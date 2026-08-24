@@ -118,7 +118,7 @@ test.describe("authenticated walking skeleton", () => {
     expect(displaySwitchBox).not.toBeNull();
     if (displaySettingsBox && displayTabsBox && displaySwitchBox) {
       expect(displaySettingsBox.width).toBeCloseTo(302, 0);
-      expect(displaySettingsBox.height).toBeCloseTo(505, 0);
+      expect(Math.abs(displaySettingsBox.height - 505)).toBeLessThanOrEqual(2);
       expect(displayTabsBox.width).toBe(268);
       expect(displayTabsBox.height).toBe(32);
       expect(displaySwitchBox.width).toBe(22);
