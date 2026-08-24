@@ -65,6 +65,7 @@ export const TaskCard = ({
 );
 
 export type KanbanColumnProps = {
+  addLabel?: string;
   children: ReactNode;
   count: number;
   label: string;
@@ -73,6 +74,7 @@ export type KanbanColumnProps = {
 };
 
 export const KanbanColumn = ({
+  addLabel,
   children,
   count,
   label,
@@ -84,7 +86,7 @@ export const KanbanColumn = ({
       <Status label={label} tone={tone} />
       <span className="lr-kanban-column__count">{count}</span>
       <Button
-        aria-label={`Add task to ${label}`}
+        aria-label={addLabel ?? `Add task to ${label}`}
         className="lr-kanban-column__add"
         disabled={onAdd === undefined}
         onClick={onAdd}

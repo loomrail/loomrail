@@ -15,9 +15,52 @@ export type FilterNode = {
   label: string;
 };
 
+export type FilterMessages = {
+  add: string;
+  addFilterPlaceholder: string;
+  backTo: string;
+  clear: string;
+  close: string;
+  description: string;
+  edit: string;
+  filterPlaceholder: string;
+  is: string;
+  isAnyOf: string;
+  noMatchingProperties: string;
+  noMatchingValues: string;
+  oneValue: string;
+  options: string;
+  remove: string;
+  rootTitle: string;
+  search: string;
+  selectedValues: string;
+};
+
+const defaultFilterMessages: FilterMessages = {
+  add: "Add",
+  addFilterPlaceholder: "Add Filter…",
+  backTo: "Back to",
+  clear: "Clear",
+  close: "Close filters",
+  description: "Choose one or more task properties. Each selection is applied immediately.",
+  edit: "Edit",
+  filterPlaceholder: "Filter…",
+  is: "is",
+  isAnyOf: "is any of",
+  noMatchingProperties: "No matching properties",
+  noMatchingValues: "No matching values",
+  oneValue: "1 value",
+  options: "options",
+  remove: "Remove",
+  rootTitle: "Filters",
+  search: "Search",
+  selectedValues: "selected values",
+};
+
 export type CascadingFilterProps = {
   ariaLabel: string;
   defaultValue?: readonly string[];
+  messages?: Partial<FilterMessages>;
   onValueChange?: (value: readonly string[]) => void;
   options: readonly FilterNode[];
   trigger: ReactElement;
@@ -28,6 +71,7 @@ export type AppliedFilterBarProps = {
   addFilter: ReactNode;
   ariaLabel: string;
   className?: string;
+  messages?: Partial<FilterMessages>;
   onValueChange: (value: readonly string[]) => void;
   options: readonly FilterNode[];
   value: readonly string[];
@@ -74,8 +118,12 @@ const getMobileFilterServerSnapshot = (): boolean => false;
 
 const pathKey = (path: readonly string[]): string => (path.length === 0 ? "root" : path.join("/"));
 
-const getColumns = (options: readonly FilterNode[], path: readonly string[]): readonly FilterColumn[] => {
-  const columns: FilterColumn[] = [{ key: "root", nodes: options, path: [], title: "Filters" }];
+const getColumns = (
+  options: readonly FilterNode[],
+  path: readonly string[],
+  rootTitle: string,
+): readonly FilterColumn[] => {
+  const columns: FilterColumn[] = [{ key: "root", nodes: options, path: [], title: rootTitle }];
   let currentNodes = options;
 
   for (const [index, nodeId] of path.entries()) {
@@ -182,6 +230,7 @@ type FilterLevelProps = {
     top: number;
   };
   mobile?: boolean;
+  messages: FilterMessages;
   onBack: () => void;
   onOpenBranch: (
     node: FilterNode,
@@ -201,6 +250,7 @@ const FilterLevel = ({
   column,
   floatingPosition,
   mobile = false,
+  messages,
   onBack,
   onOpenBranch,
   onQueryChange,
@@ -223,9 +273,11 @@ const FilterLevel = ({
       style={floatingPosition}
     >
       <label className="lr-filter-search">
-        <span className="lr-visually-hidden">Search {column.title}</span>
+        <span className="lr-visually-hidden">
+          {messages.search} {column.title}
+        </span>
         <input
-          aria-label={`Search ${column.title}`}
+          aria-label={`${messages.search} ${column.title}`}
           onChange={(event) => {
             onQueryChange(column.key, event.currentTarget.value);
           }}
@@ -240,14 +292,14 @@ const FilterLevel = ({
               ?.querySelector<HTMLButtonElement>("[data-filter-item]")
               ?.focus();
           }}
-          placeholder={column.path.length === 0 ? "Add Filter…" : "Filter…"}
+          placeholder={column.path.length === 0 ? messages.addFilterPlaceholder : messages.filterPlaceholder}
           ref={searchRef}
           spellCheck={false}
           type="search"
           value={query}
         />
       </label>
-      <div aria-label={`${column.title} options`} className="lr-filter-list" role="menu">
+      <div aria-label={`${column.title} ${messages.options}`} className="lr-filter-list" role="menu">
         {visibleNodes.map((node) => {
           const hasChildren = Boolean(node.children && node.children.length > 0);
           const isActive = hasChildren && activeChildId === node.id;
@@ -262,7 +314,7 @@ const FilterLevel = ({
                 {divider}
                 <div className="lr-filter-choice" role="none">
                   <button
-                    aria-label={`${isSelected ? "Remove" : "Add"} ${node.label}`}
+                    aria-label={`${isSelected ? messages.remove : messages.add} ${node.label}`}
                     aria-pressed={isSelected}
                     className="lr-filter-choice__checkbox"
                     onClick={() => {
@@ -370,7 +422,9 @@ const FilterLevel = ({
             </Fragment>
           );
         })}
-        {visibleNodes.length === 0 ? <p className="lr-filter-empty">No matching properties</p> : null}
+        {visibleNodes.length === 0 ? (
+          <p className="lr-filter-empty">{messages.noMatchingProperties}</p>
+        ) : null}
       </div>
     </section>
   );
@@ -379,11 +433,13 @@ const FilterLevel = ({
 export const CascadingFilter = ({
   ariaLabel,
   defaultValue = [],
+  messages,
   onValueChange,
   options,
   trigger,
   value,
 }: CascadingFilterProps): React.JSX.Element => {
+  const copy: FilterMessages = { ...defaultFilterMessages, ...messages };
   const isMobile = useSyncExternalStore(
     subscribeToMobileFilter,
     getMobileFilterSnapshot,
@@ -403,8 +459,13 @@ export const CascadingFilter = ({
   const triggerWithRef = cloneElement(trigger as ReactElement<{ ref?: Ref<HTMLButtonElement> }>, {
     ref: triggerRef,
   });
-  const columns = getColumns(options, path);
-  const currentColumn = columns.at(-1) ?? { key: "root", nodes: options, path: [], title: "Filters" };
+  const columns = getColumns(options, path, copy.rootTitle);
+  const currentColumn = columns.at(-1) ?? {
+    key: "root",
+    nodes: options,
+    path: [],
+    title: copy.rootTitle,
+  };
 
   const clearScheduledBranch = (): void => {
     if (hoverIntentTimeoutRef.current === undefined) {
@@ -542,7 +603,7 @@ export const CascadingFilter = ({
               <div className="lr-filter-dialog__heading">
                 {path.length > 0 ? (
                   <IconButton
-                    label={`Back to ${parentTitle}`}
+                    label={`${copy.backTo} ${parentTitle}`}
                     name="chevronLeft"
                     onClick={handleBack}
                     size="lg"
@@ -553,11 +614,11 @@ export const CascadingFilter = ({
                 </DialogPrimitive.Title>
               </div>
               <DialogPrimitive.Close asChild>
-                <IconButton label="Close filters" name="close" size="lg" />
+                <IconButton label={copy.close} name="close" size="lg" />
               </DialogPrimitive.Close>
             </header>
             <DialogPrimitive.Description className="lr-visually-hidden">
-              Choose one or more task properties. Each selection is applied immediately.
+              {copy.description}
             </DialogPrimitive.Description>
             <div className="lr-filter-dialog__body">
               <FilterLevel
@@ -565,6 +626,7 @@ export const CascadingFilter = ({
                 column={currentColumn}
                 key={currentColumn.key}
                 mobile
+                messages={copy}
                 onBack={handleBack}
                 onOpenBranch={handleOpenBranch}
                 onQueryChange={handleQueryChange}
@@ -611,7 +673,8 @@ export const CascadingFilter = ({
           <div className="lr-filter-main-panel">
             <FilterLevel
               activeChildId={path[0]}
-              column={columns[0] ?? { key: "root", nodes: options, path: [], title: "Filters" }}
+              column={columns[0] ?? { key: "root", nodes: options, path: [], title: copy.rootTitle }}
+              messages={copy}
               onBack={handleBack}
               onOpenBranch={handleOpenBranch}
               onQueryChange={handleQueryChange}
@@ -632,6 +695,7 @@ export const CascadingFilter = ({
                   top: panelTops[column.key] ?? 0,
                 }}
                 key={column.path.length}
+                messages={copy}
                 onBack={handleBack}
                 onOpenBranch={handleOpenBranch}
                 onQueryChange={handleQueryChange}
@@ -650,6 +714,7 @@ export const CascadingFilter = ({
 
 type AppliedFilterEditorProps = {
   group: AppliedFilterGroup;
+  messages: FilterMessages;
   onValueChange: (value: readonly string[]) => void;
   options: readonly FilterNode[];
   value: readonly string[];
@@ -657,6 +722,7 @@ type AppliedFilterEditorProps = {
 
 const AppliedFilterEditor = ({
   group,
+  messages,
   onValueChange,
   options,
   value,
@@ -671,7 +737,7 @@ const AppliedFilterEditor = ({
   const selectedIds = group.selected.map((option) => option.id);
   const valueLabel =
     group.selected.length === 1
-      ? (group.selected[0]?.label ?? "1 value")
+      ? (group.selected[0]?.label ?? messages.oneValue)
       : `${group.selected[0]?.label ?? group.selected.length.toString()} +${(
           group.selected.length - 1
         ).toString()}`;
@@ -699,7 +765,7 @@ const AppliedFilterEditor = ({
       <div className="lr-applied-filter">
         <PopoverPrimitive.Trigger asChild>
           <button
-            aria-label={`Edit ${group.label} filter`}
+            aria-label={`${messages.edit} ${group.label}`}
             className="lr-applied-filter__editor"
             type="button"
           >
@@ -708,13 +774,13 @@ const AppliedFilterEditor = ({
               {group.label}
             </span>
             <span className="lr-applied-filter__operator">
-              {group.selected.length === 1 ? "is" : "is any of"}
+              {group.selected.length === 1 ? messages.is : messages.isAnyOf}
             </span>
             <span className="lr-applied-filter__value">{valueLabel}</span>
           </button>
         </PopoverPrimitive.Trigger>
         <button
-          aria-label={`Remove ${group.label} filter`}
+          aria-label={`${messages.remove} ${group.label}`}
           className="lr-applied-filter__remove"
           onClick={() => {
             onValueChange(value.filter((nodeId) => !selectedIds.includes(nodeId)));
@@ -727,7 +793,7 @@ const AppliedFilterEditor = ({
       <PopoverPrimitive.Portal>
         <PopoverPrimitive.Content
           align="start"
-          aria-label={`Edit ${group.label} filter`}
+          aria-label={`${messages.edit} ${group.label}`}
           className="lr-applied-filter-popover"
           collisionPadding={8}
           onOpenAutoFocus={(event) => {
@@ -737,26 +803,32 @@ const AppliedFilterEditor = ({
           sideOffset={6}
         >
           <label className="lr-filter-search lr-applied-filter-popover__search">
-            <span className="lr-visually-hidden">Search {group.label}</span>
+            <span className="lr-visually-hidden">
+              {messages.search} {group.label}
+            </span>
             <input
-              aria-label={`Search ${group.label}`}
+              aria-label={`${messages.search} ${group.label}`}
               onChange={(event) => {
                 setQuery(event.currentTarget.value);
               }}
-              placeholder="Filter…"
+              placeholder={messages.filterPlaceholder}
               ref={searchRef}
               spellCheck={false}
               type="search"
               value={query}
             />
           </label>
-          <div aria-label={`${group.label} selected values`} className="lr-filter-list" role="menu">
+          <div
+            aria-label={`${group.label} ${messages.selectedValues}`}
+            className="lr-filter-list"
+            role="menu"
+          >
             {visibleOptions.map((option) => {
               const selected = value.includes(option.id);
               return (
                 <div className="lr-filter-choice" key={option.id} role="none">
                   <button
-                    aria-label={`${selected ? "Remove" : "Add"} ${option.label}`}
+                    aria-label={`${selected ? messages.remove : messages.add} ${option.label}`}
                     aria-pressed={selected}
                     className="lr-filter-choice__checkbox"
                     onClick={() => {
@@ -805,7 +877,9 @@ const AppliedFilterEditor = ({
                 </div>
               );
             })}
-            {visibleOptions.length === 0 ? <p className="lr-filter-empty">No matching values</p> : null}
+            {visibleOptions.length === 0 ? (
+              <p className="lr-filter-empty">{messages.noMatchingValues}</p>
+            ) : null}
           </div>
         </PopoverPrimitive.Content>
       </PopoverPrimitive.Portal>
@@ -817,10 +891,12 @@ export const AppliedFilterBar = ({
   addFilter,
   ariaLabel,
   className,
+  messages,
   onValueChange,
   options,
   value,
 }: AppliedFilterBarProps): React.JSX.Element => {
+  const copy: FilterMessages = { ...defaultFilterMessages, ...messages };
   const groups = getAppliedFilterGroups(options, value);
 
   return (
@@ -830,6 +906,7 @@ export const AppliedFilterBar = ({
           <AppliedFilterEditor
             group={group}
             key={group.id}
+            messages={copy}
             onValueChange={onValueChange}
             options={options}
             value={value}
@@ -845,7 +922,7 @@ export const AppliedFilterBar = ({
           }}
           shape="pill"
         >
-          Clear
+          {copy.clear}
         </Button>
       ) : null}
     </div>

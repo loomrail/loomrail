@@ -6,6 +6,8 @@ import {
 } from "@loomrail/contracts";
 import { queryOptions } from "@tanstack/react-query";
 
+import { requestLocalApi, storeCsrfToken } from "./api";
+
 export type ConnectionResult =
   { status: "connected"; daemon: DaemonStatusResponse } | { status: "error"; message: string };
 
@@ -29,15 +31,12 @@ const exchangeBootstrapToken = async (bootstrapToken: string): Promise<void> => 
     throw new Error(await readErrorMessage(response));
   }
 
-  sessionExchangeResponseSchema.parse(await response.json());
+  const session = sessionExchangeResponseSchema.parse(await response.json());
+  storeCsrfToken(session.csrfToken);
 };
 
 const fetchDaemonStatus = async (): Promise<DaemonStatusResponse> => {
-  const response = await fetch("/api/v1/status", { credentials: "same-origin" });
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
-  }
-  return daemonStatusResponseSchema.parse(await response.json());
+  return requestLocalApi("/api/v1/status", daemonStatusResponseSchema);
 };
 
 export const connectToLocalDaemon = async (): Promise<ConnectionResult> => {

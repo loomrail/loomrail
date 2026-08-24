@@ -1,9 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import type { SyntheticEvent } from "react";
+import { prioritySchema, type WorkItem } from "@loomrail/contracts";
 import {
   ActionMenu,
-  BudgetSlider,
   Button,
   cn,
   DialogSurface,
@@ -17,100 +17,154 @@ import {
   type IconName,
 } from "@loomrail/ui";
 
-import { localConnectionQuery } from "../session";
+import { BrandMark } from "../components/BrandMark";
+import { useI18n } from "../i18n";
 import { applyThemePreference, readThemePreference, type ThemePreference } from "../theme";
+import { useCreateWorkItem, useWorkspace } from "../workspace";
 
 const NewTaskDialog = (): React.JSX.Element => {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  const [budget, setBudget] = useState(8_000);
+  const formRef = useRef<HTMLFormElement>(null);
+  const { projects, selectedProject } = useWorkspace();
+  const createMutation = useCreateWorkItem();
+  const [requestedProjectId, setRequestedProjectId] = useState<string | null>(null);
+  const [priority, setPriority] = useState<WorkItem["priority"]>("MEDIUM");
+  const [title, setTitle] = useState("");
+  const projectId =
+    projects.find((project) => project.id === requestedProjectId)?.id ?? selectedProject?.id ?? "";
+
+  const submit = (event: SyntheticEvent<HTMLFormElement, SubmitEvent>): void => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const titleValue = form.get("title");
+    const descriptionValue = form.get("description");
+    const title = typeof titleValue === "string" ? titleValue.trim() : "";
+    const description = typeof descriptionValue === "string" ? descriptionValue.trim() : "";
+    if (!title || !projectId) return;
+
+    createMutation.mutate(
+      {
+        description,
+        priority,
+        projectId,
+        risk: "MEDIUM",
+        title,
+        type: "TASK",
+      },
+      {
+        onSuccess: () => {
+          formElement.reset();
+          setTitle("");
+          setOpen(false);
+        },
+      },
+    );
+  };
 
   return (
     <DialogSurface
-      description="Create the work item first. Loomrail will propose the delivery pipeline after the brief is clear."
+      closeLabel={t("action.closeDialog")}
+      description={t("task.create.description")}
       footer={
         <>
           <Button
+            disabled={createMutation.isPending}
             onClick={() => {
               setOpen(false);
             }}
           >
-            Cancel
+            {t("action.cancel")}
           </Button>
           <Button
-            disabled
+            disabled={!title.trim() || !projectId}
+            loading={createMutation.isPending}
             onClick={() => {
-              setOpen(false);
+              formRef.current?.requestSubmit();
             }}
+            type="button"
             variant="primary"
           >
-            Create task
+            {t("task.create.submit")}
           </Button>
         </>
       }
       onOpenChange={setOpen}
       open={open}
-      title="New task"
+      title={t("task.new")}
       trigger={
-        <Button icon="add" variant="primary">
-          New task
+        <Button disabled={!selectedProject} icon="add" variant="primary">
+          {t("task.new")}
         </Button>
       }
     >
-      <form className="new-task-form">
-        <Field htmlFor="new-task-title" label="Title" required>
-          <TextField autoFocus id="new-task-title" placeholder="What should the team deliver?" />
+      <form className="new-task-form" id="new-task-form" onSubmit={submit} ref={formRef}>
+        {createMutation.error instanceof Error ? (
+          <p className="new-task-form__error" role="alert">
+            {createMutation.error.message}
+          </p>
+        ) : null}
+        <Field htmlFor="new-task-title" label={t("task.create.title")} required>
+          <TextField
+            autoFocus
+            id="new-task-title"
+            name="title"
+            onChange={(event) => {
+              setTitle(event.currentTarget.value);
+            }}
+            placeholder={t("task.create.titlePlaceholder")}
+            required
+            value={title}
+          />
         </Field>
         <Field
-          description="Enough context for the planning agents to ask useful questions."
+          description={t("task.create.briefDescription")}
           htmlFor="new-task-brief"
-          label="Brief"
+          label={t("task.create.brief")}
         >
           <Textarea
             aria-describedby="new-task-brief-description"
             id="new-task-brief"
-            placeholder="Outcome, constraints, relevant files…"
+            name="description"
+            placeholder={t("task.create.briefPlaceholder")}
             rows={5}
           />
         </Field>
         <div className="new-task-form__row">
-          <Field htmlFor="new-task-project" label="Project">
+          <Field htmlFor="new-task-project" label={t("task.create.project")}>
             <SelectControl
-              ariaLabel="Project"
-              defaultValue="web-app"
+              ariaLabel={t("task.create.project")}
               id="new-task-project"
-              options={[
-                { label: "Web app", value: "web-app" },
-                { label: "Loomrail core", value: "loomrail-core" },
-              ]}
+              onValueChange={setRequestedProjectId}
+              options={projects.map((project) => ({ label: project.name, value: project.id }))}
+              value={projectId}
             />
           </Field>
-          <Field htmlFor="new-task-priority" label="Priority">
+          <Field htmlFor="new-task-priority" label={t("task.create.priority")}>
             <SelectControl
-              ariaLabel="Priority"
-              defaultValue="normal"
+              ariaLabel={t("task.create.priority")}
               id="new-task-priority"
+              onValueChange={(value) => {
+                setPriority(prioritySchema.parse(value));
+              }}
               options={[
-                { label: "No priority", value: "none" },
-                { label: "Normal", value: "normal" },
-                { label: "Urgent", value: "urgent" },
+                { label: t("priority.LOW"), value: "LOW" },
+                { label: t("priority.MEDIUM"), value: "MEDIUM" },
+                { label: t("priority.HIGH"), value: "HIGH" },
+                { label: t("priority.URGENT"), value: "URGENT" },
               ]}
+              value={priority}
             />
           </Field>
         </div>
-        <BudgetSlider
-          label="Initial token guardrail"
-          max={32_000}
-          min={2_000}
-          onValueChange={setBudget}
-          step={1_000}
-          value={budget}
-        />
       </form>
     </DialogSurface>
   );
 };
 
 const ThemeMenu = (): React.JSX.Element => {
+  const { t } = useI18n();
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
   const setPreference = (preference: ThemePreference): void => {
     setTheme(preference);
@@ -124,7 +178,7 @@ const ThemeMenu = (): React.JSX.Element => {
         [
           {
             icon: "sun",
-            label: "Light",
+            label: t("theme.light"),
             onSelect: () => {
               setPreference("light");
             },
@@ -132,7 +186,7 @@ const ThemeMenu = (): React.JSX.Element => {
           },
           {
             icon: "moon",
-            label: "Dark",
+            label: t("theme.dark"),
             onSelect: () => {
               setPreference("dark");
             },
@@ -140,7 +194,7 @@ const ThemeMenu = (): React.JSX.Element => {
           },
           {
             icon: "monitor",
-            label: "System",
+            label: t("theme.system"),
             onSelect: () => {
               setPreference("system");
             },
@@ -150,9 +204,42 @@ const ThemeMenu = (): React.JSX.Element => {
       ]}
       trigger={
         <IconButton
-          label="Change color theme"
+          label={t("theme.change")}
           name={theme === "dark" ? "moon" : theme === "light" ? "sun" : "monitor"}
         />
+      }
+    />
+  );
+};
+
+const LanguageMenu = (): React.JSX.Element => {
+  const { locale, setLocale, t } = useI18n();
+
+  return (
+    <ActionMenu
+      align="end"
+      groups={[
+        [
+          {
+            label: t("language.english"),
+            onSelect: () => {
+              setLocale("en");
+            },
+            shortcut: locale === "en" ? "✓" : "",
+          },
+          {
+            label: t("language.russian"),
+            onSelect: () => {
+              setLocale("ru");
+            },
+            shortcut: locale === "ru" ? "✓" : "",
+          },
+        ],
+      ]}
+      trigger={
+        <Button aria-label={t("language.change")} className="app-language-button" size="sm" shape="pill">
+          {locale.toUpperCase()}
+        </Button>
       }
     />
   );
@@ -192,59 +279,87 @@ const SidebarLink = ({
 };
 
 export const AppFrame = (): React.JSX.Element => {
-  const connection = useQuery(localConnectionQuery);
-  const connected = connection.data?.status === "connected";
+  const { t } = useI18n();
+  const { connection, connectionPending, projects, projectsPending, selectedProject, selectProject } =
+    useWorkspace();
+  const connected = connection?.status === "connected";
+  const projectInitial = selectedProject?.name.slice(0, 1).toUpperCase() ?? "–";
 
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
         <div className="app-sidebar__workspace">
-          <span className="app-workspace-avatar">L</span>
+          <BrandMark className="app-brand-mark" size={22} />
           <strong>Loomrail</strong>
           <Icon name="chevronDown" size={12} />
-          <Tooltip label="Search workspace">
-            <IconButton disabled label="Search workspace" name="search" size="sm" />
+          <Tooltip label={t("workspace.search")}>
+            <IconButton disabled label={t("workspace.search")} name="search" size="sm" />
           </Tooltip>
         </div>
 
-        <nav aria-label="Workspace navigation" className="app-nav">
-          <SidebarLink icon="inbox" label="Inbox" />
-          <SidebarLink icon="board" label="My work" />
-          <SidebarLink icon="agents" label="Human requests" />
+        <nav aria-label={t("nav.workspace")} className="app-nav">
+          <SidebarLink icon="inbox" label={t("nav.inbox")} />
+          <SidebarLink icon="board" label={t("nav.myWork")} />
+          <SidebarLink icon="agents" label={t("nav.humanRequests")} />
         </nav>
 
         <div className="app-nav-group">
-          <span>Workspace</span>
-          <nav aria-label="Loomrail sections" className="app-nav">
-            <SidebarLink icon="projects" label="Projects" />
-            <SidebarLink icon="views" label="Views" />
-            <SidebarLink icon="agents" label="Agents" />
-            <SidebarLink icon="sessions" label="Sessions" />
+          <span>{t("nav.workspace")}</span>
+          <nav aria-label={t("nav.workspace")} className="app-nav">
+            <SidebarLink icon="projects" label={t("nav.projects")} />
+            <SidebarLink icon="views" label={t("nav.views")} />
+            <SidebarLink icon="agents" label={t("nav.agents")} />
+            <SidebarLink icon="sessions" label={t("nav.sessions")} />
           </nav>
         </div>
 
         <div className="app-nav-group">
-          <span>Your projects</span>
-          <div className="app-project-label">
-            <span>W</span>
-            <strong>Web app</strong>
-            <Icon name="chevronDown" size={12} />
-          </div>
-          <nav aria-label="Web app navigation" className="app-nav app-nav--nested">
-            <SidebarLink active icon="board" label="Current work" to="/" />
-            <SidebarLink icon="list" label="Backlog" />
-            <SidebarLink icon="sessions" label="Rules" />
+          <span>{t("nav.yourProjects")}</span>
+          {projects.length > 0 ? (
+            <ActionMenu
+              groups={[
+                projects.map((project) => ({
+                  label: project.name,
+                  onSelect: () => {
+                    selectProject(project.id);
+                  },
+                  shortcut: project.id === selectedProject?.id ? "✓" : "",
+                })),
+              ]}
+              trigger={
+                <button aria-label={t("project.switch")} className="app-project-label" type="button">
+                  <span>{projectInitial}</span>
+                  <strong>{selectedProject?.name}</strong>
+                  <Icon name="chevronDown" size={12} />
+                </button>
+              }
+            />
+          ) : (
+            <div className="app-project-label is-empty">
+              <span>–</span>
+              <strong>{projectsPending ? t("project.loading") : t("project.none")}</strong>
+            </div>
+          )}
+          <nav aria-label={t("project.switch")} className="app-nav app-nav--nested">
+            <SidebarLink active icon="board" label={t("nav.currentWork")} to="/" />
+            <SidebarLink icon="list" label={t("nav.backlog")} />
+            <SidebarLink icon="sessions" label={t("nav.rules")} />
           </nav>
         </div>
 
         <div className="app-sidebar__footer">
           <span className={connected ? "app-connection is-online" : "app-connection is-offline"}>
             <span aria-hidden="true" />
-            {connection.isPending ? "Connecting…" : connected ? "Fixture preview" : "Preview mode"}
+            {connectionPending
+              ? t("connection.connecting")
+              : connected
+                ? t("connection.local")
+                : t("connection.offline")}
           </span>
+          <LanguageMenu />
           <ThemeMenu />
-          <Tooltip label="Settings">
-            <IconButton disabled label="Open settings" name="settings" />
+          <Tooltip label={t("settings.open")}>
+            <IconButton disabled label={t("settings.open")} name="settings" />
           </Tooltip>
         </div>
       </aside>
@@ -252,18 +367,18 @@ export const AppFrame = (): React.JSX.Element => {
       <section className="app-surface">
         <header className="app-topbar">
           <div className="app-breadcrumbs">
-            <span className="app-project-icon">W</span>
-            <span>Web app</span>
+            <span className="app-project-icon">{projectInitial}</span>
+            <span>{selectedProject?.name ?? t("project.noneSingle")}</span>
             <Icon name="chevronRight" size={12} />
-            <strong>Current work</strong>
-            <Tooltip label="Add to favorites">
-              <IconButton disabled label="Add current view to favorites" name="star" size="sm" />
+            <strong>{t("work.current")}</strong>
+            <Tooltip label={t("favorite.add")}>
+              <IconButton disabled label={t("favorite.add")} name="star" size="sm" />
             </Tooltip>
           </div>
           <div className="app-topbar__actions">
-            <Tooltip label="Open command menu">
+            <Tooltip label={t("command.open")}>
               <Button className="app-search-button" disabled icon="search" shape="pill">
-                Search
+                {t("search")}
                 <span className="app-search-shortcut">⌘ K</span>
               </Button>
             </Tooltip>

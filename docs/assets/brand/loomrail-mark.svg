@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title desc">
+  <title id="title">Loomrail mark</title>
+  <desc id="desc">Two nested rails forming the letter L.</desc>
+  <rect width="96" height="96" rx="24" fill="#5e6ad2" />
+  <path d="M27 23v46h46" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="10" />
+  <path d="M48 23v25h25" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="10" />
+</svg>

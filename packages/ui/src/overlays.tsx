@@ -125,6 +125,7 @@ export const PopoverSurface = ({
 
 export type DialogSurfaceProps = {
   children: ReactNode;
+  closeLabel?: string;
   description?: string;
   footer?: ReactNode;
   onOpenChange?: (open: boolean) => void;
@@ -136,6 +137,7 @@ export type DialogSurfaceProps = {
 
 export const DialogSurface = ({
   children,
+  closeLabel = "Close dialog",
   description,
   footer,
   onOpenChange,
@@ -170,7 +172,7 @@ export const DialogSurface = ({
               {description ? <DialogPrimitive.Description>{description}</DialogPrimitive.Description> : null}
             </div>
             <DialogPrimitive.Close asChild>
-              <IconButton label="Close dialog" name="close" size="lg" />
+              <IconButton label={closeLabel} name="close" size="lg" />
             </DialogPrimitive.Close>
           </header>
           <div className="lr-dialog__body">{children}</div>

@@ -1,59 +1,160 @@
-# Loomrail
+<div align="center">
+  <img src="docs/assets/brand/loomrail-wordmark.svg" alt="Loomrail" width="360" />
+  <p><strong>The local control plane for accountable AI software teams.</strong></p>
+  <p>
+    <a href="https://github.com/loomrail/loomrail/actions/workflows/ci.yml"><img src="https://github.com/loomrail/loomrail/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-5e6ad2" alt="Apache 2.0 license" /></a>
+    <img src="https://img.shields.io/badge/status-pre--alpha-c58b20" alt="Pre-alpha status" />
+    <img src="https://img.shields.io/badge/Node.js-24.19-43853d" alt="Node.js 24.19" />
+  </p>
+</div>
 
-**The local control plane for accountable AI software teams.**
+Loomrail is a local-first workspace for planning, running, and supervising complete software-delivery workflows
+across coding agents such as Codex and Claude Code. It is designed around tasks, evidence, budgets, review, and human
+decisions instead of disconnected chat sessions.
 
-Loomrail is a local-first, browser-first workspace for running and supervising complete software-delivery workflows
-across coding agents such as Codex and Claude Code.
+> [!IMPORTANT]
+> Loomrail is an early pre-alpha. The local kernel, authenticated browser session, SQLite state, audit log, and
+> cross-platform CI are real. The Workbench reads and changes persisted local projects and work items, with English and
+> Russian interfaces. Real agent execution is not available yet.
 
-The product and Phase 0 boundaries are approved. The M2 local kernel now launches an authenticated browser UI through
-a loopback-only daemon and persists fixture Projects, WorkItems, idempotent commands, and append-only Events in local
-SQLite. It intentionally contains no real provider, shell, Git, or browser-automation capability yet.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/workbench-dark.png" />
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/screenshots/workbench-light.png" />
+  <img src="docs/assets/screenshots/workbench-light.png" alt="Loomrail Workbench with a Kanban delivery board and task inspector" width="100%" />
+</picture>
 
-## Run the walking skeleton
+## Why Loomrail
 
-Prerequisites: Node.js 24.19.0 and Corepack. The same pinned runtime is used on macOS and Windows CI.
+- **Task-centric delivery.** Keep discovery, planning, implementation, review, QA, and acceptance on one accountable
+  route.
+- **Local by default.** The daemon binds to loopback, state lives in local SQLite, and the browser uses a one-time
+  authenticated bootstrap session.
+- **Human control.** Questions, approvals, budgets, recovery decisions, and acceptance stay visible and explicit.
+- **Auditable work.** Commands are idempotent and state changes are recorded as append-only events.
+- **Cross-platform baseline.** macOS and Windows run the same blocking verification and browser smoke tests.
+
+## Current checkpoint
+
+| Area          | Today                                                                 | Next                                                 |
+| ------------- | --------------------------------------------------------------------- | ---------------------------------------------------- |
+| Local runtime | Loopback daemon, CLI launcher, one-time browser session               | Packaged installer and release artifacts             |
+| State         | Projects, work items, commands, and events persisted in SQLite        | Editing, replay, and recovery hardening              |
+| Workbench     | Persisted boards, activity, EN/RU, light/dark, filters, view controls | Reconnect UX and richer task authoring               |
+| Agents        | Provider boundaries and safety model are specified                    | Mock workflow, then supervised Codex/Claude adapters |
+| Platforms     | macOS and Windows CI are green                                        | Clean-machine acceptance and hardening               |
+
+## How it is intended to work
+
+```mermaid
+flowchart LR
+  Brief[Task brief] --> Plan[Delivery plan]
+  Plan --> Build[Implementation agents]
+  Build --> Review[Independent review]
+  Review --> QA[Browser QA and evidence]
+  QA --> Accept{Human acceptance}
+  Accept -->|Approved| Done[Done]
+  Accept -->|Changes requested| Plan
+  Guardrails[Rules · permissions · budgets] -. constrain .-> Plan
+  Guardrails -. constrain .-> Build
+  Guardrails -. constrain .-> Review
+```
+
+Loomrail is the control plane around this route. It does not replace the coding agents; it gives their work a shared
+model, clear permissions, recoverable state, and an inspectable history.
+
+## Run from source
+
+There is no published npm package or desktop installer yet. The supported way to try the current checkpoint is to
+run the repository from source.
+
+### Requirements
+
+- Node.js `24.19.x`
+- Corepack
+- macOS or Windows
 
 ```bash
+git clone https://github.com/loomrail/loomrail.git
+cd loomrail
 corepack enable
 corepack prepare pnpm@11.21.0 --activate
-pnpm install
+pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-`pnpm dev` builds the workspace, starts Loomrail on an OS-assigned loopback port, and opens a one-time authenticated
-URL in the default browser. Stop it with `Ctrl+C`. Use `pnpm start --no-open` after a build when browser opening is
-not wanted. State is stored in the platform application-data directory; `LOOMRAIL_DATA_DIR` can point a development
-run at an isolated local directory.
+`pnpm dev` builds the workspace, starts Loomrail on an available loopback port, and opens a one-time authenticated URL
+in the default browser. Stop it with `Ctrl+C`.
 
-The main quality gate is `pnpm verify`; the browser smoke test is `pnpm test:e2e` after installing Chromium with
-`pnpm exec playwright install chromium`.
+For a fixed port after the first build:
 
-## Product direction
+```bash
+pnpm build
+pnpm start --port 4176
+```
 
-- manage projects, epics, tasks, and parallel agent sessions from one Kanban workspace;
-- move work through discovery, planning, implementation, independent review, browser QA, and human acceptance;
-- surface questions and approvals that require human input;
-- keep project rules, architecture, code style, budgets, evidence, and audit history local and inspectable;
-- support light and dark themes as equal first-class interfaces;
-- target solo developers and small teams, with macOS and Windows as primary platforms.
+Use `pnpm start --no-open --port 4176` when the browser should not open automatically. `LOOMRAIL_DATA_DIR` can point a
+development run at an isolated data directory.
 
-Read the current [Russian working master plan](docs/product/MASTER-PLAN.ru.md) for the approved product boundary,
-architecture, delivery phases, and safety model. The
-[approved decision record](docs/product/PRODUCT-DECISIONS.ru.md) captures the current product invariants, and the
-[Phase 0 implementation plan](docs/plans/00-phase-0-implementation-plan.ru.md) defines the first mocked vertical
-slice. A canonical English edition is required before the public launch. Contribution and repository-history rules
-are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
+| Platform | Default local state                                   |
+| -------- | ----------------------------------------------------- |
+| macOS    | `~/Library/Application Support/Loomrail/state.sqlite` |
+| Windows  | `%LOCALAPPDATA%\Loomrail\state.sqlite`                |
 
-The current technical baseline is documented in the [architecture overview](docs/architecture/OVERVIEW.md),
-[ADR index](docs/adr/README.md), and [Phase 0 threat model](docs/security/THREAT-MODEL.md).
+## Repository
 
-## Status
+```text
+apps/
+  cli/       # local launcher and authenticated browser bootstrap
+  daemon/    # loopback API, commands, events, and SQLite lifecycle
+  web/       # React Workbench
+packages/
+  contracts/ # shared schemas and transport contracts
+  state/     # SQLite repositories and migrations
+  ui/        # shared product primitives and patterns
+docs/        # product, architecture, security, design, plans, and evidence
+```
 
-Private pre-alpha implementation under Apache License 2.0. The macOS M2 gate is green. The matching Windows gate is
-configured in GitHub Actions and will become blocking after the first intentionally reviewed push.
+The daemon owns state and capability boundaries. The web app never receives raw provider credentials and does not
+talk directly to future agent, shell, or Git adapters.
 
-The current Workbench is an owner-reviewed synthetic UI fixture for the upcoming M3 integration. It consumes the
-authenticated daemon status, but its projects, cards, filters, inspector details, and actions are not yet backed by
-the persisted WorkItem API. Unsupported command actions are disabled in this checkpoint; filters, task selection,
-display settings, and theme controls remain interactive for design review. The real WorkItem integration, including
-realtime replay/reconnect, is the next milestone.
+## Roadmap
+
+- [x] **M0 — Foundation:** monorepo, contracts, CI, public-readiness rules
+- [x] **M1 — Walking skeleton:** CLI → daemon → authenticated browser UI
+- [x] **M2 — Local kernel:** SQLite state, idempotent commands, append-only events, macOS/Windows gate
+- [ ] **M3 — Real task cockpit (in progress):** authenticated API client, persisted projects/work items, EN/RU, activity
+      replay and reconnect
+- [ ] **M4 — Mock delivery workflow:** Human Request and resumable task pipeline
+- [ ] **M5 — Budgets and recovery:** explicit limits, pause/resume, crash recovery
+- [ ] **M6 — Acceptance:** evidence, review, owner approval, audit surface
+- [ ] **M7 — Public checkpoint:** clean install, hardening, packaging, release documentation
+
+Real Codex/Claude execution, shell/Git access, worktrees, plugins, remote mode, and desktop packaging remain outside the
+current checkpoint.
+
+## Development
+
+```bash
+pnpm verify
+pnpm exec playwright install chromium
+pnpm test:e2e
+```
+
+`pnpm verify` runs formatting, public-tree safety checks, linting, type checks, and the test suite. Changes to the CLI,
+daemon session flow, or web shell should also pass the browser smoke test on both blocking platforms.
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md). Product and engineering sources of truth:
+
+- [Master plan](docs/product/MASTER-PLAN.ru.md)
+- [Product decisions](docs/product/PRODUCT-DECISIONS.ru.md)
+- [Architecture overview](docs/architecture/OVERVIEW.md)
+- [Phase 0 implementation plan](docs/plans/00-phase-0-implementation-plan.ru.md)
+- [Threat model](docs/security/THREAT-MODEL.md)
+- [Component system](docs/design/COMPONENT-SYSTEM.md)
+- [Brand guide](docs/design/BRAND.md)
+- [Localization contract](docs/design/LOCALIZATION.md)
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
