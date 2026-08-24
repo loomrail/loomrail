@@ -1,5 +1,5 @@
 {
-  "name": "@loomrail/domain",
+  "name": "@loomrail/provider-mock",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -17,6 +17,6 @@
   },
   "dependencies": {
     "@loomrail/contracts": "workspace:*",
-    "@loomrail/workflow-engine": "workspace:*"
+    "@loomrail/provider-core": "workspace:*"
   }
 }

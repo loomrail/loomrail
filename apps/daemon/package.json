@@ -23,6 +23,8 @@
     "@loomrail/contracts": "workspace:*",
     "@loomrail/domain": "workspace:*",
     "@loomrail/persistence-sqlite": "workspace:*",
+    "@loomrail/provider-mock": "workspace:*",
+    "@loomrail/workflow-engine": "workspace:*",
     "fastify": "^5.10.0",
     "zod": "^4.0.0"
   }

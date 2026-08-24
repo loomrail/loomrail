@@ -71,6 +71,12 @@ importers:
       '@loomrail/persistence-sqlite':
         specifier: workspace:*
         version: link:../../packages/persistence-sqlite
+      '@loomrail/provider-mock':
+        specifier: workspace:*
+        version: link:../../packages/provider-mock
+      '@loomrail/workflow-engine':
+        specifier: workspace:*
+        version: link:../../packages/workflow-engine
       fastify:
         specifier: ^5.10.0
         version: 5.12.1
@@ -132,6 +138,9 @@ importers:
       '@loomrail/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@loomrail/workflow-engine':
+        specifier: workspace:*
+        version: link:../workflow-engine
 
   packages/persistence-sqlite:
     dependencies:
@@ -144,6 +153,24 @@ importers:
       zod:
         specifier: ^4.0.0
         version: 4.4.3
+
+  packages/provider-core:
+    dependencies:
+      '@loomrail/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
+
+  packages/provider-mock:
+    dependencies:
+      '@loomrail/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@loomrail/provider-core':
+        specifier: workspace:*
+        version: link:../provider-core
 
   packages/ui:
     dependencies:
@@ -163,6 +190,12 @@ importers:
       react-dom:
         specifier: ^19.2.0
         version: 19.2.8(react@19.2.8)
+
+  packages/workflow-engine:
+    dependencies:
+      '@loomrail/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
 packages:
 

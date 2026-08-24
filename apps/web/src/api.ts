@@ -1,10 +1,14 @@
 import {
   apiErrorResponseSchema,
   eventsResponseSchema,
+  humanRequestsResponseSchema,
   projectsResponseSchema,
   stateCommandResultSchema,
   workItemsResponseSchema,
+  workflowSnapshotSchema,
   type FixtureProjectId,
+  type HumanRequest,
+  type HumanRequestAnswer,
   type WorkItem,
   type WorkItemState,
 } from "@loomrail/contracts";
@@ -136,6 +140,14 @@ export const listWorkItemEvents = async (projectId: string, workItemId: string) 
   return requestLocalApi(`/api/v1/events?${query.toString()}`, eventsResponseSchema);
 };
 
+export const getWorkItemWorkflow = async (workItemId: string) =>
+  requestLocalApi(`/api/v1/work-items/${encodeURIComponent(workItemId)}/workflow`, workflowSnapshotSchema);
+
+export const listOpenHumanRequests = async (projectId: string) => {
+  const query = new URLSearchParams({ projectId, status: "OPEN" });
+  return requestLocalApi(`/api/v1/human-requests?${query.toString()}`, humanRequestsResponseSchema);
+};
+
 export const registerFixtureProject = async (fixtureId: FixtureProjectId): Promise<void> => {
   await requestLocalApi("/api/v1/projects/fixtures/register", stateCommandResultSchema, {
     method: "POST",
@@ -220,3 +232,28 @@ export const updateWorkItem = async (workItem: WorkItem, patch: UpdateWorkItemPa
   }
   return result.workItem;
 };
+
+export const startMockPipeline = async (workItem: WorkItem) =>
+  requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(workItem.id)}/pipeline/start`,
+    workflowSnapshotSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedVersion: workItem.version,
+      }),
+    },
+  );
+
+export const answerHumanRequest = async (request: HumanRequest, answer: HumanRequestAnswer) =>
+  requestLocalApi(`/api/v1/human-requests/${encodeURIComponent(request.id)}/answer`, workflowSnapshotSchema, {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: 1,
+      commandId: crypto.randomUUID(),
+      expectedVersion: request.version,
+      answer,
+    }),
+  });

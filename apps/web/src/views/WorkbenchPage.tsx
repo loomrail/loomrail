@@ -4,6 +4,9 @@ import {
   prioritySchema,
   riskSchema,
   type DomainEvent,
+  type HumanRequest,
+  type PipelineRun,
+  type StageAttempt,
   type WorkItem,
   type WorkItemChangedField,
   type WorkItemState,
@@ -24,6 +27,7 @@ import {
   KanbanColumn,
   PopoverSurface,
   PropertyChip,
+  RadioGroup,
   RunSummary,
   SegmentedControl,
   SelectControl,
@@ -44,11 +48,15 @@ import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
 import {
   useInitializeFixtureWorkspace,
+  useAnswerHumanRequest,
   useMoveWorkItem,
+  useProjectHumanRequests,
   useProjectWorkItems,
+  useStartMockPipeline,
   useUpdateWorkItem,
   useWorkspace,
   useWorkItemEvents,
+  useWorkItemWorkflow,
 } from "../workspace";
 
 const viewGroupingOptions = (t: Translator) =>
@@ -373,6 +381,29 @@ const changedFieldLabelKeys: Record<WorkItemChangedField, TranslationKey> = {
   acceptanceCriteria: "field.acceptanceCriteria",
 };
 
+const stageAttemptStatusLabel = (attempt: StageAttempt, t: Translator): string => {
+  if (attempt.status === "QUEUED") return t("workflow.stage.QUEUED");
+  if (attempt.status === "WAITING_HUMAN") return t("workflow.stage.WAITING_HUMAN");
+  if (attempt.status === "SUCCEEDED") return t("workflow.stage.SUCCEEDED");
+  return t("workflow.stage.other");
+};
+
+const pipelineStatusLabelKeys: Record<PipelineRun["status"], TranslationKey> = {
+  RUNNING: "workflow.status.RUNNING",
+  WAITING_HUMAN: "workflow.status.WAITING_HUMAN",
+  SUCCEEDED: "workflow.status.SUCCEEDED",
+  FAILED: "workflow.status.FAILED",
+  CANCELLED: "workflow.status.CANCELLED",
+};
+
+const pipelineStatusTones: Record<PipelineRun["status"], StatusTone> = {
+  RUNNING: "running",
+  WAITING_HUMAN: "waiting",
+  SUCCEEDED: "complete",
+  FAILED: "paused",
+  CANCELLED: "paused",
+};
+
 const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEventProps, "time"> => {
   switch (event.type) {
     case "WORK_ITEM_CREATED":
@@ -402,6 +433,46 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
       };
     case "PROJECT_REGISTERED":
       return { detail: event.data.project.name, icon: "projects", label: t("event.projectRegistered") };
+    case "PIPELINE_STARTED":
+      return {
+        detail: t("event.pipelineStartedDetail", {
+          stage: t(stageLabelKeys[event.data.stageAttempt.stage]),
+        }),
+        icon: "play",
+        label: t("event.pipelineStarted"),
+        tone: "accent",
+      };
+    case "STAGE_ATTEMPT_CHANGED":
+      return {
+        detail: t("event.stageChangedDetail", {
+          stage: t(stageLabelKeys[event.data.stageAttempt.stage]),
+          status: stageAttemptStatusLabel(event.data.stageAttempt, t),
+        }),
+        icon: event.data.stageAttempt.status === "SUCCEEDED" ? "check" : "clock",
+        label: t("event.stageChanged"),
+        tone: event.data.stageAttempt.status === "SUCCEEDED" ? "success" : "accent",
+      };
+    case "HUMAN_REQUEST_OPENED":
+      return {
+        detail: t("event.humanRequestOpenedDetail", { title: event.data.request.title }),
+        icon: "question",
+        label: t("event.humanRequestOpened"),
+        tone: "warning",
+      };
+    case "HUMAN_REQUEST_RESOLVED":
+      return {
+        detail: t("event.humanRequestResolvedDetail"),
+        icon: "check",
+        label: t("event.humanRequestResolved"),
+        tone: "success",
+      };
+    case "PIPELINE_COMPLETED":
+      return {
+        detail: t("event.pipelineCompletedDetail"),
+        icon: "check",
+        label: t("event.pipelineCompleted"),
+        tone: "success",
+      };
   }
 };
 
@@ -630,10 +701,151 @@ const TaskEditDialog = ({ item }: { item: WorkItem }): React.JSX.Element => {
   );
 };
 
+const HumanRequestPanel = ({ request }: { request: HumanRequest }): React.JSX.Element => {
+  const { t } = useI18n();
+  const answerMutation = useAnswerHumanRequest();
+  const [selection, setSelection] = useState("");
+  const [otherText, setOtherText] = useState("");
+  const otherSelected = selection === "__other__";
+  const canSubmit = otherSelected ? otherText.trim().length > 0 : selection.length > 0;
+
+  const submit = (): void => {
+    if (!canSubmit) return;
+    answerMutation.mutate({
+      request,
+      answer: otherSelected
+        ? { type: "OTHER", text: otherText.trim() }
+        : { type: "OPTION", optionIds: [selection] },
+    });
+  };
+
+  return (
+    <div className="human-request-card">
+      <div className="human-request-card__eyebrow">
+        <Icon name="question" size={13} />
+        <span>{t("humanRequest.blocking")}</span>
+      </div>
+      <h3>{request.title}</h3>
+      <p>{request.context}</p>
+      {request.recommendation ? (
+        <div className="human-request-card__recommendation">
+          <strong>{t("humanRequest.recommendation")}</strong>
+          <span>{request.recommendation}</span>
+        </div>
+      ) : null}
+      <RadioGroup
+        aria-label={request.title}
+        onValueChange={setSelection}
+        options={[
+          ...request.options.map((option) => ({
+            value: option.id,
+            label: option.recommended ? `${option.label} · ${t("humanRequest.recommended")}` : option.label,
+            description: option.consequence,
+          })),
+          ...(request.allowOther ? [{ value: "__other__", label: t("humanRequest.other") }] : []),
+        ]}
+        value={selection}
+      />
+      {otherSelected ? (
+        <TextField
+          aria-label={t("humanRequest.other")}
+          autoFocus
+          maxLength={2_000}
+          onChange={(event) => {
+            setOtherText(event.currentTarget.value);
+          }}
+          placeholder={t("humanRequest.otherPlaceholder")}
+          value={otherText}
+        />
+      ) : null}
+      {!canSubmit && selection ? (
+        <span className="human-request-card__hint">{t("humanRequest.chooseAnswer")}</span>
+      ) : null}
+      {answerMutation.error ? (
+        <LocalConnectionRecovery
+          error={answerMutation.error}
+          onRetry={submit}
+          retrying={answerMutation.isPending}
+        />
+      ) : null}
+      <Button disabled={!canSubmit} loading={answerMutation.isPending} onClick={submit} variant="primary">
+        {t("humanRequest.answerResume")}
+      </Button>
+    </div>
+  );
+};
+
+const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
+  const { t } = useI18n();
+  const workflowQuery = useWorkItemWorkflow(item.id);
+  const startMutation = useStartMockPipeline();
+  const snapshot = workflowQuery.data;
+  const openRequest = snapshot?.humanRequests.find(({ status }) => status === "OPEN") ?? null;
+
+  if (workflowQuery.isPending) return <p className="inspector-copy">{t("workflow.loading")}</p>;
+
+  if (!snapshot?.run) {
+    return (
+      <div className="workflow-start">
+        <p className="inspector-copy">
+          {item.state === "READY" ? t("workflow.startDescription") : t("workflow.readyRequired")}
+        </p>
+        {startMutation.error ? (
+          <LocalConnectionRecovery
+            error={startMutation.error}
+            onRetry={() => {
+              startMutation.mutate(item);
+            }}
+            retrying={startMutation.isPending}
+          />
+        ) : null}
+        <Button
+          disabled={item.state !== "READY"}
+          loading={startMutation.isPending}
+          onClick={() => {
+            startMutation.mutate(item);
+          }}
+          variant="primary"
+        >
+          {t("workflow.start")}
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="workflow-panel">
+      <div className="workflow-panel__status">
+        <span>{t("workflow.mockName")}</span>
+        <Status
+          label={t(pipelineStatusLabelKeys[snapshot.run.status])}
+          tone={pipelineStatusTones[snapshot.run.status]}
+        />
+      </div>
+      <ol className="workflow-stage-list">
+        {snapshot.stageAttempts.map((attempt) => (
+          <li className={`is-${attempt.status.toLowerCase()}`} key={attempt.id}>
+            <span aria-hidden="true" />
+            <div>
+              <strong>{t(stageLabelKeys[attempt.stage])}</strong>
+              <small>{stageAttemptStatusLabel(attempt, t)}</small>
+            </div>
+          </li>
+        ))}
+      </ol>
+      {openRequest ? <HumanRequestPanel request={openRequest} /> : null}
+      {snapshot.run.status === "SUCCEEDED" ? (
+        <p className="workflow-panel__completed">{t("workflow.completed")}</p>
+      ) : null}
+    </div>
+  );
+};
+
 const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element => {
   const { locale, t } = useI18n();
   const moveMutation = useMoveWorkItem();
   const eventsQuery = useWorkItemEvents(item?.projectId, item?.id);
+  const workflowQuery = useWorkItemWorkflow(item?.id);
   const [lastTarget, setLastTarget] = useState<WorkItemState | null>(null);
 
   if (!item) {
@@ -647,7 +859,9 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
     );
   }
 
-  const targets = transitionTargets[item.state];
+  const workflowActive =
+    workflowQuery.data?.run?.status === "RUNNING" || workflowQuery.data?.run?.status === "WAITING_HUMAN";
+  const targets = workflowActive ? [] : transitionTargets[item.state];
   const move = (targetState: WorkItemState): void => {
     setLastTarget(targetState);
     moveMutation.mutate({ targetState, workItem: item });
@@ -697,6 +911,19 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
           ]}
         />
         <p className="inspector-copy">{item.description || t("task.noBrief")}</p>
+      </InspectorSection>
+
+      <InspectorSection
+        action={
+          workflowQuery.data?.run ? (
+            <span className="inspector-step-count">
+              {workflowQuery.data.stageAttempts.length.toString().padStart(2, "0")}
+            </span>
+          ) : undefined
+        }
+        title={t("workflow.title")}
+      >
+        <WorkflowPanel item={item} />
       </InspectorSection>
 
       <InspectorSection
@@ -785,6 +1012,7 @@ export const WorkbenchPage = (): React.JSX.Element => {
   const { t } = useI18n();
   const { connectionPending, error, projectsPending, retryConnection, selectedProject } = useWorkspace();
   const workItemsQuery = useProjectWorkItems(selectedProject?.id);
+  const humanRequestsQuery = useProjectHumanRequests(selectedProject?.id);
   const initializeMutation = useInitializeFixtureWorkspace();
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null);
   const [filters, setFilters] = useState<readonly string[]>([]);
@@ -794,6 +1022,7 @@ export const WorkbenchPage = (): React.JSX.Element => {
   const selectedItem =
     activeItems.find((item) => item.id === selectedWorkItemId) ?? activeItems.at(0) ?? null;
   const filterOptions = filterOptionsFor(activeItems, t);
+  const blockingRequests = humanRequestsQuery.data?.humanRequests.filter(({ blocking }) => blocking) ?? [];
 
   return (
     <div className="workbench">
@@ -803,6 +1032,29 @@ export const WorkbenchPage = (): React.JSX.Element => {
         aria-labelledby="current-work-title"
       >
         <BoardToolbar filters={filters} onFiltersChange={setFilters} options={filterOptions} />
+        {blockingRequests[0] ? (
+          <button
+            className="attention-banner"
+            onClick={() => {
+              setSelectedWorkItemId(blockingRequests[0]?.workItemId ?? null);
+            }}
+            type="button"
+          >
+            <span className="attention-banner__icon">
+              <Icon name="question" size={14} />
+            </span>
+            <span>
+              <strong>{t("attention.title")}</strong>
+              <small>{blockingRequests[0].title}</small>
+            </span>
+            <span className="attention-banner__count">
+              {t(blockingRequests.length === 1 ? "attention.count" : "attention.countMany", {
+                count: blockingRequests.length,
+              })}
+            </span>
+            <Icon name="chevronRight" size={14} />
+          </button>
+        ) : null}
         <header className="workbench-heading">
           <div>
             <span className="workbench-heading__mark">

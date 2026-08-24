@@ -8,6 +8,7 @@ import {
   correlationIdSchema,
   sessionExchangeResponseSchema,
   stateCommandResultSchema,
+  workflowSnapshotSchema,
 } from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -152,7 +153,7 @@ describe("local daemon session and state boundary", () => {
     expect(response.status).toBe(401);
   });
 
-  it("consumes a bootstrap token once and reports the M3 cockpit", async () => {
+  it("consumes a bootstrap token once and reports the M4 mock workflow", async () => {
     const token = bootstrapToken();
     daemon = await startDaemon({ bootstrapToken: token, logger: false });
     const session = await authenticate(daemon, token);
@@ -172,7 +173,7 @@ describe("local daemon session and state boundary", () => {
     expect(status.headers.get("access-control-allow-origin")).toBeNull();
     expect(await status.json()).toMatchObject({
       authenticated: true,
-      foundation: { phase: "phase-0", milestone: "M3", persistence: "sqlite" },
+      foundation: { phase: "phase-0", milestone: "M4", persistence: "sqlite" },
     });
   });
 
@@ -366,6 +367,118 @@ describe("local daemon session and state boundary", () => {
         { type: "WORK_ITEM_UPDATED" },
         { type: "WORK_ITEM_STATE_CHANGED" },
       ],
+    });
+  });
+
+  it("restores a blocking HumanRequest after restart and answers it exactly once", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail workflow state "));
+    temporaryDirectories.push(temporaryDirectory);
+    const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    const firstToken = bootstrapToken();
+    const firstDaemon = await startDaemon({ bootstrapToken: firstToken, logger: false, stateDatabasePath });
+    daemon = firstDaemon;
+    const firstSession = await authenticate(firstDaemon, firstToken);
+    const headers = mutationHeaders(firstDaemon, firstSession);
+
+    await fetch(`${firstDaemon.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "register-workflow-fixture",
+        fixtureId: "web-app-a",
+      }),
+    });
+    const createResponse = await fetch(`${firstDaemon.baseUrl}/api/v1/work-items`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "create-workflow-item",
+        projectId: "project-fixture-web-app-a",
+        type: "TASK",
+        title: "Run the mock workflow",
+      }),
+    });
+    const created = stateCommandResultSchema.parse(await createResponse.json());
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    await fetch(`${firstDaemon.baseUrl}/api/v1/work-items/${created.workItem.id}/move`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "ready-workflow-item",
+        expectedVersion: 1,
+        targetState: "READY",
+      }),
+    });
+    const startResponse = await fetch(
+      `${firstDaemon.baseUrl}/api/v1/work-items/${created.workItem.id}/pipeline/start`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "start-workflow-item",
+          expectedVersion: 2,
+        }),
+      },
+    );
+    const waiting = workflowSnapshotSchema.parse(await startResponse.json());
+    expect(startResponse.status).toBe(200);
+    expect(waiting).toMatchObject({
+      run: { status: "WAITING_HUMAN" },
+      humanRequests: [{ status: "OPEN", kind: "SINGLE_CHOICE", blocking: true }],
+    });
+    const request = waiting.humanRequests[0];
+    if (!request) throw new Error("Expected an open HumanRequest");
+
+    await firstDaemon.close();
+    daemon = undefined;
+    const secondToken = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: secondToken, logger: false, stateDatabasePath });
+    const secondSession = await authenticate(daemon, secondToken);
+    const restoredResponse = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/workflow`,
+      { headers: { cookie: secondSession.cookie } },
+    );
+    const restored = workflowSnapshotSchema.parse(await restoredResponse.json());
+    expect(restored.humanRequests[0]).toMatchObject({ id: request.id, status: "OPEN", version: 1 });
+
+    const answerBody = JSON.stringify({
+      schemaVersion: 1,
+      commandId: "answer-workflow-request",
+      expectedVersion: 1,
+      answer: { type: "OPTION", optionIds: ["focused-pass"] },
+    });
+    const answerResponse = await fetch(`${daemon.baseUrl}/api/v1/human-requests/${request.id}/answer`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, secondSession),
+      body: answerBody,
+    });
+    const completed = workflowSnapshotSchema.parse(await answerResponse.json());
+    expect(answerResponse.status).toBe(200);
+    expect(completed.run?.status).toBe("SUCCEEDED");
+    expect(completed.stageAttempts.map(({ stage, status }) => ({ stage, status }))).toEqual([
+      { stage: "DISCOVERY", status: "SUCCEEDED" },
+      { stage: "PLAN", status: "SUCCEEDED" },
+    ]);
+    expect(completed.humanRequests[0]).toMatchObject({ status: "RESOLVED", version: 2 });
+    expect(completed.decisions).toHaveLength(1);
+
+    const repeated = await fetch(`${daemon.baseUrl}/api/v1/human-requests/${request.id}/answer`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, secondSession),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "answer-workflow-request-again",
+        expectedVersion: 2,
+        answer: { type: "OPTION", optionIds: ["focused-pass"] },
+      }),
+    });
+    expect(repeated.status).toBe(409);
+    expect(await repeated.json()).toMatchObject({
+      error: { code: "HUMAN_REQUEST_ALREADY_RESOLVED" },
     });
   });
 });

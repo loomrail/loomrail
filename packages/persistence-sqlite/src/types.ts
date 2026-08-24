@@ -1,10 +1,14 @@
 import type {
   DomainEvent,
+  HumanRequest,
+  HumanRequestStatus,
   Project,
   StateCommand,
   StateCommandResult,
   WorkItem,
   WorkItemState,
+  WorkflowDispatch,
+  WorkflowSnapshot,
 } from "@loomrail/contracts";
 
 export type StateStoreErrorCode =
@@ -37,6 +41,13 @@ export type StateQuery =
   | { type: "LIST_PROJECTS" }
   | { type: "GET_PROJECT"; projectId: string }
   | { type: "GET_WORK_ITEM"; workItemId: string }
+  | { type: "GET_WORKFLOW_SNAPSHOT"; workItemId: string }
+  | {
+      type: "LIST_HUMAN_REQUESTS";
+      projectId?: string;
+      status?: HumanRequestStatus;
+    }
+  | { type: "LIST_PENDING_DISPATCHES" }
   | {
       type: "LIST_WORK_ITEMS";
       projectId: string;
@@ -54,6 +65,9 @@ export type StateQueryResult =
   | { type: "PROJECTS"; projects: Project[] }
   | { type: "PROJECT"; project: Project | null }
   | { type: "WORK_ITEM"; workItem: WorkItem | null }
+  | { type: "WORKFLOW_SNAPSHOT"; snapshot: WorkflowSnapshot }
+  | { type: "HUMAN_REQUESTS"; humanRequests: HumanRequest[] }
+  | { type: "WORKFLOW_DISPATCHES"; dispatches: WorkflowDispatch[] }
   | { type: "WORK_ITEMS"; workItems: WorkItem[] }
   | { type: "EVENTS"; events: DomainEvent[]; nextSequence: number };
 
@@ -69,7 +83,8 @@ export type LocalState = {
   close: () => void;
 };
 
-export type LocalStateIdKind = "workItem" | "event";
+export type LocalStateIdKind =
+  "workItem" | "event" | "pipelineRun" | "stageAttempt" | "workflowDispatch" | "humanRequest" | "decision";
 
 export type OpenLocalStateOptions = {
   databasePath: string;

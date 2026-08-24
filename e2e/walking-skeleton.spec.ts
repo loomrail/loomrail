@@ -164,6 +164,44 @@ test.describe("authenticated walking skeleton", () => {
     expect(await page.evaluate<boolean>("Boolean(window.__loomrailXss)")).toBe(false);
   });
 
+  test("stops a mock workflow on a durable HumanRequest and resumes from the answer", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Human decision workflow");
+    const inspector = page.getByRole("complementary", { name: "Human decision workflow" });
+    await inspector.getByRole("button", { name: "Move to Ready" }).click();
+    await expect(inspector.getByRole("button", { name: "Start mock workflow" })).toBeEnabled();
+    await inspector.getByRole("button", { name: "Start mock workflow" }).click();
+
+    await expect(inspector.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible();
+    await expect(inspector.getByText("Waiting for you", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Needs your decision/ })).toBeVisible();
+    await page.reload();
+    const restoredInspector = page.getByRole("complementary", { name: "Human decision workflow" });
+    await expect(
+      restoredInspector.getByRole("heading", { name: "Choose the discovery depth" }),
+    ).toBeVisible();
+
+    await restoredInspector.getByRole("radio", { name: /Focused pass/ }).click();
+    await restoredInspector.getByRole("button", { name: "Answer & resume" }).click();
+    const workflowSection = restoredInspector
+      .locator(".lr-inspector-section")
+      .filter({ has: page.getByText("Workflow", { exact: true }) });
+    await expect(
+      workflowSection.getByText("Discovery and planning completed from the recorded decision."),
+    ).toBeVisible();
+    await expect(workflowSection.getByText("Completed", { exact: true })).toHaveCount(3);
+    await expect(page.getByRole("button", { name: /Needs your decision/ })).toHaveCount(0);
+    await expect(restoredInspector.getByText("Decision recorded", { exact: true })).toBeVisible();
+    await expect(restoredInspector.getByText("Workflow completed", { exact: true })).toBeVisible();
+  });
+
   test("keeps overlays mutually exclusive, dismissible, and responsive", async ({ page }) => {
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),

@@ -14,7 +14,10 @@ type Migration = {
   filename: string;
 };
 
-const migrations: readonly Migration[] = [{ version: 1, name: "initial", filename: "0001_initial.sql" }];
+const migrations: readonly Migration[] = [
+  { version: 1, name: "initial", filename: "0001_initial.sql" },
+  { version: 2, name: "mock_workflow", filename: "0002_mock_workflow.sql" },
+];
 
 const migrationRowSchema = z.object({
   version: z.number().int().positive(),

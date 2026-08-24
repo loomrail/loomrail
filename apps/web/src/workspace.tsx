@@ -2,15 +2,19 @@
 import { createContext, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Project, WorkItem, WorkItemState } from "@loomrail/contracts";
+import type { HumanRequest, HumanRequestAnswer, Project, WorkItem, WorkItemState } from "@loomrail/contracts";
 
 import {
+  answerHumanRequest,
   createWorkItem,
+  getWorkItemWorkflow,
+  listOpenHumanRequests,
   listProjects,
   listProjectWorkItems,
   listWorkItemEvents,
   moveWorkItem,
   registerFixtureProject,
+  startMockPipeline,
   updateWorkItem,
   type CreateWorkItemInput,
   type UpdateWorkItemPatch,
@@ -21,6 +25,9 @@ const projectsKey = ["projects"] as const;
 const projectWorkItemsKey = (projectId: string) => ["projects", projectId, "work-items"] as const;
 const workItemEventsKey = (projectId: string, workItemId: string) =>
   ["projects", projectId, "work-items", workItemId, "events"] as const;
+const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "workflow"] as const;
+const projectHumanRequestsKey = (projectId: string) =>
+  ["projects", projectId, "human-requests", "OPEN"] as const;
 
 type WorkspaceContextValue = {
   connection: ConnectionResult | undefined;
@@ -116,6 +123,26 @@ export const useWorkItemEvents = (projectId: string | undefined, workItemId: str
     enabled: projectId !== undefined && workItemId !== undefined,
   });
 
+export const useWorkItemWorkflow = (workItemId: string | undefined) =>
+  useQuery({
+    queryKey: workItemId ? workItemWorkflowKey(workItemId) : ["work-items", "none", "workflow"],
+    queryFn: () => {
+      if (!workItemId) throw new Error("A work item is required to load its workflow");
+      return getWorkItemWorkflow(workItemId);
+    },
+    enabled: workItemId !== undefined,
+  });
+
+export const useProjectHumanRequests = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: projectId ? projectHumanRequestsKey(projectId) : ["projects", "none", "human-requests", "OPEN"],
+    queryFn: () => {
+      if (!projectId) throw new Error("A project is required to list HumanRequests");
+      return listOpenHumanRequests(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+
 export const useInitializeFixtureWorkspace = () => {
   const queryClient = useQueryClient();
   const { projects } = useWorkspace();
@@ -164,6 +191,39 @@ export const useUpdateWorkItem = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
+      ]);
+    },
+  });
+};
+
+export const useStartMockPipeline = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (workItem: WorkItem) => startMockPipeline(workItem),
+    onSuccess: async (_, workItem) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
+        queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(workItem.id) }),
+        queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
+        queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(workItem.projectId) }),
+      ]);
+    },
+  });
+};
+
+export const useAnswerHumanRequest = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ answer, request }: { answer: HumanRequestAnswer; request: HumanRequest }) =>
+      answerHumanRequest(request, answer),
+    onSuccess: async (_, { request }) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(request.projectId) }),
+        queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(request.workItemId) }),
+        queryClient.invalidateQueries({
+          queryKey: workItemEventsKey(request.projectId, request.workItemId),
+        }),
+        queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(request.projectId) }),
       ]);
     },
   });

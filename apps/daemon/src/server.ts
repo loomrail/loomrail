@@ -7,26 +7,33 @@ import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import fastifyStatic from "@fastify/static";
 import {
+  answerHumanRequestRequestSchema,
   apiErrorResponseSchema,
   correlationIdSchema,
   createWorkItemRequestSchema,
   daemonStatusResponseSchema,
   eventsResponseSchema,
   healthResponseSchema,
+  humanRequestStatusSchema,
+  humanRequestsResponseSchema,
   moveWorkItemRequestSchema,
   opaqueIdSchema,
   projectsResponseSchema,
   registerFixtureProjectRequestSchema,
   sessionExchangeRequestSchema,
   sessionExchangeResponseSchema,
+  startMockPipelineRequestSchema,
   updateWorkItemRequestSchema,
   workItemResponseSchema,
   workItemsResponseSchema,
   workItemStateSchema,
+  workflowSnapshotSchema,
   type ApiErrorResponse,
 } from "@loomrail/contracts";
-import { WorkItemDomainError } from "@loomrail/domain";
+import { WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
 import { openLocalState, StateStoreError } from "@loomrail/persistence-sqlite";
+import { createMockProvider } from "@loomrail/provider-mock";
+import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
 
@@ -76,7 +83,11 @@ type BootstrapGrant = {
 
 const projectParamsSchema = z.object({ projectId: opaqueIdSchema }).strict();
 const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
+const humanRequestParamsSchema = z.object({ humanRequestId: opaqueIdSchema }).strict();
 const workItemsQuerySchema = z.object({ state: workItemStateSchema.optional() }).strict();
+const humanRequestsQuerySchema = z
+  .object({ projectId: opaqueIdSchema.optional(), status: humanRequestStatusSchema.optional() })
+  .strict();
 const eventsQuerySchema = z
   .object({
     after: z.coerce.number().int().nonnegative().default(0),
@@ -137,6 +148,15 @@ const sendOperationError = (
     const status = error.code === "WORK_ITEM_NOT_FOUND" || error.code === "PARENT_NOT_FOUND" ? 404 : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
+  if (error instanceof WorkflowDomainError) {
+    const status =
+      error.code === "WORKFLOW_NOT_FOUND" ||
+      error.code === "WORKFLOW_DISPATCH_NOT_FOUND" ||
+      error.code === "HUMAN_REQUEST_NOT_FOUND"
+        ? 404
+        : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
   if (error instanceof StateStoreError) {
     const status =
       error.code === "PROJECT_NOT_FOUND"
@@ -176,6 +196,60 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     databasePath: options.stateDatabasePath ?? ":memory:",
     now,
   });
+  const mockProvider = createMockProvider();
+  mockProvider.capabilities();
+
+  const drainMockDispatches = async (): Promise<void> => {
+    for (let cycle = 0; cycle < 20; cycle += 1) {
+      const queued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      const dispatch = queued.type === "WORKFLOW_DISPATCHES" ? queued.dispatches[0] : undefined;
+      if (!dispatch) return;
+
+      const workItemResult = localState.query({ type: "GET_WORK_ITEM", workItemId: dispatch.workItemId });
+      const snapshotResult = localState.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: dispatch.workItemId,
+      });
+      const workItem = workItemResult.type === "WORK_ITEM" ? workItemResult.workItem : null;
+      const snapshot =
+        snapshotResult.type === "WORKFLOW_SNAPSHOT"
+          ? snapshotResult.snapshot
+          : workflowSnapshotSchema.parse({
+              schemaVersion: 1,
+              run: null,
+              stageAttempts: [],
+              humanRequests: [],
+              decisions: [],
+            });
+      const stageAttempt = snapshot.stageAttempts.find(({ id }) => id === dispatch.stageAttemptId);
+      const stageRequest = snapshot.humanRequests.find(
+        ({ stageAttemptId }) => stageAttemptId === dispatch.stageAttemptId,
+      );
+      const decision = stageRequest
+        ? (snapshot.decisions.find(({ humanRequestId }) => humanRequestId === stageRequest.id) ?? null)
+        : null;
+      if (!workItem || !stageAttempt || !snapshot.run) {
+        throw new StateStoreError("PERSISTENCE_FAILURE", "A pending workflow dispatch is incomplete");
+      }
+
+      const invocation = { dispatch, stageAttempt, workItem, decision };
+      const outcome =
+        dispatch.mode === "RESUME"
+          ? await mockProvider.resume(invocation)
+          : await mockProvider.start(invocation);
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `apply-${dispatch.id}`,
+        correlationId: `dispatch-${dispatch.id}`,
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_MOCK_PROVIDER_OUTCOME",
+        payload: { dispatchId: dispatch.id, outcome, template: mockDeliveryTemplate },
+      });
+    }
+    throw new StateStoreError("PERSISTENCE_FAILURE", "The mock dispatch queue exceeded its safety limit");
+  };
+
+  await drainMockDispatches();
   let allowedOrigin = "";
   let closing = false;
 
@@ -347,7 +421,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         },
         foundation: {
           phase: "phase-0",
-          milestone: "M3",
+          milestone: "M4",
           providers: "mock-only",
           persistence: "sqlite",
         },
@@ -431,6 +505,48 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
+    app.get("/api/v1/work-items/:workItemId/workflow", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const workItem = localState.query({ type: "GET_WORK_ITEM", workItemId: params.workItemId });
+        if (workItem.type !== "WORK_ITEM" || !workItem.workItem) {
+          throw new WorkItemDomainError("WORK_ITEM_NOT_FOUND", "The WorkItem does not exist");
+        }
+        const result = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        return workflowSnapshotSchema.parse(
+          result.type === "WORKFLOW_SNAPSHOT"
+            ? result.snapshot
+            : { schemaVersion: 1, run: null, stageAttempts: [], humanRequests: [], decisions: [] },
+        );
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/human-requests", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const query = humanRequestsQuerySchema.parse(request.query);
+        const result = localState.query({
+          type: "LIST_HUMAN_REQUESTS",
+          ...(query.projectId === undefined ? {} : { projectId: query.projectId }),
+          ...(query.status === undefined ? {} : { status: query.status }),
+        });
+        return humanRequestsResponseSchema.parse({
+          schemaVersion: 1,
+          humanRequests: result.type === "HUMAN_REQUESTS" ? result.humanRequests : [],
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
     app.post("/api/v1/work-items", (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!authorizeMutation(request, reply, correlationId)) return;
@@ -499,6 +615,73 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             targetState: body.targetState,
           },
         });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/work-items/:workItemId/pipeline/start", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const body = startMockPipelineRequestSchema.parse(request.body);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "START_MOCK_PIPELINE",
+          payload: {
+            workItemId: params.workItemId,
+            expectedVersion: body.expectedVersion,
+            template: mockDeliveryTemplate,
+          },
+        });
+        await drainMockDispatches();
+        const result = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        if (result.type !== "WORKFLOW_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow snapshot could not be loaded");
+        }
+        return workflowSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/human-requests/:humanRequestId/answer", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = humanRequestParamsSchema.parse(request.params);
+        const body = answerHumanRequestRequestSchema.parse(request.body);
+        const answered = localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "ANSWER_HUMAN_REQUEST",
+          payload: {
+            humanRequestId: params.humanRequestId,
+            expectedVersion: body.expectedVersion,
+            answer: body.answer,
+          },
+        });
+        if (answered.type !== "HUMAN_REQUEST_ANSWERED") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The HumanRequest answer was not applied");
+        }
+        await drainMockDispatches();
+        const result = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: answered.workItemId,
+        });
+        if (result.type !== "WORKFLOW_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow snapshot could not be loaded");
+        }
+        return workflowSnapshotSchema.parse(result.snapshot);
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }

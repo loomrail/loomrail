@@ -18,7 +18,8 @@ export type WorkItemDomainErrorCode =
   | "INVALID_TRANSITION"
   | "ACCEPTANCE_REQUIRED"
   | "TERMINAL_STATE"
-  | "WORK_ITEM_HAS_CHILDREN";
+  | "WORK_ITEM_HAS_CHILDREN"
+  | "ACTIVE_WORKFLOW_CONTROLS_STATE";
 
 export class WorkItemDomainError extends Error {
   readonly code: WorkItemDomainErrorCode;
@@ -228,3 +229,5 @@ export const decideWorkItemCommand = (
       return decideMove(command, context);
   }
 };
+
+export * from "./workflow.js";

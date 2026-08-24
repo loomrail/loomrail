@@ -7,6 +7,20 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
+import {
+  answerHumanRequestCommandSchema,
+  applyMockProviderOutcomeCommandSchema,
+  humanRequestAnsweredResultSchema,
+  humanRequestOpenedEventSchema,
+  humanRequestResolvedEventSchema,
+  mockProviderOutcomeAppliedResultSchema,
+  pipelineCompletedEventSchema,
+  pipelineStartedEventSchema,
+  pipelineStartedResultSchema,
+  stageAttemptChangedEventSchema,
+  startMockPipelineCommandSchema,
+  workflowStageSchema,
+} from "./workflow.js";
 
 export const fixtureProjectIdSchema = z.enum(["web-app-a", "api-service-b"]);
 export const projectStatusSchema = z.enum(["ACTIVE", "ARCHIVED"]);
@@ -19,7 +33,6 @@ export const workItemStateSchema = z.enum([
   "DONE",
   "CANCELLED",
 ]);
-export const workflowStageSchema = z.enum(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
 export const prioritySchema = z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]);
 export const riskSchema = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
 
@@ -123,6 +136,11 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   workItemCreatedEventSchema,
   workItemUpdatedEventSchema,
   workItemStateChangedEventSchema,
+  pipelineStartedEventSchema,
+  stageAttemptChangedEventSchema,
+  humanRequestOpenedEventSchema,
+  humanRequestResolvedEventSchema,
+  pipelineCompletedEventSchema,
 ]);
 
 const commandBaseSchema = z
@@ -200,6 +218,9 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   createWorkItemCommandSchema,
   updateWorkItemCommandSchema,
   moveWorkItemCommandSchema,
+  startMockPipelineCommandSchema,
+  applyMockProviderOutcomeCommandSchema,
+  answerHumanRequestCommandSchema,
 ]);
 
 const commandResultBaseSchema = z
@@ -238,6 +259,9 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   workItemCreatedResultSchema,
   workItemUpdatedResultSchema,
   workItemMovedResultSchema,
+  pipelineStartedResultSchema,
+  mockProviderOutcomeAppliedResultSchema,
+  humanRequestAnsweredResultSchema,
 ]);
 
 export const registerFixtureProjectRequestSchema = z

@@ -15,8 +15,8 @@ decisions instead of disconnected chat sessions.
 
 > [!IMPORTANT]
 > Loomrail is an early pre-alpha. The local kernel, authenticated browser session, SQLite state, audit log, and
-> cross-platform CI are real. The Workbench reads and changes persisted local projects and work items, with English and
-> Russian interfaces. Real agent execution is not available yet.
+> cross-platform CI are real. The Workbench now runs a restart-safe synthetic Discovery → Plan workflow with a durable
+> Human Request and Decision in English and Russian. Real agent execution is not available yet.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/workbench-dark.png" />
@@ -36,13 +36,13 @@ decisions instead of disconnected chat sessions.
 
 ## Current checkpoint
 
-| Area          | Today                                                                 | Next                                                 |
-| ------------- | --------------------------------------------------------------------- | ---------------------------------------------------- |
-| Local runtime | Loopback daemon, CLI launcher, one-time browser session               | Packaged installer and release artifacts             |
-| State         | Projects, work items, commands, and events persisted in SQLite        | Editing, replay, and recovery hardening              |
-| Workbench     | Persisted boards, activity, EN/RU, light/dark, filters, view controls | Reconnect UX and richer task authoring               |
-| Agents        | Provider boundaries and safety model are specified                    | Mock workflow, then supervised Codex/Claude adapters |
-| Platforms     | macOS and Windows CI are green                                        | Clean-machine acceptance and hardening               |
+| Area          | Today                                                                                  | Next                                           |
+| ------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Local runtime | Loopback daemon, CLI launcher, one-time browser session                                | Packaged installer and release artifacts       |
+| State         | Tasks, runs, stage attempts, dispatches, Human Requests, Decisions, append-only Events | Budgets, pause, and recovery reconciliation    |
+| Workbench     | Persisted board, task cockpit, Attention banner, EN/RU, light/dark                     | Full Attention Inbox and richer workflow views |
+| Agents        | Capability-checked provider contract and deterministic mock adapter                    | Supervised Codex/Claude adapters               |
+| Platforms     | macOS and Windows CI are green                                                         | Clean-machine acceptance and hardening         |
 
 ## How it is intended to work
 
@@ -109,9 +109,13 @@ apps/
   daemon/    # loopback API, commands, events, and SQLite lifecycle
   web/       # React Workbench
 packages/
-  contracts/ # shared schemas and transport contracts
-  state/     # SQLite repositories and migrations
-  ui/        # shared product primitives and patterns
+  contracts/          # shared schemas and transport contracts
+  domain/             # deterministic WorkItem and workflow decisions
+  persistence-sqlite/ # SQLite repositories, queue, and migrations
+  provider-core/      # provider lifecycle and capability boundary
+  provider-mock/      # deterministic synthetic provider scenarios
+  workflow-engine/    # versioned workflow template validation
+  ui/                 # shared product primitives and patterns
 docs/        # product, architecture, security, design, plans, and evidence
 ```
 
@@ -125,7 +129,8 @@ talk directly to future agent, shell, or Git adapters.
 - [x] **M2 — Local kernel:** SQLite state, idempotent commands, append-only events, macOS/Windows gate
 - [x] **M3 — Real task cockpit:** authenticated API client, persisted projects/work items, editing, EN/RU, activity
       replay and secure reconnect guidance
-- [ ] **M4 — Mock delivery workflow:** Human Request and resumable task pipeline
+- [x] **M4 — Mock delivery workflow:** restart-safe dispatch queue, Human Request, Decision, and resumable task
+      pipeline
 - [ ] **M5 — Budgets and recovery:** explicit limits, pause/resume, crash recovery
 - [ ] **M6 — Acceptance:** evidence, review, owner approval, audit surface
 - [ ] **M7 — Public checkpoint:** clean install, hardening, packaging, release documentation

@@ -4,9 +4,12 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type {
+  AnswerHumanRequestCommand,
+  ApplyMockProviderOutcomeCommand,
   CreateWorkItemCommand,
   MoveWorkItemCommand,
   RegisterProjectCommand,
+  StartMockPipelineCommand,
   UpdateWorkItemCommand,
 } from "@loomrail/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -14,6 +17,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openLocalState, StateStoreError, type LocalState } from "../src/index.js";
 
 const timestamp = "2026-08-22T18:00:00.000Z";
+
+const mockTemplate: StartMockPipelineCommand["payload"]["template"] = {
+  schemaVersion: 1,
+  id: "mock-delivery-v1",
+  version: 1,
+  name: "Mock delivery",
+  stages: [
+    { stage: "DISCOVERY", ordinal: 0 },
+    { stage: "PLAN", ordinal: 1 },
+  ],
+};
 
 describe("SQLite local state", () => {
   let temporaryDirectory = "";
@@ -213,7 +227,7 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);
@@ -251,5 +265,127 @@ describe("SQLite local state", () => {
       raw.exec("DELETE FROM commands");
     }).toThrow(/append-only/);
     raw.close();
+  });
+
+  it("persists a HumanRequest across restart and resumes the exact mock workflow once", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem());
+    const independent = localState.execute(createWorkItem("create-independent"));
+    if (created.type !== "WORK_ITEM_CREATED" || independent.type !== "WORK_ITEM_CREATED") {
+      throw new Error("Expected WorkItem creation");
+    }
+    localState.execute(moveWorkItem("ready-workflow", created.workItem.id, 1, "READY"));
+    localState.execute(moveWorkItem("ready-independent", independent.workItem.id, 1, "READY"));
+    const start: StartMockPipelineCommand = {
+      schemaVersion: 1,
+      commandId: "start-mock-workflow",
+      correlationId: "correlation-start-mock-workflow",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: { workItemId: created.workItem.id, expectedVersion: 2, template: mockTemplate },
+    };
+    const started = localState.execute(start);
+    if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    const needsHuman: ApplyMockProviderOutcomeCommand = {
+      schemaVersion: 1,
+      commandId: `apply-${started.dispatch.id}`,
+      correlationId: "correlation-needs-human",
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "APPLY_MOCK_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId: started.dispatch.id,
+        template: mockTemplate,
+        outcome: {
+          type: "NEEDS_HUMAN",
+          request: {
+            kind: "SINGLE_CHOICE",
+            blocking: true,
+            title: "Choose the discovery depth",
+            context: "A durable decision is required before discovery can continue.",
+            recommendation: "Use the focused pass.",
+            options: [
+              {
+                id: "focused-pass",
+                label: "Focused pass",
+                consequence: "Proceed with a bounded discovery.",
+                recommended: true,
+              },
+            ],
+            allowOther: true,
+          },
+        },
+      },
+    };
+    localState.execute(needsHuman);
+    const waiting = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: created.workItem.id });
+    if (waiting.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected workflow snapshot");
+    expect(waiting.snapshot).toMatchObject({
+      run: { status: "WAITING_HUMAN" },
+      humanRequests: [{ status: "OPEN", version: 1 }],
+    });
+    const request = waiting.snapshot.humanRequests[0];
+    if (!request) throw new Error("Expected an open HumanRequest");
+
+    localState.close();
+    state = undefined;
+    const reopened = await open();
+    const restored = reopened.query({ type: "LIST_HUMAN_REQUESTS", status: "OPEN" });
+    expect(restored.type === "HUMAN_REQUESTS" ? restored.humanRequests : []).toHaveLength(1);
+
+    const answer: AnswerHumanRequestCommand = {
+      schemaVersion: 1,
+      commandId: "answer-human-request",
+      correlationId: "correlation-answer-human-request",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "ANSWER_HUMAN_REQUEST",
+      payload: {
+        humanRequestId: request.id,
+        expectedVersion: 1,
+        answer: { type: "OPTION", optionIds: ["focused-pass"] },
+      },
+    };
+    reopened.execute(answer);
+    expect(() => reopened.execute({ ...answer, commandId: "answer-human-request-again" })).toThrow(
+      expect.objectContaining({ code: "WORKFLOW_VERSION_CONFLICT" }),
+    );
+
+    const resumeQueue = reopened.query({ type: "LIST_PENDING_DISPATCHES" });
+    if (resumeQueue.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
+    const resume = resumeQueue.dispatches[0];
+    if (!resume) throw new Error("Expected resume dispatch");
+    const applyCompleted = (dispatchId: string, commandId: string): void => {
+      reopened.execute({
+        schemaVersion: 1,
+        commandId,
+        correlationId: `correlation-${commandId}`,
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_MOCK_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId,
+          template: mockTemplate,
+          outcome: { type: "COMPLETED", summary: "Synthetic stage completed." },
+        },
+      });
+    };
+    applyCompleted(resume.id, "complete-discovery");
+    const planQueue = reopened.query({ type: "LIST_PENDING_DISPATCHES" });
+    if (planQueue.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected plan dispatch queue");
+    const plan = planQueue.dispatches[0];
+    if (!plan) throw new Error("Expected plan dispatch");
+    applyCompleted(plan.id, "complete-plan");
+
+    const completed = reopened.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: created.workItem.id });
+    const independentItem = reopened.query({ type: "GET_WORK_ITEM", workItemId: independent.workItem.id });
+    expect(completed.type === "WORKFLOW_SNAPSHOT" ? completed.snapshot.run?.status : null).toBe("SUCCEEDED");
+    expect(
+      completed.type === "WORKFLOW_SNAPSHOT"
+        ? completed.snapshot.stageAttempts.map(({ stage, status }) => ({ stage, status }))
+        : [],
+    ).toEqual([
+      { stage: "DISCOVERY", status: "SUCCEEDED" },
+      { stage: "PLAN", status: "SUCCEEDED" },
+    ]);
+    expect(independentItem.type === "WORK_ITEM" ? independentItem.workItem?.state : null).toBe("READY");
   });
 });
