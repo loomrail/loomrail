@@ -18,6 +18,7 @@ import {
 } from "@loomrail/ui";
 
 import { BrandMark } from "../components/BrandMark";
+import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n } from "../i18n";
 import { applyThemePreference, readThemePreference, type ThemePreference } from "../theme";
 import { useCreateWorkItem, useWorkspace } from "../workspace";
@@ -100,10 +101,14 @@ const NewTaskDialog = (): React.JSX.Element => {
       }
     >
       <form className="new-task-form" id="new-task-form" onSubmit={submit} ref={formRef}>
-        {createMutation.error instanceof Error ? (
-          <p className="new-task-form__error" role="alert">
-            {createMutation.error.message}
-          </p>
+        {createMutation.error ? (
+          <LocalConnectionRecovery
+            error={createMutation.error}
+            onRetry={() => {
+              formRef.current?.requestSubmit();
+            }}
+            retrying={createMutation.isPending}
+          />
         ) : null}
         <Field htmlFor="new-task-title" label={t("task.create.title")} required>
           <TextField

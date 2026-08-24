@@ -1,5 +1,13 @@
-import { useState } from "react";
-import type { DomainEvent, WorkItem, WorkItemChangedField, WorkItemState } from "@loomrail/contracts";
+import { useRef, useState } from "react";
+import type { SyntheticEvent } from "react";
+import {
+  prioritySchema,
+  riskSchema,
+  type DomainEvent,
+  type WorkItem,
+  type WorkItemChangedField,
+  type WorkItemState,
+} from "@loomrail/contracts";
 import {
   ActionMenu,
   AppliedFilterBar,
@@ -7,7 +15,9 @@ import {
   CascadingFilter,
   Checkbox,
   cn,
+  DialogSurface,
   FeedbackState,
+  Field,
   Icon,
   IconButton,
   InspectorSection,
@@ -20,6 +30,8 @@ import {
   Status,
   Switch,
   TaskCard,
+  Textarea,
+  TextField,
   TimelineEvent,
   type BadgeTone,
   type FilterMessages,
@@ -28,11 +40,13 @@ import {
   type TimelineEventProps,
 } from "@loomrail/ui";
 
+import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
 import {
   useInitializeFixtureWorkspace,
   useMoveWorkItem,
   useProjectWorkItems,
+  useUpdateWorkItem,
   useWorkspace,
   useWorkItemEvents,
 } from "../workspace";
@@ -431,10 +445,196 @@ const WorkItemButton = ({
   );
 };
 
+const criteriaFromText = (value: string): readonly string[] =>
+  value
+    .split("\n")
+    .map((criterion) => criterion.trim())
+    .filter(Boolean);
+
+const TaskEditDialog = ({ item }: { item: WorkItem }): React.JSX.Element => {
+  const { t } = useI18n();
+  const updateMutation = useUpdateWorkItem();
+  const formRef = useRef<HTMLFormElement>(null);
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState(item.title);
+  const [description, setDescription] = useState(item.description);
+  const [priority, setPriority] = useState(item.priority);
+  const [risk, setRisk] = useState(item.risk);
+  const [criteriaText, setCriteriaText] = useState(item.acceptanceCriteria.join("\n"));
+  const acceptanceCriteria = criteriaFromText(criteriaText);
+  const criteriaValid =
+    acceptanceCriteria.length <= 50 && acceptanceCriteria.every((criterion) => criterion.length <= 500);
+  const changed =
+    title.trim() !== item.title ||
+    description.trim() !== item.description ||
+    priority !== item.priority ||
+    risk !== item.risk ||
+    acceptanceCriteria.length !== item.acceptanceCriteria.length ||
+    acceptanceCriteria.some((criterion, index) => criterion !== item.acceptanceCriteria[index]);
+
+  const resetDraft = (): void => {
+    setTitle(item.title);
+    setDescription(item.description);
+    setPriority(item.priority);
+    setRisk(item.risk);
+    setCriteriaText(item.acceptanceCriteria.join("\n"));
+    updateMutation.reset();
+  };
+
+  const submit = (event: SyntheticEvent<HTMLFormElement, SubmitEvent>): void => {
+    event.preventDefault();
+    const normalizedTitle = title.trim();
+    const normalizedDescription = description.trim();
+    if (!normalizedTitle || !criteriaValid || !changed) return;
+
+    const patch = {
+      ...(normalizedTitle === item.title ? {} : { title: normalizedTitle }),
+      ...(normalizedDescription === item.description ? {} : { description: normalizedDescription }),
+      ...(priority === item.priority ? {} : { priority }),
+      ...(risk === item.risk ? {} : { risk }),
+      ...(acceptanceCriteria.length === item.acceptanceCriteria.length &&
+      acceptanceCriteria.every((criterion, index) => criterion === item.acceptanceCriteria[index])
+        ? {}
+        : { acceptanceCriteria: [...acceptanceCriteria] }),
+    };
+
+    updateMutation.mutate(
+      { patch, workItem: item },
+      {
+        onSuccess: () => {
+          setOpen(false);
+        },
+      },
+    );
+  };
+
+  return (
+    <DialogSurface
+      closeLabel={t("action.closeDialog")}
+      description={t("task.edit.description")}
+      footer={
+        <>
+          <Button
+            disabled={updateMutation.isPending}
+            onClick={() => {
+              setOpen(false);
+              resetDraft();
+            }}
+          >
+            {t("action.cancel")}
+          </Button>
+          <Button
+            disabled={!title.trim() || !criteriaValid || !changed}
+            loading={updateMutation.isPending}
+            onClick={() => {
+              formRef.current?.requestSubmit();
+            }}
+            type="button"
+            variant="primary"
+          >
+            {t("task.edit.submit")}
+          </Button>
+        </>
+      }
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) resetDraft();
+        setOpen(nextOpen);
+      }}
+      open={open}
+      size="lg"
+      title={t("task.edit")}
+      trigger={<Button shape="pill">{t("task.edit")}</Button>}
+    >
+      <form className="edit-task-form" onSubmit={submit} ref={formRef}>
+        {updateMutation.error ? (
+          <LocalConnectionRecovery
+            error={updateMutation.error}
+            onRetry={() => {
+              formRef.current?.requestSubmit();
+            }}
+            retrying={updateMutation.isPending}
+          />
+        ) : null}
+        <Field htmlFor="edit-task-title" label={t("task.create.title")} required>
+          <TextField
+            autoFocus
+            id="edit-task-title"
+            maxLength={200}
+            onChange={(event) => {
+              setTitle(event.currentTarget.value);
+            }}
+            required
+            value={title}
+          />
+        </Field>
+        <Field htmlFor="edit-task-description" label={t("task.create.brief")}>
+          <Textarea
+            id="edit-task-description"
+            maxLength={20_000}
+            onChange={(event) => {
+              setDescription(event.currentTarget.value);
+            }}
+            rows={5}
+            value={description}
+          />
+        </Field>
+        <div className="edit-task-form__row">
+          <Field htmlFor="edit-task-priority" label={t("task.priority")}>
+            <SelectControl
+              ariaLabel={t("task.priority")}
+              id="edit-task-priority"
+              onValueChange={(value) => {
+                setPriority(prioritySchema.parse(value));
+              }}
+              options={(Object.keys(priorityLabelKeys) as WorkItem["priority"][]).map((value) => ({
+                label: t(priorityLabelKeys[value]),
+                value,
+              }))}
+              value={priority}
+            />
+          </Field>
+          <Field htmlFor="edit-task-risk" label={t("task.risk")}>
+            <SelectControl
+              ariaLabel={t("task.risk")}
+              id="edit-task-risk"
+              onValueChange={(value) => {
+                setRisk(riskSchema.parse(value));
+              }}
+              options={(Object.keys(riskLabelKeys) as WorkItem["risk"][]).map((value) => ({
+                label: t(riskLabelKeys[value]),
+                value,
+              }))}
+              value={risk}
+            />
+          </Field>
+        </div>
+        <Field
+          description={t("task.edit.criteriaDescription")}
+          htmlFor="edit-work-item-criteria"
+          label={t("task.acceptanceCriteria")}
+          {...(criteriaValid ? {} : { error: t("task.edit.criteriaError") })}
+        >
+          <Textarea
+            aria-describedby="edit-work-item-criteria-description"
+            id="edit-work-item-criteria"
+            invalid={!criteriaValid}
+            onChange={(event) => {
+              setCriteriaText(event.currentTarget.value);
+            }}
+            rows={5}
+            value={criteriaText}
+          />
+        </Field>
+      </form>
+    </DialogSurface>
+  );
+};
+
 const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element => {
   const { locale, t } = useI18n();
   const moveMutation = useMoveWorkItem();
   const eventsQuery = useWorkItemEvents(item?.projectId, item?.id);
+  const [lastTarget, setLastTarget] = useState<WorkItemState | null>(null);
 
   if (!item) {
     return (
@@ -449,6 +649,7 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
 
   const targets = transitionTargets[item.state];
   const move = (targetState: WorkItemState): void => {
+    setLastTarget(targetState);
     moveMutation.mutate({ targetState, workItem: item });
   };
   const primaryTarget = targets.find((state) => state !== "CANCELLED") ?? null;
@@ -461,23 +662,26 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
           <span>{displayWorkItemId(item.id)}</span>
           <h2>{item.title}</h2>
         </div>
-        <ActionMenu
-          align="end"
-          groups={[
-            targets.map((targetState) => ({
-              danger: targetState === "CANCELLED",
-              label: t("task.moveTo", { state: stateLabel(targetState, t) }),
-              onSelect: () => {
-                move(targetState);
-              },
-            })),
-          ]}
-          trigger={
-            <Button disabled={targets.length === 0} shape="pill" trailingIcon="chevronDown">
-              {t("task.move")}
-            </Button>
-          }
-        />
+        <div className="task-inspector__actions">
+          <TaskEditDialog key={`${item.id}-${item.version.toString()}`} item={item} />
+          <ActionMenu
+            align="end"
+            groups={[
+              targets.map((targetState) => ({
+                danger: targetState === "CANCELLED",
+                label: t("task.moveTo", { state: stateLabel(targetState, t) }),
+                onSelect: () => {
+                  move(targetState);
+                },
+              })),
+            ]}
+            trigger={
+              <Button disabled={targets.length === 0} shape="pill" trailingIcon="chevronDown">
+                {t("task.move")}
+              </Button>
+            }
+          />
+        </div>
       </header>
 
       <InspectorSection title={t("task.overview")}>
@@ -535,10 +739,16 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
         ) : null}
       </InspectorSection>
 
-      {moveMutation.error instanceof Error ? (
-        <p className="task-inspector__error" role="alert">
-          {moveMutation.error.message}
-        </p>
+      {moveMutation.error ? (
+        <div className="task-inspector__error">
+          <LocalConnectionRecovery
+            error={moveMutation.error}
+            onRetry={() => {
+              if (lastTarget) move(lastTarget);
+            }}
+            retrying={moveMutation.isPending}
+          />
+        </div>
       ) : null}
 
       <footer className="task-inspector__footer">
@@ -573,7 +783,7 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
 
 export const WorkbenchPage = (): React.JSX.Element => {
   const { t } = useI18n();
-  const { error, projectsPending, selectedProject } = useWorkspace();
+  const { connectionPending, error, projectsPending, retryConnection, selectedProject } = useWorkspace();
   const workItemsQuery = useProjectWorkItems(selectedProject?.id);
   const initializeMutation = useInitializeFixtureWorkspace();
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null);
@@ -655,15 +865,18 @@ export const WorkbenchPage = (): React.JSX.Element => {
           </div>
         ) : null}
 
-        {error || workItemsQuery.error instanceof Error ? (
+        {error || workItemsQuery.error ? (
           <div className="workbench-state">
-            <FeedbackState
-              description={
-                (workItemsQuery.error instanceof Error ? workItemsQuery.error : error)?.message ??
-                t("error.unknown")
-              }
-              title={t("error.board.title")}
-              tone="error"
+            <LocalConnectionRecovery
+              error={workItemsQuery.error ?? error ?? new Error(t("error.unknown"))}
+              onRetry={() => {
+                if (workItemsQuery.error) {
+                  void workItemsQuery.refetch();
+                } else {
+                  retryConnection();
+                }
+              }}
+              retrying={connectionPending || workItemsQuery.isFetching}
             />
           </div>
         ) : null}
@@ -717,7 +930,7 @@ export const WorkbenchPage = (): React.JSX.Element => {
         ) : null}
       </section>
 
-      <TaskInspector item={selectedItem} />
+      <TaskInspector item={selectedItem} key={selectedItem?.id ?? "empty"} />
     </div>
   );
 };

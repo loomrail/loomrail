@@ -1,7 +1,7 @@
 # Loomrail Phase 0 — implementation plan
 
 **Дата:** 2026-08-22
-**Статус:** approved; M2 locally complete, Windows CI evidence pending
+**Статус:** approved; M3 locally complete, Windows CI evidence pending
 **Phase outcome:** безопасный mocked vertical slice локальной control plane
 **Нормативные входы:**
 
@@ -11,10 +11,11 @@
 План не разбит на календарные sprint. Работа идёт последовательными проверяемыми milestones. Следующий milestone
 начинается после evidence предыдущего, а не после условной даты.
 
-**Current execution:** M2 contracts, deterministic WorkItem decisions, SQLite state/events, fixture registration and
-authenticated command/query HTTP slice are complete on macOS. The same build, tests, SQLite portability check and
-browser smoke are wired as blocking macOS/Windows CI. Windows evidence remains pending until the intentionally
-reviewed first commit/push; this is not treated as a passed gate.
+**Current execution:** M3 real task cockpit is complete locally on macOS: the authenticated Workbench reads, creates,
+edits and moves persisted WorkItems, replays their audit history, supports EN/RU and explains secure recovery after a
+lost daemon/session. The same build, tests, SQLite portability check and browser smoke are wired as blocking
+macOS/Windows CI. Windows evidence remains pending until the corresponding GitHub Actions run; this is not treated as
+a passed gate.
 
 ## 1. Цель Phase 0
 

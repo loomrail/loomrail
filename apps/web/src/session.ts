@@ -1,34 +1,38 @@
 import {
-  apiErrorResponseSchema,
   daemonStatusResponseSchema,
   sessionExchangeResponseSchema,
   type DaemonStatusResponse,
 } from "@loomrail/contracts";
 import { queryOptions } from "@tanstack/react-query";
 
-import { requestLocalApi, storeCsrfToken } from "./api";
+import {
+  createDaemonUnavailableError,
+  isLocalApiError,
+  readLocalApiError,
+  requestLocalApi,
+  storeCsrfToken,
+} from "./api";
 
 export type ConnectionResult =
-  { status: "connected"; daemon: DaemonStatusResponse } | { status: "error"; message: string };
+  { status: "connected"; daemon: DaemonStatusResponse } | { status: "error"; error: Error; message: string };
 
-const readErrorMessage = async (response: Response): Promise<string> => {
-  const body: unknown = await response.json().catch(() => undefined);
-  const parsed = apiErrorResponseSchema.safeParse(body);
-  return parsed.success
-    ? parsed.data.error.message
-    : `Local daemon returned HTTP ${response.status.toString()}`;
-};
+let pendingBootstrapToken: string | null = null;
 
 const exchangeBootstrapToken = async (bootstrapToken: string): Promise<void> => {
-  const response = await fetch("/api/session/exchange", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ bootstrapToken }),
-  });
+  let response: Response;
+  try {
+    response = await fetch("/api/session/exchange", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ bootstrapToken }),
+    });
+  } catch {
+    throw createDaemonUnavailableError();
+  }
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    throw await readLocalApiError(response);
   }
 
   const session = sessionExchangeResponseSchema.parse(await response.json());
@@ -44,15 +48,22 @@ export const connectToLocalDaemon = async (): Promise<ConnectionResult> => {
     const fragment = new URLSearchParams(window.location.hash.slice(1));
     const bootstrapToken = fragment.get("bootstrap");
     if (bootstrapToken) {
+      pendingBootstrapToken = bootstrapToken;
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
-      await exchangeBootstrapToken(bootstrapToken);
+    }
+    if (pendingBootstrapToken) {
+      await exchangeBootstrapToken(pendingBootstrapToken);
+      pendingBootstrapToken = null;
     }
 
     return { status: "connected", daemon: await fetchDaemonStatus() };
   } catch (error: unknown) {
+    if (isLocalApiError(error) && error.recovery === "reopen") pendingBootstrapToken = null;
+    const connectionError = error instanceof Error ? error : new Error("Could not connect to Loomrail");
     return {
       status: "error",
-      message: error instanceof Error ? error.message : "Could not connect to the local Loomrail daemon",
+      error: connectionError,
+      message: connectionError.message,
     };
   }
 };

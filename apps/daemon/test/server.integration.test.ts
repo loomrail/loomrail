@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -152,7 +152,7 @@ describe("local daemon session and state boundary", () => {
     expect(response.status).toBe(401);
   });
 
-  it("consumes a bootstrap token once and reports the M2 kernel", async () => {
+  it("consumes a bootstrap token once and reports the M3 cockpit", async () => {
     const token = bootstrapToken();
     daemon = await startDaemon({ bootstrapToken: token, logger: false });
     const session = await authenticate(daemon, token);
@@ -172,8 +172,31 @@ describe("local daemon session and state boundary", () => {
     expect(status.headers.get("access-control-allow-origin")).toBeNull();
     expect(await status.json()).toMatchObject({
       authenticated: true,
-      foundation: { phase: "phase-0", milestone: "M2", persistence: "sqlite" },
+      foundation: { phase: "phase-0", milestone: "M3", persistence: "sqlite" },
     });
+  });
+
+  it("serves web assets added after daemon startup instead of the SPA fallback", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail dynamic web "));
+    temporaryDirectories.push(temporaryDirectory);
+    await writeFile(join(temporaryDirectory, "index.html"), "<main>Loomrail shell</main>", "utf8");
+    daemon = await startDaemon({
+      bootstrapToken: bootstrapToken(),
+      logger: false,
+      webRoot: temporaryDirectory,
+    });
+
+    const assetsDirectory = join(temporaryDirectory, "assets");
+    await mkdir(assetsDirectory);
+    await writeFile(join(assetsDirectory, "fresh-build.js"), "export const ready = true;", "utf8");
+
+    const asset = await fetch(`${daemon.baseUrl}/assets/fresh-build.js`);
+    const clientRoute = await fetch(`${daemon.baseUrl}/workbench/current`);
+
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get("content-type")).toMatch(/javascript/);
+    expect(await asset.text()).toBe("export const ready = true;");
+    expect(await clientRoute.text()).toBe("<main>Loomrail shell</main>");
   });
 
   it("requires a valid session-bound CSRF token for mutations", async () => {

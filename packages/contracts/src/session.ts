@@ -40,7 +40,7 @@ export const daemonStatusResponseSchema = z
     foundation: z
       .object({
         phase: z.literal("phase-0"),
-        milestone: z.enum(["M1", "M2"]),
+        milestone: z.enum(["M1", "M2", "M3"]),
         providers: z.literal("mock-only"),
         persistence: z.enum(["not-enabled", "sqlite"]),
       })

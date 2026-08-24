@@ -347,7 +347,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         },
         foundation: {
           phase: "phase-0",
-          milestone: "M2",
+          milestone: "M3",
           providers: "mock-only",
           persistence: "sqlite",
         },
@@ -529,7 +529,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     if (options.webRoot) {
       const webRoot = resolve(options.webRoot);
       await access(webRoot);
-      await app.register(fastifyStatic, { root: webRoot, wildcard: false });
+      await app.register(fastifyStatic, { root: webRoot, wildcard: true });
       app.setNotFoundHandler(async (request, reply) => {
         if (request.url.startsWith("/api/") || request.url.startsWith("/health/")) {
           return reply

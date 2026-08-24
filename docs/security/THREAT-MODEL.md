@@ -1,7 +1,7 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-08-22
+**Updated:** 2026-08-24
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
@@ -69,22 +69,21 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | --- | ----------------------------------------- | -------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
 | T01 | Host binds to LAN/all interfaces          | Critical | explicit loopback bind and startup assertion                                               | M1/M2 integration asserts the listener address              |
 | T02 | Malicious site sends localhost commands   | Critical | one-time bootstrap, HttpOnly SameSite session, exact Origin, CSRF header, no wildcard CORS | M1/M2 foreign-Origin, session and CSRF integration tests    |
-| T03 | Cross-site WebSocket hijacking            | High     | session + exact Origin on upgrade                                                          | M3 gate: anonymous and untrusted upgrade tests before WS    |
+| T03 | Cross-site WebSocket hijacking            | High     | session + exact Origin on upgrade                                                          | WS gate: anonymous and untrusted upgrade tests before ship  |
 | T04 | Bootstrap token leaks in URL/log/referrer | High     | URL fragment, one-minute TTL, hash storage, atomic consume, log redaction                  | M1/M2 replay, request-URL, fragment, referrer and log tests |
-| T05 | Stored XSS through WorkItem/artifact      | High     | output escaping, no raw HTML Markdown, CSP, size limits                                    | M3 gate before persisted WorkItem/artifact UI binding       |
+| T05 | Stored XSS through WorkItem/artifact      | High     | output escaping, no raw HTML Markdown, CSP, size limits                                    | M3 persisted-text browser test and CSP                      |
 | T06 | Path traversal in fixture project         | High     | canonical path containment and no symlink escape                                           | M2 HTTP traversal plus directory/manifest symlink tests     |
 | T07 | Duplicate command/dispatch                | High     | command ID idempotency, transaction + unique constraints                                   | M2 concurrent retry and command-reuse tests                 |
 | T08 | False Done/approval tampering             | High     | state-machine gate, append-only Event/Decision, optimistic version                         | M2 transition/version/append-only tests; acceptance in M6   |
 | T09 | SQLite corruption/migration failure       | High     | WAL, short transactions, backup before migration, fail closed                              | M2 backup/checksum/reopen tests; full restore drill in M7   |
 | T10 | Sensitive values in logs/errors           | High     | structured allowlisted fields and pre-persistence redaction                                | M2 bootstrap/session canary redaction test                  |
-| T11 | Event/resource exhaustion                 | Medium   | payload limits, pagination, queue bounds, WS slow-consumer policy                          | M2 body/query bounds; M3 flood/slow-consumer gate           |
+| T11 | Event/resource exhaustion                 | Medium   | payload limits, pagination, queue bounds, WS slow-consumer policy                          | M2 body/query bounds; WS flood/slow-consumer gate           |
 | T12 | Dependency/supply-chain compromise        | High     | lockfile, trusted registry, minimum release age, audit, reviewed updates                   | pinned CI install, production audit and reviewed updates    |
 | T13 | Private data committed publicly           | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                        | automated public-tree scan; full history scan in M7         |
-| T14 | Theme/UI hides critical state             | Medium   | text/icon semantics, contrast, no color-only gates                                         | M1/M2 light/dark, keyboard and state browser checks         |
+| T14 | Theme/UI hides critical state             | Medium   | text/icon semantics, contrast, no color-only gates                                         | M1–M3 light/dark, keyboard and state browser checks         |
 
-`M3 gate`, `M6` and `M7` entries identify capabilities that are not present in the M2 checkpoint. They are release
-preconditions for the named milestone, not claims that future WebSocket, persisted Workbench, acceptance or final
-hardening behavior already exists.
+`M6` and `M7` entries identify future capabilities. The persisted M3 Workbench is present; WebSocket remains a
+separate Phase 0 capability and T03 stays open until its own implementation and security tests land.
 
 ## 7. Future execution threats
 
@@ -101,6 +100,16 @@ The following controls are required before their corresponding feature can ship:
 - Events and command receipts have database triggers rejecting UPDATE and DELETE.
 
 The remaining Phase 0 WebSocket/session-restart controls are still future work; M2 does not claim them early.
+
+### M3 persisted Workbench delta
+
+- WorkItem title, description and criteria render only through escaped React text nodes; raw HTML/Markdown rendering
+  is absent and CSP remains `default-src 'self'`;
+- browser E2E persists script-shaped fixture text, reloads it and verifies that no handler executes;
+- API failures are classified as retryable daemon unavailability or session/CSRF expiry without exposing tokens;
+- browser recovery cannot mint a bootstrap token: the CLI remains the only authority that opens a fresh one-time
+  authenticated URL;
+- failed/retried UI mutations preserve SQLite state through existing command idempotency and optimistic versioning.
 
 ### Provider CLI
 

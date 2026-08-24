@@ -11,7 +11,9 @@ import {
   listWorkItemEvents,
   moveWorkItem,
   registerFixtureProject,
+  updateWorkItem,
   type CreateWorkItemInput,
+  type UpdateWorkItemPatch,
 } from "./api";
 import { localConnectionQuery, type ConnectionResult } from "./session";
 
@@ -27,6 +29,7 @@ type WorkspaceContextValue = {
   projects: readonly Project[];
   projectsPending: boolean;
   selectedProject: Project | null;
+  retryConnection: () => void;
   selectProject: (projectId: string) => void;
 };
 
@@ -51,7 +54,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }): React.
       connectionPending: connectionQuery.isPending,
       error:
         connectionQuery.data?.status === "error"
-          ? new Error(connectionQuery.data.message)
+          ? connectionQuery.data.error
           : connectionQuery.error instanceof Error
             ? connectionQuery.error
             : projectsQuery.error instanceof Error
@@ -59,6 +62,11 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }): React.
               : null,
       projects,
       projectsPending: connected && projectsQuery.isPending,
+      retryConnection: () => {
+        void connectionQuery.refetch().then((result) => {
+          if (result.data?.status === "connected") void projectsQuery.refetch();
+        });
+      },
       selectedProject,
       selectProject: setRequestedProjectId,
     }),
@@ -67,9 +75,11 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }): React.
       connectionQuery.data,
       connectionQuery.error,
       connectionQuery.isPending,
+      connectionQuery.refetch,
       projects,
       projectsQuery.error,
       projectsQuery.isPending,
+      projectsQuery.refetch,
       selectedProject,
     ],
   );
@@ -136,6 +146,20 @@ export const useMoveWorkItem = () => {
   return useMutation({
     mutationFn: ({ targetState, workItem }: { targetState: WorkItemState; workItem: WorkItem }) =>
       moveWorkItem(workItem, targetState),
+    onSuccess: async (workItem) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
+        queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
+      ]);
+    },
+  });
+};
+
+export const useUpdateWorkItem = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ patch, workItem }: { patch: UpdateWorkItemPatch; workItem: WorkItem }) =>
+      updateWorkItem(workItem, patch),
     onSuccess: async (workItem) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),

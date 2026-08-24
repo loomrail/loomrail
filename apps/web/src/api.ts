@@ -15,13 +15,66 @@ type RuntimeSchema<T> = {
 
 const CSRF_STORAGE_KEY = "loomrail.csrf-token";
 
-const readErrorMessage = async (response: Response): Promise<string> => {
+export type LocalApiRecovery = "none" | "reopen" | "retry";
+
+type LocalApiErrorOptions = {
+  code: string;
+  correlationId?: string;
+  message: string;
+  recovery: LocalApiRecovery;
+  status: number;
+};
+
+export class LocalApiError extends Error {
+  readonly code: string;
+  readonly correlationId: string | undefined;
+  readonly recovery: LocalApiRecovery;
+  readonly status: number;
+
+  constructor({ code, correlationId, message, recovery, status }: LocalApiErrorOptions) {
+    super(message);
+    this.name = "LocalApiError";
+    this.code = code;
+    this.correlationId = correlationId;
+    this.recovery = recovery;
+    this.status = status;
+  }
+}
+
+const recoveryFor = (code: string, status: number): LocalApiRecovery => {
+  if (["BOOTSTRAP_REJECTED", "CSRF_REJECTED", "SESSION_REQUIRED"].includes(code)) return "reopen";
+  return status === 0 || status >= 500 ? "retry" : "none";
+};
+
+export const readLocalApiError = async (response: Response): Promise<LocalApiError> => {
   const body: unknown = await response.json().catch(() => undefined);
   const parsed = apiErrorResponseSchema.safeParse(body);
-  return parsed.success
-    ? parsed.data.error.message
-    : `Local daemon returned HTTP ${response.status.toString()}`;
+  if (parsed.success) {
+    return new LocalApiError({
+      code: parsed.data.error.code,
+      correlationId: parsed.data.error.correlationId,
+      message: parsed.data.error.message,
+      recovery: recoveryFor(parsed.data.error.code, response.status),
+      status: response.status,
+    });
+  }
+  return new LocalApiError({
+    code: "LOCAL_API_ERROR",
+    message: `Local daemon returned HTTP ${response.status.toString()}`,
+    recovery: recoveryFor("LOCAL_API_ERROR", response.status),
+    status: response.status,
+  });
 };
+
+export const isLocalApiError = (error: unknown): error is LocalApiError => error instanceof LocalApiError;
+
+export const createDaemonUnavailableError = (): LocalApiError =>
+  new LocalApiError({
+    code: "LOCAL_DAEMON_UNAVAILABLE",
+    message: "The local Loomrail daemon could not be reached",
+    recovery: "retry",
+    status: 0,
+  });
 
 const readCsrfToken = (): string | undefined => window.sessionStorage.getItem(CSRF_STORAGE_KEY) ?? undefined;
 
@@ -45,19 +98,29 @@ export const requestLocalApi = async <T>(
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
     const csrfToken = readCsrfToken();
     if (!csrfToken) {
-      throw new Error("The local session must be reopened before changing data");
+      throw new LocalApiError({
+        code: "LOCAL_SESSION_REQUIRED",
+        message: "The local session must be reopened before changing data",
+        recovery: "reopen",
+        status: 0,
+      });
     }
     headers.set("x-loomrail-csrf", csrfToken);
   }
 
-  const response = await fetch(path, {
-    ...init,
-    credentials: "same-origin",
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...init,
+      credentials: "same-origin",
+      headers,
+    });
+  } catch {
+    throw createDaemonUnavailableError();
+  }
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    throw await readLocalApiError(response);
   }
 
   return schema.parse(await response.json());
@@ -129,6 +192,31 @@ export const moveWorkItem = async (workItem: WorkItem, targetState: WorkItemStat
 
   if (result.type !== "WORK_ITEM_MOVED") {
     throw new Error("The local daemon returned an unexpected move result");
+  }
+  return result.workItem;
+};
+
+export type UpdateWorkItemPatch = Partial<
+  Pick<WorkItem, "acceptanceCriteria" | "description" | "priority" | "risk" | "title">
+>;
+
+export const updateWorkItem = async (workItem: WorkItem, patch: UpdateWorkItemPatch): Promise<WorkItem> => {
+  const result = await requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(workItem.id)}`,
+    stateCommandResultSchema,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedVersion: workItem.version,
+        patch,
+      }),
+    },
+  );
+
+  if (result.type !== "WORK_ITEM_UPDATED") {
+    throw new Error("The local daemon returned an unexpected update result");
   }
   return result.workItem;
 };

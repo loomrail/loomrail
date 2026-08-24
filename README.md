@@ -123,8 +123,8 @@ talk directly to future agent, shell, or Git adapters.
 - [x] **M0 — Foundation:** monorepo, contracts, CI, public-readiness rules
 - [x] **M1 — Walking skeleton:** CLI → daemon → authenticated browser UI
 - [x] **M2 — Local kernel:** SQLite state, idempotent commands, append-only events, macOS/Windows gate
-- [ ] **M3 — Real task cockpit (in progress):** authenticated API client, persisted projects/work items, EN/RU, activity
-      replay and reconnect
+- [x] **M3 — Real task cockpit:** authenticated API client, persisted projects/work items, editing, EN/RU, activity
+      replay and secure reconnect guidance
 - [ ] **M4 — Mock delivery workflow:** Human Request and resumable task pipeline
 - [ ] **M5 — Budgets and recovery:** explicit limits, pause/resume, crash recovery
 - [ ] **M6 — Acceptance:** evidence, review, owner approval, audit surface

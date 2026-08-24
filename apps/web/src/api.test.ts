@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { requestLocalApi, storeCsrfToken } from "./api";
+import { LocalApiError, requestLocalApi, storeCsrfToken } from "./api";
 
 const passThroughSchema = { parse: (value: unknown): unknown => value };
 
@@ -31,8 +31,42 @@ describe("local API client", () => {
   it("refuses mutations when the bootstrap exchange has not stored a CSRF token", async () => {
     await expect(
       requestLocalApi("/api/v1/example", passThroughSchema, { method: "POST", body: "{}" }),
-    ).rejects.toThrow("reopened");
+    ).rejects.toMatchObject({
+      code: "LOCAL_SESSION_REQUIRED",
+      recovery: "reopen",
+    } satisfies Partial<LocalApiError>);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("classifies an expired daemon session as requiring a secure reopen", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "SESSION_REQUIRED",
+            correlationId: "correlation-session-required",
+            message: "A valid local session is required",
+          },
+        }),
+        { status: 401, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    await expect(requestLocalApi("/api/v1/status", passThroughSchema)).rejects.toMatchObject({
+      code: "SESSION_REQUIRED",
+      recovery: "reopen",
+      status: 401,
+    } satisfies Partial<LocalApiError>);
+  });
+
+  it("classifies an unreachable daemon as retryable", async () => {
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+
+    await expect(requestLocalApi("/api/v1/status", passThroughSchema)).rejects.toMatchObject({
+      code: "LOCAL_DAEMON_UNAVAILABLE",
+      recovery: "retry",
+      status: 0,
+    } satisfies Partial<LocalApiError>);
   });
 
   it("adds the exchanged CSRF token to mutation requests", async () => {

@@ -77,9 +77,32 @@ test.describe("authenticated walking skeleton", () => {
     await expect(task).toHaveAttribute("aria-pressed", "true");
     await expect(card).toHaveClass(/is-selected/);
     await expect(card).toHaveCSS("box-shadow", /0px 0px 0px 1px/);
-    const inspector = page.getByRole("complementary", { name: "Persisted browser task" });
-    await expect(inspector.getByRole("heading", { level: 2, name: "Persisted browser task" })).toBeVisible();
-    await expect(inspector.getByText("Backlog", { exact: true })).toBeVisible();
+    const initialInspector = page.getByRole("complementary", { name: "Persisted browser task" });
+    await expect(
+      initialInspector.getByRole("heading", { level: 2, name: "Persisted browser task" }),
+    ).toBeVisible();
+    await expect(initialInspector.getByText("Backlog", { exact: true })).toBeVisible();
+
+    await initialInspector.getByRole("button", { name: "Edit task" }).click();
+    const editDialog = page.getByRole("dialog", { name: "Edit task" });
+    await editDialog.locator("#edit-task-title").fill("Edited persisted browser task");
+    await editDialog.locator("#edit-task-description").fill("Updated through the persisted PATCH command.");
+    await editDialog
+      .locator("#edit-work-item-criteria")
+      .fill("The edit survives reload\nThe event is auditable");
+    await editDialog.getByRole("combobox", { name: "Priority" }).click();
+    await page.getByRole("option", { name: "High" }).click();
+    await editDialog.getByRole("button", { name: "Save changes" }).click();
+    await expect(editDialog).toBeHidden();
+
+    const inspector = page.getByRole("complementary", { name: "Edited persisted browser task" });
+    await expect(page.getByRole("button", { name: "Edited persisted browser task" })).toBeVisible();
+    await expect(inspector.getByText("Updated through the persisted PATCH command.")).toBeVisible();
+    await expect(inspector.getByText("The edit survives reload")).toBeVisible();
+    await expect(inspector.getByText("Task updated", { exact: true })).toBeVisible();
+    await expect(
+      inspector.getByText(/Changed title, description, priority, acceptance criteria/),
+    ).toBeVisible();
 
     await inspector.getByRole("button", { name: "Move to Ready" }).click();
     await expect(inspector.getByText("Ready", { exact: true })).toBeVisible();
@@ -97,8 +120,48 @@ test.describe("authenticated walking skeleton", () => {
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(page.locator("html")).toHaveAttribute("lang", "ru");
     await expect(page.getByRole("heading", { level: 1, name: "Текущая работа" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Persisted browser task" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Edited persisted browser task" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Components" })).toHaveCount(0);
+  });
+
+  test("explains how to recover when the local daemon becomes unavailable", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Recovery guidance task");
+
+    const stoppedDaemon = daemon;
+    daemon = undefined;
+    await stoppedDaemon.close();
+
+    const inspector = page.getByRole("complementary", { name: "Recovery guidance task" });
+    await inspector.getByRole("button", { name: "Move to Ready" }).click();
+    await expect(inspector.getByText("Loomrail is temporarily unreachable", { exact: true })).toBeVisible();
+    await expect(inspector.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
+
+  test("renders persisted WorkItem text as inert content", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    const title = '<img src=x onerror="window.__loomrailXss = true">';
+    await createTask(page, title, "<script>window.__loomrailXss = true</script>");
+
+    await expect(page.getByRole("button", { name: title })).toBeVisible();
+    expect(await page.evaluate<boolean>("Boolean(window.__loomrailXss)")).toBe(false);
+    await page.reload();
+    await expect(page.getByRole("button", { name: title })).toBeVisible();
+    expect(await page.evaluate<boolean>("Boolean(window.__loomrailXss)")).toBe(false);
   });
 
   test("keeps overlays mutually exclusive, dismissible, and responsive", async ({ page }) => {
