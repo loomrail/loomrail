@@ -1,0 +1,63 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build and package output
+dist/
+build/
+out/
+target/
+.turbo/
+.vite/
+*.tsbuildinfo
+*.tgz
+
+# Test and QA output
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+blob-report/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.key
+*.p12
+*.pfx
+
+# Logs and temporary files
+*.log
+logs/
+tmp/
+temp/
+.tmp/
+.cache/
+
+# Loomrail local runtime state
+.loomrail/state.sqlite
+.loomrail/state.sqlite-*
+.loomrail/runs/
+.loomrail/artifacts/
+.loomrail/logs/
+.loomrail/cache/
+.loomrail/tmp/
+.loomrail/workspaces/
+.loomrail/locks/
+
+# Local agent settings; shared instructions and skills remain trackable
+.claude/settings.local.json
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Local-only notes must never become product documentation
+.private/
+.hallmark/
