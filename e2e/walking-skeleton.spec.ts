@@ -364,6 +364,20 @@ test.describe("authenticated walking skeleton", () => {
     await expect(rootFilterPopover.locator(".lr-filter-item__icon svg").first()).toHaveCSS("width", "14px");
     await expect(rootFilterPopover.getByRole("separator")).toHaveCount(1);
 
+    const displaySettingsTrigger = page.getByRole("button", { name: "Display settings" });
+    const displaySettings = page.locator('.lr-popover[aria-label="Display settings"]');
+    await displaySettingsTrigger.click();
+    await expect(rootFilterPopover).toBeHidden();
+    await expect(displaySettings).toBeVisible();
+    await page.waitForTimeout(160);
+    await expect(displaySettings).toBeVisible();
+
+    await trigger.click();
+    await expect(displaySettings).toBeHidden();
+    await expect(rootFilterPopover).toBeVisible();
+    await page.waitForTimeout(160);
+    await expect(rootFilterPopover).toBeVisible();
+
     const statusItem = page.getByRole("menuitem", { name: /Status/ });
     await statusItem.hover();
     await expect(statusItem).toHaveCSS("background-color", "rgb(244, 244, 245)");

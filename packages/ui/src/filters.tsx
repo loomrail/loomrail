@@ -396,6 +396,7 @@ export const CascadingFilter = ({
   const [panelTops, setPanelTops] = useState<Readonly<Record<string, number>>>({});
   const [queries, setQueries] = useState<Readonly<Record<string, string>>>({});
   const desktopSearchRef = useRef<HTMLInputElement>(null);
+  const desktopPointerDismissRef = useRef(false);
   const hoverIntentTimeoutRef = useRef<number | undefined>(undefined);
   const mobileSearchRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -426,6 +427,7 @@ export const CascadingFilter = ({
   const handleOpenChange = (nextOpen: boolean): void => {
     clearScheduledBranch();
     if (nextOpen) {
+      desktopPointerDismissRef.current = false;
       setPath([]);
       setPanelTops({});
       setQueries({});
@@ -593,7 +595,16 @@ export const CascadingFilter = ({
           }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            triggerRef.current?.focus();
+            if (!desktopPointerDismissRef.current) {
+              triggerRef.current?.focus();
+            }
+            desktopPointerDismissRef.current = false;
+          }}
+          onEscapeKeyDown={() => {
+            desktopPointerDismissRef.current = false;
+          }}
+          onPointerDownOutside={() => {
+            desktopPointerDismissRef.current = true;
           }}
           sideOffset={6}
         >
