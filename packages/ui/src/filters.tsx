@@ -4,6 +4,7 @@ import { Dialog as DialogPrimitive, Popover as PopoverPrimitive } from "radix-ui
 
 import { Button, cn, IconButton } from "./foundation.js";
 import { Icon, type IconName } from "./icons.js";
+import { Tooltip } from "./overlays.js";
 
 export type FilterNode = {
   children?: readonly FilterNode[];
@@ -64,6 +65,7 @@ export type CascadingFilterProps = {
   onValueChange?: (value: readonly string[]) => void;
   options: readonly FilterNode[];
   trigger: ReactElement;
+  triggerTooltip?: string;
   value?: readonly string[];
 };
 
@@ -72,8 +74,10 @@ export type AppliedFilterBarProps = {
   ariaLabel: string;
   className?: string;
   messages?: Partial<FilterMessages>;
+  onClear?: () => void;
   onValueChange: (value: readonly string[]) => void;
   options: readonly FilterNode[];
+  supplementalConditions?: ReactNode;
   value: readonly string[];
 };
 
@@ -437,6 +441,7 @@ export const CascadingFilter = ({
   onValueChange,
   options,
   trigger,
+  triggerTooltip,
   value,
 }: CascadingFilterProps): React.JSX.Element => {
   const copy: FilterMessages = { ...defaultFilterMessages, ...messages };
@@ -585,7 +590,13 @@ export const CascadingFilter = ({
     const parentTitle = columns.at(-2)?.title ?? ariaLabel;
     return (
       <DialogPrimitive.Root onOpenChange={handleOpenChange} open={open}>
-        <DialogPrimitive.Trigger asChild>{triggerWithRef}</DialogPrimitive.Trigger>
+        {triggerTooltip ? (
+          <Tooltip label={triggerTooltip}>
+            <DialogPrimitive.Trigger asChild>{triggerWithRef}</DialogPrimitive.Trigger>
+          </Tooltip>
+        ) : (
+          <DialogPrimitive.Trigger asChild>{triggerWithRef}</DialogPrimitive.Trigger>
+        )}
         <DialogPrimitive.Portal>
           <DialogPrimitive.Overlay className="lr-dialog-overlay" />
           <DialogPrimitive.Content
@@ -602,20 +613,24 @@ export const CascadingFilter = ({
             <header className="lr-filter-dialog__header">
               <div className="lr-filter-dialog__heading">
                 {path.length > 0 ? (
-                  <IconButton
-                    label={`${copy.backTo} ${parentTitle}`}
-                    name="chevronLeft"
-                    onClick={handleBack}
-                    size="lg"
-                  />
+                  <Tooltip label={`${copy.backTo} ${parentTitle}`}>
+                    <IconButton
+                      label={`${copy.backTo} ${parentTitle}`}
+                      name="chevronLeft"
+                      onClick={handleBack}
+                      size="lg"
+                    />
+                  </Tooltip>
                 ) : null}
                 <DialogPrimitive.Title>
                   {path.length === 0 ? ariaLabel : currentColumn.title}
                 </DialogPrimitive.Title>
               </div>
-              <DialogPrimitive.Close asChild>
-                <IconButton label={copy.close} name="close" size="lg" />
-              </DialogPrimitive.Close>
+              <Tooltip label={copy.close}>
+                <DialogPrimitive.Close asChild>
+                  <IconButton label={copy.close} name="close" size="lg" />
+                </DialogPrimitive.Close>
+              </Tooltip>
             </header>
             <DialogPrimitive.Description className="lr-visually-hidden">
               {copy.description}
@@ -644,7 +659,13 @@ export const CascadingFilter = ({
 
   return (
     <PopoverPrimitive.Root onOpenChange={handleOpenChange} open={open}>
-      <PopoverPrimitive.Trigger asChild>{triggerWithRef}</PopoverPrimitive.Trigger>
+      {triggerTooltip ? (
+        <Tooltip label={triggerTooltip}>
+          <PopoverPrimitive.Trigger asChild>{triggerWithRef}</PopoverPrimitive.Trigger>
+        </Tooltip>
+      ) : (
+        <PopoverPrimitive.Trigger asChild>{triggerWithRef}</PopoverPrimitive.Trigger>
+      )}
       <PopoverPrimitive.Portal>
         <PopoverPrimitive.Content
           align="start"
@@ -892,8 +913,10 @@ export const AppliedFilterBar = ({
   ariaLabel,
   className,
   messages,
+  onClear,
   onValueChange,
   options,
+  supplementalConditions,
   value,
 }: AppliedFilterBarProps): React.JSX.Element => {
   const copy: FilterMessages = { ...defaultFilterMessages, ...messages };
@@ -902,6 +925,7 @@ export const AppliedFilterBar = ({
   return (
     <div aria-label={ariaLabel} className={cn("lr-applied-filter-bar", className)} role="region">
       <div className="lr-applied-filter-bar__conditions">
+        {supplementalConditions}
         {groups.map((group) => (
           <AppliedFilterEditor
             group={group}
@@ -914,10 +938,14 @@ export const AppliedFilterBar = ({
         ))}
         <div className="lr-applied-filter-bar__add">{addFilter}</div>
       </div>
-      {value.length > 0 ? (
+      {value.length > 0 || supplementalConditions ? (
         <Button
           className="lr-applied-filter-bar__clear"
           onClick={() => {
+            if (onClear) {
+              onClear();
+              return;
+            }
             onValueChange([]);
           }}
           shape="pill"

@@ -182,6 +182,9 @@
 
   --lr-selection-bg: var(--lr-surface-active);
   --lr-selection-text: var(--lr-text);
+  --lr-scrollbar-thumb: color-mix(in srgb, var(--lr-text-faint) 58%, transparent);
+  --lr-scrollbar-thumb-hover: color-mix(in srgb, var(--lr-accent) 45%, var(--lr-text-faint));
+  --lr-scrollbar-track: transparent;
 }
 
 :root[data-theme="dark"] {

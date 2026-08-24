@@ -15,6 +15,7 @@ export type IconName =
   | "code"
   | "command"
   | "error"
+  | "edit"
   | "external"
   | "filter"
   | "inbox"
@@ -78,6 +79,7 @@ const paths: Record<Exclude<IconName, "spinner">, readonly string[]> = {
   code: ["m8 9-4 3 4 3", "m16 9 4 3-4 3", "m14 5-4 14"],
   command: ["M18 9h-9a3 3 0 1 1 3-3v12a3 3 0 1 1-3-3h9a3 3 0 1 1-3 3V6a3 3 0 1 1 3 3Z"],
   error: ["M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20", "m15 9-6 6", "m9 9 6 6"],
+  edit: ["M12 20h9", "M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"],
   external: ["M14 3h7v7", "m10 14 11-11", "M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"],
   filter: ["M4 6h16", "M7 12h10", "M10 18h4"],
   inbox: ["M4 4h16v16H4z", "M4 14h4l2 3h4l2-3h4"],

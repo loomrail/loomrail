@@ -207,6 +207,7 @@ const ThemeMenu = (): React.JSX.Element => {
           },
         ],
       ]}
+      triggerTooltip={t("theme.change")}
       trigger={
         <IconButton
           label={t("theme.change")}
@@ -223,6 +224,7 @@ const LanguageMenu = (): React.JSX.Element => {
   return (
     <ActionMenu
       align="end"
+      contentClassName="app-language-menu"
       groups={[
         [
           {
@@ -290,6 +292,19 @@ export const AppFrame = (): React.JSX.Element => {
   const connected = connection?.status === "connected";
   const projectInitial = selectedProject?.name.slice(0, 1).toUpperCase() ?? "–";
 
+  if (connectionPending || projectsPending) {
+    return (
+      <div aria-busy="true" className="app-shell app-shell--loading">
+        <aside aria-hidden="true" className="app-sidebar app-sidebar--loading" />
+        <section className="app-surface app-surface--loading">
+          <span aria-label={t("connection.connecting")} className="app-loading-mark" role="status">
+            <BrandMark className="app-brand-mark" size={40} />
+          </span>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
@@ -342,7 +357,7 @@ export const AppFrame = (): React.JSX.Element => {
           ) : (
             <div className="app-project-label is-empty">
               <span>–</span>
-              <strong>{projectsPending ? t("project.loading") : t("project.none")}</strong>
+              <strong>{t("project.none")}</strong>
             </div>
           )}
           <nav aria-label={t("project.switch")} className="app-nav app-nav--nested">
@@ -355,11 +370,7 @@ export const AppFrame = (): React.JSX.Element => {
         <div className="app-sidebar__footer">
           <span className={connected ? "app-connection is-online" : "app-connection is-offline"}>
             <span aria-hidden="true" />
-            {connectionPending
-              ? t("connection.connecting")
-              : connected
-                ? t("connection.local")
-                : t("connection.offline")}
+            {connected ? t("connection.local") : t("connection.offline")}
           </span>
           <LanguageMenu />
           <ThemeMenu />

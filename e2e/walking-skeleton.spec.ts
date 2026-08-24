@@ -124,6 +124,241 @@ test.describe("authenticated walking skeleton", () => {
     await expect(page.getByRole("link", { name: "Components" })).toHaveCount(0);
   });
 
+  test("keeps the application frame stable while the workspace is loading", async ({ page }) => {
+    const bootstrapToken = randomBytes(32).toString("base64url");
+    let releaseStatus: (() => void) | undefined;
+    const statusBlocked = new Promise<void>((resolveStatus) => {
+      releaseStatus = resolveStatus;
+    });
+    daemon = await startDaemon({
+      bootstrapToken,
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+    await page.route("**/api/v1/status", async (route) => {
+      await statusBlocked;
+      await route.continue();
+    });
+
+    await page.goto(daemon.bootstrapUrl, { waitUntil: "domcontentloaded" });
+    const surface = page.locator(".app-surface");
+    await expect(surface).toBeVisible();
+    await expect(page.locator(".app-sidebar nav:visible")).toHaveCount(0);
+    await expect(page.locator(".app-topbar")).toBeHidden();
+    const loadingMark = surface.locator(".app-brand-mark");
+    await expect(loadingMark).toBeVisible();
+    await expect(loadingMark).toHaveAttribute("height", "40");
+    await expect(surface.getByRole("status", { name: "Connecting…" })).toBeVisible();
+    expect(
+      await surface.locator(".app-loading-mark").evaluate((element) => {
+        const style = window.getComputedStyle(element);
+        return style.animationName === "app-loading-mark" && style.animationDuration === "1.4s";
+      }),
+    ).toBe(true);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    expect(
+      await surface.locator(".app-loading-mark").evaluate((element) => {
+        const style = window.getComputedStyle(element);
+        return style.animationName === "none" && style.opacity === "1" && style.transform === "none";
+      }),
+    ).toBe(true);
+    const initialDocument = await page.request.get(new URL("/", daemon.bootstrapUrl).toString());
+    const initialMarkup = await initialDocument.text();
+    expect(initialMarkup).not.toContain("Starting Loomrail");
+    expect(initialMarkup).toContain('class="app-shell app-shell--loading"');
+    expect(initialMarkup).toContain('lang="ru">Подключение…');
+    const loadingBox = await surface.boundingBox();
+
+    releaseStatus?.();
+    await expect(page.getByRole("heading", { level: 1, name: "Current work" })).toBeVisible();
+    const loadedBox = await surface.boundingBox();
+    expect(loadingBox).not.toBeNull();
+    expect(loadedBox).not.toBeNull();
+    if (loadingBox && loadedBox) {
+      expect(Math.abs(loadingBox.x - loadedBox.x)).toBeLessThan(0.1);
+      expect(Math.abs(loadingBox.y - loadedBox.y)).toBeLessThan(0.1);
+      expect(Math.abs(loadingBox.width - loadedBox.width)).toBeLessThan(0.1);
+      expect(Math.abs(loadingBox.height - loadedBox.height)).toBeLessThan(0.1);
+    }
+  });
+
+  test("reserves inspector workflow and activity space while their data loads", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Stable inspector loading");
+
+    let releaseWorkflow: (() => void) | undefined;
+    let releaseEvents: (() => void) | undefined;
+    const workflowBlocked = new Promise<void>((resolveWorkflow) => {
+      releaseWorkflow = resolveWorkflow;
+    });
+    const eventsBlocked = new Promise<void>((resolveEvents) => {
+      releaseEvents = resolveEvents;
+    });
+    await page.route("**/api/v1/work-items/*/workflow", async (route) => {
+      await workflowBlocked;
+      await route.continue();
+    });
+    await page.route(/\/api\/v1\/events\?/, async (route) => {
+      await eventsBlocked;
+      await route.continue();
+    });
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const inspector = page.getByRole("complementary", { name: "Stable inspector loading" });
+    const workflowSkeleton = inspector.getByRole("status", { name: "Loading workflow…" });
+    const activitySkeleton = inspector.getByRole("status", { name: "Loading activity…" });
+    await expect(workflowSkeleton).toBeVisible();
+    await expect(activitySkeleton).toBeVisible();
+    expect((await workflowSkeleton.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(120);
+    expect((await activitySkeleton.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(90);
+    await expect(inspector.getByText("Loading workflow…", { exact: true })).toHaveCount(0);
+    await expect(inspector.getByText("Loading activity…", { exact: true })).toHaveCount(0);
+
+    releaseWorkflow?.();
+    releaseEvents?.();
+    await expect(workflowSkeleton).toBeHidden();
+    await expect(activitySkeleton).toBeHidden();
+    await expect(inspector.getByText("Move this task to Ready before starting its workflow.")).toBeVisible();
+  });
+
+  test("keeps localized inspector actions inside the inspector", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Localized inspector actions");
+    await page.getByRole("button", { name: "Change language" }).click();
+    await page.getByRole("menuitem", { name: "Русский" }).click();
+
+    const inspector = page.getByRole("complementary", { name: "Localized inspector actions" });
+    const inspectorTitle = inspector.getByRole("heading", { name: "Localized inspector actions" });
+    expect(await inspectorTitle.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await inspector.getByRole("button", { name: "Редактировать задачу" }).hover();
+    await expect(page.getByRole("tooltip")).toHaveText("Редактировать задачу");
+    await expect(page.getByRole("tooltip")).toHaveAttribute("data-side", "bottom");
+    await expect(inspector.getByRole("button", { name: "Редактировать задачу" })).not.toHaveAttribute(
+      "title",
+    );
+    await page.mouse.move(0, 0);
+    const footer = inspector.locator(".task-inspector__footer");
+    const footerBox = await footer.boundingBox();
+    const actionBoxes = await footer.getByRole("button").evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const box = button.getBoundingClientRect();
+        return { left: box.left, right: box.right };
+      }),
+    );
+    expect(footerBox).not.toBeNull();
+    if (footerBox) {
+      expect(
+        actionBoxes.every(({ left, right }) => left >= footerBox.x && right <= footerBox.x + footerBox.width),
+      ).toBe(true);
+    }
+    expect(await footer.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+    await page.getByRole("button", { name: "Настройки отображения" }).click();
+    const grouping = page.getByRole("combobox", { name: "Группировать задачи по" });
+    await grouping.click();
+    const assignee = page.getByRole("option", { name: "Исполнитель" });
+    expect(
+      await assignee
+        .locator(".lr-select-item__copy > span")
+        .evaluate((element) => element.scrollWidth <= element.clientWidth),
+    ).toBe(true);
+  });
+
+  test("renders the language menu as a compact left-aligned control", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await page.getByRole("button", { name: "Change language" }).click();
+    const menu = page.getByRole("menu");
+    const english = menu.getByRole("menuitem", { name: "English" });
+    const menuBox = await menu.boundingBox();
+    const labelBox = await english.getByText("English", { exact: true }).boundingBox();
+    expect(menuBox).not.toBeNull();
+    expect(labelBox).not.toBeNull();
+    if (menuBox && labelBox) {
+      expect(menuBox.width).toBeLessThanOrEqual(144);
+      expect(labelBox.x - menuBox.x).toBeLessThanOrEqual(14);
+    }
+  });
+
+  test("uses command summary metrics as toggleable board filters", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Summary filter task");
+    const needsYou = page.getByRole("button", { name: "Needs you: 0" });
+    await expect(needsYou).toHaveAttribute("aria-pressed", "false");
+    await needsYou.click();
+    await expect(needsYou).toHaveAttribute("aria-pressed", "true");
+    await expect(page).toHaveURL(/summary=needsYou/);
+    const appliedFilters = page.getByRole("region", { name: "Filter tasks" });
+    await expect(appliedFilters.getByText("Quick filter", { exact: true })).toBeVisible();
+    await expect(appliedFilters.getByText("Needs you", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Summary filter task" })).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Needs you: 0" })).toHaveAttribute("aria-pressed", "true");
+    await appliedFilters.getByRole("button", { name: "Clear quick filter" }).click();
+    await expect(page).not.toHaveURL(/summary=/);
+    await expect(page.getByRole("button", { name: "Needs you: 0" })).toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByRole("button", { name: "Summary filter task" })).toBeVisible();
+  });
+
+  test("isolates board scrolling from the inspector on compact screens", async ({ page }) => {
+    await page.setViewportSize({ height: 900, width: 720 });
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Compact screen task");
+    const workbench = page.locator(".workbench");
+    const board = page.locator(".workbench-board");
+    const inspector = page.getByRole("complementary", { name: "Compact screen task" });
+
+    expect(await workbench.evaluate((element) => element.scrollWidth === element.clientWidth)).toBe(true);
+    expect(await board.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    await inspector.scrollIntoViewIfNeeded();
+    const surfaceBox = await page.locator(".app-surface").boundingBox();
+    const inspectorBox = await inspector.boundingBox();
+    expect(surfaceBox).not.toBeNull();
+    expect(inspectorBox).not.toBeNull();
+    if (surfaceBox && inspectorBox) {
+      expect(inspectorBox.x).toBeGreaterThanOrEqual(surfaceBox.x);
+      expect(inspectorBox.x + inspectorBox.width).toBeLessThanOrEqual(surfaceBox.x + surfaceBox.width);
+    }
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth === document.documentElement.clientWidth,
+      ),
+    ).toBe(true);
+  });
+
   test("explains how to recover when the local daemon becomes unavailable", async ({ page }) => {
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
@@ -182,6 +417,15 @@ test.describe("authenticated walking skeleton", () => {
     await expect(inspector.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible();
     await expect(inspector.getByText("Waiting for you", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /Needs your decision/ })).toBeVisible();
+
+    await page.goto(new URL("/?filters=priority-urgent", daemon.baseUrl).toString());
+    await expect(page.getByRole("button", { name: "Human decision workflow" })).toHaveCount(0);
+    const filteredAttentionBanner = page.getByRole("button", { name: /Needs your decision/ });
+    await expect(filteredAttentionBanner).toBeVisible();
+    await filteredAttentionBanner.click();
+    await expect(page).not.toHaveURL(/filters=/);
+    await expect(page.getByRole("complementary", { name: "Human decision workflow" })).toBeVisible();
+
     await page.reload();
     const restoredInspector = page.getByRole("complementary", { name: "Human decision workflow" });
     await expect(
@@ -234,6 +478,11 @@ test.describe("authenticated walking skeleton", () => {
         1,
       );
     }
+    await viewActionsTrigger.hover();
+    await expect(page.getByRole("tooltip")).toHaveText("Open view actions");
+    await expect(page.getByRole("tooltip")).toHaveAttribute("data-side", "bottom");
+    await expect(viewActionsTrigger).not.toHaveAttribute("title");
+    await page.mouse.move(0, 0);
     await viewActionsTrigger.click();
     await expect(page.getByRole("menuitem", { name: "Copy view link" })).toBeVisible();
     await page.keyboard.press("Escape");
@@ -243,6 +492,9 @@ test.describe("authenticated walking skeleton", () => {
     const displayTrigger = page.getByRole("button", { name: "Display settings" });
     const filterPopover = page.locator(".lr-filter-popover");
     const displayPopover = page.locator('.lr-popover[aria-label="Display settings"]');
+    await filterTrigger.hover();
+    await expect(page.getByRole("tooltip")).toHaveText("Filter tasks");
+    await page.mouse.move(0, 0);
     await filterTrigger.click();
     await expect(filterPopover).toBeVisible();
     await displayTrigger.click();
@@ -425,6 +677,12 @@ test.describe("authenticated walking skeleton", () => {
     await expect(
       groupingOptions.getByRole("option", { name: "Status" }).locator(".lr-select-item__copy > span"),
     ).toHaveCSS("font-weight", "500");
+    const assigneeOption = groupingOptions.getByRole("option", { name: "Assignee" });
+    expect(
+      await assigneeOption
+        .locator(".lr-select-item__copy > span")
+        .evaluate((element) => element.scrollWidth <= element.clientWidth),
+    ).toBe(true);
     const projectOption = groupingOptions.getByRole("option", { name: "Project" });
     await projectOption.hover();
     await expect(projectOption).toHaveCSS("cursor", "default");

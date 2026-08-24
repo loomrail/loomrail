@@ -75,7 +75,6 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
       className={cn("lr-icon-button", `lr-button--${variant}`, `lr-control--${size}`, className)}
       disabled={loading || disabled === true}
       ref={ref}
-      title={label}
       {...props}
     >
       <Icon name={loading ? "spinner" : name} />

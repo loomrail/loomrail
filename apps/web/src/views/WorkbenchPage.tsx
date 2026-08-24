@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   prioritySchema,
   riskSchema,
@@ -34,12 +35,14 @@ import {
   RunSummary,
   SegmentedControl,
   SelectControl,
+  Skeleton,
   Status,
   Switch,
   TaskCard,
   Textarea,
   TextField,
   TimelineEvent,
+  Tooltip,
   type BadgeTone,
   type FilterMessages,
   type FilterNode,
@@ -49,6 +52,7 @@ import {
 
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
+import type { SummaryFilter } from "../router";
 import {
   useInitializeFixtureWorkspace,
   useApproveBudgetOverride,
@@ -130,12 +134,14 @@ const ViewSettings = (): React.JSX.Element => {
         <div className="view-settings__row">
           <span>{t("view.ordering")}</span>
           <div className="view-settings__ordering">
-            <IconButton
-              className="view-settings__direction"
-              label={t("view.direction")}
-              name="sortAscending"
-              size="sm"
-            />
+            <Tooltip label={t("view.direction")}>
+              <IconButton
+                className="view-settings__direction"
+                label={t("view.direction")}
+                name="sortAscending"
+                size="sm"
+              />
+            </Tooltip>
             <SelectControl
               ariaLabel={t("view.orderBy")}
               defaultValue="priority"
@@ -176,13 +182,24 @@ const ViewSettings = (): React.JSX.Element => {
 
 type BoardToolbarProps = {
   filters: readonly string[];
+  onClearFilters: () => void;
   onFiltersChange: (value: readonly string[]) => void;
+  onSummaryFilterChange: (value: SummaryFilter | null) => void;
   options: readonly FilterNode[];
+  summaryFilter: SummaryFilter | null;
 };
 
-const BoardToolbar = ({ filters, onFiltersChange, options }: BoardToolbarProps): React.JSX.Element => {
+const BoardToolbar = ({
+  filters,
+  onClearFilters,
+  onFiltersChange,
+  onSummaryFilterChange,
+  options,
+  summaryFilter,
+}: BoardToolbarProps): React.JSX.Element => {
   const { t } = useI18n();
-  const hasActiveFilters = filters.length > 0;
+  const hasActiveFilters = filters.length > 0 || summaryFilter !== null;
+  const summaryFilterLabel = summaryFilter ? t(`work.summary.${summaryFilter}`) : null;
   const filterMessages: Partial<FilterMessages> = {
     add: t("filter.add"),
     addFilterPlaceholder: t("filter.addPlaceholder"),
@@ -217,7 +234,9 @@ const BoardToolbar = ({ filters, onFiltersChange, options }: BoardToolbarProps):
           <Button disabled shape="pill" variant="surface">
             {t("view.allIssues")}
           </Button>
-          <IconButton disabled className="board-view-tabs__add" label={t("view.add")} name="viewAdd" />
+          <Tooltip label={t("view.add")}>
+            <IconButton disabled className="board-view-tabs__add" label={t("view.add")} name="viewAdd" />
+          </Tooltip>
         </div>
         <div className="board-toolbar__actions">
           <CascadingFilter
@@ -226,12 +245,14 @@ const BoardToolbar = ({ filters, onFiltersChange, options }: BoardToolbarProps):
             onValueChange={onFiltersChange}
             options={options}
             trigger={<IconButton label={t("view.filter")} name="filter" variant="surface" />}
+            triggerTooltip={t("view.filter")}
             value={filters}
           />
           <PopoverSurface
             className="view-settings-popover"
             label={t("view.display")}
             trigger={<IconButton label={t("view.display")} name="settings" variant="surface" />}
+            triggerTooltip={t("view.display")}
           >
             <ViewSettings />
           </PopoverSurface>
@@ -248,14 +269,39 @@ const BoardToolbar = ({ filters, onFiltersChange, options }: BoardToolbarProps):
               trigger={
                 <IconButton className="board-add-filter" label={t("view.filter")} name="add" size="sm" />
               }
+              triggerTooltip={t("view.filter")}
               value={filters}
             />
           }
           ariaLabel={t("view.filter")}
           className="board-applied-filters"
           messages={filterMessages}
+          onClear={onClearFilters}
           onValueChange={onFiltersChange}
           options={options}
+          supplementalConditions={
+            summaryFilter && summaryFilterLabel ? (
+              <div className="lr-applied-filter board-summary-filter">
+                <span className="lr-applied-filter__property">
+                  <Icon name="filter" size={12} />
+                  {t("work.summary.filter")}
+                </span>
+                <span className="lr-applied-filter__value">{summaryFilterLabel}</span>
+                <Tooltip label={t("work.summary.clear")}>
+                  <button
+                    aria-label={t("work.summary.clear")}
+                    className="lr-applied-filter__remove"
+                    onClick={() => {
+                      onSummaryFilterChange(null);
+                    }}
+                    type="button"
+                  >
+                    <Icon name="close" size={12} />
+                  </button>
+                </Tooltip>
+              </div>
+            ) : null
+          }
           value={filters}
         />
       ) : null}
@@ -732,7 +778,8 @@ const TaskEditDialog = ({ item }: { item: WorkItem }): React.JSX.Element => {
       open={open}
       size="lg"
       title={t("task.edit")}
-      trigger={<Button shape="pill">{t("task.edit")}</Button>}
+      trigger={<IconButton label={t("task.edit")} name="edit" size="sm" variant="surface" />}
+      triggerTooltip={t("task.edit")}
     >
       <form className="edit-task-form" onSubmit={submit} ref={formRef}>
         {updateMutation.error ? (
@@ -1020,7 +1067,28 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
       ({ id, status }) => status === "OPEN" && id !== snapshot.acceptancePackage?.humanRequestId,
     ) ?? null;
 
-  if (workflowQuery.isPending) return <p className="inspector-copy">{t("workflow.loading")}</p>;
+  if (workflowQuery.isPending) {
+    return (
+      <div aria-label={t("workflow.loading")} className="inspector-workflow-skeleton" role="status">
+        <div className="inspector-workflow-skeleton__status">
+          <Skeleton width="42%" />
+          <Skeleton width="68px" />
+        </div>
+        <div className="inspector-workflow-skeleton__panel">
+          <div>
+            <Skeleton width="48%" />
+            <Skeleton width="54px" />
+          </div>
+          <Skeleton className="inspector-workflow-skeleton__meter" width="100%" />
+          <Skeleton width="36%" />
+        </div>
+        <div className="inspector-workflow-skeleton__steps">
+          <Skeleton width="58%" />
+          <Skeleton width="44%" />
+        </div>
+      </div>
+    );
+  }
 
   if (!snapshot?.run) {
     return (
@@ -1210,6 +1278,7 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
     return (
       <aside className="task-inspector is-empty" aria-label={t("empty.noSelection.title")}>
         <FeedbackState
+          className="inspector-empty-feedback"
           description={t("empty.noSelection.description")}
           title={t("empty.noSelection.title")}
         />
@@ -1319,7 +1388,20 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
             time={eventTime(event.occurredAt, locale)}
           />
         ))}
-        {eventsQuery.isPending ? <p className="inspector-copy">{t("task.loadingActivity")}</p> : null}
+        {eventsQuery.isPending ? (
+          <div aria-label={t("task.loadingActivity")} className="inspector-activity-skeleton" role="status">
+            {["first", "second", "third"].map((row, index) => (
+              <div className="inspector-activity-skeleton__row" key={row}>
+                <Skeleton className="inspector-activity-skeleton__icon" />
+                <span>
+                  <Skeleton width={index === 1 ? "52%" : "68%"} />
+                  <Skeleton width={index === 2 ? "64%" : "82%"} />
+                </span>
+                <Skeleton width="28px" />
+              </div>
+            ))}
+          </div>
+        ) : null}
         {eventsQuery.data?.events.length === 0 ? (
           <p className="inspector-copy">{t("task.noActivity")}</p>
         ) : null}
@@ -1339,6 +1421,11 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
 
       <footer className="task-inspector__footer">
         <Button
+          aria-label={
+            secondaryTarget
+              ? t("task.moveTo", { state: stateLabel(secondaryTarget, t) })
+              : t("task.noSecondaryAction")
+          }
           disabled={!secondaryTarget}
           loading={moveMutation.isPending && secondaryTarget !== null}
           onClick={() => {
@@ -1347,10 +1434,15 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
           variant="secondary"
         >
           {secondaryTarget
-            ? t("task.moveTo", { state: stateLabel(secondaryTarget, t) })
+            ? t("task.moveToShort", { state: stateLabel(secondaryTarget, t) })
             : t("task.noSecondaryAction")}
         </Button>
         <Button
+          aria-label={
+            primaryTarget
+              ? t("task.moveTo", { state: stateLabel(primaryTarget, t) })
+              : t("task.noAvailableMove")
+          }
           disabled={!primaryTarget}
           loading={moveMutation.isPending && primaryTarget !== null}
           onClick={() => {
@@ -1359,7 +1451,7 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
           variant="primary"
         >
           {primaryTarget
-            ? t("task.moveTo", { state: stateLabel(primaryTarget, t) })
+            ? t("task.moveToShort", { state: stateLabel(primaryTarget, t) })
             : t("task.noAvailableMove")}
         </Button>
       </footer>
@@ -1369,19 +1461,62 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
 
 export const WorkbenchPage = (): React.JSX.Element => {
   const { t } = useI18n();
+  const navigate = useNavigate({ from: "/" });
+  const search = useSearch({ from: "/" });
   const { connectionPending, error, projectsPending, retryConnection, selectedProject } = useWorkspace();
   const workItemsQuery = useProjectWorkItems(selectedProject?.id);
   const humanRequestsQuery = useProjectHumanRequests(selectedProject?.id);
   const initializeMutation = useInitializeFixtureWorkspace();
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null);
-  const [filters, setFilters] = useState<readonly string[]>([]);
+  const filters = search.filters?.split(",") ?? [];
+  const summaryFilter = search.summary ?? null;
+  const setFilters = (value: readonly string[]): void => {
+    void navigate({
+      replace: true,
+      resetScroll: false,
+      search: (current) => ({
+        ...current,
+        filters: value.length > 0 ? value.join(",") : undefined,
+      }),
+    });
+  };
+  const setSummaryFilter = (value: SummaryFilter | null): void => {
+    void navigate({
+      replace: true,
+      resetScroll: false,
+      search: (current) => ({
+        ...current,
+        summary: value ?? undefined,
+      }),
+    });
+  };
+  const clearFilters = (): void => {
+    void navigate({
+      replace: true,
+      resetScroll: false,
+      search: (current) => ({
+        ...current,
+        filters: undefined,
+        summary: undefined,
+      }),
+    });
+  };
   const workItems = workItemsQuery.data?.workItems ?? [];
   const activeItems = workItems.filter((item) => item.state !== "DONE" && item.state !== "CANCELLED");
-  const visibleItems = activeItems.filter((item) => matchesFilters(item, filters));
-  const selectedItem =
-    activeItems.find((item) => item.id === selectedWorkItemId) ?? activeItems.at(0) ?? null;
-  const filterOptions = filterOptionsFor(activeItems, t);
   const blockingRequests = humanRequestsQuery.data?.humanRequests.filter(({ blocking }) => blocking) ?? [];
+  const blockingWorkItemIds = new Set(blockingRequests.map(({ workItemId }) => workItemId));
+  const summaryFilteredItems = activeItems.filter((item) => {
+    if (summaryFilter === "needsYou") return blockingWorkItemIds.has(item.id);
+    if (summaryFilter === "active") return item.state === "IN_PROGRESS";
+    if (summaryFilter === "atRisk") {
+      return item.state === "BLOCKED" || item.risk === "HIGH" || item.risk === "CRITICAL";
+    }
+    return true;
+  });
+  const visibleItems = summaryFilteredItems.filter((item) => matchesFilters(item, filters));
+  const selectedItem =
+    visibleItems.find((item) => item.id === selectedWorkItemId) ?? visibleItems.at(0) ?? null;
+  const filterOptions = filterOptionsFor(activeItems, t);
   const runningCount = activeItems.filter(({ state }) => state === "IN_PROGRESS").length;
   const atRiskCount = activeItems.filter(
     ({ risk, state }) => state === "BLOCKED" || risk === "HIGH" || risk === "CRITICAL",
@@ -1394,11 +1529,19 @@ export const WorkbenchPage = (): React.JSX.Element => {
         className="workbench-board"
         aria-labelledby="current-work-title"
       >
-        <BoardToolbar filters={filters} onFiltersChange={setFilters} options={filterOptions} />
+        <BoardToolbar
+          filters={filters}
+          onClearFilters={clearFilters}
+          onFiltersChange={setFilters}
+          onSummaryFilterChange={setSummaryFilter}
+          options={filterOptions}
+          summaryFilter={summaryFilter}
+        />
         {blockingRequests[0] ? (
           <button
             className="attention-banner"
             onClick={() => {
+              clearFilters();
               setSelectedWorkItemId(blockingRequests[0]?.workItemId ?? null);
             }}
             type="button"
@@ -1432,20 +1575,28 @@ export const WorkbenchPage = (): React.JSX.Element => {
               </p>
             </div>
           </div>
-          <dl aria-label={t("work.summary.label")} className="work-command-summary">
-            <div>
-              <dt>{t("work.summary.needsYou")}</dt>
-              <dd>{blockingRequests.length}</dd>
-            </div>
-            <div>
-              <dt>{t("work.summary.active")}</dt>
-              <dd>{runningCount}</dd>
-            </div>
-            <div>
-              <dt>{t("work.summary.atRisk")}</dt>
-              <dd>{atRiskCount}</dd>
-            </div>
-          </dl>
+          <div aria-label={t("work.summary.label")} className="work-command-summary" role="group">
+            {(
+              [
+                { count: blockingRequests.length, filter: "needsYou", label: t("work.summary.needsYou") },
+                { count: runningCount, filter: "active", label: t("work.summary.active") },
+                { count: atRiskCount, filter: "atRisk", label: t("work.summary.atRisk") },
+              ] as const
+            ).map(({ count, filter, label }) => (
+              <button
+                aria-label={`${label}: ${count.toString()}`}
+                aria-pressed={summaryFilter === filter}
+                key={filter}
+                onClick={() => {
+                  setSummaryFilter(summaryFilter === filter ? null : filter);
+                }}
+                type="button"
+              >
+                <span>{label}</span>
+                <strong>{count}</strong>
+              </button>
+            ))}
+          </div>
           <div>
             <Button disabled shape="pill">
               {t("action.share")}
@@ -1459,6 +1610,7 @@ export const WorkbenchPage = (): React.JSX.Element => {
                 ],
               ]}
               trigger={<IconButton label={t("view.actions")} name="more" variant="surface" />}
+              triggerTooltip={t("view.actions")}
             />
           </div>
         </header>
@@ -1546,7 +1698,7 @@ export const WorkbenchPage = (): React.JSX.Element => {
                 <p>{t("empty.noTasks.description")}</p>
               </div>
             ) : null}
-            {filters.length > 0 && visibleItems.length === 0 ? (
+            {(filters.length > 0 || summaryFilter !== null) && visibleItems.length === 0 ? (
               <div className="board-filter-empty" role="status">
                 <span>
                   <Icon name="filter" size={18} />

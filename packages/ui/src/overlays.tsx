@@ -17,7 +17,7 @@ export type TooltipProps = {
   side?: ComponentPropsWithoutRef<typeof TooltipPrimitive.Content>["side"];
 };
 
-export const Tooltip = ({ children, label, side = "top" }: TooltipProps): React.JSX.Element => (
+export const Tooltip = ({ children, label, side = "bottom" }: TooltipProps): React.JSX.Element => (
   <TooltipPrimitive.Provider delayDuration={350} skipDelayDuration={150}>
     <TooltipPrimitive.Root>
       <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
@@ -42,23 +42,33 @@ export type ActionMenuItem = {
 
 export type ActionMenuProps = {
   align?: ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>["align"];
+  contentClassName?: string;
   groups: readonly (readonly ActionMenuItem[])[];
   side?: ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>["side"];
   trigger: ReactElement;
+  triggerTooltip?: string;
 };
 
 export const ActionMenu = ({
   align = "start",
+  contentClassName,
   groups,
   side = "bottom",
   trigger,
+  triggerTooltip,
 }: ActionMenuProps): React.JSX.Element => (
   <DropdownMenuPrimitive.Root>
-    <DropdownMenuPrimitive.Trigger asChild>{trigger}</DropdownMenuPrimitive.Trigger>
+    {triggerTooltip ? (
+      <Tooltip label={triggerTooltip}>
+        <DropdownMenuPrimitive.Trigger asChild>{trigger}</DropdownMenuPrimitive.Trigger>
+      </Tooltip>
+    ) : (
+      <DropdownMenuPrimitive.Trigger asChild>{trigger}</DropdownMenuPrimitive.Trigger>
+    )}
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
         align={align}
-        className="lr-menu"
+        className={cn("lr-menu", contentClassName)}
         collisionPadding={8}
         side={side}
         sideOffset={5}
@@ -67,14 +77,16 @@ export const ActionMenu = ({
           <div className="lr-menu__group" key={group.map((item) => item.label).join("-")}>
             {group.map((item) => (
               <DropdownMenuPrimitive.Item
-                className={cn("lr-menu__item", item.danger && "is-danger")}
+                className={cn("lr-menu__item", item.icon && "has-icon", item.danger && "is-danger")}
                 disabled={item.disabled === true || item.onSelect === undefined}
                 key={item.label}
                 {...(item.onSelect === undefined ? {} : { onSelect: item.onSelect })}
               >
-                <span className="lr-menu__item-icon">
-                  {item.icon ? <Icon name={item.icon} size={14} /> : null}
-                </span>
+                {item.icon ? (
+                  <span className="lr-menu__item-icon">
+                    <Icon name={item.icon} size={14} />
+                  </span>
+                ) : null}
                 <span>{item.label}</span>
                 {item.shortcut ? <Kbd>{item.shortcut}</Kbd> : null}
               </DropdownMenuPrimitive.Item>
@@ -96,6 +108,7 @@ export type PopoverSurfaceProps = {
   label?: string;
   side?: ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>["side"];
   trigger: ReactElement;
+  triggerTooltip?: string;
 };
 
 export const PopoverSurface = ({
@@ -105,9 +118,16 @@ export const PopoverSurface = ({
   label,
   side = "bottom",
   trigger,
+  triggerTooltip,
 }: PopoverSurfaceProps): React.JSX.Element => (
   <PopoverPrimitive.Root>
-    <PopoverPrimitive.Trigger asChild>{trigger}</PopoverPrimitive.Trigger>
+    {triggerTooltip ? (
+      <Tooltip label={triggerTooltip}>
+        <PopoverPrimitive.Trigger asChild>{trigger}</PopoverPrimitive.Trigger>
+      </Tooltip>
+    ) : (
+      <PopoverPrimitive.Trigger asChild>{trigger}</PopoverPrimitive.Trigger>
+    )}
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content
         align={align}
@@ -133,6 +153,7 @@ export type DialogSurfaceProps = {
   size?: "sm" | "md" | "lg";
   title: string;
   trigger?: ReactElement;
+  triggerTooltip?: string;
 };
 
 export const DialogSurface = ({
@@ -145,6 +166,7 @@ export const DialogSurface = ({
   size = "md",
   title,
   trigger,
+  triggerTooltip,
 }: DialogSurfaceProps): React.JSX.Element => {
   const contentRef = useRef<HTMLDivElement>(null);
   const rootProps = {
@@ -154,7 +176,15 @@ export const DialogSurface = ({
 
   return (
     <DialogPrimitive.Root {...rootProps}>
-      {trigger ? <DialogPrimitive.Trigger asChild>{trigger}</DialogPrimitive.Trigger> : null}
+      {trigger ? (
+        triggerTooltip ? (
+          <Tooltip label={triggerTooltip}>
+            <DialogPrimitive.Trigger asChild>{trigger}</DialogPrimitive.Trigger>
+          </Tooltip>
+        ) : (
+          <DialogPrimitive.Trigger asChild>{trigger}</DialogPrimitive.Trigger>
+        )
+      ) : null}
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="lr-dialog-overlay" />
         <DialogPrimitive.Content
@@ -171,9 +201,11 @@ export const DialogSurface = ({
               <DialogPrimitive.Title>{title}</DialogPrimitive.Title>
               {description ? <DialogPrimitive.Description>{description}</DialogPrimitive.Description> : null}
             </div>
-            <DialogPrimitive.Close asChild>
-              <IconButton label={closeLabel} name="close" size="lg" />
-            </DialogPrimitive.Close>
+            <Tooltip label={closeLabel}>
+              <DialogPrimitive.Close asChild>
+                <IconButton label={closeLabel} name="close" size="lg" />
+              </DialogPrimitive.Close>
+            </Tooltip>
           </header>
           <div className="lr-dialog__body">{children}</div>
           {footer ? <footer className="lr-dialog__footer">{footer}</footer> : null}
