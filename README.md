@@ -131,7 +131,7 @@ talk directly to future agent, shell, or Git adapters.
       replay and secure reconnect guidance
 - [x] **M4 — Mock delivery workflow:** restart-safe dispatch queue, Human Request, Decision, and resumable task
       pipeline
-- [ ] **M5 — Budgets and recovery:** explicit limits, pause/resume, crash recovery
+- [x] **M5 — Budgets and recovery:** explicit limits, pause/resume, crash recovery
 - [ ] **M6 — Acceptance:** evidence, review, owner approval, audit surface
 - [ ] **M7 — Public checkpoint:** clean install, hardening, packaging, release documentation
 

@@ -8,8 +8,11 @@ import {
   correlationIdSchema,
   sessionExchangeResponseSchema,
   stateCommandResultSchema,
+  workItemsResponseSchema,
   workflowSnapshotSchema,
 } from "@loomrail/contracts";
+import { openLocalState } from "@loomrail/persistence-sqlite";
+import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { startDaemon, type RunningDaemon } from "../src/server.js";
@@ -456,15 +459,48 @@ describe("local daemon session and state boundary", () => {
       headers: mutationHeaders(daemon, secondSession),
       body: answerBody,
     });
-    const completed = workflowSnapshotSchema.parse(await answerResponse.json());
+    const hardPaused = workflowSnapshotSchema.parse(await answerResponse.json());
     expect(answerResponse.status).toBe(200);
-    expect(completed.run?.status).toBe("SUCCEEDED");
-    expect(completed.stageAttempts.map(({ stage, status }) => ({ stage, status }))).toEqual([
+    expect(hardPaused.run?.status).toBe("HARD_PAUSED");
+    expect(hardPaused.stageAttempts.map(({ stage, status }) => ({ stage, status }))).toEqual([
       { stage: "DISCOVERY", status: "SUCCEEDED" },
       { stage: "PLAN", status: "SUCCEEDED" },
+      { stage: "IMPLEMENT", status: "HARD_PAUSED" },
     ]);
-    expect(completed.humanRequests[0]).toMatchObject({ status: "RESOLVED", version: 2 });
-    expect(completed.decisions).toHaveLength(1);
+    expect(hardPaused.usageRecords.map(({ amount }) => amount)).toEqual([50, 30, 15, 5]);
+    expect(hardPaused.humanRequests[0]).toMatchObject({ status: "RESOLVED", version: 2 });
+    expect(hardPaused.decisions).toHaveLength(1);
+
+    const overrideResponse = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/pipeline/budget-override`,
+      {
+        method: "POST",
+        headers: mutationHeaders(daemon, secondSession),
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "approve-budget-override",
+          expectedVersion: hardPaused.run?.version,
+          maxEstimatedTokens: 200,
+        }),
+      },
+    );
+    const completed = workflowSnapshotSchema.parse(await overrideResponse.json());
+    expect(overrideResponse.status).toBe(200);
+    expect(completed.run?.status).toBe("SUCCEEDED");
+    expect(
+      completed.budgetPolicies.map(({ revision, maxEstimatedTokens }) => ({
+        revision,
+        maxEstimatedTokens,
+      })),
+    ).toEqual([
+      { revision: 1, maxEstimatedTokens: 100 },
+      { revision: 2, maxEstimatedTokens: 200 },
+    ]);
+    expect(completed.stageAttempts.at(-1)).toMatchObject({
+      stage: "IMPLEMENT",
+      attempt: 2,
+      status: "SUCCEEDED",
+    });
 
     const repeated = await fetch(`${daemon.baseUrl}/api/v1/human-requests/${request.id}/answer`, {
       method: "POST",
@@ -480,5 +516,135 @@ describe("local daemon session and state boundary", () => {
     expect(await repeated.json()).toMatchObject({
       error: { code: "HUMAN_REQUEST_ALREADY_RESOLVED" },
     });
+  });
+
+  it("marks an orphaned running attempt interrupted before serving startup traffic", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail daemon recovery "));
+    temporaryDirectories.push(temporaryDirectory);
+    const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    const localState = await openLocalState({ databasePath: stateDatabasePath });
+    try {
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "register-recovery-project",
+        correlationId: "correlation-register-recovery",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_FIXTURE_PROJECT",
+        payload: {
+          id: "project-recovery",
+          fixtureId: "web-app-a",
+          name: "Recovery fixture",
+          repositoryPath: temporaryDirectory,
+        },
+      });
+      const created = localState.execute({
+        schemaVersion: 1,
+        commandId: "create-recovery-task",
+        correlationId: "correlation-create-recovery",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "CREATE_WORK_ITEM",
+        payload: {
+          projectId: "project-recovery",
+          parentId: null,
+          type: "TASK",
+          title: "Recover an orphaned attempt",
+          description: "Synthetic recovery fixture",
+          priority: "MEDIUM",
+          risk: "LOW",
+          acceptanceCriteria: [],
+        },
+      });
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "ready-recovery-task",
+        correlationId: "correlation-ready-recovery",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "MOVE_WORK_ITEM",
+        payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
+      });
+      const started = localState.execute({
+        schemaVersion: 1,
+        commandId: "start-recovery-task",
+        correlationId: "correlation-start-recovery",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_MOCK_PIPELINE",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedVersion: 2,
+          template: mockDeliveryTemplate,
+          budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+        },
+      });
+      if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "mark-recovery-task-running",
+        correlationId: "correlation-mark-recovery",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: started.dispatch.id },
+      });
+    } finally {
+      localState.close();
+    }
+
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, logger: false, stateDatabasePath });
+    const session = await authenticate(daemon, token);
+    const projects = await fetch(`${daemon.baseUrl}/api/v1/projects`, {
+      headers: { cookie: session.cookie },
+    });
+    const projectBody = await projects.json();
+    expect(projectBody).toMatchObject({ projects: [{ id: "project-recovery" }] });
+    const items = await fetch(`${daemon.baseUrl}/api/v1/projects/project-recovery/work-items`, {
+      headers: { cookie: session.cookie },
+    });
+    const listed = workItemsResponseSchema.parse(await items.json());
+    const recoveredResponse = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${listed.workItems[0]?.id ?? "missing"}/workflow`,
+      { headers: { cookie: session.cookie } },
+    );
+    const recovered = workflowSnapshotSchema.parse(await recoveredResponse.json());
+    expect(recovered).toMatchObject({
+      run: { status: "INTERRUPTED" },
+      stageAttempts: [{ status: "INTERRUPTED", failureCode: "DAEMON_RESTART" }],
+      recoveryReports: [{ reason: "DAEMON_RESTART" }],
+    });
+
+    const resumeResponse = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${listed.workItems[0]?.id ?? "missing"}/pipeline/resume`,
+      {
+        method: "POST",
+        headers: mutationHeaders(daemon, session),
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "resume-recovered-task",
+          expectedVersion: recovered.run?.version,
+        }),
+      },
+    );
+    const resumed = workflowSnapshotSchema.parse(await resumeResponse.json());
+    expect(resumeResponse.status).toBe(200);
+    expect(resumed).toMatchObject({
+      run: { status: "HARD_PAUSED" },
+      recoveryReports: [{ reason: "DAEMON_RESTART" }],
+    });
+
+    const cancelResponse = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${listed.workItems[0]?.id ?? "missing"}/pipeline/cancel`,
+      {
+        method: "POST",
+        headers: mutationHeaders(daemon, session),
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "cancel-recovered-task",
+          expectedVersion: resumed.run?.version,
+        }),
+      },
+    );
+    const cancelled = workflowSnapshotSchema.parse(await cancelResponse.json());
+    expect(cancelResponse.status).toBe(200);
+    expect(cancelled.run?.status).toBe("CANCELLED");
   });
 });

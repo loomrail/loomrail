@@ -9,6 +9,7 @@ import fastifyStatic from "@fastify/static";
 import {
   answerHumanRequestRequestSchema,
   apiErrorResponseSchema,
+  budgetOverrideRequestSchema,
   correlationIdSchema,
   createWorkItemRequestSchema,
   daemonStatusResponseSchema,
@@ -18,6 +19,7 @@ import {
   humanRequestsResponseSchema,
   moveWorkItemRequestSchema,
   opaqueIdSchema,
+  pipelineControlRequestSchema,
   projectsResponseSchema,
   registerFixtureProjectRequestSchema,
   sessionExchangeRequestSchema,
@@ -45,6 +47,8 @@ const SESSION_COOKIE = "loomrail_session";
 const CSRF_HEADER = "x-loomrail-csrf";
 const BOOTSTRAP_TTL_MS = 60_000;
 const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
+const DEFAULT_MOCK_BUDGET = 100;
+const DEFAULT_MOCK_BUDGET_THRESHOLDS = [0.5, 0.8, 0.95] as const;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1"]);
 
 type Clock = () => Date;
@@ -220,6 +224,9 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
               stageAttempts: [],
               humanRequests: [],
               decisions: [],
+              budgetPolicies: [],
+              usageRecords: [],
+              recoveryReports: [],
             });
       const stageAttempt = snapshot.stageAttempts.find(({ id }) => id === dispatch.stageAttemptId);
       const stageRequest = snapshot.humanRequests.find(
@@ -232,7 +239,18 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         throw new StateStoreError("PERSISTENCE_FAILURE", "A pending workflow dispatch is incomplete");
       }
 
-      const invocation = { dispatch, stageAttempt, workItem, decision };
+      const started = localState.execute({
+        schemaVersion: 1,
+        commandId: `mark-started-${dispatch.id}`,
+        correlationId: `dispatch-${dispatch.id}`,
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: dispatch.id },
+      });
+      if (started.type !== "WORKFLOW_DISPATCH_STARTED") {
+        throw new StateStoreError("PERSISTENCE_FAILURE", "The mock workflow dispatch did not start");
+      }
+      const invocation = { dispatch, stageAttempt: started.stageAttempt, workItem, decision };
       const outcome =
         dispatch.mode === "RESUME"
           ? await mockProvider.resume(invocation)
@@ -249,6 +267,14 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     throw new StateStoreError("PERSISTENCE_FAILURE", "The mock dispatch queue exceeded its safety limit");
   };
 
+  localState.execute({
+    schemaVersion: 1,
+    commandId: `reconcile-${randomUUID()}`,
+    correlationId: `startup-${randomUUID()}`,
+    actor: { type: "SYSTEM", id: "local-daemon" },
+    type: "RECONCILE_WORKFLOWS",
+    payload: {},
+  });
   await drainMockDispatches();
   let allowedOrigin = "";
   let closing = false;
@@ -521,7 +547,16 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         return workflowSnapshotSchema.parse(
           result.type === "WORKFLOW_SNAPSHOT"
             ? result.snapshot
-            : { schemaVersion: 1, run: null, stageAttempts: [], humanRequests: [], decisions: [] },
+            : {
+                schemaVersion: 1,
+                run: null,
+                stageAttempts: [],
+                humanRequests: [],
+                decisions: [],
+                budgetPolicies: [],
+                usageRecords: [],
+                recoveryReports: [],
+              },
         );
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
@@ -636,6 +671,161 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             workItemId: params.workItemId,
             expectedVersion: body.expectedVersion,
             template: mockDeliveryTemplate,
+            budget: {
+              maxEstimatedTokens: DEFAULT_MOCK_BUDGET,
+              warningThresholds: [...DEFAULT_MOCK_BUDGET_THRESHOLDS],
+            },
+          },
+        });
+        await drainMockDispatches();
+        const result = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        if (result.type !== "WORKFLOW_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow snapshot could not be loaded");
+        }
+        return workflowSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/work-items/:workItemId/pipeline/pause", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const body = pipelineControlRequestSchema.parse(request.body);
+        const snapshot = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        if (snapshot.type !== "WORKFLOW_SNAPSHOT" || !snapshot.snapshot.run) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow does not exist");
+        }
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "PAUSE_PIPELINE",
+          payload: {
+            pipelineRunId: snapshot.snapshot.run.id,
+            expectedVersion: body.expectedVersion,
+          },
+        });
+        const result = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        if (result.type !== "WORKFLOW_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow snapshot could not be loaded");
+        }
+        return workflowSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/work-items/:workItemId/pipeline/resume", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const body = pipelineControlRequestSchema.parse(request.body);
+        const snapshot = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        if (snapshot.type !== "WORKFLOW_SNAPSHOT" || !snapshot.snapshot.run) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow does not exist");
+        }
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "RESUME_PIPELINE",
+          payload: {
+            pipelineRunId: snapshot.snapshot.run.id,
+            expectedVersion: body.expectedVersion,
+          },
+        });
+        await drainMockDispatches();
+        const result = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        if (result.type !== "WORKFLOW_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow snapshot could not be loaded");
+        }
+        return workflowSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/work-items/:workItemId/pipeline/cancel", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const body = pipelineControlRequestSchema.parse(request.body);
+        const snapshot = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        if (snapshot.type !== "WORKFLOW_SNAPSHOT" || !snapshot.snapshot.run) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow does not exist");
+        }
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "CANCEL_PIPELINE",
+          payload: {
+            pipelineRunId: snapshot.snapshot.run.id,
+            expectedVersion: body.expectedVersion,
+          },
+        });
+        const result = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        if (result.type !== "WORKFLOW_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow snapshot could not be loaded");
+        }
+        return workflowSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/work-items/:workItemId/pipeline/budget-override", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const body = budgetOverrideRequestSchema.parse(request.body);
+        const snapshot = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        if (snapshot.type !== "WORKFLOW_SNAPSHOT" || !snapshot.snapshot.run) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow does not exist");
+        }
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "APPROVE_BUDGET_OVERRIDE",
+          payload: {
+            pipelineRunId: snapshot.snapshot.run.id,
+            expectedVersion: body.expectedVersion,
+            maxEstimatedTokens: body.maxEstimatedTokens,
           },
         });
         await drainMockDispatches();

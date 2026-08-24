@@ -164,7 +164,7 @@ test.describe("authenticated walking skeleton", () => {
     expect(await page.evaluate<boolean>("Boolean(window.__loomrailXss)")).toBe(false);
   });
 
-  test("stops a mock workflow on a durable HumanRequest and resumes from the answer", async ({ page }) => {
+  test("persists a HumanRequest, hard-pauses on budget, and continues from an override", async ({ page }) => {
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
       logger: false,
@@ -193,10 +193,15 @@ test.describe("authenticated walking skeleton", () => {
     const workflowSection = restoredInspector
       .locator(".lr-inspector-section")
       .filter({ has: page.getByText("Workflow", { exact: true }) });
+    await expect(workflowSection.getByText("Budget paused", { exact: true }).first()).toBeVisible();
+    await expect(workflowSection.getByText("100 of 100", { exact: true })).toBeVisible();
+    await expect(workflowSection.getByRole("button", { name: "Approve 200 token budget" })).toBeEnabled();
+    await workflowSection.getByRole("button", { name: "Approve 200 token budget" }).click();
     await expect(
-      workflowSection.getByText("Discovery and planning completed from the recorded decision."),
+      workflowSection.getByText("The bounded mock workflow completed from the recorded decision."),
     ).toBeVisible();
-    await expect(workflowSection.getByText("Completed", { exact: true })).toHaveCount(3);
+    await expect(workflowSection.getByText("100 of 200", { exact: true })).toBeVisible();
+    await expect(workflowSection.getByText("Completed", { exact: true })).toHaveCount(4);
     await expect(page.getByRole("button", { name: /Needs your decision/ })).toHaveCount(0);
     await expect(restoredInspector.getByText("Decision recorded", { exact: true })).toBeVisible();
     await expect(restoredInspector.getByText("Workflow completed", { exact: true })).toBeVisible();

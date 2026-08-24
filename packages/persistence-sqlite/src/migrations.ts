@@ -17,6 +17,12 @@ type Migration = {
 const migrations: readonly Migration[] = [
   { version: 1, name: "initial", filename: "0001_initial.sql" },
   { version: 2, name: "mock_workflow", filename: "0002_mock_workflow.sql" },
+  { version: 3, name: "budget_pause_recovery", filename: "0003_budget_pause_recovery.sql" },
+  {
+    version: 4,
+    name: "pipeline_started_budget_backfill",
+    filename: "0004_pipeline_started_budget_backfill.sql",
+  },
 ];
 
 const migrationRowSchema = z.object({

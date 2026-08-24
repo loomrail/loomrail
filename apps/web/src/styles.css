@@ -755,6 +755,57 @@ button {
   font-weight: var(--lr-weight-medium);
 }
 
+.workflow-budget {
+  background: var(--lr-surface-inset);
+  border: 1px solid var(--lr-border-subtle);
+  border-radius: var(--lr-radius-control);
+  display: grid;
+  gap: var(--lr-space-2);
+  padding: var(--lr-space-2-5);
+}
+
+.workflow-budget__heading,
+.workflow-budget__meta {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.workflow-budget__heading {
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-xs);
+}
+
+.workflow-budget__heading strong {
+  color: var(--lr-text);
+  font-weight: var(--lr-weight-semibold);
+}
+
+.workflow-budget progress {
+  appearance: none;
+  background: var(--lr-border);
+  border: 0;
+  border-radius: var(--lr-radius-full);
+  height: 4px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.workflow-budget progress::-webkit-progress-bar {
+  background: var(--lr-border);
+}
+
+.workflow-budget progress::-webkit-progress-value,
+.workflow-budget progress::-moz-progress-bar {
+  background: var(--lr-accent);
+  border-radius: var(--lr-radius-full);
+}
+
+.workflow-budget__meta {
+  color: var(--lr-text-faint);
+  font-size: var(--lr-font-xs);
+}
+
 .workflow-stage-list {
   display: grid;
   gap: 0;
@@ -802,6 +853,13 @@ button {
   border-color: var(--lr-warning);
 }
 
+.workflow-stage-list li.is-soft_paused > span,
+.workflow-stage-list li.is-hard_paused > span,
+.workflow-stage-list li.is-interrupted > span {
+  background: var(--lr-warning);
+  border-color: var(--lr-warning);
+}
+
 .workflow-stage-list strong,
 .workflow-stage-list small {
   display: block;
@@ -827,6 +885,32 @@ button {
   line-height: 1.45;
   margin: 0;
   padding: var(--lr-space-2-5);
+}
+
+.workflow-recovery {
+  background: var(--lr-warning-soft);
+  border: 1px solid color-mix(in srgb, var(--lr-warning) 28%, var(--lr-border));
+  border-radius: var(--lr-radius-control);
+  display: grid;
+  gap: var(--lr-space-1);
+  padding: var(--lr-space-2-5);
+}
+
+.workflow-recovery strong {
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-xs);
+}
+
+.workflow-recovery span {
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-xs);
+  line-height: 1.45;
+}
+
+.workflow-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lr-space-2);
 }
 
 .human-request-card {

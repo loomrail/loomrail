@@ -48,8 +48,10 @@ import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
 import {
   useInitializeFixtureWorkspace,
+  useApproveBudgetOverride,
   useAnswerHumanRequest,
   useMoveWorkItem,
+  usePipelineControl,
   useProjectHumanRequests,
   useProjectWorkItems,
   useStartMockPipeline,
@@ -383,7 +385,12 @@ const changedFieldLabelKeys: Record<WorkItemChangedField, TranslationKey> = {
 
 const stageAttemptStatusLabel = (attempt: StageAttempt, t: Translator): string => {
   if (attempt.status === "QUEUED") return t("workflow.stage.QUEUED");
+  if (attempt.status === "RUNNING") return t("workflow.stage.RUNNING");
   if (attempt.status === "WAITING_HUMAN") return t("workflow.stage.WAITING_HUMAN");
+  if (attempt.status === "SOFT_PAUSED") return t("workflow.stage.SOFT_PAUSED");
+  if (attempt.status === "HARD_PAUSED") return t("workflow.stage.HARD_PAUSED");
+  if (attempt.status === "INTERRUPTED") return t("workflow.stage.INTERRUPTED");
+  if (attempt.status === "CANCELLED") return t("workflow.stage.CANCELLED");
   if (attempt.status === "SUCCEEDED") return t("workflow.stage.SUCCEEDED");
   return t("workflow.stage.other");
 };
@@ -391,6 +398,9 @@ const stageAttemptStatusLabel = (attempt: StageAttempt, t: Translator): string =
 const pipelineStatusLabelKeys: Record<PipelineRun["status"], TranslationKey> = {
   RUNNING: "workflow.status.RUNNING",
   WAITING_HUMAN: "workflow.status.WAITING_HUMAN",
+  SOFT_PAUSED: "workflow.status.SOFT_PAUSED",
+  HARD_PAUSED: "workflow.status.HARD_PAUSED",
+  INTERRUPTED: "workflow.status.INTERRUPTED",
   SUCCEEDED: "workflow.status.SUCCEEDED",
   FAILED: "workflow.status.FAILED",
   CANCELLED: "workflow.status.CANCELLED",
@@ -399,6 +409,9 @@ const pipelineStatusLabelKeys: Record<PipelineRun["status"], TranslationKey> = {
 const pipelineStatusTones: Record<PipelineRun["status"], StatusTone> = {
   RUNNING: "running",
   WAITING_HUMAN: "waiting",
+  SOFT_PAUSED: "paused",
+  HARD_PAUSED: "waiting",
+  INTERRUPTED: "paused",
   SUCCEEDED: "complete",
   FAILED: "paused",
   CANCELLED: "paused",
@@ -465,6 +478,72 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         icon: "check",
         label: t("event.humanRequestResolved"),
         tone: "success",
+      };
+    case "USAGE_RECORDED":
+      return {
+        detail: t("event.usageRecordedDetail", {
+          amount: event.data.usageRecord.amount,
+          total: event.data.cumulativeAmount,
+        }),
+        icon: "clock",
+        label: t("event.usageRecorded"),
+      };
+    case "BUDGET_THRESHOLD_REACHED":
+      return {
+        detail: t("event.budgetThresholdDetail", {
+          threshold: Math.round(event.data.threshold * 100),
+          total: event.data.cumulativeAmount,
+        }),
+        icon: "filter",
+        label: t("event.budgetThreshold"),
+        tone: event.data.threshold >= 1 ? "warning" : "accent",
+      };
+    case "PIPELINE_PAUSED":
+      return {
+        detail: t("event.pipelinePausedDetail", {
+          kind: event.data.kind,
+          stage: t(stageLabelKeys[event.data.stageAttempt.stage]),
+        }),
+        icon: "pause",
+        label: t("event.pipelinePaused"),
+        tone: "warning",
+      };
+    case "PIPELINE_RESUMED":
+      return {
+        detail: t("event.pipelineResumedDetail", {
+          stage: t(stageLabelKeys[event.data.stageAttempt.stage]),
+        }),
+        icon: "play",
+        label: t("event.pipelineResumed"),
+        tone: "accent",
+      };
+    case "PIPELINE_CANCELLED":
+      return {
+        detail: t("event.pipelineCancelledDetail", {
+          stage: t(stageLabelKeys[event.data.stageAttempt.stage]),
+        }),
+        icon: "pause",
+        label: t("event.pipelineCancelled"),
+        tone: "warning",
+      };
+    case "BUDGET_OVERRIDE_APPROVED":
+      return {
+        detail: t("event.budgetOverrideDetail", {
+          revision: event.data.budgetPolicy.revision,
+          limit: event.data.budgetPolicy.maxEstimatedTokens,
+        }),
+        icon: "settings",
+        label: t("event.budgetOverride"),
+        tone: "accent",
+      };
+    case "RECOVERY_REPORT_CREATED":
+      return {
+        detail: t("event.recoveryCreatedDetail", {
+          stage: t(stageLabelKeys[event.data.stageAttempt.stage]),
+        }),
+        icon: "clock",
+        label: t("event.recoveryCreated"),
+        tone: "warning",
       };
     case "PIPELINE_COMPLETED":
       return {
@@ -779,6 +858,9 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const { t } = useI18n();
   const workflowQuery = useWorkItemWorkflow(item.id);
   const startMutation = useStartMockPipeline();
+  const controlMutation = usePipelineControl();
+  const overrideMutation = useApproveBudgetOverride();
+  const [lastAction, setLastAction] = useState<"pause" | "resume" | "cancel" | "override" | null>(null);
   const snapshot = workflowQuery.data;
   const openRequest = snapshot?.humanRequests.find(({ status }) => status === "OPEN") ?? null;
 
@@ -813,6 +895,27 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
     );
   }
 
+  const run = snapshot.run;
+  const budgetPolicy = snapshot.budgetPolicies.at(-1) ?? null;
+  const used = snapshot.usageRecords.reduce((total, record) => total + record.amount, 0);
+  const budgetPercent = budgetPolicy
+    ? Math.min(100, Math.round((used / budgetPolicy.maxEstimatedTokens) * 100))
+    : 0;
+  const overrideLimit = budgetPolicy ? Math.max(budgetPolicy.maxEstimatedTokens * 2, used + 100) : used + 100;
+  const controlPending = controlMutation.isPending || overrideMutation.isPending;
+  const runControl = (action: "pause" | "resume" | "cancel"): void => {
+    controlMutation.reset();
+    overrideMutation.reset();
+    setLastAction(action);
+    controlMutation.mutate({ action, run, workItem: item });
+  };
+  const approveOverride = (): void => {
+    controlMutation.reset();
+    overrideMutation.reset();
+    setLastAction("override");
+    overrideMutation.mutate({ maxEstimatedTokens: overrideLimit, run, workItem: item });
+  };
+
   return (
     <div className="workflow-panel">
       <div className="workflow-panel__status">
@@ -822,6 +925,28 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
           tone={pipelineStatusTones[snapshot.run.status]}
         />
       </div>
+      {budgetPolicy ? (
+        <div className="workflow-budget">
+          <div className="workflow-budget__heading">
+            <span>{t("workflow.budget.title")}</span>
+            <strong>
+              {t("workflow.budget.usage", {
+                used,
+                limit: budgetPolicy.maxEstimatedTokens,
+              })}
+            </strong>
+          </div>
+          <progress
+            aria-label={t("workflow.budget.title")}
+            max={budgetPolicy.maxEstimatedTokens}
+            value={Math.min(used, budgetPolicy.maxEstimatedTokens)}
+          />
+          <div className="workflow-budget__meta">
+            <span>{t("workflow.budget.revision", { revision: budgetPolicy.revision })}</span>
+            <span>{budgetPercent}%</span>
+          </div>
+        </div>
+      ) : null}
       <ol className="workflow-stage-list">
         {snapshot.stageAttempts.map((attempt) => (
           <li className={`is-${attempt.status.toLowerCase()}`} key={attempt.id}>
@@ -834,6 +959,69 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
         ))}
       </ol>
       {openRequest ? <HumanRequestPanel request={openRequest} /> : null}
+      {snapshot.recoveryReports.at(-1) ? (
+        <div className="workflow-recovery" role="status">
+          <strong>{t("workflow.recovery.title")}</strong>
+          <span>{t("workflow.recovery.description")}</span>
+        </div>
+      ) : null}
+      {controlMutation.error || overrideMutation.error ? (
+        <LocalConnectionRecovery
+          error={controlMutation.error ?? overrideMutation.error}
+          onRetry={() => {
+            if (lastAction === "override") approveOverride();
+            else if (lastAction) runControl(lastAction);
+          }}
+          retrying={controlPending}
+        />
+      ) : null}
+      {["RUNNING", "WAITING_HUMAN", "SOFT_PAUSED", "HARD_PAUSED", "INTERRUPTED"].includes(run.status) ? (
+        <div className="workflow-panel__actions">
+          {run.status === "RUNNING" ? (
+            <Button
+              disabled={controlPending}
+              loading={controlMutation.isPending && lastAction === "pause"}
+              onClick={() => {
+                runControl("pause");
+              }}
+            >
+              {t("workflow.action.pause")}
+            </Button>
+          ) : null}
+          {run.status === "SOFT_PAUSED" || run.status === "INTERRUPTED" ? (
+            <Button
+              disabled={controlPending}
+              loading={controlMutation.isPending && lastAction === "resume"}
+              onClick={() => {
+                runControl("resume");
+              }}
+              variant="primary"
+            >
+              {t("workflow.action.resume")}
+            </Button>
+          ) : null}
+          {run.status === "HARD_PAUSED" ? (
+            <Button
+              disabled={controlPending}
+              loading={overrideMutation.isPending}
+              onClick={approveOverride}
+              variant="primary"
+            >
+              {t("workflow.action.override", { limit: overrideLimit })}
+            </Button>
+          ) : null}
+          <Button
+            disabled={controlPending}
+            loading={controlMutation.isPending && lastAction === "cancel"}
+            onClick={() => {
+              runControl("cancel");
+            }}
+            variant="secondary"
+          >
+            {t("workflow.action.cancel")}
+          </Button>
+        </div>
+      ) : null}
       {snapshot.run.status === "SUCCEEDED" ? (
         <p className="workflow-panel__completed">{t("workflow.completed")}</p>
       ) : null}
@@ -859,8 +1047,9 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
     );
   }
 
-  const workflowActive =
-    workflowQuery.data?.run?.status === "RUNNING" || workflowQuery.data?.run?.status === "WAITING_HUMAN";
+  const workflowActive = ["RUNNING", "WAITING_HUMAN", "SOFT_PAUSED", "HARD_PAUSED", "INTERRUPTED"].includes(
+    workflowQuery.data?.run?.status ?? "",
+  );
   const targets = workflowActive ? [] : transitionTargets[item.state];
   const move = (targetState: WorkItemState): void => {
     setLastTarget(targetState);

@@ -2,10 +2,19 @@
 import { createContext, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { HumanRequest, HumanRequestAnswer, Project, WorkItem, WorkItemState } from "@loomrail/contracts";
+import type {
+  HumanRequest,
+  HumanRequestAnswer,
+  PipelineRun,
+  Project,
+  WorkItem,
+  WorkItemState,
+} from "@loomrail/contracts";
 
 import {
+  approveBudgetOverride,
   answerHumanRequest,
+  controlPipeline,
   createWorkItem,
   getWorkItemWorkflow,
   listOpenHumanRequests,
@@ -17,6 +26,7 @@ import {
   startMockPipeline,
   updateWorkItem,
   type CreateWorkItemInput,
+  type PipelineControlAction,
   type UpdateWorkItemPatch,
 } from "./api";
 import { localConnectionQuery, type ConnectionResult } from "./session";
@@ -224,6 +234,51 @@ export const useAnswerHumanRequest = () => {
           queryKey: workItemEventsKey(request.projectId, request.workItemId),
         }),
         queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(request.projectId) }),
+      ]);
+    },
+  });
+};
+
+export const usePipelineControl = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      action,
+      run,
+      workItem,
+    }: {
+      action: PipelineControlAction;
+      run: PipelineRun;
+      workItem: WorkItem;
+    }) => controlPipeline(workItem.id, run, action),
+    onSuccess: async (_, { workItem }) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
+        queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(workItem.id) }),
+        queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
+        queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(workItem.projectId) }),
+      ]);
+    },
+  });
+};
+
+export const useApproveBudgetOverride = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      maxEstimatedTokens,
+      run,
+      workItem,
+    }: {
+      maxEstimatedTokens: number;
+      run: PipelineRun;
+      workItem: WorkItem;
+    }) => approveBudgetOverride(workItem.id, run, maxEstimatedTokens),
+    onSuccess: async (_, { workItem }) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
+        queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(workItem.id) }),
+        queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
       ]);
     },
   });

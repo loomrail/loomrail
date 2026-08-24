@@ -10,7 +10,8 @@ import {
 describe("workflow template validation", () => {
   it("orders and advances the bounded mock template", () => {
     expect(nextWorkflowStage(mockDeliveryTemplate, "DISCOVERY")).toBe("PLAN");
-    expect(nextWorkflowStage(mockDeliveryTemplate, "PLAN")).toBeNull();
+    expect(nextWorkflowStage(mockDeliveryTemplate, "PLAN")).toBe("IMPLEMENT");
+    expect(nextWorkflowStage(mockDeliveryTemplate, "IMPLEMENT")).toBeNull();
   });
 
   it("rejects duplicate and non-contiguous stages", () => {

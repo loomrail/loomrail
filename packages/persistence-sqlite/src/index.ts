@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import {
+  budgetPolicySchema,
   decisionSchema,
   domainEventSchema,
   humanRequestSchema,
@@ -11,38 +12,53 @@ import {
   opaqueIdSchema,
   pipelineRunSchema,
   projectSchema,
+  recoveryReportSchema,
   stageAttemptSchema,
   stateCommandResultSchema,
   stateCommandSchema,
+  usageRecordSchema,
   workflowDispatchSchema,
   workflowSnapshotSchema,
   workflowTemplateSchema,
   workItemSchema,
   workItemStateSchema,
+  type BudgetPolicy,
   type Actor,
   type Decision,
   type DomainEvent,
   type HumanRequest,
   type PipelineRun,
   type Project,
+  type RecoveryReport,
   type RegisterProjectCommand,
   type StageAttempt,
   type StartMockPipelineCommand,
   type StateCommand,
   type StateCommandResult,
+  type UsageRecord,
   type WorkItem,
   type WorkflowDispatch,
   type WorkflowSnapshot,
 } from "@loomrail/contracts";
 import {
+  decideApproveBudgetOverride,
   decideAnswerHumanRequest,
   decideApplyMockProviderOutcome,
+  decideCancelPipeline,
+  decideMarkWorkflowDispatchStarted,
+  decidePausePipeline,
+  decideRecoverInterruptedWorkflow,
+  decideResumePipeline,
   decideStartMockPipeline,
   decideWorkItemCommand,
   WorkflowDomainError,
   WorkItemDomainError,
+  type BudgetOverrideDecision,
   type AnswerHumanRequestDecision,
   type ApplyProviderOutcomeDecision,
+  type MarkDispatchStartedDecision,
+  type PipelineControlDecision,
+  type RecoveryDecision,
   type StartWorkflowDecision,
   type WorkItemCommand,
   type WorkItemDecision,
@@ -123,11 +139,53 @@ const pipelineRunRowSchema = z.object({
   workflow_template_id: z.string(),
   workflow_version: z.number().int(),
   status: z.string(),
+  orchestration_status: z.string().nullable(),
   current_stage_attempt_id: z.string(),
   version: z.number().int(),
   created_at: z.string(),
   updated_at: z.string(),
   finished_at: z.string().nullable(),
+});
+
+const budgetPolicyRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  revision: z.number().int(),
+  max_estimated_tokens: z.number().int(),
+  warning_thresholds_json: z.string(),
+  actor_type: z.string(),
+  actor_id: z.string(),
+  created_at: z.string(),
+});
+
+const usageRecordRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  stage_attempt_id: z.string(),
+  budget_policy_id: z.string(),
+  kind: z.string(),
+  amount: z.number().int(),
+  quality: z.string(),
+  recorded_at: z.string(),
+});
+
+const recoveryReportRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  stage_attempt_id: z.string(),
+  previous_status: z.string(),
+  recovered_status: z.string(),
+  reason: z.string(),
+  created_at: z.string(),
 });
 
 const stageAttemptRowSchema = z.object({
@@ -242,6 +300,55 @@ const projectFromRow = (value: unknown): Project => {
   });
 };
 
+const budgetPolicyFromRow = (value: unknown): BudgetPolicy => {
+  const row = budgetPolicyRowSchema.parse(value);
+  return budgetPolicySchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    revision: row.revision,
+    maxEstimatedTokens: row.max_estimated_tokens,
+    warningThresholds: parseJson(row.warning_thresholds_json),
+    createdBy: { type: row.actor_type, id: row.actor_id },
+    createdAt: row.created_at,
+  });
+};
+
+const usageRecordFromRow = (value: unknown): UsageRecord => {
+  const row = usageRecordRowSchema.parse(value);
+  return usageRecordSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    stageAttemptId: row.stage_attempt_id,
+    budgetPolicyId: row.budget_policy_id,
+    kind: row.kind,
+    amount: row.amount,
+    quality: row.quality,
+    recordedAt: row.recorded_at,
+  });
+};
+
+const recoveryReportFromRow = (value: unknown): RecoveryReport => {
+  const row = recoveryReportRowSchema.parse(value);
+  return recoveryReportSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    stageAttemptId: row.stage_attempt_id,
+    previousStatus: row.previous_status,
+    recoveredStatus: row.recovered_status,
+    reason: row.reason,
+    createdAt: row.created_at,
+  });
+};
+
 const eventFromRow = (value: unknown): DomainEvent => {
   const row = eventRowSchema.parse(value);
   return domainEventSchema.parse({
@@ -268,7 +375,7 @@ const pipelineRunFromRow = (value: unknown): PipelineRun => {
     workItemId: row.work_item_id,
     workflowTemplateId: row.workflow_template_id,
     workflowVersion: row.workflow_version,
-    status: row.status,
+    status: row.orchestration_status ?? row.status,
     currentStageAttemptId: row.current_stage_attempt_id,
     version: row.version,
     createdAt: row.created_at,
@@ -349,6 +456,9 @@ const lastInsertSequence = (value: number | bigint): number => {
 const asReplayed = (result: StateCommandResult): StateCommandResult =>
   stateCommandResultSchema.parse({ ...result, replayed: true });
 
+const legacyCompatibleRunStatus = (status: PipelineRun["status"]): string =>
+  ["SOFT_PAUSED", "HARD_PAUSED", "INTERRUPTED"].includes(status) ? "RUNNING" : status;
+
 const assertNever = (value: never): never => {
   throw new StateStoreError("PERSISTENCE_FAILURE", "Unknown local-state operation", {
     value: String(value),
@@ -424,7 +534,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     );
     const selectActivePipelineRun = database.prepare(
       `SELECT * FROM pipeline_runs
-       WHERE work_item_id = ? AND status IN ('RUNNING', 'WAITING_HUMAN')
+       WHERE work_item_id = ?
+         AND COALESCE(orchestration_status, status) IN (
+           'RUNNING', 'WAITING_HUMAN', 'SOFT_PAUSED', 'HARD_PAUSED', 'INTERRUPTED'
+         )
        ORDER BY created_at DESC, id DESC LIMIT 1`,
     );
     const selectStageAttemptById = database.prepare("SELECT * FROM stage_attempts WHERE id = ?");
@@ -434,6 +547,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        WHERE human_request_id = ? ORDER BY ordinal`,
     );
     const selectWorkflowDispatchById = database.prepare("SELECT * FROM workflow_dispatches WHERE id = ?");
+    const selectPendingDispatchByStageAttempt = database.prepare(
+      "SELECT * FROM workflow_dispatches WHERE stage_attempt_id = ? AND status = 'PENDING' ORDER BY created_at DESC, id DESC LIMIT 1",
+    );
+    const selectCurrentBudgetPolicy = database.prepare(
+      "SELECT * FROM budget_policies WHERE pipeline_run_id = ? ORDER BY revision DESC LIMIT 1",
+    );
 
     const assertOpen = (): void => {
       if (closed) throw new StateStoreError("STATE_CLOSED", "The local state module is closed");
@@ -486,6 +605,22 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       return value === undefined ? null : stageAttemptFromRow(value);
     };
 
+    const readCurrentBudgetPolicy = (pipelineRunId: string): BudgetPolicy | null => {
+      const value = selectCurrentBudgetPolicy.get(pipelineRunId);
+      return value === undefined ? null : budgetPolicyFromRow(value);
+    };
+
+    const readUsageRecords = (pipelineRunId: string): UsageRecord[] =>
+      database
+        .prepare("SELECT * FROM usage_records WHERE pipeline_run_id = ? ORDER BY rowid")
+        .all(pipelineRunId)
+        .map(usageRecordFromRow);
+
+    const readPendingDispatch = (stageAttemptId: string): WorkflowDispatch | null => {
+      const value = selectPendingDispatchByStageAttempt.get(stageAttemptId);
+      return value === undefined ? null : workflowDispatchFromRow(value);
+    };
+
     const readHumanRequest = (humanRequestId: string): HumanRequest | null => {
       const value = selectHumanRequestById.get(humanRequestId);
       if (value === undefined) return null;
@@ -533,6 +668,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           stageAttempts: [],
           humanRequests: [],
           decisions: [],
+          budgetPolicies: [],
+          usageRecords: [],
+          recoveryReports: [],
         });
       }
       const stageAttempts = database
@@ -553,12 +691,24 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare("SELECT * FROM decisions WHERE work_item_id = ? ORDER BY created_at, id")
         .all(workItemId)
         .map(decisionFromRow);
+      const budgetPolicies = database
+        .prepare("SELECT * FROM budget_policies WHERE pipeline_run_id = ? ORDER BY revision")
+        .all(run.id)
+        .map(budgetPolicyFromRow);
+      const usageRecords = readUsageRecords(run.id);
+      const recoveryReports = database
+        .prepare("SELECT * FROM recovery_reports WHERE pipeline_run_id = ? ORDER BY created_at, id")
+        .all(run.id)
+        .map(recoveryReportFromRow);
       return workflowSnapshotSchema.parse({
         schemaVersion: 1,
         run,
         stageAttempts,
         humanRequests,
         decisions,
+        budgetPolicies,
+        usageRecords,
+        recoveryReports,
       });
     };
 
@@ -645,8 +795,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
     type WorkflowEventIntent =
       | StartWorkflowDecision["events"][number]
+      | MarkDispatchStartedDecision["events"][number]
       | ApplyProviderOutcomeDecision["events"][number]
-      | AnswerHumanRequestDecision["events"][number];
+      | AnswerHumanRequestDecision["events"][number]
+      | PipelineControlDecision["events"][number]
+      | BudgetOverrideDecision["events"][number]
+      | RecoveryDecision["events"][number];
 
     const appendWorkflowEvents = (
       intents: readonly WorkflowEventIntent[],
@@ -743,8 +897,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO pipeline_runs (
             id, project_id, work_item_id, workflow_template_id, workflow_version, status,
-            current_stage_attempt_id, version, created_at, updated_at, finished_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            current_stage_attempt_id, version, created_at, updated_at, finished_at, orchestration_status
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           run.id,
@@ -752,22 +906,24 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           run.workItemId,
           run.workflowTemplateId,
           run.workflowVersion,
-          run.status,
+          legacyCompatibleRunStatus(run.status),
           run.currentStageAttemptId,
           run.version,
           run.createdAt,
           run.updatedAt,
           run.finishedAt,
+          run.status,
         );
     };
 
     const updatePipelineRun = (run: PipelineRun): void => {
       const update = database
         .prepare(
-          `UPDATE pipeline_runs SET status = ?, current_stage_attempt_id = ?, version = ?,
+          `UPDATE pipeline_runs SET status = ?, orchestration_status = ?, current_stage_attempt_id = ?, version = ?,
              updated_at = ?, finished_at = ? WHERE id = ? AND version = ?`,
         )
         .run(
+          legacyCompatibleRunStatus(run.status),
           run.status,
           run.currentStageAttemptId,
           run.version,
@@ -863,6 +1019,74 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           "The workflow dispatch has already been applied",
         );
       }
+    };
+
+    const insertBudgetPolicy = (policy: BudgetPolicy): void => {
+      database
+        .prepare(
+          `INSERT INTO budget_policies (
+            id, schema_version, project_id, work_item_id, pipeline_run_id, revision,
+            max_estimated_tokens, warning_thresholds_json, actor_type, actor_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          policy.id,
+          policy.schemaVersion,
+          policy.projectId,
+          policy.workItemId,
+          policy.pipelineRunId,
+          policy.revision,
+          policy.maxEstimatedTokens,
+          JSON.stringify(policy.warningThresholds),
+          policy.createdBy.type,
+          policy.createdBy.id,
+          policy.createdAt,
+        );
+    };
+
+    const insertUsageRecord = (record: UsageRecord): void => {
+      database
+        .prepare(
+          `INSERT INTO usage_records (
+            id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+            budget_policy_id, kind, amount, quality, recorded_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          record.id,
+          record.schemaVersion,
+          record.projectId,
+          record.workItemId,
+          record.pipelineRunId,
+          record.stageAttemptId,
+          record.budgetPolicyId,
+          record.kind,
+          record.amount,
+          record.quality,
+          record.recordedAt,
+        );
+    };
+
+    const insertRecoveryReport = (report: RecoveryReport): void => {
+      database
+        .prepare(
+          `INSERT INTO recovery_reports (
+            id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+            previous_status, recovered_status, reason, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          report.id,
+          report.schemaVersion,
+          report.projectId,
+          report.workItemId,
+          report.pipelineRunId,
+          report.stageAttemptId,
+          report.previousStatus,
+          report.recoveredStatus,
+          report.reason,
+          report.createdAt,
+        );
     };
 
     const insertHumanRequest = (request: HumanRequest): void => {
@@ -1070,6 +1294,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           ids: {
             pipelineRunId: createId("pipelineRun"),
             stageAttemptId: createId("stageAttempt"),
+            budgetPolicyId: createId("budgetPolicy"),
             dispatchId: createId("workflowDispatch"),
           },
         });
@@ -1077,6 +1302,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         updateWorkflowWorkItem(decision.workItem);
         insertPipelineRun(decision.run);
         insertStageAttempt(decision.stageAttempt);
+        insertBudgetPolicy(decision.budgetPolicy);
         insertWorkflowDispatch(decision.dispatch);
         const events = appendWorkflowEvents(decision.events, {
           workItemId: decision.workItem.id,
@@ -1090,6 +1316,48 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           type: "PIPELINE_STARTED",
           replayed: false,
           workItemId: decision.workItem.id,
+          run: decision.run,
+          stageAttempt: decision.stageAttempt,
+          budgetPolicy: decision.budgetPolicy,
+          dispatch: decision.dispatch,
+          events,
+        });
+      }
+
+      if (command.type === "MARK_WORKFLOW_DISPATCH_STARTED") {
+        const dispatch = readWorkflowDispatch(command.payload.dispatchId);
+        if (!dispatch) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_DISPATCH_NOT_FOUND",
+            "The workflow dispatch does not exist",
+          );
+        }
+        const run = readPipelineRun(dispatch.pipelineRunId);
+        const stageAttempt = readStageAttempt(dispatch.stageAttemptId);
+        const workItem = readWorkItem(dispatch.workItemId);
+        if (!run || !stageAttempt || !workItem) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow state is incomplete");
+        }
+        const decision = decideMarkWorkflowDispatchStarted(command, {
+          now: occurredAt,
+          workItem,
+          run,
+          stageAttempt,
+          dispatch,
+        });
+        updateStageAttempt(decision.stageAttempt);
+        const events = appendWorkflowEvents(decision.events, {
+          workItemId: workItem.id,
+          projectId: workItem.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "WORKFLOW_DISPATCH_STARTED",
+          replayed: false,
+          workItemId: workItem.id,
           run: decision.run,
           stageAttempt: decision.stageAttempt,
           dispatch: decision.dispatch,
@@ -1117,6 +1385,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           run,
           stageAttempt,
           dispatch,
+          budgetPolicy: readCurrentBudgetPolicy(run.id),
+          existingUsageRecords: readUsageRecords(run.id),
+          usageRecordIds:
+            command.payload.outcome.type === "BUDGET_LIMIT_REACHED"
+              ? command.payload.outcome.usageIncrements.map(() => createId("usageRecord"))
+              : [],
           humanRequestId: createId("humanRequest"),
           nextStageAttemptId: createId("stageAttempt"),
           nextDispatchId: createId("workflowDispatch"),
@@ -1129,6 +1403,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (decision.request) insertHumanRequest(decision.request);
         if (decision.nextStageAttempt) insertStageAttempt(decision.nextStageAttempt);
         if (decision.nextDispatch) insertWorkflowDispatch(decision.nextDispatch);
+        decision.usageRecords.forEach(insertUsageRecord);
         const events = appendWorkflowEvents(decision.events, {
           workItemId: decision.workItem.id,
           projectId: decision.workItem.projectId,
@@ -1143,6 +1418,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           workItemId: decision.workItem.id,
           run: decision.run,
           stageAttempt: decision.stageAttempt,
+          usageRecords: decision.usageRecords,
           events,
         });
       }
@@ -1188,6 +1464,179 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           request: decision.request,
           decision: decision.decision,
           dispatch: decision.dispatch,
+          events,
+        });
+      }
+
+      if (
+        command.type === "PAUSE_PIPELINE" ||
+        command.type === "RESUME_PIPELINE" ||
+        command.type === "CANCEL_PIPELINE"
+      ) {
+        const run = readPipelineRun(command.payload.pipelineRunId);
+        const stageAttempt = run ? readStageAttempt(run.currentStageAttemptId) : null;
+        const workItem = run ? readWorkItem(run.workItemId) : null;
+        if (!run || !stageAttempt || !workItem) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow state is incomplete");
+        }
+        const pendingDispatch = readPendingDispatch(stageAttempt.id);
+        const decision =
+          command.type === "PAUSE_PIPELINE"
+            ? decidePausePipeline(command, {
+                now: occurredAt,
+                workItem,
+                run,
+                stageAttempt,
+                pendingDispatch,
+              })
+            : command.type === "RESUME_PIPELINE"
+              ? decideResumePipeline(command, {
+                  now: occurredAt,
+                  workItem,
+                  run,
+                  stageAttempt,
+                  dispatchId: createId("workflowDispatch"),
+                })
+              : decideCancelPipeline(command, {
+                  now: occurredAt,
+                  workItem,
+                  run,
+                  stageAttempt,
+                  pendingDispatch,
+                });
+        updateStageAttempt(decision.stageAttempt);
+        updatePipelineRun(decision.run);
+        updateWorkflowWorkItem(decision.workItem);
+        if (decision.previousDispatch && decision.previousDispatch.status !== pendingDispatch?.status) {
+          updateWorkflowDispatch(decision.previousDispatch);
+        }
+        if (decision.dispatch) insertWorkflowDispatch(decision.dispatch);
+        if (decision.action === "CANCEL") {
+          database
+            .prepare(
+              `UPDATE human_requests SET status = 'CANCELLED', version = version + 1, resolved_at = ?
+               WHERE work_item_id = ? AND status IN ('OPEN', 'CLAIMED', 'SNOOZED')`,
+            )
+            .run(occurredAt, workItem.id);
+        }
+        const events = appendWorkflowEvents(decision.events, {
+          workItemId: workItem.id,
+          projectId: workItem.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PIPELINE_CONTROL_APPLIED",
+          replayed: false,
+          action: decision.action,
+          workItemId: workItem.id,
+          run: decision.run,
+          stageAttempt: decision.stageAttempt,
+          dispatch: decision.dispatch,
+          events,
+        });
+      }
+
+      if (command.type === "APPROVE_BUDGET_OVERRIDE") {
+        const run = readPipelineRun(command.payload.pipelineRunId);
+        const stageAttempt = run ? readStageAttempt(run.currentStageAttemptId) : null;
+        const workItem = run ? readWorkItem(run.workItemId) : null;
+        const currentBudgetPolicy = run ? readCurrentBudgetPolicy(run.id) : null;
+        if (!run || !stageAttempt || !workItem || !currentBudgetPolicy) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow state is incomplete");
+        }
+        const decision = decideApproveBudgetOverride(command, {
+          now: occurredAt,
+          workItem,
+          run,
+          stageAttempt,
+          currentBudgetPolicy,
+          cumulativeUsage: readUsageRecords(run.id).reduce((total, record) => total + record.amount, 0),
+          ids: {
+            budgetPolicyId: createId("budgetPolicy"),
+            stageAttemptId: createId("stageAttempt"),
+            dispatchId: createId("workflowDispatch"),
+          },
+        });
+        updatePipelineRun(decision.run);
+        updateWorkflowWorkItem(decision.workItem);
+        insertBudgetPolicy(decision.budgetPolicy);
+        insertStageAttempt(decision.stageAttempt);
+        insertWorkflowDispatch(decision.dispatch);
+        const events = appendWorkflowEvents(decision.events, {
+          workItemId: workItem.id,
+          projectId: workItem.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "BUDGET_OVERRIDE_APPROVED",
+          replayed: false,
+          workItemId: workItem.id,
+          run: decision.run,
+          previousStageAttempt: decision.previousStageAttempt,
+          stageAttempt: decision.stageAttempt,
+          budgetPolicy: decision.budgetPolicy,
+          dispatch: decision.dispatch,
+          events,
+        });
+      }
+
+      if (command.type === "RECONCILE_WORKFLOWS") {
+        const orphanedDispatches = database
+          .prepare(
+            `SELECT workflow_dispatches.* FROM workflow_dispatches
+             INNER JOIN stage_attempts ON stage_attempts.id = workflow_dispatches.stage_attempt_id
+             INNER JOIN pipeline_runs ON pipeline_runs.id = workflow_dispatches.pipeline_run_id
+             WHERE workflow_dispatches.status = 'PENDING'
+               AND stage_attempts.status = 'RUNNING'
+               AND COALESCE(pipeline_runs.orchestration_status, pipeline_runs.status) = 'RUNNING'
+             ORDER BY workflow_dispatches.created_at, workflow_dispatches.id`,
+          )
+          .all()
+          .map(workflowDispatchFromRow);
+        const recoveryReports: RecoveryReport[] = [];
+        const events: DomainEvent[] = [];
+        for (const dispatch of orphanedDispatches) {
+          const run = readPipelineRun(dispatch.pipelineRunId);
+          const stageAttempt = readStageAttempt(dispatch.stageAttemptId);
+          const workItem = readWorkItem(dispatch.workItemId);
+          if (!run || !stageAttempt || !workItem) {
+            throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow state is incomplete");
+          }
+          const decision = decideRecoverInterruptedWorkflow({
+            now: occurredAt,
+            workItem,
+            run,
+            stageAttempt,
+            dispatch,
+            recoveryReportId: createId("recoveryReport"),
+          });
+          updateWorkflowDispatch(decision.dispatch);
+          updateStageAttempt(decision.stageAttempt);
+          updatePipelineRun(decision.run);
+          updateWorkflowWorkItem(decision.workItem);
+          insertRecoveryReport(decision.report);
+          recoveryReports.push(decision.report);
+          events.push(
+            ...appendWorkflowEvents(decision.events, {
+              workItemId: workItem.id,
+              projectId: workItem.projectId,
+              actor: command.actor,
+              occurredAt,
+              correlationId: command.correlationId,
+            }),
+          );
+        }
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "WORKFLOWS_RECONCILED",
+          replayed: false,
+          recoveryReports,
           events,
         });
       }

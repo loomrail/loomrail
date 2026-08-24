@@ -84,7 +84,16 @@ export type LocalState = {
 };
 
 export type LocalStateIdKind =
-  "workItem" | "event" | "pipelineRun" | "stageAttempt" | "workflowDispatch" | "humanRequest" | "decision";
+  | "workItem"
+  | "event"
+  | "pipelineRun"
+  | "stageAttempt"
+  | "workflowDispatch"
+  | "humanRequest"
+  | "decision"
+  | "budgetPolicy"
+  | "usageRecord"
+  | "recoveryReport";
 
 export type OpenLocalStateOptions = {
   databasePath: string;

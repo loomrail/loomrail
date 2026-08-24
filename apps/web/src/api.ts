@@ -9,6 +9,7 @@ import {
   type FixtureProjectId,
   type HumanRequest,
   type HumanRequestAnswer,
+  type PipelineRun,
   type WorkItem,
   type WorkItemState,
 } from "@loomrail/contracts";
@@ -257,3 +258,38 @@ export const answerHumanRequest = async (request: HumanRequest, answer: HumanReq
       answer,
     }),
   });
+
+export type PipelineControlAction = "pause" | "resume" | "cancel";
+
+export const controlPipeline = async (workItemId: string, run: PipelineRun, action: PipelineControlAction) =>
+  requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(workItemId)}/pipeline/${action}`,
+    workflowSnapshotSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedVersion: run.version,
+      }),
+    },
+  );
+
+export const approveBudgetOverride = async (
+  workItemId: string,
+  run: PipelineRun,
+  maxEstimatedTokens: number,
+) =>
+  requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(workItemId)}/pipeline/budget-override`,
+    workflowSnapshotSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedVersion: run.version,
+        maxEstimatedTokens,
+      }),
+    },
+  );

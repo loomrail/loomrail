@@ -30,6 +30,7 @@ export const mockDeliveryTemplate = validateWorkflowTemplate({
   stages: [
     { stage: "DISCOVERY", ordinal: 0 },
     { stage: "PLAN", ordinal: 1 },
+    { stage: "IMPLEMENT", ordinal: 2 },
   ],
 });
 

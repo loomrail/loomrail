@@ -40,8 +40,27 @@ const complete = (invocation: ProviderInvocation) =>
     summary:
       invocation.stageAttempt.stage === "DISCOVERY"
         ? "Discovery resumed from the recorded human decision."
-        : "The bounded mock plan was produced from the accepted discovery direction.",
+        : invocation.stageAttempt.stage === "PLAN"
+          ? "The bounded mock plan was produced from the accepted discovery direction."
+          : "The mock implementation completed inside the approved budget revision.",
   });
+
+const exhaustInitialImplementationBudget = () =>
+  mockProviderOutcomeSchema.parse({
+    type: "BUDGET_LIMIT_REACHED",
+    usageIncrements: [50, 30, 15, 5],
+    quality: "LOOMRAIL_ESTIMATE",
+  });
+
+const outcomeFor = (invocation: ProviderInvocation) => {
+  if (invocation.stageAttempt.stage === "DISCOVERY" && invocation.dispatch.mode === "START") {
+    return discoveryQuestion();
+  }
+  if (invocation.stageAttempt.stage === "IMPLEMENT" && invocation.stageAttempt.attempt === 1) {
+    return exhaustInitialImplementationBudget();
+  }
+  return complete(invocation);
+};
 
 export const createMockProvider = (): ProviderAdapter => ({
   capabilities: () =>
@@ -53,9 +72,6 @@ export const createMockProvider = (): ProviderAdapter => ({
       eventStream: true,
       usageReporting: true,
     }),
-  start: (invocation) =>
-    Promise.resolve(
-      invocation.stageAttempt.stage === "DISCOVERY" ? discoveryQuestion() : complete(invocation),
-    ),
-  resume: (invocation) => Promise.resolve(complete(invocation)),
+  start: (invocation) => Promise.resolve(outcomeFor(invocation)),
+  resume: (invocation) => Promise.resolve(outcomeFor(invocation)),
 });

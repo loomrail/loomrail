@@ -227,13 +227,117 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);
     const backup = new DatabaseSync(localState.startup.backupPath, { readOnly: true });
     expect(backup.prepare("SELECT value FROM legacy_marker").get()).toEqual({ value: "preserve-me" });
     backup.close();
+  });
+
+  it("backfills the BudgetPolicy in M4 PIPELINE_STARTED events", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-migration-workflow"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-migration-workflow", created.workItem.id, 1, "READY"));
+    const startCommand: StartMockPipelineCommand = {
+      schemaVersion: 1,
+      commandId: "start-migration-workflow",
+      correlationId: "correlation-start-migration-workflow",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: mockTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    };
+    const started = localState.execute(startCommand);
+    if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "mark-migration-workflow-started",
+      correlationId: "correlation-mark-migration-workflow-started",
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "MARK_WORKFLOW_DISPATCH_STARTED",
+      payload: { dispatchId: started.dispatch.id },
+    });
+    const applyCommand: ApplyMockProviderOutcomeCommand = {
+      schemaVersion: 1,
+      commandId: "apply-migration-workflow",
+      correlationId: "correlation-apply-migration-workflow",
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "APPLY_MOCK_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId: started.dispatch.id,
+        template: mockTemplate,
+        outcome: { type: "COMPLETED", summary: "Legacy M4 discovery completed." },
+      },
+    };
+    localState.execute(applyCommand);
+    localState.close();
+    state = undefined;
+
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("DROP TRIGGER events_are_append_only_update");
+    raw.exec("DROP TRIGGER commands_are_append_only_update");
+    raw.exec(
+      "UPDATE events SET data_json = json_remove(data_json, '$.budgetPolicy') WHERE type = 'PIPELINE_STARTED'",
+    );
+    raw.exec(`
+      UPDATE commands
+      SET result_json = json_remove(
+        result_json,
+        '$.budgetPolicy',
+        '$.events[0].data.budgetPolicy'
+      )
+      WHERE command_type = 'START_MOCK_PIPELINE'
+    `);
+    raw.exec(`
+      UPDATE commands
+      SET result_json = json_remove(result_json, '$.usageRecords')
+      WHERE command_type = 'APPLY_MOCK_PROVIDER_OUTCOME'
+    `);
+    raw.exec(`
+      CREATE TRIGGER events_are_append_only_update
+      BEFORE UPDATE ON events
+      BEGIN
+        SELECT RAISE(ABORT, 'events are append-only');
+      END;
+    `);
+    raw.exec(`
+      CREATE TRIGGER commands_are_append_only_update
+      BEFORE UPDATE ON commands
+      BEGIN
+        SELECT RAISE(ABORT, 'commands are append-only');
+      END;
+    `);
+    raw.prepare("DELETE FROM schema_migrations WHERE version = 4").run();
+    raw.close();
+
+    const migrated = await open();
+    expect(migrated.startup.appliedMigrations).toEqual([4]);
+    const events = migrated.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id });
+    const pipelineStarted =
+      events.type === "EVENTS" ? events.events.find(({ type }) => type === "PIPELINE_STARTED") : undefined;
+    if (pipelineStarted?.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline event");
+    expect(pipelineStarted.data.budgetPolicy.id).toMatch(/^budget-migrated-/);
+    expect(pipelineStarted.data.budgetPolicy.pipelineRunId).toBe(pipelineStarted.data.run.id);
+    expect(pipelineStarted.data.budgetPolicy.maxEstimatedTokens).toBe(100);
+    expect(pipelineStarted.data.budgetPolicy.warningThresholds).toEqual([0.5, 0.8, 0.95]);
+    const replayedStart = migrated.execute(startCommand);
+    if (replayedStart.type !== "PIPELINE_STARTED") throw new Error("Expected replayed pipeline start");
+    expect(replayedStart.replayed).toBe(true);
+    expect(replayedStart.budgetPolicy.id).toMatch(/^budget-migrated-/);
+    expect(replayedStart.budgetPolicy.maxEstimatedTokens).toBe(100);
+    expect(migrated.execute(applyCommand)).toMatchObject({
+      type: "MOCK_PROVIDER_OUTCOME_APPLIED",
+      replayed: true,
+      usageRecords: [],
+    });
   });
 
   it("fails closed when an applied migration checksum drifts", async () => {
@@ -283,7 +387,12 @@ describe("SQLite local state", () => {
       correlationId: "correlation-start-mock-workflow",
       actor: { type: "HUMAN", id: "local-owner" },
       type: "START_MOCK_PIPELINE",
-      payload: { workItemId: created.workItem.id, expectedVersion: 2, template: mockTemplate },
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: mockTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
     };
     const started = localState.execute(start);
     if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
@@ -317,6 +426,14 @@ describe("SQLite local state", () => {
         },
       },
     };
+    localState.execute({
+      schemaVersion: 1,
+      commandId: `mark-started-${started.dispatch.id}`,
+      correlationId: "correlation-start-discovery",
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "MARK_WORKFLOW_DISPATCH_STARTED",
+      payload: { dispatchId: started.dispatch.id },
+    });
     localState.execute(needsHuman);
     const waiting = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: created.workItem.id });
     if (waiting.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected workflow snapshot");
@@ -357,6 +474,14 @@ describe("SQLite local state", () => {
     const applyCompleted = (dispatchId: string, commandId: string): void => {
       reopened.execute({
         schemaVersion: 1,
+        commandId: `mark-started-${dispatchId}`,
+        correlationId: `correlation-mark-${dispatchId}`,
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId },
+      });
+      reopened.execute({
+        schemaVersion: 1,
         commandId,
         correlationId: `correlation-${commandId}`,
         actor: { type: "SYSTEM", id: "mock-provider" },
@@ -387,5 +512,70 @@ describe("SQLite local state", () => {
       { stage: "PLAN", status: "SUCCEEDED" },
     ]);
     expect(independentItem.type === "WORK_ITEM" ? independentItem.workItem?.state : null).toBe("READY");
+  });
+
+  it("reconciles an orphaned running attempt once and persists its RecoveryReport", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-recovery-item"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-recovery-item", created.workItem.id, 1, "READY"));
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-recovery-workflow",
+      correlationId: "correlation-start-recovery",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: mockTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "mark-recovery-running",
+      correlationId: "correlation-mark-recovery",
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "MARK_WORKFLOW_DISPATCH_STARTED",
+      payload: { dispatchId: started.dispatch.id },
+    });
+
+    const reconciled = localState.execute({
+      schemaVersion: 1,
+      commandId: "reconcile-startup-1",
+      correlationId: "correlation-reconcile-1",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "RECONCILE_WORKFLOWS",
+      payload: {},
+    });
+    expect(reconciled).toMatchObject({
+      type: "WORKFLOWS_RECONCILED",
+      recoveryReports: [{ reason: "DAEMON_RESTART", recoveredStatus: "INTERRUPTED" }],
+    });
+    const repeated = localState.execute({
+      schemaVersion: 1,
+      commandId: "reconcile-startup-2",
+      correlationId: "correlation-reconcile-2",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "RECONCILE_WORKFLOWS",
+      payload: {},
+    });
+    expect(repeated).toMatchObject({ type: "WORKFLOWS_RECONCILED", recoveryReports: [] });
+
+    localState.close();
+    state = undefined;
+    const reopened = await open();
+    const snapshot = reopened.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    expect(snapshot.type === "WORKFLOW_SNAPSHOT" ? snapshot.snapshot : null).toMatchObject({
+      run: { status: "INTERRUPTED" },
+      stageAttempts: [{ status: "INTERRUPTED", failureCode: "DAEMON_RESTART" }],
+      recoveryReports: [{ reason: "DAEMON_RESTART" }],
+    });
   });
 });

@@ -1,16 +1,31 @@
 import type {
   AnswerHumanRequestCommand,
   ApplyMockProviderOutcomeCommand,
+  ApproveBudgetOverrideCommand,
+  BudgetOverrideApprovedEvent,
+  BudgetPolicy,
+  BudgetThresholdReachedEvent,
+  CancelPipelineCommand,
   Decision,
   HumanRequest,
   HumanRequestAnswer,
   HumanRequestResolvedEvent,
+  MarkWorkflowDispatchStartedCommand,
+  PausePipelineCommand,
+  PipelineCancelledEvent,
   PipelineCompletedEvent,
+  PipelinePausedEvent,
+  PipelineResumedEvent,
   PipelineRun,
   PipelineStartedEvent,
+  RecoveryReport,
+  RecoveryReportCreatedEvent,
+  ResumePipelineCommand,
   StageAttempt,
   StageAttemptChangedEvent,
   StartMockPipelineCommand,
+  UsageRecord,
+  UsageRecordedEvent,
   WorkItem,
   WorkflowDispatch,
 } from "@loomrail/contracts";
@@ -24,6 +39,11 @@ export type WorkflowDomainErrorCode =
   | "WORKFLOW_DISPATCH_ALREADY_COMPLETED"
   | "WORKFLOW_STAGE_MISMATCH"
   | "WORKFLOW_VERSION_CONFLICT"
+  | "WORKFLOW_CONTROL_NOT_ALLOWED"
+  | "BUDGET_POLICY_NOT_FOUND"
+  | "BUDGET_LIMIT_NOT_REACHED"
+  | "BUDGET_OVERRIDE_REQUIRED"
+  | "BUDGET_OVERRIDE_INVALID"
   | "HUMAN_REQUEST_NOT_FOUND"
   | "HUMAN_REQUEST_ALREADY_RESOLVED"
   | "HUMAN_REQUEST_INVALID_ANSWER";
@@ -50,8 +70,17 @@ export type StartWorkflowDecision = {
   workItem: WorkItem;
   run: PipelineRun;
   stageAttempt: StageAttempt;
+  budgetPolicy: BudgetPolicy;
   dispatch: WorkflowDispatch;
   events: EventIntent<PipelineStartedEvent>[];
+};
+
+export type MarkDispatchStartedDecision = {
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  dispatch: WorkflowDispatch;
+  events: EventIntent<StageAttemptChangedEvent>[];
 };
 
 export type ApplyProviderOutcomeDecision = {
@@ -62,9 +91,13 @@ export type ApplyProviderOutcomeDecision = {
   request: HumanRequest | null;
   nextStageAttempt: StageAttempt | null;
   nextDispatch: WorkflowDispatch | null;
+  usageRecords: UsageRecord[];
   events: (
     | EventIntent<StageAttemptChangedEvent>
     | EventIntent<import("@loomrail/contracts").HumanRequestOpenedEvent>
+    | EventIntent<UsageRecordedEvent>
+    | EventIntent<BudgetThresholdReachedEvent>
+    | EventIntent<PipelinePausedEvent>
     | EventIntent<PipelineCompletedEvent>
   )[];
 };
@@ -79,11 +112,51 @@ export type AnswerHumanRequestDecision = {
   events: EventIntent<HumanRequestResolvedEvent>[];
 };
 
+export type PipelineControlDecision = {
+  action: "PAUSE" | "RESUME" | "CANCEL";
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  previousDispatch: WorkflowDispatch | null;
+  dispatch: WorkflowDispatch | null;
+  events: (
+    EventIntent<PipelinePausedEvent> | EventIntent<PipelineResumedEvent> | EventIntent<PipelineCancelledEvent>
+  )[];
+};
+
+export type BudgetOverrideDecision = {
+  workItem: WorkItem;
+  run: PipelineRun;
+  previousStageAttempt: StageAttempt;
+  stageAttempt: StageAttempt;
+  budgetPolicy: BudgetPolicy;
+  dispatch: WorkflowDispatch;
+  events: EventIntent<BudgetOverrideApprovedEvent>[];
+};
+
+export type RecoveryDecision = {
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  dispatch: WorkflowDispatch;
+  report: RecoveryReport;
+  events: EventIntent<RecoveryReportCreatedEvent>[];
+};
+
 export type WorkflowIds = {
   pipelineRunId: string;
   stageAttemptId: string;
+  budgetPolicyId: string;
   dispatchId: string;
 };
+
+const activeRunStatuses = new Set<PipelineRun["status"]>([
+  "RUNNING",
+  "WAITING_HUMAN",
+  "SOFT_PAUSED",
+  "HARD_PAUSED",
+  "INTERRUPTED",
+]);
 
 const verifyWorkItemVersion = (workItem: WorkItem, expectedVersion: number): void => {
   if (workItem.version !== expectedVersion) {
@@ -94,6 +167,53 @@ const verifyWorkItemVersion = (workItem: WorkItem, expectedVersion: number): voi
     );
   }
 };
+
+const verifyRunVersion = (run: PipelineRun, pipelineRunId: string, expectedVersion: number): void => {
+  if (run.id !== pipelineRunId) {
+    throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The PipelineRun does not exist");
+  }
+  if (run.version !== expectedVersion) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_VERSION_CONFLICT",
+      "The PipelineRun changed after the workflow action was loaded",
+      { expectedVersion, actualVersion: run.version },
+    );
+  }
+};
+
+const requireCurrentStage = (run: PipelineRun, stageAttempt: StageAttempt): void => {
+  if (run.currentStageAttemptId !== stageAttempt.id || run.id !== stageAttempt.pipelineRunId) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_STAGE_MISMATCH",
+      "The StageAttempt is not the current stage of this PipelineRun",
+    );
+  }
+};
+
+const pendingDispatchFailed = (dispatch: WorkflowDispatch | null, now: string): WorkflowDispatch | null => {
+  if (dispatch?.status !== "PENDING") return dispatch;
+  return { ...dispatch, status: "FAILED", completedAt: now };
+};
+
+const createDispatch = (
+  id: string,
+  workItem: WorkItem,
+  run: PipelineRun,
+  stageAttempt: StageAttempt,
+  mode: WorkflowDispatch["mode"],
+  now: string,
+): WorkflowDispatch => ({
+  schemaVersion: 1,
+  id,
+  projectId: workItem.projectId,
+  workItemId: workItem.id,
+  pipelineRunId: run.id,
+  stageAttemptId: stageAttempt.id,
+  mode,
+  status: "PENDING",
+  createdAt: now,
+  completedAt: null,
+});
 
 export const decideStartMockPipeline = (
   command: StartMockPipelineCommand,
@@ -114,7 +234,7 @@ export const decideStartMockPipeline = (
       { state: context.workItem.state },
     );
   }
-  if (context.activeRun && ["RUNNING", "WAITING_HUMAN"].includes(context.activeRun.status)) {
+  if (context.activeRun && activeRunStatuses.has(context.activeRun.status)) {
     throw new WorkflowDomainError("WORKFLOW_ALREADY_ACTIVE", "The WorkItem already has an active workflow");
   }
 
@@ -158,25 +278,74 @@ export const decideStartMockPipeline = (
     updatedAt: context.now,
     finishedAt: null,
   };
-  const dispatch: WorkflowDispatch = {
+  const budgetPolicy: BudgetPolicy = {
     schemaVersion: 1,
-    id: context.ids.dispatchId,
+    id: context.ids.budgetPolicyId,
     projectId: workItem.projectId,
     workItemId: workItem.id,
     pipelineRunId: run.id,
-    stageAttemptId: stageAttempt.id,
-    mode: "START",
-    status: "PENDING",
+    revision: 1,
+    maxEstimatedTokens: command.payload.budget.maxEstimatedTokens,
+    warningThresholds: [...command.payload.budget.warningThresholds],
+    createdBy: command.actor,
     createdAt: context.now,
-    completedAt: null,
   };
+  const dispatch = createDispatch(context.ids.dispatchId, workItem, run, stageAttempt, "START", context.now);
 
   return {
     workItem,
     run,
     stageAttempt,
+    budgetPolicy,
     dispatch,
-    events: [{ type: "PIPELINE_STARTED", data: { run, stageAttempt } }],
+    events: [{ type: "PIPELINE_STARTED", data: { run, stageAttempt, budgetPolicy } }],
+  };
+};
+
+export const decideMarkWorkflowDispatchStarted = (
+  command: MarkWorkflowDispatchStartedCommand,
+  context: {
+    now: string;
+    workItem: WorkItem;
+    run: PipelineRun;
+    stageAttempt: StageAttempt;
+    dispatch: WorkflowDispatch;
+  },
+): MarkDispatchStartedDecision => {
+  if (
+    context.dispatch.id !== command.payload.dispatchId ||
+    context.dispatch.pipelineRunId !== context.run.id ||
+    context.dispatch.stageAttemptId !== context.stageAttempt.id
+  ) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_STAGE_MISMATCH",
+      "The dispatch does not match the current workflow stage",
+    );
+  }
+  requireCurrentStage(context.run, context.stageAttempt);
+  if (
+    context.dispatch.status !== "PENDING" ||
+    !["QUEUED", "RECOVERING"].includes(context.stageAttempt.status)
+  ) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "Only a pending dispatch for a queued stage can start",
+      { status: context.stageAttempt.status },
+    );
+  }
+  const previousStatus = context.stageAttempt.status;
+  const stageAttempt: StageAttempt = {
+    ...context.stageAttempt,
+    status: "RUNNING",
+    version: context.stageAttempt.version + 1,
+    startedAt: context.stageAttempt.startedAt ?? context.now,
+  };
+  return {
+    workItem: context.workItem,
+    run: context.run,
+    stageAttempt,
+    dispatch: context.dispatch,
+    events: [{ type: "STAGE_ATTEMPT_CHANGED", data: { run: context.run, stageAttempt, previousStatus } }],
   };
 };
 
@@ -191,6 +360,129 @@ const completeDispatch = (dispatch: WorkflowDispatch, now: string): WorkflowDisp
   return { ...dispatch, status: "COMPLETED", completedAt: now };
 };
 
+const budgetOutcome = (
+  command: ApplyMockProviderOutcomeCommand,
+  context: {
+    now: string;
+    workItem: WorkItem;
+    run: PipelineRun;
+    stageAttempt: StageAttempt;
+    dispatch: WorkflowDispatch;
+    budgetPolicy: BudgetPolicy | null;
+    existingUsageRecords: readonly UsageRecord[];
+    usageRecordIds: readonly string[];
+  },
+): ApplyProviderOutcomeDecision => {
+  if (command.payload.outcome.type !== "BUDGET_LIMIT_REACHED") {
+    throw new WorkflowDomainError("BUDGET_LIMIT_NOT_REACHED", "The provider outcome is not a budget result");
+  }
+  const outcome = command.payload.outcome;
+  if (!context.budgetPolicy) {
+    throw new WorkflowDomainError("BUDGET_POLICY_NOT_FOUND", "The active BudgetPolicy does not exist");
+  }
+  if (context.stageAttempt.stage !== "IMPLEMENT") {
+    throw new WorkflowDomainError(
+      "WORKFLOW_STAGE_MISMATCH",
+      "The bounded mock budget is only consumed during Implement",
+    );
+  }
+  if (context.usageRecordIds.length !== outcome.usageIncrements.length) {
+    throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "Durable UsageRecord IDs were not supplied");
+  }
+
+  const budgetPolicy = context.budgetPolicy;
+  let cumulativeAmount = context.existingUsageRecords.reduce((total, record) => total + record.amount, 0);
+  const usageRecords: UsageRecord[] = [];
+  const events: ApplyProviderOutcomeDecision["events"] = [];
+  const reachedThresholds = new Set<number>();
+  const thresholds = [...new Set([...budgetPolicy.warningThresholds, 1])].sort((left, right) => left - right);
+
+  outcome.usageIncrements.forEach((amount, index) => {
+    const usageRecordId = context.usageRecordIds.at(index);
+    if (!usageRecordId) {
+      throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "Durable UsageRecord ID was not supplied");
+    }
+    const previousAmount = cumulativeAmount;
+    cumulativeAmount += amount;
+    const usageRecord: UsageRecord = {
+      schemaVersion: 1,
+      id: usageRecordId,
+      projectId: context.workItem.projectId,
+      workItemId: context.workItem.id,
+      pipelineRunId: context.run.id,
+      stageAttemptId: context.stageAttempt.id,
+      budgetPolicyId: budgetPolicy.id,
+      kind: "ESTIMATED_TOKENS",
+      amount,
+      quality: outcome.quality,
+      recordedAt: context.now,
+    };
+    usageRecords.push(usageRecord);
+    events.push({ type: "USAGE_RECORDED", data: { usageRecord, cumulativeAmount } });
+    for (const threshold of thresholds) {
+      const thresholdAmount = budgetPolicy.maxEstimatedTokens * threshold;
+      if (
+        !reachedThresholds.has(threshold) &&
+        previousAmount < thresholdAmount &&
+        cumulativeAmount >= thresholdAmount
+      ) {
+        reachedThresholds.add(threshold);
+        events.push({
+          type: "BUDGET_THRESHOLD_REACHED",
+          data: { budgetPolicy, threshold, cumulativeAmount },
+        });
+      }
+    }
+  });
+
+  if (cumulativeAmount < budgetPolicy.maxEstimatedTokens) {
+    throw new WorkflowDomainError(
+      "BUDGET_LIMIT_NOT_REACHED",
+      "A hard pause requires usage to reach the active budget limit",
+      { cumulativeAmount, maxEstimatedTokens: budgetPolicy.maxEstimatedTokens },
+    );
+  }
+
+  const previousStatus = context.stageAttempt.status;
+  const stageAttempt: StageAttempt = {
+    ...context.stageAttempt,
+    status: "HARD_PAUSED",
+    version: context.stageAttempt.version + 1,
+  };
+  const run: PipelineRun = {
+    ...context.run,
+    status: "HARD_PAUSED",
+    version: context.run.version + 1,
+    updatedAt: context.now,
+  };
+  const workItem: WorkItem = {
+    ...context.workItem,
+    state: "BLOCKED",
+    currentStage: stageAttempt.stage,
+    version: context.workItem.version + 1,
+    updatedAt: context.now,
+  };
+  events.push(
+    { type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt, previousStatus } },
+    {
+      type: "PIPELINE_PAUSED",
+      data: { run, stageAttempt, kind: "HARD", reason: "The active estimated-token budget was exhausted." },
+    },
+  );
+
+  return {
+    workItem,
+    run,
+    stageAttempt,
+    dispatch: completeDispatch(context.dispatch, context.now),
+    request: null,
+    nextStageAttempt: null,
+    nextDispatch: null,
+    usageRecords,
+    events,
+  };
+};
+
 export const decideApplyMockProviderOutcome = (
   command: ApplyMockProviderOutcomeCommand,
   context: {
@@ -199,6 +491,9 @@ export const decideApplyMockProviderOutcome = (
     run: PipelineRun;
     stageAttempt: StageAttempt;
     dispatch: WorkflowDispatch;
+    budgetPolicy: BudgetPolicy | null;
+    existingUsageRecords: readonly UsageRecord[];
+    usageRecordIds: readonly string[];
     humanRequestId?: string;
     nextStageAttemptId?: string;
     nextDispatchId?: string;
@@ -208,25 +503,28 @@ export const decideApplyMockProviderOutcome = (
   if (
     context.dispatch.id !== command.payload.dispatchId ||
     context.dispatch.pipelineRunId !== context.run.id ||
-    context.dispatch.stageAttemptId !== context.stageAttempt.id ||
-    context.run.currentStageAttemptId !== context.stageAttempt.id
+    context.dispatch.stageAttemptId !== context.stageAttempt.id
   ) {
     throw new WorkflowDomainError(
       "WORKFLOW_STAGE_MISMATCH",
       "The provider outcome does not match the current workflow stage",
     );
   }
-
-  const dispatch = completeDispatch(context.dispatch, context.now);
-  const previousStatus = context.stageAttempt.status;
-  if (!["QUEUED", "RUNNING"].includes(previousStatus)) {
+  requireCurrentStage(context.run, context.stageAttempt);
+  if (context.stageAttempt.status !== "RUNNING") {
     throw new WorkflowDomainError(
       "WORKFLOW_STAGE_MISMATCH",
-      "Only a queued or running stage can accept a provider outcome",
-      { status: previousStatus },
+      "Only a running stage can accept a provider outcome",
+      { status: context.stageAttempt.status },
     );
   }
 
+  if (command.payload.outcome.type === "BUDGET_LIMIT_REACHED") {
+    return budgetOutcome(command, context);
+  }
+
+  const dispatch = completeDispatch(context.dispatch, context.now);
+  const previousStatus = context.stageAttempt.status;
   if (command.payload.outcome.type === "NEEDS_HUMAN") {
     if (!context.humanRequestId) {
       throw new WorkflowDomainError("HUMAN_REQUEST_NOT_FOUND", "A HumanRequest ID was not supplied");
@@ -235,7 +533,6 @@ export const decideApplyMockProviderOutcome = (
       ...context.stageAttempt,
       status: "WAITING_HUMAN",
       version: context.stageAttempt.version + 1,
-      startedAt: context.stageAttempt.startedAt ?? context.now,
     };
     const run: PipelineRun = {
       ...context.run,
@@ -270,6 +567,7 @@ export const decideApplyMockProviderOutcome = (
       request,
       nextStageAttempt: null,
       nextDispatch: null,
+      usageRecords: [],
       events: [
         { type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt, previousStatus } },
         { type: "HUMAN_REQUEST_OPENED", data: { request } },
@@ -281,7 +579,6 @@ export const decideApplyMockProviderOutcome = (
     ...context.stageAttempt,
     status: "SUCCEEDED",
     version: context.stageAttempt.version + 1,
-    startedAt: context.stageAttempt.startedAt ?? context.now,
     finishedAt: context.now,
   };
   const nextStage = nextWorkflowStage(template, completedStage.stage);
@@ -301,6 +598,7 @@ export const decideApplyMockProviderOutcome = (
       request: null,
       nextStageAttempt: null,
       nextDispatch: null,
+      usageRecords: [],
       events: [
         { type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt: completedStage, previousStatus } },
         { type: "PIPELINE_COMPLETED", data: { run, stageAttempt: completedStage } },
@@ -342,18 +640,14 @@ export const decideApplyMockProviderOutcome = (
     version: context.workItem.version + 1,
     updatedAt: context.now,
   };
-  const nextDispatch: WorkflowDispatch = {
-    schemaVersion: 1,
-    id: context.nextDispatchId,
-    projectId: workItem.projectId,
-    workItemId: workItem.id,
-    pipelineRunId: run.id,
-    stageAttemptId: nextStageAttempt.id,
-    mode: "START",
-    status: "PENDING",
-    createdAt: context.now,
-    completedAt: null,
-  };
+  const nextDispatch = createDispatch(
+    context.nextDispatchId,
+    workItem,
+    run,
+    nextStageAttempt,
+    "START",
+    context.now,
+  );
   return {
     workItem,
     run,
@@ -362,6 +656,7 @@ export const decideApplyMockProviderOutcome = (
     request: null,
     nextStageAttempt,
     nextDispatch,
+    usageRecords: [],
     events: [{ type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt: completedStage, previousStatus } }],
   };
 };
@@ -470,18 +765,7 @@ export const decideAnswerHumanRequest = (
     version: context.workItem.version + 1,
     updatedAt: context.now,
   };
-  const dispatch: WorkflowDispatch = {
-    schemaVersion: 1,
-    id: context.dispatchId,
-    projectId: workItem.projectId,
-    workItemId: workItem.id,
-    pipelineRunId: run.id,
-    stageAttemptId: stageAttempt.id,
-    mode: "RESUME",
-    status: "PENDING",
-    createdAt: context.now,
-    completedAt: null,
-  };
+  const dispatch = createDispatch(context.dispatchId, workItem, run, stageAttempt, "RESUME", context.now);
 
   return {
     workItem,
@@ -491,5 +775,321 @@ export const decideAnswerHumanRequest = (
     decision,
     dispatch,
     events: [{ type: "HUMAN_REQUEST_RESOLVED", data: { request, decision } }],
+  };
+};
+
+export const decidePausePipeline = (
+  command: PausePipelineCommand,
+  context: {
+    now: string;
+    workItem: WorkItem;
+    run: PipelineRun;
+    stageAttempt: StageAttempt;
+    pendingDispatch: WorkflowDispatch | null;
+  },
+): PipelineControlDecision => {
+  verifyRunVersion(context.run, command.payload.pipelineRunId, command.payload.expectedVersion);
+  requireCurrentStage(context.run, context.stageAttempt);
+  if (
+    context.run.status !== "RUNNING" ||
+    !["QUEUED", "RUNNING", "RECOVERING"].includes(context.stageAttempt.status)
+  ) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "Only an executing pipeline can be paused",
+      { status: context.run.status },
+    );
+  }
+  const stageAttempt: StageAttempt = {
+    ...context.stageAttempt,
+    status: "SOFT_PAUSED",
+    version: context.stageAttempt.version + 1,
+  };
+  const run: PipelineRun = {
+    ...context.run,
+    status: "SOFT_PAUSED",
+    version: context.run.version + 1,
+    updatedAt: context.now,
+  };
+  const workItem: WorkItem = {
+    ...context.workItem,
+    state: "BLOCKED",
+    version: context.workItem.version + 1,
+    updatedAt: context.now,
+  };
+  return {
+    action: "PAUSE",
+    workItem,
+    run,
+    stageAttempt,
+    previousDispatch: pendingDispatchFailed(context.pendingDispatch, context.now),
+    dispatch: null,
+    events: [
+      {
+        type: "PIPELINE_PAUSED",
+        data: { run, stageAttempt, kind: "SOFT", reason: "Execution was paused by the operator." },
+      },
+    ],
+  };
+};
+
+export const decideResumePipeline = (
+  command: ResumePipelineCommand,
+  context: {
+    now: string;
+    workItem: WorkItem;
+    run: PipelineRun;
+    stageAttempt: StageAttempt;
+    dispatchId: string;
+  },
+): PipelineControlDecision => {
+  verifyRunVersion(context.run, command.payload.pipelineRunId, command.payload.expectedVersion);
+  requireCurrentStage(context.run, context.stageAttempt);
+  if (context.run.status === "HARD_PAUSED" || context.stageAttempt.status === "HARD_PAUSED") {
+    throw new WorkflowDomainError(
+      "BUDGET_OVERRIDE_REQUIRED",
+      "A hard-paused pipeline requires a new BudgetPolicy revision",
+    );
+  }
+  if (
+    !["SOFT_PAUSED", "INTERRUPTED"].includes(context.run.status) ||
+    !["SOFT_PAUSED", "INTERRUPTED"].includes(context.stageAttempt.status)
+  ) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "Only a soft-paused or interrupted pipeline can be resumed",
+      { status: context.run.status },
+    );
+  }
+  const stageAttempt: StageAttempt = {
+    ...context.stageAttempt,
+    status: "QUEUED",
+    version: context.stageAttempt.version + 1,
+    failureCode: null,
+  };
+  const run: PipelineRun = {
+    ...context.run,
+    status: "RUNNING",
+    version: context.run.version + 1,
+    updatedAt: context.now,
+  };
+  const workItem: WorkItem = {
+    ...context.workItem,
+    state: "IN_PROGRESS",
+    currentStage: stageAttempt.stage,
+    version: context.workItem.version + 1,
+    updatedAt: context.now,
+  };
+  const dispatch = createDispatch(context.dispatchId, workItem, run, stageAttempt, "RESUME", context.now);
+  return {
+    action: "RESUME",
+    workItem,
+    run,
+    stageAttempt,
+    previousDispatch: null,
+    dispatch,
+    events: [{ type: "PIPELINE_RESUMED", data: { run, stageAttempt } }],
+  };
+};
+
+export const decideCancelPipeline = (
+  command: CancelPipelineCommand,
+  context: {
+    now: string;
+    workItem: WorkItem;
+    run: PipelineRun;
+    stageAttempt: StageAttempt;
+    pendingDispatch: WorkflowDispatch | null;
+  },
+): PipelineControlDecision => {
+  verifyRunVersion(context.run, command.payload.pipelineRunId, command.payload.expectedVersion);
+  requireCurrentStage(context.run, context.stageAttempt);
+  if (!activeRunStatuses.has(context.run.status)) {
+    throw new WorkflowDomainError("WORKFLOW_CONTROL_NOT_ALLOWED", "A terminal pipeline cannot be cancelled", {
+      status: context.run.status,
+    });
+  }
+  const stageAttempt: StageAttempt = {
+    ...context.stageAttempt,
+    status: "CANCELLED",
+    version: context.stageAttempt.version + 1,
+    finishedAt: context.now,
+  };
+  const run: PipelineRun = {
+    ...context.run,
+    status: "CANCELLED",
+    version: context.run.version + 1,
+    updatedAt: context.now,
+    finishedAt: context.now,
+  };
+  const workItem: WorkItem = {
+    ...context.workItem,
+    state: "CANCELLED",
+    version: context.workItem.version + 1,
+    updatedAt: context.now,
+  };
+  return {
+    action: "CANCEL",
+    workItem,
+    run,
+    stageAttempt,
+    previousDispatch: pendingDispatchFailed(context.pendingDispatch, context.now),
+    dispatch: null,
+    events: [{ type: "PIPELINE_CANCELLED", data: { run, stageAttempt } }],
+  };
+};
+
+export const decideApproveBudgetOverride = (
+  command: ApproveBudgetOverrideCommand,
+  context: {
+    now: string;
+    workItem: WorkItem;
+    run: PipelineRun;
+    stageAttempt: StageAttempt;
+    currentBudgetPolicy: BudgetPolicy;
+    cumulativeUsage: number;
+    ids: { budgetPolicyId: string; stageAttemptId: string; dispatchId: string };
+  },
+): BudgetOverrideDecision => {
+  verifyRunVersion(context.run, command.payload.pipelineRunId, command.payload.expectedVersion);
+  requireCurrentStage(context.run, context.stageAttempt);
+  if (context.run.status !== "HARD_PAUSED" || context.stageAttempt.status !== "HARD_PAUSED") {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "A BudgetPolicy override is only available for a hard-paused pipeline",
+    );
+  }
+  if (
+    command.payload.maxEstimatedTokens <= context.currentBudgetPolicy.maxEstimatedTokens ||
+    command.payload.maxEstimatedTokens <= context.cumulativeUsage
+  ) {
+    throw new WorkflowDomainError(
+      "BUDGET_OVERRIDE_INVALID",
+      "The new budget must exceed both the previous limit and recorded usage",
+      {
+        previousLimit: context.currentBudgetPolicy.maxEstimatedTokens,
+        cumulativeUsage: context.cumulativeUsage,
+      },
+    );
+  }
+  const budgetPolicy: BudgetPolicy = {
+    ...context.currentBudgetPolicy,
+    id: context.ids.budgetPolicyId,
+    revision: context.currentBudgetPolicy.revision + 1,
+    maxEstimatedTokens: command.payload.maxEstimatedTokens,
+    createdBy: command.actor,
+    createdAt: context.now,
+  };
+  const stageAttempt: StageAttempt = {
+    schemaVersion: 1,
+    id: context.ids.stageAttemptId,
+    pipelineRunId: context.run.id,
+    projectId: context.workItem.projectId,
+    workItemId: context.workItem.id,
+    stage: context.stageAttempt.stage,
+    attempt: context.stageAttempt.attempt + 1,
+    status: "QUEUED",
+    version: 1,
+    startedAt: null,
+    finishedAt: null,
+    failureCode: null,
+  };
+  const run: PipelineRun = {
+    ...context.run,
+    status: "RUNNING",
+    currentStageAttemptId: stageAttempt.id,
+    version: context.run.version + 1,
+    updatedAt: context.now,
+  };
+  const workItem: WorkItem = {
+    ...context.workItem,
+    state: "IN_PROGRESS",
+    currentStage: stageAttempt.stage,
+    version: context.workItem.version + 1,
+    updatedAt: context.now,
+  };
+  const dispatch = createDispatch(context.ids.dispatchId, workItem, run, stageAttempt, "START", context.now);
+  return {
+    workItem,
+    run,
+    previousStageAttempt: context.stageAttempt,
+    stageAttempt,
+    budgetPolicy,
+    dispatch,
+    events: [
+      {
+        type: "BUDGET_OVERRIDE_APPROVED",
+        data: {
+          run,
+          previousStageAttempt: context.stageAttempt,
+          stageAttempt,
+          budgetPolicy,
+        },
+      },
+    ],
+  };
+};
+
+export const decideRecoverInterruptedWorkflow = (context: {
+  now: string;
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  dispatch: WorkflowDispatch;
+  recoveryReportId: string;
+}): RecoveryDecision => {
+  requireCurrentStage(context.run, context.stageAttempt);
+  if (
+    context.run.status !== "RUNNING" ||
+    context.stageAttempt.status !== "RUNNING" ||
+    context.dispatch.status !== "PENDING"
+  ) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "Only an orphaned running dispatch can be reconciled",
+    );
+  }
+  const stageAttempt: StageAttempt = {
+    ...context.stageAttempt,
+    status: "INTERRUPTED",
+    version: context.stageAttempt.version + 1,
+    failureCode: "DAEMON_RESTART",
+  };
+  const run: PipelineRun = {
+    ...context.run,
+    status: "INTERRUPTED",
+    version: context.run.version + 1,
+    updatedAt: context.now,
+  };
+  const workItem: WorkItem = {
+    ...context.workItem,
+    state: "BLOCKED",
+    version: context.workItem.version + 1,
+    updatedAt: context.now,
+  };
+  const dispatch: WorkflowDispatch = {
+    ...context.dispatch,
+    status: "FAILED",
+    completedAt: context.now,
+  };
+  const report: RecoveryReport = {
+    schemaVersion: 1,
+    id: context.recoveryReportId,
+    projectId: context.workItem.projectId,
+    workItemId: context.workItem.id,
+    pipelineRunId: context.run.id,
+    stageAttemptId: context.stageAttempt.id,
+    previousStatus: "RUNNING",
+    recoveredStatus: "INTERRUPTED",
+    reason: "DAEMON_RESTART",
+    createdAt: context.now,
+  };
+  return {
+    workItem,
+    run,
+    stageAttempt,
+    dispatch,
+    report,
+    events: [{ type: "RECOVERY_REPORT_CREATED", data: { report, run, stageAttempt } }],
   };
 };

@@ -8,18 +8,35 @@ import {
   utcTimestampSchema,
 } from "./shared.js";
 import {
+  approveBudgetOverrideCommandSchema,
   answerHumanRequestCommandSchema,
   applyMockProviderOutcomeCommandSchema,
+  budgetOverrideApprovedEventSchema,
+  budgetOverrideApprovedResultSchema,
+  budgetThresholdReachedEventSchema,
+  cancelPipelineCommandSchema,
   humanRequestAnsweredResultSchema,
   humanRequestOpenedEventSchema,
   humanRequestResolvedEventSchema,
+  markWorkflowDispatchStartedCommandSchema,
   mockProviderOutcomeAppliedResultSchema,
+  pausePipelineCommandSchema,
+  pipelineCancelledEventSchema,
   pipelineCompletedEventSchema,
+  pipelineControlAppliedResultSchema,
+  pipelinePausedEventSchema,
+  pipelineResumedEventSchema,
   pipelineStartedEventSchema,
   pipelineStartedResultSchema,
+  reconcileWorkflowsCommandSchema,
+  recoveryReportCreatedEventSchema,
+  resumePipelineCommandSchema,
   stageAttemptChangedEventSchema,
   startMockPipelineCommandSchema,
+  usageRecordedEventSchema,
+  workflowDispatchStartedResultSchema,
   workflowStageSchema,
+  workflowsReconciledResultSchema,
 } from "./workflow.js";
 
 export const fixtureProjectIdSchema = z.enum(["web-app-a", "api-service-b"]);
@@ -140,6 +157,13 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   stageAttemptChangedEventSchema,
   humanRequestOpenedEventSchema,
   humanRequestResolvedEventSchema,
+  usageRecordedEventSchema,
+  budgetThresholdReachedEventSchema,
+  pipelinePausedEventSchema,
+  pipelineResumedEventSchema,
+  pipelineCancelledEventSchema,
+  budgetOverrideApprovedEventSchema,
+  recoveryReportCreatedEventSchema,
   pipelineCompletedEventSchema,
 ]);
 
@@ -219,8 +243,14 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   updateWorkItemCommandSchema,
   moveWorkItemCommandSchema,
   startMockPipelineCommandSchema,
+  markWorkflowDispatchStartedCommandSchema,
   applyMockProviderOutcomeCommandSchema,
   answerHumanRequestCommandSchema,
+  pausePipelineCommandSchema,
+  resumePipelineCommandSchema,
+  cancelPipelineCommandSchema,
+  approveBudgetOverrideCommandSchema,
+  reconcileWorkflowsCommandSchema,
 ]);
 
 const commandResultBaseSchema = z
@@ -260,8 +290,12 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   workItemUpdatedResultSchema,
   workItemMovedResultSchema,
   pipelineStartedResultSchema,
+  workflowDispatchStartedResultSchema,
   mockProviderOutcomeAppliedResultSchema,
   humanRequestAnsweredResultSchema,
+  pipelineControlAppliedResultSchema,
+  budgetOverrideApprovedResultSchema,
+  workflowsReconciledResultSchema,
 ]);
 
 export const registerFixtureProjectRequestSchema = z

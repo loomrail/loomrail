@@ -19,6 +19,7 @@ const template: StartMockPipelineCommand["payload"]["template"] = {
   stages: [
     { stage: "DISCOVERY", ordinal: 0 },
     { stage: "PLAN", ordinal: 1 },
+    { stage: "IMPLEMENT", ordinal: 2 },
   ],
 };
 const workItem = (state: WorkItem["state"]): WorkItem => ({
@@ -47,14 +48,24 @@ describe("mock workflow decisions", () => {
       correlationId: "correlation-start-1",
       actor: { type: "HUMAN", id: "local-owner" },
       type: "START_MOCK_PIPELINE",
-      payload: { workItemId: "work-item-1", expectedVersion: 2, template },
+      payload: {
+        workItemId: "work-item-1",
+        expectedVersion: 2,
+        template,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
     };
     const started = decideStartMockPipeline(command, {
       now: timestamp,
       workItem: workItem("READY"),
       activeRun: null,
       hasChildren: false,
-      ids: { pipelineRunId: "run-1", stageAttemptId: "attempt-1", dispatchId: "dispatch-1" },
+      ids: {
+        pipelineRunId: "run-1",
+        stageAttemptId: "attempt-1",
+        budgetPolicyId: "budget-1",
+        dispatchId: "dispatch-1",
+      },
     });
     expect(started).toMatchObject({
       workItem: { state: "IN_PROGRESS", currentStage: "DISCOVERY" },
@@ -67,7 +78,12 @@ describe("mock workflow decisions", () => {
         workItem: workItem("BACKLOG"),
         activeRun: null,
         hasChildren: false,
-        ids: { pipelineRunId: "run-2", stageAttemptId: "attempt-2", dispatchId: "dispatch-2" },
+        ids: {
+          pipelineRunId: "run-2",
+          stageAttemptId: "attempt-2",
+          budgetPolicyId: "budget-2",
+          dispatchId: "dispatch-2",
+        },
       }),
     ).toThrow(WorkflowDomainError);
   });
