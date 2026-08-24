@@ -164,7 +164,7 @@ test.describe("authenticated walking skeleton", () => {
     expect(await page.evaluate<boolean>("Boolean(window.__loomrailXss)")).toBe(false);
   });
 
-  test("persists a HumanRequest, hard-pauses on budget, and continues from an override", async ({ page }) => {
+  test("persists the full mock delivery and gates Done on owner acceptance", async ({ page }) => {
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
       logger: false,
@@ -197,14 +197,21 @@ test.describe("authenticated walking skeleton", () => {
     await expect(workflowSection.getByText("100 of 100", { exact: true })).toBeVisible();
     await expect(workflowSection.getByRole("button", { name: "Approve 200 token budget" })).toBeEnabled();
     await workflowSection.getByRole("button", { name: "Approve 200 token budget" }).click();
-    await expect(
-      workflowSection.getByText("The bounded mock workflow completed from the recorded decision."),
-    ).toBeVisible();
     await expect(workflowSection.getByText("100 of 200", { exact: true })).toBeVisible();
-    await expect(workflowSection.getByText("Completed", { exact: true })).toHaveCount(4);
-    await expect(page.getByRole("button", { name: /Needs your decision/ })).toHaveCount(0);
+    await expect(workflowSection.getByRole("heading", { name: "Acceptance package" })).toBeVisible();
+    await expect(workflowSection.getByText("Review report", { exact: true })).toBeVisible();
+    await expect(workflowSection.getByText("QA report", { exact: true })).toBeVisible();
+    await expect(workflowSection.getByText("Needs decision", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Needs your decision/ })).toBeVisible();
     await expect(restoredInspector.getByText("Decision recorded", { exact: true })).toBeVisible();
-    await expect(restoredInspector.getByText("Workflow completed", { exact: true })).toBeVisible();
+    const acceptanceResponsePromise = page.waitForResponse(
+      (response) => response.url().includes("/acceptance/") && response.url().endsWith("/resolve"),
+    );
+    await workflowSection.getByRole("button", { name: "Accept delivery" }).click();
+    const acceptanceResponse = await acceptanceResponsePromise;
+    expect(acceptanceResponse.status()).toBe(200);
+    await expect(page.getByRole("button", { name: "Human decision workflow" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Needs your decision/ })).toHaveCount(0);
   });
 
   test("keeps overlays mutually exclusive, dismissible, and responsive", async ({ page }) => {

@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import { createMockProvider } from "../src/index.js";
 
-const invocation = (stage: "DISCOVERY" | "PLAN" | "IMPLEMENT", attempt = 1): ProviderInvocation => ({
+const invocation = (
+  stage: "DISCOVERY" | "PLAN" | "IMPLEMENT" | "REVIEW" | "QA" | "ACCEPTANCE",
+  attempt = 1,
+): ProviderInvocation => ({
   decision: null,
   dispatch: {
     schemaVersion: 1,
@@ -73,6 +76,20 @@ describe("mock provider scenario A", () => {
     });
     await expect(createMockProvider().start(invocation("IMPLEMENT", 2))).resolves.toMatchObject({
       type: "COMPLETED",
+    });
+  });
+
+  it("records typed review and QA evidence before requesting owner acceptance", async () => {
+    await expect(createMockProvider().start(invocation("REVIEW"))).resolves.toMatchObject({
+      type: "COMPLETED",
+      artifacts: [{ kind: "REVIEW_REPORT" }],
+    });
+    await expect(createMockProvider().start(invocation("QA"))).resolves.toMatchObject({
+      type: "COMPLETED",
+      artifacts: [{ kind: "QA_REPORT" }],
+    });
+    await expect(createMockProvider().start(invocation("ACCEPTANCE"))).resolves.toMatchObject({
+      type: "READY_FOR_ACCEPTANCE",
     });
   });
 });

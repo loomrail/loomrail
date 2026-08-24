@@ -22,6 +22,7 @@ import {
   pipelineControlRequestSchema,
   projectsResponseSchema,
   registerFixtureProjectRequestSchema,
+  resolveAcceptanceRequestSchema,
   sessionExchangeRequestSchema,
   sessionExchangeResponseSchema,
   startMockPipelineRequestSchema,
@@ -88,6 +89,9 @@ type BootstrapGrant = {
 const projectParamsSchema = z.object({ projectId: opaqueIdSchema }).strict();
 const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
 const humanRequestParamsSchema = z.object({ humanRequestId: opaqueIdSchema }).strict();
+const acceptanceParamsSchema = z
+  .object({ workItemId: opaqueIdSchema, acceptancePackageId: opaqueIdSchema })
+  .strict();
 const workItemsQuerySchema = z.object({ state: workItemStateSchema.optional() }).strict();
 const humanRequestsQuerySchema = z
   .object({ projectId: opaqueIdSchema.optional(), status: humanRequestStatusSchema.optional() })
@@ -156,7 +160,8 @@ const sendOperationError = (
     const status =
       error.code === "WORKFLOW_NOT_FOUND" ||
       error.code === "WORKFLOW_DISPATCH_NOT_FOUND" ||
-      error.code === "HUMAN_REQUEST_NOT_FOUND"
+      error.code === "HUMAN_REQUEST_NOT_FOUND" ||
+      error.code === "ACCEPTANCE_NOT_FOUND"
         ? 404
         : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
@@ -227,6 +232,8 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
               budgetPolicies: [],
               usageRecords: [],
               recoveryReports: [],
+              artifacts: [],
+              acceptancePackage: null,
             });
       const stageAttempt = snapshot.stageAttempts.find(({ id }) => id === dispatch.stageAttemptId);
       const stageRequest = snapshot.humanRequests.find(
@@ -447,7 +454,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         },
         foundation: {
           phase: "phase-0",
-          milestone: "M4",
+          milestone: "M6",
           providers: "mock-only",
           persistence: "sqlite",
         },
@@ -556,6 +563,8 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
                 budgetPolicies: [],
                 usageRecords: [],
                 recoveryReports: [],
+                artifacts: [],
+                acceptancePackage: null,
               },
         );
       } catch (error: unknown) {
@@ -867,6 +876,49 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         const result = localState.query({
           type: "GET_WORKFLOW_SNAPSHOT",
           workItemId: answered.workItemId,
+        });
+        if (result.type !== "WORKFLOW_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow snapshot could not be loaded");
+        }
+        return workflowSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/work-items/:workItemId/acceptance/:acceptancePackageId/resolve", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = acceptanceParamsSchema.parse(request.params);
+        const body = resolveAcceptanceRequestSchema.parse(request.body);
+        const current = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        if (
+          current.type !== "WORKFLOW_SNAPSHOT" ||
+          current.snapshot.acceptancePackage?.id !== params.acceptancePackageId
+        ) {
+          throw new WorkflowDomainError("ACCEPTANCE_NOT_FOUND", "The AcceptancePackage does not exist");
+        }
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "RESOLVE_ACCEPTANCE",
+          payload: {
+            acceptancePackageId: params.acceptancePackageId,
+            expectedVersion: body.expectedVersion,
+            expectedRunVersion: body.expectedRunVersion,
+            action: body.action,
+            reason: body.reason,
+          },
+        });
+        const result = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
         });
         if (result.type !== "WORKFLOW_SNAPSHOT") {
           throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow snapshot could not be loaded");

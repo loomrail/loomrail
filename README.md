@@ -15,8 +15,9 @@ decisions instead of disconnected chat sessions.
 
 > [!IMPORTANT]
 > Loomrail is an early pre-alpha. The local kernel, authenticated browser session, SQLite state, audit log, and
-> cross-platform CI are real. The Workbench now runs a restart-safe synthetic Discovery → Plan workflow with a durable
-> Human Request and Decision in English and Russian. Real agent execution is not available yet.
+> cross-platform CI are real. The Workbench now runs a restart-safe synthetic Discovery → Plan → Implement → Review
+> → QA → Acceptance workflow with durable budgets, evidence, Human Requests, and owner Decisions in English and
+> Russian. Real agent execution is not available yet.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/workbench-dark.png" />
@@ -36,13 +37,13 @@ decisions instead of disconnected chat sessions.
 
 ## Current checkpoint
 
-| Area          | Today                                                                                  | Next                                           |
-| ------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| Local runtime | Loopback daemon, CLI launcher, one-time browser session                                | Packaged installer and release artifacts       |
-| State         | Tasks, runs, stage attempts, dispatches, Human Requests, Decisions, append-only Events | Budgets, pause, and recovery reconciliation    |
-| Workbench     | Persisted board, task cockpit, Attention banner, EN/RU, light/dark                     | Full Attention Inbox and richer workflow views |
-| Agents        | Capability-checked provider contract and deterministic mock adapter                    | Supervised Codex/Claude adapters               |
-| Platforms     | macOS and Windows CI are green                                                         | Clean-machine acceptance and hardening         |
+| Area          | Today                                                                                                    | Next                                           |
+| ------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Local runtime | Loopback daemon, CLI launcher, one-time browser session                                                  | Packaged installer and release artifacts       |
+| State         | Tasks, runs, budgets, recovery, typed evidence, acceptance packages, Decisions, append-only Events       | Retention and restore hardening                |
+| Workbench     | Persisted board, workflow cockpit, command summary, evidence matrix, owner acceptance, EN/RU, light/dark | Full Attention Inbox and richer workflow views |
+| Agents        | Capability-checked provider contract and deterministic full-delivery mock adapter                        | Supervised Codex/Claude adapters               |
+| Platforms     | macOS and Windows CI are green                                                                           | Clean-machine acceptance and hardening         |
 
 ## How it is intended to work
 
@@ -132,7 +133,7 @@ talk directly to future agent, shell, or Git adapters.
 - [x] **M4 — Mock delivery workflow:** restart-safe dispatch queue, Human Request, Decision, and resumable task
       pipeline
 - [x] **M5 — Budgets and recovery:** explicit limits, pause/resume, crash recovery
-- [ ] **M6 — Acceptance:** evidence, review, owner approval, audit surface
+- [x] **M6 — Acceptance:** typed Review/QA evidence, criterion matrix, owner-only final approval, audit surface
 - [ ] **M7 — Public checkpoint:** clean install, hardening, packaging, release documentation
 
 Real Codex/Claude execution, shell/Git access, worktrees, plugins, remote mode, and desktop packaging remain outside the

@@ -3,6 +3,8 @@ import { createContext, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  AcceptanceAction,
+  AcceptancePackage,
   HumanRequest,
   HumanRequestAnswer,
   PipelineRun,
@@ -23,6 +25,7 @@ import {
   listWorkItemEvents,
   moveWorkItem,
   registerFixtureProject,
+  resolveAcceptance,
   startMockPipeline,
   updateWorkItem,
   type CreateWorkItemInput,
@@ -279,6 +282,32 @@ export const useApproveBudgetOverride = () => {
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(workItem.id) }),
         queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
+        queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(workItem.projectId) }),
+      ]);
+    },
+  });
+};
+
+export const useResolveAcceptance = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      acceptancePackage,
+      action,
+      run,
+      workItem,
+    }: {
+      acceptancePackage: AcceptancePackage;
+      action: AcceptanceAction;
+      run: PipelineRun;
+      workItem: WorkItem;
+    }) => resolveAcceptance(workItem.id, run, acceptancePackage, action),
+    onSuccess: async (_, { workItem }) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
+        queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(workItem.id) }),
+        queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
+        queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(workItem.projectId) }),
       ]);
     },
   });

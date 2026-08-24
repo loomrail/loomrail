@@ -11,7 +11,10 @@ describe("workflow template validation", () => {
   it("orders and advances the bounded mock template", () => {
     expect(nextWorkflowStage(mockDeliveryTemplate, "DISCOVERY")).toBe("PLAN");
     expect(nextWorkflowStage(mockDeliveryTemplate, "PLAN")).toBe("IMPLEMENT");
-    expect(nextWorkflowStage(mockDeliveryTemplate, "IMPLEMENT")).toBeNull();
+    expect(nextWorkflowStage(mockDeliveryTemplate, "IMPLEMENT")).toBe("REVIEW");
+    expect(nextWorkflowStage(mockDeliveryTemplate, "REVIEW")).toBe("QA");
+    expect(nextWorkflowStage(mockDeliveryTemplate, "QA")).toBe("ACCEPTANCE");
+    expect(nextWorkflowStage(mockDeliveryTemplate, "ACCEPTANCE")).toBeNull();
   });
 
   it("rejects duplicate and non-contiguous stages", () => {

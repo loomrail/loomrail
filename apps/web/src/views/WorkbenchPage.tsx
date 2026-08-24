@@ -3,7 +3,10 @@ import type { SyntheticEvent } from "react";
 import {
   prioritySchema,
   riskSchema,
+  type AcceptanceAction,
+  type AcceptancePackage,
   type DomainEvent,
+  type EvidenceArtifact,
   type HumanRequest,
   type PipelineRun,
   type StageAttempt,
@@ -54,6 +57,7 @@ import {
   usePipelineControl,
   useProjectHumanRequests,
   useProjectWorkItems,
+  useResolveAcceptance,
   useStartMockPipeline,
   useUpdateWorkItem,
   useWorkspace,
@@ -417,6 +421,20 @@ const pipelineStatusTones: Record<PipelineRun["status"], StatusTone> = {
   CANCELLED: "paused",
 };
 
+const acceptanceStatusLabelKeys: Record<AcceptancePackage["status"], TranslationKey> = {
+  PENDING: "acceptance.status.PENDING",
+  ACCEPTED: "acceptance.status.ACCEPTED",
+  RETURNED: "acceptance.status.RETURNED",
+  REJECTED: "acceptance.status.REJECTED",
+};
+
+const acceptanceStatusTones: Record<AcceptancePackage["status"], StatusTone> = {
+  PENDING: "waiting",
+  ACCEPTED: "complete",
+  RETURNED: "paused",
+  REJECTED: "paused",
+};
+
 const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEventProps, "time"> => {
   switch (event.type) {
     case "WORK_ITEM_CREATED":
@@ -544,6 +562,27 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         icon: "clock",
         label: t("event.recoveryCreated"),
         tone: "warning",
+      };
+    case "EVIDENCE_ARTIFACT_RECORDED":
+      return {
+        detail: t("event.evidenceRecordedDetail", { title: event.data.artifact.title }),
+        icon: "check",
+        label: t("event.evidenceRecorded"),
+        tone: "success",
+      };
+    case "ACCEPTANCE_REQUESTED":
+      return {
+        detail: t("event.acceptanceRequestedDetail"),
+        icon: "question",
+        label: t("event.acceptanceRequested"),
+        tone: "warning",
+      };
+    case "ACCEPTANCE_RESOLVED":
+      return {
+        detail: t("event.acceptanceResolvedDetail", { action: event.data.action }),
+        icon: event.data.action === "ACCEPT" ? "check" : "pause",
+        label: t("event.acceptanceResolved"),
+        tone: event.data.action === "ACCEPT" ? "success" : "warning",
       };
     case "PIPELINE_COMPLETED":
       return {
@@ -854,6 +893,120 @@ const HumanRequestPanel = ({ request }: { request: HumanRequest }): React.JSX.El
   );
 };
 
+const AcceptancePanel = ({
+  acceptancePackage,
+  artifacts,
+  item,
+  run,
+}: {
+  acceptancePackage: AcceptancePackage;
+  artifacts: readonly EvidenceArtifact[];
+  item: WorkItem;
+  run: PipelineRun;
+}): React.JSX.Element => {
+  const { t } = useI18n();
+  const resolveMutation = useResolveAcceptance();
+  const [lastAction, setLastAction] = useState<AcceptanceAction | null>(null);
+  const resolve = (action: AcceptanceAction): void => {
+    setLastAction(action);
+    resolveMutation.mutate({ acceptancePackage, action, run, workItem: item });
+  };
+
+  return (
+    <div className="acceptance-package">
+      <div className="acceptance-package__heading">
+        <div>
+          <span>{t("acceptance.eyebrow")}</span>
+          <h3>{t("acceptance.title")}</h3>
+        </div>
+        <Status
+          label={t(acceptanceStatusLabelKeys[acceptancePackage.status])}
+          tone={acceptanceStatusTones[acceptancePackage.status]}
+        />
+      </div>
+      <p>{acceptancePackage.releaseNote}</p>
+
+      <div className="acceptance-evidence" aria-label={t("acceptance.evidence")}>
+        {artifacts.map((artifact) => (
+          <article key={artifact.id}>
+            <div>
+              <Icon name="check" size={13} />
+              <strong>
+                {artifact.kind === "REVIEW_REPORT"
+                  ? t("acceptance.reviewEvidence")
+                  : t("acceptance.qaEvidence")}
+              </strong>
+            </div>
+            <span>{artifact.summary}</span>
+            <small>{t("acceptance.checks", { count: artifact.checks.length })}</small>
+          </article>
+        ))}
+      </div>
+
+      <div className="acceptance-matrix">
+        <strong>{t("acceptance.matrix")}</strong>
+        {acceptancePackage.criteria.length > 0 ? (
+          <ol>
+            {acceptancePackage.criteria.map((criterion) => (
+              <li key={criterion.criterion}>
+                <div>
+                  <Icon name="check" size={13} />
+                  <strong>{criterion.criterion}</strong>
+                </div>
+                <span>{criterion.verification}</span>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <span>{t("acceptance.noCriteria")}</span>
+        )}
+      </div>
+
+      {resolveMutation.error ? (
+        <LocalConnectionRecovery
+          error={resolveMutation.error}
+          onRetry={() => {
+            if (lastAction) resolve(lastAction);
+          }}
+          retrying={resolveMutation.isPending}
+        />
+      ) : null}
+      {acceptancePackage.status === "PENDING" ? (
+        <div className="acceptance-package__actions">
+          <Button
+            disabled={resolveMutation.isPending}
+            loading={resolveMutation.isPending && lastAction === "ACCEPT"}
+            onClick={() => {
+              resolve("ACCEPT");
+            }}
+            variant="primary"
+          >
+            {t("acceptance.accept")}
+          </Button>
+          <Button
+            disabled={resolveMutation.isPending}
+            loading={resolveMutation.isPending && lastAction === "RETURN_TO_WORK"}
+            onClick={() => {
+              resolve("RETURN_TO_WORK");
+            }}
+          >
+            {t("acceptance.return")}
+          </Button>
+          <Button
+            disabled={resolveMutation.isPending}
+            loading={resolveMutation.isPending && lastAction === "REJECT"}
+            onClick={() => {
+              resolve("REJECT");
+            }}
+          >
+            {t("acceptance.reject")}
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const { t } = useI18n();
   const workflowQuery = useWorkItemWorkflow(item.id);
@@ -862,7 +1015,10 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const overrideMutation = useApproveBudgetOverride();
   const [lastAction, setLastAction] = useState<"pause" | "resume" | "cancel" | "override" | null>(null);
   const snapshot = workflowQuery.data;
-  const openRequest = snapshot?.humanRequests.find(({ status }) => status === "OPEN") ?? null;
+  const openRequest =
+    snapshot?.humanRequests.find(
+      ({ id, status }) => status === "OPEN" && id !== snapshot.acceptancePackage?.humanRequestId,
+    ) ?? null;
 
   if (workflowQuery.isPending) return <p className="inspector-copy">{t("workflow.loading")}</p>;
 
@@ -958,6 +1114,19 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
           </li>
         ))}
       </ol>
+      {snapshot.acceptancePackage ? (
+        <AcceptancePanel
+          acceptancePackage={snapshot.acceptancePackage}
+          artifacts={snapshot.artifacts}
+          item={item}
+          run={run}
+        />
+      ) : snapshot.artifacts.length > 0 ? (
+        <div className="workflow-artifact-summary">
+          <strong>{t("acceptance.evidence")}</strong>
+          <span>{t("acceptance.evidenceCount", { count: snapshot.artifacts.length })}</span>
+        </div>
+      ) : null}
       {openRequest ? <HumanRequestPanel request={openRequest} /> : null}
       {snapshot.recoveryReports.at(-1) ? (
         <div className="workflow-recovery" role="status">
@@ -975,7 +1144,8 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
           retrying={controlPending}
         />
       ) : null}
-      {["RUNNING", "WAITING_HUMAN", "SOFT_PAUSED", "HARD_PAUSED", "INTERRUPTED"].includes(run.status) ? (
+      {["RUNNING", "WAITING_HUMAN", "SOFT_PAUSED", "HARD_PAUSED", "INTERRUPTED"].includes(run.status) &&
+      snapshot.acceptancePackage?.status !== "PENDING" ? (
         <div className="workflow-panel__actions">
           {run.status === "RUNNING" ? (
             <Button
@@ -1212,6 +1382,10 @@ export const WorkbenchPage = (): React.JSX.Element => {
     activeItems.find((item) => item.id === selectedWorkItemId) ?? activeItems.at(0) ?? null;
   const filterOptions = filterOptionsFor(activeItems, t);
   const blockingRequests = humanRequestsQuery.data?.humanRequests.filter(({ blocking }) => blocking) ?? [];
+  const runningCount = activeItems.filter(({ state }) => state === "IN_PROGRESS").length;
+  const atRiskCount = activeItems.filter(
+    ({ risk, state }) => state === "BLOCKED" || risk === "HIGH" || risk === "CRITICAL",
+  ).length;
 
   return (
     <div className="workbench">
@@ -1258,6 +1432,20 @@ export const WorkbenchPage = (): React.JSX.Element => {
               </p>
             </div>
           </div>
+          <dl aria-label={t("work.summary.label")} className="work-command-summary">
+            <div>
+              <dt>{t("work.summary.needsYou")}</dt>
+              <dd>{blockingRequests.length}</dd>
+            </div>
+            <div>
+              <dt>{t("work.summary.active")}</dt>
+              <dd>{runningCount}</dd>
+            </div>
+            <div>
+              <dt>{t("work.summary.atRisk")}</dt>
+              <dd>{atRiskCount}</dd>
+            </div>
+          </dl>
           <div>
             <Button disabled shape="pill">
               {t("action.share")}

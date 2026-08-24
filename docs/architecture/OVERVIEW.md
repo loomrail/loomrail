@@ -1,7 +1,7 @@
 # Loomrail architecture overview
 
-**Status:** Phase 0 / M2 implemented baseline
-**Updated:** 2026-08-22
+**Status:** Phase 0 / M6 implemented baseline
+**Updated:** 2026-08-24
 
 Loomrail separates deterministic product authority from non-deterministic agent work. The daemon owns state,
 permissions, budgets, transitions and recovery. Providers produce proposals, tool activity and artifacts; they do not
@@ -12,7 +12,8 @@ directly decide that a WorkItem is complete.
 ```mermaid
 flowchart LR
     CLI[CLI] -->|start + one-time bootstrap| D[Local daemon]
-    UI[Browser UI] <-->|authenticated HTTP + resumable WS| D
+    UI[Browser UI] <-->|authenticated HTTP| D
+    UI -. later: resumable WS .-> D
 
     D --> APP[Application commands and queries]
     APP --> DOMAIN[Domain state machines]
@@ -26,8 +27,9 @@ flowchart LR
     PORT --> DB[(SQLite current state)]
     PORT --> EVT[(Append-only events)]
     PORT --> QUEUE[(Durable dispatch queue)]
+    PORT --> EVIDENCE[(Evidence + acceptance packages)]
 
-    D --> ART[(Local artifact store)]
+    D -. later .-> ART[(Filesystem artifact store)]
     D -. later .-> GIT[Git/worktree adapter]
     D -. later .-> BROWSER[BrowserDriver layer]
 ```
@@ -40,7 +42,8 @@ Dashed components are outside Phase 0.
 | ---------------------- | --------------------------------------------------------------------- |
 | WorkItem current state | Domain state machine persisted by daemon                              |
 | Workflow transition    | Workflow engine after deterministic gate validation                   |
-| Human decision         | Recorded Decision created by authenticated command                    |
+| Human decision         | Recorded Decision created by authenticated, versioned command         |
+| Final acceptance       | Human-only acceptance command after durable Review and QA evidence    |
 | Provider/model output  | Artifact or proposal, never direct state mutation                     |
 | Realtime UI            | Projection of committed events, never source of truth                 |
 | Git code state         | Git; Loomrail references exact snapshots in later phases              |
@@ -124,8 +127,9 @@ supported replay window forces an explicit query refresh.
 - human/budget/acceptance rules;
 - deterministic, clock/ID injected, infrastructure-free tests.
 
-The M2 external interface is one pure `decideWorkItemCommand(command, context)` function. It owns the complete
-WorkItem transition matrix, version increments, leaf-execution rule and Event intent without knowing SQLite or HTTP.
+The deterministic interfaces include `decideWorkItemCommand`, workflow lifecycle decisions, and
+`decideResolveAcceptance`. They own WorkItem/run transitions, budgets, recovery and the owner-only `DONE` gate without
+knowing SQLite or HTTP.
 
 ### `packages/contracts`
 
@@ -141,8 +145,9 @@ WorkItem transition matrix, version increments, leaf-execution rule and Event in
 - command idempotency;
 - event sequence and durable dispatch queue.
 
-M2 exposes one deep `openLocalState()` module with `execute`, `query` and `close`. Migration checksums, online backup,
-prepared SQL, optimistic concurrency, idempotency receipts, current state and Event append stay behind that interface.
+`openLocalState()` remains the deep persistence module with `execute`, `query` and `close`. Migration checksums,
+online backup, prepared SQL, optimistic concurrency, idempotency receipts, append-only evidence, mutable versioned
+AcceptancePackages, current state and Event append stay behind that interface.
 
 ### `packages/workflow-engine`
 

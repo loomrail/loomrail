@@ -74,7 +74,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T05 | Stored XSS through WorkItem/artifact      | High     | output escaping, no raw HTML Markdown, CSP, size limits                                    | M3 persisted-text browser test and CSP                      |
 | T06 | Path traversal in fixture project         | High     | canonical path containment and no symlink escape                                           | M2 HTTP traversal plus directory/manifest symlink tests     |
 | T07 | Duplicate command/dispatch                | High     | command ID idempotency, transaction + unique constraints                                   | M2 concurrent retry and command-reuse tests                 |
-| T08 | False Done/approval tampering             | High     | state-machine gate, append-only Event/Decision, optimistic version                         | M2 transition/version/append-only tests; acceptance in M6   |
+| T08 | False Done/approval tampering             | High     | state-machine gate, append-only Event/Decision/evidence, optimistic version                | M2 transition tests; M6 Scenario D and acceptance replay    |
 | T09 | SQLite corruption/migration failure       | High     | WAL, short transactions, backup before migration, fail closed                              | M2 backup/checksum/reopen tests; full restore drill in M7   |
 | T10 | Sensitive values in logs/errors           | High     | structured allowlisted fields and pre-persistence redaction                                | M2 bootstrap/session canary redaction test                  |
 | T11 | Event/resource exhaustion                 | Medium   | payload limits, pagination, queue bounds, WS slow-consumer policy                          | M2 body/query bounds; WS flood/slow-consumer gate           |
@@ -82,8 +82,9 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T13 | Private data committed publicly           | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                        | automated public-tree scan; full history scan in M7         |
 | T14 | Theme/UI hides critical state             | Medium   | text/icon semantics, contrast, no color-only gates                                         | M1–M3 light/dark, keyboard and state browser checks         |
 
-`M6` and `M7` entries identify future capabilities. The persisted M3 Workbench is present; WebSocket remains a
-separate Phase 0 capability and T03 stays open until its own implementation and security tests land.
+`M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present;
+WebSocket remains a separate Phase 0 capability and T03 stays open until its own implementation and security tests
+land.
 
 ## 7. Future execution threats
 

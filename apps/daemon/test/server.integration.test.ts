@@ -156,7 +156,7 @@ describe("local daemon session and state boundary", () => {
     expect(response.status).toBe(401);
   });
 
-  it("consumes a bootstrap token once and reports the M4 mock workflow", async () => {
+  it("consumes a bootstrap token once and reports the M6 mock workflow", async () => {
     const token = bootstrapToken();
     daemon = await startDaemon({ bootstrapToken: token, logger: false });
     const session = await authenticate(daemon, token);
@@ -176,7 +176,7 @@ describe("local daemon session and state boundary", () => {
     expect(status.headers.get("access-control-allow-origin")).toBeNull();
     expect(await status.json()).toMatchObject({
       authenticated: true,
-      foundation: { phase: "phase-0", milestone: "M4", persistence: "sqlite" },
+      foundation: { phase: "phase-0", milestone: "M6", persistence: "sqlite" },
     });
   });
 
@@ -484,11 +484,11 @@ describe("local daemon session and state boundary", () => {
         }),
       },
     );
-    const completed = workflowSnapshotSchema.parse(await overrideResponse.json());
+    const awaitingAcceptance = workflowSnapshotSchema.parse(await overrideResponse.json());
     expect(overrideResponse.status).toBe(200);
-    expect(completed.run?.status).toBe("SUCCEEDED");
+    expect(awaitingAcceptance.run?.status).toBe("WAITING_HUMAN");
     expect(
-      completed.budgetPolicies.map(({ revision, maxEstimatedTokens }) => ({
+      awaitingAcceptance.budgetPolicies.map(({ revision, maxEstimatedTokens }) => ({
         revision,
         maxEstimatedTokens,
       })),
@@ -496,11 +496,50 @@ describe("local daemon session and state boundary", () => {
       { revision: 1, maxEstimatedTokens: 100 },
       { revision: 2, maxEstimatedTokens: 200 },
     ]);
+    expect(awaitingAcceptance.stageAttempts.at(-1)).toMatchObject({
+      stage: "ACCEPTANCE",
+      status: "WAITING_HUMAN",
+    });
+    expect(awaitingAcceptance.artifacts.map(({ kind }) => kind).sort()).toEqual([
+      "QA_REPORT",
+      "REVIEW_REPORT",
+    ]);
+    expect(awaitingAcceptance.acceptancePackage).toMatchObject({ status: "PENDING" });
+    expect([...(awaitingAcceptance.acceptancePackage?.artifactIds ?? [])].sort()).toEqual(
+      awaitingAcceptance.artifacts.map(({ id }) => id).sort(),
+    );
+    const acceptancePackage = awaitingAcceptance.acceptancePackage;
+    if (!acceptancePackage || !awaitingAcceptance.run) {
+      throw new Error("Expected a pending AcceptancePackage");
+    }
+    const acceptanceResponse = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/acceptance/${acceptancePackage.id}/resolve`,
+      {
+        method: "POST",
+        headers: mutationHeaders(daemon, secondSession),
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "accept-workflow-delivery",
+          expectedVersion: acceptancePackage.version,
+          expectedRunVersion: awaitingAcceptance.run.version,
+          action: "ACCEPT",
+          reason: "Synthetic acceptance evidence is sufficient.",
+        }),
+      },
+    );
+    const completed = workflowSnapshotSchema.parse(await acceptanceResponse.json());
+    expect(acceptanceResponse.status).toBe(200);
+    expect(completed.run?.status).toBe("SUCCEEDED");
+    expect(completed.acceptancePackage).toMatchObject({ status: "ACCEPTED", version: 2 });
     expect(completed.stageAttempts.at(-1)).toMatchObject({
-      stage: "IMPLEMENT",
-      attempt: 2,
+      stage: "ACCEPTANCE",
       status: "SUCCEEDED",
     });
+    const acceptedWorkItemResponse = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}`,
+      { headers: { cookie: secondSession.cookie } },
+    );
+    expect(await acceptedWorkItemResponse.json()).toMatchObject({ workItem: { state: "DONE" } });
 
     const repeated = await fetch(`${daemon.baseUrl}/api/v1/human-requests/${request.id}/answer`, {
       method: "POST",
@@ -515,6 +554,172 @@ describe("local daemon session and state boundary", () => {
     expect(repeated.status).toBe(409);
     expect(await repeated.json()).toMatchObject({
       error: { code: "HUMAN_REQUEST_ALREADY_RESOLVED" },
+    });
+  });
+
+  it("starts the current workflow after a legacy template version was persisted", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail legacy template "));
+    temporaryDirectories.push(temporaryDirectory);
+    const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    const localState = await openLocalState({ databasePath: stateDatabasePath });
+    try {
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "register-legacy-template-project",
+        correlationId: "correlation-register-legacy-template-project",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_FIXTURE_PROJECT",
+        payload: {
+          id: "project-legacy-template",
+          fixtureId: "web-app-a",
+          name: "Legacy template fixture",
+          repositoryPath: temporaryDirectory,
+        },
+      });
+      const created = localState.execute({
+        schemaVersion: 1,
+        commandId: "create-legacy-template-task",
+        correlationId: "correlation-create-legacy-template-task",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "CREATE_WORK_ITEM",
+        payload: {
+          projectId: "project-legacy-template",
+          parentId: null,
+          type: "TASK",
+          title: "Legacy template task",
+          description: "Persists the pre-M6 workflow template version.",
+          priority: "MEDIUM",
+          risk: "LOW",
+          acceptanceCriteria: [],
+        },
+      });
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "ready-legacy-template-task",
+        correlationId: "correlation-ready-legacy-template-task",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "MOVE_WORK_ITEM",
+        payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
+      });
+      const started = localState.execute({
+        schemaVersion: 1,
+        commandId: "start-legacy-template-task",
+        correlationId: "correlation-start-legacy-template-task",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_MOCK_PIPELINE",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedVersion: 2,
+          template: {
+            schemaVersion: 1,
+            id: "mock-delivery-v1",
+            version: 1,
+            name: "Mock delivery",
+            stages: [
+              { stage: "DISCOVERY", ordinal: 0 },
+              { stage: "PLAN", ordinal: 1 },
+            ],
+          },
+          budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+        },
+      });
+      if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "mark-legacy-template-task-started",
+        correlationId: "correlation-mark-legacy-template-task-started",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: started.dispatch.id },
+      });
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-legacy-template-task",
+        correlationId: "correlation-apply-legacy-template-task",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_MOCK_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: started.dispatch.id,
+          template: {
+            schemaVersion: 1,
+            id: "mock-delivery-v1",
+            version: 1,
+            name: "Mock delivery",
+            stages: [
+              { stage: "DISCOVERY", ordinal: 0 },
+              { stage: "PLAN", ordinal: 1 },
+            ],
+          },
+          outcome: {
+            type: "NEEDS_HUMAN",
+            request: {
+              kind: "SINGLE_CHOICE",
+              blocking: true,
+              title: "Choose the discovery depth",
+              context: "A durable decision is required before discovery can continue.",
+              recommendation: "Use the focused pass.",
+              options: [
+                {
+                  id: "focused-pass",
+                  label: "Focused pass",
+                  consequence: "Proceed with a bounded discovery.",
+                  recommended: true,
+                },
+              ],
+              allowOther: true,
+            },
+          },
+        },
+      });
+    } finally {
+      localState.close();
+    }
+
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, logger: false, stateDatabasePath });
+    const session = await authenticate(daemon, token);
+    const headers = mutationHeaders(daemon, session);
+    const createResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "create-current-template-task",
+        projectId: "project-legacy-template",
+        type: "TASK",
+        title: "Current template task",
+      }),
+    });
+    const created = stateCommandResultSchema.parse(await createResponse.json());
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    await fetch(`${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/move`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "ready-current-template-task",
+        expectedVersion: 1,
+        targetState: "READY",
+      }),
+    });
+    const startResponse = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/pipeline/start`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "start-current-template-task",
+          expectedVersion: 2,
+        }),
+      },
+    );
+
+    const startBody: unknown = await startResponse.json();
+    expect(startResponse.status, JSON.stringify(startBody)).toBe(200);
+    expect(workflowSnapshotSchema.parse(startBody)).toMatchObject({
+      run: { workflowVersion: mockDeliveryTemplate.version, status: "WAITING_HUMAN" },
     });
   });
 

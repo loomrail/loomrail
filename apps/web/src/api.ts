@@ -7,6 +7,8 @@ import {
   workItemsResponseSchema,
   workflowSnapshotSchema,
   type FixtureProjectId,
+  type AcceptanceAction,
+  type AcceptancePackage,
   type HumanRequest,
   type HumanRequestAnswer,
   type PipelineRun,
@@ -290,6 +292,29 @@ export const approveBudgetOverride = async (
         commandId: crypto.randomUUID(),
         expectedVersion: run.version,
         maxEstimatedTokens,
+      }),
+    },
+  );
+
+export const resolveAcceptance = async (
+  workItemId: string,
+  run: PipelineRun,
+  acceptancePackage: AcceptancePackage,
+  action: AcceptanceAction,
+  reason: string | null = null,
+) =>
+  requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(workItemId)}/acceptance/${encodeURIComponent(acceptancePackage.id)}/resolve`,
+    workflowSnapshotSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedVersion: acceptancePackage.version,
+        expectedRunVersion: run.version,
+        action,
+        reason,
       }),
     },
   );

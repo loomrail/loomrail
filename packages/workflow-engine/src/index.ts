@@ -25,12 +25,15 @@ export const validateWorkflowTemplate = (input: unknown): WorkflowTemplate => {
 export const mockDeliveryTemplate = validateWorkflowTemplate({
   schemaVersion: 1,
   id: "mock-delivery-v1",
-  version: 1,
+  version: 2,
   name: "Mock delivery",
   stages: [
     { stage: "DISCOVERY", ordinal: 0 },
     { stage: "PLAN", ordinal: 1 },
     { stage: "IMPLEMENT", ordinal: 2 },
+    { stage: "REVIEW", ordinal: 3 },
+    { stage: "QA", ordinal: 4 },
+    { stage: "ACCEPTANCE", ordinal: 5 },
   ],
 });
 

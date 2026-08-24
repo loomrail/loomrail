@@ -8,6 +8,9 @@ import {
   utcTimestampSchema,
 } from "./shared.js";
 import {
+  acceptanceRequestedEventSchema,
+  acceptanceResolvedEventSchema,
+  acceptanceResolvedResultSchema,
   approveBudgetOverrideCommandSchema,
   answerHumanRequestCommandSchema,
   applyMockProviderOutcomeCommandSchema,
@@ -18,6 +21,7 @@ import {
   humanRequestAnsweredResultSchema,
   humanRequestOpenedEventSchema,
   humanRequestResolvedEventSchema,
+  evidenceArtifactRecordedEventSchema,
   markWorkflowDispatchStartedCommandSchema,
   mockProviderOutcomeAppliedResultSchema,
   pausePipelineCommandSchema,
@@ -30,6 +34,7 @@ import {
   pipelineStartedResultSchema,
   reconcileWorkflowsCommandSchema,
   recoveryReportCreatedEventSchema,
+  resolveAcceptanceCommandSchema,
   resumePipelineCommandSchema,
   stageAttemptChangedEventSchema,
   startMockPipelineCommandSchema,
@@ -164,6 +169,9 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   pipelineCancelledEventSchema,
   budgetOverrideApprovedEventSchema,
   recoveryReportCreatedEventSchema,
+  evidenceArtifactRecordedEventSchema,
+  acceptanceRequestedEventSchema,
+  acceptanceResolvedEventSchema,
   pipelineCompletedEventSchema,
 ]);
 
@@ -251,6 +259,7 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   cancelPipelineCommandSchema,
   approveBudgetOverrideCommandSchema,
   reconcileWorkflowsCommandSchema,
+  resolveAcceptanceCommandSchema,
 ]);
 
 const commandResultBaseSchema = z
@@ -296,6 +305,7 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   pipelineControlAppliedResultSchema,
   budgetOverrideApprovedResultSchema,
   workflowsReconciledResultSchema,
+  acceptanceResolvedResultSchema,
 ]);
 
 export const registerFixtureProjectRequestSchema = z

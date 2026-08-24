@@ -15,13 +15,15 @@
 | Attention Inbox  | Проекция открытых HumanRequest, требующих внимания человека                                | Отдельный источник истины                        |
 | ProviderAdapter  | Capability-checked граница start/resume/interrupt/events/usage для конкретного provider    | Прямая shell-интеграция из браузера              |
 
-## M4 relationship
+## M6 relationship
 
 ```text
 WorkItem
   └── PipelineRun
         ├── StageAttempt
         │     └── WorkflowDispatch
+        ├── EvidenceArtifact (Review / QA)
+        ├── AcceptancePackage
         └── HumanRequest
               └── Decision
 ```
@@ -29,3 +31,7 @@ WorkItem
 Blocking HumanRequest переводит только связанный WorkItem в `BLOCKED` и StageAttempt в `WAITING_HUMAN`.
 `Answer & resume` атомарно сохраняет Decision, закрывает HumanRequest и создаёт resume WorkflowDispatch. Независимые
 WorkItem не меняются.
+
+Acceptance — отдельный owner gate: обычный ответ на HumanRequest и generic pipeline controls его не обходят. Только
+versioned `Accept`, `Return to work` или `Reject` закрывают AcceptancePackage; лишь `Accept` переводит WorkItem в
+`DONE`. Review/QA evidence остаётся append-only, AcceptancePackage меняется только optimistic-versioned transition.

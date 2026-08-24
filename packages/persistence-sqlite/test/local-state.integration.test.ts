@@ -220,6 +220,167 @@ describe("SQLite local state", () => {
     expect(apiItems.type === "WORK_ITEMS" ? apiItems.workItems : []).toHaveLength(1);
   });
 
+  it("persists Review and QA evidence and gates Done on owner acceptance", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-acceptance-item"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-acceptance-item", created.workItem.id, 1, "READY"));
+    const acceptanceTemplate: StartMockPipelineCommand["payload"]["template"] = {
+      schemaVersion: 1,
+      id: "acceptance-fixture-v1",
+      version: 1,
+      name: "Acceptance fixture",
+      stages: [
+        { stage: "REVIEW", ordinal: 0 },
+        { stage: "QA", ordinal: 1 },
+        { stage: "ACCEPTANCE", ordinal: 2 },
+      ],
+    };
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "start-acceptance-workflow",
+      correlationId: "correlation-start-acceptance-workflow",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: acceptanceTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+
+    const applyNext = (outcome: ApplyMockProviderOutcomeCommand["payload"]["outcome"]): void => {
+      const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
+      const dispatch = pending.dispatches[0];
+      if (!dispatch) throw new Error("Expected a pending dispatch");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `mark-${dispatch.id}`,
+        correlationId: `correlation-mark-${dispatch.id}`,
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: dispatch.id },
+      });
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `apply-${dispatch.id}`,
+        correlationId: `correlation-apply-${dispatch.id}`,
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_MOCK_PROVIDER_OUTCOME",
+        payload: { dispatchId: dispatch.id, template: acceptanceTemplate, outcome },
+      });
+    };
+
+    applyNext({
+      type: "COMPLETED",
+      summary: "Review passed.",
+      artifacts: [
+        {
+          kind: "REVIEW_REPORT",
+          title: "Review report",
+          summary: "Review passed.",
+          checks: ["Contract review passed."],
+        },
+      ],
+    });
+    applyNext({
+      type: "COMPLETED",
+      summary: "QA passed.",
+      artifacts: [
+        {
+          kind: "QA_REPORT",
+          title: "QA report",
+          summary: "QA passed.",
+          checks: ["Scenario D passed."],
+        },
+      ],
+    });
+    applyNext({
+      type: "READY_FOR_ACCEPTANCE",
+      releaseNote: "The bounded fixture is ready for owner acceptance.",
+      verifyInstructions: ["Run pnpm verify."],
+    });
+
+    const pendingSnapshot = localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    if (
+      pendingSnapshot.type !== "WORKFLOW_SNAPSHOT" ||
+      !pendingSnapshot.snapshot.run ||
+      !pendingSnapshot.snapshot.acceptancePackage
+    ) {
+      throw new Error("Expected a pending acceptance snapshot");
+    }
+    expect(pendingSnapshot.snapshot).toMatchObject({
+      run: { status: "WAITING_HUMAN" },
+      artifacts: [{ kind: "REVIEW_REPORT" }, { kind: "QA_REPORT" }],
+      acceptancePackage: { status: "PENDING" },
+    });
+    localState.close();
+    state = undefined;
+    const acceptanceState = await open();
+    const restored = acceptanceState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    if (
+      restored.type !== "WORKFLOW_SNAPSHOT" ||
+      !restored.snapshot.run ||
+      !restored.snapshot.acceptancePackage
+    ) {
+      throw new Error("Expected the acceptance snapshot after restart");
+    }
+    expect(restored.snapshot.artifacts).toHaveLength(2);
+    const acceptancePackage = restored.snapshot.acceptancePackage;
+    const acceptanceCommand = {
+      schemaVersion: 1,
+      commandId: "accept-persisted-package",
+      correlationId: "correlation-accept-persisted-package",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "RESOLVE_ACCEPTANCE",
+      payload: {
+        acceptancePackageId: acceptancePackage.id,
+        expectedVersion: acceptancePackage.version,
+        expectedRunVersion: restored.snapshot.run.version,
+        action: "ACCEPT",
+        reason: "Evidence accepted.",
+      },
+    } as const;
+    const accepted = acceptanceState.execute(acceptanceCommand);
+    expect(accepted).toMatchObject({
+      type: "ACCEPTANCE_RESOLVED",
+      acceptancePackage: { status: "ACCEPTED" },
+      run: { status: "SUCCEEDED" },
+    });
+    expect(acceptanceState.query({ type: "GET_WORK_ITEM", workItemId: created.workItem.id })).toMatchObject({
+      workItem: { state: "DONE" },
+    });
+    const eventCount = acceptanceState.query({
+      type: "LIST_EVENTS",
+      aggregateId: created.workItem.id,
+    });
+    expect(acceptanceState.execute(acceptanceCommand)).toMatchObject({
+      type: "ACCEPTANCE_RESOLVED",
+      replayed: true,
+    });
+    const replayedEventCount = acceptanceState.query({
+      type: "LIST_EVENTS",
+      aggregateId: created.workItem.id,
+    });
+    expect(replayedEventCount.type === "EVENTS" ? replayedEventCount.events.length : -1).toBe(
+      eventCount.type === "EVENTS" ? eventCount.events.length : -2,
+    );
+    acceptanceState.close();
+    state = undefined;
+    const raw = new DatabaseSync(databasePath);
+    expect(() => raw.prepare("UPDATE evidence_artifacts SET title = ?").run("Tampered")).toThrow();
+    raw.close();
+  });
+
   it("creates a backup before migrating an existing non-empty database", async () => {
     const legacy = new DatabaseSync(databasePath);
     legacy.exec("CREATE TABLE legacy_marker (value TEXT NOT NULL) STRICT");
@@ -227,7 +388,7 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);
@@ -337,6 +498,37 @@ describe("SQLite local state", () => {
       type: "MOCK_PROVIDER_OUTCOME_APPLIED",
       replayed: true,
       usageRecords: [],
+    });
+    migrated.close();
+    state = undefined;
+
+    const beforeM6 = new DatabaseSync(databasePath);
+    beforeM6.exec("DROP TABLE acceptance_packages");
+    beforeM6.exec("DROP TABLE evidence_artifacts");
+    beforeM6.exec("DROP TRIGGER commands_are_append_only_update");
+    beforeM6.exec(`
+      UPDATE commands
+      SET result_json = json_remove(result_json, '$.artifacts', '$.acceptancePackage')
+      WHERE command_type = 'APPLY_MOCK_PROVIDER_OUTCOME'
+    `);
+    beforeM6.exec(`
+      CREATE TRIGGER commands_are_append_only_update
+      BEFORE UPDATE ON commands
+      BEGIN
+        SELECT RAISE(ABORT, 'commands are append-only');
+      END;
+    `);
+    beforeM6.prepare("DELETE FROM schema_migrations WHERE version = 5").run();
+    beforeM6.close();
+
+    const migratedM6 = await open();
+    expect(migratedM6.startup.appliedMigrations).toEqual([5]);
+    expect(migratedM6.execute(applyCommand)).toMatchObject({
+      type: "MOCK_PROVIDER_OUTCOME_APPLIED",
+      replayed: true,
+      usageRecords: [],
+      artifacts: [],
+      acceptancePackage: null,
     });
   });
 

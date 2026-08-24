@@ -42,7 +42,51 @@ const complete = (invocation: ProviderInvocation) =>
         ? "Discovery resumed from the recorded human decision."
         : invocation.stageAttempt.stage === "PLAN"
           ? "The bounded mock plan was produced from the accepted discovery direction."
-          : "The mock implementation completed inside the approved budget revision.",
+          : invocation.stageAttempt.stage === "IMPLEMENT"
+            ? "The mock implementation completed inside the approved budget revision."
+            : invocation.stageAttempt.stage === "REVIEW"
+              ? "Independent mock review completed without open findings."
+              : "Deterministic mock browser QA completed without regressions.",
+    ...(invocation.stageAttempt.stage === "REVIEW"
+      ? {
+          artifacts: [
+            {
+              kind: "REVIEW_REPORT",
+              title: "Independent mock review",
+              summary:
+                "The synthetic reviewer found no blocking correctness, security, or maintainability issues.",
+              checks: ["Requirements traced", "No blocking findings", "Regression scope recorded"],
+            },
+          ],
+        }
+      : invocation.stageAttempt.stage === "QA"
+        ? {
+            artifacts: [
+              {
+                kind: "QA_REPORT",
+                title: "Deterministic mock QA",
+                summary:
+                  "The synthetic browser and runtime checks passed for the bounded acceptance fixture.",
+                checks: [
+                  "Primary journey passed",
+                  "Desktop and mobile checked",
+                  "No application console errors",
+                ],
+              },
+            ],
+          }
+        : {}),
+  });
+
+const requestAcceptance = () =>
+  mockProviderOutcomeSchema.parse({
+    type: "READY_FOR_ACCEPTANCE",
+    releaseNote: "Completes the deterministic mock delivery flow with budget, review, QA, and owner control.",
+    verifyInstructions: [
+      "Run pnpm verify.",
+      "Run pnpm test:e2e.",
+      "Inspect the acceptance evidence in Loomrail.",
+    ],
   });
 
 const exhaustInitialImplementationBudget = () =>
@@ -59,6 +103,7 @@ const outcomeFor = (invocation: ProviderInvocation) => {
   if (invocation.stageAttempt.stage === "IMPLEMENT" && invocation.stageAttempt.attempt === 1) {
     return exhaustInitialImplementationBudget();
   }
+  if (invocation.stageAttempt.stage === "ACCEPTANCE") return requestAcceptance();
   return complete(invocation);
 };
 

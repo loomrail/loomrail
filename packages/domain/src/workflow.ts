@@ -1,4 +1,7 @@
 import type {
+  AcceptancePackage,
+  AcceptanceRequestedEvent,
+  AcceptanceResolvedEvent,
   AnswerHumanRequestCommand,
   ApplyMockProviderOutcomeCommand,
   ApproveBudgetOverrideCommand,
@@ -7,6 +10,8 @@ import type {
   BudgetThresholdReachedEvent,
   CancelPipelineCommand,
   Decision,
+  EvidenceArtifact,
+  EvidenceArtifactRecordedEvent,
   HumanRequest,
   HumanRequestAnswer,
   HumanRequestResolvedEvent,
@@ -20,6 +25,7 @@ import type {
   PipelineStartedEvent,
   RecoveryReport,
   RecoveryReportCreatedEvent,
+  ResolveAcceptanceCommand,
   ResumePipelineCommand,
   StageAttempt,
   StageAttemptChangedEvent,
@@ -46,7 +52,10 @@ export type WorkflowDomainErrorCode =
   | "BUDGET_OVERRIDE_INVALID"
   | "HUMAN_REQUEST_NOT_FOUND"
   | "HUMAN_REQUEST_ALREADY_RESOLVED"
-  | "HUMAN_REQUEST_INVALID_ANSWER";
+  | "HUMAN_REQUEST_INVALID_ANSWER"
+  | "ACCEPTANCE_NOT_FOUND"
+  | "ACCEPTANCE_NOT_READY"
+  | "ACCEPTANCE_ALREADY_RESOLVED";
 
 export class WorkflowDomainError extends Error {
   readonly code: WorkflowDomainErrorCode;
@@ -92,12 +101,16 @@ export type ApplyProviderOutcomeDecision = {
   nextStageAttempt: StageAttempt | null;
   nextDispatch: WorkflowDispatch | null;
   usageRecords: UsageRecord[];
+  artifacts: EvidenceArtifact[];
+  acceptancePackage: AcceptancePackage | null;
   events: (
     | EventIntent<StageAttemptChangedEvent>
     | EventIntent<import("@loomrail/contracts").HumanRequestOpenedEvent>
     | EventIntent<UsageRecordedEvent>
     | EventIntent<BudgetThresholdReachedEvent>
     | EventIntent<PipelinePausedEvent>
+    | EventIntent<EvidenceArtifactRecordedEvent>
+    | EventIntent<AcceptanceRequestedEvent>
     | EventIntent<PipelineCompletedEvent>
   )[];
 };
@@ -141,6 +154,21 @@ export type RecoveryDecision = {
   dispatch: WorkflowDispatch;
   report: RecoveryReport;
   events: EventIntent<RecoveryReportCreatedEvent>[];
+};
+
+export type AcceptanceResolutionDecision = {
+  action: ResolveAcceptanceCommand["payload"]["action"];
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  acceptancePackage: AcceptancePackage;
+  request: HumanRequest;
+  decision: Decision;
+  events: (
+    | EventIntent<HumanRequestResolvedEvent>
+    | EventIntent<AcceptanceResolvedEvent>
+    | EventIntent<PipelineCompletedEvent>
+  )[];
 };
 
 export type WorkflowIds = {
@@ -479,6 +507,8 @@ const budgetOutcome = (
     nextStageAttempt: null,
     nextDispatch: null,
     usageRecords,
+    artifacts: [],
+    acceptancePackage: null,
     events,
   };
 };
@@ -494,7 +524,10 @@ export const decideApplyMockProviderOutcome = (
     budgetPolicy: BudgetPolicy | null;
     existingUsageRecords: readonly UsageRecord[];
     usageRecordIds: readonly string[];
+    existingArtifacts?: readonly EvidenceArtifact[];
+    artifactIds?: readonly string[];
     humanRequestId?: string;
+    acceptancePackageId?: string;
     nextStageAttemptId?: string;
     nextDispatchId?: string;
   },
@@ -568,12 +601,187 @@ export const decideApplyMockProviderOutcome = (
       nextStageAttempt: null,
       nextDispatch: null,
       usageRecords: [],
+      artifacts: [],
+      acceptancePackage: null,
       events: [
         { type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt, previousStatus } },
         { type: "HUMAN_REQUEST_OPENED", data: { request } },
       ],
     };
   }
+
+  if (command.payload.outcome.type === "READY_FOR_ACCEPTANCE") {
+    const acceptanceOutcome = command.payload.outcome;
+    if (context.stageAttempt.stage !== "ACCEPTANCE") {
+      throw new WorkflowDomainError(
+        "WORKFLOW_STAGE_MISMATCH",
+        "Only the Acceptance stage can request owner acceptance",
+      );
+    }
+    if (!context.humanRequestId || !context.acceptancePackageId) {
+      throw new WorkflowDomainError("ACCEPTANCE_NOT_FOUND", "Durable acceptance IDs were not supplied");
+    }
+    const reviewArtifact = context.existingArtifacts?.find(({ kind }) => kind === "REVIEW_REPORT");
+    const qaArtifact = context.existingArtifacts?.find(({ kind }) => kind === "QA_REPORT");
+    if (!reviewArtifact || !qaArtifact) {
+      throw new WorkflowDomainError(
+        "ACCEPTANCE_NOT_READY",
+        "Owner acceptance requires both Review and QA evidence",
+      );
+    }
+    const stageAttempt: StageAttempt = {
+      ...context.stageAttempt,
+      status: "WAITING_HUMAN",
+      version: context.stageAttempt.version + 1,
+    };
+    const run: PipelineRun = {
+      ...context.run,
+      status: "WAITING_HUMAN",
+      version: context.run.version + 1,
+      updatedAt: context.now,
+    };
+    const workItem: WorkItem = {
+      ...context.workItem,
+      state: "BLOCKED",
+      currentStage: "ACCEPTANCE",
+      version: context.workItem.version + 1,
+      updatedAt: context.now,
+    };
+    const request: HumanRequest = {
+      schemaVersion: 1,
+      id: context.humanRequestId,
+      projectId: workItem.projectId,
+      workItemId: workItem.id,
+      stageAttemptId: stageAttempt.id,
+      kind: "SINGLE_CHOICE",
+      blocking: true,
+      title: "Review the acceptance package",
+      context: "Only the owner can accept, return, or reject this completed mock delivery.",
+      recommendation: "Accept when the criterion matrix and synthetic evidence are sufficient.",
+      options: [
+        {
+          id: "accept",
+          label: "Accept",
+          consequence: "Record owner acceptance and move the WorkItem to Done.",
+          recommended: true,
+        },
+        {
+          id: "return-to-work",
+          label: "Return to work",
+          consequence: "Close this run without acceptance and keep the WorkItem blocked.",
+          recommended: false,
+        },
+        {
+          id: "reject",
+          label: "Reject",
+          consequence: "Reject this package and keep the WorkItem blocked.",
+          recommended: false,
+        },
+      ],
+      allowOther: false,
+      status: "OPEN",
+      version: 1,
+      createdAt: context.now,
+      resolvedAt: null,
+    };
+    const artifactIds = [reviewArtifact.id, qaArtifact.id];
+    const acceptancePackage: AcceptancePackage = {
+      schemaVersion: 1,
+      id: context.acceptancePackageId,
+      projectId: workItem.projectId,
+      workItemId: workItem.id,
+      pipelineRunId: run.id,
+      stageAttemptId: stageAttempt.id,
+      humanRequestId: request.id,
+      status: "PENDING",
+      criteria: workItem.acceptanceCriteria.map((criterion, index) => ({
+        criterion,
+        implementation: "The deterministic mock implementation completed under the approved budget policy.",
+        reviewArtifactId: reviewArtifact.id,
+        qaArtifactId: qaArtifact.id,
+        verification:
+          acceptanceOutcome.verifyInstructions.at(index) ??
+          acceptanceOutcome.verifyInstructions[0] ??
+          "Run the deterministic verification suite.",
+        knownRisk: null,
+      })),
+      artifactIds,
+      releaseNote: acceptanceOutcome.releaseNote,
+      verifyInstructions: [...acceptanceOutcome.verifyInstructions],
+      version: 1,
+      createdAt: context.now,
+      resolvedAt: null,
+      resolvedBy: null,
+      resolutionReason: null,
+    };
+    return {
+      workItem,
+      run,
+      stageAttempt,
+      dispatch,
+      request,
+      nextStageAttempt: null,
+      nextDispatch: null,
+      usageRecords: [],
+      artifacts: [],
+      acceptancePackage,
+      events: [
+        { type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt, previousStatus } },
+        { type: "HUMAN_REQUEST_OPENED", data: { request } },
+        { type: "ACCEPTANCE_REQUESTED", data: { acceptancePackage, request, run, stageAttempt } },
+      ],
+    };
+  }
+
+  const artifactDrafts = command.payload.outcome.artifacts ?? [];
+  const expectedArtifactKind =
+    context.stageAttempt.stage === "REVIEW"
+      ? "REVIEW_REPORT"
+      : context.stageAttempt.stage === "QA"
+        ? "QA_REPORT"
+        : null;
+  if (
+    expectedArtifactKind &&
+    (artifactDrafts.length !== 1 || artifactDrafts[0]?.kind !== expectedArtifactKind)
+  ) {
+    throw new WorkflowDomainError(
+      "ACCEPTANCE_NOT_READY",
+      `${context.stageAttempt.stage} must produce its typed evidence artifact`,
+    );
+  }
+  if (!expectedArtifactKind && artifactDrafts.length > 0) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_STAGE_MISMATCH",
+      "Only Review and QA stages can produce acceptance evidence",
+    );
+  }
+  const artifactIds = context.artifactIds ?? [];
+  if (artifactIds.length !== artifactDrafts.length) {
+    throw new WorkflowDomainError("ACCEPTANCE_NOT_FOUND", "Durable EvidenceArtifact IDs were not supplied");
+  }
+  const artifacts = artifactDrafts.map((draft, index): EvidenceArtifact => {
+    const id = artifactIds.at(index);
+    if (!id || (context.stageAttempt.stage !== "REVIEW" && context.stageAttempt.stage !== "QA")) {
+      throw new WorkflowDomainError("ACCEPTANCE_NOT_FOUND", "Durable EvidenceArtifact ID was not supplied");
+    }
+    return {
+      schemaVersion: 1,
+      id,
+      projectId: context.workItem.projectId,
+      workItemId: context.workItem.id,
+      pipelineRunId: context.run.id,
+      stageAttemptId: context.stageAttempt.id,
+      stage: context.stageAttempt.stage,
+      status: "PASSED",
+      provider: "MOCK",
+      createdAt: context.now,
+      ...draft,
+    };
+  });
+  const artifactEvents: ApplyProviderOutcomeDecision["events"] = artifacts.map((artifact) => ({
+    type: "EVIDENCE_ARTIFACT_RECORDED",
+    data: { artifact },
+  }));
 
   const completedStage: StageAttempt = {
     ...context.stageAttempt,
@@ -599,7 +807,10 @@ export const decideApplyMockProviderOutcome = (
       nextStageAttempt: null,
       nextDispatch: null,
       usageRecords: [],
+      artifacts,
+      acceptancePackage: null,
       events: [
+        ...artifactEvents,
         { type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt: completedStage, previousStatus } },
         { type: "PIPELINE_COMPLETED", data: { run, stageAttempt: completedStage } },
       ],
@@ -657,7 +868,12 @@ export const decideApplyMockProviderOutcome = (
     nextStageAttempt,
     nextDispatch,
     usageRecords: [],
-    events: [{ type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt: completedStage, previousStatus } }],
+    artifacts,
+    acceptancePackage: null,
+    events: [
+      ...artifactEvents,
+      { type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt: completedStage, previousStatus } },
+    ],
   };
 };
 
@@ -726,6 +942,12 @@ export const decideAnswerHumanRequest = (
     throw new WorkflowDomainError(
       "WORKFLOW_STAGE_MISMATCH",
       "The HumanRequest is not attached to the current waiting workflow stage",
+    );
+  }
+  if (context.stageAttempt.stage === "ACCEPTANCE") {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "Final acceptance must be accepted, returned, or rejected through its AcceptancePackage",
     );
   }
   validateAnswer(context.request, command.payload.answer);
@@ -900,10 +1122,17 @@ export const decideCancelPipeline = (
     run: PipelineRun;
     stageAttempt: StageAttempt;
     pendingDispatch: WorkflowDispatch | null;
+    acceptancePending?: boolean;
   },
 ): PipelineControlDecision => {
   verifyRunVersion(context.run, command.payload.pipelineRunId, command.payload.expectedVersion);
   requireCurrentStage(context.run, context.stageAttempt);
+  if (context.acceptancePending) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "A pending AcceptancePackage must be accepted, returned, or rejected explicitly",
+    );
+  }
   if (!activeRunStatuses.has(context.run.status)) {
     throw new WorkflowDomainError("WORKFLOW_CONTROL_NOT_ALLOWED", "A terminal pipeline cannot be cancelled", {
       status: context.run.status,
@@ -1091,5 +1320,138 @@ export const decideRecoverInterruptedWorkflow = (context: {
     dispatch,
     report,
     events: [{ type: "RECOVERY_REPORT_CREATED", data: { report, run, stageAttempt } }],
+  };
+};
+
+export const decideResolveAcceptance = (
+  command: ResolveAcceptanceCommand,
+  context: {
+    now: string;
+    workItem: WorkItem;
+    run: PipelineRun;
+    stageAttempt: StageAttempt;
+    acceptancePackage: AcceptancePackage;
+    request: HumanRequest;
+    decisionId: string;
+  },
+): AcceptanceResolutionDecision => {
+  if (command.actor.type !== "HUMAN") {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "Only a human owner can resolve final acceptance",
+    );
+  }
+  verifyRunVersion(context.run, context.run.id, command.payload.expectedRunVersion);
+  requireCurrentStage(context.run, context.stageAttempt);
+  if (
+    context.acceptancePackage.id !== command.payload.acceptancePackageId ||
+    context.acceptancePackage.pipelineRunId !== context.run.id
+  ) {
+    throw new WorkflowDomainError("ACCEPTANCE_NOT_FOUND", "The AcceptancePackage does not exist");
+  }
+  if (context.acceptancePackage.version !== command.payload.expectedVersion) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_VERSION_CONFLICT",
+      "The AcceptancePackage changed after it was loaded",
+      { expectedVersion: command.payload.expectedVersion, actualVersion: context.acceptancePackage.version },
+    );
+  }
+  if (
+    context.acceptancePackage.status !== "PENDING" ||
+    context.request.status !== "OPEN" ||
+    context.request.id !== context.acceptancePackage.humanRequestId ||
+    context.run.status !== "WAITING_HUMAN" ||
+    context.stageAttempt.status !== "WAITING_HUMAN" ||
+    context.stageAttempt.stage !== "ACCEPTANCE"
+  ) {
+    throw new WorkflowDomainError(
+      "ACCEPTANCE_ALREADY_RESOLVED",
+      "This AcceptancePackage is no longer awaiting an owner decision",
+    );
+  }
+
+  const resolvedStatus =
+    command.payload.action === "ACCEPT"
+      ? "ACCEPTED"
+      : command.payload.action === "RETURN_TO_WORK"
+        ? "RETURNED"
+        : "REJECTED";
+  const terminalRunStatus = command.payload.action === "ACCEPT" ? "SUCCEEDED" : "FAILED";
+  const optionId =
+    command.payload.action === "ACCEPT"
+      ? "accept"
+      : command.payload.action === "RETURN_TO_WORK"
+        ? "return-to-work"
+        : "reject";
+  const request: HumanRequest = {
+    ...context.request,
+    status: "RESOLVED",
+    version: context.request.version + 1,
+    resolvedAt: context.now,
+  };
+  const decision: Decision = {
+    schemaVersion: 1,
+    id: context.decisionId,
+    projectId: context.workItem.projectId,
+    workItemId: context.workItem.id,
+    humanRequestId: request.id,
+    answer: { type: "OPTION", optionIds: [optionId] },
+    actor: command.actor,
+    reason: command.payload.reason,
+    createdAt: context.now,
+  };
+  const acceptancePackage: AcceptancePackage = {
+    ...context.acceptancePackage,
+    status: resolvedStatus,
+    version: context.acceptancePackage.version + 1,
+    resolvedAt: context.now,
+    resolvedBy: command.actor,
+    resolutionReason: command.payload.reason,
+  };
+  const stageAttempt: StageAttempt = {
+    ...context.stageAttempt,
+    status: command.payload.action === "ACCEPT" ? "SUCCEEDED" : "FAILED",
+    version: context.stageAttempt.version + 1,
+    finishedAt: context.now,
+    failureCode:
+      command.payload.action === "ACCEPT"
+        ? null
+        : command.payload.action === "RETURN_TO_WORK"
+          ? "ACCEPTANCE_RETURNED"
+          : "ACCEPTANCE_REJECTED",
+  };
+  const run: PipelineRun = {
+    ...context.run,
+    status: terminalRunStatus,
+    version: context.run.version + 1,
+    updatedAt: context.now,
+    finishedAt: context.now,
+  };
+  const workItem: WorkItem = {
+    ...context.workItem,
+    state: command.payload.action === "ACCEPT" ? "DONE" : "BLOCKED",
+    currentStage: "ACCEPTANCE",
+    version: context.workItem.version + 1,
+    updatedAt: context.now,
+  };
+  const events: AcceptanceResolutionDecision["events"] = [
+    { type: "HUMAN_REQUEST_RESOLVED", data: { request, decision } },
+    {
+      type: "ACCEPTANCE_RESOLVED",
+      data: { action: command.payload.action, acceptancePackage, request, decision, run, stageAttempt },
+    },
+  ];
+  if (command.payload.action === "ACCEPT") {
+    events.push({ type: "PIPELINE_COMPLETED", data: { run, stageAttempt } });
+  }
+  return {
+    action: command.payload.action,
+    workItem,
+    run,
+    stageAttempt,
+    acceptancePackage,
+    request,
+    decision,
+    events,
   };
 };

@@ -4,9 +4,11 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import {
+  acceptancePackageSchema,
   budgetPolicySchema,
   decisionSchema,
   domainEventSchema,
+  evidenceArtifactSchema,
   humanRequestSchema,
   humanRequestStatusSchema,
   opaqueIdSchema,
@@ -24,8 +26,10 @@ import {
   workItemStateSchema,
   type BudgetPolicy,
   type Actor,
+  type AcceptancePackage,
   type Decision,
   type DomainEvent,
+  type EvidenceArtifact,
   type HumanRequest,
   type PipelineRun,
   type Project,
@@ -48,12 +52,14 @@ import {
   decideMarkWorkflowDispatchStarted,
   decidePausePipeline,
   decideRecoverInterruptedWorkflow,
+  decideResolveAcceptance,
   decideResumePipeline,
   decideStartMockPipeline,
   decideWorkItemCommand,
   WorkflowDomainError,
   WorkItemDomainError,
   type BudgetOverrideDecision,
+  type AcceptanceResolutionDecision,
   type AnswerHumanRequestDecision,
   type ApplyProviderOutcomeDecision,
   type MarkDispatchStartedDecision,
@@ -186,6 +192,44 @@ const recoveryReportRowSchema = z.object({
   recovered_status: z.string(),
   reason: z.string(),
   created_at: z.string(),
+});
+
+const evidenceArtifactRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  stage_attempt_id: z.string(),
+  stage: z.string(),
+  kind: z.string(),
+  status: z.string(),
+  provider: z.string(),
+  title: z.string(),
+  summary: z.string(),
+  checks_json: z.string(),
+  created_at: z.string(),
+});
+
+const acceptancePackageRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  stage_attempt_id: z.string(),
+  human_request_id: z.string(),
+  status: z.string(),
+  criteria_json: z.string(),
+  artifact_ids_json: z.string(),
+  release_note: z.string(),
+  verify_instructions_json: z.string(),
+  version: z.number().int(),
+  created_at: z.string(),
+  resolved_at: z.string().nullable(),
+  resolved_by_type: z.string().nullable(),
+  resolved_by_id: z.string().nullable(),
+  resolution_reason: z.string().nullable(),
 });
 
 const stageAttemptRowSchema = z.object({
@@ -346,6 +390,52 @@ const recoveryReportFromRow = (value: unknown): RecoveryReport => {
     recoveredStatus: row.recovered_status,
     reason: row.reason,
     createdAt: row.created_at,
+  });
+};
+
+const evidenceArtifactFromRow = (value: unknown): EvidenceArtifact => {
+  const row = evidenceArtifactRowSchema.parse(value);
+  return evidenceArtifactSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    stageAttemptId: row.stage_attempt_id,
+    stage: row.stage,
+    kind: row.kind,
+    status: row.status,
+    provider: row.provider,
+    title: row.title,
+    summary: row.summary,
+    checks: parseJson(row.checks_json),
+    createdAt: row.created_at,
+  });
+};
+
+const acceptancePackageFromRow = (value: unknown): AcceptancePackage => {
+  const row = acceptancePackageRowSchema.parse(value);
+  return acceptancePackageSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    stageAttemptId: row.stage_attempt_id,
+    humanRequestId: row.human_request_id,
+    status: row.status,
+    criteria: parseJson(row.criteria_json),
+    artifactIds: parseJson(row.artifact_ids_json),
+    releaseNote: row.release_note,
+    verifyInstructions: parseJson(row.verify_instructions_json),
+    version: row.version,
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at,
+    resolvedBy:
+      row.resolved_by_type === null || row.resolved_by_id === null
+        ? null
+        : { type: row.resolved_by_type, id: row.resolved_by_id },
+    resolutionReason: row.resolution_reason,
   });
 };
 
@@ -553,6 +643,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectCurrentBudgetPolicy = database.prepare(
       "SELECT * FROM budget_policies WHERE pipeline_run_id = ? ORDER BY revision DESC LIMIT 1",
     );
+    const selectAcceptancePackageById = database.prepare("SELECT * FROM acceptance_packages WHERE id = ?");
+    const selectAcceptancePackageByRun = database.prepare(
+      "SELECT * FROM acceptance_packages WHERE pipeline_run_id = ?",
+    );
 
     const assertOpen = (): void => {
       if (closed) throw new StateStoreError("STATE_CLOSED", "The local state module is closed");
@@ -616,6 +710,22 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .all(pipelineRunId)
         .map(usageRecordFromRow);
 
+    const readEvidenceArtifacts = (pipelineRunId: string): EvidenceArtifact[] =>
+      database
+        .prepare("SELECT * FROM evidence_artifacts WHERE pipeline_run_id = ? ORDER BY created_at, id")
+        .all(pipelineRunId)
+        .map(evidenceArtifactFromRow);
+
+    const readAcceptancePackage = (acceptancePackageId: string): AcceptancePackage | null => {
+      const value = selectAcceptancePackageById.get(acceptancePackageId);
+      return value === undefined ? null : acceptancePackageFromRow(value);
+    };
+
+    const readAcceptancePackageForRun = (pipelineRunId: string): AcceptancePackage | null => {
+      const value = selectAcceptancePackageByRun.get(pipelineRunId);
+      return value === undefined ? null : acceptancePackageFromRow(value);
+    };
+
     const readPendingDispatch = (stageAttemptId: string): WorkflowDispatch | null => {
       const value = selectPendingDispatchByStageAttempt.get(stageAttemptId);
       return value === undefined ? null : workflowDispatchFromRow(value);
@@ -671,6 +781,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           budgetPolicies: [],
           usageRecords: [],
           recoveryReports: [],
+          artifacts: [],
+          acceptancePackage: null,
         });
       }
       const stageAttempts = database
@@ -700,6 +812,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare("SELECT * FROM recovery_reports WHERE pipeline_run_id = ? ORDER BY created_at, id")
         .all(run.id)
         .map(recoveryReportFromRow);
+      const artifacts = readEvidenceArtifacts(run.id);
+      const acceptancePackage = readAcceptancePackageForRun(run.id);
       return workflowSnapshotSchema.parse({
         schemaVersion: 1,
         run,
@@ -709,6 +823,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         budgetPolicies,
         usageRecords,
         recoveryReports,
+        artifacts,
+        acceptancePackage,
       });
     };
 
@@ -800,7 +916,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       | AnswerHumanRequestDecision["events"][number]
       | PipelineControlDecision["events"][number]
       | BudgetOverrideDecision["events"][number]
-      | RecoveryDecision["events"][number];
+      | RecoveryDecision["events"][number]
+      | AcceptanceResolutionDecision["events"][number];
 
     const appendWorkflowEvents = (
       intents: readonly WorkflowEventIntent[],
@@ -1087,6 +1204,94 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           report.reason,
           report.createdAt,
         );
+    };
+
+    const insertEvidenceArtifact = (artifact: EvidenceArtifact): void => {
+      database
+        .prepare(
+          `INSERT INTO evidence_artifacts (
+            id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+            stage, kind, status, provider, title, summary, checks_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          artifact.id,
+          artifact.schemaVersion,
+          artifact.projectId,
+          artifact.workItemId,
+          artifact.pipelineRunId,
+          artifact.stageAttemptId,
+          artifact.stage,
+          artifact.kind,
+          artifact.status,
+          artifact.provider,
+          artifact.title,
+          artifact.summary,
+          JSON.stringify(artifact.checks),
+          artifact.createdAt,
+        );
+    };
+
+    const insertAcceptancePackage = (acceptancePackage: AcceptancePackage): void => {
+      database
+        .prepare(
+          `INSERT INTO acceptance_packages (
+            id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+            human_request_id, status, criteria_json, artifact_ids_json, release_note,
+            verify_instructions_json, version, created_at, resolved_at, resolved_by_type,
+            resolved_by_id, resolution_reason
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          acceptancePackage.id,
+          acceptancePackage.schemaVersion,
+          acceptancePackage.projectId,
+          acceptancePackage.workItemId,
+          acceptancePackage.pipelineRunId,
+          acceptancePackage.stageAttemptId,
+          acceptancePackage.humanRequestId,
+          acceptancePackage.status,
+          JSON.stringify(acceptancePackage.criteria),
+          JSON.stringify(acceptancePackage.artifactIds),
+          acceptancePackage.releaseNote,
+          JSON.stringify(acceptancePackage.verifyInstructions),
+          acceptancePackage.version,
+          acceptancePackage.createdAt,
+          acceptancePackage.resolvedAt,
+          acceptancePackage.resolvedBy?.type ?? null,
+          acceptancePackage.resolvedBy?.id ?? null,
+          acceptancePackage.resolutionReason,
+        );
+    };
+
+    const updateAcceptancePackage = (acceptancePackage: AcceptancePackage): void => {
+      const update = database
+        .prepare(
+          `UPDATE acceptance_packages SET status = ?, criteria_json = ?, artifact_ids_json = ?,
+             release_note = ?, verify_instructions_json = ?, version = ?, resolved_at = ?,
+             resolved_by_type = ?, resolved_by_id = ?, resolution_reason = ?
+           WHERE id = ? AND version = ?`,
+        )
+        .run(
+          acceptancePackage.status,
+          JSON.stringify(acceptancePackage.criteria),
+          JSON.stringify(acceptancePackage.artifactIds),
+          acceptancePackage.releaseNote,
+          JSON.stringify(acceptancePackage.verifyInstructions),
+          acceptancePackage.version,
+          acceptancePackage.resolvedAt,
+          acceptancePackage.resolvedBy?.type ?? null,
+          acceptancePackage.resolvedBy?.id ?? null,
+          acceptancePackage.resolutionReason,
+          acceptancePackage.id,
+          acceptancePackage.version - 1,
+        );
+      if (update.changes !== 1) {
+        throw new WorkflowDomainError(
+          "WORKFLOW_VERSION_CONFLICT",
+          "The AcceptancePackage changed while the resolution was being applied",
+        );
+      }
     };
 
     const insertHumanRequest = (request: HumanRequest): void => {
@@ -1387,11 +1592,17 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           dispatch,
           budgetPolicy: readCurrentBudgetPolicy(run.id),
           existingUsageRecords: readUsageRecords(run.id),
+          existingArtifacts: readEvidenceArtifacts(run.id),
           usageRecordIds:
             command.payload.outcome.type === "BUDGET_LIMIT_REACHED"
               ? command.payload.outcome.usageIncrements.map(() => createId("usageRecord"))
               : [],
+          artifactIds:
+            command.payload.outcome.type === "COMPLETED"
+              ? (command.payload.outcome.artifacts ?? []).map(() => createId("evidenceArtifact"))
+              : [],
           humanRequestId: createId("humanRequest"),
+          acceptancePackageId: createId("acceptancePackage"),
           nextStageAttemptId: createId("stageAttempt"),
           nextDispatchId: createId("workflowDispatch"),
         });
@@ -1401,6 +1612,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         updatePipelineRun(decision.run);
         if (decision.workItem.version !== workItem.version) updateWorkflowWorkItem(decision.workItem);
         if (decision.request) insertHumanRequest(decision.request);
+        decision.artifacts.forEach(insertEvidenceArtifact);
+        if (decision.acceptancePackage) insertAcceptancePackage(decision.acceptancePackage);
         if (decision.nextStageAttempt) insertStageAttempt(decision.nextStageAttempt);
         if (decision.nextDispatch) insertWorkflowDispatch(decision.nextDispatch);
         decision.usageRecords.forEach(insertUsageRecord);
@@ -1419,6 +1632,57 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           run: decision.run,
           stageAttempt: decision.stageAttempt,
           usageRecords: decision.usageRecords,
+          artifacts: decision.artifacts,
+          acceptancePackage: decision.acceptancePackage,
+          events,
+        });
+      }
+
+      if (command.type === "RESOLVE_ACCEPTANCE") {
+        const acceptancePackage = readAcceptancePackage(command.payload.acceptancePackageId);
+        const run = acceptancePackage ? readPipelineRun(acceptancePackage.pipelineRunId) : null;
+        const stageAttempt = acceptancePackage ? readStageAttempt(acceptancePackage.stageAttemptId) : null;
+        const workItem = acceptancePackage ? readWorkItem(acceptancePackage.workItemId) : null;
+        const request = acceptancePackage ? readHumanRequest(acceptancePackage.humanRequestId) : null;
+        if (!acceptancePackage) {
+          throw new WorkflowDomainError("ACCEPTANCE_NOT_FOUND", "The AcceptancePackage does not exist");
+        }
+        if (!run || !stageAttempt || !workItem || !request) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The acceptance workflow state is incomplete");
+        }
+        const decision = decideResolveAcceptance(command, {
+          now: occurredAt,
+          workItem,
+          run,
+          stageAttempt,
+          acceptancePackage,
+          request,
+          decisionId: createId("decision"),
+        });
+        updateHumanRequest(decision.request);
+        insertDecision(decision.decision);
+        updateStageAttempt(decision.stageAttempt);
+        updatePipelineRun(decision.run);
+        updateWorkflowWorkItem(decision.workItem);
+        updateAcceptancePackage(decision.acceptancePackage);
+        const events = appendWorkflowEvents(decision.events, {
+          workItemId: decision.workItem.id,
+          projectId: decision.workItem.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "ACCEPTANCE_RESOLVED",
+          replayed: false,
+          action: decision.action,
+          workItemId: decision.workItem.id,
+          run: decision.run,
+          stageAttempt: decision.stageAttempt,
+          acceptancePackage: decision.acceptancePackage,
+          request: decision.request,
+          decision: decision.decision,
           events,
         });
       }
@@ -1503,6 +1767,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                   run,
                   stageAttempt,
                   pendingDispatch,
+                  acceptancePending: readAcceptancePackageForRun(run.id)?.status === "PENDING",
                 });
         updateStageAttempt(decision.stageAttempt);
         updatePipelineRun(decision.run);

@@ -93,7 +93,9 @@ export type LocalStateIdKind =
   | "decision"
   | "budgetPolicy"
   | "usageRecord"
-  | "recoveryReport";
+  | "recoveryReport"
+  | "evidenceArtifact"
+  | "acceptancePackage";
 
 export type OpenLocalStateOptions = {
   databasePath: string;

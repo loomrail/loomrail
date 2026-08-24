@@ -53,6 +53,10 @@ export const usageQualitySchema = z.enum(["ACTUAL", "PROVIDER_ESTIMATE", "LOOMRA
 export const usageKindSchema = z.literal("ESTIMATED_TOKENS");
 export const budgetPauseKindSchema = z.enum(["SOFT", "HARD"]);
 export const recoveryReasonSchema = z.literal("DAEMON_RESTART");
+export const evidenceArtifactKindSchema = z.enum(["REVIEW_REPORT", "QA_REPORT"]);
+export const evidenceArtifactStatusSchema = z.literal("PASSED");
+export const acceptanceStatusSchema = z.enum(["PENDING", "ACCEPTED", "RETURNED", "REJECTED"]);
+export const acceptanceActionSchema = z.enum(["ACCEPT", "RETURN_TO_WORK", "REJECT"]);
 
 const titleSchema = z.string().trim().min(1).max(200);
 const descriptionSchema = z.string().trim().min(1).max(4_000);
@@ -155,6 +159,63 @@ export const recoveryReportSchema = z
   })
   .strict();
 
+export const mockArtifactDraftSchema = z
+  .object({
+    kind: evidenceArtifactKindSchema,
+    title: titleSchema,
+    summary: descriptionSchema,
+    checks: z.array(z.string().trim().min(1).max(500)).min(1).max(20),
+  })
+  .strict();
+
+export const evidenceArtifactSchema = mockArtifactDraftSchema
+  .extend({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    workItemId: opaqueIdSchema,
+    pipelineRunId: opaqueIdSchema,
+    stageAttemptId: opaqueIdSchema,
+    stage: z.enum(["REVIEW", "QA"]),
+    status: evidenceArtifactStatusSchema,
+    provider: z.literal("MOCK"),
+    createdAt: utcTimestampSchema,
+  })
+  .strict();
+
+export const acceptanceCriterionEvidenceSchema = z
+  .object({
+    criterion: z.string().trim().min(1).max(500),
+    implementation: descriptionSchema,
+    reviewArtifactId: opaqueIdSchema,
+    qaArtifactId: opaqueIdSchema,
+    verification: descriptionSchema,
+    knownRisk: descriptionSchema.nullable(),
+  })
+  .strict();
+
+export const acceptancePackageSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    workItemId: opaqueIdSchema,
+    pipelineRunId: opaqueIdSchema,
+    stageAttemptId: opaqueIdSchema,
+    humanRequestId: opaqueIdSchema,
+    status: acceptanceStatusSchema,
+    criteria: z.array(acceptanceCriterionEvidenceSchema).max(50),
+    artifactIds: z.array(opaqueIdSchema).min(2).max(20),
+    releaseNote: descriptionSchema,
+    verifyInstructions: z.array(descriptionSchema).min(1).max(20),
+    version: z.number().int().positive(),
+    createdAt: utcTimestampSchema,
+    resolvedAt: utcTimestampSchema.nullable(),
+    resolvedBy: actorSchema.nullable(),
+    resolutionReason: descriptionSchema.nullable(),
+  })
+  .strict();
+
 export const humanRequestOptionSchema = z
   .object({
     id: opaqueIdSchema,
@@ -252,6 +313,14 @@ export const mockProviderOutcomeSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("COMPLETED"),
       summary: z.string().trim().min(1).max(4_000),
+      artifacts: z.array(mockArtifactDraftSchema).max(5).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("READY_FOR_ACCEPTANCE"),
+      releaseNote: descriptionSchema,
+      verifyInstructions: z.array(descriptionSchema).min(1).max(20),
     })
     .strict(),
   z
@@ -372,6 +441,40 @@ export const recoveryReportCreatedEventSchema = eventBaseSchema.extend({
     .strict(),
 });
 
+export const evidenceArtifactRecordedEventSchema = eventBaseSchema.extend({
+  type: z.literal("EVIDENCE_ARTIFACT_RECORDED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z.object({ artifact: evidenceArtifactSchema }).strict(),
+});
+
+export const acceptanceRequestedEventSchema = eventBaseSchema.extend({
+  type: z.literal("ACCEPTANCE_REQUESTED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z
+    .object({
+      acceptancePackage: acceptancePackageSchema,
+      request: humanRequestSchema,
+      run: pipelineRunSchema,
+      stageAttempt: stageAttemptSchema,
+    })
+    .strict(),
+});
+
+export const acceptanceResolvedEventSchema = eventBaseSchema.extend({
+  type: z.literal("ACCEPTANCE_RESOLVED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z
+    .object({
+      action: acceptanceActionSchema,
+      acceptancePackage: acceptancePackageSchema,
+      request: humanRequestSchema,
+      decision: decisionSchema,
+      run: pipelineRunSchema,
+      stageAttempt: stageAttemptSchema,
+    })
+    .strict(),
+});
+
 export const pipelineCompletedEventSchema = eventBaseSchema.extend({
   type: z.literal("PIPELINE_COMPLETED"),
   aggregateType: z.literal("WORK_ITEM"),
@@ -465,6 +568,19 @@ export const reconcileWorkflowsCommandSchema = commandBaseSchema.extend({
   payload: z.object({}).strict(),
 });
 
+export const resolveAcceptanceCommandSchema = commandBaseSchema.extend({
+  type: z.literal("RESOLVE_ACCEPTANCE"),
+  payload: z
+    .object({
+      acceptancePackageId: opaqueIdSchema,
+      expectedVersion: z.number().int().positive(),
+      expectedRunVersion: z.number().int().positive(),
+      action: acceptanceActionSchema,
+      reason: descriptionSchema.nullable(),
+    })
+    .strict(),
+});
+
 export const pipelineStartedResultSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -498,6 +614,8 @@ const providerOutcomeEventSchema = z.discriminatedUnion("type", [
   usageRecordedEventSchema,
   budgetThresholdReachedEventSchema,
   pipelinePausedEventSchema,
+  evidenceArtifactRecordedEventSchema,
+  acceptanceRequestedEventSchema,
   pipelineCompletedEventSchema,
 ]);
 
@@ -510,6 +628,8 @@ export const mockProviderOutcomeAppliedResultSchema = z
     run: pipelineRunSchema,
     stageAttempt: stageAttemptSchema,
     usageRecords: z.array(usageRecordSchema),
+    artifacts: z.array(evidenceArtifactSchema),
+    acceptancePackage: acceptancePackageSchema.nullable(),
     events: z.array(providerOutcomeEventSchema),
   })
   .strict();
@@ -572,6 +692,28 @@ export const workflowsReconciledResultSchema = z
   })
   .strict();
 
+const acceptanceResolutionEventSchema = z.discriminatedUnion("type", [
+  humanRequestResolvedEventSchema,
+  acceptanceResolvedEventSchema,
+  pipelineCompletedEventSchema,
+]);
+
+export const acceptanceResolvedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("ACCEPTANCE_RESOLVED"),
+    replayed: z.boolean(),
+    action: acceptanceActionSchema,
+    workItemId: opaqueIdSchema,
+    run: pipelineRunSchema,
+    stageAttempt: stageAttemptSchema,
+    acceptancePackage: acceptancePackageSchema,
+    request: humanRequestSchema,
+    decision: decisionSchema,
+    events: z.array(acceptanceResolutionEventSchema),
+  })
+  .strict();
+
 export const startMockPipelineRequestSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -601,6 +743,17 @@ export const budgetOverrideRequestSchema = pipelineControlRequestSchema.extend({
   maxEstimatedTokens: z.number().int().positive(),
 });
 
+export const resolveAcceptanceRequestSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    commandId: opaqueIdSchema,
+    expectedVersion: z.number().int().positive(),
+    expectedRunVersion: z.number().int().positive(),
+    action: acceptanceActionSchema,
+    reason: descriptionSchema.nullable().default(null),
+  })
+  .strict();
+
 export const workflowSnapshotSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -611,6 +764,8 @@ export const workflowSnapshotSchema = z
     budgetPolicies: z.array(budgetPolicySchema),
     usageRecords: z.array(usageRecordSchema),
     recoveryReports: z.array(recoveryReportSchema),
+    artifacts: z.array(evidenceArtifactSchema),
+    acceptancePackage: acceptancePackageSchema.nullable(),
   })
   .strict();
 
@@ -627,6 +782,10 @@ export type StageAttemptStatus = z.infer<typeof stageAttemptStatusSchema>;
 export type BudgetPolicy = z.infer<typeof budgetPolicySchema>;
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
 export type RecoveryReport = z.infer<typeof recoveryReportSchema>;
+export type EvidenceArtifact = z.infer<typeof evidenceArtifactSchema>;
+export type MockArtifactDraft = z.infer<typeof mockArtifactDraftSchema>;
+export type AcceptancePackage = z.infer<typeof acceptancePackageSchema>;
+export type AcceptanceAction = z.infer<typeof acceptanceActionSchema>;
 export type HumanRequest = z.infer<typeof humanRequestSchema>;
 export type HumanRequestStatus = z.infer<typeof humanRequestStatusSchema>;
 export type HumanRequestAnswer = z.infer<typeof humanRequestAnswerSchema>;
@@ -645,6 +804,9 @@ export type PipelineResumedEvent = z.infer<typeof pipelineResumedEventSchema>;
 export type PipelineCancelledEvent = z.infer<typeof pipelineCancelledEventSchema>;
 export type BudgetOverrideApprovedEvent = z.infer<typeof budgetOverrideApprovedEventSchema>;
 export type RecoveryReportCreatedEvent = z.infer<typeof recoveryReportCreatedEventSchema>;
+export type EvidenceArtifactRecordedEvent = z.infer<typeof evidenceArtifactRecordedEventSchema>;
+export type AcceptanceRequestedEvent = z.infer<typeof acceptanceRequestedEventSchema>;
+export type AcceptanceResolvedEvent = z.infer<typeof acceptanceResolvedEventSchema>;
 export type PipelineCompletedEvent = z.infer<typeof pipelineCompletedEventSchema>;
 export type StartMockPipelineCommand = z.infer<typeof startMockPipelineCommandSchema>;
 export type MarkWorkflowDispatchStartedCommand = z.infer<typeof markWorkflowDispatchStartedCommandSchema>;
@@ -655,4 +817,5 @@ export type ResumePipelineCommand = z.infer<typeof resumePipelineCommandSchema>;
 export type CancelPipelineCommand = z.infer<typeof cancelPipelineCommandSchema>;
 export type ApproveBudgetOverrideCommand = z.infer<typeof approveBudgetOverrideCommandSchema>;
 export type ReconcileWorkflowsCommand = z.infer<typeof reconcileWorkflowsCommandSchema>;
+export type ResolveAcceptanceCommand = z.infer<typeof resolveAcceptanceCommandSchema>;
 export type WorkflowSnapshot = z.infer<typeof workflowSnapshotSchema>;
