@@ -777,6 +777,7 @@
   border: 0;
   border-radius: 7px;
   color: var(--lr-text-secondary);
+  cursor: default;
   display: grid;
   font: inherit;
   font-size: var(--lr-font-sm);
@@ -787,6 +788,7 @@
   padding: 0 var(--lr-space-2);
   position: relative;
   text-align: left;
+  user-select: none;
   width: 100%;
 }
 

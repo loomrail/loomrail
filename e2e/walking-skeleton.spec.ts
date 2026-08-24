@@ -181,6 +181,10 @@ test.describe("authenticated walking skeleton", () => {
     await expect(
       groupingOptions.getByRole("option", { name: "Status" }).locator(".lr-select-item__copy > span"),
     ).toHaveCSS("font-weight", "500");
+    const projectGroupingOption = groupingOptions.getByRole("option", { name: "Project" });
+    await projectGroupingOption.hover();
+    await expect(projectGroupingOption).toHaveCSS("cursor", "default");
+    await expect(projectGroupingOption).toHaveCSS("user-select", "none");
     await page.keyboard.press("Escape");
     await expect(groupingTrigger).toBeFocused();
     await page.keyboard.press("Escape");
