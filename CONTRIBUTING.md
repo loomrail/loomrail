@@ -8,11 +8,13 @@ Participation in project spaces is governed by the [Code of Conduct](CODE_OF_CON
 
 ## Local setup and verification
 
-Use Node.js 24.19.0 and the repository-pinned pnpm version:
+The toolchain is pinned in two places and nowhere else: [`.nvmrc`](.nvmrc) holds the Node version and
+`packageManager` in `package.json` holds the pnpm version. CI and `pnpm verify` both derive from
+them, so never restate either number.
 
 ```bash
-corepack enable
-corepack prepare pnpm@11.21.0 --activate
+nvm use          # or: fnm use
+corepack enable  # installs the pnpm version pinned by packageManager
 pnpm install
 pnpm verify
 ```

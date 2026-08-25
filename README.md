@@ -89,15 +89,15 @@ run the repository directly.
 
 ### Requirements
 
-- Node.js `24.19.x`
+- Node.js as pinned in [`.nvmrc`](.nvmrc)
 - Corepack
 - macOS or Windows
 
 ```bash
 git clone https://github.com/loomrail/loomrail.git
 cd loomrail
-corepack enable
-corepack prepare pnpm@11.21.0 --activate
+nvm use          # or: fnm use
+corepack enable  # installs the pnpm version pinned by packageManager
 pnpm install --frozen-lockfile
 pnpm dev
 ```
