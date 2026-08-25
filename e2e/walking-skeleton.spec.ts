@@ -674,8 +674,8 @@ test.describe("authenticated walking skeleton", () => {
     const appliedFilters = page.getByRole("region", { name: "Filter tasks" });
     await expect(appliedFilters.locator(".lr-applied-filter")).toHaveCount(1);
     await expect(appliedFilters).toContainText("Ready");
-    await expect(page.locator(".board-toolbar-stack")).toHaveClass(/has-active-filters/);
-    await expect(page.locator(".board-toolbar")).toHaveCSS("border-bottom-color", "rgba(0, 0, 0, 0)");
+    // The view tabs carry no rule of their own; the board heading below is the only divider.
+    await expect(page.locator(".board-toolbar")).toHaveCSS("border-bottom-width", "0px");
     await expect(appliedFilters).toHaveCSS("background-color", "rgb(239, 239, 240)");
     await expect(appliedFilters).toHaveCSS("border-radius", "10px");
     const triggerBoxAfterSelection = await trigger.boundingBox();

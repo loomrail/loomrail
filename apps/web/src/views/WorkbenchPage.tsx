@@ -187,7 +187,7 @@ const BoardToolbar = ({
   };
 
   return (
-    <div className={cn("board-toolbar-stack", hasActiveFilters && "has-active-filters")}>
+    <div className="board-toolbar-stack">
       <div className="board-toolbar">
         <div className="board-view-tabs">
           {(
@@ -1709,8 +1709,8 @@ export const WorkbenchPage = (): React.JSX.Element => {
                 <span>
                   <Icon name="inbox" size={18} />
                 </span>
-                <strong>{t("empty.noTasks.title")}</strong>
-                <p>{t("empty.noTasks.description")}</p>
+                <strong>{t(`empty.${scope}.title`)}</strong>
+                <p>{t(`empty.${scope}.description`)}</p>
               </div>
             ) : null}
             {(filters.length > 0 || summaryFilter !== null) && visibleItems.length === 0 ? (

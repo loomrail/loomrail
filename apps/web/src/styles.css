@@ -419,7 +419,6 @@ button {
 .board-toolbar {
   align-items: center;
   background: var(--lr-canvas);
-  border-bottom: 1px solid var(--lr-border-subtle);
   display: flex;
   height: 42px;
   justify-content: space-between;
@@ -454,10 +453,6 @@ button {
 .board-toolbar-stack {
   background: var(--lr-canvas);
   position: relative;
-}
-
-.board-toolbar-stack.has-active-filters .board-toolbar {
-  border-bottom-color: transparent;
 }
 
 .board-applied-filters {
@@ -1365,7 +1360,7 @@ button {
 .view-settings {
   display: flex;
   flex-direction: column;
-  padding: 16px 16px 12px;
+  padding: 10px 16px;
   width: 300px;
 }
 
@@ -1429,17 +1424,17 @@ button {
 }
 
 .view-settings__row > span,
-.view-settings__section-title {
-  color: var(--lr-text-muted);
-  font-size: var(--lr-font-sm);
-  font-weight: var(--lr-weight-medium);
-}
-
 .view-settings .lr-switch-row strong {
-  color: var(--lr-text-muted);
+  color: var(--lr-text-secondary);
   font-size: var(--lr-font-sm);
   font-weight: var(--lr-weight-medium);
   line-height: normal;
+}
+
+.view-settings__section-title {
+  color: var(--lr-text-faint);
+  font-size: var(--lr-font-xs);
+  font-weight: var(--lr-weight-semibold);
 }
 
 .view-settings__ordering {
@@ -1476,9 +1471,9 @@ button {
 .view-settings__section {
   border-top: 0.5px solid var(--lr-popover-border);
   display: grid;
-  gap: 8px;
-  margin: 12px -16px 0;
-  padding: 12px 16px 0;
+  gap: 6px;
+  margin: 10px -16px -10px;
+  padding: 10px 16px;
 }
 
 .view-settings .lr-property-chip {
