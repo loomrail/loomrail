@@ -6,10 +6,37 @@
 -- adds the unproductive-session counter to `stage_attempts` (§6.5: it must survive a daemon
 -- restart, so it lives in the database rather than in daemon memory).
 
-CREATE TABLE context_pack_recipes (
+CREATE TABLE provider_sessions (
   id TEXT PRIMARY KEY,
   schema_version INTEGER NOT NULL CHECK (schema_version = 1),
   stage_attempt_id TEXT NOT NULL REFERENCES stage_attempts(id) ON DELETE RESTRICT,
+  ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+  status TEXT NOT NULL CHECK (status IN ('RUNNING', 'ENDED')),
+  end_reason TEXT CHECK (
+    end_reason IS NULL OR
+    end_reason IN ('COMPLETED', 'HANDOFF', 'CONTEXT_EXHAUSTED', 'INTERRUPTED', 'CANCELLED')
+  ),
+  handoff_requested_at TEXT,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  version INTEGER NOT NULL CHECK (version > 0),
+  UNIQUE (stage_attempt_id, ordinal),
+  -- Mirrors providerSessionSchema's two refines: an ENDED session carries both an end reason and
+  -- an end timestamp, and a RUNNING one carries neither.
+  CHECK ((status = 'ENDED') = (end_reason IS NOT NULL)),
+  CHECK ((status = 'ENDED') = (ended_at IS NOT NULL))
+) STRICT;
+
+-- The link to ProviderSession is owned here, one-directional: a two-way FK between this table and
+-- provider_sessions would be circular (spec §6.1 step 4 writes both in one transaction, and each
+-- side's NOT NULL FK would need the other to exist first). UNIQUE enforces the 1:1 the design
+-- assumes -- one recipe per session -- in the schema, not by convention. The StageAttempt is
+-- reachable through the session; a second path to it here would be a second thing that can
+-- disagree with the first.
+CREATE TABLE context_pack_recipes (
+  id TEXT PRIMARY KEY,
+  schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+  provider_session_id TEXT NOT NULL UNIQUE REFERENCES provider_sessions(id) ON DELETE RESTRICT,
   template_id TEXT NOT NULL,
   template_version INTEGER NOT NULL CHECK (template_version > 0),
   spec_source TEXT NOT NULL CHECK (spec_source = 'WORKFLOW_TEMPLATE'),
@@ -23,28 +50,6 @@ CREATE TABLE context_pack_recipes (
   estimate_quality TEXT NOT NULL
     CHECK (estimate_quality IN ('ACTUAL', 'PROVIDER_ESTIMATE', 'LOOMRAIL_ESTIMATE')),
   created_at TEXT NOT NULL
-) STRICT;
-
-CREATE TABLE provider_sessions (
-  id TEXT PRIMARY KEY,
-  schema_version INTEGER NOT NULL CHECK (schema_version = 1),
-  stage_attempt_id TEXT NOT NULL REFERENCES stage_attempts(id) ON DELETE RESTRICT,
-  ordinal INTEGER NOT NULL CHECK (ordinal > 0),
-  status TEXT NOT NULL CHECK (status IN ('RUNNING', 'ENDED')),
-  end_reason TEXT CHECK (
-    end_reason IS NULL OR
-    end_reason IN ('COMPLETED', 'HANDOFF', 'CONTEXT_EXHAUSTED', 'INTERRUPTED', 'CANCELLED')
-  ),
-  context_pack_recipe_id TEXT NOT NULL REFERENCES context_pack_recipes(id) ON DELETE RESTRICT,
-  handoff_requested_at TEXT,
-  started_at TEXT NOT NULL,
-  ended_at TEXT,
-  version INTEGER NOT NULL CHECK (version > 0),
-  UNIQUE (stage_attempt_id, ordinal),
-  -- Mirrors providerSessionSchema's two refines: an ENDED session carries both an end reason and
-  -- an end timestamp, and a RUNNING one carries neither.
-  CHECK ((status = 'ENDED') = (end_reason IS NOT NULL)),
-  CHECK ((status = 'ENDED') = (ended_at IS NOT NULL))
 ) STRICT;
 
 CREATE TABLE checkpoints (

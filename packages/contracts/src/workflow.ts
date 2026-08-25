@@ -181,7 +181,6 @@ export const providerSessionSchema = z
     ordinal: z.number().int().positive(),
     status: providerSessionStatusSchema,
     endReason: providerSessionEndReasonSchema.nullable(),
-    contextPackRecipeId: opaqueIdSchema,
     handoffRequestedAt: utcTimestampSchema.nullable(),
     startedAt: utcTimestampSchema,
     endedAt: utcTimestampSchema.nullable(),

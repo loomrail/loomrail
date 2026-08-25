@@ -16,7 +16,6 @@ describe("session handoff contracts", () => {
     ordinal: 1,
     status: "RUNNING",
     endReason: null,
-    contextPackRecipeId: "recipe-1",
     handoffRequestedAt: null,
     startedAt: "2026-08-25T18:00:00.000Z",
     endedAt: null,

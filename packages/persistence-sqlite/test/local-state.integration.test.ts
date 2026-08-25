@@ -915,10 +915,20 @@ describe("SQLite local state", () => {
       sessionId: string,
       checkpointId: string,
     ): void => {
+      // provider_sessions first: context_pack_recipes owns the (one-directional) link to it, so
+      // the session row must already exist before the recipe can reference it.
+      raw
+        .prepare(
+          `INSERT INTO provider_sessions (
+            id, schema_version, stage_attempt_id, ordinal, status, end_reason,
+            handoff_requested_at, started_at, ended_at, version
+          ) VALUES (?, 1, ?, 1, 'RUNNING', NULL, NULL, ?, NULL, 1)`,
+        )
+        .run(sessionId, stageAttemptId, timestamp);
       raw
         .prepare(
           `INSERT INTO context_pack_recipes (
-            id, schema_version, stage_attempt_id, template_id, template_version, spec_source,
+            id, schema_version, provider_session_id, template_id, template_version, spec_source,
             sections_json, omitted_json, content_hash, estimated_tokens, budget_tokens,
             estimate_quality, created_at
           ) VALUES (?, 1, ?, 'mock-delivery-v1', 1, 'WORKFLOW_TEMPLATE', ?, '[]', ?, 10, 100,
@@ -926,19 +936,11 @@ describe("SQLite local state", () => {
         )
         .run(
           recipeId,
-          stageAttemptId,
+          sessionId,
           JSON.stringify([{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }]),
           `sha256:${"0".repeat(64)}`,
           timestamp,
         );
-      raw
-        .prepare(
-          `INSERT INTO provider_sessions (
-            id, schema_version, stage_attempt_id, ordinal, status, end_reason,
-            context_pack_recipe_id, handoff_requested_at, started_at, ended_at, version
-          ) VALUES (?, 1, ?, 1, 'RUNNING', NULL, ?, NULL, ?, NULL, 1)`,
-        )
-        .run(sessionId, stageAttemptId, recipeId, timestamp);
       raw
         .prepare(
           `INSERT INTO checkpoints (
@@ -960,35 +962,27 @@ describe("SQLite local state", () => {
       state = undefined;
 
       const raw = new DatabaseSync(databasePath);
-      seedContextPackRecipeAndCheckpoint(
-        raw,
-        stageAttemptId,
-        "recipe-append-only",
-        "session-append-only",
-        "checkpoint-append-only",
-      );
+      const recipeId = "recipe-append-only";
+      const checkpointId = "checkpoint-append-only";
+      seedContextPackRecipeAndCheckpoint(raw, stageAttemptId, recipeId, "session-append-only", checkpointId);
 
       // D7: checkpoints are append-only, otherwise a rewritten checkpoint makes the recipe a lie.
       expect(() =>
-        raw.prepare("UPDATE checkpoints SET summary = ? WHERE id = 'checkpoint-append-only'").run("tampered"),
+        raw.prepare("UPDATE checkpoints SET summary = ? WHERE id = ?").run("tampered", checkpointId),
       ).toThrow(/append-only/);
-      expect(() => raw.prepare("DELETE FROM checkpoints WHERE id = 'checkpoint-append-only'").run()).toThrow(
+      expect(() => raw.prepare("DELETE FROM checkpoints WHERE id = ?").run(checkpointId)).toThrow(
         /append-only/,
       );
       // D7: the recipe plus a hash only proves anything if the recipe itself can't be edited.
       expect(() =>
-        raw
-          .prepare("UPDATE context_pack_recipes SET template_version = 2 WHERE id = 'recipe-append-only'")
-          .run(),
+        raw.prepare("UPDATE context_pack_recipes SET template_version = 2 WHERE id = ?").run(recipeId),
       ).toThrow(/append-only/);
-      expect(() =>
-        raw.prepare("DELETE FROM context_pack_recipes WHERE id = 'recipe-append-only'").run(),
-      ).toThrow(/append-only/);
+      expect(() => raw.prepare("DELETE FROM context_pack_recipes WHERE id = ?").run(recipeId)).toThrow(
+        /append-only/,
+      );
 
       // The rows are still exactly as inserted -- the triggers rejected the mutations, not the data.
-      expect(
-        raw.prepare("SELECT summary FROM checkpoints WHERE id = 'checkpoint-append-only'").get(),
-      ).toEqual({
+      expect(raw.prepare("SELECT summary FROM checkpoints WHERE id = ?").get(checkpointId)).toEqual({
         summary: "Initial summary",
       });
       raw.close();
@@ -1093,8 +1087,8 @@ describe("SQLite local state", () => {
       // Revert exactly what migration 0006 does, to reconstruct a database that predates it.
       const raw = new DatabaseSync(databasePath);
       raw.exec("DROP TABLE checkpoints");
-      raw.exec("DROP TABLE provider_sessions");
       raw.exec("DROP TABLE context_pack_recipes");
+      raw.exec("DROP TABLE provider_sessions");
       raw.exec("ALTER TABLE stage_attempts DROP COLUMN unproductive_sessions");
 
       raw.exec("DROP TRIGGER events_are_append_only_update");
