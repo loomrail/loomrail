@@ -38,16 +38,16 @@ const complete = (invocation: ProviderInvocation) =>
   providerOutcomeSchema.parse({
     type: "COMPLETED",
     summary:
-      invocation.stageAttempt.stage === "DISCOVERY"
+      invocation.session.stage === "DISCOVERY"
         ? "Discovery resumed from the recorded human decision."
-        : invocation.stageAttempt.stage === "PLAN"
+        : invocation.session.stage === "PLAN"
           ? "The bounded mock plan was produced from the accepted discovery direction."
-          : invocation.stageAttempt.stage === "IMPLEMENT"
+          : invocation.session.stage === "IMPLEMENT"
             ? "The mock implementation completed inside the approved budget revision."
-            : invocation.stageAttempt.stage === "REVIEW"
+            : invocation.session.stage === "REVIEW"
               ? "Independent mock review completed without open findings."
               : "Deterministic mock browser QA completed without regressions.",
-    ...(invocation.stageAttempt.stage === "REVIEW"
+    ...(invocation.session.stage === "REVIEW"
       ? {
           artifacts: [
             {
@@ -59,7 +59,7 @@ const complete = (invocation: ProviderInvocation) =>
             },
           ],
         }
-      : invocation.stageAttempt.stage === "QA"
+      : invocation.session.stage === "QA"
         ? {
             artifacts: [
               {
@@ -96,27 +96,50 @@ const exhaustInitialImplementationBudget = () =>
     quality: "LOOMRAIL_ESTIMATE",
   });
 
-const outcomeFor = (invocation: ProviderInvocation) => {
-  if (invocation.stageAttempt.stage === "DISCOVERY" && invocation.dispatch.mode === "START") {
-    return discoveryQuestion();
-  }
-  if (invocation.stageAttempt.stage === "IMPLEMENT" && invocation.stageAttempt.attempt === 1) {
-    return exhaustInitialImplementationBudget();
-  }
-  if (invocation.stageAttempt.stage === "ACCEPTANCE") return requestAcceptance();
-  return complete(invocation);
+// This is the deterministic scripted scenario from before the provider-adapter contract
+// (spec §5) stopped handing the adapter a raw `StageAttempt`. The old script gated the
+// budget-exhaustion beat on `stageAttempt.attempt === 1`; that field no longer exists on
+// `ProviderInvocation` by design (an adapter that cannot see raw state cannot diverge from
+// what the pack says it was given). Counting distinct IMPLEMENT `stageAttemptId`s this adapter
+// instance has been asked to run is the mechanical equivalent for this fixed, one-flow-at-a-time
+// script: the budget-override path always mints a new StageAttempt, so the first IMPLEMENT
+// StageAttempt still exhausts its budget and every later one still completes. A real adapter
+// deciding this from pack content instead of adapter-local bookkeeping is Task 10's job.
+const createOutcomeFor = () => {
+  const seenImplementAttempts = new Set<string>();
+
+  return (invocation: ProviderInvocation) => {
+    const { stage, stageAttemptId } = invocation.session;
+    if (stage === "DISCOVERY" && invocation.dispatch.mode === "START") {
+      return discoveryQuestion();
+    }
+    if (stage === "IMPLEMENT") {
+      seenImplementAttempts.add(stageAttemptId);
+      if (seenImplementAttempts.size === 1) return exhaustInitialImplementationBudget();
+    }
+    if (stage === "ACCEPTANCE") return requestAcceptance();
+    return complete(invocation);
+  };
 };
 
-export const createMockProvider = (): ProviderAdapter => ({
-  capabilities: () =>
-    providerCapabilitiesSchema.parse({
-      provider: "MOCK",
-      start: true,
-      resume: true,
-      interrupt: true,
-      eventStream: true,
-      usageReporting: true,
-    }),
-  start: (invocation) => Promise.resolve(outcomeFor(invocation)),
-  resume: (invocation) => Promise.resolve(outcomeFor(invocation)),
-});
+export const createMockProvider = (): ProviderAdapter => {
+  const outcomeFor = createOutcomeFor();
+  return {
+    capabilities: () =>
+      providerCapabilitiesSchema.parse({
+        provider: "MOCK",
+        start: true,
+        interrupt: true,
+        eventStream: false,
+        usageReporting: true,
+        contextWindowReporting: false,
+        checkpointOnRequest: false,
+        contextWindowTokens: 128_000,
+      }),
+    start: (invocation) => Promise.resolve(outcomeFor(invocation)),
+    // This mock resolves synchronously with a scripted outcome and never streams, so there is
+    // never a session in flight to wind down. A real handoff (Task 10) needs an adapter that is
+    // actually still running when the request arrives.
+    requestHandoff: () => Promise.resolve(),
+  };
+};

@@ -241,12 +241,6 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
               acceptancePackage: null,
             });
       const stageAttempt = snapshot.stageAttempts.find(({ id }) => id === dispatch.stageAttemptId);
-      const stageRequest = snapshot.humanRequests.find(
-        ({ stageAttemptId }) => stageAttemptId === dispatch.stageAttemptId,
-      );
-      const decision = stageRequest
-        ? (snapshot.decisions.find(({ humanRequestId }) => humanRequestId === stageRequest.id) ?? null)
-        : null;
       if (!workItem || !stageAttempt || !snapshot.run) {
         throw new StateStoreError("PERSISTENCE_FAILURE", "A pending workflow dispatch is incomplete");
       }
@@ -262,11 +256,32 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       if (started.type !== "WORKFLOW_DISPATCH_STARTED") {
         throw new StateStoreError("PERSISTENCE_FAILURE", "The mock workflow dispatch did not start");
       }
-      const invocation = { dispatch, stageAttempt: started.stageAttempt, workItem, decision };
-      const outcome =
-        dispatch.mode === "RESUME"
-          ? await mockProvider.resume(invocation)
-          : await mockProvider.start(invocation);
+      // Task 9 collapses `start`/`resume` into one context-pack invocation (spec §5), but a real
+      // assembled ContextPack needs the stage's ContextPackSpec, a consistent snapshot of context
+      // sources, and a token budget derived from the adapter's declared context window -- wiring
+      // that in end to end, alongside real ProviderSession persistence and the session lifecycle
+      // decisions in packages/domain/src/session.ts, is Task 11's job (spec §6). Until then this
+      // placeholder pack keeps the daemon's one dispatch-per-attempt flow running against the new
+      // adapter boundary; it carries no real content and is not persisted as a ContextPackRecipe.
+      const placeholderPackText = `placeholder pack for stage attempt ${started.stageAttempt.id}`;
+      const invocation = {
+        dispatch,
+        session: {
+          id: dispatch.id,
+          ordinal: 1,
+          stageAttemptId: started.stageAttempt.id,
+          stage: started.stageAttempt.stage,
+        },
+        contextPack: {
+          schemaVersion: 1 as const,
+          text: placeholderPackText,
+          contentHash: `sha256:${createHash("sha256").update(placeholderPackText).digest("hex")}`,
+        },
+      };
+      const outcome = await mockProvider.start(invocation, {
+        onContextWindow: () => undefined,
+        onCheckpoint: () => undefined,
+      });
       localState.execute({
         schemaVersion: 1,
         commandId: `apply-${dispatch.id}`,

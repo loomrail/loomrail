@@ -1,0 +1,68 @@
+import { describe, expect, it } from "vitest";
+
+import { providerCapabilitiesSchema } from "../src/index.js";
+
+const validCapabilities = {
+  provider: "MOCK" as const,
+  start: true,
+  interrupt: true,
+  eventStream: true,
+  usageReporting: true,
+  contextWindowReporting: true,
+  checkpointOnRequest: true,
+  contextWindowTokens: 128_000,
+};
+
+const withoutField = (field: keyof typeof validCapabilities) =>
+  Object.fromEntries(Object.entries(validCapabilities).filter(([key]) => key !== field));
+
+describe("provider capabilities", () => {
+  it("accepts a fully declared capability set", () => {
+    expect(providerCapabilitiesSchema.parse(validCapabilities)).toMatchObject({
+      provider: "MOCK",
+      contextWindowTokens: 128_000,
+    });
+  });
+
+  it("requires a declared context window size", () => {
+    // Without a window size the pack budget (spec §4.3) is unknowable, and §6.1 step 2 has
+    // nothing to compute a share of.
+    expect(() => providerCapabilitiesSchema.parse(withoutField("contextWindowTokens"))).toThrow();
+  });
+
+  it("rejects a non-positive context window size", () => {
+    expect(() =>
+      providerCapabilitiesSchema.parse({ ...validCapabilities, contextWindowTokens: 0 }),
+    ).toThrow();
+  });
+
+  it("rejects a capability set that claims checkpointOnRequest without eventStream", () => {
+    // Winding down on request is impossible without a channel to deliver the checkpoint on.
+    // Built by breaking exactly one field (eventStream) off an otherwise-valid capability set,
+    // so the rejection can only be attributed to that pairing.
+    expect(() => providerCapabilitiesSchema.parse({ ...validCapabilities, eventStream: false })).toThrow();
+  });
+
+  it("accepts checkpointOnRequest when paired with eventStream, and accepts neither", () => {
+    // The invariant only forbids one direction (checkpointOnRequest without eventStream); both
+    // of these otherwise-plausible pairings must still be accepted.
+    expect(
+      providerCapabilitiesSchema.parse({
+        ...validCapabilities,
+        checkpointOnRequest: true,
+        eventStream: true,
+      }),
+    ).toMatchObject({ checkpointOnRequest: true, eventStream: true });
+    expect(
+      providerCapabilitiesSchema.parse({
+        ...validCapabilities,
+        checkpointOnRequest: false,
+        eventStream: false,
+      }),
+    ).toMatchObject({ checkpointOnRequest: false, eventStream: false });
+  });
+
+  it("rejects an unknown capability field", () => {
+    expect(() => providerCapabilitiesSchema.parse({ ...validCapabilities, resume: true })).toThrow();
+  });
+});
