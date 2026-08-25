@@ -301,7 +301,7 @@ test.describe("authenticated walking skeleton", () => {
     }
   });
 
-  test("uses command summary metrics as toggleable board filters", async ({ page }) => {
+  test("filters the board to blocking requests and back from the workspace navigation", async ({ page }) => {
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
       logger: false,
@@ -310,22 +310,51 @@ test.describe("authenticated walking skeleton", () => {
 
     await page.goto(daemon.bootstrapUrl);
     await initializeWorkspace(page);
-    await createTask(page, "Summary filter task");
-    const needsYou = page.getByRole("button", { name: "Needs you: 0" });
-    await expect(needsYou).toHaveAttribute("aria-pressed", "false");
-    await needsYou.click();
-    await expect(needsYou).toHaveAttribute("aria-pressed", "true");
+    await createTask(page, "Quick filter task");
+
+    // Human requests is the only quick filter the product still offers.
+    await page.getByRole("link", { name: "Human requests" }).click();
     await expect(page).toHaveURL(/summary=needsYou/);
+
     const appliedFilters = page.getByRole("region", { name: "Filter tasks" });
     await expect(appliedFilters.getByText("Quick filter", { exact: true })).toBeVisible();
     await expect(appliedFilters.getByText("Needs you", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Summary filter task" })).toHaveCount(0);
+    // Nothing is blocking, so the task the test just created must be filtered out.
+    await expect(page.getByRole("button", { name: "Quick filter task" })).toHaveCount(0);
+
     await page.reload();
-    await expect(page.getByRole("button", { name: "Needs you: 0" })).toHaveAttribute("aria-pressed", "true");
+    await expect(appliedFilters.getByText("Needs you", { exact: true })).toBeVisible();
+
     await appliedFilters.getByRole("button", { name: "Clear quick filter" }).click();
     await expect(page).not.toHaveURL(/summary=/);
-    await expect(page.getByRole("button", { name: "Needs you: 0" })).toHaveAttribute("aria-pressed", "false");
-    await expect(page.getByRole("button", { name: "Summary filter task" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Quick filter task" })).toBeVisible();
+  });
+
+  test("filters the board by risk", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Medium risk task");
+
+    // Risk is a real WorkItem field, so it belongs in the filter tree rather than behind a
+    // metric chip that mixed it with delivery state.
+    await page.getByRole("button", { name: "Filter tasks" }).first().click();
+    await page.locator(".lr-filter-popover").getByRole("menuitem", { name: "Risk" }).hover();
+    await expect(page.getByRole("menu", { name: "Risk options" })).toBeVisible();
+    await page.getByRole("button", { name: "Add Critical" }).click();
+    await expect(page).toHaveURL(/filters=risk-critical/);
+    await expect(page.getByRole("button", { name: "Medium risk task" })).toHaveCount(0);
+
+    // The filter popover stays open after adding a value and would cover the applied-filter bar.
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".lr-filter-popover")).toBeHidden();
+    await page.getByRole("region", { name: "Filter tasks" }).getByRole("button", { name: "Clear" }).click();
+    await expect(page.getByRole("button", { name: "Medium risk task" })).toBeVisible();
   });
 
   test("isolates board scrolling from the inspector on compact screens", async ({ page }) => {
@@ -477,7 +506,6 @@ test.describe("authenticated walking skeleton", () => {
       "true",
     );
     await expect(page.getByRole("button", { name: "Human decision workflow" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Active: 0" })).toBeVisible();
 
     await page.getByRole("button", { name: "Backlog", exact: true }).click();
     await expect(page).toHaveURL(/scope=backlog/);
@@ -655,7 +683,7 @@ test.describe("authenticated walking skeleton", () => {
     const rootPopover = page.locator(".lr-filter-popover");
     await expect(rootPopover).toBeVisible();
     await expect(page.getByRole("menu", { name: "Filters options" })).toBeVisible();
-    await expect(rootPopover.getByRole("menuitem")).toHaveCount(2);
+    await expect(rootPopover.getByRole("menuitem")).toHaveCount(3);
     await expect(rootPopover.getByRole("separator")).toHaveCount(0);
     await expect(rootPopover).toHaveCSS("width", "191px");
     await expect(rootPopover).toHaveCSS("border-top-color", "rgb(232, 232, 234)");

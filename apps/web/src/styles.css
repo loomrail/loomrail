@@ -598,57 +598,6 @@ button {
   gap: var(--lr-space-1);
 }
 
-.work-command-summary {
-  align-items: stretch;
-  border: 1px solid var(--lr-border-subtle);
-  border-radius: var(--lr-radius-control);
-  display: flex;
-  margin: 0 var(--lr-space-3);
-  min-width: 0;
-  overflow: hidden;
-}
-
-.work-command-summary > button {
-  align-items: center;
-  background: transparent;
-  border: 0;
-  color: inherit;
-  cursor: pointer;
-  display: flex;
-  font: inherit;
-  gap: var(--lr-space-1-5);
-  outline: 0;
-  padding: var(--lr-space-1-5) var(--lr-space-2-5);
-}
-
-.work-command-summary > button + button {
-  border-left: 1px solid var(--lr-border-subtle);
-}
-
-.work-command-summary button > span,
-.work-command-summary button > strong {
-  font-size: var(--lr-font-xs);
-  white-space: nowrap;
-}
-
-.work-command-summary button > span {
-  color: var(--lr-text-muted);
-}
-
-.work-command-summary button > strong {
-  color: var(--lr-text);
-  font-weight: var(--lr-weight-semibold);
-}
-
-.work-command-summary > button:hover,
-.work-command-summary > button[aria-pressed="true"] {
-  background: var(--lr-surface-active);
-}
-
-.work-command-summary > button:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--lr-focus);
-}
-
 .workbench-heading__mark {
   align-items: center;
   background: var(--lr-surface-inset);
@@ -1657,18 +1606,6 @@ button {
     align-items: flex-start;
     flex-wrap: wrap;
     gap: var(--lr-space-2);
-  }
-
-  .work-command-summary {
-    margin: 0;
-    order: 3;
-    width: 100%;
-  }
-
-  .work-command-summary > button {
-    flex: 1;
-    justify-content: center;
-    padding-inline: var(--lr-space-1-5);
   }
 
   .attention-banner {

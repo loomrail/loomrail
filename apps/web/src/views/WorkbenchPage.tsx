@@ -387,6 +387,16 @@ const filterOptionsFor = (
         count: count((item) => item.priority === priority),
       })),
     },
+    {
+      id: "risk",
+      label: t("filter.risk"),
+      icon: "warning",
+      children: (["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const).map((risk) => ({
+        id: `risk-${risk.toLowerCase()}`,
+        label: t(riskLabelKeys[risk]),
+        count: count((item) => item.risk === risk),
+      })),
+    },
   ];
 };
 
@@ -394,6 +404,7 @@ const matchesFilters = (item: WorkItem, filters: readonly string[]): boolean =>
   filters.every((filter) => {
     if (filter.startsWith("status-")) return filter === `status-${item.state.toLowerCase()}`;
     if (filter.startsWith("priority-")) return filter === `priority-${item.priority.toLowerCase()}`;
+    if (filter.startsWith("risk-")) return filter === `risk-${item.risk.toLowerCase()}`;
     return true;
   });
 
@@ -1504,18 +1515,12 @@ export const WorkbenchPage = (): React.JSX.Element => {
     });
   };
   const workItems = workItemsQuery.data?.workItems ?? [];
-  // Summary metrics always describe live delivery; the board itself follows the selected scope.
-  const liveItems = workItems.filter((item) => item.state !== "DONE" && item.state !== "CANCELLED");
   const columns = columnsFor(scope);
   const scopedItems = workItems.filter((item) => scopeShows(scope, item.state));
   const blockingRequests = humanRequestsQuery.data?.humanRequests.filter(({ blocking }) => blocking) ?? [];
   const blockingWorkItemIds = new Set(blockingRequests.map(({ workItemId }) => workItemId));
   const summaryFilteredItems = scopedItems.filter((item) => {
     if (summaryFilter === "needsYou") return blockingWorkItemIds.has(item.id);
-    if (summaryFilter === "active") return item.state === "IN_PROGRESS";
-    if (summaryFilter === "atRisk") {
-      return item.state === "BLOCKED" || item.risk === "HIGH" || item.risk === "CRITICAL";
-    }
     return true;
   });
   const visibleItems = orderWorkItems(
@@ -1525,10 +1530,6 @@ export const WorkbenchPage = (): React.JSX.Element => {
   const selectedItem =
     visibleItems.find((item) => item.id === selectedWorkItemId) ?? visibleItems.at(0) ?? null;
   const filterOptions = filterOptionsFor(scopedItems, columns, t);
-  const runningCount = liveItems.filter(({ state }) => state === "IN_PROGRESS").length;
-  const atRiskCount = liveItems.filter(
-    ({ risk, state }) => state === "BLOCKED" || risk === "HIGH" || risk === "CRITICAL",
-  ).length;
 
   return (
     <div className="workbench">
@@ -1586,28 +1587,6 @@ export const WorkbenchPage = (): React.JSX.Element => {
                   : t("work.chooseProject")}
               </p>
             </div>
-          </div>
-          <div aria-label={t("work.summary.label")} className="work-command-summary" role="group">
-            {(
-              [
-                { count: blockingRequests.length, filter: "needsYou", label: t("work.summary.needsYou") },
-                { count: runningCount, filter: "active", label: t("work.summary.active") },
-                { count: atRiskCount, filter: "atRisk", label: t("work.summary.atRisk") },
-              ] as const
-            ).map(({ count, filter, label }) => (
-              <button
-                aria-label={`${label}: ${count.toString()}`}
-                aria-pressed={summaryFilter === filter}
-                key={filter}
-                onClick={() => {
-                  setSummaryFilter(summaryFilter === filter ? null : filter);
-                }}
-                type="button"
-              >
-                <span>{label}</span>
-                <strong>{count}</strong>
-              </button>
-            ))}
           </div>
           <div>
             <ActionMenu

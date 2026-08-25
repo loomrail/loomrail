@@ -14,12 +14,18 @@ import { WorkbenchPage } from "./views/WorkbenchPage";
 
 const rootRoute = createRootRoute({ component: AppFrame });
 
-const summaryFilters = new Set(["active", "atRisk", "needsYou"]);
+// The board heading no longer carries metric chips; the only quick filter left is the workspace
+// navigation's Human requests destination.
+const summaryFilters = new Set(["needsYou"]);
 const workItemFilters = new Set([
   "priority-high",
   "priority-low",
   "priority-medium",
   "priority-urgent",
+  "risk-critical",
+  "risk-high",
+  "risk-low",
+  "risk-medium",
   "status-backlog",
   "status-blocked",
   "status-cancelled",
@@ -28,7 +34,7 @@ const workItemFilters = new Set([
   "status-ready",
 ]);
 
-export type SummaryFilter = "active" | "atRisk" | "needsYou";
+export type SummaryFilter = "needsYou";
 
 export type WorkbenchSearch = {
   dir?: BoardDirection;
