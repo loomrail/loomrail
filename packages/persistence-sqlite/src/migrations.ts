@@ -24,6 +24,7 @@ const migrations: readonly Migration[] = [
     filename: "0004_pipeline_started_budget_backfill.sql",
   },
   { version: 5, name: "acceptance_evidence", filename: "0005_acceptance_evidence.sql" },
+  { version: 6, name: "session_handoff", filename: "0006_session_handoff.sql" },
 ];
 
 const migrationRowSchema = z.object({

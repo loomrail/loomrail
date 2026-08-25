@@ -293,6 +293,10 @@ export const stageAttemptSchema = z
     startedAt: utcTimestampSchema.nullable(),
     finishedAt: utcTimestampSchema.nullable(),
     failureCode: z.string().trim().min(1).max(100).nullable(),
+    // §6.5: a session that publishes no checkpoint is unproductive; two in a row trigger a
+    // HARD-pause. Lives on the StageAttempt (not in daemon memory) so a daemon restart -- itself
+    // a normal end of a session -- cannot reset the very guard meant to catch that scenario.
+    unproductiveSessions: z.number().int().nonnegative(),
   })
   .strict();
 

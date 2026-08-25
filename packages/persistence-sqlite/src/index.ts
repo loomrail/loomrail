@@ -245,6 +245,7 @@ const stageAttemptRowSchema = z.object({
   started_at: z.string().nullable(),
   finished_at: z.string().nullable(),
   failure_code: z.string().nullable(),
+  unproductive_sessions: z.number().int(),
 });
 
 const humanRequestRowSchema = z.object({
@@ -509,6 +510,7 @@ const stageAttemptFromRow = (value: unknown): StageAttempt => {
     startedAt: row.started_at,
     finishedAt: row.finished_at,
     failureCode: row.failure_code,
+    unproductiveSessions: row.unproductive_sessions,
   });
 };
 
@@ -1082,8 +1084,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO stage_attempts (
             id, pipeline_run_id, project_id, work_item_id, stage, attempt, status, version,
-            started_at, finished_at, failure_code
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            started_at, finished_at, failure_code, unproductive_sessions
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           attempt.id,
@@ -1097,6 +1099,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           attempt.startedAt,
           attempt.finishedAt,
           attempt.failureCode,
+          attempt.unproductiveSessions,
         );
     };
 
@@ -1104,7 +1107,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       const update = database
         .prepare(
           `UPDATE stage_attempts SET status = ?, version = ?, started_at = ?, finished_at = ?,
-             failure_code = ? WHERE id = ? AND version = ?`,
+             failure_code = ?, unproductive_sessions = ? WHERE id = ? AND version = ?`,
         )
         .run(
           attempt.status,
@@ -1112,6 +1115,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           attempt.startedAt,
           attempt.finishedAt,
           attempt.failureCode,
+          attempt.unproductiveSessions,
           attempt.id,
           attempt.version - 1,
         );

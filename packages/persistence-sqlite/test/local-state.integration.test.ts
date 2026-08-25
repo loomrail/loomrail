@@ -444,7 +444,7 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);
@@ -871,6 +871,315 @@ describe("SQLite local state", () => {
       run: { status: "INTERRUPTED" },
       stageAttempts: [{ status: "INTERRUPTED", failureCode: "DAEMON_RESTART" }],
       recoveryReports: [{ reason: "DAEMON_RESTART" }],
+    });
+  });
+
+  // Task 6 of the A1 session-handoff plan (docs/plans/07-a1-session-handoff-spec.ru.md §4.2, §4.4,
+  // §6.5): durable storage for ProviderSession, ContextPackRecipe and Checkpoint, plus the widened
+  // Events CHECK and the StageAttempt unproductive-session counter.
+  describe("session handoff storage (migration 0006)", () => {
+    const startWorkflow = (
+      localState: LocalState,
+      commandId: string,
+      workItemCommandId: string,
+    ): { workItemId: string; stageAttemptId: string; projectId: string } => {
+      localState.execute(registerProject());
+      const created = localState.execute(createWorkItem(workItemCommandId));
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      localState.execute(moveWorkItem(`ready-${commandId}`, created.workItem.id, 1, "READY"));
+      const started = localState.execute({
+        schemaVersion: 1,
+        commandId,
+        correlationId: `correlation-${commandId}`,
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_MOCK_PIPELINE",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedVersion: 2,
+          template: mockTemplate,
+          budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+        },
+      });
+      if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+      return {
+        workItemId: created.workItem.id,
+        stageAttemptId: started.stageAttempt.id,
+        projectId: created.workItem.projectId,
+      };
+    };
+
+    const seedContextPackRecipeAndCheckpoint = (
+      raw: DatabaseSync,
+      stageAttemptId: string,
+      recipeId: string,
+      sessionId: string,
+      checkpointId: string,
+    ): void => {
+      raw
+        .prepare(
+          `INSERT INTO context_pack_recipes (
+            id, schema_version, stage_attempt_id, template_id, template_version, spec_source,
+            sections_json, omitted_json, content_hash, estimated_tokens, budget_tokens,
+            estimate_quality, created_at
+          ) VALUES (?, 1, ?, 'mock-delivery-v1', 1, 'WORKFLOW_TEMPLATE', ?, '[]', ?, 10, 100,
+            'LOOMRAIL_ESTIMATE', ?)`,
+        )
+        .run(
+          recipeId,
+          stageAttemptId,
+          JSON.stringify([{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }]),
+          `sha256:${"0".repeat(64)}`,
+          timestamp,
+        );
+      raw
+        .prepare(
+          `INSERT INTO provider_sessions (
+            id, schema_version, stage_attempt_id, ordinal, status, end_reason,
+            context_pack_recipe_id, handoff_requested_at, started_at, ended_at, version
+          ) VALUES (?, 1, ?, 1, 'RUNNING', NULL, ?, NULL, ?, NULL, 1)`,
+        )
+        .run(sessionId, stageAttemptId, recipeId, timestamp);
+      raw
+        .prepare(
+          `INSERT INTO checkpoints (
+            id, schema_version, stage_attempt_id, provider_session_id, ordinal, summary,
+            completed_json, remaining_json, dead_ends_json, open_questions_json, created_at
+          ) VALUES (?, 1, ?, ?, 1, 'Initial summary', '[]', '[]', '[]', '[]', ?)`,
+        )
+        .run(checkpointId, stageAttemptId, sessionId, timestamp);
+    };
+
+    it("rejects updates and deletes of a stored Checkpoint and ContextPackRecipe", async () => {
+      const localState = await open();
+      const { stageAttemptId } = startWorkflow(
+        localState,
+        "start-append-only-check",
+        "create-append-only-item",
+      );
+      localState.close();
+      state = undefined;
+
+      const raw = new DatabaseSync(databasePath);
+      seedContextPackRecipeAndCheckpoint(
+        raw,
+        stageAttemptId,
+        "recipe-append-only",
+        "session-append-only",
+        "checkpoint-append-only",
+      );
+
+      // D7: checkpoints are append-only, otherwise a rewritten checkpoint makes the recipe a lie.
+      expect(() =>
+        raw.prepare("UPDATE checkpoints SET summary = ? WHERE id = 'checkpoint-append-only'").run("tampered"),
+      ).toThrow(/append-only/);
+      expect(() => raw.prepare("DELETE FROM checkpoints WHERE id = 'checkpoint-append-only'").run()).toThrow(
+        /append-only/,
+      );
+      // D7: the recipe plus a hash only proves anything if the recipe itself can't be edited.
+      expect(() =>
+        raw
+          .prepare("UPDATE context_pack_recipes SET template_version = 2 WHERE id = 'recipe-append-only'")
+          .run(),
+      ).toThrow(/append-only/);
+      expect(() =>
+        raw.prepare("DELETE FROM context_pack_recipes WHERE id = 'recipe-append-only'").run(),
+      ).toThrow(/append-only/);
+
+      // The rows are still exactly as inserted -- the triggers rejected the mutations, not the data.
+      expect(
+        raw.prepare("SELECT summary FROM checkpoints WHERE id = 'checkpoint-append-only'").get(),
+      ).toEqual({
+        summary: "Initial summary",
+      });
+      raw.close();
+    });
+
+    it("accepts the five new session-handoff event types under the rebuilt Events CHECK", async () => {
+      const localState = await open();
+      const registered = localState.execute(registerProject());
+      if (registered.type !== "PROJECT_REGISTERED") throw new Error("Expected project registration");
+      localState.close();
+      state = undefined;
+
+      const raw = new DatabaseSync(databasePath);
+      const insertEvent = raw.prepare(
+        `INSERT INTO events (
+          id, schema_version, type, aggregate_type, aggregate_id, project_id,
+          actor_type, actor_id, occurred_at, correlation_id, data_json
+        ) VALUES (?, 1, ?, 'WORK_ITEM', 'work-item-session-handoff', ?, 'SYSTEM', 'mock-provider', ?, ?, '{}')`,
+      );
+      const newEventTypes = [
+        "PROVIDER_SESSION_STARTED",
+        "CONTEXT_HANDOFF_REQUESTED",
+        "CHECKPOINT_PUBLISHED",
+        "PROVIDER_SESSION_ENDED",
+        "CONTEXT_FLOOR_EXCEEDED",
+      ] as const;
+      for (const [index, type] of newEventTypes.entries()) {
+        insertEvent.run(
+          `event-${type}`,
+          type,
+          registered.project.id,
+          timestamp,
+          `correlation-${index.toString()}`,
+        );
+      }
+
+      // A type outside the CHECK's list is still rejected -- proves the list is enforced, not wide open.
+      expect(() =>
+        raw
+          .prepare(
+            `INSERT INTO events (
+              id, schema_version, type, aggregate_type, aggregate_id, project_id,
+              actor_type, actor_id, occurred_at, correlation_id, data_json
+            ) VALUES ('event-bogus', 1, 'NOT_A_REAL_TYPE', 'WORK_ITEM', 'work-item-session-handoff', ?,
+              'SYSTEM', 'mock-provider', ?, 'correlation-bogus', '{}')`,
+          )
+          .run(registered.project.id, timestamp),
+      ).toThrow();
+
+      const stored = raw
+        .prepare("SELECT type FROM events WHERE type IN (?, ?, ?, ?, ?) ORDER BY sequence")
+        .all(...newEventTypes) as { type: string }[];
+      expect(stored.map((row) => row.type)).toEqual(newEventTypes);
+      raw.close();
+    });
+
+    it("persists StageAttempt.unproductiveSessions across a restart with a zero default", async () => {
+      const localState = await open();
+      const { workItemId, stageAttemptId } = startWorkflow(
+        localState,
+        "start-unproductive-sessions",
+        "create-unproductive-sessions-item",
+      );
+      const snapshotBeforeRestart = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+      expect(
+        snapshotBeforeRestart.type === "WORKFLOW_SNAPSHOT"
+          ? snapshotBeforeRestart.snapshot.stageAttempts.find((attempt) => attempt.id === stageAttemptId)
+              ?.unproductiveSessions
+          : null,
+      ).toBe(0);
+      localState.close();
+      state = undefined;
+
+      const reopened = await open();
+      const snapshot = reopened.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+      expect(
+        snapshot.type === "WORKFLOW_SNAPSHOT"
+          ? snapshot.snapshot.stageAttempts.find((attempt) => attempt.id === stageAttemptId)
+              ?.unproductiveSessions
+          : null,
+      ).toBe(0);
+    });
+
+    it("migrates a pre-M6 database without losing Events or their sequence numbers", async () => {
+      const localState = await open();
+      const { workItemId } = startWorkflow(
+        localState,
+        "start-pre-m6-migration",
+        "create-pre-m6-migration-item",
+      );
+      const before = localState.query({ type: "LIST_EVENTS" });
+      if (before.type !== "EVENTS") throw new Error("Expected events");
+      const originalEvents = before.events.map((event) => ({
+        sequence: event.sequence,
+        id: event.id,
+        type: event.type,
+      }));
+      expect(originalEvents.length).toBeGreaterThan(0);
+      localState.close();
+      state = undefined;
+
+      // Revert exactly what migration 0006 does, to reconstruct a database that predates it.
+      const raw = new DatabaseSync(databasePath);
+      raw.exec("DROP TABLE checkpoints");
+      raw.exec("DROP TABLE provider_sessions");
+      raw.exec("DROP TABLE context_pack_recipes");
+      raw.exec("ALTER TABLE stage_attempts DROP COLUMN unproductive_sessions");
+
+      raw.exec("DROP TRIGGER events_are_append_only_update");
+      raw.exec("DROP TRIGGER events_are_append_only_delete");
+      raw.exec("DROP INDEX events_project_sequence_idx");
+      raw.exec("DROP INDEX events_aggregate_sequence_idx");
+      raw.exec("ALTER TABLE events RENAME TO events_v6");
+      raw.exec(`
+        CREATE TABLE events (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          id TEXT NOT NULL UNIQUE,
+          schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+          type TEXT NOT NULL CHECK (
+            type IN (
+              'PROJECT_REGISTERED', 'WORK_ITEM_CREATED', 'WORK_ITEM_UPDATED', 'WORK_ITEM_STATE_CHANGED',
+              'PIPELINE_STARTED', 'STAGE_ATTEMPT_CHANGED', 'HUMAN_REQUEST_OPENED',
+              'HUMAN_REQUEST_RESOLVED', 'USAGE_RECORDED', 'BUDGET_THRESHOLD_REACHED',
+              'PIPELINE_PAUSED', 'PIPELINE_RESUMED', 'PIPELINE_CANCELLED',
+              'BUDGET_OVERRIDE_APPROVED', 'RECOVERY_REPORT_CREATED', 'PIPELINE_COMPLETED',
+              'EVIDENCE_ARTIFACT_RECORDED', 'ACCEPTANCE_REQUESTED', 'ACCEPTANCE_RESOLVED'
+            )
+          ),
+          aggregate_type TEXT NOT NULL CHECK (aggregate_type IN ('PROJECT', 'WORK_ITEM')),
+          aggregate_id TEXT NOT NULL,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+          actor_type TEXT NOT NULL CHECK (actor_type IN ('HUMAN', 'SYSTEM')),
+          actor_id TEXT NOT NULL,
+          occurred_at TEXT NOT NULL,
+          correlation_id TEXT NOT NULL,
+          data_json TEXT NOT NULL CHECK (json_valid(data_json))
+        ) STRICT;
+      `);
+      raw.exec(`
+        INSERT INTO events (
+          sequence, id, schema_version, type, aggregate_type, aggregate_id, project_id,
+          actor_type, actor_id, occurred_at, correlation_id, data_json
+        )
+        SELECT
+          sequence, id, schema_version, type, aggregate_type, aggregate_id, project_id,
+          actor_type, actor_id, occurred_at, correlation_id, data_json
+        FROM events_v6
+      `);
+      raw.exec("DROP TABLE events_v6");
+      raw.exec("CREATE INDEX events_project_sequence_idx ON events(project_id, sequence)");
+      raw.exec("CREATE INDEX events_aggregate_sequence_idx ON events(aggregate_id, sequence)");
+      raw.exec(`
+        CREATE TRIGGER events_are_append_only_update
+        BEFORE UPDATE ON events
+        BEGIN
+          SELECT RAISE(ABORT, 'events are append-only');
+        END;
+      `);
+      raw.exec(`
+        CREATE TRIGGER events_are_append_only_delete
+        BEFORE DELETE ON events
+        BEGIN
+          SELECT RAISE(ABORT, 'events are append-only');
+        END;
+      `);
+      raw.prepare("DELETE FROM schema_migrations WHERE version = 6").run();
+      raw.close();
+
+      const migrated = await open();
+      expect(migrated.startup.appliedMigrations).toEqual([6]);
+
+      const after = migrated.query({ type: "LIST_EVENTS" });
+      if (after.type !== "EVENTS") throw new Error("Expected events");
+      expect(
+        after.events.map((event) => ({ sequence: event.sequence, id: event.id, type: event.type })),
+      ).toEqual(originalEvents);
+
+      // The append-only triggers on events survived the rebuild.
+      const raw2 = new DatabaseSync(databasePath);
+      expect(() => {
+        raw2.exec("UPDATE events SET type = type WHERE sequence = 1");
+      }).toThrow(/append-only/);
+      raw2.close();
+
+      // The existing StageAttempt got the new column with its DEFAULT 0, not NULL.
+      const snapshot = migrated.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+      expect(
+        snapshot.type === "WORKFLOW_SNAPSHOT"
+          ? snapshot.snapshot.stageAttempts[0]?.unproductiveSessions
+          : null,
+      ).toBe(0);
     });
   });
 });

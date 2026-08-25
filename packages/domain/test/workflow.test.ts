@@ -120,6 +120,7 @@ describe("mock workflow decisions", () => {
       startedAt: timestamp,
       finishedAt: null,
       failureCode: null,
+      unproductiveSessions: 0,
     };
     const request: HumanRequest = {
       schemaVersion: 1,

@@ -33,6 +33,7 @@ const invocation = (
     startedAt: null,
     finishedAt: null,
     failureCode: null,
+    unproductiveSessions: 0,
   },
   workItem: {
     schemaVersion: 1,

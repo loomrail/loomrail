@@ -291,6 +291,7 @@ export const decideStartMockPipeline = (
     startedAt: null,
     finishedAt: null,
     failureCode: null,
+    unproductiveSessions: 0,
   };
   const run: PipelineRun = {
     schemaVersion: 1,
@@ -836,6 +837,7 @@ export const decideApplyProviderOutcome = (
     startedAt: null,
     finishedAt: null,
     failureCode: null,
+    unproductiveSessions: 0,
   };
   const run: PipelineRun = {
     ...context.run,
@@ -1217,6 +1219,7 @@ export const decideApproveBudgetOverride = (
     workItemId: context.workItem.id,
     stage: context.stageAttempt.stage,
     attempt: context.stageAttempt.attempt + 1,
+    unproductiveSessions: 0,
     status: "QUEUED",
     version: 1,
     startedAt: null,
