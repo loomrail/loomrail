@@ -109,15 +109,18 @@ const createTask = async (
  * mid-flight, and a name-based locator would report the still-open dialog as hidden while it is
  * covering the page.
  */
+/**
+ * Picks one preference in the settings dialog.
+ *
+ * The dialog is located by class rather than by accessible name: choosing a language renames it
+ * mid-flight, and a name-based locator would report the still-open dialog as hidden while it is
+ * covering the page. The close control is used for the same reason.
+ */
 const chooseInSettings = async (page: Page, control: string, option: string): Promise<void> => {
   const settings = page.locator(".lr-dialog");
   await page.getByRole("button", { name: /Open settings|Открыть настройки/ }).click();
   await expect(settings).toBeVisible();
-  await settings.getByRole("combobox", { name: control }).click();
-  await page.getByRole("option", { name: option, exact: true }).click();
-  await expect(page.getByRole("listbox")).toHaveCount(0);
-  // The close control is used rather than Escape: the select consumes the first Escape, and the
-  // button carries a label that changes with the language being set here.
+  await settings.getByRole("group", { name: control }).getByRole("button", { name: option }).click();
   await settings.locator(".lr-dialog__header button").click();
   await expect(settings).toHaveCount(0);
 };
@@ -379,19 +382,13 @@ test.describe("authenticated walking skeleton", () => {
     await page.goto(daemon.bootstrapUrl);
     await page.getByRole("button", { name: "Open settings" }).click();
     const settings = page.getByRole("dialog", { name: "Settings" });
-    await settings.getByRole("combobox", { name: "Change language" }).click();
+    const languages = settings.getByRole("group", { name: "Change language" });
 
-    const options = page.getByRole("listbox");
-    await expect(options.getByRole("option")).toHaveCount(2);
-    await expect(options.getByRole("option", { name: "English", exact: true })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-    // Neither label may be clipped by the control that holds it.
+    await expect(languages.getByRole("button")).toHaveCount(2);
+    await expect(languages.getByRole("button", { name: "English" })).toHaveAttribute("aria-pressed", "true");
+    // Neither label may be clipped by the tile that holds it.
     for (const name of ["English", "Русский"]) {
-      const label = options
-        .getByRole("option", { name, exact: true })
-        .locator(".lr-select-item__copy > span");
+      const label = languages.getByRole("button", { name }).locator("span");
       expect(await label.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     }
   });
@@ -1164,8 +1161,10 @@ test.describe("authenticated walking skeleton", () => {
     // Both registered fixture projects are listed, with the active one marked.
     await expect(settings.getByRole("button", { name: /Fixture/ })).toHaveCount(2);
 
-    await settings.getByRole("combobox", { name: "Board density" }).click();
-    await page.getByRole("option", { name: "Compact" }).click();
+    await settings
+      .getByRole("group", { name: "Board density" })
+      .getByRole("button", { name: "Compact" })
+      .click();
     await expect(card).toHaveCSS("padding", "8px");
 
     await page.keyboard.press("Escape");

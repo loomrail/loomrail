@@ -57,7 +57,7 @@ import {
   type BoardScope,
   type BoardView,
 } from "../boardView";
-import { BrandMark } from "../components/BrandMark";
+import { PanelResizer } from "../components/PanelResizer";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
 import type { SummaryFilter } from "../router";
@@ -1654,8 +1654,27 @@ export const WorkbenchPage = (): React.JSX.Element => {
         ) : null}
 
         {projectsPending || (selectedProject && workItemsQuery.isPending) ? (
-          <div className="workbench-state workbench-state--loading" role="status">
-            <BrandMark aria-label={t("loading.board.title")} className="app-brand-mark" size={36} />
+          <div
+            aria-busy="true"
+            aria-label={t("loading.board.title")}
+            className="board-skeleton"
+            role="status"
+          >
+            {columns.map((column) => (
+              <div className="board-skeleton__column" key={column.labelKey}>
+                <header>
+                  <Skeleton width="72px" />
+                  <Skeleton width="16px" />
+                </header>
+                {[0, 1].map((card) => (
+                  <div className="board-skeleton__card" key={card}>
+                    <Skeleton width="54px" />
+                    <Skeleton width={card === 0 ? "88%" : "64%"} />
+                    <Skeleton width="46%" />
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
         ) : null}
 
@@ -1724,6 +1743,7 @@ export const WorkbenchPage = (): React.JSX.Element => {
         ) : null}
       </section>
 
+      <PanelResizer edge="end" panel="inspector" />
       <TaskInspector item={selectedItem} key={selectedItem?.id ?? "empty"} />
     </div>
   );

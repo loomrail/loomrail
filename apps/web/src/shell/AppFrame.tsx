@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { prioritySchema, type WorkItem } from "@loomrail/contracts";
 import {
@@ -18,16 +18,13 @@ import {
 } from "@loomrail/ui";
 
 import { BrandMark } from "../components/BrandMark";
+import { PanelResizer } from "../components/PanelResizer";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n } from "../i18n";
 import type { WorkbenchSearch } from "../router";
-import {
-  applyDensityPreference,
-  isDensityPreference,
-  readDensityPreference,
-  type DensityPreference,
-} from "../density";
-import { applyThemePreference, isThemePreference, readThemePreference, type ThemePreference } from "../theme";
+import { hasCustomPanelWidths, resetPanelWidths } from "../layout";
+import { applyDensityPreference, readDensityPreference, type DensityPreference } from "../density";
+import { applyThemePreference, readThemePreference, type ThemePreference } from "../theme";
 import { useCreateWorkItem, useProjectHumanRequests, useWorkspace } from "../workspace";
 
 const NewTaskDialog = (): React.JSX.Element => {
@@ -180,6 +177,58 @@ type SettingsDialogProps = {
   open: boolean;
 };
 
+type SettingChoiceOption<TValue extends string> = {
+  icon?: IconName;
+  label: string;
+  value: TValue;
+};
+
+/**
+ * A small set of mutually exclusive options shown as pressable tiles.
+ *
+ * Preferred over a dropdown here because every choice fits on screen: the reader compares them at a
+ * glance and commits in one click, instead of opening a list to see two or three items.
+ */
+const SettingChoice = <TValue extends string>({
+  description,
+  label,
+  onChange,
+  options,
+  value,
+}: {
+  description?: string;
+  label: string;
+  onChange: (value: TValue) => void;
+  options: readonly SettingChoiceOption<TValue>[];
+  value: TValue;
+}): React.JSX.Element => {
+  // A generated id, because a translated label can contain spaces and would not be a valid IDREF.
+  const labelId = useId();
+  return (
+    <div className="setting">
+      <span className="setting__label" id={labelId}>
+        {label}
+      </span>
+      <div aria-labelledby={labelId} className="setting__choices" role="group">
+        {options.map((option) => (
+          <button
+            aria-pressed={value === option.value}
+            key={option.value}
+            onClick={() => {
+              onChange(option.value);
+            }}
+            type="button"
+          >
+            {option.icon ? <Icon name={option.icon} size={15} /> : null}
+            <span>{option.label}</span>
+          </button>
+        ))}
+      </div>
+      {description ? <small className="setting__hint">{description}</small> : null}
+    </div>
+  );
+};
+
 /**
  * Gathers the preferences that belong to this browser.
  *
@@ -192,6 +241,11 @@ const SettingsDialog = ({ onOpenChange, open }: SettingsDialogProps): React.JSX.
   const { projects, selectedProject, selectProject } = useWorkspace();
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
   const [density, setDensity] = useState<DensityPreference>(readDensityPreference);
+  const [customWidths, setCustomWidths] = useState(hasCustomPanelWidths);
+
+  useEffect(() => {
+    if (open) setCustomWidths(hasCustomPanelWidths());
+  }, [open]);
 
   return (
     <DialogSurface
@@ -204,57 +258,55 @@ const SettingsDialog = ({ onOpenChange, open }: SettingsDialogProps): React.JSX.
       <div className="settings">
         <section className="settings__section">
           <h3>{t("settings.appearance")}</h3>
-          <Field htmlFor="settings-theme" label={t("theme.change")}>
-            <SelectControl
-              ariaLabel={t("theme.change")}
-              id="settings-theme"
-              onValueChange={(value) => {
-                if (!isThemePreference(value)) return;
-                setTheme(value);
-                applyThemePreference(value);
-              }}
-              options={[
-                { label: t("theme.system"), value: "system" },
-                { label: t("theme.light"), value: "light" },
-                { label: t("theme.dark"), value: "dark" },
-              ]}
-              value={theme}
-            />
-          </Field>
-          <Field
+          <SettingChoice
+            label={t("theme.change")}
+            onChange={(value) => {
+              setTheme(value);
+              applyThemePreference(value);
+            }}
+            options={[
+              { icon: "monitor", label: t("theme.system"), value: "system" },
+              { icon: "sun", label: t("theme.light"), value: "light" },
+              { icon: "moon", label: t("theme.dark"), value: "dark" },
+            ]}
+            value={theme}
+          />
+          <SettingChoice
             description={t("settings.density.description")}
-            htmlFor="settings-density"
             label={t("settings.density")}
+            onChange={(value) => {
+              setDensity(value);
+              applyDensityPreference(value);
+            }}
+            options={[
+              { icon: "list", label: t("settings.density.comfortable"), value: "comfortable" },
+              { icon: "layers", label: t("settings.density.compact"), value: "compact" },
+            ]}
+            value={density}
+          />
+          <SettingChoice
+            label={t("language.change")}
+            onChange={setLocale}
+            options={[
+              { label: t("language.english"), value: "en" },
+              { label: t("language.russian"), value: "ru" },
+            ]}
+            value={locale}
+          />
+        </section>
+
+        <section className="settings__section">
+          <h3>{t("settings.layout")}</h3>
+          <p className="settings__note">{t("settings.layout.description")}</p>
+          <Button
+            disabled={!customWidths}
+            onClick={() => {
+              resetPanelWidths();
+              setCustomWidths(false);
+            }}
           >
-            <SelectControl
-              ariaLabel={t("settings.density")}
-              id="settings-density"
-              onValueChange={(value) => {
-                if (!isDensityPreference(value)) return;
-                setDensity(value);
-                applyDensityPreference(value);
-              }}
-              options={[
-                { label: t("settings.density.comfortable"), value: "comfortable" },
-                { label: t("settings.density.compact"), value: "compact" },
-              ]}
-              value={density}
-            />
-          </Field>
-          <Field htmlFor="settings-language" label={t("language.change")}>
-            <SelectControl
-              ariaLabel={t("language.change")}
-              id="settings-language"
-              onValueChange={(value) => {
-                if (value === "en" || value === "ru") setLocale(value);
-              }}
-              options={[
-                { label: t("language.english"), value: "en" },
-                { label: t("language.russian"), value: "ru" },
-              ]}
-              value={locale}
-            />
-          </Field>
+            {t("settings.layout.reset")}
+          </Button>
         </section>
 
         <section className="settings__section">
@@ -418,6 +470,7 @@ export const AppFrame = (): React.JSX.Element => {
             setSettingsOpen(true);
           }}
         />
+        <PanelResizer edge="start" panel="sidebar" />
       </aside>
 
       <section className="app-surface">

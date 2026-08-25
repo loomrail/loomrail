@@ -43,6 +43,7 @@ button {
 
 .app-sidebar {
   display: flex;
+  position: relative;
   flex-direction: column;
   min-height: 0;
   padding: var(--lr-space-2);
@@ -304,6 +305,56 @@ button {
   gap: var(--lr-space-2);
 }
 
+/* The divider is a thin hit target that only shows itself on hover, focus or while dragging, so a
+   resizable edge never reads as a permanent border. */
+.panel-resizer {
+  bottom: 0;
+  cursor: col-resize;
+  position: absolute;
+  top: 0;
+  touch-action: none;
+  width: 9px;
+  /* Above the sticky board toolbar, or the divider would be clipped along that row. */
+  z-index: 12;
+}
+
+.app-sidebar .panel-resizer {
+  right: -4px;
+}
+
+/* Anchored to the grid rather than the panel: the inspector scrolls, and the handle must not. */
+.workbench > .panel-resizer {
+  right: calc(var(--lr-size-inspector) - 4px);
+}
+
+.panel-resizer::after {
+  background: transparent;
+  bottom: 0;
+  content: "";
+  left: 50%;
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  transition: background var(--lr-duration-fast) var(--lr-ease-standard);
+  width: 2px;
+}
+
+.panel-resizer:hover::after,
+.panel-resizer:focus-visible::after,
+body.is-resizing .panel-resizer:active::after {
+  background: var(--lr-accent);
+}
+
+.panel-resizer:focus-visible {
+  outline: none;
+}
+
+/* While dragging, the pointer owns the whole window: no text selection, no hover states. */
+body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
 .settings {
   display: grid;
   gap: var(--lr-space-5);
@@ -321,6 +372,65 @@ button {
   letter-spacing: 0.04em;
   margin: 0;
   text-transform: uppercase;
+}
+
+.setting {
+  display: grid;
+  gap: var(--lr-space-2);
+}
+
+.setting__label {
+  color: var(--lr-text);
+  font-size: var(--lr-font-sm);
+  font-weight: var(--lr-weight-medium);
+}
+
+.setting__choices {
+  display: grid;
+  gap: var(--lr-space-2);
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+}
+
+.setting__choices > button {
+  align-items: center;
+  background: var(--lr-surface);
+  border: 1px solid var(--lr-border-subtle);
+  border-radius: var(--lr-radius-control);
+  color: var(--lr-text-secondary);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  font: inherit;
+  font-size: var(--lr-font-sm);
+  gap: var(--lr-space-1-5);
+  padding: var(--lr-space-3) var(--lr-space-2);
+  transition:
+    background var(--lr-duration-fast) var(--lr-ease-standard),
+    border-color var(--lr-duration-fast) var(--lr-ease-standard);
+}
+
+.setting__choices > button:hover {
+  background: var(--lr-surface-raised);
+}
+
+.setting__choices > button[aria-pressed="true"] {
+  background: var(--lr-property-selected-bg);
+  border-color: var(--lr-accent);
+  color: var(--lr-text);
+}
+
+.setting__choices > button > .lr-icon {
+  color: var(--lr-text-muted);
+}
+
+.setting__choices > button[aria-pressed="true"] > .lr-icon {
+  color: var(--lr-accent);
+}
+
+.setting__hint {
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-xs);
 }
 
 .settings__projects {
@@ -471,6 +581,7 @@ button {
 
 .workbench {
   display: grid;
+  position: relative;
   grid-template-columns: minmax(0, 1fr) var(--lr-size-inspector);
   height: 100%;
   min-height: 0;
@@ -669,10 +780,35 @@ button {
   padding: var(--lr-space-3) var(--lr-space-4) var(--lr-space-8);
 }
 
-/* The board loading state shows the brand mark alone: naming internals mid-load helps nobody. */
-.workbench-state--loading {
-  min-height: 220px;
-  opacity: 0.5;
+/* The loading board mirrors the real column layout, so nothing shifts once the data lands. */
+.board-skeleton {
+  display: grid;
+  gap: var(--lr-space-4);
+  grid-auto-columns: minmax(220px, 1fr);
+  grid-auto-flow: column;
+  padding: var(--lr-space-3) var(--lr-space-4) var(--lr-space-8);
+}
+
+.board-skeleton__column {
+  display: grid;
+  gap: var(--lr-density-stack-gap);
+  align-content: start;
+}
+
+.board-skeleton__column > header {
+  align-items: center;
+  display: flex;
+  gap: var(--lr-space-2);
+  height: 28px;
+}
+
+.board-skeleton__card {
+  background: var(--lr-surface);
+  border: 1px solid var(--lr-border-subtle);
+  border-radius: var(--lr-radius-panel);
+  display: grid;
+  gap: var(--lr-density-card-gap);
+  padding: var(--lr-density-card-padding);
 }
 
 .workbench-state {
@@ -1501,6 +1637,11 @@ button {
 @media (max-width: 880px) {
   .app-shell {
     grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  /* The rail has a fixed width and the inspector stacks below the board; nothing to drag. */
+  .panel-resizer {
+    display: none;
   }
 
   .app-sidebar {
