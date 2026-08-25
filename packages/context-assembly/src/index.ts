@@ -1,2 +1,2 @@
-export type { ContextSources, RenderedSection, RenderedSectionSource } from "./render.js";
+export type { ContextSourceRef, ContextSources, RenderedSection } from "./render.js";
 export { renderSection } from "./render.js";

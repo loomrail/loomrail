@@ -31,14 +31,21 @@ export type ContextSources = {
   activity: readonly { id: string; version: number; occurredAt: string; description: string }[];
 };
 
-export type RenderedSectionSource = { kind: string; id: string; version: number };
+export type ContextSourceRef = { kind: string; id: string; version: number };
 
 export type RenderedSection = {
   id: ContextSectionId;
   text: string;
   bytes: number;
-  source: RenderedSectionSource | null;
+  // Cardinality carries the meaning: 0 = genuinely derived (no durable entity backs the section,
+  // or a checkpoint hasn't been published yet), 1 = one durable entity, N = one ref per record
+  // included in the section, in the order rendered. Spec D7 stores this per-section provenance in
+  // the recipe alongside a content hash, so an empty array here would silently break the recipe's
+  // reproducibility and source-drift claims for collection sections.
+  sources: readonly ContextSourceRef[];
 };
+
+type RenderedBody = { text: string; sources: readonly ContextSourceRef[] };
 
 // The `\n` join is load-bearing, not a style choice: the same input must produce the same bytes
 // on macOS and on Windows, and `Array.join` never inserts a platform line ending.
@@ -59,7 +66,7 @@ const untrusted = (body: string): string =>
     "END UNTRUSTED AGENT REPORT",
   ].join("\n");
 
-const renderWorkItemBrief = (sources: ContextSources): { text: string; source: RenderedSectionSource } => {
+const renderWorkItemBrief = (sources: ContextSources): RenderedBody => {
   const { workItemBrief } = sources;
   const text = block("Work Item Brief", [
     `ID: ${workItemBrief.id} (v${String(workItemBrief.version)})`,
@@ -72,10 +79,13 @@ const renderWorkItemBrief = (sources: ContextSources): { text: string; source: R
     "Acceptance Criteria:",
     ...list(workItemBrief.acceptanceCriteria, "(none recorded)"),
   ]);
-  return { text, source: { kind: "WORK_ITEM", id: workItemBrief.id, version: workItemBrief.version } };
+  return {
+    text,
+    sources: [{ kind: "WORK_ITEM", id: workItemBrief.id, version: workItemBrief.version }],
+  };
 };
 
-const renderWorkflowPosition = (sources: ContextSources): { text: string; source: null } => {
+const renderWorkflowPosition = (sources: ContextSources): RenderedBody => {
   const { workflowPosition } = sources;
   const text = block("Workflow Position", [
     `Template: ${workflowPosition.templateId} (v${String(workflowPosition.templateVersion)})`,
@@ -83,10 +93,12 @@ const renderWorkflowPosition = (sources: ContextSources): { text: string; source
     `Attempt: ${String(workflowPosition.attempt)}`,
     `Session: ${String(workflowPosition.sessionOrdinal)}`,
   ]);
-  return { text, source: null };
+  // No per-section ref: templateId/templateVersion are recorded at the recipe's top level (spec
+  // §4.2), so a ref here would be redundant rather than missing provenance.
+  return { text, sources: [] };
 };
 
-const renderDecisions = (sources: ContextSources): { text: string; source: null } => {
+const renderDecisions = (sources: ContextSources): RenderedBody => {
   const lines =
     sources.decisions.length === 0
       ? ["(no decisions recorded yet)"]
@@ -94,17 +106,22 @@ const renderDecisions = (sources: ContextSources): { text: string; source: null 
           `- [${decision.id} v${String(decision.version)}] Q: ${decision.question}`,
           `  A: ${decision.answer}`,
         ]);
-  return { text: block("Decisions", lines), source: null };
+  return {
+    text: block("Decisions", lines),
+    sources: sources.decisions.map((decision) => ({
+      kind: "DECISION",
+      id: decision.id,
+      version: decision.version,
+    })),
+  };
 };
 
-const renderLatestCheckpoint = (
-  sources: ContextSources,
-): { text: string; source: RenderedSectionSource | null } => {
+const renderLatestCheckpoint = (sources: ContextSources): RenderedBody => {
   const { latestCheckpoint } = sources;
   if (latestCheckpoint === null) {
     return {
       text: block("Latest Checkpoint", ["No checkpoint has been published for this attempt yet."]),
-      source: null,
+      sources: [],
     };
   }
   const body = [
@@ -121,11 +138,11 @@ const renderLatestCheckpoint = (
   ].join("\n");
   return {
     text: block("Latest Checkpoint", [untrusted(body)]),
-    source: { kind: "CHECKPOINT", id: latestCheckpoint.id, version: latestCheckpoint.version },
+    sources: [{ kind: "CHECKPOINT", id: latestCheckpoint.id, version: latestCheckpoint.version }],
   };
 };
 
-const renderEvidence = (sources: ContextSources): { text: string; source: null } => {
+const renderEvidence = (sources: ContextSources): RenderedBody => {
   const lines =
     sources.evidence.length === 0
       ? ["(no evidence recorded yet)"]
@@ -133,21 +150,27 @@ const renderEvidence = (sources: ContextSources): { text: string; source: null }
           `- [${item.id} v${String(item.version)}] ${item.kind}: ${item.title}`,
           `  ${item.summary}`,
         ]);
-  return { text: block("Evidence", lines), source: null };
+  return {
+    text: block("Evidence", lines),
+    sources: sources.evidence.map((item) => ({ kind: "EVIDENCE", id: item.id, version: item.version })),
+  };
 };
 
-const renderActivity = (sources: ContextSources): { text: string; source: null } => {
+const renderActivity = (sources: ContextSources): RenderedBody => {
   const lines =
     sources.activity.length === 0
       ? ["(no activity recorded yet)"]
       : sources.activity.map(
           (item) => `- [${item.id} v${String(item.version)}] ${item.occurredAt}: ${item.description}`,
         );
-  return { text: block("Activity", lines), source: null };
+  return {
+    text: block("Activity", lines),
+    sources: sources.activity.map((item) => ({ kind: "ACTIVITY", id: item.id, version: item.version })),
+  };
 };
 
 export const renderSection = (id: ContextSectionId, sources: ContextSources): RenderedSection => {
-  const rendered = ((): { text: string; source: RenderedSectionSource | null } => {
+  const rendered = ((): RenderedBody => {
     switch (id) {
       case "WORK_ITEM_BRIEF":
         return renderWorkItemBrief(sources);
@@ -168,6 +191,6 @@ export const renderSection = (id: ContextSectionId, sources: ContextSources): Re
     id,
     text: rendered.text,
     bytes: Buffer.byteLength(rendered.text, "utf8"),
-    source: rendered.source,
+    sources: rendered.sources,
   };
 };

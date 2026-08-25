@@ -24,10 +24,27 @@ describe("section rendering", () => {
     expect(rendered.text).toContain("END UNTRUSTED AGENT REPORT");
   });
 
+  it("attaches the checkpoint's own id and version as its source ref", () => {
+    const sources = sampleSources();
+    const rendered = renderSection("LATEST_CHECKPOINT", sources);
+    expect(rendered.sources).toEqual([
+      { kind: "CHECKPOINT", id: sources.latestCheckpoint?.id, version: sources.latestCheckpoint?.version },
+    ]);
+  });
+
   it("renders an absent checkpoint as an explicit absence, not as emptiness", () => {
     const rendered = renderSection("LATEST_CHECKPOINT", { ...sampleSources(), latestCheckpoint: null });
     expect(rendered.text).toContain("No checkpoint has been published for this attempt yet.");
-    expect(rendered.source).toBeNull();
+    expect(rendered.sources).toEqual([]);
+  });
+
+  it("reports one source ref per rendered record, in rendered order, for a collection section", () => {
+    // Спек D7: рецепт хранит провенанс по секции; для секции-коллекции это N ссылок, а не одна.
+    const sources = sampleSources();
+    const rendered = renderSection("EVIDENCE", sources);
+    expect(rendered.sources).toEqual(
+      sources.evidence.map((item) => ({ kind: "EVIDENCE", id: item.id, version: item.version })),
+    );
   });
 
   it("counts bytes, not characters", () => {
@@ -37,6 +54,6 @@ describe("section rendering", () => {
       ...sources,
       workItemBrief: { ...sources.workItemBrief, title: "Задача" },
     });
-    expect(rendered.bytes).toBeGreaterThan(rendered.text.length - 20);
+    expect(rendered.bytes).toBeGreaterThan(rendered.text.length);
   });
 });
