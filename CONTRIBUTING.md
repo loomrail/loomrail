@@ -18,7 +18,8 @@ pnpm verify
 ```
 
 Run `pnpm test:e2e` after `pnpm exec playwright install chromium` when changing CLI, daemon session behavior, or the
-web shell. macOS and Windows are blocking platforms; platform-specific behavior must not be accepted from only one.
+web shell. Run `pnpm pack:release && pnpm test:release` when changing how the launcher, the daemon or the persistence
+layer locate files on disk; see the [release guide](docs/RELEASE.md). macOS and Windows are blocking platforms; platform-specific behavior must not be accepted from only one.
 
 ## Public-by-default rule
 

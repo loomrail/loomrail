@@ -39,7 +39,7 @@ decisions instead of disconnected chat sessions.
 
 | Area          | Today                                                                                                    | Next                                           |
 | ------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| Local runtime | Loopback daemon, CLI launcher, one-time browser session                                                  | Packaged installer and release artifacts       |
+| Local runtime | Loopback daemon, CLI launcher, one-time browser session, installable tarball                             | Published package and desktop installer        |
 | State         | Tasks, runs, budgets, recovery, typed evidence, acceptance packages, Decisions, append-only Events       | Retention and restore hardening                |
 | Workbench     | Persisted board, workflow cockpit, command summary, evidence matrix, owner acceptance, EN/RU, light/dark | Full Attention Inbox and richer workflow views |
 | Agents        | Capability-checked provider contract and deterministic full-delivery mock adapter                        | Supervised Codex/Claude adapters               |
@@ -64,10 +64,28 @@ flowchart LR
 Loomrail is the control plane around this route. It does not replace the coding agents; it gives their work a shared
 model, clear permissions, recoverable state, and an inspectable history.
 
+## Install
+
+Loomrail ships as a single package: a bundled launcher, the prebuilt Workbench, the SQLite migrations and the bundled
+fixture projects. It is not published to npm yet, so build the tarball once and install it anywhere:
+
+```bash
+pnpm pack:release
+npm install ./dist-release/loomrail-0.0.0.tgz
+npx loomrail --port 4176
+```
+
+Install it globally with `npm install -g` instead if you want `loomrail` on your `PATH`. Either way the launcher
+starts on loopback and opens a one-time authenticated URL; add `--no-open` and it prints that URL instead, so a
+headless or remote terminal can still sign in.
+
+`pnpm test:release` performs exactly this install into an empty project using only the public registry, and runs on
+macOS and Windows in CI. See the [release guide](docs/RELEASE.md) for the full procedure.
+
 ## Run from source
 
-There is no published npm package or desktop installer yet. The supported way to try the current checkpoint is to
-run the repository from source.
+There is no desktop installer yet. To develop Loomrail, or to try the current checkpoint without building a package,
+run the repository directly.
 
 ### Requirements
 
@@ -94,8 +112,10 @@ pnpm build
 pnpm start --port 4176
 ```
 
-Use `pnpm start --no-open --port 4176` when the browser should not open automatically. `LOOMRAIL_DATA_DIR` can point a
-development run at an isolated data directory.
+Use `pnpm start --no-open --port 4176` when the browser should not open automatically; the launcher then prints the
+one-time sign-in URL so a headless or remote terminal can still authenticate a browser. That URL signs in a single
+browser, expires after 60 seconds, and is replaced on every restart. `LOOMRAIL_DATA_DIR` can point a development run at
+an isolated data directory.
 
 | Platform | Default local state                                   |
 | -------- | ----------------------------------------------------- |
@@ -134,7 +154,8 @@ talk directly to future agent, shell, or Git adapters.
       pipeline
 - [x] **M5 — Budgets and recovery:** explicit limits, pause/resume, crash recovery
 - [x] **M6 — Acceptance:** typed Review/QA evidence, criterion matrix, owner-only final approval, audit surface
-- [ ] **M7 — Public checkpoint:** clean install, hardening, packaging, release documentation
+- [ ] **M7 — Public checkpoint:** packaged launcher and clean-install gate are in place; remaining work is hardening
+      and the first published release
 
 Real Codex/Claude execution, shell/Git access, worktrees, plugins, remote mode, and desktop packaging remain outside the
 current checkpoint.
@@ -152,6 +173,7 @@ daemon session flow, or web shell should also pass the browser smoke test on bot
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md). Product and engineering sources of truth:
 
+- [Release guide](docs/RELEASE.md)
 - [Master plan](docs/product/MASTER-PLAN.ru.md)
 - [Product decisions](docs/product/PRODUCT-DECISIONS.ru.md)
 - [Architecture overview](docs/architecture/OVERVIEW.md)
