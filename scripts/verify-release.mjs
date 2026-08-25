@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { execFileSync } from "node:child_process";
-import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -67,10 +67,16 @@ const run = async () => {
 
     const port = await freePort();
     const baseUrl = `http://127.0.0.1:${port}`;
-    launcher = spawn(toolCommand("npx"), ["loomrail", "--no-open", "--port", String(port)], {
+    // Launch the installed binary through Node directly rather than the `npx` shim. On Windows the
+    // shim needs a shell, and killing that shell leaves the real process running with its pipes
+    // open, which hangs this script long after the check has passed. Reading `bin` from the
+    // installed manifest also asserts that the published entry point is where it claims to be.
+    const installedRoot = join(installDirectory, "node_modules", "loomrail");
+    const installedManifest = JSON.parse(await readFile(join(installedRoot, "package.json"), "utf8"));
+    const binaryPath = join(installedRoot, installedManifest.bin.loomrail);
+    launcher = spawn(process.execPath, [binaryPath, "--no-open", "--port", String(port)], {
       cwd: installDirectory,
       env: { ...process.env, LOOMRAIL_DATA_DIR: dataDirectory },
-      ...toolSpawnOptions(),
     });
 
     let output = "";
@@ -95,6 +101,8 @@ const run = async () => {
     process.stdout.write(`Release check passed: ${tarball} runs from a clean install.\n`);
   } finally {
     launcher?.kill("SIGTERM");
+    launcher?.stdout?.destroy();
+    launcher?.stderr?.destroy();
     await rm(installDirectory, { recursive: true, force: true }).catch(() => undefined);
     await rm(dataDirectory, { recursive: true, force: true }).catch(() => undefined);
   }
