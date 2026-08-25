@@ -974,6 +974,40 @@ body.is-resizing {
   font-weight: var(--lr-weight-medium);
 }
 
+/* The loading inspector reuses the real panel's spacing, so the header, the overview grid and the
+   brief keep their place when the selected task arrives. */
+.inspector-skeleton__actions {
+  align-items: center;
+  display: flex;
+  flex: none;
+  gap: var(--lr-space-1);
+}
+
+.inspector-skeleton__control {
+  border-radius: var(--lr-radius-full);
+  height: 28px;
+}
+
+.inspector-skeleton__title {
+  height: 16px;
+}
+
+.inspector-skeleton__summary {
+  display: grid;
+  gap: var(--lr-space-2-5) var(--lr-space-3);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.inspector-skeleton__summary > div {
+  display: grid;
+  gap: 4px;
+}
+
+.inspector-skeleton__copy {
+  display: grid;
+  gap: 6px;
+}
+
 .inspector-workflow-skeleton {
   display: grid;
   gap: var(--lr-space-3);

@@ -1064,6 +1064,33 @@ const AcceptancePanel = ({
   );
 };
 
+// The skeleton is shared by the workflow section and by the whole-inspector loading state; only the
+// outermost loading container announces itself, so the label - and with it the live region - is optional.
+const WorkflowSkeleton = ({ label }: { label?: string }): React.JSX.Element => (
+  <div
+    aria-label={label}
+    className="inspector-workflow-skeleton"
+    role={label === undefined ? undefined : "status"}
+  >
+    <div className="inspector-workflow-skeleton__status">
+      <Skeleton width="42%" />
+      <Skeleton width="68px" />
+    </div>
+    <div className="inspector-workflow-skeleton__panel">
+      <div>
+        <Skeleton width="48%" />
+        <Skeleton width="54px" />
+      </div>
+      <Skeleton className="inspector-workflow-skeleton__meter" width="100%" />
+      <Skeleton width="36%" />
+    </div>
+    <div className="inspector-workflow-skeleton__steps">
+      <Skeleton width="58%" />
+      <Skeleton width="44%" />
+    </div>
+  </div>
+);
+
 const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const { t } = useI18n();
   const workflowQuery = useWorkItemWorkflow(item.id);
@@ -1078,26 +1105,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
     ) ?? null;
 
   if (workflowQuery.isPending) {
-    return (
-      <div aria-label={t("workflow.loading")} className="inspector-workflow-skeleton" role="status">
-        <div className="inspector-workflow-skeleton__status">
-          <Skeleton width="42%" />
-          <Skeleton width="68px" />
-        </div>
-        <div className="inspector-workflow-skeleton__panel">
-          <div>
-            <Skeleton width="48%" />
-            <Skeleton width="54px" />
-          </div>
-          <Skeleton className="inspector-workflow-skeleton__meter" width="100%" />
-          <Skeleton width="36%" />
-        </div>
-        <div className="inspector-workflow-skeleton__steps">
-          <Skeleton width="58%" />
-          <Skeleton width="44%" />
-        </div>
-      </div>
-    );
+    return <WorkflowSkeleton label={t("workflow.loading")} />;
   }
 
   if (!snapshot?.run) {
@@ -1277,6 +1285,25 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   );
 };
 
+const ActivitySkeleton = ({ label }: { label?: string }): React.JSX.Element => (
+  <div
+    aria-label={label}
+    className="inspector-activity-skeleton"
+    role={label === undefined ? undefined : "status"}
+  >
+    {["first", "second", "third"].map((row, index) => (
+      <div className="inspector-activity-skeleton__row" key={row}>
+        <Skeleton className="inspector-activity-skeleton__icon" />
+        <span>
+          <Skeleton width={index === 1 ? "52%" : "68%"} />
+          <Skeleton width={index === 2 ? "64%" : "82%"} />
+        </span>
+        <Skeleton width="28px" />
+      </div>
+    ))}
+  </div>
+);
+
 /**
  * An item's activity grows without bound, so it is read newest first, one page at a time, rather
  * than rendering the whole log. The count stays honest about that: it reads "30+" while more pages
@@ -1321,24 +1348,80 @@ const TaskActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element =>
           {t("task.loadMoreActivity")}
         </Button>
       ) : null}
-      {eventsQuery.isPending ? (
-        <div aria-label={t("task.loadingActivity")} className="inspector-activity-skeleton" role="status">
-          {["first", "second", "third"].map((row, index) => (
-            <div className="inspector-activity-skeleton__row" key={row}>
-              <Skeleton className="inspector-activity-skeleton__icon" />
-              <span>
-                <Skeleton width={index === 1 ? "52%" : "68%"} />
-                <Skeleton width={index === 2 ? "64%" : "82%"} />
-              </span>
-              <Skeleton width="28px" />
-            </div>
-          ))}
-        </div>
-      ) : null}
+      {eventsQuery.isPending ? <ActivitySkeleton label={t("task.loadingActivity")} /> : null}
       {eventsQuery.data && events.length === 0 ? (
         <p className="inspector-copy">{t("task.noActivity")}</p>
       ) : null}
     </InspectorSection>
+  );
+};
+
+/**
+ * While the board loads there is nothing to select yet, so the inspector must not claim the reader
+ * made no selection. It mirrors the real panel - header, overview grid, workflow and activity - so
+ * the layout holds still once the first task lands.
+ */
+const TaskInspectorSkeleton = (): React.JSX.Element => {
+  const { t } = useI18n();
+
+  return (
+    <aside
+      aria-busy="true"
+      aria-label={t("loading.inspector.title")}
+      className="task-inspector"
+      role="status"
+    >
+      <div className="task-inspector__header">
+        <div className="task-inspector__identity">
+          <Skeleton width="68px" />
+          <div className="inspector-skeleton__actions">
+            <Skeleton className="inspector-skeleton__control" width="28px" />
+            <Skeleton className="inspector-skeleton__control" width="112px" />
+          </div>
+        </div>
+        <Skeleton className="inspector-skeleton__title" width="72%" />
+      </div>
+
+      <section className="lr-inspector-section">
+        <header>
+          <Skeleton width="64px" />
+        </header>
+        <div className="lr-inspector-section__body">
+          <div className="inspector-skeleton__summary">
+            {["state", "stage", "type", "priority", "risk"].map((property, index) => (
+              <div key={property}>
+                <Skeleton width="48%" />
+                <Skeleton width={index % 2 === 0 ? "74%" : "56%"} />
+              </div>
+            ))}
+          </div>
+          <div className="inspector-skeleton__copy">
+            <Skeleton width="100%" />
+            <Skeleton width="84%" />
+          </div>
+        </div>
+      </section>
+
+      <section className="lr-inspector-section">
+        <header>
+          <Skeleton width="76px" />
+          <Skeleton width="20px" />
+        </header>
+        <div className="lr-inspector-section__body">
+          <WorkflowSkeleton />
+        </div>
+      </section>
+
+      <section className="lr-inspector-section">
+        <header>
+          <Skeleton width="120px" />
+          <Skeleton width="16px" />
+        </header>
+        <div className="lr-inspector-section__body">
+          <ActivitySkeleton />
+        </div>
+      </section>
+    </aside>
   );
 };
 
@@ -1561,6 +1644,7 @@ export const WorkbenchPage = (): React.JSX.Element => {
       }),
     });
   };
+  const boardPending = projectsPending || (selectedProject !== null && workItemsQuery.isPending);
   const workItems = workItemsQuery.data?.workItems ?? [];
   const columns = columnsFor(scope);
   const scopedItems = workItems.filter((item) => scopeShows(scope, item.state));
@@ -1650,7 +1734,7 @@ export const WorkbenchPage = (): React.JSX.Element => {
           </div>
         ) : null}
 
-        {projectsPending || (selectedProject && workItemsQuery.isPending) ? (
+        {boardPending ? (
           <div
             aria-busy="true"
             aria-label={t("loading.board.title")}
@@ -1741,7 +1825,11 @@ export const WorkbenchPage = (): React.JSX.Element => {
       </section>
 
       <PanelResizer edge="end" panel="inspector" />
-      <TaskInspector item={selectedItem} key={selectedItem?.id ?? "empty"} />
+      {boardPending ? (
+        <TaskInspectorSkeleton />
+      ) : (
+        <TaskInspector item={selectedItem} key={selectedItem?.id ?? "empty"} />
+      )}
     </div>
   );
 };
