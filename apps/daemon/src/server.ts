@@ -371,6 +371,10 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           defaultSrc: ["'self'"],
           scriptSrc: ["'self'"],
           styleSrc: ["'self'"],
+          // Headless overlay primitives position themselves by writing a style attribute. Allowing
+          // inline style *attributes* keeps stylesheet injection (`style-src`) blocked; see
+          // docs/security/THREAT-MODEL.md.
+          styleSrcAttr: ["'unsafe-inline'"],
           imgSrc: ["'self'", "data:"],
           connectSrc: ["'self'"],
           frameAncestors: ["'none'"],

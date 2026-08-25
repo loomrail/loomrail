@@ -70,6 +70,28 @@ describe("local daemon session and state boundary", () => {
     expect(daemon.app.server.address()).toMatchObject({ address: "127.0.0.1" });
   });
 
+  it("blocks stylesheet injection while allowing overlay style attributes", async () => {
+    daemon = await startDaemon({ bootstrapToken: bootstrapToken(), logger: false });
+
+    const response = await fetch(`${daemon.baseUrl}/health/ready`);
+    const policy = response.headers.get("content-security-policy") ?? "";
+    const directive = (name: string): string =>
+      policy
+        .split(";")
+        .map((part) => part.trim())
+        .find((part) => part === name || part.startsWith(`${name} `)) ?? "";
+
+    // Script and stylesheet sources stay same-origin only.
+    expect(directive("script-src")).toBe("script-src 'self'");
+    expect(directive("style-src")).toBe("style-src 'self'");
+    expect(directive("default-src")).toBe("default-src 'self'");
+    expect(directive("frame-ancestors")).toBe("frame-ancestors 'none'");
+    // Overlay positioning needs inline style attributes; nothing else inline is permitted.
+    expect(directive("style-src-attr")).toBe("style-src-attr 'unsafe-inline'");
+    expect(directive("script-src-attr")).toBe("script-src-attr 'none'");
+    expect(policy).not.toContain("script-src 'unsafe-inline'");
+  });
+
   it("accepts only a valid correlation ID from an HTTP header", async () => {
     daemon = await startDaemon({ bootstrapToken: bootstrapToken(), logger: false });
 

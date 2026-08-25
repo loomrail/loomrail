@@ -112,6 +112,16 @@ The remaining Phase 0 WebSocket/session-restart controls are still future work; 
   authenticated URL;
 - failed/retried UI mutations preserve SQLite state through existing command idempotency and optimistic versioning.
 
+### M7 public checkpoint delta
+
+- `style-src` and `script-src` stay `'self'`, so no stylesheet or script can be injected into the Workbench;
+  `style-src-attr 'unsafe-inline'` is granted only so headless overlay primitives can write positioning style
+  attributes. `script-src-attr` remains `'none'`. A daemon integration test pins every one of these directives.
+- The launcher prints the one-time bootstrap URL only when it does not open a browser itself. The token stays a
+  single-use, 60-second, loopback-only grant, so terminal exposure is equivalent to handing it to the browser and is
+  the only way to authenticate a headless or remote-terminal run. It is still never written to the structured logger,
+  SQLite or Git, and a unit test asserts it is absent from launcher output whenever a browser was opened.
+
 ### Provider CLI
 
 - scrub inherited environment;
