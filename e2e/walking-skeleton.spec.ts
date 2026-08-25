@@ -773,21 +773,19 @@ test.describe("authenticated walking skeleton", () => {
     // Both tasks share a priority, so the default view falls back to newest-created first.
     expect(await backlogTitles()).toEqual(["Alpha ordering probe", "Zulu ordering probe"]);
 
+    // Both changes are made in one popover session: closing and reopening it between them adds
+    // overlay transitions that say nothing about ordering.
     await page.getByRole("button", { name: "Display settings" }).click();
     const displaySettings = page.locator('.lr-popover[aria-label="Display settings"]');
     await expect(displaySettings).toBeVisible();
     await displaySettings.getByRole("combobox", { name: "Order tasks by" }).click();
     await page.getByRole("option", { name: "Title" }).click();
-    await page.keyboard.press("Escape");
+    await expect(page.getByRole("listbox")).toBeHidden();
 
     await expect(page).toHaveURL(/order=title/);
     expect(await backlogTitles()).toEqual(["Zulu ordering probe", "Alpha ordering probe"]);
 
-    await page.getByRole("button", { name: "Display settings" }).click();
-    await expect(displaySettings).toBeVisible();
     await displaySettings.getByRole("button", { name: "Sort ascending" }).click();
-    await page.keyboard.press("Escape");
-
     await expect(page).toHaveURL(/dir=asc/);
     expect(await backlogTitles()).toEqual(["Alpha ordering probe", "Zulu ordering probe"]);
 
@@ -811,11 +809,11 @@ test.describe("authenticated walking skeleton", () => {
     await expect(columns).toHaveCount(4);
 
     await page.getByRole("button", { name: "Display settings" }).click();
-    await page
-      .locator('.lr-popover[aria-label="Display settings"]')
-      .getByRole("switch", { name: "Show empty columns" })
-      .click();
+    const displaySettings = page.locator('.lr-popover[aria-label="Display settings"]');
+    await expect(displaySettings).toBeVisible();
+    await displaySettings.getByRole("switch", { name: "Show empty columns" }).click();
     await page.keyboard.press("Escape");
+    await expect(displaySettings).toBeHidden();
 
     await expect(page).toHaveURL(/hideEmpty=true/);
     await expect(columns).toHaveCount(1);

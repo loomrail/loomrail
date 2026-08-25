@@ -3,7 +3,13 @@ import { cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import process from "node:process";
 
-import { releaseDependencies, releaseName, releaseVersion, repositoryRoot } from "./release-manifest.mjs";
+import {
+  releaseDependencies,
+  releaseName,
+  releaseVersion,
+  repositoryRoot,
+  toolExecutable,
+} from "./release-manifest.mjs";
 
 /**
  * Assembles the publishable launcher from an already-built workspace and packs it into a tarball.
@@ -66,7 +72,7 @@ const run = async () => {
     "utf8",
   );
 
-  const packed = execFileSync("npm", ["pack", "--pack-destination", stagingDirectory], {
+  const packed = execFileSync(toolExecutable("npm"), ["pack", "--pack-destination", stagingDirectory], {
     cwd: packageDirectory,
     encoding: "utf8",
   })

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
 
-import { repositoryRoot } from "./release-manifest.mjs";
+import { repositoryRoot, toolExecutable } from "./release-manifest.mjs";
 
 /**
  * Installs the packed launcher into an empty directory and proves it runs there.
@@ -55,22 +55,17 @@ const run = async () => {
       `${JSON.stringify({ name: "loomrail-release-check", private: true, version: "0.0.0" }, null, 2)}\n`,
       "utf8",
     );
-    execFileSync("npm", ["install", "--no-audit", "--no-fund", tarball], {
+    execFileSync(toolExecutable("npm"), ["install", "--no-audit", "--no-fund", tarball], {
       cwd: installDirectory,
       stdio: "inherit",
     });
 
     const port = await freePort();
     const baseUrl = `http://127.0.0.1:${port}`;
-    launcher = spawn(
-      process.platform === "win32" ? "npx.cmd" : "npx",
-      ["loomrail", "--no-open", "--port", String(port)],
-      {
-        cwd: installDirectory,
-        env: { ...process.env, LOOMRAIL_DATA_DIR: dataDirectory },
-        shell: process.platform === "win32",
-      },
-    );
+    launcher = spawn(toolExecutable("npx"), ["loomrail", "--no-open", "--port", String(port)], {
+      cwd: installDirectory,
+      env: { ...process.env, LOOMRAIL_DATA_DIR: dataDirectory },
+    });
 
     let output = "";
     launcher.stdout.on("data", (chunk) => (output += chunk.toString("utf8")));

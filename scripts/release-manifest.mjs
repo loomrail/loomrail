@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import process from "node:process";
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -57,3 +58,12 @@ export const releaseDependencies = () => {
 };
 
 export const releaseVersion = () => readPackageJson("apps/cli").version;
+
+/**
+ * Resolves a Node toolchain executable for the current platform.
+ *
+ * On Windows `npm` and `npx` are `.cmd` shims, which `child_process` cannot resolve without a
+ * shell. Naming the shim directly keeps argument handling free of shell quoting, which matters
+ * because release paths routinely contain spaces.
+ */
+export const toolExecutable = (name) => (process.platform === "win32" ? `${name}.cmd` : name);
