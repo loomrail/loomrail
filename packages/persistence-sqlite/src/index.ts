@@ -1057,16 +1057,22 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           summary: artifact.summary,
         }));
 
+        // Reads id/type/occurred_at straight off the row -- NOT through eventFromRow, which runs
+        // domainEventSchema.parse over the full row including data_json. The events CHECK
+        // constraint (migration 0006) already admits CONTEXT_HANDOFF_REQUESTED and
+        // CONTEXT_FLOOR_EXCEEDED, neither of which domainEventSchema models yet (deliberately --
+        // Task 8 emits them). The moment either lands in a work item's recent history, parsing it
+        // here would throw PERSISTENCE_FAILURE and block every future session from starting for
+        // that work item. ACTIVITY only ever needs these three fields, so it never needs the parse.
         const activity = eventRowSchema
           .array()
           .parse(selectRecentEventsForAggregate.all(workItem.id, MAX_ACTIVITY_EVENTS))
-          .map(eventFromRow)
           .reverse()
-          .map((event) => ({
-            id: event.id,
+          .map((row) => ({
+            id: row.id,
             version: 1,
-            occurredAt: event.occurredAt,
-            description: humanizeEventType(event.type),
+            occurredAt: row.occurred_at,
+            description: humanizeEventType(row.type),
           }));
 
         const sources: ContextSources = {

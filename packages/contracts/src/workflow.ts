@@ -803,12 +803,17 @@ export const resolveAcceptanceCommandSchema = commandBaseSchema.extend({
     .strict(),
 });
 
-// The recipe fields context-assembly's ContextPackRecipeDraft cannot know: templateId/
-// templateVersion/specSource come from the stage's ContextPackSpec, contentHash from the
-// assembled ContextPack, estimateQuality from the caller's window-size source. Everything else
-// (id, providerSessionId, createdAt) is assigned by the persistence layer that writes this
-// alongside the ProviderSession (spec §6.1 step 4).
-const contextPackRecipeDraftSchema = contextPackRecipeSchema.omit({
+// What START_PROVIDER_SESSION's caller submits for the recipe: context-assembly's
+// ContextPackRecipeDraft (sections/omitted/estimatedTokens/budgetTokens, the assembler's own
+// output) plus the fields the assembler cannot know -- templateId/templateVersion/specSource come
+// from the stage's ContextPackSpec, contentHash from the assembled ContextPack, estimateQuality
+// from the caller's window-size source. Everything else (id, providerSessionId, createdAt) is
+// assigned by the persistence layer that writes this alongside the ProviderSession (spec §6.1 step
+// 4). Named distinctly from context-assembly's ContextPackRecipeDraft -- the two are different
+// shapes sharing a concept (10 fields here vs. 4 there), and collapsing the names would send a
+// reader through StartProviderSessionCommand["payload"]["recipe"] to find this instead of
+// importing it directly.
+export const contextPackRecipeInputSchema = contextPackRecipeSchema.omit({
   id: true,
   providerSessionId: true,
   createdAt: true,
@@ -819,7 +824,7 @@ export const startProviderSessionCommandSchema = commandBaseSchema.extend({
   payload: z
     .object({
       stageAttemptId: opaqueIdSchema,
-      recipe: contextPackRecipeDraftSchema,
+      recipe: contextPackRecipeInputSchema,
     })
     .strict(),
 });
@@ -1119,6 +1124,7 @@ export type ApproveBudgetOverrideCommand = z.infer<typeof approveBudgetOverrideC
 export type ReconcileWorkflowsCommand = z.infer<typeof reconcileWorkflowsCommandSchema>;
 export type ResolveAcceptanceCommand = z.infer<typeof resolveAcceptanceCommandSchema>;
 export type WorkflowSnapshot = z.infer<typeof workflowSnapshotSchema>;
+export type ContextPackRecipeInput = z.infer<typeof contextPackRecipeInputSchema>;
 export type StartProviderSessionCommand = z.infer<typeof startProviderSessionCommandSchema>;
 export type PublishCheckpointCommand = z.infer<typeof publishCheckpointCommandSchema>;
 export type EndProviderSessionCommand = z.infer<typeof endProviderSessionCommandSchema>;

@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import type {
   AnswerHumanRequestCommand,
   ApplyProviderOutcomeCommand,
+  ContextPackRecipeInput,
   CreateWorkItemCommand,
   EndProviderSessionCommand,
   LegacyApplyMockProviderOutcomeCommand,
@@ -1214,7 +1215,7 @@ describe("SQLite local state", () => {
     const startProviderSessionCommand = (
       commandId: string,
       stageAttemptId: string,
-      recipeOverrides: Partial<StartProviderSessionCommand["payload"]["recipe"]> = {},
+      recipeOverrides: Partial<ContextPackRecipeInput> = {},
     ): StartProviderSessionCommand => ({
       schemaVersion: 1,
       commandId,
@@ -1347,12 +1348,14 @@ describe("SQLite local state", () => {
         );
     };
 
-    it("rolls back the session, the recipe, and the Event together when the StageAttempt does not exist", async () => {
+    it("rejects a ProviderSession for a StageAttempt that does not exist, writing nothing", async () => {
+      // No StageAttempt is ever created with this id: the FK on provider_sessions rejects the
+      // insert. This is a real, useful guard on its own, but note what it does NOT prove: the
+      // very first write attempted by this command fails, so a command that never wrote anything
+      // at all would pass these same assertions. It cannot tell a working ROLLBACK apart from no
+      // transaction existing in the first place -- see the next test for that.
       const localState = await open();
 
-      // No StageAttempt is ever created with this id: the FK on provider_sessions rejects the
-      // insert from inside this command's own transaction, which is what proves the rollback --
-      // a command that fails before writing anything would prove nothing about atomicity.
       expect(() =>
         localState.execute(startProviderSessionCommand("start-broken-attempt", "stage-attempt-missing")),
       ).toThrow();
@@ -1364,6 +1367,54 @@ describe("SQLite local state", () => {
       expect(countProviderSessions(raw)).toBe(0);
       expect(countContextPackRecipes(raw)).toBe(0);
       expect(countEventsOfType(raw, "PROVIDER_SESSION_STARTED")).toBe(0);
+      raw.close();
+    });
+
+    it("rolls back a session's own successful insert when its recipe write fails afterward", async () => {
+      // The scenario the previous test cannot reach: something DOES get written successfully
+      // before the failure. `createId` is rigged to hand out the SAME "contextPackRecipe" id
+      // every time, so the first session's recipe claims it, and a second session's recipe
+      // collides on the PRIMARY KEY -- but only after that second session's own row has already
+      // been inserted successfully. If BEGIN IMMEDIATE/COMMIT/ROLLBACK were removed from
+      // `execute`, the second session's row would survive; the assertions below would then fail.
+      let counter = 0;
+      state = await openLocalState({
+        databasePath,
+        now: () => new Date(timestamp),
+        createId: (kind) =>
+          kind === "contextPackRecipe" ? "recipe-reused" : `${kind}-${(counter += 1).toString()}`,
+      });
+      const localState = state;
+
+      const { stageAttemptId } = startWorkflow(
+        localState,
+        "start-recipe-collision",
+        "create-recipe-collision-item",
+      );
+
+      const first = localState.execute(startProviderSessionCommand("start-session-first", stageAttemptId));
+      if (first.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected the first session to start");
+
+      const ended = localState.execute(
+        endProviderSessionCommand("end-session-first", first.session.id, "HANDOFF"),
+      );
+      if (ended.type !== "PROVIDER_SESSION_ENDED") throw new Error("Expected the first session to end");
+
+      // Qualified with the expected error code: an unqualified toThrow() would also be satisfied
+      // by, say, a Zod parse failure that never touches SQL at all.
+      expect(() =>
+        localState.execute(startProviderSessionCommand("start-session-second", stageAttemptId)),
+      ).toThrow(expect.objectContaining({ code: "PERSISTENCE_FAILURE" }));
+
+      localState.close();
+      state = undefined;
+
+      const raw = new DatabaseSync(databasePath);
+      // Only the first session and its recipe survive -- the second session's insert, which by
+      // itself succeeded, was rolled back along with the recipe write that failed after it.
+      expect(countProviderSessions(raw)).toBe(1);
+      expect(countContextPackRecipes(raw)).toBe(1);
+      expect(countEventsOfType(raw, "PROVIDER_SESSION_STARTED")).toBe(1);
       raw.close();
     });
 
@@ -1483,6 +1534,39 @@ describe("SQLite local state", () => {
           answer: "Use pdf-lib.",
         },
       ]);
+    });
+
+    it("reads context sources even when a recent Event's type is not modeled by domainEventSchema", async () => {
+      // Migration 0006's events CHECK admits CONTEXT_HANDOFF_REQUESTED and CONTEXT_FLOOR_EXCEEDED
+      // (Task 8's events); domainEventSchema deliberately does not model them yet. ACTIVITY must
+      // not route these rows through eventFromRow's full domainEventSchema.parse, or the mere
+      // presence of one of these events in a work item's recent history would make it impossible
+      // to start any session for that work item at all.
+      const localState = await open();
+      const { workItemId, stageAttemptId, projectId } = startWorkflow(
+        localState,
+        "start-unmodeled-event",
+        "create-unmodeled-event-item",
+      );
+      localState.close();
+      state = undefined;
+
+      const raw = new DatabaseSync(databasePath);
+      raw
+        .prepare(
+          `INSERT INTO events (
+            id, schema_version, type, aggregate_type, aggregate_id, project_id,
+            actor_type, actor_id, occurred_at, correlation_id, data_json
+          ) VALUES (?, 1, 'CONTEXT_HANDOFF_REQUESTED', 'WORK_ITEM', ?, ?, 'SYSTEM', 'mock-provider', ?, ?, '{}')`,
+        )
+        .run("event-unmodeled", workItemId, projectId, timestamp, "correlation-unmodeled");
+      raw.close();
+
+      const reopened = await open();
+      const result = reopened.query({ type: "READ_CONTEXT_SOURCES", stageAttemptId, sessionOrdinal: 1 });
+      if (result.type !== "CONTEXT_SOURCES") throw new Error("Expected context sources");
+      const unmodeled = result.sources.activity.find((item) => item.id === "event-unmodeled");
+      expect(unmodeled).toMatchObject({ description: "Context Handoff Requested" });
     });
 
     it("keeps every context source pinned to one snapshot, immune to a write that commits mid-read", async () => {
