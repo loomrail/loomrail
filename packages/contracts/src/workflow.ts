@@ -57,6 +57,26 @@ export const evidenceArtifactKindSchema = z.enum(["REVIEW_REPORT", "QA_REPORT"])
 export const evidenceArtifactStatusSchema = z.literal("PASSED");
 export const acceptanceStatusSchema = z.enum(["PENDING", "ACCEPTED", "RETURNED", "REJECTED"]);
 export const acceptanceActionSchema = z.enum(["ACCEPT", "RETURN_TO_WORK", "REJECT"]);
+export const providerSessionStatusSchema = z.enum(["RUNNING", "ENDED"]);
+export const providerSessionEndReasonSchema = z.enum([
+  "COMPLETED",
+  "HANDOFF",
+  "CONTEXT_EXHAUSTED",
+  "INTERRUPTED",
+  "CANCELLED",
+]);
+// The kinds a context-pack section's provenance can point at (packages/context-assembly's
+// render.ts is the only producer today). WORKFLOW_POSITION carries no source: templateId and
+// templateVersion are recorded at the recipe's top level instead (spec §4.2).
+export const contextSourceKindSchema = z.enum([
+  "WORK_ITEM",
+  "DECISION",
+  "CHECKPOINT",
+  "EVIDENCE",
+  "ACTIVITY",
+]);
+export const contextPackSpecSourceSchema = z.literal("WORKFLOW_TEMPLATE"); // A3 adds ROLE_PLAYBOOK
+export const contextPackOmittedReasonSchema = z.literal("CONTEXT_BUDGET");
 
 const titleSchema = z.string().trim().min(1).max(200);
 const descriptionSchema = z.string().trim().min(1).max(4_000);
@@ -101,6 +121,124 @@ export const contextPackSchema = z
   .strict();
 
 export type ContextPack = z.infer<typeof contextPackSchema>;
+
+// Per-section provenance is a list, not a single { kind, id, version } pair: cardinality carries
+// meaning (0 = a genuinely derived section, 1 = one durable entity, N = a collection), and
+// DECISIONS/EVIDENCE/ACTIVITY are collections of records, each with its own id and version. A
+// single pair cannot express N of them. This mirrors ContextPackRecipeDraft in
+// packages/context-assembly/src/assemble.ts, which is the only producer of this shape today.
+export const contextPackRecipeSourceSchema = z
+  .object({
+    kind: contextSourceKindSchema,
+    id: opaqueIdSchema,
+    version: z.number().int().positive(),
+  })
+  .strict();
+
+export const contextPackRecipeSectionSchema = z
+  .object({
+    id: contextSectionIdSchema,
+    sources: z.array(contextPackRecipeSourceSchema).max(200),
+    bytes: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const contextPackRecipeOmittedSectionSchema = z
+  .object({
+    id: contextSectionIdSchema,
+    reason: contextPackOmittedReasonSchema,
+  })
+  .strict();
+
+// Persisted alongside the assembled pack (spec §4.2). `sections`/`omitted`/`estimatedTokens`/
+// `budgetTokens` are exactly what the assembler's ContextPackRecipeDraft emits; the remaining
+// fields (id, providerSessionId, templateId, templateVersion, specSource, contentHash,
+// estimateQuality, createdAt) are added by the persistence layer that writes the recipe alongside
+// the session and the PROVIDER_SESSION_STARTED event.
+export const contextPackRecipeSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    providerSessionId: opaqueIdSchema,
+    templateId: opaqueIdSchema,
+    templateVersion: z.number().int().positive(),
+    specSource: contextPackSpecSourceSchema,
+    sections: z.array(contextPackRecipeSectionSchema).min(1).max(20),
+    omitted: z.array(contextPackRecipeOmittedSectionSchema).max(20),
+    contentHash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+    estimatedTokens: z.number().int().nonnegative(),
+    budgetTokens: z.number().int().positive(),
+    estimateQuality: usageQualitySchema,
+    createdAt: utcTimestampSchema,
+  })
+  .strict();
+
+export const providerSessionSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    stageAttemptId: opaqueIdSchema,
+    ordinal: z.number().int().positive(),
+    status: providerSessionStatusSchema,
+    endReason: providerSessionEndReasonSchema.nullable(),
+    contextPackRecipeId: opaqueIdSchema,
+    handoffRequestedAt: utcTimestampSchema.nullable(),
+    startedAt: utcTimestampSchema,
+    endedAt: utcTimestampSchema.nullable(),
+    version: z.number().int().positive(),
+  })
+  .strict()
+  .refine(
+    (session) => (session.status === "ENDED") === (session.endReason !== null),
+    "An ended session must carry an end reason and a running one must not",
+  );
+
+// What the agent publishes mid-session (spec §5.1's onCheckpoint). Empty completed/remaining/
+// deadEnds/openQuestions lists are legitimate -- a session may genuinely have hit no dead ends --
+// but a checkpoint with no summary carries nothing forward to the next session's context pack.
+export const checkpointDraftSchema = z
+  .object({
+    summary: descriptionSchema,
+    completed: z.array(z.string().trim().min(1).max(500)).max(50),
+    remaining: z.array(z.string().trim().min(1).max(500)).max(50),
+    deadEnds: z.array(z.string().trim().min(1).max(500)).max(50),
+    openQuestions: z.array(z.string().trim().min(1).max(500)).max(50),
+  })
+  .strict();
+
+// Checkpoint is append-only and never edited (D7): unlike the other entities in this file it
+// carries no optimistic-concurrency `version` field, matching evidenceArtifactSchema's pattern.
+export const checkpointSchema = checkpointDraftSchema
+  .extend({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    stageAttemptId: opaqueIdSchema,
+    providerSessionId: opaqueIdSchema,
+    ordinal: z.number().int().positive(),
+    createdAt: utcTimestampSchema,
+  })
+  .strict();
+
+export const contextWindowUsageSchema = z
+  .object({
+    usedTokens: z.number().int().nonnegative(),
+    windowTokens: z.number().int().positive(),
+    quality: usageQualitySchema,
+  })
+  .strict()
+  .refine((usage) => usage.usedTokens <= usage.windowTokens, "Usage cannot exceed the window");
+
+export type ContextSourceKind = z.infer<typeof contextSourceKindSchema>;
+export type ContextPackRecipeSource = z.infer<typeof contextPackRecipeSourceSchema>;
+export type ContextPackRecipeSection = z.infer<typeof contextPackRecipeSectionSchema>;
+export type ContextPackRecipeOmittedSection = z.infer<typeof contextPackRecipeOmittedSectionSchema>;
+export type ContextPackRecipe = z.infer<typeof contextPackRecipeSchema>;
+export type ProviderSessionStatus = z.infer<typeof providerSessionStatusSchema>;
+export type ProviderSessionEndReason = z.infer<typeof providerSessionEndReasonSchema>;
+export type ProviderSession = z.infer<typeof providerSessionSchema>;
+export type CheckpointDraft = z.infer<typeof checkpointDraftSchema>;
+export type Checkpoint = z.infer<typeof checkpointSchema>;
+export type ContextWindowUsage = z.infer<typeof contextWindowUsageSchema>;
 
 export const workflowTemplateStageSchema = z
   .object({
