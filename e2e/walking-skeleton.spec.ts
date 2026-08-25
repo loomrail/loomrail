@@ -247,6 +247,8 @@ test.describe("authenticated walking skeleton", () => {
     await inspector.getByRole("button", { name: "Редактировать задачу" }).hover();
     await expect(page.getByRole("tooltip")).toHaveText("Редактировать задачу");
     await expect(page.getByRole("tooltip")).toHaveAttribute("data-side", "bottom");
+    // A visible tooltip is a label, not a target: it must not intercept clicks beneath it.
+    await expect(page.getByRole("tooltip")).toHaveCSS("pointer-events", "none");
     await expect(inspector.getByRole("button", { name: "Редактировать задачу" })).not.toHaveAttribute(
       "title",
     );
@@ -268,11 +270,11 @@ test.describe("authenticated walking skeleton", () => {
     expect(await footer.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 
     await page.getByRole("button", { name: "Настройки отображения" }).click();
-    const grouping = page.getByRole("combobox", { name: "Группировать задачи по" });
-    await grouping.click();
-    const assignee = page.getByRole("option", { name: "Исполнитель" });
+    const ordering = page.getByRole("combobox", { name: "Сортировать задачи по" });
+    await ordering.click();
+    const updated = page.getByRole("option", { name: "Обновлено" });
     expect(
-      await assignee
+      await updated
         .locator(".lr-select-item__copy > span")
         .evaluate((element) => element.scrollWidth <= element.clientWidth),
     ).toBe(true);
@@ -339,10 +341,13 @@ test.describe("authenticated walking skeleton", () => {
     await createTask(page, "Compact screen task");
     const workbench = page.locator(".workbench");
     const board = page.locator(".workbench-board");
+    const columns = page.locator(".kanban-board-scroll");
     const inspector = page.getByRole("complementary", { name: "Compact screen task" });
 
     expect(await workbench.evaluate((element) => element.scrollWidth === element.clientWidth)).toBe(true);
-    expect(await board.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    // The column row absorbs the horizontal overflow so the toolbar and heading never scroll away.
+    expect(await columns.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    expect(await board.evaluate((element) => element.scrollWidth === element.clientWidth)).toBe(true);
     await inspector.scrollIntoViewIfNeeded();
     const surfaceBox = await page.locator(".app-surface").boundingBox();
     const inspectorBox = await inspector.boundingBox();
@@ -456,6 +461,28 @@ test.describe("authenticated walking skeleton", () => {
     expect(acceptanceResponse.status()).toBe(200);
     await expect(page.getByRole("button", { name: "Human decision workflow" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Needs your decision/ })).toHaveCount(0);
+
+    // Accepted work leaves the active board, so "All issues" has to be able to show it again.
+    await page.getByRole("button", { name: "All issues", exact: true }).click();
+    await expect(page).toHaveURL(/scope=all/);
+    const doneColumn = page
+      .locator(".lr-kanban-column")
+      .filter({ has: page.getByText("Done", { exact: true }) });
+    await expect(doneColumn.getByRole("button", { name: "Human decision workflow" })).toBeVisible();
+
+    // The scope survives a reload and the summary keeps describing live work only.
+    await page.reload();
+    await expect(page.getByRole("button", { name: "All issues", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(page.getByRole("button", { name: "Human decision workflow" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Active: 0" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Backlog", exact: true }).click();
+    await expect(page).toHaveURL(/scope=backlog/);
+    await expect(page.locator(".lr-kanban-column")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Human decision workflow" })).toHaveCount(0);
   });
 
   test("keeps overlays mutually exclusive, dismissible, and responsive", async ({ page }) => {
@@ -533,15 +560,13 @@ test.describe("authenticated walking skeleton", () => {
     await page.goto(daemon.bootstrapUrl);
     await initializeWorkspace(page);
 
-    const inbox = page.locator(".app-nav-link").filter({ hasText: "Inbox" });
-    const navBackgroundBefore = await page.evaluate<string>(
-      "getComputedStyle(document.querySelector('.app-nav-link')).backgroundColor",
-    );
-    await inbox.hover();
-    const navBackgroundAfter = await page.evaluate<string>(
-      "getComputedStyle(document.querySelector('.app-nav-link')).backgroundColor",
-    );
-    expect(navBackgroundAfter).not.toBe(navBackgroundBefore);
+    // Measure the very link that is hovered, not merely the first one in the sidebar.
+    const humanRequests = page.locator(".app-nav-link").filter({ hasText: "Human requests" });
+    const navBackground = async (): Promise<string> =>
+      humanRequests.evaluate((element) => getComputedStyle(element).backgroundColor);
+    const navBackgroundBefore = await navBackground();
+    await humanRequests.hover();
+    expect(await navBackground()).not.toBe(navBackgroundBefore);
 
     await page.getByRole("button", { name: "New task" }).click();
     const dialog = page.getByRole("dialog", { name: "New task" });
@@ -664,31 +689,33 @@ test.describe("authenticated walking skeleton", () => {
     await expect(rootPopover).toBeHidden();
     const displaySettings = page.locator('.lr-popover[aria-label="Display settings"]');
     await expect(displaySettings).toBeVisible();
-    const groupingTrigger = displaySettings.getByRole("combobox", {
+    const orderingTrigger = displaySettings.getByRole("combobox", {
       exact: true,
-      name: "Group tasks by",
+      name: "Order tasks by",
     });
-    await groupingTrigger.click();
-    const groupingOptions = page.getByRole("listbox");
-    await expect(groupingOptions.getByRole("option")).toHaveCount(7);
+    await orderingTrigger.click();
+    const orderingOptions = page.getByRole("listbox");
+    // Every offered ordering is backed by a real WorkItem field.
+    await expect(orderingOptions.getByRole("option")).toHaveCount(4);
     await expect(
-      groupingOptions.getByRole("option", { name: "No grouping" }).locator(".lr-select-item__copy > span"),
-    ).toHaveCSS("font-weight", "400");
-    await expect(
-      groupingOptions.getByRole("option", { name: "Status" }).locator(".lr-select-item__copy > span"),
+      orderingOptions.getByRole("option", { name: "Priority" }).locator(".lr-select-item__copy > span"),
     ).toHaveCSS("font-weight", "500");
-    const assigneeOption = groupingOptions.getByRole("option", { name: "Assignee" });
+    await expect(
+      orderingOptions.getByRole("option", { name: "Created" }).locator(".lr-select-item__copy > span"),
+    ).toHaveCSS("font-weight", "400");
+    const titleOption = orderingOptions.getByRole("option", { name: "Title" });
     expect(
-      await assigneeOption
+      await titleOption
         .locator(".lr-select-item__copy > span")
         .evaluate((element) => element.scrollWidth <= element.clientWidth),
     ).toBe(true);
-    const projectOption = groupingOptions.getByRole("option", { name: "Project" });
-    await projectOption.hover();
-    await expect(projectOption).toHaveCSS("cursor", "default");
-    await expect(projectOption).toHaveCSS("user-select", "none");
+    await titleOption.hover();
+    await expect(titleOption).toHaveCSS("cursor", "default");
+    await expect(titleOption).toHaveCSS("user-select", "none");
     await page.keyboard.press("Escape");
+    await expect(orderingOptions).toBeHidden();
     await page.keyboard.press("Escape");
+    await expect(displaySettings).toBeHidden();
 
     await appliedFilters.getByRole("button", { name: "Clear" }).click();
     await page.setViewportSize({ height: 844, width: 390 });
@@ -720,5 +747,210 @@ test.describe("authenticated walking skeleton", () => {
       "0.001s",
     );
     await page.keyboard.press("Escape");
+  });
+
+  test("orders the board by a real WorkItem field and keeps the choice in the URL", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    // The popover animates in; reduced motion keeps its controls immediately stable to click.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Zulu ordering probe");
+    await createTask(page, "Alpha ordering probe");
+
+    const backlogTitles = async (): Promise<readonly string[]> =>
+      page
+        .locator(".lr-kanban-column")
+        .first()
+        .locator(".task-card-button .lr-task-card__title")
+        .allInnerTexts();
+
+    // Both tasks share a priority, so the default view falls back to newest-created first.
+    expect(await backlogTitles()).toEqual(["Alpha ordering probe", "Zulu ordering probe"]);
+
+    await page.getByRole("button", { name: "Display settings" }).click();
+    const displaySettings = page.locator('.lr-popover[aria-label="Display settings"]');
+    await expect(displaySettings).toBeVisible();
+    await displaySettings.getByRole("combobox", { name: "Order tasks by" }).click();
+    await page.getByRole("option", { name: "Title" }).click();
+    await page.keyboard.press("Escape");
+
+    await expect(page).toHaveURL(/order=title/);
+    expect(await backlogTitles()).toEqual(["Zulu ordering probe", "Alpha ordering probe"]);
+
+    await page.getByRole("button", { name: "Display settings" }).click();
+    await expect(displaySettings).toBeVisible();
+    await displaySettings.getByRole("button", { name: "Sort ascending" }).click();
+    await page.keyboard.press("Escape");
+
+    await expect(page).toHaveURL(/dir=asc/);
+    expect(await backlogTitles()).toEqual(["Alpha ordering probe", "Zulu ordering probe"]);
+
+    // The ordering survives a reload because it lives in the URL, not component state.
+    await page.reload();
+    expect(await backlogTitles()).toEqual(["Alpha ordering probe", "Zulu ordering probe"]);
+  });
+
+  test("hides empty delivery columns only when the owner asks for it", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Only backlog work");
+
+    const columns = page.locator(".lr-kanban-column");
+    await expect(columns).toHaveCount(4);
+
+    await page.getByRole("button", { name: "Display settings" }).click();
+    await page
+      .locator('.lr-popover[aria-label="Display settings"]')
+      .getByRole("switch", { name: "Show empty columns" })
+      .click();
+    await page.keyboard.press("Escape");
+
+    await expect(page).toHaveURL(/hideEmpty=true/);
+    await expect(columns).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Only backlog work" })).toBeVisible();
+  });
+
+  test("emphasises the forward move and offers no placeholder actions", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Forward move probe");
+
+    const inspector = page.getByRole("complementary", { name: "Forward move probe" });
+    const footer = inspector.locator(".task-inspector__footer");
+
+    // Backlog has exactly one meaningful move, so no disabled placeholder is rendered beside it.
+    await expect(footer.getByRole("button")).toHaveCount(1);
+    const toReady = footer.getByRole("button", { name: "Move to Ready" });
+    await expect(toReady).toHaveClass(/lr-button--primary/);
+    await toReady.click();
+
+    // READY allows Backlog before Running in the transition matrix; the emphasised action must
+    // still be the one that carries the work forward.
+    await expect(footer.getByRole("button")).toHaveCount(2);
+    await expect(footer.getByRole("button", { name: "Move to Running" })).toHaveClass(/lr-button--primary/);
+    await expect(footer.getByRole("button", { name: "Move to Backlog" })).not.toHaveClass(
+      /lr-button--primary/,
+    );
+    await expect(footer.getByRole("button", { name: /No available move|No secondary action/ })).toHaveCount(
+      0,
+    );
+  });
+
+  test("reveals the column a selected task moved into on a narrow board", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.setViewportSize({ height: 800, width: 1024 });
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Scrolled into view");
+
+    const board = page.locator(".kanban-board-scroll");
+    expect(await board.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+
+    const inspector = page.getByRole("complementary", { name: "Scrolled into view" });
+    await inspector.getByRole("button", { name: "Move to Ready" }).click();
+    await inspector.getByRole("button", { name: "Move to Running" }).click();
+    await inspector.getByRole("button", { name: "Move to Blocked" }).click();
+
+    const card = page.getByRole("button", { name: "Scrolled into view" });
+    await expect(card).toHaveAttribute("aria-pressed", "true");
+    // The card sits in the right-most column; the board must have scrolled it back into view
+    // instead of leaving the visible columns looking empty.
+    const cardBox = await card.boundingBox();
+    const boardBox = await board.boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(boardBox).not.toBeNull();
+    if (cardBox && boardBox) {
+      expect(cardBox.x).toBeGreaterThanOrEqual(boardBox.x - 1);
+      expect(cardBox.x + cardBox.width).toBeLessThanOrEqual(boardBox.x + boardBox.width + 1);
+    }
+  });
+
+  test("keeps navigation reachable and free of dead ends on a phone viewport", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await page.setViewportSize({ height: 812, width: 375 });
+
+    // The sidebar is gone at this width, so the drawer is the only route to navigation.
+    await expect(page.locator(".app-sidebar")).toBeHidden();
+    const openNavigation = page.getByRole("button", { name: "Open navigation" });
+    await expect(openNavigation).toBeVisible();
+    await openNavigation.click();
+
+    const drawer = page.getByRole("dialog", { name: "Workspace" });
+    await expect(drawer).toBeVisible();
+    // Project switching, language and theme all have to survive the narrow layout.
+    await expect(drawer.getByRole("button", { name: "Switch project" })).toBeVisible();
+    await expect(drawer.getByRole("button", { name: "Change language" })).toBeVisible();
+    await expect(drawer.getByRole("button", { name: "Change color theme" })).toBeVisible();
+
+    await drawer.getByRole("link", { name: "Human requests" }).click();
+    await expect(drawer).toBeHidden();
+    await expect(page).toHaveURL(/summary=needsYou/);
+  });
+
+  test("offers no navigation entry that leads nowhere", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+
+    // Every sidebar entry resolves to a view the product actually serves.
+    const links = page.locator(".app-sidebar .app-nav-link");
+    await expect(links).toHaveCount(2);
+    for (const link of await links.all()) {
+      await expect(link).toHaveAttribute("href", /^\//);
+      await expect(link).not.toHaveAttribute("aria-disabled", "true");
+    }
+
+    // No control in the frame or the board toolbar is present purely for decoration.
+    const disabledControls = await page
+      .locator(".app-sidebar, .app-topbar, .board-toolbar")
+      .locator("button:disabled, [aria-disabled='true']")
+      .count();
+    expect(disabledControls).toBe(0);
+
+    // Every board scope tab switches the board rather than sitting there inert.
+    for (const [name, expected] of [
+      ["Backlog", /scope=backlog/],
+      ["All issues", /scope=all/],
+      ["Active", /^(?!.*scope=).*$/],
+    ] as const) {
+      await page.getByRole("button", { name, exact: true }).click();
+      await expect(page).toHaveURL(expected);
+      await expect(page.getByRole("button", { name, exact: true })).toHaveAttribute("aria-pressed", "true");
+    }
   });
 });

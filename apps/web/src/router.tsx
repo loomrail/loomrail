@@ -1,5 +1,14 @@
 import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 
+import {
+  defaultBoardView,
+  isBoardDirection,
+  isBoardOrdering,
+  isBoardScope,
+  type BoardDirection,
+  type BoardOrdering,
+  type BoardScope,
+} from "./boardView";
 import { AppFrame } from "./shell/AppFrame";
 import { WorkbenchPage } from "./views/WorkbenchPage";
 
@@ -13,6 +22,8 @@ const workItemFilters = new Set([
   "priority-urgent",
   "status-backlog",
   "status-blocked",
+  "status-cancelled",
+  "status-done",
   "status-in_progress",
   "status-ready",
 ]);
@@ -20,7 +31,11 @@ const workItemFilters = new Set([
 export type SummaryFilter = "active" | "atRisk" | "needsYou";
 
 export type WorkbenchSearch = {
+  dir?: BoardDirection;
   filters?: string;
+  hideEmpty?: true;
+  order?: BoardOrdering;
+  scope?: Exclude<BoardScope, "active">;
   summary?: SummaryFilter;
 };
 
@@ -39,9 +54,22 @@ const validateWorkbenchSearch = (search: Record<string, unknown>): WorkbenchSear
       ? (rawSummary as SummaryFilter)
       : undefined;
 
+  const rawOrder = search["order"];
+  const rawDirection = search["dir"];
+  const order = isBoardOrdering(rawOrder) && rawOrder !== defaultBoardView.ordering ? rawOrder : undefined;
+  const dir =
+    isBoardDirection(rawDirection) && rawDirection !== defaultBoardView.direction ? rawDirection : undefined;
+  const hideEmpty = search["hideEmpty"] === true || search["hideEmpty"] === "true" ? true : undefined;
+  const rawScope = search["scope"];
+  const scope = isBoardScope(rawScope) && rawScope !== "active" ? rawScope : undefined;
+
   return {
     ...(filters.length > 0 ? { filters } : {}),
     ...(summary === undefined ? {} : { summary }),
+    ...(order === undefined ? {} : { order }),
+    ...(dir === undefined ? {} : { dir }),
+    ...(hideEmpty === undefined ? {} : { hideEmpty }),
+    ...(scope === undefined ? {} : { scope }),
   };
 };
 

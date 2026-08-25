@@ -4,11 +4,10 @@ import {
   Dialog as DialogPrimitive,
   DropdownMenu as DropdownMenuPrimitive,
   Popover as PopoverPrimitive,
-  Tabs as TabsPrimitive,
   Tooltip as TooltipPrimitive,
 } from "radix-ui";
 
-import { Button, cn, IconButton, Kbd } from "./foundation.js";
+import { cn, IconButton, Kbd } from "./foundation.js";
 import { Icon, type IconName } from "./icons.js";
 
 export type TooltipProps = {
@@ -145,6 +144,7 @@ export const PopoverSurface = ({
 
 export type DialogSurfaceProps = {
   children: ReactNode;
+  className?: string;
   closeLabel?: string;
   description?: string;
   footer?: ReactNode;
@@ -158,6 +158,7 @@ export type DialogSurfaceProps = {
 
 export const DialogSurface = ({
   children,
+  className,
   closeLabel = "Close dialog",
   description,
   footer,
@@ -188,7 +189,7 @@ export const DialogSurface = ({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="lr-dialog-overlay" />
         <DialogPrimitive.Content
-          className={cn("lr-dialog", `lr-dialog--${size}`)}
+          className={cn("lr-dialog", `lr-dialog--${size}`, className)}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             contentRef.current?.focus();
@@ -214,114 +215,3 @@ export const DialogSurface = ({
     </DialogPrimitive.Root>
   );
 };
-
-export const DialogClose = ({ children }: { children: ReactElement }): React.JSX.Element => (
-  <DialogPrimitive.Close asChild>{children}</DialogPrimitive.Close>
-);
-
-export type TabItem = {
-  badge?: string;
-  content: ReactNode;
-  label: string;
-  value: string;
-};
-
-export type TabsControlProps = {
-  ariaLabel: string;
-  defaultValue: string;
-  items: readonly TabItem[];
-};
-
-export const TabsControl = ({ ariaLabel, defaultValue, items }: TabsControlProps): React.JSX.Element => (
-  <TabsPrimitive.Root className="lr-tabs" defaultValue={defaultValue}>
-    <TabsPrimitive.List aria-label={ariaLabel} className="lr-tabs__list">
-      {items.map((item) => (
-        <TabsPrimitive.Trigger className="lr-tabs__trigger" key={item.value} value={item.value}>
-          {item.label}
-          {item.badge ? <span>{item.badge}</span> : null}
-        </TabsPrimitive.Trigger>
-      ))}
-    </TabsPrimitive.List>
-    {items.map((item) => (
-      <TabsPrimitive.Content className="lr-tabs__content" key={item.value} value={item.value}>
-        {item.content}
-      </TabsPrimitive.Content>
-    ))}
-  </TabsPrimitive.Root>
-);
-
-export type SegmentOption<TValue extends string> = {
-  icon?: IconName;
-  label: string;
-  value: TValue;
-};
-
-export type SegmentedControlProps<TValue extends string> = {
-  ariaLabel: string;
-  onValueChange: (value: TValue) => void;
-  options: readonly SegmentOption<TValue>[];
-  value: TValue;
-};
-
-export const SegmentedControl = <TValue extends string>({
-  ariaLabel,
-  onValueChange,
-  options,
-  value,
-}: SegmentedControlProps<TValue>): React.JSX.Element => (
-  <div aria-label={ariaLabel} className="lr-segmented" role="group">
-    {options.map((option) => (
-      <button
-        aria-pressed={option.value === value}
-        className="lr-segmented__option"
-        key={option.value}
-        onClick={() => {
-          onValueChange(option.value);
-        }}
-        type="button"
-      >
-        {option.icon ? <Icon name={option.icon} size={14} /> : null}
-        {option.label}
-      </button>
-    ))}
-  </div>
-);
-
-export type PropertyChipProps = {
-  active?: boolean;
-  icon?: IconName;
-  label: string;
-  onClick?: () => void;
-};
-
-export const PropertyChip = ({
-  active = false,
-  icon,
-  label,
-  onClick,
-}: PropertyChipProps): React.JSX.Element => (
-  <button
-    aria-pressed={active}
-    className={cn("lr-property-chip", active && "is-active")}
-    onClick={onClick}
-    type="button"
-  >
-    {icon ? <Icon name={icon} size={13} /> : null}
-    {label}
-  </button>
-);
-
-export type CommandButtonProps = {
-  label?: string;
-  onClick?: () => void;
-};
-
-export const CommandButton = ({
-  label = "Search or run a command…",
-  onClick,
-}: CommandButtonProps): React.JSX.Element => (
-  <Button className="lr-command-button" icon="search" onClick={onClick}>
-    <span>{label}</span>
-    <Kbd>⌘ K</Kbd>
-  </Button>
-);

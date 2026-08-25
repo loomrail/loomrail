@@ -1,4 +1,4 @@
-import { Link, Outlet } from "@tanstack/react-router";
+import { Link, Outlet, useLocation } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { prioritySchema, type WorkItem } from "@loomrail/contracts";
@@ -13,15 +13,15 @@ import {
   SelectControl,
   Textarea,
   TextField,
-  Tooltip,
   type IconName,
 } from "@loomrail/ui";
 
 import { BrandMark } from "../components/BrandMark";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n } from "../i18n";
+import type { WorkbenchSearch } from "../router";
 import { applyThemePreference, readThemePreference, type ThemePreference } from "../theme";
-import { useCreateWorkItem, useWorkspace } from "../workspace";
+import { useCreateWorkItem, useProjectHumanRequests, useWorkspace } from "../workspace";
 
 const NewTaskDialog = (): React.JSX.Element => {
   const { t } = useI18n();
@@ -252,44 +252,103 @@ const LanguageMenu = (): React.JSX.Element => {
   );
 };
 
+/**
+ * A workspace destination. Every entry resolves to a view the product actually serves, so the
+ * navigation never advertises a surface that does not exist.
+ */
 const SidebarLink = ({
-  active = false,
+  active,
+  count,
   icon,
   label,
-  to,
+  search,
 }: {
-  active?: boolean;
+  active: boolean;
+  count?: number;
   icon: IconName;
   label: string;
-  to?: "/";
-}): React.JSX.Element => {
-  const content = (
-    <>
-      <Icon name={icon} size={15} />
-      <span>{label}</span>
-    </>
-  );
+  search: WorkbenchSearch;
+}): React.JSX.Element => (
+  <Link className={cn("app-nav-link", active && "is-active")} search={search} to="/">
+    <Icon name={icon} size={15} />
+    <span>{label}</span>
+    {count !== undefined && count > 0 ? <em className="app-nav-link__count">{count}</em> : null}
+  </Link>
+);
 
-  if (!to) {
-    return (
-      <span aria-disabled="true" className="app-nav-link">
-        {content}
-      </span>
-    );
-  }
+const WorkspaceNavigation = ({ onNavigate }: { onNavigate?: () => void }): React.JSX.Element => {
+  const { t } = useI18n();
+  const { connection, projects, selectedProject, selectProject } = useWorkspace();
+  const humanRequestsQuery = useProjectHumanRequests(selectedProject?.id);
+  const search = useLocation({ select: (location) => location.search });
+  const connected = connection?.status === "connected";
+  const projectInitial = selectedProject?.name.slice(0, 1).toUpperCase() ?? "–";
+  const blockingCount = humanRequestsQuery.data?.humanRequests.filter(({ blocking }) => blocking).length ?? 0;
+  const onNeedsYou = search.summary === "needsYou";
 
   return (
-    <Link activeOptions={{ exact: true }} className={cn("app-nav-link", active && "is-active")} to={to}>
-      {content}
-    </Link>
+    <>
+      <div className="app-sidebar__workspace">
+        <BrandMark className="app-brand-mark" size={22} />
+        <strong>Loomrail</strong>
+      </div>
+
+      <div className="app-nav-group">
+        <span>{t("nav.yourProjects")}</span>
+        {projects.length > 0 ? (
+          <ActionMenu
+            groups={[
+              projects.map((project) => ({
+                label: project.name,
+                onSelect: () => {
+                  selectProject(project.id);
+                  onNavigate?.();
+                },
+                shortcut: project.id === selectedProject?.id ? "✓" : "",
+              })),
+            ]}
+            trigger={
+              <button aria-label={t("project.switch")} className="app-project-label" type="button">
+                <span>{projectInitial}</span>
+                <strong>{selectedProject?.name}</strong>
+                <Icon name="chevronDown" size={12} />
+              </button>
+            }
+          />
+        ) : (
+          <div className="app-project-label is-empty">
+            <span>–</span>
+            <strong>{t("project.none")}</strong>
+          </div>
+        )}
+        <nav aria-label={t("nav.workspace")} className="app-nav app-nav--nested" onClick={onNavigate}>
+          <SidebarLink active={!onNeedsYou} icon="board" label={t("nav.currentWork")} search={{}} />
+          <SidebarLink
+            active={onNeedsYou}
+            count={blockingCount}
+            icon="question"
+            label={t("nav.humanRequests")}
+            search={{ summary: "needsYou" }}
+          />
+        </nav>
+      </div>
+
+      <div className="app-sidebar__footer">
+        <span className={connected ? "app-connection is-online" : "app-connection is-offline"}>
+          <span aria-hidden="true" />
+          {connected ? t("connection.local") : t("connection.offline")}
+        </span>
+        <LanguageMenu />
+        <ThemeMenu />
+      </div>
+    </>
   );
 };
 
 export const AppFrame = (): React.JSX.Element => {
   const { t } = useI18n();
-  const { connection, connectionPending, projects, projectsPending, selectedProject, selectProject } =
-    useWorkspace();
-  const connected = connection?.status === "connected";
+  const { connectionPending, projectsPending, selectedProject } = useWorkspace();
+  const [navigationOpen, setNavigationOpen] = useState(false);
   const projectInitial = selectedProject?.name.slice(0, 1).toUpperCase() ?? "–";
 
   if (connectionPending || projectsPending) {
@@ -308,96 +367,36 @@ export const AppFrame = (): React.JSX.Element => {
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
-        <div className="app-sidebar__workspace">
-          <BrandMark className="app-brand-mark" size={22} />
-          <strong>Loomrail</strong>
-          <Icon name="chevronDown" size={12} />
-          <Tooltip label={t("workspace.search")}>
-            <IconButton disabled label={t("workspace.search")} name="search" size="sm" />
-          </Tooltip>
-        </div>
-
-        <nav aria-label={t("nav.workspace")} className="app-nav">
-          <SidebarLink icon="inbox" label={t("nav.inbox")} />
-          <SidebarLink icon="board" label={t("nav.myWork")} />
-          <SidebarLink icon="agents" label={t("nav.humanRequests")} />
-        </nav>
-
-        <div className="app-nav-group">
-          <span>{t("nav.workspace")}</span>
-          <nav aria-label={t("nav.workspace")} className="app-nav">
-            <SidebarLink icon="projects" label={t("nav.projects")} />
-            <SidebarLink icon="views" label={t("nav.views")} />
-            <SidebarLink icon="agents" label={t("nav.agents")} />
-            <SidebarLink icon="sessions" label={t("nav.sessions")} />
-          </nav>
-        </div>
-
-        <div className="app-nav-group">
-          <span>{t("nav.yourProjects")}</span>
-          {projects.length > 0 ? (
-            <ActionMenu
-              groups={[
-                projects.map((project) => ({
-                  label: project.name,
-                  onSelect: () => {
-                    selectProject(project.id);
-                  },
-                  shortcut: project.id === selectedProject?.id ? "✓" : "",
-                })),
-              ]}
-              trigger={
-                <button aria-label={t("project.switch")} className="app-project-label" type="button">
-                  <span>{projectInitial}</span>
-                  <strong>{selectedProject?.name}</strong>
-                  <Icon name="chevronDown" size={12} />
-                </button>
-              }
-            />
-          ) : (
-            <div className="app-project-label is-empty">
-              <span>–</span>
-              <strong>{t("project.none")}</strong>
-            </div>
-          )}
-          <nav aria-label={t("project.switch")} className="app-nav app-nav--nested">
-            <SidebarLink active icon="board" label={t("nav.currentWork")} to="/" />
-            <SidebarLink icon="list" label={t("nav.backlog")} />
-            <SidebarLink icon="sessions" label={t("nav.rules")} />
-          </nav>
-        </div>
-
-        <div className="app-sidebar__footer">
-          <span className={connected ? "app-connection is-online" : "app-connection is-offline"}>
-            <span aria-hidden="true" />
-            {connected ? t("connection.local") : t("connection.offline")}
-          </span>
-          <LanguageMenu />
-          <ThemeMenu />
-          <Tooltip label={t("settings.open")}>
-            <IconButton disabled label={t("settings.open")} name="settings" />
-          </Tooltip>
-        </div>
+        <WorkspaceNavigation />
       </aside>
 
       <section className="app-surface">
         <header className="app-topbar">
           <div className="app-breadcrumbs">
+            <DialogSurface
+              className="app-navigation-drawer"
+              closeLabel={t("action.closeDialog")}
+              onOpenChange={setNavigationOpen}
+              open={navigationOpen}
+              title={t("nav.workspace")}
+              trigger={
+                <IconButton className="app-navigation-trigger" label={t("nav.open")} name="menu" size="sm" />
+              }
+            >
+              <WorkspaceNavigation
+                onNavigate={() => {
+                  setNavigationOpen(false);
+                }}
+              />
+            </DialogSurface>
             <span className="app-project-icon">{projectInitial}</span>
-            <span>{selectedProject?.name ?? t("project.noneSingle")}</span>
+            <span className="app-breadcrumbs__project">
+              {selectedProject?.name ?? t("project.noneSingle")}
+            </span>
             <Icon name="chevronRight" size={12} />
             <strong>{t("work.current")}</strong>
-            <Tooltip label={t("favorite.add")}>
-              <IconButton disabled label={t("favorite.add")} name="star" size="sm" />
-            </Tooltip>
           </div>
           <div className="app-topbar__actions">
-            <Tooltip label={t("command.open")}>
-              <Button className="app-search-button" disabled icon="search" shape="pill">
-                {t("search")}
-                <span className="app-search-shortcut">⌘ K</span>
-              </Button>
-            </Tooltip>
             <NewTaskDialog />
           </div>
         </header>

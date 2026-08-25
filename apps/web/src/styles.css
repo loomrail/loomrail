@@ -56,7 +56,7 @@ button {
   align-items: center;
   display: grid;
   gap: var(--lr-space-2);
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr);
   height: 38px;
   padding: 0 var(--lr-space-1);
 }
@@ -123,6 +123,22 @@ button {
   outline: none;
 }
 
+.app-nav-link__count {
+  background: var(--lr-surface-raised);
+  border-radius: 5px;
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-xs);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  padding: 1px 5px;
+}
+
+/* The drawer is the only way to reach navigation once the sidebar is hidden. */
+.app-navigation-trigger {
+  display: none;
+}
+
 .app-nav-group {
   margin-top: var(--lr-space-5);
 }
@@ -176,7 +192,7 @@ button {
   align-items: center;
   display: grid;
   gap: var(--lr-space-1);
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   margin-top: auto;
   padding: var(--lr-space-2) 0 0 var(--lr-space-2);
 }
@@ -288,17 +304,6 @@ button {
   gap: var(--lr-space-2);
 }
 
-.app-search-button {
-  color: var(--lr-text-muted);
-  min-width: 116px;
-}
-
-.app-search-shortcut {
-  color: var(--lr-text-faint);
-  font-size: 10px;
-  margin-left: var(--lr-space-2);
-}
-
 .app-content {
   flex: 1;
   min-height: 0;
@@ -406,7 +411,9 @@ button {
   background: var(--lr-canvas);
   min-height: 0;
   min-width: 0;
-  overflow: auto;
+  /* Only the column row scrolls sideways; the toolbar and heading must stay put. */
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .board-toolbar {
@@ -438,15 +445,6 @@ button {
   background: var(--lr-view-tab-selected-bg);
   box-shadow: var(--lr-selected-control-ring);
   color: var(--lr-text);
-}
-
-.board-view-tabs__add {
-  color: var(--lr-text-faint);
-}
-
-.board-view-tabs__add > .lr-icon {
-  height: 16px;
-  width: 16px;
 }
 
 .board-toolbar__actions {
@@ -689,11 +687,16 @@ button {
   padding: var(--lr-space-3) var(--lr-space-4) 0;
 }
 
+.kanban-board-scroll {
+  overflow-x: auto;
+}
+
 .kanban-board {
   display: grid;
   gap: var(--lr-space-4);
-  grid-template-columns: repeat(4, minmax(220px, 1fr));
-  min-width: 980px;
+  /* Auto columns so hiding a column reclaims its width instead of reserving it. */
+  grid-auto-columns: minmax(220px, 1fr);
+  grid-auto-flow: column;
   padding: var(--lr-space-3) var(--lr-space-4) var(--lr-space-8);
 }
 
@@ -1298,28 +1301,38 @@ button {
   width: 100%;
 }
 
+/* The descending control mirrors the ascending glyph so both directions share one source of truth. */
+.view-settings__direction.is-descending .lr-icon {
+  transform: scaleY(-1);
+}
+
 .task-inspector__footer {
   background: var(--lr-surface);
   border-top: 1px solid var(--lr-border-subtle);
   bottom: 0;
-  display: grid;
+  display: flex;
   gap: var(--lr-space-2);
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
   margin-top: auto;
   padding: var(--lr-space-3) var(--lr-space-4);
   position: sticky;
 }
 
+/* Buttons share the row; a lone action still fills it. The primary keeps a little more room. */
 .task-inspector__footer .lr-button {
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   padding-inline: var(--lr-space-2);
-  width: 100%;
+}
+
+.task-inspector__footer .lr-button--primary {
+  flex-grow: 1.15;
 }
 
 .task-inspector__footer .lr-button__content {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @keyframes app-loading-mark {
@@ -1416,8 +1429,7 @@ button {
 }
 
 .view-settings__row > span,
-.view-settings__section-title,
-.view-settings__properties > span {
+.view-settings__section-title {
   color: var(--lr-text-muted);
   font-size: var(--lr-font-sm);
   font-weight: var(--lr-weight-medium);
@@ -1461,33 +1473,12 @@ button {
   transform: translateX(8px);
 }
 
-.view-settings__section,
-.view-settings__properties {
+.view-settings__section {
   border-top: 0.5px solid var(--lr-popover-border);
   display: grid;
   gap: 8px;
   margin: 12px -16px 0;
   padding: 12px 16px 0;
-}
-
-.view-settings__section--single {
-  padding-bottom: 0;
-}
-
-.view-settings__section:not(.view-settings__section--single) {
-  padding-top: 14px;
-}
-
-.view-settings__properties {
-  gap: 12px;
-  margin-top: 3px;
-  padding-top: 8px;
-}
-
-.view-settings__properties > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
 }
 
 .view-settings .lr-property-chip {
@@ -1526,38 +1517,41 @@ button {
     justify-content: center;
   }
 
-  .app-sidebar__workspace strong,
-  .app-sidebar__workspace > .lr-icon,
-  .app-sidebar__workspace > .lr-icon-button,
-  .app-nav-link span,
-  .app-nav-group > span,
-  .app-project-label strong,
-  .app-project-label > .lr-icon,
-  .app-sidebar__footer .app-connection,
-  .app-sidebar__footer > .lr-icon-button {
+  /* Collapsed rail: scoped to the sidebar so the navigation drawer keeps its full labels. */
+  .app-sidebar .app-sidebar__workspace strong,
+  .app-sidebar .app-sidebar__workspace > .lr-icon,
+  .app-sidebar .app-sidebar__workspace > .lr-icon-button,
+  .app-sidebar .app-nav-link span,
+  .app-sidebar .app-nav-link__count,
+  .app-sidebar .app-nav-group > span,
+  .app-sidebar .app-project-label strong,
+  .app-sidebar .app-project-label > .lr-icon,
+  .app-sidebar .app-sidebar__footer .app-connection {
     display: none;
   }
 
-  .app-nav,
-  .app-nav-group,
-  .app-nav--nested {
+  .app-sidebar .app-nav,
+  .app-sidebar .app-nav-group,
+  .app-sidebar .app-nav--nested {
     margin-top: var(--lr-space-2);
     padding-left: 0;
     width: 100%;
   }
 
-  .app-nav-link,
-  .app-project-label {
+  .app-sidebar .app-nav-link,
+  .app-sidebar .app-project-label {
     justify-content: center;
     padding: 0;
   }
 
-  .app-project-label {
+  .app-sidebar .app-project-label {
     display: flex;
   }
 
-  .app-sidebar__footer {
+  /* The rail stacks its controls so language and theme both stay reachable. */
+  .app-sidebar .app-sidebar__footer {
     display: flex;
+    flex-direction: column;
     justify-content: center;
     padding-left: 0;
   }
@@ -1568,16 +1562,17 @@ button {
     overflow-y: auto;
   }
 
+  /* Stacked layout: each pane grows with its content instead of reserving a fixed block of
+     empty canvas. The floor only keeps an empty board from collapsing out of sight. */
   .workbench-board {
-    min-height: 620px;
-    overflow-x: auto;
+    min-height: 260px;
+    overflow-x: hidden;
     overflow-y: visible;
   }
 
   .task-inspector {
     border-left: 0;
     border-top: 1px solid var(--lr-border-subtle);
-    min-height: 580px;
     min-width: 0;
     overflow: visible;
     width: 100%;
@@ -1604,6 +1599,35 @@ button {
     display: none;
   }
 
+  .app-navigation-trigger {
+    display: inline-flex;
+  }
+
+  .app-navigation-drawer .app-sidebar__workspace,
+  .app-navigation-drawer .app-nav-group,
+  .app-navigation-drawer .app-sidebar__footer {
+    display: flex;
+  }
+
+  .app-navigation-drawer .app-sidebar__workspace {
+    align-items: center;
+    gap: var(--lr-space-2);
+  }
+
+  .app-navigation-drawer .app-nav-group {
+    flex-direction: column;
+    gap: var(--lr-space-1);
+    margin-top: var(--lr-space-3);
+  }
+
+  .app-navigation-drawer .app-sidebar__footer {
+    align-items: center;
+    border-top: 1px solid var(--lr-border-subtle);
+    gap: var(--lr-space-2);
+    margin-top: var(--lr-space-4);
+    padding-top: var(--lr-space-3);
+  }
+
   .app-surface {
     border: 0;
     border-radius: 0;
@@ -1615,9 +1639,8 @@ button {
     padding: 0 var(--lr-space-2);
   }
 
-  .app-breadcrumbs > span:nth-child(2),
-  .app-breadcrumbs > .lr-icon,
-  .app-search-button {
+  .app-breadcrumbs__project,
+  .app-breadcrumbs > .lr-icon {
     display: none;
   }
 
@@ -1670,7 +1693,7 @@ button {
   }
 
   .kanban-board {
-    grid-template-columns: repeat(4, 260px);
+    grid-auto-columns: 260px;
   }
 
   .new-task-form__row {

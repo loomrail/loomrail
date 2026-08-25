@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
@@ -30,10 +30,8 @@ import {
   InspectorSection,
   KanbanColumn,
   PopoverSurface,
-  PropertyChip,
   RadioGroup,
   RunSummary,
-  SegmentedControl,
   SelectControl,
   Skeleton,
   Status,
@@ -50,9 +48,19 @@ import {
   type TimelineEventProps,
 } from "@loomrail/ui";
 
+import {
+  defaultBoardView,
+  isBoardOrdering,
+  orderWorkItems,
+  scopeShows,
+  type BoardOrdering,
+  type BoardScope,
+  type BoardView,
+} from "../boardView";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
 import type { SummaryFilter } from "../router";
+import { moveShortcutsFor, transitionTargets } from "../taskMoves";
 import {
   useInitializeFixtureWorkspace,
   useApproveBudgetOverride,
@@ -69,112 +77,61 @@ import {
   useWorkItemWorkflow,
 } from "../workspace";
 
-const viewGroupingOptions = (t: Translator) =>
-  [
-    { label: t("view.noGrouping"), value: "none" },
-    { label: t("property.status"), value: "status" },
-    { label: t("view.assignee"), value: "assignee" },
-    { label: t("view.agent"), value: "agent" },
-    { label: t("property.project"), value: "project" },
-    { label: t("property.priority"), value: "priority" },
-    { label: t("view.label"), value: "label" },
-  ] as const;
+const viewOrderingOptions = (t: Translator): readonly { label: string; value: BoardOrdering }[] => [
+  { label: t("property.priority"), value: "priority" },
+  { label: t("view.created"), value: "created" },
+  { label: t("view.updated"), value: "updated" },
+  { label: t("view.title"), value: "title" },
+];
 
-const viewOrderingOptions = (t: Translator) =>
-  [
-    { label: t("view.manual"), value: "manual" },
-    { label: t("view.title"), value: "title" },
-    { label: t("property.status"), value: "status" },
-    { label: t("property.priority"), value: "priority" },
-    { label: t("view.assignee"), value: "assignee" },
-    { label: t("view.agent"), value: "agent" },
-    { label: t("view.estimate"), value: "estimate" },
-    { label: t("view.updated"), value: "updated" },
-    { label: t("view.created"), value: "created" },
-    { label: t("view.dueDate"), value: "due-date" },
-    { label: t("view.linkCount"), value: "link-count" },
-    { label: t("view.timeInStatus"), value: "time-in-status" },
-  ] as const;
+type ViewSettingsProps = {
+  onViewChange: (value: BoardView) => void;
+  view: BoardView;
+};
 
-const ViewSettings = (): React.JSX.Element => {
+const ViewSettings = ({ onViewChange, view }: ViewSettingsProps): React.JSX.Element => {
   const { t } = useI18n();
-  const [view, setView] = useState<"board" | "list">("list");
+  const nextDirection = view.direction === "asc" ? "desc" : "asc";
+
   return (
     <div className="view-settings">
-      <SegmentedControl
-        ariaLabel={t("view.layout")}
-        onValueChange={setView}
-        options={[
-          { icon: "list", label: t("view.list"), value: "list" },
-          { icon: "board", label: t("view.board"), value: "board" },
-        ]}
-        value={view}
-      />
       <div className="view-settings__controls">
-        <div className="view-settings__row">
-          <span>{t("view.grouping")}</span>
-          <SelectControl
-            ariaLabel={t("view.groupBy")}
-            defaultValue="status"
-            options={viewGroupingOptions(t)}
-            size="sm"
-            variant="compact"
-          />
-        </div>
-        <div className="view-settings__row">
-          <span>{t("view.subGrouping")}</span>
-          <SelectControl
-            ariaLabel={t("view.subGroupBy")}
-            defaultValue="none"
-            options={viewGroupingOptions(t)}
-            size="sm"
-            variant="compact"
-          />
-        </div>
         <div className="view-settings__row">
           <span>{t("view.ordering")}</span>
           <div className="view-settings__ordering">
-            <Tooltip label={t("view.direction")}>
+            <Tooltip label={t(`view.direction.${nextDirection}`)}>
               <IconButton
-                className="view-settings__direction"
-                label={t("view.direction")}
+                className={cn("view-settings__direction", view.direction === "desc" && "is-descending")}
+                label={t(`view.direction.${nextDirection}`)}
                 name="sortAscending"
+                onClick={() => {
+                  onViewChange({ ...view, direction: nextDirection });
+                }}
                 size="sm"
               />
             </Tooltip>
             <SelectControl
               ariaLabel={t("view.orderBy")}
-              defaultValue="priority"
+              onValueChange={(value) => {
+                if (isBoardOrdering(value)) onViewChange({ ...view, ordering: value });
+              }}
               options={viewOrderingOptions(t)}
               size="sm"
+              value={view.ordering}
               variant="compact"
             />
           </div>
         </div>
-        <Switch label={t("view.completedRecency")} />
-      </div>
-      <div className="view-settings__section view-settings__section--single">
-        <Switch defaultChecked label={t("view.showSubIssues")} />
       </div>
       <div className="view-settings__section">
-        <span className="view-settings__section-title">
-          {view === "list" ? t("view.listOptions") : t("view.boardOptions")}
-        </span>
-        {view === "list" ? <Switch label={t("view.nestedSubIssues")} /> : null}
-        <Switch label={t("view.showEmptyGroups")} />
-      </div>
-      <div className="view-settings__properties">
-        <span>{t("view.displayProperties")}</span>
-        <div>
-          <PropertyChip active label={t("property.id")} />
-          <PropertyChip active label={t("property.status")} />
-          <PropertyChip active label={t("property.priority")} />
-          <PropertyChip active label={t("property.project")} />
-          <PropertyChip label={t("property.dueDate")} />
-          <PropertyChip label={t("property.labels")} />
-          <PropertyChip active label={t("property.created")} />
-          <PropertyChip label={t("property.updated")} />
-        </div>
+        <span className="view-settings__section-title">{t("view.boardOptions")}</span>
+        <Switch
+          checked={view.showEmptyColumns}
+          label={t("view.showEmptyColumns")}
+          onCheckedChange={(checked) => {
+            onViewChange({ ...view, showEmptyColumns: checked });
+          }}
+        />
       </div>
     </div>
   );
@@ -184,18 +141,26 @@ type BoardToolbarProps = {
   filters: readonly string[];
   onClearFilters: () => void;
   onFiltersChange: (value: readonly string[]) => void;
+  onScopeChange: (value: BoardScope) => void;
   onSummaryFilterChange: (value: SummaryFilter | null) => void;
+  onViewChange: (value: BoardView) => void;
   options: readonly FilterNode[];
+  scope: BoardScope;
   summaryFilter: SummaryFilter | null;
+  view: BoardView;
 };
 
 const BoardToolbar = ({
   filters,
   onClearFilters,
   onFiltersChange,
+  onScopeChange,
   onSummaryFilterChange,
+  onViewChange,
   options,
+  scope,
   summaryFilter,
+  view,
 }: BoardToolbarProps): React.JSX.Element => {
   const { t } = useI18n();
   const hasActiveFilters = filters.length > 0 || summaryFilter !== null;
@@ -225,18 +190,25 @@ const BoardToolbar = ({
     <div className={cn("board-toolbar-stack", hasActiveFilters && "has-active-filters")}>
       <div className="board-toolbar">
         <div className="board-view-tabs">
-          <Button aria-pressed="true" shape="pill" variant="surface">
-            {t("view.active")}
-          </Button>
-          <Button disabled shape="pill" variant="surface">
-            {t("view.backlog")}
-          </Button>
-          <Button disabled shape="pill" variant="surface">
-            {t("view.allIssues")}
-          </Button>
-          <Tooltip label={t("view.add")}>
-            <IconButton disabled className="board-view-tabs__add" label={t("view.add")} name="viewAdd" />
-          </Tooltip>
+          {(
+            [
+              { labelKey: "view.active", value: "active" },
+              { labelKey: "view.backlog", value: "backlog" },
+              { labelKey: "view.allIssues", value: "all" },
+            ] as const
+          ).map(({ labelKey, value }) => (
+            <Button
+              aria-pressed={scope === value}
+              key={value}
+              onClick={() => {
+                onScopeChange(value);
+              }}
+              shape="pill"
+              variant="surface"
+            >
+              {t(labelKey)}
+            </Button>
+          ))}
         </div>
         <div className="board-toolbar__actions">
           <CascadingFilter
@@ -254,7 +226,7 @@ const BoardToolbar = ({
             trigger={<IconButton label={t("view.display")} name="settings" variant="surface" />}
             triggerTooltip={t("view.display")}
           >
-            <ViewSettings />
+            <ViewSettings onViewChange={onViewChange} view={view} />
           </PopoverSurface>
         </div>
       </div>
@@ -309,16 +281,21 @@ const BoardToolbar = ({
   );
 };
 
-const activeColumns = [
-  { labelKey: "state.BACKLOG", states: ["BACKLOG"], tone: "queued" },
-  { labelKey: "state.READY", states: ["READY"], tone: "ready" },
-  { labelKey: "state.IN_PROGRESS", states: ["IN_PROGRESS"], tone: "running" },
-  { labelKey: "state.BLOCKED", states: ["BLOCKED"], tone: "waiting" },
+const boardColumns = [
+  { labelKey: "state.BACKLOG", state: "BACKLOG", tone: "queued" },
+  { labelKey: "state.READY", state: "READY", tone: "ready" },
+  { labelKey: "state.IN_PROGRESS", state: "IN_PROGRESS", tone: "running" },
+  { labelKey: "state.BLOCKED", state: "BLOCKED", tone: "waiting" },
+  { labelKey: "state.DONE", state: "DONE", tone: "complete" },
+  { labelKey: "state.CANCELLED", state: "CANCELLED", tone: "paused" },
 ] as const satisfies readonly {
   labelKey: TranslationKey;
-  states: readonly WorkItemState[];
+  state: WorkItemState;
   tone: StatusTone;
 }[];
+
+const columnsFor = (scope: BoardScope): readonly (typeof boardColumns)[number][] =>
+  boardColumns.filter((column) => scopeShows(scope, column.state));
 
 const stateLabelKeys: Record<WorkItemState, TranslationKey> = {
   BACKLOG: "state.BACKLOG",
@@ -372,15 +349,6 @@ const stateTones: Record<WorkItemState, StatusTone> = {
   CANCELLED: "paused",
 };
 
-const transitionTargets: Record<WorkItemState, readonly WorkItemState[]> = {
-  BACKLOG: ["READY", "CANCELLED"],
-  READY: ["BACKLOG", "IN_PROGRESS", "BLOCKED", "CANCELLED"],
-  IN_PROGRESS: ["READY", "BLOCKED", "CANCELLED"],
-  BLOCKED: ["READY", "IN_PROGRESS", "CANCELLED"],
-  DONE: [],
-  CANCELLED: [],
-};
-
 const priorityTone = (priority: WorkItem["priority"]): BadgeTone => {
   if (priority === "URGENT") return "danger";
   if (priority === "HIGH") return "warning";
@@ -392,17 +360,21 @@ const displayWorkItemId = (id: string): string => {
   return suffix.length > 10 ? suffix.slice(0, 8).toUpperCase() : suffix.toUpperCase();
 };
 
-const filterOptionsFor = (items: readonly WorkItem[], t: Translator): readonly FilterNode[] => {
+const filterOptionsFor = (
+  items: readonly WorkItem[],
+  columns: readonly (typeof boardColumns)[number][],
+  t: Translator,
+): readonly FilterNode[] => {
   const count = (predicate: (item: WorkItem) => boolean): number => items.filter(predicate).length;
   return [
     {
       id: "status",
       label: t("filter.status"),
       icon: "clock",
-      children: activeColumns.map((column) => ({
-        id: `status-${column.states[0].toLowerCase()}`,
+      children: columns.map((column) => ({
+        id: `status-${column.state.toLowerCase()}`,
         label: t(column.labelKey),
-        count: count((item) => column.states.some((state) => state === item.state)),
+        count: count((item) => item.state === column.state),
       })),
     },
     {
@@ -656,6 +628,14 @@ const WorkItemButton = ({
   selected: boolean;
 }): React.JSX.Element => {
   const { t } = useI18n();
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  // The board scrolls horizontally, so a selected task can sit in an off-screen column - including
+  // after a workflow moves it there. Reveal it instead of leaving the visible columns looking empty.
+  useEffect(() => {
+    if (!selected) return;
+    buttonRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selected]);
 
   return (
     <button
@@ -665,6 +645,7 @@ const WorkItemButton = ({
       onClick={() => {
         onSelect(item.id);
       }}
+      ref={buttonRef}
       type="button"
     >
       <TaskCard
@@ -1294,8 +1275,7 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
     setLastTarget(targetState);
     moveMutation.mutate({ targetState, workItem: item });
   };
-  const primaryTarget = targets.find((state) => state !== "CANCELLED") ?? null;
-  const secondaryTarget = targets.find((state) => state !== primaryTarget && state !== "CANCELLED") ?? null;
+  const { primary: primaryTarget, secondary: secondaryTarget } = moveShortcutsFor(item.state, workflowActive);
 
   return (
     <aside className="task-inspector" aria-label={item.title}>
@@ -1419,42 +1399,34 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
         </div>
       ) : null}
 
-      <footer className="task-inspector__footer">
-        <Button
-          aria-label={
-            secondaryTarget
-              ? t("task.moveTo", { state: stateLabel(secondaryTarget, t) })
-              : t("task.noSecondaryAction")
-          }
-          disabled={!secondaryTarget}
-          loading={moveMutation.isPending && secondaryTarget !== null}
-          onClick={() => {
-            if (secondaryTarget) move(secondaryTarget);
-          }}
-          variant="secondary"
-        >
-          {secondaryTarget
-            ? t("task.moveToShort", { state: stateLabel(secondaryTarget, t) })
-            : t("task.noSecondaryAction")}
-        </Button>
-        <Button
-          aria-label={
-            primaryTarget
-              ? t("task.moveTo", { state: stateLabel(primaryTarget, t) })
-              : t("task.noAvailableMove")
-          }
-          disabled={!primaryTarget}
-          loading={moveMutation.isPending && primaryTarget !== null}
-          onClick={() => {
-            if (primaryTarget) move(primaryTarget);
-          }}
-          variant="primary"
-        >
-          {primaryTarget
-            ? t("task.moveToShort", { state: stateLabel(primaryTarget, t) })
-            : t("task.noAvailableMove")}
-        </Button>
-      </footer>
+      {primaryTarget !== null || secondaryTarget !== null ? (
+        <footer className="task-inspector__footer">
+          {secondaryTarget ? (
+            <Button
+              aria-label={t("task.moveTo", { state: stateLabel(secondaryTarget, t) })}
+              loading={moveMutation.isPending}
+              onClick={() => {
+                move(secondaryTarget);
+              }}
+              variant="secondary"
+            >
+              {t("task.moveToShort", { state: stateLabel(secondaryTarget, t) })}
+            </Button>
+          ) : null}
+          {primaryTarget ? (
+            <Button
+              aria-label={t("task.moveTo", { state: stateLabel(primaryTarget, t) })}
+              loading={moveMutation.isPending}
+              onClick={() => {
+                move(primaryTarget);
+              }}
+              variant="primary"
+            >
+              {t("task.moveToShort", { state: stateLabel(primaryTarget, t) })}
+            </Button>
+          ) : null}
+        </footer>
+      ) : null}
     </aside>
   );
 };
@@ -1490,6 +1462,36 @@ export const WorkbenchPage = (): React.JSX.Element => {
       }),
     });
   };
+  const view: BoardView = {
+    direction: search.dir ?? defaultBoardView.direction,
+    ordering: search.order ?? defaultBoardView.ordering,
+    showEmptyColumns: search.hideEmpty !== true,
+  };
+  const setView = (value: BoardView): void => {
+    void navigate({
+      replace: true,
+      resetScroll: false,
+      search: (current) => ({
+        ...current,
+        dir: value.direction === defaultBoardView.direction ? undefined : value.direction,
+        order: value.ordering === defaultBoardView.ordering ? undefined : value.ordering,
+        hideEmpty: value.showEmptyColumns ? undefined : true,
+      }),
+    });
+  };
+  const scope: BoardScope = search.scope ?? "active";
+  const setScope = (value: BoardScope): void => {
+    void navigate({
+      replace: true,
+      resetScroll: false,
+      search: (current) => ({
+        ...current,
+        scope: value === "active" ? undefined : value,
+        // Status filters name columns that a different scope may not show.
+        filters: undefined,
+      }),
+    });
+  };
   const clearFilters = (): void => {
     void navigate({
       replace: true,
@@ -1502,10 +1504,13 @@ export const WorkbenchPage = (): React.JSX.Element => {
     });
   };
   const workItems = workItemsQuery.data?.workItems ?? [];
-  const activeItems = workItems.filter((item) => item.state !== "DONE" && item.state !== "CANCELLED");
+  // Summary metrics always describe live delivery; the board itself follows the selected scope.
+  const liveItems = workItems.filter((item) => item.state !== "DONE" && item.state !== "CANCELLED");
+  const columns = columnsFor(scope);
+  const scopedItems = workItems.filter((item) => scopeShows(scope, item.state));
   const blockingRequests = humanRequestsQuery.data?.humanRequests.filter(({ blocking }) => blocking) ?? [];
   const blockingWorkItemIds = new Set(blockingRequests.map(({ workItemId }) => workItemId));
-  const summaryFilteredItems = activeItems.filter((item) => {
+  const summaryFilteredItems = scopedItems.filter((item) => {
     if (summaryFilter === "needsYou") return blockingWorkItemIds.has(item.id);
     if (summaryFilter === "active") return item.state === "IN_PROGRESS";
     if (summaryFilter === "atRisk") {
@@ -1513,12 +1518,15 @@ export const WorkbenchPage = (): React.JSX.Element => {
     }
     return true;
   });
-  const visibleItems = summaryFilteredItems.filter((item) => matchesFilters(item, filters));
+  const visibleItems = orderWorkItems(
+    summaryFilteredItems.filter((item) => matchesFilters(item, filters)),
+    view,
+  );
   const selectedItem =
     visibleItems.find((item) => item.id === selectedWorkItemId) ?? visibleItems.at(0) ?? null;
-  const filterOptions = filterOptionsFor(activeItems, t);
-  const runningCount = activeItems.filter(({ state }) => state === "IN_PROGRESS").length;
-  const atRiskCount = activeItems.filter(
+  const filterOptions = filterOptionsFor(scopedItems, columns, t);
+  const runningCount = liveItems.filter(({ state }) => state === "IN_PROGRESS").length;
+  const atRiskCount = liveItems.filter(
     ({ risk, state }) => state === "BLOCKED" || risk === "HIGH" || risk === "CRITICAL",
   ).length;
 
@@ -1533,9 +1541,13 @@ export const WorkbenchPage = (): React.JSX.Element => {
           filters={filters}
           onClearFilters={clearFilters}
           onFiltersChange={setFilters}
+          onScopeChange={setScope}
           onSummaryFilterChange={setSummaryFilter}
+          onViewChange={setView}
           options={filterOptions}
+          scope={scope}
           summaryFilter={summaryFilter}
+          view={view}
         />
         {blockingRequests[0] ? (
           <button
@@ -1598,15 +1610,18 @@ export const WorkbenchPage = (): React.JSX.Element => {
             ))}
           </div>
           <div>
-            <Button disabled shape="pill">
-              {t("action.share")}
-            </Button>
             <ActionMenu
               align="end"
               groups={[
                 [
-                  { icon: "link", label: t("view.copyLink") },
-                  { icon: "star", label: t("favorite.add") },
+                  {
+                    icon: "link",
+                    label: t("view.copyLink"),
+                    // Filters and ordering live in the URL, so the current address is the shareable view.
+                    onSelect: () => {
+                      void navigator.clipboard.writeText(window.location.href);
+                    },
+                  },
                 ],
               ]}
               trigger={<IconButton label={t("view.actions")} name="more" variant="surface" />}
@@ -1664,32 +1679,32 @@ export const WorkbenchPage = (): React.JSX.Element => {
 
         {selectedProject && workItemsQuery.data ? (
           <>
-            <div className="kanban-board">
-              {activeColumns.map((column) => {
-                const columnItems = visibleItems.filter((item) =>
-                  column.states.some((state) => state === item.state),
-                );
-                return (
-                  <KanbanColumn
-                    addLabel={t("task.addToColumn", { state: t(column.labelKey) })}
-                    count={columnItems.length}
-                    key={column.labelKey}
-                    label={t(column.labelKey)}
-                    tone={column.tone}
-                  >
-                    {columnItems.map((item) => (
-                      <WorkItemButton
-                        item={item}
-                        key={item.id}
-                        onSelect={setSelectedWorkItemId}
-                        selected={selectedItem?.id === item.id}
-                      />
-                    ))}
-                  </KanbanColumn>
-                );
-              })}
+            <div className="kanban-board-scroll">
+              <div className="kanban-board">
+                {columns.map((column) => {
+                  const columnItems = visibleItems.filter((item) => item.state === column.state);
+                  if (columnItems.length === 0 && !view.showEmptyColumns) return null;
+                  return (
+                    <KanbanColumn
+                      count={columnItems.length}
+                      key={column.labelKey}
+                      label={t(column.labelKey)}
+                      tone={column.tone}
+                    >
+                      {columnItems.map((item) => (
+                        <WorkItemButton
+                          item={item}
+                          key={item.id}
+                          onSelect={setSelectedWorkItemId}
+                          selected={selectedItem?.id === item.id}
+                        />
+                      ))}
+                    </KanbanColumn>
+                  );
+                })}
+              </div>
             </div>
-            {activeItems.length === 0 ? (
+            {scopedItems.length === 0 ? (
               <div className="board-filter-empty" role="status">
                 <span>
                   <Icon name="inbox" size={18} />

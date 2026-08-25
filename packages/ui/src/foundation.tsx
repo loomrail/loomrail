@@ -123,28 +123,6 @@ export const Avatar = ({ className, label, tone = "neutral", ...props }: AvatarP
   </span>
 );
 
-export type ProgressBarProps = HTMLAttributes<HTMLDivElement> & {
-  label: string;
-  value: number;
-};
-
-export const ProgressBar = ({ className, label, value, ...props }: ProgressBarProps): React.JSX.Element => {
-  const boundedValue = Math.max(0, Math.min(100, value));
-  return (
-    <div
-      aria-label={label}
-      aria-valuemax={100}
-      aria-valuemin={0}
-      aria-valuenow={boundedValue}
-      className={cn("lr-progress", className)}
-      role="progressbar"
-      {...props}
-    >
-      <span style={{ width: `${boundedValue.toString()}%` }} />
-    </div>
-  );
-};
-
 export type SkeletonProps = HTMLAttributes<HTMLSpanElement> & {
   width?: string;
 };
