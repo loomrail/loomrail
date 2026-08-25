@@ -1,4 +1,4 @@
-import { mockProviderOutcomeSchema } from "@loomrail/contracts";
+import { providerOutcomeSchema } from "@loomrail/contracts";
 import {
   providerCapabilitiesSchema,
   type ProviderAdapter,
@@ -6,7 +6,7 @@ import {
 } from "@loomrail/provider-core";
 
 const discoveryQuestion = () =>
-  mockProviderOutcomeSchema.parse({
+  providerOutcomeSchema.parse({
     type: "NEEDS_HUMAN",
     request: {
       kind: "SINGLE_CHOICE",
@@ -35,7 +35,7 @@ const discoveryQuestion = () =>
   });
 
 const complete = (invocation: ProviderInvocation) =>
-  mockProviderOutcomeSchema.parse({
+  providerOutcomeSchema.parse({
     type: "COMPLETED",
     summary:
       invocation.stageAttempt.stage === "DISCOVERY"
@@ -79,7 +79,7 @@ const complete = (invocation: ProviderInvocation) =>
   });
 
 const requestAcceptance = () =>
-  mockProviderOutcomeSchema.parse({
+  providerOutcomeSchema.parse({
     type: "READY_FOR_ACCEPTANCE",
     releaseNote: "Completes the deterministic mock delivery flow with budget, review, QA, and owner control.",
     verifyInstructions: [
@@ -90,7 +90,7 @@ const requestAcceptance = () =>
   });
 
 const exhaustInitialImplementationBudget = () =>
-  mockProviderOutcomeSchema.parse({
+  providerOutcomeSchema.parse({
     type: "BUDGET_LIMIT_REACHED",
     usageIncrements: [50, 30, 15, 5],
     quality: "LOOMRAIL_ESTIMATE",

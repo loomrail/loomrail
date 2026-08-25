@@ -709,7 +709,7 @@ describe("local daemon session and state boundary", () => {
         commandId: "apply-legacy-template-task",
         correlationId: "correlation-apply-legacy-template-task",
         actor: { type: "SYSTEM", id: "mock-provider" },
-        type: "APPLY_MOCK_PROVIDER_OUTCOME",
+        type: "APPLY_PROVIDER_OUTCOME",
         payload: {
           dispatchId: started.dispatch.id,
           template: {

@@ -1,6 +1,6 @@
 import type {
   AnswerHumanRequestCommand,
-  ApplyMockProviderOutcomeCommand,
+  ApplyProviderOutcomeCommand,
   EvidenceArtifact,
   PipelineRun,
   ResolveAcceptanceCommand,
@@ -12,13 +12,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   decideAnswerHumanRequest,
-  decideApplyMockProviderOutcome,
+  decideApplyProviderOutcome,
   decideCancelPipeline,
   decideResolveAcceptance,
 } from "../src/index.js";
 
 const now = "2026-08-24T14:00:00.000Z";
-const template: ApplyMockProviderOutcomeCommand["payload"]["template"] = {
+const template: ApplyProviderOutcomeCommand["payload"]["template"] = {
   schemaVersion: 1,
   id: "mock-delivery-v1",
   version: 1,
@@ -110,12 +110,12 @@ const artifact = (
 describe("M6 acceptance decisions", () => {
   it("requires and records the typed Review artifact before advancing", () => {
     const attempt = stageAttempt("REVIEW", "attempt-review");
-    const command: ApplyMockProviderOutcomeCommand = {
+    const command: ApplyProviderOutcomeCommand = {
       schemaVersion: 1,
       commandId: "complete-review",
       correlationId: "correlation-complete-review",
       actor: { type: "SYSTEM", id: "mock-provider" },
-      type: "APPLY_MOCK_PROVIDER_OUTCOME",
+      type: "APPLY_PROVIDER_OUTCOME",
       payload: {
         dispatchId: "dispatch-review",
         template,
@@ -134,7 +134,7 @@ describe("M6 acceptance decisions", () => {
       nextStageAttemptId: "attempt-qa",
       nextDispatchId: "dispatch-qa",
     };
-    expect(() => decideApplyMockProviderOutcome(command, context)).toThrow(
+    expect(() => decideApplyProviderOutcome(command, context)).toThrow(
       expect.objectContaining({ code: "ACCEPTANCE_NOT_READY" }),
     );
 
@@ -150,7 +150,7 @@ describe("M6 acceptance decisions", () => {
         },
       ],
     };
-    const decision = decideApplyMockProviderOutcome(command, {
+    const decision = decideApplyProviderOutcome(command, {
       ...context,
       artifactIds: ["artifact-review"],
     });
@@ -172,13 +172,13 @@ describe("M6 acceptance decisions", () => {
       currentStage: "ACCEPTANCE",
       version: 10,
     };
-    const ready = decideApplyMockProviderOutcome(
+    const ready = decideApplyProviderOutcome(
       {
         schemaVersion: 1,
         commandId: "request-acceptance",
         correlationId: "correlation-request-acceptance",
         actor: { type: "SYSTEM", id: "mock-provider" },
-        type: "APPLY_MOCK_PROVIDER_OUTCOME",
+        type: "APPLY_PROVIDER_OUTCOME",
         payload: {
           dispatchId: "dispatch-acceptance",
           template,

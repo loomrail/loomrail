@@ -1,6 +1,6 @@
 import type {
   Decision,
-  MockProviderOutcome,
+  ProviderOutcome,
   StageAttempt,
   WorkItem,
   WorkflowDispatch,
@@ -29,6 +29,6 @@ export type ProviderInvocation = {
 
 export type ProviderAdapter = {
   capabilities: () => ProviderCapabilities;
-  start: (invocation: ProviderInvocation) => Promise<MockProviderOutcome>;
-  resume: (invocation: ProviderInvocation) => Promise<MockProviderOutcome>;
+  start: (invocation: ProviderInvocation) => Promise<ProviderOutcome>;
+  resume: (invocation: ProviderInvocation) => Promise<ProviderOutcome>;
 };

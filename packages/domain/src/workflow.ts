@@ -3,7 +3,7 @@ import type {
   AcceptanceRequestedEvent,
   AcceptanceResolvedEvent,
   AnswerHumanRequestCommand,
-  ApplyMockProviderOutcomeCommand,
+  ApplyProviderOutcomeCommand,
   ApproveBudgetOverrideCommand,
   BudgetOverrideApprovedEvent,
   BudgetPolicy,
@@ -389,7 +389,7 @@ const completeDispatch = (dispatch: WorkflowDispatch, now: string): WorkflowDisp
 };
 
 const budgetOutcome = (
-  command: ApplyMockProviderOutcomeCommand,
+  command: ApplyProviderOutcomeCommand,
   context: {
     now: string;
     workItem: WorkItem;
@@ -513,8 +513,8 @@ const budgetOutcome = (
   };
 };
 
-export const decideApplyMockProviderOutcome = (
-  command: ApplyMockProviderOutcomeCommand,
+export const decideApplyProviderOutcome = (
+  command: ApplyProviderOutcomeCommand,
   context: {
     now: string;
     workItem: WorkItem;

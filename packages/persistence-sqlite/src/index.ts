@@ -48,7 +48,7 @@ import {
 import {
   decideApproveBudgetOverride,
   decideAnswerHumanRequest,
-  decideApplyMockProviderOutcome,
+  decideApplyProviderOutcome,
   decideCancelPipeline,
   decideMarkWorkflowDispatchStarted,
   decidePausePipeline,
@@ -1590,7 +1590,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
-      if (command.type === "APPLY_MOCK_PROVIDER_OUTCOME") {
+      if (command.type === "APPLY_MOCK_PROVIDER_OUTCOME" || command.type === "APPLY_PROVIDER_OUTCOME") {
         const dispatch = readWorkflowDispatch(command.payload.dispatchId);
         if (!dispatch) {
           throw new WorkflowDomainError(
@@ -1604,28 +1604,34 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (!run || !stageAttempt || !workItem) {
           throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow state is incomplete");
         }
-        const decision = decideApplyMockProviderOutcome(command, {
-          now: occurredAt,
-          workItem,
-          run,
-          stageAttempt,
-          dispatch,
-          budgetPolicy: readCurrentBudgetPolicy(run.id),
-          existingUsageRecords: readUsageRecords(run.id),
-          existingArtifacts: readEvidenceArtifacts(run.id),
-          usageRecordIds:
-            command.payload.outcome.type === "BUDGET_LIMIT_REACHED"
-              ? command.payload.outcome.usageIncrements.map(() => createId("usageRecord"))
-              : [],
-          artifactIds:
-            command.payload.outcome.type === "COMPLETED"
-              ? (command.payload.outcome.artifacts ?? []).map(() => createId("evidenceArtifact"))
-              : [],
-          humanRequestId: createId("humanRequest"),
-          acceptancePackageId: createId("acceptancePackage"),
-          nextStageAttemptId: createId("stageAttempt"),
-          nextDispatchId: createId("workflowDispatch"),
-        });
+        // decideApplyProviderOutcome never reads command.type; normalizing it here keeps the
+        // domain function's parameter type single-literal (so it, in turn, narrows cleanly)
+        // without weakening what actually gets persisted as this command's command_type below.
+        const decision = decideApplyProviderOutcome(
+          { ...command, type: "APPLY_PROVIDER_OUTCOME" },
+          {
+            now: occurredAt,
+            workItem,
+            run,
+            stageAttempt,
+            dispatch,
+            budgetPolicy: readCurrentBudgetPolicy(run.id),
+            existingUsageRecords: readUsageRecords(run.id),
+            existingArtifacts: readEvidenceArtifacts(run.id),
+            usageRecordIds:
+              command.payload.outcome.type === "BUDGET_LIMIT_REACHED"
+                ? command.payload.outcome.usageIncrements.map(() => createId("usageRecord"))
+                : [],
+            artifactIds:
+              command.payload.outcome.type === "COMPLETED"
+                ? (command.payload.outcome.artifacts ?? []).map(() => createId("evidenceArtifact"))
+                : [],
+            humanRequestId: createId("humanRequest"),
+            acceptancePackageId: createId("acceptancePackage"),
+            nextStageAttemptId: createId("stageAttempt"),
+            nextDispatchId: createId("workflowDispatch"),
+          },
+        );
         persistWorkflowTemplate(command.payload.template, occurredAt);
         updateWorkflowDispatch(decision.dispatch);
         updateStageAttempt(decision.stageAttempt);

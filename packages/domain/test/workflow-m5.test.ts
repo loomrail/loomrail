@@ -1,5 +1,5 @@
 import type {
-  ApplyMockProviderOutcomeCommand,
+  ApplyProviderOutcomeCommand,
   BudgetPolicy,
   PipelineRun,
   StageAttempt,
@@ -9,7 +9,7 @@ import type {
 import { describe, expect, it } from "vitest";
 
 import {
-  decideApplyMockProviderOutcome,
+  decideApplyProviderOutcome,
   decideApproveBudgetOverride,
   decidePausePipeline,
   decideRecoverInterruptedWorkflow,
@@ -17,7 +17,7 @@ import {
 } from "../src/index.js";
 
 const now = "2026-08-24T12:00:00.000Z";
-const template: ApplyMockProviderOutcomeCommand["payload"]["template"] = {
+const template: ApplyProviderOutcomeCommand["payload"]["template"] = {
   schemaVersion: 1,
   id: "mock-delivery-v1",
   version: 1,
@@ -100,12 +100,12 @@ const budgetPolicy: BudgetPolicy = {
 
 describe("M5 workflow decisions", () => {
   it("records deterministic usage thresholds once and enters a hard pause", () => {
-    const command: ApplyMockProviderOutcomeCommand = {
+    const command: ApplyProviderOutcomeCommand = {
       schemaVersion: 1,
       commandId: "apply-budget",
       correlationId: "correlation-budget",
       actor: { type: "SYSTEM", id: "mock-provider" },
-      type: "APPLY_MOCK_PROVIDER_OUTCOME",
+      type: "APPLY_PROVIDER_OUTCOME",
       payload: {
         dispatchId: dispatch.id,
         template,
@@ -116,7 +116,7 @@ describe("M5 workflow decisions", () => {
         },
       },
     };
-    const decision = decideApplyMockProviderOutcome(command, {
+    const decision = decideApplyProviderOutcome(command, {
       now,
       workItem,
       run,

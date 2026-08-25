@@ -272,7 +272,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         commandId: `apply-${dispatch.id}`,
         correlationId: `dispatch-${dispatch.id}`,
         actor: { type: "SYSTEM", id: "mock-provider" },
-        type: "APPLY_MOCK_PROVIDER_OUTCOME",
+        type: "APPLY_PROVIDER_OUTCOME",
         payload: { dispatchId: dispatch.id, outcome, template: mockDeliveryTemplate },
       });
     }

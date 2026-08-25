@@ -159,7 +159,7 @@ export const recoveryReportSchema = z
   })
   .strict();
 
-export const mockArtifactDraftSchema = z
+export const providerArtifactDraftSchema = z
   .object({
     kind: evidenceArtifactKindSchema,
     title: titleSchema,
@@ -168,7 +168,7 @@ export const mockArtifactDraftSchema = z
   })
   .strict();
 
-export const evidenceArtifactSchema = mockArtifactDraftSchema
+export const evidenceArtifactSchema = providerArtifactDraftSchema
   .extend({
     schemaVersion: schemaVersionSchema,
     id: opaqueIdSchema,
@@ -302,7 +302,7 @@ export const humanRequestDraftSchema = humanRequestSchema
   })
   .strict();
 
-export const mockProviderOutcomeSchema = z.discriminatedUnion("type", [
+export const providerOutcomeSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("NEEDS_HUMAN"),
@@ -313,7 +313,7 @@ export const mockProviderOutcomeSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("COMPLETED"),
       summary: z.string().trim().min(1).max(4_000),
-      artifacts: z.array(mockArtifactDraftSchema).max(5).optional(),
+      artifacts: z.array(providerArtifactDraftSchema).max(5).optional(),
     })
     .strict(),
   z
@@ -512,15 +512,29 @@ export const markWorkflowDispatchStartedCommandSchema = commandBaseSchema.extend
   payload: z.object({ dispatchId: opaqueIdSchema }).strict(),
 });
 
-export const applyMockProviderOutcomeCommandSchema = commandBaseSchema.extend({
+const applyProviderOutcomePayloadSchema = z
+  .object({
+    dispatchId: opaqueIdSchema,
+    outcome: providerOutcomeSchema,
+    template: workflowTemplateSchema,
+  })
+  .strict();
+
+export const applyProviderOutcomeCommandSchema = commandBaseSchema.extend({
+  type: z.literal("APPLY_PROVIDER_OUTCOME"),
+  payload: applyProviderOutcomePayloadSchema,
+});
+
+// "APPLY_MOCK_PROVIDER_OUTCOME" is the historical discriminant: commands already recorded under
+// that name (the commands table is append-only audit history and is not rewritten) must still
+// parse when the same commandId is resubmitted, so the receipt cache can return the cached
+// result. Kept as a distinct single-literal schema (rather than folded into
+// applyProviderOutcomeCommandSchema's type as a two-value literal) so every member of
+// stateCommandSchema keeps a single-literal discriminant and TypeScript can still narrow it away
+// completely once handled. Nothing constructs a fresh command with this type going forward.
+export const legacyApplyMockProviderOutcomeCommandSchema = commandBaseSchema.extend({
   type: z.literal("APPLY_MOCK_PROVIDER_OUTCOME"),
-  payload: z
-    .object({
-      dispatchId: opaqueIdSchema,
-      outcome: mockProviderOutcomeSchema,
-      template: workflowTemplateSchema,
-    })
-    .strict(),
+  payload: applyProviderOutcomePayloadSchema,
 });
 
 export const answerHumanRequestCommandSchema = commandBaseSchema.extend({
@@ -783,7 +797,7 @@ export type BudgetPolicy = z.infer<typeof budgetPolicySchema>;
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
 export type RecoveryReport = z.infer<typeof recoveryReportSchema>;
 export type EvidenceArtifact = z.infer<typeof evidenceArtifactSchema>;
-export type MockArtifactDraft = z.infer<typeof mockArtifactDraftSchema>;
+export type ProviderArtifactDraft = z.infer<typeof providerArtifactDraftSchema>;
 export type AcceptancePackage = z.infer<typeof acceptancePackageSchema>;
 export type AcceptanceAction = z.infer<typeof acceptanceActionSchema>;
 export type HumanRequest = z.infer<typeof humanRequestSchema>;
@@ -792,7 +806,7 @@ export type HumanRequestAnswer = z.infer<typeof humanRequestAnswerSchema>;
 export type HumanRequestDraft = z.infer<typeof humanRequestDraftSchema>;
 export type Decision = z.infer<typeof decisionSchema>;
 export type WorkflowDispatch = z.infer<typeof workflowDispatchSchema>;
-export type MockProviderOutcome = z.infer<typeof mockProviderOutcomeSchema>;
+export type ProviderOutcome = z.infer<typeof providerOutcomeSchema>;
 export type PipelineStartedEvent = z.infer<typeof pipelineStartedEventSchema>;
 export type StageAttemptChangedEvent = z.infer<typeof stageAttemptChangedEventSchema>;
 export type HumanRequestOpenedEvent = z.infer<typeof humanRequestOpenedEventSchema>;
@@ -810,7 +824,10 @@ export type AcceptanceResolvedEvent = z.infer<typeof acceptanceResolvedEventSche
 export type PipelineCompletedEvent = z.infer<typeof pipelineCompletedEventSchema>;
 export type StartMockPipelineCommand = z.infer<typeof startMockPipelineCommandSchema>;
 export type MarkWorkflowDispatchStartedCommand = z.infer<typeof markWorkflowDispatchStartedCommandSchema>;
-export type ApplyMockProviderOutcomeCommand = z.infer<typeof applyMockProviderOutcomeCommandSchema>;
+export type ApplyProviderOutcomeCommand = z.infer<typeof applyProviderOutcomeCommandSchema>;
+export type LegacyApplyMockProviderOutcomeCommand = z.infer<
+  typeof legacyApplyMockProviderOutcomeCommandSchema
+>;
 export type AnswerHumanRequestCommand = z.infer<typeof answerHumanRequestCommandSchema>;
 export type PausePipelineCommand = z.infer<typeof pausePipelineCommandSchema>;
 export type ResumePipelineCommand = z.infer<typeof resumePipelineCommandSchema>;

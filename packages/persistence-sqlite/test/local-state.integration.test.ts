@@ -5,8 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 
 import type {
   AnswerHumanRequestCommand,
-  ApplyMockProviderOutcomeCommand,
+  ApplyProviderOutcomeCommand,
   CreateWorkItemCommand,
+  LegacyApplyMockProviderOutcomeCommand,
   MoveWorkItemCommand,
   RegisterProjectCommand,
   StartMockPipelineCommand,
@@ -301,7 +302,7 @@ describe("SQLite local state", () => {
       },
     });
 
-    const applyNext = (outcome: ApplyMockProviderOutcomeCommand["payload"]["outcome"]): void => {
+    const applyNext = (outcome: ApplyProviderOutcomeCommand["payload"]["outcome"]): void => {
       const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
       if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
       const dispatch = pending.dispatches[0];
@@ -319,7 +320,7 @@ describe("SQLite local state", () => {
         commandId: `apply-${dispatch.id}`,
         correlationId: `correlation-apply-${dispatch.id}`,
         actor: { type: "SYSTEM", id: "mock-provider" },
-        type: "APPLY_MOCK_PROVIDER_OUTCOME",
+        type: "APPLY_PROVIDER_OUTCOME",
         payload: { dispatchId: dispatch.id, template: acceptanceTemplate, outcome },
       });
     };
@@ -447,6 +448,53 @@ describe("SQLite local state", () => {
     backup.close();
   });
 
+  it("keeps a historical APPLY_MOCK_PROVIDER_OUTCOME command receipt readable after the provider rename", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-legacy-outcome-item"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.close();
+    state = undefined;
+
+    // The commands table is append-only audit history and is never rewritten (see the provider
+    // rename decision in docs/plans/07-a1-session-handoff-spec.ru.md §5.3): a receipt recorded
+    // under the pre-rename command_type must remain exactly as it was written.
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("DROP TRIGGER commands_are_append_only_update");
+    raw
+      .prepare(
+        `INSERT INTO commands (command_id, command_type, input_hash, result_json, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-apply-outcome",
+        "APPLY_MOCK_PROVIDER_OUTCOME",
+        "0".repeat(64),
+        JSON.stringify({ schemaVersion: 1, type: "MOCK_PROVIDER_OUTCOME_APPLIED", replayed: false }),
+        timestamp,
+      );
+    raw.exec(`
+      CREATE TRIGGER commands_are_append_only_update
+      BEFORE UPDATE ON commands
+      BEGIN
+        SELECT RAISE(ABORT, 'commands are append-only');
+      END;
+    `);
+    raw.close();
+
+    const reopened = await open();
+    const events = reopened.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id });
+    expect(events.type).toBe("EVENTS");
+    reopened.close();
+    state = undefined;
+
+    const verify = new DatabaseSync(databasePath);
+    expect(
+      verify.prepare("SELECT command_type FROM commands WHERE command_id = ?").get("legacy-apply-outcome"),
+    ).toEqual({ command_type: "APPLY_MOCK_PROVIDER_OUTCOME" });
+    verify.close();
+  });
+
   it("backfills the BudgetPolicy in M4 PIPELINE_STARTED events", async () => {
     const localState = await open();
     localState.execute(registerProject());
@@ -476,7 +524,7 @@ describe("SQLite local state", () => {
       type: "MARK_WORKFLOW_DISPATCH_STARTED",
       payload: { dispatchId: started.dispatch.id },
     });
-    const applyCommand: ApplyMockProviderOutcomeCommand = {
+    const applyCommand: LegacyApplyMockProviderOutcomeCommand = {
       schemaVersion: 1,
       commandId: "apply-migration-workflow",
       correlationId: "correlation-apply-migration-workflow",
@@ -638,12 +686,12 @@ describe("SQLite local state", () => {
     };
     const started = localState.execute(start);
     if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
-    const needsHuman: ApplyMockProviderOutcomeCommand = {
+    const needsHuman: ApplyProviderOutcomeCommand = {
       schemaVersion: 1,
       commandId: `apply-${started.dispatch.id}`,
       correlationId: "correlation-needs-human",
       actor: { type: "SYSTEM", id: "mock-provider" },
-      type: "APPLY_MOCK_PROVIDER_OUTCOME",
+      type: "APPLY_PROVIDER_OUTCOME",
       payload: {
         dispatchId: started.dispatch.id,
         template: mockTemplate,
@@ -727,7 +775,7 @@ describe("SQLite local state", () => {
         commandId,
         correlationId: `correlation-${commandId}`,
         actor: { type: "SYSTEM", id: "mock-provider" },
-        type: "APPLY_MOCK_PROVIDER_OUTCOME",
+        type: "APPLY_PROVIDER_OUTCOME",
         payload: {
           dispatchId,
           template: mockTemplate,
