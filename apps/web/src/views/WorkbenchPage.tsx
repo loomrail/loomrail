@@ -652,6 +652,13 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.checkpointPublished"),
         tone: "success",
       };
+    case "CONTEXT_HANDOFF_REQUESTED":
+      return {
+        detail: t("event.contextHandoffRequestedDetail", { ordinal: event.data.session.ordinal }),
+        icon: "clock",
+        label: t("event.contextHandoffRequested"),
+        tone: "warning",
+      };
     case "PROVIDER_SESSION_ENDED":
       return {
         detail: t("event.providerSessionEndedDetail", { reason: event.data.session.endReason ?? "" }),

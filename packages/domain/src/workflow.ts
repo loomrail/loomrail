@@ -55,7 +55,9 @@ export type WorkflowDomainErrorCode =
   | "HUMAN_REQUEST_INVALID_ANSWER"
   | "ACCEPTANCE_NOT_FOUND"
   | "ACCEPTANCE_NOT_READY"
-  | "ACCEPTANCE_ALREADY_RESOLVED";
+  | "ACCEPTANCE_ALREADY_RESOLVED"
+  | "PROVIDER_SESSION_MISMATCH"
+  | "SESSION_END_REASON_NOT_HANDLED";
 
 export class WorkflowDomainError extends Error {
   readonly code: WorkflowDomainErrorCode;

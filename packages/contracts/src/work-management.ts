@@ -21,6 +21,7 @@ import {
   cancelPipelineCommandSchema,
   checkpointPublishedEventSchema,
   checkpointPublishedResultSchema,
+  contextHandoffRequestedEventSchema,
   endProviderSessionCommandSchema,
   humanRequestAnsweredResultSchema,
   humanRequestOpenedEventSchema,
@@ -185,6 +186,7 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   pipelineCompletedEventSchema,
   providerSessionStartedEventSchema,
   checkpointPublishedEventSchema,
+  contextHandoffRequestedEventSchema,
   providerSessionEndedEventSchema,
 ]);
 

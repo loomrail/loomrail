@@ -683,6 +683,15 @@ export const checkpointPublishedEventSchema = eventBaseSchema.extend({
   data: z.object({ checkpoint: checkpointSchema }).strict(),
 });
 
+// Emitted once per ProviderSession, on the first occupancy report that crosses
+// handoffThreshold (spec §6.2). Carries the usage that triggered it so the audit trail shows why
+// the session started winding down, not just that it did.
+export const contextHandoffRequestedEventSchema = eventBaseSchema.extend({
+  type: z.literal("CONTEXT_HANDOFF_REQUESTED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z.object({ session: providerSessionSchema, usage: contextWindowUsageSchema }).strict(),
+});
+
 export const providerSessionEndedEventSchema = eventBaseSchema.extend({
   type: z.literal("PROVIDER_SESSION_ENDED"),
   aggregateType: z.literal("WORK_ITEM"),
@@ -1130,6 +1139,7 @@ export type PublishCheckpointCommand = z.infer<typeof publishCheckpointCommandSc
 export type EndProviderSessionCommand = z.infer<typeof endProviderSessionCommandSchema>;
 export type ProviderSessionStartedEvent = z.infer<typeof providerSessionStartedEventSchema>;
 export type CheckpointPublishedEvent = z.infer<typeof checkpointPublishedEventSchema>;
+export type ContextHandoffRequestedEvent = z.infer<typeof contextHandoffRequestedEventSchema>;
 export type ProviderSessionEndedEvent = z.infer<typeof providerSessionEndedEventSchema>;
 export type ProviderSessionStartedResult = z.infer<typeof providerSessionStartedResultSchema>;
 export type CheckpointPublishedResult = z.infer<typeof checkpointPublishedResultSchema>;
