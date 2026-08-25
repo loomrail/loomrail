@@ -9,6 +9,7 @@ import open from "open";
 
 import { resolveLoomrailDataDirectory } from "./app-data.js";
 import { parseCliOptions } from "./options.js";
+import { formatStartupReport } from "./startup-report.js";
 
 const writeLine = (message: string): void => {
   process.stdout.write(`${message}\n`);
@@ -38,12 +39,18 @@ const run = async (): Promise<void> => {
     void shutdown("SIGTERM").finally(() => process.exit(0));
   });
 
-  writeLine(`Loomrail is ready at ${daemon.baseUrl}`);
+  let browserOpened = false;
   if (!options.noOpen) {
     await open(daemon.bootstrapUrl, { wait: false });
-    writeLine("Opened Loomrail in your default browser.");
-  } else {
-    writeLine("Browser opening is disabled for this run.");
+    browserOpened = true;
+  }
+
+  for (const line of formatStartupReport({
+    baseUrl: daemon.baseUrl,
+    bootstrapUrl: daemon.bootstrapUrl,
+    browserOpened,
+  })) {
+    writeLine(line);
   }
 };
 
