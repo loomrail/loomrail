@@ -89,6 +89,19 @@ export const contextPackSpecSchema = z
 export type ContextSectionId = z.infer<typeof contextSectionIdSchema>;
 export type ContextPackSpec = z.infer<typeof contextPackSpecSchema>;
 
+// The assembled pack that crosses the provider-adapter boundary (A2). Declared here rather than
+// in @loomrail/context-assembly so that provider-core can depend on the type without depending on
+// an assembly implementation package for it.
+export const contextPackSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    text: z.string(),
+    contentHash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+  })
+  .strict();
+
+export type ContextPack = z.infer<typeof contextPackSchema>;
+
 export const workflowTemplateStageSchema = z
   .object({
     stage: workflowStageSchema,

@@ -1,3 +1,5 @@
+import type { ContextPackSpec } from "@loomrail/contracts";
+
 import type { ContextSources } from "../src/index.js";
 
 // Synthetic slice of durable state used across render tests. Deliberately carries two
@@ -51,5 +53,20 @@ export const sampleSources = (): ContextSources => ({
       occurredAt: "2026-08-20T10:00:00.000Z",
       description: "Opened the work item",
     },
+  ],
+});
+
+// A workflow-template-level declaration covering all six v1 sections. The two most important
+// sections are required; the rest are optional and ordered so the least important (ACTIVITY)
+// is dropped first under a tight budget.
+export const specWithAllSections = (): ContextPackSpec => ({
+  schemaVersion: 1,
+  sections: [
+    { id: "WORK_ITEM_BRIEF", ordinal: 0, required: true },
+    { id: "WORKFLOW_POSITION", ordinal: 1, required: true },
+    { id: "DECISIONS", ordinal: 2, required: false },
+    { id: "LATEST_CHECKPOINT", ordinal: 3, required: false },
+    { id: "EVIDENCE", ordinal: 4, required: false },
+    { id: "ACTIVITY", ordinal: 5, required: false },
   ],
 });
