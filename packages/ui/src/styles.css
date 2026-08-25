@@ -1573,8 +1573,8 @@
   color: var(--lr-text-secondary);
   cursor: default;
   display: grid;
-  gap: var(--lr-space-2);
-  padding: var(--lr-space-3);
+  gap: var(--lr-density-card-gap);
+  padding: var(--lr-density-card-padding);
   transition:
     background-color var(--lr-duration-fast) var(--lr-ease-standard),
     border-color var(--lr-duration-fast) var(--lr-ease-standard),
@@ -1664,7 +1664,7 @@
 
 .lr-kanban-column__stack {
   display: grid;
-  gap: var(--lr-space-2);
+  gap: var(--lr-density-stack-gap);
 }
 
 .lr-timeline-event {

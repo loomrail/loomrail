@@ -69,6 +69,11 @@
   --lr-size-control: 28px;
   --lr-size-control-lg: 34px;
   --lr-size-row: 28px;
+
+  /* Board density. Comfortable is the base; `data-density="compact"` tightens these only. */
+  --lr-density-card-padding: var(--lr-space-3);
+  --lr-density-card-gap: var(--lr-space-2);
+  --lr-density-stack-gap: var(--lr-space-2);
   --lr-size-topbar: 44px;
   --lr-size-sidebar: 240px;
   --lr-size-inspector: 344px;
@@ -185,6 +190,12 @@
   --lr-scrollbar-thumb: color-mix(in srgb, var(--lr-text-faint) 58%, transparent);
   --lr-scrollbar-thumb-hover: color-mix(in srgb, var(--lr-accent) 45%, var(--lr-text-faint));
   --lr-scrollbar-track: transparent;
+}
+
+:root[data-density="compact"] {
+  --lr-density-card-padding: var(--lr-space-2);
+  --lr-density-card-gap: var(--lr-space-1);
+  --lr-density-stack-gap: var(--lr-space-1);
 }
 
 :root[data-theme="dark"] {

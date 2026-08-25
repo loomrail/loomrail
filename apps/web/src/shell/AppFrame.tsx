@@ -13,6 +13,7 @@ import {
   SelectControl,
   Textarea,
   TextField,
+  Tooltip,
   type IconName,
 } from "@loomrail/ui";
 
@@ -20,7 +21,13 @@ import { BrandMark } from "../components/BrandMark";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n } from "../i18n";
 import type { WorkbenchSearch } from "../router";
-import { applyThemePreference, readThemePreference, type ThemePreference } from "../theme";
+import {
+  applyDensityPreference,
+  isDensityPreference,
+  readDensityPreference,
+  type DensityPreference,
+} from "../density";
+import { applyThemePreference, isThemePreference, readThemePreference, type ThemePreference } from "../theme";
 import { useCreateWorkItem, useProjectHumanRequests, useWorkspace } from "../workspace";
 
 const NewTaskDialog = (): React.JSX.Element => {
@@ -168,94 +175,119 @@ const NewTaskDialog = (): React.JSX.Element => {
   );
 };
 
-const ThemeMenu = (): React.JSX.Element => {
-  const { t } = useI18n();
-  const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
-  const setPreference = (preference: ThemePreference): void => {
-    setTheme(preference);
-    applyThemePreference(preference);
-  };
-
-  return (
-    <ActionMenu
-      align="end"
-      groups={[
-        [
-          {
-            icon: "sun",
-            label: t("theme.light"),
-            onSelect: () => {
-              setPreference("light");
-            },
-            shortcut: theme === "light" ? "✓" : "",
-          },
-          {
-            icon: "moon",
-            label: t("theme.dark"),
-            onSelect: () => {
-              setPreference("dark");
-            },
-            shortcut: theme === "dark" ? "✓" : "",
-          },
-          {
-            icon: "monitor",
-            label: t("theme.system"),
-            onSelect: () => {
-              setPreference("system");
-            },
-            shortcut: theme === "system" ? "✓" : "",
-          },
-        ],
-      ]}
-      triggerTooltip={t("theme.change")}
-      trigger={
-        <IconButton
-          label={t("theme.change")}
-          name={theme === "dark" ? "moon" : theme === "light" ? "sun" : "monitor"}
-        />
-      }
-    />
-  );
-};
-
-const LanguageMenu = (): React.JSX.Element => {
-  const { locale, setLocale, t } = useI18n();
-
-  return (
-    <ActionMenu
-      align="end"
-      contentClassName="app-language-menu"
-      groups={[
-        [
-          {
-            label: t("language.english"),
-            onSelect: () => {
-              setLocale("en");
-            },
-            shortcut: locale === "en" ? "✓" : "",
-          },
-          {
-            label: t("language.russian"),
-            onSelect: () => {
-              setLocale("ru");
-            },
-            shortcut: locale === "ru" ? "✓" : "",
-          },
-        ],
-      ]}
-      trigger={
-        <Button aria-label={t("language.change")} className="app-language-button" size="sm" shape="pill">
-          {locale.toUpperCase()}
-        </Button>
-      }
-    />
-  );
+type SettingsDialogProps = {
+  onOpenChange: (open: boolean) => void;
+  open: boolean;
 };
 
 /**
- * A workspace destination. Every entry resolves to a view the product actually serves, so the
- * navigation never advertises a surface that does not exist.
+ * Gathers the preferences that belong to this browser.
+ *
+ * Theme, language and density are stored locally and affect nothing the daemon owns, which is why
+ * they live together here. Project-level settings are deliberately absent: those are domain state
+ * and need commands, migrations and events rather than a local toggle.
  */
+const SettingsDialog = ({ onOpenChange, open }: SettingsDialogProps): React.JSX.Element => {
+  const { locale, setLocale, t } = useI18n();
+  const { projects, selectedProject, selectProject } = useWorkspace();
+  const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
+  const [density, setDensity] = useState<DensityPreference>(readDensityPreference);
+
+  return (
+    <DialogSurface
+      closeLabel={t("action.closeDialog")}
+      description={t("settings.description")}
+      onOpenChange={onOpenChange}
+      open={open}
+      title={t("settings.title")}
+    >
+      <div className="settings">
+        <section className="settings__section">
+          <h3>{t("settings.appearance")}</h3>
+          <Field htmlFor="settings-theme" label={t("theme.change")}>
+            <SelectControl
+              ariaLabel={t("theme.change")}
+              id="settings-theme"
+              onValueChange={(value) => {
+                if (!isThemePreference(value)) return;
+                setTheme(value);
+                applyThemePreference(value);
+              }}
+              options={[
+                { label: t("theme.system"), value: "system" },
+                { label: t("theme.light"), value: "light" },
+                { label: t("theme.dark"), value: "dark" },
+              ]}
+              value={theme}
+            />
+          </Field>
+          <Field
+            description={t("settings.density.description")}
+            htmlFor="settings-density"
+            label={t("settings.density")}
+          >
+            <SelectControl
+              ariaLabel={t("settings.density")}
+              id="settings-density"
+              onValueChange={(value) => {
+                if (!isDensityPreference(value)) return;
+                setDensity(value);
+                applyDensityPreference(value);
+              }}
+              options={[
+                { label: t("settings.density.comfortable"), value: "comfortable" },
+                { label: t("settings.density.compact"), value: "compact" },
+              ]}
+              value={density}
+            />
+          </Field>
+          <Field htmlFor="settings-language" label={t("language.change")}>
+            <SelectControl
+              ariaLabel={t("language.change")}
+              id="settings-language"
+              onValueChange={(value) => {
+                if (value === "en" || value === "ru") setLocale(value);
+              }}
+              options={[
+                { label: t("language.english"), value: "en" },
+                { label: t("language.russian"), value: "ru" },
+              ]}
+              value={locale}
+            />
+          </Field>
+        </section>
+
+        <section className="settings__section">
+          <h3>{t("settings.projects")}</h3>
+          {projects.length > 0 ? (
+            <ul className="settings__projects">
+              {projects.map((project) => (
+                <li key={project.id}>
+                  <button
+                    aria-pressed={project.id === selectedProject?.id}
+                    onClick={() => {
+                      selectProject(project.id);
+                    }}
+                    type="button"
+                  >
+                    <span>{project.name.slice(0, 1).toUpperCase()}</span>
+                    <strong>{project.name}</strong>
+                    {project.id === selectedProject?.id ? <Icon name="check" size={14} /> : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="settings__note">{t("project.none")}</p>
+          )}
+          {/* Registering a project means reading a real repository, which this phase does not do. */}
+          <p className="settings__note">{t("settings.projects.note")}</p>
+        </section>
+      </div>
+    </DialogSurface>
+  );
+};
+
 const SidebarLink = ({
   active,
   count,
@@ -276,7 +308,13 @@ const SidebarLink = ({
   </Link>
 );
 
-const WorkspaceNavigation = ({ onNavigate }: { onNavigate?: () => void }): React.JSX.Element => {
+const WorkspaceNavigation = ({
+  onNavigate,
+  onOpenSettings,
+}: {
+  onNavigate?: () => void;
+  onOpenSettings: () => void;
+}): React.JSX.Element => {
   const { t } = useI18n();
   const { connection, projects, selectedProject, selectProject } = useWorkspace();
   const humanRequestsQuery = useProjectHumanRequests(selectedProject?.id);
@@ -338,8 +376,15 @@ const WorkspaceNavigation = ({ onNavigate }: { onNavigate?: () => void }): React
           <span aria-hidden="true" />
           {connected ? t("connection.local") : t("connection.offline")}
         </span>
-        <LanguageMenu />
-        <ThemeMenu />
+        <Tooltip label={t("settings.open")}>
+          <IconButton
+            label={t("settings.open")}
+            name="settings"
+            onClick={() => {
+              onOpenSettings();
+            }}
+          />
+        </Tooltip>
       </div>
     </>
   );
@@ -349,6 +394,7 @@ export const AppFrame = (): React.JSX.Element => {
   const { t } = useI18n();
   const { connectionPending, projectsPending, selectedProject } = useWorkspace();
   const [navigationOpen, setNavigationOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const projectInitial = selectedProject?.name.slice(0, 1).toUpperCase() ?? "–";
 
   if (connectionPending || projectsPending) {
@@ -367,7 +413,11 @@ export const AppFrame = (): React.JSX.Element => {
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
-        <WorkspaceNavigation />
+        <WorkspaceNavigation
+          onOpenSettings={() => {
+            setSettingsOpen(true);
+          }}
+        />
       </aside>
 
       <section className="app-surface">
@@ -387,6 +437,10 @@ export const AppFrame = (): React.JSX.Element => {
                 onNavigate={() => {
                   setNavigationOpen(false);
                 }}
+                onOpenSettings={() => {
+                  setNavigationOpen(false);
+                  setSettingsOpen(true);
+                }}
               />
             </DialogSurface>
             <span className="app-project-icon">{projectInitial}</span>
@@ -404,6 +458,8 @@ export const AppFrame = (): React.JSX.Element => {
           <Outlet />
         </main>
       </section>
+
+      <SettingsDialog onOpenChange={setSettingsOpen} open={settingsOpen} />
     </div>
   );
 };

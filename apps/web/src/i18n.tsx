@@ -5,6 +5,16 @@ import type { ReactNode } from "react";
 const LOCALE_STORAGE_KEY = "loomrail.locale";
 
 const en = {
+  "settings.open": "Open settings",
+  "settings.title": "Settings",
+  "settings.description": "Preferences stored in this browser.",
+  "settings.appearance": "Appearance",
+  "settings.density": "Board density",
+  "settings.density.description": "Compact tightens the spacing inside and between cards.",
+  "settings.density.comfortable": "Comfortable",
+  "settings.density.compact": "Compact",
+  "settings.projects": "Projects",
+  "settings.projects.note": "Registering another repository arrives with real project scanning.",
   "language.change": "Change language",
   "language.english": "English",
   "language.russian": "Русский",
@@ -259,6 +269,17 @@ const en = {
 } as const;
 
 const ru = {
+  "settings.open": "Открыть настройки",
+  "settings.title": "Настройки",
+  "settings.description": "Параметры, сохранённые в этом браузере.",
+  "settings.appearance": "Внешний вид",
+  "settings.density": "Плотность доски",
+  "settings.density.description": "Компактный режим уменьшает отступы внутри карточек и между ними.",
+  "settings.density.comfortable": "Обычная",
+  "settings.density.compact": "Компактная",
+  "settings.projects": "Проекты",
+  "settings.projects.note":
+    "Подключение другого репозитория появится вместе с реальным сканированием проектов.",
   "language.change": "Сменить язык",
   "language.english": "English",
   "language.russian": "Русский",

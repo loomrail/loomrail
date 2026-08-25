@@ -8,6 +8,15 @@ try {
 }
 
 try {
+  const density = globalThis.localStorage.getItem("loomrail-density");
+  if (density === "compact") {
+    globalThis.document.documentElement.dataset.density = density;
+  }
+} catch {
+  // Density is an enhancement; the comfortable spacing in the stylesheet remains the fallback.
+}
+
+try {
   const storedLocale = globalThis.localStorage.getItem("loomrail.locale");
   const locale =
     storedLocale === "ru" || storedLocale === "en"
