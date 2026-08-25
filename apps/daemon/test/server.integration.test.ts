@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   apiErrorResponseSchema,
   correlationIdSchema,
+  eventsResponseSchema,
   sessionExchangeResponseSchema,
   stateCommandResultSchema,
   workItemsResponseSchema,
@@ -385,6 +386,7 @@ describe("local daemon session and state boundary", () => {
       },
     });
     expect(await events.json()).toMatchObject({
+      hasMore: false,
       nextSequence: 4,
       events: [
         { type: "PROJECT_REGISTERED" },
@@ -392,6 +394,25 @@ describe("local daemon session and state boundary", () => {
         { type: "WORK_ITEM_UPDATED" },
         { type: "WORK_ITEM_STATE_CHANGED" },
       ],
+    });
+
+    const newestPage = await fetch(
+      `${daemon.baseUrl}/api/v1/events?order=DESC&limit=2&aggregateId=${encodeURIComponent(created.workItem.id)}`,
+      { headers: { cookie: secondSession.cookie } },
+    );
+    const newest = eventsResponseSchema.parse(await newestPage.json());
+    expect(newest).toMatchObject({
+      hasMore: true,
+      events: [{ type: "WORK_ITEM_STATE_CHANGED" }, { type: "WORK_ITEM_UPDATED" }],
+    });
+
+    const olderPage = await fetch(
+      `${daemon.baseUrl}/api/v1/events?order=DESC&limit=2&before=${newest.nextSequence.toString()}&aggregateId=${encodeURIComponent(created.workItem.id)}`,
+      { headers: { cookie: secondSession.cookie } },
+    );
+    expect(await olderPage.json()).toMatchObject({
+      hasMore: false,
+      events: [{ type: "WORK_ITEM_CREATED" }],
     });
   });
 

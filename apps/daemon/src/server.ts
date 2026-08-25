@@ -13,6 +13,7 @@ import {
   correlationIdSchema,
   createWorkItemRequestSchema,
   daemonStatusResponseSchema,
+  eventPageDirectionSchema,
   eventsResponseSchema,
   healthResponseSchema,
   humanRequestStatusSchema,
@@ -98,7 +99,9 @@ const humanRequestsQuerySchema = z
   .strict();
 const eventsQuerySchema = z
   .object({
+    order: eventPageDirectionSchema.default("ASC"),
     after: z.coerce.number().int().nonnegative().default(0),
+    before: z.coerce.number().int().positive().optional(),
     projectId: opaqueIdSchema.optional(),
     aggregateId: opaqueIdSchema.optional(),
     limit: z.coerce.number().int().min(1).max(500).default(100),
@@ -940,15 +943,19 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         const query = eventsQuerySchema.parse(request.query);
         const result = localState.query({
           type: "LIST_EVENTS",
+          direction: query.order,
           afterSequence: query.after,
           limit: query.limit,
+          ...(query.before === undefined ? {} : { beforeSequence: query.before }),
           ...(query.projectId === undefined ? {} : { projectId: query.projectId }),
           ...(query.aggregateId === undefined ? {} : { aggregateId: query.aggregateId }),
         });
+        const exhaustedCursor = query.order === "DESC" ? (query.before ?? 0) : query.after;
         return eventsResponseSchema.parse({
           schemaVersion: 1,
           events: result.type === "EVENTS" ? result.events : [],
-          nextSequence: result.type === "EVENTS" ? result.nextSequence : query.after,
+          nextSequence: result.type === "EVENTS" ? result.nextSequence : exhaustedCursor,
+          hasMore: result.type === "EVENTS" ? result.hasMore : false,
         });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);

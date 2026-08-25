@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components -- workspace hooks intentionally share their provider module */
 import { createContext, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   AcceptanceAction,
   AcceptancePackage,
@@ -123,16 +123,23 @@ export const useProjectWorkItems = (projectId: string | undefined) =>
     enabled: projectId !== undefined,
   });
 
+/**
+ * Activity is append-only and read newest first, so pages are cursors into the past. Refetching
+ * re-derives every cursor from the page before it, which keeps Events that arrive while older
+ * pages are open from falling into the gap between two page boundaries.
+ */
 export const useWorkItemEvents = (projectId: string | undefined, workItemId: string | undefined) =>
-  useQuery({
+  useInfiniteQuery({
     queryKey:
       projectId && workItemId
         ? workItemEventsKey(projectId, workItemId)
         : ["projects", "none", "work-items", "none", "events"],
-    queryFn: () => {
+    queryFn: ({ pageParam }) => {
       if (!projectId || !workItemId) throw new Error("A project and work item are required to list activity");
-      return listWorkItemEvents(projectId, workItemId);
+      return listWorkItemEvents(projectId, workItemId, pageParam);
     },
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.nextSequence : undefined),
     enabled: projectId !== undefined && workItemId !== undefined,
   });
 

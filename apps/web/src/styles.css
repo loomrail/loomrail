@@ -704,11 +704,21 @@ button {
 
 .task-inspector__header {
   align-items: flex-start;
-  border-bottom: 1px solid var(--lr-border-subtle);
   display: flex;
   gap: var(--lr-space-3);
   justify-content: space-between;
   padding: var(--lr-space-4);
+  position: relative;
+}
+
+.task-inspector__header::after {
+  background: var(--lr-border-subtle);
+  bottom: 0;
+  content: "";
+  height: 1px;
+  left: var(--lr-space-4);
+  position: absolute;
+  right: var(--lr-space-4);
 }
 
 .task-inspector__actions {
@@ -822,6 +832,18 @@ button {
   display: grid;
   gap: var(--lr-space-2);
   padding-left: var(--lr-space-3);
+}
+
+.inspector-activity {
+  display: grid;
+  gap: var(--lr-space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.inspector-activity__more {
+  justify-self: start;
 }
 
 .inspector-activity-skeleton {

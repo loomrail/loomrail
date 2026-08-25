@@ -8,6 +8,7 @@ import {
   budgetPolicySchema,
   decisionSchema,
   domainEventSchema,
+  eventPageDirectionSchema,
   evidenceArtifactSchema,
   humanRequestSchema,
   humanRequestStatusSchema,
@@ -318,13 +319,32 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("LIST_EVENTS"),
+      direction: eventPageDirectionSchema.default("ASC"),
       afterSequence: z.number().int().nonnegative().default(0),
+      beforeSequence: z.number().int().positive().optional(),
       projectId: opaqueIdSchema.optional(),
       aggregateId: opaqueIdSchema.optional(),
       limit: z.number().int().min(1).max(500).default(100),
     })
     .strict(),
 ]);
+
+// `ORDER BY` direction is structure rather than a value, so it cannot be bound. The two statements are
+// spelled out in full so that every dynamic value stays a placeholder.
+const listEventsWhereClause = `WHERE sequence > ?
+     AND (? IS NULL OR sequence < ?)
+     AND (? IS NULL OR project_id = ?)
+     AND (? IS NULL OR aggregate_id = ?)`;
+
+const listEventsAscendingSql = `SELECT * FROM events
+   ${listEventsWhereClause}
+   ORDER BY sequence ASC
+   LIMIT ?`;
+
+const listEventsDescendingSql = `SELECT * FROM events
+   ${listEventsWhereClause}
+   ORDER BY sequence DESC
+   LIMIT ?`;
 
 const parseJson = (value: string): unknown => JSON.parse(value) as unknown;
 
@@ -2117,28 +2137,28 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           };
         }
         case "LIST_EVENTS": {
-          const events = database
-            .prepare(
-              `SELECT * FROM events
-               WHERE sequence > ?
-                 AND (? IS NULL OR project_id = ?)
-                 AND (? IS NULL OR aggregate_id = ?)
-               ORDER BY sequence
-               LIMIT ?`,
-            )
+          const descending = queryValue.direction === "DESC";
+          // Read one row past the page so `hasMore` is exact instead of "the page came back full".
+          const rows = database
+            .prepare(descending ? listEventsDescendingSql : listEventsAscendingSql)
             .all(
               queryValue.afterSequence,
+              queryValue.beforeSequence ?? null,
+              queryValue.beforeSequence ?? null,
               queryValue.projectId ?? null,
               queryValue.projectId ?? null,
               queryValue.aggregateId ?? null,
               queryValue.aggregateId ?? null,
-              queryValue.limit,
-            )
-            .map(eventFromRow);
+              queryValue.limit + 1,
+            );
+          const events = rows.slice(0, queryValue.limit).map(eventFromRow);
+          // The cursor for the following page: the newest sequence read ascending, the oldest descending.
+          const exhaustedCursor = descending ? (queryValue.beforeSequence ?? 0) : queryValue.afterSequence;
           return {
             type: "EVENTS",
             events,
-            nextSequence: events.at(-1)?.sequence ?? queryValue.afterSequence,
+            hasMore: rows.length > queryValue.limit,
+            nextSequence: events.at(-1)?.sequence ?? exhaustedCursor,
           };
         }
         default:

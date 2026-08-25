@@ -1,9 +1,81 @@
 import { randomBytes } from "node:crypto";
-import { resolve } from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
 
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
+import { openLocalState } from "../packages/persistence-sqlite/dist/index.js";
+
+/**
+ * Writes a task carrying more activity than a single page holds. Driving forty moves through the
+ * board would dominate the run, and the point under test is what the inspector does with a long
+ * log, not how the log came to be long.
+ */
+const seedLongActivity = async (databasePath: string, title: string): Promise<number> => {
+  let nextId = 0;
+  const localState = await openLocalState({
+    databasePath,
+    now: () => new Date("2026-08-22T18:00:00.000Z"),
+    createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+  });
+  try {
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-register-project",
+      correlationId: "correlation-seed-register-project",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "REGISTER_FIXTURE_PROJECT",
+      payload: {
+        id: "project-web",
+        fixtureId: "web-app-a",
+        name: "Fixture web application",
+        repositoryPath: resolve("fixtures/projects/web-app-a"),
+      },
+    });
+    const created = localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-create-work-item",
+      correlationId: "correlation-seed-create-work-item",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CREATE_WORK_ITEM",
+      payload: {
+        projectId: "project-web",
+        parentId: null,
+        type: "TASK",
+        title,
+        description: "Seeded with a long audit trail.",
+        priority: "MEDIUM",
+        risk: "LOW",
+        acceptanceCriteria: [],
+      },
+    });
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("The seeded WorkItem was not created");
+
+    let version = created.workItem.version;
+    for (let move = 0; move < 40; move += 1) {
+      const moved = localState.execute({
+        schemaVersion: 1,
+        commandId: `seed-move-${move.toString()}`,
+        correlationId: `correlation-seed-move-${move.toString()}`,
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "MOVE_WORK_ITEM",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedVersion: version,
+          targetState: move % 2 === 0 ? "READY" : "BACKLOG",
+        },
+      });
+      if (moved.type !== "WORK_ITEM_MOVED") throw new Error("The seeded WorkItem was not moved");
+      version = moved.workItem.version;
+    }
+    // One creation plus forty moves.
+    return 41;
+  } finally {
+    localState.close();
+  }
+};
 
 const initializeWorkspace = async (page: Page): Promise<void> => {
   const initialize = page.getByRole("button", { name: "Initialize demo workspace" });
@@ -972,5 +1044,81 @@ test.describe("authenticated walking skeleton", () => {
       await expect(page).toHaveURL(expected);
       await expect(page.getByRole("button", { name, exact: true })).toHaveAttribute("aria-pressed", "true");
     }
+  });
+
+  test("shows the newest activity first and loads older pages on demand", async ({ page }) => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail activity "));
+    try {
+      const databasePath = join(temporaryDirectory, "local-state.sqlite");
+      const title = "Task with a long audit trail";
+      const total = await seedLongActivity(databasePath, title);
+
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        stateDatabasePath: databasePath,
+        webRoot: resolve("apps/web/dist"),
+      });
+
+      await page.goto(daemon.bootstrapUrl);
+      await page.getByRole("button", { name: "All issues", exact: true }).click();
+      await page.getByRole("button", { name: title }).click();
+
+      const inspector = page.getByRole("complementary", { name: title });
+      const rows = inspector.locator(".inspector-activity > li");
+      await expect(rows).toHaveCount(30);
+
+      // The count admits that the loaded rows are not the whole log.
+      await expect(inspector.getByText("30+", { exact: true })).toBeVisible();
+
+      // The newest Event leads, so the current state is readable without scrolling or paging.
+      await expect(rows.first()).toContainText("State changed");
+      await expect(rows.first()).toContainText("Ready → Backlog");
+      await expect(inspector.getByText("Task created", { exact: true })).toHaveCount(0);
+
+      const loadMore = inspector.getByRole("button", { name: "Show more" });
+      await expect(loadMore).toBeVisible();
+      await loadMore.click();
+
+      await expect(rows).toHaveCount(total);
+      await expect(inspector.getByText("Task created", { exact: true })).toBeVisible();
+      await expect(inspector.getByText(total.toString(), { exact: true })).toBeVisible();
+      await expect(loadMore).toHaveCount(0);
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("draws inspector rules inset from the panel edge and none below the last section", async ({
+    page,
+  }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Inspector rule alignment");
+
+    const inspector = page.getByRole("complementary", { name: "Inspector rule alignment" });
+    const sections = inspector.locator(".lr-inspector-section");
+    await expect(sections).toHaveCount(4);
+
+    // Every rule stops short of the panel edge by the same inset the content sits at.
+    const inset = await sections.first().evaluate((element) => {
+      const rule = window.getComputedStyle(element, "::after");
+      return { content: rule.content, left: rule.left, right: rule.right };
+    });
+    expect(inset.content).not.toBe("none");
+    expect(inset.left).toBe("16px");
+    expect(inset.right).toBe("16px");
+
+    // The last section - the activity log - has nothing below it to separate from.
+    const trailing = await sections
+      .last()
+      .evaluate((element) => window.getComputedStyle(element, "::after").content);
+    expect(trailing).toBe("none");
   });
 });

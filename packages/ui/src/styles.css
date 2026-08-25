@@ -1724,8 +1724,24 @@
 }
 
 .lr-inspector-section {
-  border-bottom: 1px solid var(--lr-border-subtle);
   padding: var(--lr-space-4);
+  position: relative;
+}
+
+/* The rule is drawn inset so that it lines up with the content rather than running past it, and the
+   last section drops it because there is nothing below to separate from. */
+.lr-inspector-section::after {
+  background: var(--lr-border-subtle);
+  bottom: 0;
+  content: "";
+  height: 1px;
+  left: var(--lr-space-4);
+  position: absolute;
+  right: var(--lr-space-4);
+}
+
+.lr-inspector-section:last-of-type::after {
+  content: none;
 }
 
 .lr-inspector-section > header {
@@ -1748,7 +1764,8 @@
 
 .lr-run-summary {
   display: grid;
-  gap: var(--lr-space-3);
+  /* Rows sit closer than columns so each label reads as attached to its own value. */
+  gap: var(--lr-space-2-5) var(--lr-space-3);
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
 }

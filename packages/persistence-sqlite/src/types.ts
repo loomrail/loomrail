@@ -1,5 +1,6 @@
 import type {
   DomainEvent,
+  EventPageDirection,
   HumanRequest,
   HumanRequestStatus,
   Project,
@@ -55,7 +56,9 @@ export type StateQuery =
     }
   | {
       type: "LIST_EVENTS";
+      direction?: EventPageDirection;
       afterSequence?: number;
+      beforeSequence?: number;
       projectId?: string;
       aggregateId?: string;
       limit?: number;
@@ -69,7 +72,7 @@ export type StateQueryResult =
   | { type: "HUMAN_REQUESTS"; humanRequests: HumanRequest[] }
   | { type: "WORKFLOW_DISPATCHES"; dispatches: WorkflowDispatch[] }
   | { type: "WORK_ITEMS"; workItems: WorkItem[] }
-  | { type: "EVENTS"; events: DomainEvent[]; nextSequence: number };
+  | { type: "EVENTS"; events: DomainEvent[]; nextSequence: number; hasMore: boolean };
 
 export type StateStoreStartup = {
   appliedMigrations: number[];

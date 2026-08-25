@@ -352,11 +352,13 @@ export const workItemResponseSchema = z
 export const workItemsResponseSchema = z
   .object({ schemaVersion: schemaVersionSchema, workItems: z.array(workItemSchema) })
   .strict();
+export const eventPageDirectionSchema = z.enum(["ASC", "DESC"]);
 export const eventsResponseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
     events: z.array(domainEventSchema),
     nextSequence: z.number().int().nonnegative(),
+    hasMore: z.boolean(),
   })
   .strict();
 
@@ -367,6 +369,7 @@ export type WorkItemType = z.infer<typeof workItemTypeSchema>;
 export type WorkItemState = z.infer<typeof workItemStateSchema>;
 export type WorkItemChangedField = z.infer<typeof workItemChangedFieldSchema>;
 export type DomainEvent = z.infer<typeof domainEventSchema>;
+export type EventPageDirection = z.infer<typeof eventPageDirectionSchema>;
 export type ProjectRegisteredEvent = z.infer<typeof projectRegisteredEventSchema>;
 export type WorkItemCreatedEvent = z.infer<typeof workItemCreatedEventSchema>;
 export type WorkItemUpdatedEvent = z.infer<typeof workItemUpdatedEventSchema>;

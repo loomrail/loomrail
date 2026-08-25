@@ -138,8 +138,17 @@ export const listProjects = async () => requestLocalApi("/api/v1/projects", proj
 export const listProjectWorkItems = async (projectId: string) =>
   requestLocalApi(`/api/v1/projects/${encodeURIComponent(projectId)}/work-items`, workItemsResponseSchema);
 
-export const listWorkItemEvents = async (projectId: string, workItemId: string) => {
-  const query = new URLSearchParams({ after: "0", aggregateId: workItemId, limit: "100", projectId });
+export const activityPageSize = 30;
+
+/** Reads one page of an item's activity newest first; `before` continues from a page's `nextSequence`. */
+export const listWorkItemEvents = async (projectId: string, workItemId: string, before?: number) => {
+  const query = new URLSearchParams({
+    aggregateId: workItemId,
+    limit: activityPageSize.toString(),
+    order: "DESC",
+    projectId,
+    ...(before === undefined ? {} : { before: before.toString() }),
+  });
   return requestLocalApi(`/api/v1/events?${query.toString()}`, eventsResponseSchema);
 };
 

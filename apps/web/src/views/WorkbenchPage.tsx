@@ -1259,10 +1259,74 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   );
 };
 
-const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element => {
+/**
+ * An item's activity grows without bound, so it is read newest first, one page at a time, rather
+ * than rendering the whole log. The count stays honest about that: it reads "30+" while more pages
+ * remain instead of claiming the loaded rows are all there is.
+ */
+const TaskActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const { locale, t } = useI18n();
+  const eventsQuery = useWorkItemEvents(item.projectId, item.id);
+  const events = eventsQuery.data?.pages.flatMap((page) => page.events) ?? [];
+  const loadMore = (): void => {
+    void eventsQuery.fetchNextPage();
+  };
+
+  return (
+    <InspectorSection
+      action={
+        eventsQuery.data ? (
+          <span className="inspector-step-count">
+            {eventsQuery.hasNextPage ? t("task.activityCountMore", { count: events.length }) : events.length}
+          </span>
+        ) : undefined
+      }
+      title={t("task.activity")}
+    >
+      {events.length > 0 ? (
+        <ol aria-busy={eventsQuery.isFetchingNextPage} className="inspector-activity">
+          {events.map((event) => (
+            <li key={event.id}>
+              <TimelineEvent {...eventPresentation(event, t)} time={eventTime(event.occurredAt, locale)} />
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {eventsQuery.hasNextPage ? (
+        <Button
+          className="inspector-activity__more"
+          disabled={eventsQuery.isFetchingNextPage}
+          loading={eventsQuery.isFetchingNextPage}
+          onClick={loadMore}
+          size="sm"
+        >
+          {t("task.loadMoreActivity")}
+        </Button>
+      ) : null}
+      {eventsQuery.isPending ? (
+        <div aria-label={t("task.loadingActivity")} className="inspector-activity-skeleton" role="status">
+          {["first", "second", "third"].map((row, index) => (
+            <div className="inspector-activity-skeleton__row" key={row}>
+              <Skeleton className="inspector-activity-skeleton__icon" />
+              <span>
+                <Skeleton width={index === 1 ? "52%" : "68%"} />
+                <Skeleton width={index === 2 ? "64%" : "82%"} />
+              </span>
+              <Skeleton width="28px" />
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {eventsQuery.data && events.length === 0 ? (
+        <p className="inspector-copy">{t("task.noActivity")}</p>
+      ) : null}
+    </InspectorSection>
+  );
+};
+
+const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element => {
+  const { t } = useI18n();
   const moveMutation = useMoveWorkItem();
-  const eventsQuery = useWorkItemEvents(item?.projectId, item?.id);
   const workflowQuery = useWorkItemWorkflow(item?.id);
   const [lastTarget, setLastTarget] = useState<WorkItemState | null>(null);
 
@@ -1364,39 +1428,7 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
         )}
       </InspectorSection>
 
-      <InspectorSection
-        action={
-          eventsQuery.data ? (
-            <span className="inspector-step-count">{eventsQuery.data.events.length}</span>
-          ) : undefined
-        }
-        title={t("task.activity")}
-      >
-        {eventsQuery.data?.events.map((event) => (
-          <TimelineEvent
-            {...eventPresentation(event, t)}
-            key={event.id}
-            time={eventTime(event.occurredAt, locale)}
-          />
-        ))}
-        {eventsQuery.isPending ? (
-          <div aria-label={t("task.loadingActivity")} className="inspector-activity-skeleton" role="status">
-            {["first", "second", "third"].map((row, index) => (
-              <div className="inspector-activity-skeleton__row" key={row}>
-                <Skeleton className="inspector-activity-skeleton__icon" />
-                <span>
-                  <Skeleton width={index === 1 ? "52%" : "68%"} />
-                  <Skeleton width={index === 2 ? "64%" : "82%"} />
-                </span>
-                <Skeleton width="28px" />
-              </div>
-            ))}
-          </div>
-        ) : null}
-        {eventsQuery.data?.events.length === 0 ? (
-          <p className="inspector-copy">{t("task.noActivity")}</p>
-        ) : null}
-      </InspectorSection>
+      <TaskActivitySection item={item} />
 
       {moveMutation.error ? (
         <div className="task-inspector__error">

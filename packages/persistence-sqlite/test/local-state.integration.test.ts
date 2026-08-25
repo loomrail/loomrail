@@ -124,6 +124,56 @@ describe("SQLite local state", () => {
     expect(events.type === "EVENTS" ? events.events : []).toHaveLength(2);
   });
 
+  it("pages an aggregate's Events newest-first without dropping any across page boundaries", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem());
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("The WorkItem was not created");
+    const workItemId = created.workItem.id;
+
+    // Toggle the state so the aggregate accumulates more Events than a single page can hold.
+    let version = created.workItem.version;
+    for (let move = 0; move < 12; move += 1) {
+      const targetState = move % 2 === 0 ? "READY" : "BACKLOG";
+      const moved = localState.execute(
+        moveWorkItem(`move-${move.toString()}`, workItemId, version, targetState),
+      );
+      if (moved.type !== "WORK_ITEM_MOVED") throw new Error("The WorkItem was not moved");
+      version = moved.workItem.version;
+    }
+
+    const listAscending = localState.query({ type: "LIST_EVENTS", aggregateId: workItemId });
+    if (listAscending.type !== "EVENTS") throw new Error("The Events were not listed");
+    expect(listAscending.events).toHaveLength(13);
+    expect(listAscending.hasMore).toBe(false);
+    // The ascending default is unchanged: oldest first, cursor at the newest sequence read.
+    expect(listAscending.events.at(0)?.type).toBe("WORK_ITEM_CREATED");
+    expect(listAscending.nextSequence).toBe(listAscending.events.at(-1)?.sequence);
+
+    const pages = [];
+    let beforeSequence: number | undefined;
+    for (let page = 0; page < 3; page += 1) {
+      const result = localState.query({
+        type: "LIST_EVENTS",
+        aggregateId: workItemId,
+        direction: "DESC",
+        limit: 5,
+        ...(beforeSequence === undefined ? {} : { beforeSequence }),
+      });
+      if (result.type !== "EVENTS") throw new Error("The Events were not listed");
+      pages.push(result);
+      beforeSequence = result.nextSequence;
+    }
+
+    expect(pages.map((page) => page.events.length)).toEqual([5, 5, 3]);
+    expect(pages.map((page) => page.hasMore)).toEqual([true, true, false]);
+    // Every Event appears exactly once and in strict newest-first order - a shifting cursor would
+    // either skip the Events straddling a boundary or repeat them.
+    expect(pages.flatMap((page) => page.events.map((event) => event.sequence))).toEqual(
+      listAscending.events.map((event) => event.sequence).reverse(),
+    );
+  });
+
   it("rejects command ID reuse with different input", async () => {
     const localState = await open();
     localState.execute(registerProject());
