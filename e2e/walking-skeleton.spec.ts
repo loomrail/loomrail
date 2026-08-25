@@ -875,15 +875,9 @@ test.describe("authenticated walking skeleton", () => {
     const card = page.getByRole("button", { name: "Scrolled into view" });
     await expect(card).toHaveAttribute("aria-pressed", "true");
     // The card sits in the right-most column; the board must have scrolled it back into view
-    // instead of leaving the visible columns looking empty.
-    const cardBox = await card.boundingBox();
-    const boardBox = await board.boundingBox();
-    expect(cardBox).not.toBeNull();
-    expect(boardBox).not.toBeNull();
-    if (cardBox && boardBox) {
-      expect(cardBox.x).toBeGreaterThanOrEqual(boardBox.x - 1);
-      expect(cardBox.x + cardBox.width).toBeLessThanOrEqual(boardBox.x + boardBox.width + 1);
-    }
+    // instead of leaving the visible columns looking empty. A retrying assertion is used because
+    // the move re-renders the board underneath us.
+    await expect(card).toBeInViewport();
   });
 
   test("keeps navigation reachable and free of dead ends on a phone viewport", async ({ page }) => {

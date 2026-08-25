@@ -59,11 +59,15 @@ export const releaseDependencies = () => {
 
 export const releaseVersion = () => readPackageJson("apps/cli").version;
 
+const onWindows = process.platform === "win32";
+
 /**
- * Resolves a Node toolchain executable for the current platform.
+ * Spawn options for a Node toolchain executable.
  *
- * On Windows `npm` and `npx` are `.cmd` shims, which `child_process` cannot resolve without a
- * shell. Naming the shim directly keeps argument handling free of shell quoting, which matters
- * because release paths routinely contain spaces.
+ * On Windows `npm` and `npx` are `.cmd` shims. Node refuses to spawn those without a shell, so the
+ * shell is opted into there — which in turn means no argument may contain a space. Callers keep
+ * paths out of the argument list and pass them through `cwd` instead, so a repository or temporary
+ * directory containing spaces cannot break the release.
  */
-export const toolExecutable = (name) => (process.platform === "win32" ? `${name}.cmd` : name);
+export const toolCommand = (name) => (onWindows ? `${name}.cmd` : name);
+export const toolSpawnOptions = () => (onWindows ? { shell: true } : {});

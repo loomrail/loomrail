@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import process from "node:process";
 
@@ -8,7 +8,8 @@ import {
   releaseName,
   releaseVersion,
   repositoryRoot,
-  toolExecutable,
+  toolCommand,
+  toolSpawnOptions,
 } from "./release-manifest.mjs";
 
 /**
@@ -72,15 +73,20 @@ const run = async () => {
     "utf8",
   );
 
-  const packed = execFileSync(toolExecutable("npm"), ["pack", "--pack-destination", stagingDirectory], {
+  // `npm pack` writes to its working directory, so no path needs to travel through the argument
+  // list; on Windows those arguments would go through a shell.
+  const packed = execFileSync(toolCommand("npm"), ["pack"], {
     cwd: packageDirectory,
     encoding: "utf8",
+    ...toolSpawnOptions(),
   })
     .trim()
     .split("\n")
     .at(-1);
 
-  process.stdout.write(`${resolve(stagingDirectory, packed)}\n`);
+  const tarball = resolve(stagingDirectory, packed);
+  await rename(resolve(packageDirectory, packed), tarball);
+  process.stdout.write(`${tarball}\n`);
 };
 
 await run();

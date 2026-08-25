@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
 
-import { repositoryRoot, toolExecutable } from "./release-manifest.mjs";
+import { repositoryRoot, toolCommand, toolSpawnOptions } from "./release-manifest.mjs";
 
 /**
  * Installs the packed launcher into an empty directory and proves it runs there.
@@ -55,16 +55,22 @@ const run = async () => {
       `${JSON.stringify({ name: "loomrail-release-check", private: true, version: "0.0.0" }, null, 2)}\n`,
       "utf8",
     );
-    execFileSync(toolExecutable("npm"), ["install", "--no-audit", "--no-fund", tarball], {
+    // Install by bare filename from inside the directory: on Windows the arguments go through a
+    // shell, and a temporary path containing a space would break the command.
+    const localTarball = "loomrail.tgz";
+    await copyFile(tarball, join(installDirectory, localTarball));
+    execFileSync(toolCommand("npm"), ["install", "--no-audit", "--no-fund", localTarball], {
       cwd: installDirectory,
       stdio: "inherit",
+      ...toolSpawnOptions(),
     });
 
     const port = await freePort();
     const baseUrl = `http://127.0.0.1:${port}`;
-    launcher = spawn(toolExecutable("npx"), ["loomrail", "--no-open", "--port", String(port)], {
+    launcher = spawn(toolCommand("npx"), ["loomrail", "--no-open", "--port", String(port)], {
       cwd: installDirectory,
       env: { ...process.env, LOOMRAIL_DATA_DIR: dataDirectory },
+      ...toolSpawnOptions(),
     });
 
     let output = "";
