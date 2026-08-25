@@ -57,6 +57,7 @@ import {
   type BoardScope,
   type BoardView,
 } from "../boardView";
+import { BrandMark } from "../components/BrandMark";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
 import type { SummaryFilter } from "../router";
@@ -228,6 +229,23 @@ const BoardToolbar = ({
           >
             <ViewSettings onViewChange={onViewChange} view={view} />
           </PopoverSurface>
+          <ActionMenu
+            align="end"
+            groups={[
+              [
+                {
+                  icon: "link",
+                  label: t("view.copyLink"),
+                  // Filters, ordering and scope live in the URL, so the address is the shareable view.
+                  onSelect: () => {
+                    void navigator.clipboard.writeText(window.location.href);
+                  },
+                },
+              ],
+            ]}
+            trigger={<IconButton label={t("view.actions")} name="more" variant="surface" />}
+            triggerTooltip={t("view.actions")}
+          />
         </div>
       </div>
       {hasActiveFilters ? (
@@ -1570,6 +1588,9 @@ export const WorkbenchPage = (): React.JSX.Element => {
         className="workbench-board"
         aria-labelledby="current-work-title"
       >
+        <h1 className="lr-visually-hidden" id="current-work-title">
+          {t("work.current")}
+        </h1>
         <BoardToolbar
           filters={filters}
           onClearFilters={clearFilters}
@@ -1606,40 +1627,6 @@ export const WorkbenchPage = (): React.JSX.Element => {
             <Icon name="chevronRight" size={14} />
           </button>
         ) : null}
-        <header className="workbench-heading">
-          <div>
-            <span className="workbench-heading__mark">
-              <Icon name="board" size={14} />
-            </span>
-            <div>
-              <h1 id="current-work-title">{t("work.current")}</h1>
-              <p>
-                {selectedProject
-                  ? t("work.projectPersisted", { project: selectedProject.name })
-                  : t("work.chooseProject")}
-              </p>
-            </div>
-          </div>
-          <div>
-            <ActionMenu
-              align="end"
-              groups={[
-                [
-                  {
-                    icon: "link",
-                    label: t("view.copyLink"),
-                    // Filters and ordering live in the URL, so the current address is the shareable view.
-                    onSelect: () => {
-                      void navigator.clipboard.writeText(window.location.href);
-                    },
-                  },
-                ],
-              ]}
-              trigger={<IconButton label={t("view.actions")} name="more" variant="surface" />}
-              triggerTooltip={t("view.actions")}
-            />
-          </div>
-        </header>
 
         {!selectedProject && !projectsPending && !error ? (
           <div className="workbench-state">
@@ -1667,8 +1654,8 @@ export const WorkbenchPage = (): React.JSX.Element => {
         ) : null}
 
         {projectsPending || (selectedProject && workItemsQuery.isPending) ? (
-          <div className="workbench-state">
-            <FeedbackState description={t("loading.board.description")} title={t("loading.board.title")} />
+          <div className="workbench-state workbench-state--loading" role="status">
+            <BrandMark aria-label={t("loading.board.title")} className="app-brand-mark" size={36} />
           </div>
         ) : null}
 
