@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@loomrail/daemon": "workspace:*",
-    "open": "^10.0.0"
+    "open": "^11.0.1"
   },
   "devDependencies": {
     "vite": "^8.1.0"
