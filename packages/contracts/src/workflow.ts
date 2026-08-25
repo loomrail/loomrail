@@ -62,10 +62,38 @@ const titleSchema = z.string().trim().min(1).max(200);
 const descriptionSchema = z.string().trim().min(1).max(4_000);
 const budgetThresholdSchema = z.number().positive().max(1);
 
+export const contextSectionIdSchema = z.enum([
+  "WORK_ITEM_BRIEF",
+  "WORKFLOW_POSITION",
+  "DECISIONS",
+  "LATEST_CHECKPOINT",
+  "EVIDENCE",
+  "ACTIVITY",
+]);
+
+export const contextPackSectionSchema = z
+  .object({
+    id: contextSectionIdSchema,
+    ordinal: z.number().int().nonnegative(),
+    required: z.boolean(),
+  })
+  .strict();
+
+export const contextPackSpecSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    sections: z.array(contextPackSectionSchema).min(1).max(20),
+  })
+  .strict();
+
+export type ContextSectionId = z.infer<typeof contextSectionIdSchema>;
+export type ContextPackSpec = z.infer<typeof contextPackSpecSchema>;
+
 export const workflowTemplateStageSchema = z
   .object({
     stage: workflowStageSchema,
     ordinal: z.number().int().nonnegative(),
+    contextPack: contextPackSpecSchema,
   })
   .strict();
 

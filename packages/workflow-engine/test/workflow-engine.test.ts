@@ -7,6 +7,11 @@ import {
   WorkflowTemplateError,
 } from "../src/index.js";
 
+const minimalContextPack = {
+  schemaVersion: 1,
+  sections: [{ id: "WORK_ITEM_BRIEF", ordinal: 0, required: true }],
+};
+
 describe("workflow template validation", () => {
   it("orders and advances the bounded mock template", () => {
     expect(nextWorkflowStage(mockDeliveryTemplate, "DISCOVERY")).toBe("PLAN");
@@ -25,8 +30,8 @@ describe("workflow template validation", () => {
         version: 1,
         name: "Invalid",
         stages: [
-          { stage: "PLAN", ordinal: 0 },
-          { stage: "PLAN", ordinal: 2 },
+          { stage: "PLAN", ordinal: 0, contextPack: minimalContextPack },
+          { stage: "PLAN", ordinal: 2, contextPack: minimalContextPack },
         ],
       }),
     ).toThrow(WorkflowTemplateError);

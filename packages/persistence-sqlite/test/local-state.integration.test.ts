@@ -19,14 +19,19 @@ import { openLocalState, StateStoreError, type LocalState } from "../src/index.j
 
 const timestamp = "2026-08-22T18:00:00.000Z";
 
+const contextPack: StartMockPipelineCommand["payload"]["template"]["stages"][number]["contextPack"] = {
+  schemaVersion: 1,
+  sections: [{ id: "WORK_ITEM_BRIEF", ordinal: 0, required: true }],
+};
+
 const mockTemplate: StartMockPipelineCommand["payload"]["template"] = {
   schemaVersion: 1,
   id: "mock-delivery-v1",
   version: 1,
   name: "Mock delivery",
   stages: [
-    { stage: "DISCOVERY", ordinal: 0 },
-    { stage: "PLAN", ordinal: 1 },
+    { stage: "DISCOVERY", ordinal: 0, contextPack },
+    { stage: "PLAN", ordinal: 1, contextPack },
   ],
 };
 
@@ -283,9 +288,9 @@ describe("SQLite local state", () => {
       version: 1,
       name: "Acceptance fixture",
       stages: [
-        { stage: "REVIEW", ordinal: 0 },
-        { stage: "QA", ordinal: 1 },
-        { stage: "ACCEPTANCE", ordinal: 2 },
+        { stage: "REVIEW", ordinal: 0, contextPack },
+        { stage: "QA", ordinal: 1, contextPack },
+        { stage: "ACCEPTANCE", ordinal: 2, contextPack },
       ],
     };
     localState.execute({

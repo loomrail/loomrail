@@ -14,6 +14,7 @@ import {
   stateCommandResultSchema,
   workItemsResponseSchema,
   workflowSnapshotSchema,
+  type ContextPackSpec,
 } from "@loomrail/contracts";
 import { openLocalState } from "@loomrail/persistence-sqlite";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
@@ -48,6 +49,19 @@ const mutationHeaders = (daemon: RunningDaemon, session: AuthenticatedSession): 
   origin: daemon.baseUrl,
   "x-loomrail-csrf": session.csrfToken,
 });
+
+// The context pack a legacy (pre-current) persisted template still carries: DISCOVERY and PLAN
+// never had an EVIDENCE section, since this legacy fixture only exercises those two stages.
+const legacyContextPack: ContextPackSpec = {
+  schemaVersion: 1,
+  sections: [
+    { id: "WORK_ITEM_BRIEF", ordinal: 0, required: true },
+    { id: "WORKFLOW_POSITION", ordinal: 1, required: true },
+    { id: "DECISIONS", ordinal: 2, required: true },
+    { id: "LATEST_CHECKPOINT", ordinal: 3, required: true },
+    { id: "ACTIVITY", ordinal: 4, required: false },
+  ],
+};
 
 describe("local daemon session and state boundary", () => {
   let daemon: RunningDaemon | undefined;
@@ -688,8 +702,8 @@ describe("local daemon session and state boundary", () => {
             version: 1,
             name: "Mock delivery",
             stages: [
-              { stage: "DISCOVERY", ordinal: 0 },
-              { stage: "PLAN", ordinal: 1 },
+              { stage: "DISCOVERY", ordinal: 0, contextPack: legacyContextPack },
+              { stage: "PLAN", ordinal: 1, contextPack: legacyContextPack },
             ],
           },
           budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
@@ -718,8 +732,8 @@ describe("local daemon session and state boundary", () => {
             version: 1,
             name: "Mock delivery",
             stages: [
-              { stage: "DISCOVERY", ordinal: 0 },
-              { stage: "PLAN", ordinal: 1 },
+              { stage: "DISCOVERY", ordinal: 0, contextPack: legacyContextPack },
+              { stage: "PLAN", ordinal: 1, contextPack: legacyContextPack },
             ],
           },
           outcome: {

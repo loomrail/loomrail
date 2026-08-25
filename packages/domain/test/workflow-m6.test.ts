@@ -18,15 +18,19 @@ import {
 } from "../src/index.js";
 
 const now = "2026-08-24T14:00:00.000Z";
+const contextPack: ApplyProviderOutcomeCommand["payload"]["template"]["stages"][number]["contextPack"] = {
+  schemaVersion: 1,
+  sections: [{ id: "WORK_ITEM_BRIEF", ordinal: 0, required: true }],
+};
 const template: ApplyProviderOutcomeCommand["payload"]["template"] = {
   schemaVersion: 1,
   id: "mock-delivery-v1",
   version: 1,
   name: "Mock delivery",
   stages: [
-    { stage: "REVIEW", ordinal: 0 },
-    { stage: "QA", ordinal: 1 },
-    { stage: "ACCEPTANCE", ordinal: 2 },
+    { stage: "REVIEW", ordinal: 0, contextPack },
+    { stage: "QA", ordinal: 1, contextPack },
+    { stage: "ACCEPTANCE", ordinal: 2, contextPack },
   ],
 };
 const workItem: WorkItem = {

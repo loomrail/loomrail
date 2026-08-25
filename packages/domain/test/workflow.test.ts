@@ -11,15 +11,19 @@ import { describe, expect, it } from "vitest";
 import { decideAnswerHumanRequest, decideStartMockPipeline, WorkflowDomainError } from "../src/index.js";
 
 const timestamp = "2026-08-24T10:00:00.000Z";
+const contextPack: StartMockPipelineCommand["payload"]["template"]["stages"][number]["contextPack"] = {
+  schemaVersion: 1,
+  sections: [{ id: "WORK_ITEM_BRIEF", ordinal: 0, required: true }],
+};
 const template: StartMockPipelineCommand["payload"]["template"] = {
   schemaVersion: 1,
   id: "mock-delivery-v1",
   version: 1,
   name: "Mock delivery",
   stages: [
-    { stage: "DISCOVERY", ordinal: 0 },
-    { stage: "PLAN", ordinal: 1 },
-    { stage: "IMPLEMENT", ordinal: 2 },
+    { stage: "DISCOVERY", ordinal: 0, contextPack },
+    { stage: "PLAN", ordinal: 1, contextPack },
+    { stage: "IMPLEMENT", ordinal: 2, contextPack },
   ],
 };
 const workItem = (state: WorkItem["state"]): WorkItem => ({
