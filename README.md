@@ -158,7 +158,9 @@ talk directly to future agent, shell, or Git adapters.
       and the first published release
 
 Real Codex/Claude execution, shell/Git access, worktrees, plugins, remote mode, and desktop packaging remain outside the
-current checkpoint.
+current checkpoint. What comes after it — session handoff, live provider adapters, repository access, project
+guardrails and extensibility — is decomposed in the
+[post-Phase-0 plan](docs/plans/06-post-phase-0-decomposition.ru.md).
 
 ## Development
 
