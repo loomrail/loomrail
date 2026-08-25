@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { resolve } from "node:path";
+import process from "node:process";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -26,6 +28,20 @@ describe("panel layout", () => {
     for (const panel of panels) {
       const { defaultWidth, property } = panelBounds[panel];
       expect(tokens).toContain(`${property}: ${defaultWidth.toString()}px;`);
+    }
+  });
+
+  it("is restored before hydration with the same bounds", () => {
+    // The pre-hydration script cannot import this module, so it restates the bounds. Drift there
+    // would let a stored width through unclamped, or make the loading shell jump on first paint.
+    const bootstrap = readFileSync(resolve(process.cwd(), "public/theme-bootstrap.js"), "utf8");
+
+    for (const panel of panels) {
+      const { max, min, property } = panelBounds[panel];
+      expect(bootstrap).toContain(`"loomrail-panel-${panel}"`);
+      expect(bootstrap).toContain(`max: ${max.toString()}`);
+      expect(bootstrap).toContain(`min: ${min.toString()}`);
+      expect(bootstrap).toContain(`property: "${property}"`);
     }
   });
 

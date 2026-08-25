@@ -1373,30 +1373,30 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
   return (
     <aside className="task-inspector" aria-label={item.title}>
       <header className="task-inspector__header">
-        <div>
-          <span>{displayWorkItemId(item.id)}</span>
-          <h2>{item.title}</h2>
+        <div className="task-inspector__identity">
+          <span className="task-inspector__id">{displayWorkItemId(item.id)}</span>
+          <div className="task-inspector__actions">
+            <TaskEditDialog key={`${item.id}-${item.version.toString()}`} item={item} />
+            <ActionMenu
+              align="end"
+              groups={[
+                targets.map((targetState) => ({
+                  danger: targetState === "CANCELLED",
+                  label: t("task.moveTo", { state: stateLabel(targetState, t) }),
+                  onSelect: () => {
+                    move(targetState);
+                  },
+                })),
+              ]}
+              trigger={
+                <Button disabled={targets.length === 0} shape="pill" trailingIcon="chevronDown">
+                  {t("task.move")}
+                </Button>
+              }
+            />
+          </div>
         </div>
-        <div className="task-inspector__actions">
-          <TaskEditDialog key={`${item.id}-${item.version.toString()}`} item={item} />
-          <ActionMenu
-            align="end"
-            groups={[
-              targets.map((targetState) => ({
-                danger: targetState === "CANCELLED",
-                label: t("task.moveTo", { state: stateLabel(targetState, t) }),
-                onSelect: () => {
-                  move(targetState);
-                },
-              })),
-            ]}
-            trigger={
-              <Button disabled={targets.length === 0} shape="pill" trailingIcon="chevronDown">
-                {t("task.move")}
-              </Button>
-            }
-          />
-        </div>
+        <h2>{item.title}</h2>
       </header>
 
       <InspectorSection title={t("task.overview")}>
@@ -1405,6 +1405,10 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
             {
               label: t("task.state"),
               value: <Status label={stateLabel(item.state, t)} tone={stateTones[item.state]} />,
+            },
+            {
+              label: t("task.stage"),
+              value: item.currentStage ? t(stageLabelKeys[item.currentStage]) : "—",
             },
             { label: t("task.type"), value: t(typeLabelKeys[item.type]) },
             { label: t("task.priority"), value: t(priorityLabelKeys[item.priority]) },
@@ -1427,14 +1431,7 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
         <WorkflowPanel item={item} />
       </InspectorSection>
 
-      <InspectorSection
-        action={
-          <span className="inspector-step-count">
-            {item.currentStage ? t(stageLabelKeys[item.currentStage]) : "—"}
-          </span>
-        }
-        title={t("task.acceptanceCriteria")}
-      >
+      <InspectorSection title={t("task.acceptanceCriteria")}>
         {item.acceptanceCriteria.length > 0 ? (
           <div className="inspector-checklist">
             {item.acceptanceCriteria.map((criterion) => (

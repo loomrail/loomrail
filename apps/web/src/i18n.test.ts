@@ -11,7 +11,15 @@ describe("i18n", () => {
   it("provides typed English and Russian messages", () => {
     expect(translate("en", "state.IN_PROGRESS")).toBe("Running");
     expect(translate("ru", "state.IN_PROGRESS")).toBe("В работе");
-    expect(translate("ru", "task.moveTo", { state: "Готово" })).toBe("Переместить в «Готово»");
+    expect(translate("ru", "task.moveTo", { state: "Бэклог" })).toBe("Переместить в «Бэклог»");
+  });
+
+  it("keeps the ready and done state labels distinguishable", () => {
+    // READY is a queue position, DONE is the end of the route: a reader must never confuse them.
+    for (const locale of ["en", "ru"] as const) {
+      expect(translate(locale, "state.READY")).not.toBe(translate(locale, "state.DONE"));
+    }
+    expect(translate("ru", "state.READY")).toBe("Готово к работе");
   });
 
   it("persists and applies the selected locale", () => {

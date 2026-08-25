@@ -1174,4 +1174,40 @@ test.describe("authenticated walking skeleton", () => {
     await page.reload();
     await expect(page.locator(".lr-task-card").first()).toHaveCSS("padding", "8px");
   });
+
+  test("keeps a resized panel across a reload without the loading shell jumping", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+
+    const sidebar = page.locator(".app-sidebar");
+    expect((await sidebar.boundingBox())?.width).toBe(240);
+
+    // Drag the divider rather than writing storage directly, so the whole path is exercised.
+    const handle = page.getByRole("separator", { name: "Resize the sidebar" });
+    const handleBox = await handle.boundingBox();
+    expect(handleBox).not.toBeNull();
+    if (handleBox) {
+      await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + 200);
+      await page.mouse.down();
+      await page.mouse.move(320, handleBox.y + 200, { steps: 8 });
+      await page.mouse.up();
+    }
+    expect((await sidebar.boundingBox())?.width).toBe(320);
+
+    await page.reload();
+    // The width has to be in place on the very first paint, before React hydrates, or the loading
+    // shell renders at the default and the layout jumps once the app mounts.
+    expect(
+      await page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue("--lr-size-sidebar").trim(),
+      ),
+    ).toBe("320px");
+    expect((await sidebar.boundingBox())?.width).toBe(320);
+  });
 });

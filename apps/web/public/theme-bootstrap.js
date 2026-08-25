@@ -17,6 +17,22 @@ try {
 }
 
 try {
+  // Bounds mirror `panelBounds` in src/layout.ts; a unit test fails if the two ever disagree.
+  const panels = [
+    { key: "loomrail-panel-sidebar", max: 360, min: 200, property: "--lr-size-sidebar" },
+    { key: "loomrail-panel-inspector", max: 520, min: 280, property: "--lr-size-inspector" },
+  ];
+  for (const panel of panels) {
+    const stored = Number(globalThis.localStorage.getItem(panel.key));
+    if (!Number.isFinite(stored) || stored === 0) continue;
+    const width = Math.min(panel.max, Math.max(panel.min, Math.round(stored)));
+    globalThis.document.documentElement.style.setProperty(panel.property, `${width}px`);
+  }
+} catch {
+  // Panel widths are an enhancement; the token defaults remain the safe fallback.
+}
+
+try {
   const storedLocale = globalThis.localStorage.getItem("loomrail.locale");
   const locale =
     storedLocale === "ru" || storedLocale === "en"

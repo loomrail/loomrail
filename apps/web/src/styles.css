@@ -869,13 +869,21 @@ body.is-resizing {
   padding: 0 var(--lr-space-4) var(--lr-space-4);
 }
 
+/* The title gets its own full-width line: task names are long and must not be squeezed by the
+   actions sitting beside them. */
 .task-inspector__header {
-  align-items: flex-start;
+  display: grid;
+  gap: var(--lr-space-2);
+  padding: var(--lr-space-4);
+  position: relative;
+}
+
+.task-inspector__identity {
+  align-items: center;
   display: flex;
   gap: var(--lr-space-3);
   justify-content: space-between;
-  padding: var(--lr-space-4);
-  position: relative;
+  min-width: 0;
 }
 
 .task-inspector__header::after {
@@ -910,17 +918,14 @@ body.is-resizing {
   width: 100%;
 }
 
-.task-inspector__header > div:first-child {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.task-inspector__header > div:first-child > span {
+.task-inspector__id {
   color: var(--lr-text-faint);
-  display: block;
   font-family: var(--lr-font-mono);
   font-size: var(--lr-font-xs);
-  margin-bottom: var(--lr-space-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .task-inspector h2 {
