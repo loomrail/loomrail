@@ -21,7 +21,10 @@
     "test:integration": "pnpm -r --sort --if-present test:integration",
     "test:e2e": "playwright test",
     "test:public-readiness": "node scripts/check-public-tree.mjs",
-    "verify": "pnpm format:check && pnpm test:public-readiness && pnpm lint && pnpm typecheck && pnpm test"
+    "verify": "pnpm format:check && pnpm test:public-readiness && pnpm lint && pnpm typecheck && pnpm test",
+    "bundle": "pnpm build && pnpm --filter @loomrail/cli bundle",
+    "pack:release": "pnpm bundle && node scripts/pack-release.mjs",
+    "test:release": "node scripts/verify-release.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

@@ -1,0 +1,80 @@
+import { execFileSync } from "node:child_process";
+import { cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import process from "node:process";
+
+import { releaseDependencies, releaseName, releaseVersion, repositoryRoot } from "./release-manifest.mjs";
+
+/**
+ * Assembles the publishable launcher from an already-built workspace and packs it into a tarball.
+ *
+ * The staged tree mirrors the repository layout on purpose: the launcher resolves the web assets and
+ * the daemon resolves the bundled fixtures relative to their own module URL, so an identical layout
+ * keeps both lookups correct in the package without any packaging-aware code in the product.
+ */
+const stagingDirectory = resolve(repositoryRoot, "dist-release");
+const packageDirectory = resolve(stagingDirectory, "package");
+
+const copyInto = async (from, to) => {
+  await cp(resolve(repositoryRoot, from), resolve(packageDirectory, to), { recursive: true });
+};
+
+const assertNotEmpty = async (relativePath, hint) => {
+  const entries = await readdir(resolve(packageDirectory, relativePath)).catch(() => []);
+  if (entries.length === 0) throw new Error(`${relativePath} is empty in the staged package; ${hint}`);
+};
+
+const run = async () => {
+  await rm(stagingDirectory, { recursive: true, force: true });
+  await mkdir(packageDirectory, { recursive: true });
+
+  await copyInto("apps/cli/bundle/apps/cli/dist", "apps/cli/dist");
+  await copyInto("apps/web/dist", "apps/web/dist");
+  await copyInto("fixtures/projects", "fixtures/projects");
+  // The bundled code keeps the persistence package's `../migrations` lookup, which now resolves
+  // beside the launcher instead of beside that package.
+  await copyInto("packages/persistence-sqlite/migrations", "apps/cli/migrations");
+  for (const file of ["README.md", "LICENSE", "NOTICE"]) await copyInto(file, file);
+
+  await assertNotEmpty("apps/cli/dist", "run `pnpm bundle` first");
+  await assertNotEmpty("apps/web/dist", "run `pnpm build` first");
+  await assertNotEmpty("apps/cli/migrations", "the SQLite migrations are missing");
+  await assertNotEmpty("fixtures/projects", "the bundled fixture projects are missing");
+
+  const manifest = {
+    name: releaseName,
+    version: releaseVersion(),
+    description: "The local control plane for accountable AI software teams.",
+    license: "Apache-2.0",
+    type: "module",
+    bin: { loomrail: "apps/cli/dist/index.js" },
+    engines: { node: ">=24.19 <25" },
+    dependencies: releaseDependencies(),
+    files: [
+      "apps/cli/dist",
+      "apps/cli/migrations",
+      "apps/web/dist",
+      "fixtures/projects",
+      "README.md",
+      "LICENSE",
+      "NOTICE",
+    ],
+  };
+  await writeFile(
+    resolve(packageDirectory, "package.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
+
+  const packed = execFileSync("npm", ["pack", "--pack-destination", stagingDirectory], {
+    cwd: packageDirectory,
+    encoding: "utf8",
+  })
+    .trim()
+    .split("\n")
+    .at(-1);
+
+  process.stdout.write(`${resolve(stagingDirectory, packed)}\n`);
+};
+
+await run();

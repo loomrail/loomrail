@@ -3,6 +3,8 @@ node_modules/
 .pnpm-store/
 
 # Build and package output
+bundle/
+dist-release/
 dist/
 build/
 out/

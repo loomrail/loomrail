@@ -50,6 +50,10 @@ importers:
       open:
         specifier: ^10.0.0
         version: 10.2.0
+    devDependencies:
+      vite:
+        specifier: ^8.1.0
+        version: 8.2.2(@types/node@24.13.3)(jiti@2.7.0)
 
   apps/daemon:
     dependencies:
