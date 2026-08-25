@@ -131,6 +131,12 @@ importers:
         specifier: ^8.1.0
         version: 8.2.2(@types/node@24.13.3)(jiti@2.7.0)
 
+  packages/context-assembly:
+    dependencies:
+      '@loomrail/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+
   packages/contracts:
     dependencies:
       zod:
