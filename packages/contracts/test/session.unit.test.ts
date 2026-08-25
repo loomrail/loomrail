@@ -53,6 +53,17 @@ describe("session handoff contracts", () => {
     expect(() => providerSessionSchema.parse(session({ endReason: "HANDOFF" }))).toThrow();
   });
 
+  it("requires an end timestamp once a session has ended", () => {
+    // An ended session with no end timestamp makes the audit trail lie about when work stopped.
+    expect(() =>
+      providerSessionSchema.parse(session({ status: "ENDED", endReason: "COMPLETED", endedAt: null })),
+    ).toThrow();
+  });
+
+  it("rejects an end timestamp on a still-running session", () => {
+    expect(() => providerSessionSchema.parse(session({ endedAt: "2026-08-25T18:05:00.000Z" }))).toThrow();
+  });
+
   it("accepts a checkpoint with no dead ends but not one with no summary", () => {
     expect(
       checkpointDraftSchema.parse({

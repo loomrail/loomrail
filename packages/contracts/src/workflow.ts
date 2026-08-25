@@ -191,6 +191,10 @@ export const providerSessionSchema = z
   .refine(
     (session) => (session.status === "ENDED") === (session.endReason !== null),
     "An ended session must carry an end reason and a running one must not",
+  )
+  .refine(
+    (session) => (session.status === "ENDED") === (session.endedAt !== null),
+    "An ended session must carry an end timestamp and a running one must not",
   );
 
 // What the agent publishes mid-session (spec §5.1's onCheckpoint). Empty completed/remaining/
