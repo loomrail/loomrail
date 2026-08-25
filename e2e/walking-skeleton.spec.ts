@@ -883,15 +883,15 @@ test.describe("authenticated walking skeleton", () => {
     await createTask(page, "Zulu ordering probe");
     await createTask(page, "Alpha ordering probe");
 
-    const backlogTitles = async (): Promise<readonly string[]> =>
-      page
-        .locator(".lr-kanban-column")
-        .first()
-        .locator(".task-card-button .lr-task-card__title")
-        .allInnerTexts();
+    // Read through a retrying assertion rather than a one-shot text snapshot: a reload repaints
+    // the board asynchronously, and a bare read reports the empty column it passes through.
+    const backlogTitles = page
+      .locator(".lr-kanban-column")
+      .first()
+      .locator(".task-card-button .lr-task-card__title");
 
     // Both tasks share a priority, so the default view falls back to newest-created first.
-    expect(await backlogTitles()).toEqual(["Alpha ordering probe", "Zulu ordering probe"]);
+    await expect(backlogTitles).toHaveText(["Alpha ordering probe", "Zulu ordering probe"]);
 
     // Both changes are made in one popover session: closing and reopening it between them adds
     // overlay transitions that say nothing about ordering.
@@ -903,15 +903,15 @@ test.describe("authenticated walking skeleton", () => {
     await expect(page.getByRole("listbox")).toBeHidden();
 
     await expect(page).toHaveURL(/order=title/);
-    expect(await backlogTitles()).toEqual(["Zulu ordering probe", "Alpha ordering probe"]);
+    await expect(backlogTitles).toHaveText(["Zulu ordering probe", "Alpha ordering probe"]);
 
     await displaySettings.getByRole("button", { name: "Sort ascending" }).click();
     await expect(page).toHaveURL(/dir=asc/);
-    expect(await backlogTitles()).toEqual(["Alpha ordering probe", "Zulu ordering probe"]);
+    await expect(backlogTitles).toHaveText(["Alpha ordering probe", "Zulu ordering probe"]);
 
     // The ordering survives a reload because it lives in the URL, not component state.
     await page.reload();
-    expect(await backlogTitles()).toEqual(["Alpha ordering probe", "Zulu ordering probe"]);
+    await expect(backlogTitles).toHaveText(["Alpha ordering probe", "Zulu ordering probe"]);
   });
 
   test("hides empty delivery columns only when the owner asks for it", async ({ page }) => {
@@ -1104,6 +1104,10 @@ test.describe("authenticated walking skeleton", () => {
       await expect(inspector.getByText(total.toString(), { exact: true })).toBeVisible();
       await expect(loadMore).toHaveCount(0);
     } finally {
+      // The daemon holds this database open, and Windows refuses to unlink a file that still has
+      // a handle on it. Releasing it here rather than in afterEach keeps the removal ordered.
+      await daemon?.close();
+      daemon = undefined;
       await rm(temporaryDirectory, { recursive: true, force: true });
     }
   });

@@ -1,5 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { access } from "node:fs/promises";
+import type { IncomingMessage } from "node:http";
+import type { Socket } from "node:net";
 import { platform } from "node:os";
 import { resolve } from "node:path";
 
@@ -307,6 +309,29 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         ...(options.loggerStream === undefined ? {} : { stream: options.loggerStream }),
       } as const),
     genReqId: () => randomUUID(),
+  });
+
+  /**
+   * Connections a client opened without ever sending a request on them.
+   *
+   * Closing the HTTP server reclaims idle keep-alive connections, but a connection that never
+   * carried a request has no idle period to detect, so the server waits for a request that will
+   * never arrive and `close` never settles. Browsers open such speculative connections routinely,
+   * which would leave `loomrail` hanging on Ctrl+C. Shutdown reclaims them explicitly; connections
+   * with a request in flight are left alone and still drain.
+   */
+  const unusedConnections = new Set<Socket>();
+  app.server.on("connection", (socket: Socket) => {
+    unusedConnections.add(socket);
+    socket.once("close", () => unusedConnections.delete(socket));
+  });
+  app.server.on("request", (request: IncomingMessage) => {
+    unusedConnections.delete(request.socket);
+  });
+  app.addHook("preClose", (done) => {
+    for (const socket of unusedConnections) socket.destroy();
+    unusedConnections.clear();
+    done();
   });
 
   const sessionForRequest = (request: FastifyRequest): Session | undefined => {

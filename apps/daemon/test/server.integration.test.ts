@@ -1,7 +1,10 @@
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import {
   apiErrorResponseSchema,
@@ -57,6 +60,31 @@ describe("local daemon session and state boundary", () => {
       temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
     );
   });
+
+  it("shuts down while a client holds a connection it never sent a request on", async () => {
+    const started = await startDaemon({ bootstrapToken: bootstrapToken(), logger: false });
+    daemon = started;
+
+    // Browsers open speculative connections ahead of the requests they may never make. Such a
+    // socket carries no request, so it is not an idle keep-alive connection either, and nothing
+    // in the HTTP server reclaims it on close.
+    const accepted = once(started.app.server, "connection");
+    const socket = connect({ host: "127.0.0.1", port: Number(new URL(started.baseUrl).port) });
+    socket.on("error", () => {
+      // Shutdown resets this socket, which is the behaviour under test.
+    });
+    await Promise.all([once(socket, "connect"), accepted]);
+
+    try {
+      const outcome = await Promise.race([
+        started.close().then(() => "closed" as const),
+        delay(3_000, "hung" as const),
+      ]);
+      expect(outcome).toBe("closed");
+    } finally {
+      socket.destroy();
+    }
+  }, 15_000);
 
   it("exposes health but protects product status", async () => {
     daemon = await startDaemon({ bootstrapToken: bootstrapToken(), logger: false });
