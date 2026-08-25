@@ -3,9 +3,12 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import type { ContextSources } from "@loomrail/context-assembly";
 import {
   acceptancePackageSchema,
   budgetPolicySchema,
+  checkpointSchema,
+  contextPackRecipeSchema,
   decisionSchema,
   domainEventSchema,
   eventPageDirectionSchema,
@@ -15,6 +18,7 @@ import {
   opaqueIdSchema,
   pipelineRunSchema,
   projectSchema,
+  providerSessionSchema,
   recoveryReportSchema,
   stageAttemptSchema,
   stateCommandResultSchema,
@@ -28,12 +32,15 @@ import {
   type BudgetPolicy,
   type Actor,
   type AcceptancePackage,
+  type Checkpoint,
+  type ContextPackRecipe,
   type Decision,
   type DomainEvent,
   type EvidenceArtifact,
   type HumanRequest,
   type PipelineRun,
   type Project,
+  type ProviderSession,
   type RecoveryReport,
   type RegisterProjectCommand,
   type StageAttempt,
@@ -285,6 +292,35 @@ const decisionRowSchema = z.object({
   created_at: z.string(),
 });
 
+const providerSessionRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  stage_attempt_id: z.string(),
+  ordinal: z.number().int(),
+  status: z.string(),
+  end_reason: z.string().nullable(),
+  handoff_requested_at: z.string().nullable(),
+  started_at: z.string(),
+  ended_at: z.string().nullable(),
+  version: z.number().int(),
+});
+
+const checkpointRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  stage_attempt_id: z.string(),
+  provider_session_id: z.string(),
+  ordinal: z.number().int(),
+  summary: z.string(),
+  completed_json: z.string(),
+  remaining_json: z.string(),
+  dead_ends_json: z.string(),
+  open_questions_json: z.string(),
+  created_at: z.string(),
+});
+
+const maxOrdinalRowSchema = z.object({ max_ordinal: z.number().int() });
+
 const workflowDispatchRowSchema = z.object({
   id: z.string(),
   project_id: z.string(),
@@ -326,6 +362,13 @@ const stateQuerySchema = z.discriminatedUnion("type", [
       projectId: opaqueIdSchema.optional(),
       aggregateId: opaqueIdSchema.optional(),
       limit: z.number().int().min(1).max(500).default(100),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("READ_CONTEXT_SOURCES"),
+      stageAttemptId: opaqueIdSchema,
+      sessionOrdinal: z.number().int().positive(),
     })
     .strict(),
 ]);
@@ -545,6 +588,62 @@ const workflowDispatchFromRow = (value: unknown): WorkflowDispatch => {
   });
 };
 
+const providerSessionFromRow = (value: unknown): ProviderSession => {
+  const row = providerSessionRowSchema.parse(value);
+  return providerSessionSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    stageAttemptId: row.stage_attempt_id,
+    ordinal: row.ordinal,
+    status: row.status,
+    endReason: row.end_reason,
+    handoffRequestedAt: row.handoff_requested_at,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    version: row.version,
+  });
+};
+
+const checkpointFromRow = (value: unknown): Checkpoint => {
+  const row = checkpointRowSchema.parse(value);
+  return checkpointSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    stageAttemptId: row.stage_attempt_id,
+    providerSessionId: row.provider_session_id,
+    ordinal: row.ordinal,
+    summary: row.summary,
+    completed: parseJson(row.completed_json),
+    remaining: parseJson(row.remaining_json),
+    deadEnds: parseJson(row.dead_ends_json),
+    openQuestions: parseJson(row.open_questions_json),
+    createdAt: row.created_at,
+  });
+};
+
+// Turns a raw Event type into an ACTIVITY-section label, e.g. "STAGE_ATTEMPT_CHANGED" ->
+// "Stage attempt changed". ACTIVITY has no dedicated table -- spec §4.1 restricts v1 sections to
+// "only what state already owns", and the append-only Event log is exactly that for "what
+// happened" without inventing a second record of it.
+const humanizeEventType = (type: string): string =>
+  type
+    .split("_")
+    .map((word) => word.charAt(0) + word.slice(1).toLowerCase())
+    .join(" ");
+
+const MAX_ACTIVITY_EVENTS = 20;
+
+const describeDecisionAnswer = (
+  answer: Decision["answer"],
+  options: readonly { id: string; label: string }[],
+): string => {
+  if (answer.type === "OTHER") return answer.text;
+  const labels = answer.optionIds
+    .map((optionId) => options.find((option) => option.id === optionId)?.label)
+    .filter((label): label is string => label !== undefined);
+  return labels.length > 0 ? labels.join(", ") : answer.optionIds.join(", ");
+};
+
 const commandHash = (command: StateCommand): string =>
   createHash("sha256")
     .update(
@@ -668,6 +767,49 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectAcceptancePackageById = database.prepare("SELECT * FROM acceptance_packages WHERE id = ?");
     const selectAcceptancePackageByRun = database.prepare(
       "SELECT * FROM acceptance_packages WHERE pipeline_run_id = ?",
+    );
+    const selectProviderSessionById = database.prepare("SELECT * FROM provider_sessions WHERE id = ?");
+    const selectRunningProviderSession = database.prepare(
+      "SELECT id FROM provider_sessions WHERE stage_attempt_id = ? AND status = 'RUNNING' LIMIT 1",
+    );
+    const selectMaxProviderSessionOrdinal = database.prepare(
+      "SELECT COALESCE(MAX(ordinal), 0) AS max_ordinal FROM provider_sessions WHERE stage_attempt_id = ?",
+    );
+    const insertProviderSession = database.prepare(
+      `INSERT INTO provider_sessions (
+        id, schema_version, stage_attempt_id, ordinal, status, end_reason, handoff_requested_at,
+        started_at, ended_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateProviderSession = database.prepare(
+      `UPDATE provider_sessions
+       SET status = ?, end_reason = ?, handoff_requested_at = ?, ended_at = ?, version = ?
+       WHERE id = ? AND version = ?`,
+    );
+    const insertContextPackRecipe = database.prepare(
+      `INSERT INTO context_pack_recipes (
+        id, schema_version, provider_session_id, template_id, template_version, spec_source,
+        sections_json, omitted_json, content_hash, estimated_tokens, budget_tokens,
+        estimate_quality, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectMaxCheckpointOrdinal = database.prepare(
+      "SELECT COALESCE(MAX(ordinal), 0) AS max_ordinal FROM checkpoints WHERE provider_session_id = ?",
+    );
+    const insertCheckpoint = database.prepare(
+      `INSERT INTO checkpoints (
+        id, schema_version, stage_attempt_id, provider_session_id, ordinal, summary,
+        completed_json, remaining_json, dead_ends_json, open_questions_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectLatestCheckpointForAttempt = database.prepare(
+      `SELECT * FROM checkpoints WHERE stage_attempt_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+    );
+    const selectDecisionsForWorkItem = database.prepare(
+      "SELECT * FROM decisions WHERE work_item_id = ? ORDER BY created_at, id",
+    );
+    const selectRecentEventsForAggregate = database.prepare(
+      "SELECT * FROM events WHERE aggregate_id = ? ORDER BY sequence DESC LIMIT ?",
     );
 
     const assertOpen = (): void => {
@@ -850,6 +992,121 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       });
     };
 
+    // Spec §6.1 step 1: every context source read together, as one consistent snapshot. Wrapped in
+    // its own transaction (distinct from `execute`'s BEGIN IMMEDIATE, which is for writes) so a
+    // concurrent writer's commit landing partway through cannot make one source describe a
+    // different moment than another -- the recipe records a per-section sourceVersion, and a
+    // torn read would make that provenance describe a pack that never existed.
+    const readContextSourcesSnapshot = (stageAttemptId: string, sessionOrdinal: number): ContextSources => {
+      let transactionStarted = false;
+      try {
+        database.exec("BEGIN");
+        transactionStarted = true;
+
+        const stageAttempt = readStageAttempt(stageAttemptId);
+        // Test-only: lets a test commit a write through a second connection right here, then
+        // assert the reads below still see the pre-write snapshot. See OpenLocalStateOptions.
+        options.onContextSourcesSnapshotStarted?.();
+        if (!stageAttempt) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The StageAttempt does not exist");
+        }
+        const workItem = readWorkItem(stageAttempt.workItemId);
+        const run = readPipelineRun(stageAttempt.pipelineRunId);
+        if (!workItem || !run) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_NOT_FOUND",
+            "The workflow state backing this StageAttempt is incomplete",
+          );
+        }
+
+        const decisions = decisionRowSchema
+          .array()
+          .parse(selectDecisionsForWorkItem.all(workItem.id))
+          .map(decisionFromRow)
+          .map((decision) => {
+            const request = readHumanRequest(decision.humanRequestId);
+            return {
+              id: decision.id,
+              version: 1,
+              question: request?.title ?? decision.humanRequestId,
+              answer: describeDecisionAnswer(decision.answer, request?.options ?? []),
+            };
+          });
+
+        const latestCheckpointRow = selectLatestCheckpointForAttempt.get(stageAttemptId);
+        const latestCheckpointEntity =
+          latestCheckpointRow === undefined ? null : checkpointFromRow(latestCheckpointRow);
+        const latestCheckpoint =
+          latestCheckpointEntity === null
+            ? null
+            : {
+                id: latestCheckpointEntity.id,
+                version: 1,
+                summary: latestCheckpointEntity.summary,
+                completed: latestCheckpointEntity.completed,
+                remaining: latestCheckpointEntity.remaining,
+                deadEnds: latestCheckpointEntity.deadEnds,
+                openQuestions: latestCheckpointEntity.openQuestions,
+              };
+
+        const evidence = readEvidenceArtifacts(run.id).map((artifact) => ({
+          id: artifact.id,
+          version: 1,
+          kind: artifact.kind,
+          title: artifact.title,
+          summary: artifact.summary,
+        }));
+
+        const activity = eventRowSchema
+          .array()
+          .parse(selectRecentEventsForAggregate.all(workItem.id, MAX_ACTIVITY_EVENTS))
+          .map(eventFromRow)
+          .reverse()
+          .map((event) => ({
+            id: event.id,
+            version: 1,
+            occurredAt: event.occurredAt,
+            description: humanizeEventType(event.type),
+          }));
+
+        const sources: ContextSources = {
+          workItemBrief: {
+            id: workItem.id,
+            version: workItem.version,
+            title: workItem.title,
+            description: workItem.description,
+            acceptanceCriteria: workItem.acceptanceCriteria,
+            priority: workItem.priority,
+            risk: workItem.risk,
+          },
+          workflowPosition: {
+            templateId: run.workflowTemplateId,
+            templateVersion: run.workflowVersion,
+            stage: stageAttempt.stage,
+            attempt: stageAttempt.attempt,
+            sessionOrdinal,
+          },
+          decisions,
+          latestCheckpoint,
+          evidence,
+          activity,
+        };
+
+        database.exec("COMMIT");
+        transactionStarted = false;
+        return sources;
+      } catch (error: unknown) {
+        if (transactionStarted) database.exec("ROLLBACK");
+        if (error instanceof WorkflowDomainError || error instanceof StateStoreError) throw error;
+        throw new StateStoreError(
+          "PERSISTENCE_FAILURE",
+          "The context sources snapshot could not be read",
+          {},
+          { cause: error },
+        );
+      }
+    };
+
     const writeCriteria = (workItem: WorkItem): void => {
       deleteCriteria.run(workItem.id);
       workItem.acceptanceCriteria.forEach((criterion, ordinal) => {
@@ -980,6 +1237,50 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           data: intent.data,
         });
       });
+
+    type SessionEventIntent =
+      | { type: "PROVIDER_SESSION_STARTED"; data: { session: ProviderSession; recipe: ContextPackRecipe } }
+      | { type: "CHECKPOINT_PUBLISHED"; data: { checkpoint: Checkpoint } }
+      | { type: "PROVIDER_SESSION_ENDED"; data: { session: ProviderSession } };
+
+    const appendSessionEvent = (
+      intent: SessionEventIntent,
+      metadata: {
+        workItemId: string;
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "WORK_ITEM",
+        metadata.workItemId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "WORK_ITEM",
+        aggregateId: metadata.workItemId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
 
     const persistWorkflowTemplate = (
       templateInput: StartMockPipelineCommand["payload"]["template"],
@@ -1936,6 +2237,216 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "START_PROVIDER_SESSION") {
+        if (selectRunningProviderSession.get(command.payload.stageAttemptId) !== undefined) {
+          throw new StateStoreError(
+            "PROVIDER_SESSION_ALREADY_RUNNING",
+            "The StageAttempt already has a running ProviderSession",
+          );
+        }
+        const maxOrdinal = maxOrdinalRowSchema.parse(
+          selectMaxProviderSessionOrdinal.get(command.payload.stageAttemptId),
+        ).max_ordinal;
+        const session = providerSessionSchema.parse({
+          schemaVersion: 1,
+          id: createId("providerSession"),
+          stageAttemptId: command.payload.stageAttemptId,
+          ordinal: maxOrdinal + 1,
+          status: "RUNNING",
+          endReason: null,
+          handoffRequestedAt: null,
+          startedAt: occurredAt,
+          endedAt: null,
+          version: 1,
+        });
+        // No existence pre-check on stageAttemptId: the FK on provider_sessions.stage_attempt_id
+        // rejects a non-existent StageAttempt right here, inside this command's transaction, which
+        // is what makes "the write rolls back completely" provable rather than merely asserted.
+        insertProviderSession.run(
+          session.id,
+          session.schemaVersion,
+          session.stageAttemptId,
+          session.ordinal,
+          session.status,
+          session.endReason,
+          session.handoffRequestedAt,
+          session.startedAt,
+          session.endedAt,
+          session.version,
+        );
+        const recipe = contextPackRecipeSchema.parse({
+          ...command.payload.recipe,
+          id: createId("contextPackRecipe"),
+          providerSessionId: session.id,
+          createdAt: occurredAt,
+        });
+        insertContextPackRecipe.run(
+          recipe.id,
+          recipe.schemaVersion,
+          recipe.providerSessionId,
+          recipe.templateId,
+          recipe.templateVersion,
+          recipe.specSource,
+          JSON.stringify(recipe.sections),
+          JSON.stringify(recipe.omitted),
+          recipe.contentHash,
+          recipe.estimatedTokens,
+          recipe.budgetTokens,
+          recipe.estimateQuality,
+          recipe.createdAt,
+        );
+        const stageAttempt = readStageAttempt(session.stageAttemptId);
+        if (!stageAttempt) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The StageAttempt disappeared after its ProviderSession was inserted",
+          );
+        }
+        const event = appendSessionEvent(
+          { type: "PROVIDER_SESSION_STARTED", data: { session, recipe } },
+          {
+            workItemId: stageAttempt.workItemId,
+            projectId: stageAttempt.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROVIDER_SESSION_STARTED",
+          replayed: false,
+          workItemId: stageAttempt.workItemId,
+          session,
+          recipe,
+          events: [event],
+        });
+      }
+
+      if (command.type === "PUBLISH_CHECKPOINT") {
+        const sessionRow = selectProviderSessionById.get(command.payload.providerSessionId);
+        if (sessionRow === undefined) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The ProviderSession does not exist");
+        }
+        const session = providerSessionFromRow(sessionRow);
+        if (session.status !== "RUNNING") {
+          throw new StateStoreError(
+            "PROVIDER_SESSION_NOT_RUNNING",
+            "A checkpoint cannot be published to a ProviderSession that has already ended",
+          );
+        }
+        const stageAttempt = readStageAttempt(session.stageAttemptId);
+        if (!stageAttempt) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_NOT_FOUND",
+            "The StageAttempt backing this ProviderSession is missing",
+          );
+        }
+        const maxOrdinal = maxOrdinalRowSchema.parse(selectMaxCheckpointOrdinal.get(session.id)).max_ordinal;
+        const checkpoint = checkpointSchema.parse({
+          schemaVersion: 1,
+          id: createId("checkpoint"),
+          stageAttemptId: session.stageAttemptId,
+          providerSessionId: session.id,
+          ordinal: maxOrdinal + 1,
+          summary: command.payload.checkpoint.summary,
+          completed: command.payload.checkpoint.completed,
+          remaining: command.payload.checkpoint.remaining,
+          deadEnds: command.payload.checkpoint.deadEnds,
+          openQuestions: command.payload.checkpoint.openQuestions,
+          createdAt: occurredAt,
+        });
+        insertCheckpoint.run(
+          checkpoint.id,
+          checkpoint.schemaVersion,
+          checkpoint.stageAttemptId,
+          checkpoint.providerSessionId,
+          checkpoint.ordinal,
+          checkpoint.summary,
+          JSON.stringify(checkpoint.completed),
+          JSON.stringify(checkpoint.remaining),
+          JSON.stringify(checkpoint.deadEnds),
+          JSON.stringify(checkpoint.openQuestions),
+          checkpoint.createdAt,
+        );
+        const event = appendSessionEvent(
+          { type: "CHECKPOINT_PUBLISHED", data: { checkpoint } },
+          {
+            workItemId: stageAttempt.workItemId,
+            projectId: stageAttempt.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "CHECKPOINT_PUBLISHED",
+          replayed: false,
+          workItemId: stageAttempt.workItemId,
+          checkpoint,
+          events: [event],
+        });
+      }
+
+      if (command.type === "END_PROVIDER_SESSION") {
+        const sessionRow = selectProviderSessionById.get(command.payload.providerSessionId);
+        if (sessionRow === undefined) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The ProviderSession does not exist");
+        }
+        const current = providerSessionFromRow(sessionRow);
+        if (current.status !== "RUNNING") {
+          throw new StateStoreError("PROVIDER_SESSION_NOT_RUNNING", "The ProviderSession has already ended");
+        }
+        const stageAttempt = readStageAttempt(current.stageAttemptId);
+        if (!stageAttempt) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_NOT_FOUND",
+            "The StageAttempt backing this ProviderSession is missing",
+          );
+        }
+        const session = providerSessionSchema.parse({
+          ...current,
+          status: "ENDED",
+          endReason: command.payload.endReason,
+          endedAt: occurredAt,
+          version: current.version + 1,
+        });
+        const update = updateProviderSession.run(
+          session.status,
+          session.endReason,
+          session.handoffRequestedAt,
+          session.endedAt,
+          session.version,
+          session.id,
+          current.version,
+        );
+        if (update.changes !== 1) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_VERSION_CONFLICT",
+            "The ProviderSession changed while it was being ended",
+          );
+        }
+        const event = appendSessionEvent(
+          { type: "PROVIDER_SESSION_ENDED", data: { session } },
+          {
+            workItemId: stageAttempt.workItemId,
+            projectId: stageAttempt.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROVIDER_SESSION_ENDED",
+          replayed: false,
+          workItemId: stageAttempt.workItemId,
+          session,
+          events: [event],
+        });
+      }
+
       const projectId =
         command.type === "CREATE_WORK_ITEM"
           ? command.payload.projectId
@@ -2171,6 +2682,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             nextSequence: events.at(-1)?.sequence ?? exhaustedCursor,
           };
         }
+        case "READ_CONTEXT_SOURCES":
+          return {
+            type: "CONTEXT_SOURCES",
+            sources: readContextSourcesSnapshot(queryValue.stageAttemptId, queryValue.sessionOrdinal),
+          };
         default:
           return assertNever(queryValue);
       }

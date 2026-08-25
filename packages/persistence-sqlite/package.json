@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@loomrail/contracts": "workspace:*",
+    "@loomrail/context-assembly": "workspace:*",
     "@loomrail/domain": "workspace:*",
     "zod": "^4.0.0"
   }

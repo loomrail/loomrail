@@ -154,6 +154,9 @@ importers:
 
   packages/persistence-sqlite:
     dependencies:
+      '@loomrail/context-assembly':
+        specifier: workspace:*
+        version: link:../context-assembly
       '@loomrail/contracts':
         specifier: workspace:*
         version: link:../contracts

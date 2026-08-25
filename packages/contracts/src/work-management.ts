@@ -19,6 +19,9 @@ import {
   budgetOverrideApprovedResultSchema,
   budgetThresholdReachedEventSchema,
   cancelPipelineCommandSchema,
+  checkpointPublishedEventSchema,
+  checkpointPublishedResultSchema,
+  endProviderSessionCommandSchema,
   humanRequestAnsweredResultSchema,
   humanRequestOpenedEventSchema,
   humanRequestResolvedEventSchema,
@@ -33,12 +36,18 @@ import {
   pipelineResumedEventSchema,
   pipelineStartedEventSchema,
   pipelineStartedResultSchema,
+  providerSessionEndedEventSchema,
+  providerSessionEndedResultSchema,
+  providerSessionStartedEventSchema,
+  providerSessionStartedResultSchema,
+  publishCheckpointCommandSchema,
   reconcileWorkflowsCommandSchema,
   recoveryReportCreatedEventSchema,
   resolveAcceptanceCommandSchema,
   resumePipelineCommandSchema,
   stageAttemptChangedEventSchema,
   startMockPipelineCommandSchema,
+  startProviderSessionCommandSchema,
   usageRecordedEventSchema,
   workflowDispatchStartedResultSchema,
   workflowStageSchema,
@@ -174,6 +183,9 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   acceptanceRequestedEventSchema,
   acceptanceResolvedEventSchema,
   pipelineCompletedEventSchema,
+  providerSessionStartedEventSchema,
+  checkpointPublishedEventSchema,
+  providerSessionEndedEventSchema,
 ]);
 
 const commandBaseSchema = z
@@ -262,6 +274,9 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   approveBudgetOverrideCommandSchema,
   reconcileWorkflowsCommandSchema,
   resolveAcceptanceCommandSchema,
+  startProviderSessionCommandSchema,
+  publishCheckpointCommandSchema,
+  endProviderSessionCommandSchema,
 ]);
 
 const commandResultBaseSchema = z
@@ -308,6 +323,9 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   budgetOverrideApprovedResultSchema,
   workflowsReconciledResultSchema,
   acceptanceResolvedResultSchema,
+  providerSessionStartedResultSchema,
+  checkpointPublishedResultSchema,
+  providerSessionEndedResultSchema,
 ]);
 
 export const registerFixtureProjectRequestSchema = z

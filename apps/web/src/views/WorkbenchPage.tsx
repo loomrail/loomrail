@@ -638,6 +638,27 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.pipelineCompleted"),
         tone: "success",
       };
+    case "PROVIDER_SESSION_STARTED":
+      return {
+        detail: t("event.providerSessionStartedDetail", { ordinal: event.data.session.ordinal }),
+        icon: "sessions",
+        label: t("event.providerSessionStarted"),
+        tone: "accent",
+      };
+    case "CHECKPOINT_PUBLISHED":
+      return {
+        detail: t("event.checkpointPublishedDetail", { summary: event.data.checkpoint.summary }),
+        icon: "check",
+        label: t("event.checkpointPublished"),
+        tone: "success",
+      };
+    case "PROVIDER_SESSION_ENDED":
+      return {
+        detail: t("event.providerSessionEndedDetail", { reason: event.data.session.endReason ?? "" }),
+        icon: "sessions",
+        label: t("event.providerSessionEnded"),
+        tone: event.data.session.endReason === "COMPLETED" ? "success" : "neutral",
+      };
   }
 };
 

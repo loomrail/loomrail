@@ -7,10 +7,13 @@ import type {
   AnswerHumanRequestCommand,
   ApplyProviderOutcomeCommand,
   CreateWorkItemCommand,
+  EndProviderSessionCommand,
   LegacyApplyMockProviderOutcomeCommand,
   MoveWorkItemCommand,
+  PublishCheckpointCommand,
   RegisterProjectCommand,
   StartMockPipelineCommand,
+  StartProviderSessionCommand,
   UpdateWorkItemCommand,
 } from "@loomrail/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -1174,6 +1177,367 @@ describe("SQLite local state", () => {
           ? snapshot.snapshot.stageAttempts[0]?.unproductiveSessions
           : null,
       ).toBe(0);
+    });
+  });
+
+  describe("provider session lifecycle (Task 7)", () => {
+    const startWorkflow = (
+      localState: LocalState,
+      commandId: string,
+      workItemCommandId: string,
+    ): { workItemId: string; stageAttemptId: string; projectId: string } => {
+      localState.execute(registerProject());
+      const created = localState.execute(createWorkItem(workItemCommandId));
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      localState.execute(moveWorkItem(`ready-${commandId}`, created.workItem.id, 1, "READY"));
+      const started = localState.execute({
+        schemaVersion: 1,
+        commandId,
+        correlationId: `correlation-${commandId}`,
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_MOCK_PIPELINE",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedVersion: 2,
+          template: mockTemplate,
+          budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+        },
+      });
+      if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+      return {
+        workItemId: created.workItem.id,
+        stageAttemptId: started.stageAttempt.id,
+        projectId: created.workItem.projectId,
+      };
+    };
+
+    const startProviderSessionCommand = (
+      commandId: string,
+      stageAttemptId: string,
+      recipeOverrides: Partial<StartProviderSessionCommand["payload"]["recipe"]> = {},
+    ): StartProviderSessionCommand => ({
+      schemaVersion: 1,
+      commandId,
+      correlationId: `correlation-${commandId}`,
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "START_PROVIDER_SESSION",
+      payload: {
+        stageAttemptId,
+        recipe: {
+          schemaVersion: 1,
+          templateId: mockTemplate.id,
+          templateVersion: mockTemplate.version,
+          specSource: "WORKFLOW_TEMPLATE",
+          sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
+          omitted: [],
+          contentHash: `sha256:${"0".repeat(64)}`,
+          estimatedTokens: 10,
+          budgetTokens: 100,
+          estimateQuality: "LOOMRAIL_ESTIMATE",
+          ...recipeOverrides,
+        },
+      },
+    });
+
+    const publishCheckpointCommand = (
+      commandId: string,
+      providerSessionId: string,
+      draft: PublishCheckpointCommand["payload"]["checkpoint"],
+    ): PublishCheckpointCommand => ({
+      schemaVersion: 1,
+      commandId,
+      correlationId: `correlation-${commandId}`,
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "PUBLISH_CHECKPOINT",
+      payload: { providerSessionId, checkpoint: draft },
+    });
+
+    const endProviderSessionCommand = (
+      commandId: string,
+      providerSessionId: string,
+      endReason: EndProviderSessionCommand["payload"]["endReason"],
+    ): EndProviderSessionCommand => ({
+      schemaVersion: 1,
+      commandId,
+      correlationId: `correlation-${commandId}`,
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "END_PROVIDER_SESSION",
+      payload: { providerSessionId, endReason },
+    });
+
+    const countProviderSessions = (raw: DatabaseSync): number =>
+      (raw.prepare("SELECT COUNT(*) AS count FROM provider_sessions").get() as { count: number }).count;
+    const countContextPackRecipes = (raw: DatabaseSync): number =>
+      (raw.prepare("SELECT COUNT(*) AS count FROM context_pack_recipes").get() as { count: number }).count;
+    const countEventsOfType = (raw: DatabaseSync, type: string): number =>
+      (raw.prepare("SELECT COUNT(*) AS count FROM events WHERE type = ?").get(type) as { count: number })
+        .count;
+
+    const seedEvidenceArtifact = (
+      raw: DatabaseSync,
+      ids: {
+        id: string;
+        projectId: string;
+        workItemId: string;
+        pipelineRunId: string;
+        stageAttemptId: string;
+      },
+    ): void => {
+      raw
+        .prepare(
+          `INSERT INTO evidence_artifacts (
+            id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+            stage, kind, status, provider, title, summary, checks_json, created_at
+          ) VALUES (?, 1, ?, ?, ?, ?, 'REVIEW', 'REVIEW_REPORT', 'PASSED', 'MOCK', ?, ?,
+            '["Contract review passed."]', ?)`,
+        )
+        .run(
+          ids.id,
+          ids.projectId,
+          ids.workItemId,
+          ids.pipelineRunId,
+          ids.stageAttemptId,
+          "Review report",
+          "Looks good.",
+          timestamp,
+        );
+    };
+
+    const seedDecision = (
+      raw: DatabaseSync,
+      ids: {
+        humanRequestId: string;
+        decisionId: string;
+        projectId: string;
+        workItemId: string;
+        stageAttemptId: string;
+      },
+    ): void => {
+      raw
+        .prepare(
+          `INSERT INTO human_requests (
+            id, project_id, work_item_id, stage_attempt_id, kind, blocking, title, context,
+            recommendation, allow_other, status, version, created_at, resolved_at
+          ) VALUES (?, ?, ?, ?, 'FREE_TEXT', 0, ?, ?, NULL, 1, 'RESOLVED', 1, ?, ?)`,
+        )
+        .run(
+          ids.humanRequestId,
+          ids.projectId,
+          ids.workItemId,
+          ids.stageAttemptId,
+          "Which parser library?",
+          "Need a decision to keep going.",
+          timestamp,
+          timestamp,
+        );
+      raw
+        .prepare(
+          `INSERT INTO decisions (
+            id, schema_version, project_id, work_item_id, human_request_id, answer_json,
+            actor_type, actor_id, reason, created_at
+          ) VALUES (?, 1, ?, ?, ?, ?, 'HUMAN', 'local-owner', NULL, ?)`,
+        )
+        .run(
+          ids.decisionId,
+          ids.projectId,
+          ids.workItemId,
+          ids.humanRequestId,
+          JSON.stringify({ type: "OTHER", text: "Use pdf-lib." }),
+          timestamp,
+        );
+    };
+
+    it("rolls back the session, the recipe, and the Event together when the StageAttempt does not exist", async () => {
+      const localState = await open();
+
+      // No StageAttempt is ever created with this id: the FK on provider_sessions rejects the
+      // insert from inside this command's own transaction, which is what proves the rollback --
+      // a command that fails before writing anything would prove nothing about atomicity.
+      expect(() =>
+        localState.execute(startProviderSessionCommand("start-broken-attempt", "stage-attempt-missing")),
+      ).toThrow();
+
+      localState.close();
+      state = undefined;
+
+      const raw = new DatabaseSync(databasePath);
+      expect(countProviderSessions(raw)).toBe(0);
+      expect(countContextPackRecipes(raw)).toBe(0);
+      expect(countEventsOfType(raw, "PROVIDER_SESSION_STARTED")).toBe(0);
+      raw.close();
+    });
+
+    it("refuses a second RUNNING ProviderSession for the same StageAttempt, and allows one after the first ends", async () => {
+      const localState = await open();
+      const { stageAttemptId } = startWorkflow(localState, "start-two-sessions", "create-two-sessions-item");
+
+      const first = localState.execute(startProviderSessionCommand("start-session-one", stageAttemptId));
+      if (first.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected the first session to start");
+      expect(first.session.ordinal).toBe(1);
+
+      expect(() =>
+        localState.execute(startProviderSessionCommand("start-session-two", stageAttemptId)),
+      ).toThrow(expect.objectContaining({ code: "PROVIDER_SESSION_ALREADY_RUNNING" }));
+
+      const ended = localState.execute(
+        endProviderSessionCommand("end-session-one", first.session.id, "HANDOFF"),
+      );
+      if (ended.type !== "PROVIDER_SESSION_ENDED") throw new Error("Expected the session to end");
+      expect(ended.session).toMatchObject({ status: "ENDED", endReason: "HANDOFF" });
+
+      const second = localState.execute(
+        startProviderSessionCommand("start-session-two-after-end", stageAttemptId),
+      );
+      if (second.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected the second session to start");
+      expect(second.session.ordinal).toBe(2);
+    });
+
+    it("assembles the context sources snapshot from a published Checkpoint, Evidence, and a Decision", async () => {
+      const localState = await open();
+      const { workItemId, stageAttemptId, projectId } = startWorkflow(
+        localState,
+        "start-context-sources",
+        "create-context-sources-item",
+      );
+      const snapshot = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+      if (snapshot.type !== "WORKFLOW_SNAPSHOT" || !snapshot.snapshot.run) {
+        throw new Error("Expected a running PipelineRun");
+      }
+      const pipelineRunId = snapshot.snapshot.run.id;
+
+      const started = localState.execute(
+        startProviderSessionCommand("start-context-session", stageAttemptId),
+      );
+      if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected the session to start");
+
+      const published = localState.execute(
+        publishCheckpointCommand("publish-context-checkpoint", started.session.id, {
+          summary: "Implemented the size guard and added a regression test.",
+          completed: ["Added a 5s parsing timeout"],
+          remaining: ["Wire the timeout into the retry policy"],
+          deadEnds: ["Tried streaming parse; the library does not support it"],
+          openQuestions: ["Should the timeout be configurable per work item?"],
+        }),
+      );
+      if (published.type !== "CHECKPOINT_PUBLISHED") throw new Error("Expected the checkpoint to publish");
+
+      const ended = localState.execute(
+        endProviderSessionCommand("end-context-session", started.session.id, "HANDOFF"),
+      );
+      if (ended.type !== "PROVIDER_SESSION_ENDED") throw new Error("Expected the session to end");
+
+      localState.close();
+      state = undefined;
+
+      const raw = new DatabaseSync(databasePath);
+      seedEvidenceArtifact(raw, {
+        id: "evidence-context-sources",
+        projectId,
+        workItemId,
+        pipelineRunId,
+        stageAttemptId,
+      });
+      seedDecision(raw, {
+        humanRequestId: "human-request-context-sources",
+        decisionId: "decision-context-sources",
+        projectId,
+        workItemId,
+        stageAttemptId,
+      });
+      raw.close();
+
+      const reopened = await open();
+      const result = reopened.query({ type: "READ_CONTEXT_SOURCES", stageAttemptId, sessionOrdinal: 2 });
+      if (result.type !== "CONTEXT_SOURCES") throw new Error("Expected context sources");
+      const sources = result.sources;
+
+      expect(sources.workItemBrief.id).toBe(workItemId);
+      expect(sources.workflowPosition).toMatchObject({
+        templateId: mockTemplate.id,
+        templateVersion: mockTemplate.version,
+        stage: "DISCOVERY",
+        attempt: 1,
+        sessionOrdinal: 2,
+      });
+      expect(sources.latestCheckpoint).toMatchObject({
+        summary: "Implemented the size guard and added a regression test.",
+        completed: ["Added a 5s parsing timeout"],
+        remaining: ["Wire the timeout into the retry policy"],
+        deadEnds: ["Tried streaming parse; the library does not support it"],
+        openQuestions: ["Should the timeout be configurable per work item?"],
+      });
+      expect(sources.evidence).toEqual([
+        {
+          id: "evidence-context-sources",
+          version: 1,
+          kind: "REVIEW_REPORT",
+          title: "Review report",
+          summary: "Looks good.",
+        },
+      ]);
+      expect(sources.decisions).toEqual([
+        {
+          id: "decision-context-sources",
+          version: 1,
+          question: "Which parser library?",
+          answer: "Use pdf-lib.",
+        },
+      ]);
+    });
+
+    it("keeps every context source pinned to one snapshot, immune to a write that commits mid-read", async () => {
+      // A torn read across DECISIONS/LATEST_CHECKPOINT/EVIDENCE/ACTIVITY would silently make the
+      // recipe's per-section sourceVersion describe a pack that never existed (spec §6.1 step 1).
+      // Proving the snapshot is pinned requires a write to actually land *during* the read, so
+      // this drives a second, independent connection to the same database file from inside a
+      // hook fired after the read's first statement -- WAL's reader/writer concurrency is exactly
+      // what a torn read would break and what one transaction around the read is meant to prevent.
+      let hookCalls = 0;
+      let workItemId = "";
+
+      state = await openLocalState({
+        databasePath,
+        now: () => new Date(timestamp),
+        createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+        onContextSourcesSnapshotStarted: () => {
+          hookCalls += 1;
+          const writer = new DatabaseSync(databasePath);
+          try {
+            writer
+              .prepare("UPDATE work_items SET title = ?, version = version + 1, updated_at = ? WHERE id = ?")
+              .run("Retitled mid-read", timestamp, workItemId);
+          } finally {
+            writer.close();
+          }
+        },
+      });
+      const localState = state;
+
+      const { workItemId: seededWorkItemId, stageAttemptId } = startWorkflow(
+        localState,
+        "start-snapshot-isolation",
+        "create-snapshot-isolation-item",
+      );
+      workItemId = seededWorkItemId;
+
+      const baseline = localState.query({ type: "GET_WORK_ITEM", workItemId });
+      if (baseline.type !== "WORK_ITEM" || !baseline.workItem) throw new Error("Expected the WorkItem");
+      const baselineTitle = baseline.workItem.title;
+      const baselineVersion = baseline.workItem.version;
+
+      const result = localState.query({ type: "READ_CONTEXT_SOURCES", stageAttemptId, sessionOrdinal: 1 });
+      if (result.type !== "CONTEXT_SOURCES") throw new Error("Expected context sources");
+
+      expect(hookCalls).toBe(1);
+      // The read observed the pre-write snapshot, not the write the hook committed mid-read.
+      expect(result.sources.workItemBrief.title).toBe(baselineTitle);
+      expect(result.sources.workItemBrief.version).toBe(baselineVersion);
+
+      // The write genuinely committed -- a fresh read now sees it. Without this, the assertion
+      // above would be equally true of a hook that silently did nothing.
+      const after = localState.query({ type: "GET_WORK_ITEM", workItemId });
+      expect(after.type === "WORK_ITEM" ? after.workItem?.title : null).toBe("Retitled mid-read");
+      expect(after.type === "WORK_ITEM" ? after.workItem?.version : null).toBe(baselineVersion + 1);
     });
   });
 });

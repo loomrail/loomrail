@@ -1,3 +1,4 @@
+import type { ContextSources } from "@loomrail/context-assembly";
 import type {
   DomainEvent,
   EventPageDirection,
@@ -19,7 +20,13 @@ export type StateStoreErrorCode =
   | "MIGRATION_DRIFT"
   | "MIGRATION_FAILED"
   | "PERSISTENCE_FAILURE"
-  | "STATE_CLOSED";
+  | "STATE_CLOSED"
+  // Storage invariant, not a domain decision (spec §6.1 step 4 / this package's Task 7 boundary):
+  // a StageAttempt must never have two RUNNING ProviderSessions at once, since that would mean two
+  // agents working the same StageAttempt's workspace concurrently.
+  | "PROVIDER_SESSION_ALREADY_RUNNING"
+  // Guards PUBLISH_CHECKPOINT/END_PROVIDER_SESSION against acting on a session that already ended.
+  | "PROVIDER_SESSION_NOT_RUNNING";
 
 export class StateStoreError extends Error {
   readonly code: StateStoreErrorCode;
@@ -62,6 +69,13 @@ export type StateQuery =
       projectId?: string;
       aggregateId?: string;
       limit?: number;
+    }
+  | {
+      // Spec §6.1 step 1: every context source read together, as one consistent snapshot, so the
+      // recipe's per-section sourceVersion describes a pack that actually existed.
+      type: "READ_CONTEXT_SOURCES";
+      stageAttemptId: string;
+      sessionOrdinal: number;
     };
 
 export type StateQueryResult =
@@ -72,7 +86,8 @@ export type StateQueryResult =
   | { type: "HUMAN_REQUESTS"; humanRequests: HumanRequest[] }
   | { type: "WORKFLOW_DISPATCHES"; dispatches: WorkflowDispatch[] }
   | { type: "WORK_ITEMS"; workItems: WorkItem[] }
-  | { type: "EVENTS"; events: DomainEvent[]; nextSequence: number; hasMore: boolean };
+  | { type: "EVENTS"; events: DomainEvent[]; nextSequence: number; hasMore: boolean }
+  | { type: "CONTEXT_SOURCES"; sources: ContextSources };
 
 export type StateStoreStartup = {
   appliedMigrations: number[];
@@ -98,7 +113,10 @@ export type LocalStateIdKind =
   | "usageRecord"
   | "recoveryReport"
   | "evidenceArtifact"
-  | "acceptancePackage";
+  | "acceptancePackage"
+  | "providerSession"
+  | "contextPackRecipe"
+  | "checkpoint";
 
 export type OpenLocalStateOptions = {
   databasePath: string;
@@ -106,4 +124,12 @@ export type OpenLocalStateOptions = {
   migrationsDirectory?: string;
   now?: () => Date;
   createId?: (kind: LocalStateIdKind) => string;
+  // Test-only instrumentation, in the same spirit as `now`/`createId` above: called synchronously
+  // right after READ_CONTEXT_SOURCES's snapshot transaction takes its first read (of the
+  // StageAttempt row), before it reads any other source. A test can use this moment to commit a
+  // write through a second connection to the same database file and then assert that the rest of
+  // this same READ_CONTEXT_SOURCES call still reflects the pre-write snapshot -- the one
+  // observable difference between "wrapped in one transaction" and "read as independent
+  // statements". Never set outside tests; a no-op when absent.
+  onContextSourcesSnapshotStarted?: () => void;
 };

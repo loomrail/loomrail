@@ -667,6 +667,28 @@ export const pipelineCompletedEventSchema = eventBaseSchema.extend({
   data: z.object({ run: pipelineRunSchema, stageAttempt: stageAttemptSchema }).strict(),
 });
 
+// Spec §4.4: PROVIDER_SESSION_STARTED must carry the recipe's contentHash and the list of omitted
+// section ids, so a reader of the audit log can see what the agent was and was not given without
+// loading the recipe row. Embedding the full recipe -- which contentHash and omitted are already
+// fields of -- satisfies that without inventing a second, narrower shape to keep in sync with it.
+export const providerSessionStartedEventSchema = eventBaseSchema.extend({
+  type: z.literal("PROVIDER_SESSION_STARTED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z.object({ session: providerSessionSchema, recipe: contextPackRecipeSchema }).strict(),
+});
+
+export const checkpointPublishedEventSchema = eventBaseSchema.extend({
+  type: z.literal("CHECKPOINT_PUBLISHED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z.object({ checkpoint: checkpointSchema }).strict(),
+});
+
+export const providerSessionEndedEventSchema = eventBaseSchema.extend({
+  type: z.literal("PROVIDER_SESSION_ENDED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z.object({ session: providerSessionSchema }).strict(),
+});
+
 const commandBaseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -777,6 +799,47 @@ export const resolveAcceptanceCommandSchema = commandBaseSchema.extend({
       expectedRunVersion: z.number().int().positive(),
       action: acceptanceActionSchema,
       reason: descriptionSchema.nullable(),
+    })
+    .strict(),
+});
+
+// The recipe fields context-assembly's ContextPackRecipeDraft cannot know: templateId/
+// templateVersion/specSource come from the stage's ContextPackSpec, contentHash from the
+// assembled ContextPack, estimateQuality from the caller's window-size source. Everything else
+// (id, providerSessionId, createdAt) is assigned by the persistence layer that writes this
+// alongside the ProviderSession (spec §6.1 step 4).
+const contextPackRecipeDraftSchema = contextPackRecipeSchema.omit({
+  id: true,
+  providerSessionId: true,
+  createdAt: true,
+});
+
+export const startProviderSessionCommandSchema = commandBaseSchema.extend({
+  type: z.literal("START_PROVIDER_SESSION"),
+  payload: z
+    .object({
+      stageAttemptId: opaqueIdSchema,
+      recipe: contextPackRecipeDraftSchema,
+    })
+    .strict(),
+});
+
+export const publishCheckpointCommandSchema = commandBaseSchema.extend({
+  type: z.literal("PUBLISH_CHECKPOINT"),
+  payload: z
+    .object({
+      providerSessionId: opaqueIdSchema,
+      checkpoint: checkpointDraftSchema,
+    })
+    .strict(),
+});
+
+export const endProviderSessionCommandSchema = commandBaseSchema.extend({
+  type: z.literal("END_PROVIDER_SESSION"),
+  payload: z
+    .object({
+      providerSessionId: opaqueIdSchema,
+      endReason: providerSessionEndReasonSchema,
     })
     .strict(),
 });
@@ -914,6 +977,40 @@ export const acceptanceResolvedResultSchema = z
   })
   .strict();
 
+export const providerSessionStartedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("PROVIDER_SESSION_STARTED"),
+    replayed: z.boolean(),
+    workItemId: opaqueIdSchema,
+    session: providerSessionSchema,
+    recipe: contextPackRecipeSchema,
+    events: z.array(providerSessionStartedEventSchema),
+  })
+  .strict();
+
+export const checkpointPublishedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("CHECKPOINT_PUBLISHED"),
+    replayed: z.boolean(),
+    workItemId: opaqueIdSchema,
+    checkpoint: checkpointSchema,
+    events: z.array(checkpointPublishedEventSchema),
+  })
+  .strict();
+
+export const providerSessionEndedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("PROVIDER_SESSION_ENDED"),
+    replayed: z.boolean(),
+    workItemId: opaqueIdSchema,
+    session: providerSessionSchema,
+    events: z.array(providerSessionEndedEventSchema),
+  })
+  .strict();
+
 export const startMockPipelineRequestSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -1022,3 +1119,12 @@ export type ApproveBudgetOverrideCommand = z.infer<typeof approveBudgetOverrideC
 export type ReconcileWorkflowsCommand = z.infer<typeof reconcileWorkflowsCommandSchema>;
 export type ResolveAcceptanceCommand = z.infer<typeof resolveAcceptanceCommandSchema>;
 export type WorkflowSnapshot = z.infer<typeof workflowSnapshotSchema>;
+export type StartProviderSessionCommand = z.infer<typeof startProviderSessionCommandSchema>;
+export type PublishCheckpointCommand = z.infer<typeof publishCheckpointCommandSchema>;
+export type EndProviderSessionCommand = z.infer<typeof endProviderSessionCommandSchema>;
+export type ProviderSessionStartedEvent = z.infer<typeof providerSessionStartedEventSchema>;
+export type CheckpointPublishedEvent = z.infer<typeof checkpointPublishedEventSchema>;
+export type ProviderSessionEndedEvent = z.infer<typeof providerSessionEndedEventSchema>;
+export type ProviderSessionStartedResult = z.infer<typeof providerSessionStartedResultSchema>;
+export type CheckpointPublishedResult = z.infer<typeof checkpointPublishedResultSchema>;
+export type ProviderSessionEndedResult = z.infer<typeof providerSessionEndedResultSchema>;
