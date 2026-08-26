@@ -6,7 +6,11 @@ import { stateCommandResultSchema } from "@loomrail/contracts";
 import type { FastifyBaseLogger } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createEventStreamRegistry, MAX_OPEN_STREAMS } from "../src/event-stream.js";
+import {
+  createEventStreamRegistry,
+  MAX_OPEN_STREAMS,
+  type EventStreamRegistry,
+} from "../src/event-stream.js";
 import { startDaemon, type RunningDaemon } from "../src/server.js";
 
 import {
@@ -127,10 +131,19 @@ const createWorkItem = async (
 describe("daemon event stream", () => {
   let daemon: RunningDaemon | undefined;
   const token = bootstrapToken();
+  // Registries built directly (not via startDaemon) own an unref'd heartbeat timer that only
+  // `stopHeartbeat()` clears; without this, each such test leaks one live interval per run.
+  const openRegistries: EventStreamRegistry[] = [];
+  const trackRegistry = (registry: EventStreamRegistry): EventStreamRegistry => {
+    openRegistries.push(registry);
+    return registry;
+  };
 
   afterEach(async () => {
     await daemon?.close();
     daemon = undefined;
+    for (const registry of openRegistries) registry.stopHeartbeat();
+    openRegistries.length = 0;
   });
 
   it("refuses a stream to a caller without a session", async () => {
@@ -228,7 +241,7 @@ describe("daemon event stream", () => {
   // authenticated access forever. Proven through `tick()`, not by waiting out the real interval: the
   // difference between "proven" and "runs" is the one line the production timer calls it with.
   it("closes an open stream once its session has expired", async () => {
-    const registry = createEventStreamRegistry({ logger: silentLogger });
+    const registry = trackRegistry(createEventStreamRegistry({ logger: silentLogger }));
     const written: string[] = [];
     let authorized = true;
     const response = fakeResponse(written);
@@ -245,7 +258,7 @@ describe("daemon event stream", () => {
   });
 
   it("refuses to open more streams than the limit and leaves the open ones alone", () => {
-    const registry = createEventStreamRegistry({ logger: silentLogger });
+    const registry = trackRegistry(createEventStreamRegistry({ logger: silentLogger }));
     const releases = Array.from({ length: MAX_OPEN_STREAMS }, () =>
       registry.open({ response: fakeResponse([]), isAuthorized: () => true }),
     );
