@@ -144,9 +144,10 @@ mitigations, verified in code:
   and the response read to its end — with "closes an open stream once its session has expired"
   covering the registry's `tick()` in isolation;
 - a local process cannot exhaust file descriptors through it: open streams are capped at `MAX_OPEN_STREAMS`
-  (8), enforced at both the registry and the HTTP layer, verified by "refuses to open more streams than the
-  limit and leaves the open ones alone" and "answers a stream request over the limit with a status rather
-  than an opened stream";
+  (8), enforced in one place — the registry's `open()`, which the route calls before hijacking the response
+  and reports as a 503 when it refuses — verified by "refuses to open more streams than the limit and leaves
+  the open ones alone" and "answers a stream request over the limit with a status rather than an opened
+  stream";
 - the channel carries no content: `eventSignalSchema` (`packages/contracts/src/event-stream.ts`) is a
   `.strict()` object of exactly three opaque identifiers — `projectId`, `aggregateType`, `aggregateId` — so a
   field cannot be added to the frame by accident, verified at the byte level by "carries no work item text on
