@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
+  isSessionPauseFailureCode,
   prioritySchema,
   riskSchema,
   type AcceptanceAction,
@@ -12,6 +13,7 @@ import {
   type HumanRequest,
   type PipelineRun,
   type ProviderSession,
+  type SessionPauseFailureCode,
   type StageAttempt,
   type WorkItem,
   type WorkItemChangedField,
@@ -442,23 +444,13 @@ const changedFieldLabelKeys: Record<WorkItemChangedField, TranslationKey> = {
   acceptanceCriteria: "field.acceptanceCriteria",
 };
 
-// The four StageAttempt.failureCode values that mark a HARD pause as raised by the session loop
-// (spec §6.5, §D8, §7) rather than by the token budget -- mirrors
-// packages/domain/src/session-pause.ts's sessionPauseFailureCodes. Duplicated as a display literal
-// rather than imported: apps/web depends on @loomrail/contracts and @loomrail/ui only, never on the
-// domain package that owns the decision, and this list is the display-layer's read of a value the
-// backend already computed and put on the wire, not a business rule of its own.
-const hardPauseFailureCodes = [
-  "NO_PROGRESS",
-  "CONTEXT_FLOOR_EXCEEDED",
-  "PROVIDER_REJECTED_PACK",
-  "PROVIDER_START_FAILED",
-] as const;
-type HardPauseFailureCode = (typeof hardPauseFailureCodes)[number];
-const isSessionPauseFailureCode = (code: string | null): code is HardPauseFailureCode =>
-  code !== null && (hardPauseFailureCodes as readonly string[]).includes(code);
-
-const hardPauseLabelKeys: Record<HardPauseFailureCode, TranslationKey> = {
+// `isSessionPauseFailureCode` and its four codes come from @loomrail/contracts (imported above),
+// not from a local copy: apps/web depends on @loomrail/contracts and @loomrail/ui only, never on
+// @loomrail/domain, and a hand-duplicated list here is exactly what let this file disagree with
+// packages/domain/src/session-pause.ts once already -- every HARD_PAUSED attempt read as a budget
+// pause regardless of the real failureCode. Reading the same exported list both sides use keeps a
+// fifth code added there from silently going stale here.
+const hardPauseLabelKeys: Record<SessionPauseFailureCode, TranslationKey> = {
   NO_PROGRESS: "workflow.hardPause.noProgress",
   CONTEXT_FLOOR_EXCEEDED: "workflow.hardPause.contextFloor",
   PROVIDER_REJECTED_PACK: "workflow.hardPause.providerRejected",

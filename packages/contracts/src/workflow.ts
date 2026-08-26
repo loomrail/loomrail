@@ -304,6 +304,27 @@ export const stageAttemptSchema = z
   })
   .strict();
 
+// The `StageAttempt.failureCode` values that mark a HARD pause as raised by the session loop
+// (spec §6.5, §D8, §7) rather than by the token budget. Lives here, not in @loomrail/domain,
+// because it has two consumers on either side of the apps/web boundary: `decideAnswerHumanRequest`
+// and `decideApproveBudgetOverride` (packages/domain) decide behaviour from it, and the Task
+// Cockpit (apps/web) decides display from it -- apps/web depends on @loomrail/contracts and
+// @loomrail/ui only, never on @loomrail/domain, so a single shared list here is what keeps the two
+// readings of "is this a session pause" from drifting apart. That drift is exactly what shipped as
+// a defect once already: the cockpit read every HARD_PAUSED attempt as a budget pause and offered
+// an "approve budget override" action that decideApproveBudgetOverride throws on for these codes.
+export const sessionPauseFailureCodes = [
+  "NO_PROGRESS",
+  "CONTEXT_FLOOR_EXCEEDED",
+  "PROVIDER_REJECTED_PACK",
+  "PROVIDER_START_FAILED",
+] as const;
+
+export type SessionPauseFailureCode = (typeof sessionPauseFailureCodes)[number];
+
+export const isSessionPauseFailureCode = (code: string | null): code is SessionPauseFailureCode =>
+  code !== null && (sessionPauseFailureCodes as readonly string[]).includes(code);
+
 export const budgetPolicySchema = z
   .object({
     schemaVersion: schemaVersionSchema,

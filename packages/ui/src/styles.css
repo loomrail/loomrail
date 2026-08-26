@@ -1896,11 +1896,10 @@
 }
 
 .lr-checkpoint-card > summary {
-  align-items: baseline;
+  align-items: center;
   cursor: pointer;
   display: flex;
   gap: var(--lr-space-2);
-  justify-content: space-between;
   list-style: none;
 }
 
@@ -1908,8 +1907,22 @@
   display: none;
 }
 
+/* The only persistent (non-hover) sign a collapsed checkpoint is openable: without it a closed
+   card reads as a plain line of grey text. Rotates via the native [open] attribute -- no JS. */
+.lr-checkpoint-card__chevron {
+  color: var(--lr-text-faint);
+  flex-shrink: 0;
+  transform: rotate(0deg);
+  transition: transform var(--lr-duration-fast) var(--lr-ease-standard);
+}
+
+.lr-checkpoint-card[open] > summary > .lr-checkpoint-card__chevron {
+  transform: rotate(90deg);
+}
+
 .lr-checkpoint-card > summary > span {
   color: var(--lr-text-secondary);
+  flex: 1;
   font-size: var(--lr-font-sm);
   font-weight: var(--lr-weight-medium);
 }

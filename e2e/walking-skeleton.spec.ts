@@ -1112,8 +1112,12 @@ test.describe("authenticated walking skeleton", () => {
 
       // The Task 11 defect: this pause has nothing to do with budget, so the banner must not claim
       // it does, and the escape hatch that only works for a budget pause must not be offered.
-      await expect(workflowSection.getByText("Budget paused", { exact: true })).toHaveCount(0);
+      // The "Budget paused" absence check runs only after the panel is confirmed rendered (the
+      // "Paused: no progress" visibility assertion establishes that): asserting absence first would
+      // pass on the very first poll, before the workflow query resolves, against an empty panel --
+      // and would keep passing even if the banner reverted to "Budget paused".
       await expect(workflowSection.getByText("Paused: no progress", { exact: true }).first()).toBeVisible();
+      await expect(workflowSection.getByText("Budget paused", { exact: true })).toHaveCount(0);
       await expect(workflowSection.getByRole("button", { name: /Approve .* token budget/ })).toHaveCount(0);
 
       // The owner is not stuck: the Human Request panel still renders the real question, and

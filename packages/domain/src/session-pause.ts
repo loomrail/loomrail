@@ -9,18 +9,17 @@
  * lets `decideAnswerHumanRequest` accept an answer to it and lift the pause, and what lets
  * `decideApproveBudgetOverride` refuse to pretend a bigger budget is the answer.
  *
- * It lives in its own module because both of those decisions are in `workflow.ts` while the pause
- * that stamps the code is in `session.ts`; putting it in either would make the two import each
- * other.
+ * The list itself is defined in `@loomrail/contracts` (see `sessionPauseFailureCodes` there), not
+ * here, because the Task Cockpit (apps/web) needs the same answer to "is this a session pause" to
+ * pick the right banner text and hide the budget-override action -- and apps/web depends on
+ * @loomrail/contracts and @loomrail/ui only, never on @loomrail/domain. A second, hand-copied list
+ * in the display layer is exactly what let the cockpit disagree with this package once already:
+ * it read every HARD_PAUSED attempt as a budget pause regardless of `failureCode`. Re-exported here
+ * so the decisions in `workflow.ts` (which imports from this module, not from `session.ts`, to
+ * avoid a cycle between the two) don't have to reach past the domain package's own boundary.
  */
-export const sessionPauseFailureCodes = [
-  "NO_PROGRESS",
-  "CONTEXT_FLOOR_EXCEEDED",
-  "PROVIDER_REJECTED_PACK",
-  "PROVIDER_START_FAILED",
-] as const;
-
-export type SessionPauseFailureCode = (typeof sessionPauseFailureCodes)[number];
-
-export const isSessionPauseFailureCode = (code: string | null): code is SessionPauseFailureCode =>
-  code !== null && (sessionPauseFailureCodes as readonly string[]).includes(code);
+export {
+  sessionPauseFailureCodes,
+  isSessionPauseFailureCode,
+  type SessionPauseFailureCode,
+} from "@loomrail/contracts";

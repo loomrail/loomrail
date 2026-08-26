@@ -212,6 +212,16 @@ export const ProviderSessionTimeline = ({
                   <li key={checkpoint.id}>
                     <details className="lr-checkpoint-card" open={checkpoint.defaultOpen}>
                       <summary>
+                        {/* Decorative: native <details> already exposes expanded state to
+                            assistive tech via <summary>'s button-like role. This is the only
+                            persistent (non-hover) sign a sighted reader has that a collapsed
+                            checkpoint -- otherwise a plain line of text -- is openable at all. */}
+                        <Icon
+                          aria-hidden="true"
+                          className="lr-checkpoint-card__chevron"
+                          name="chevronRight"
+                          size={12}
+                        />
                         <span>{checkpoint.summary}</span>
                         <time>{checkpoint.timeLabel}</time>
                       </summary>
@@ -221,8 +231,13 @@ export const ProviderSessionTimeline = ({
                             <div key={group.label}>
                               <strong>{group.label}</strong>
                               <ul>
-                                {group.items.map((item) => (
-                                  <li key={item}>{item}</li>
+                                {/* Keyed by index+value, not value alone: a checkpoint's lists are
+                                    untrusted provider output (spec §8) with no uniqueness
+                                    constraint -- schema allows up to 50 free-text entries that may
+                                    repeat -- and keying by the repeated string alone would collide
+                                    and corrupt React's reconciliation, not just warn. */}
+                                {group.items.map((item, index) => (
+                                  <li key={`${index.toString()}-${item}`}>{item}</li>
                                 ))}
                               </ul>
                             </div>
