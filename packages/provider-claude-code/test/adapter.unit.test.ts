@@ -177,6 +177,23 @@ describe("createClaudeCodeProvider", () => {
     expect(spawned.args).toContain("--no-session-persistence");
   });
 
+  // FINDING (post-review): neither flag was asserted by any test. Trace their absence: without
+  // `--output-format stream-json` the CLI prints plain text instead of JSONL, `parseClaudeEvent`
+  // returns `null` for every line, `onLine` fires and yields nothing, no `result` event is ever
+  // seen -- and `start()` falls through to its initialised `CONTEXT_EXHAUSTED` default. Silent,
+  // clean exit, session reported as failed, no error anywhere -- byte-for-byte the same failure
+  // shape as the `--json-schema` defect this milestone already fixed once. `--verbose` is the
+  // same story one step removed: the CLI requires it alongside `--print` for stream-json output,
+  // so losing it produces the same silence.
+  it("requests JSONL output, verbosely, so events are ever seen at all", async () => {
+    const spawned = recordSpawn();
+    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
+    const outputFormatIndex = spawned.args.indexOf("--output-format");
+    expect(outputFormatIndex).toBeGreaterThanOrEqual(0);
+    expect(spawned.args[outputFormatIndex + 1]).toBe("stream-json");
+    expect(spawned.args).toContain("--verbose");
+  });
+
   // BD-001: the budget stops being a Loomrail estimate and becomes something the CLI enforces.
   it("passes the remaining budget to the CLI so the limit is enforced where the spending happens", async () => {
     const spawned = recordSpawn();
