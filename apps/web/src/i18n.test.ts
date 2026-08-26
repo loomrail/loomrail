@@ -22,6 +22,22 @@ describe("i18n", () => {
     expect(translate("ru", "state.READY")).toBe("Готово к работе");
   });
 
+  it("does not describe a running session's window occupancy as a handoff", () => {
+    // Occupancy is saved on every report now (migration 0009), not only the reading that crosses
+    // the handoff threshold, so the label a session gets by default must not claim a handoff
+    // happened. "At handoff" survives as its own key, which the cockpit picks only for a session
+    // that actually asked to wind down.
+    expect(translate("en", "workflow.sessions.occupancy", { percent: 40 })).toBe("40% of the window used");
+    expect(translate("en", "workflow.sessions.occupancyAtHandoff", { percent: 92 })).toBe(
+      "92% of the window at handoff",
+    );
+    for (const locale of ["en", "ru"] as const) {
+      expect(translate(locale, "workflow.sessions.occupancy", { percent: 40 })).not.toBe(
+        translate(locale, "workflow.sessions.occupancyAtHandoff", { percent: 40 }),
+      );
+    }
+  });
+
   it("persists and applies the selected locale", () => {
     applyLocale("ru");
     expect(readLocale()).toBe("ru");

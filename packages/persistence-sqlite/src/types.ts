@@ -104,10 +104,11 @@ export type StateQueryResult =
       sessions: ProviderSession[];
       recipes: ContextPackRecipe[];
       checkpoints: Checkpoint[];
-      // Spec §6.2: the only occupancy Loomrail keeps durably is the reading that first crossed the
-      // handoff threshold, carried on CONTEXT_HANDOFF_REQUESTED. Keyed by ProviderSession id; a
-      // session that never crossed the threshold has no entry.
-      handoffUsage: Record<string, ContextWindowUsage>;
+      // Spec §6.2: the latest window occupancy each session was able to act on, read from the
+      // session's own columns (migration 0009) rather than replayed out of the audit log. Keyed by
+      // ProviderSession id; a session that never received a report has no entry, which is a
+      // different fact from a session reported at zero.
+      contextWindowUsage: Record<string, ContextWindowUsage>;
     };
 
 export type StateStoreStartup = {

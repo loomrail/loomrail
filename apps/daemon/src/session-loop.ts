@@ -313,7 +313,14 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
 
     // One mutable record rather than four `let`s: the listener callbacks below run while `start()`
     // is still in flight, so these are shared between this function body and those closures.
-    const live = { closed: false, handoffRequested: false, checkpointWriteFailed: false };
+    const live = {
+      closed: false,
+      handoffRequested: false,
+      checkpointWriteFailed: false,
+      // Every integer percent already reported to state for this session. At most 101 entries.
+      // See the comment on `reportedPercent` in `onContextWindow`.
+      reportedPercents: new Set<number>(),
+    };
     let lastPublished: CheckpointDraft | null = null;
     let deadline: HandoffDeadline | undefined;
     let signalDeadline: (() => void) | undefined;
@@ -361,9 +368,29 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
           );
           return;
         }
+        // Occupancy is state now, and state is written by a command, so every report costs a row
+        // in the append-only `commands` table -- it already did, because the receipt is written
+        // outside the branch that decided the report changed nothing. With the mock that is a
+        // handful of rows; a live adapter streams occupancy continuously across up to
+        // MAX_SESSIONS_PER_ATTEMPT sessions, and most of those rows say only "not yet".
+        //
+        // So a report is sent once per integer percentage point of the window, which is exactly
+        // the resolution the cockpit renders: 101 rows per session at the very worst, and the
+        // displayed figure never more than a point stale. The commandId is built from that same
+        // percent rather than freshly generated, so the row a report costs is identified by what
+        // makes it worth writing.
+        //
+        // The set has to hold every point already sent, not just the last one: occupancy is not
+        // monotonic (dropping a large tool result out of the window frees points), so a session
+        // can return to a percent it has left. A repeat would then reuse the commandId with a
+        // different token count in the payload, and `execute` rejects a reused id whose input
+        // hashes differently -- COMMAND_ID_REUSED, thrown from inside a provider callback.
+        const reportedPercent = Math.round((usage.data.usedTokens / usage.data.windowTokens) * 100);
+        if (live.reportedPercents.has(reportedPercent)) return;
+        live.reportedPercents.add(reportedPercent);
         const requested = deps.state.execute({
           schemaVersion: 1,
-          commandId: deps.createCommandId(),
+          commandId: `usage-${providerSession.id}-${reportedPercent.toString()}`,
           correlationId: deps.correlationId,
           actor,
           type: "REQUEST_CONTEXT_HANDOFF",

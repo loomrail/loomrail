@@ -1236,8 +1236,8 @@ const checkpointGroups = (checkpoint: Checkpoint, t: Translator): readonly Check
 ];
 
 /**
- * The sessions inside the current stage attempt (spec §D5), with each session's window occupancy
- * at handoff, whether a handoff was requested, and the full text of every checkpoint it published.
+ * The sessions inside the current stage attempt (spec §D5), with each session's latest window
+ * occupancy, whether a handoff was requested, and the full text of every checkpoint it published.
  * Renders nothing while there is no attempt to nest sessions under, or once it has none yet -- a
  * brand-new attempt has not started its first session, and an empty "Sessions" heading would just
  * be noise.
@@ -1248,7 +1248,7 @@ const AttemptSessionsPanel = ({ attempt }: { attempt: StageAttempt }): React.JSX
   const capabilitiesQuery = useProviderCapabilities();
   const sessions = sessionsQuery.data?.sessions ?? [];
   const checkpoints = sessionsQuery.data?.checkpoints ?? [];
-  const handoffUsage = sessionsQuery.data?.handoffUsage ?? {};
+  const contextWindowUsage = sessionsQuery.data?.contextWindowUsage ?? {};
 
   if (sessions.length === 0) return null;
 
@@ -1267,7 +1267,7 @@ const AttemptSessionsPanel = ({ attempt }: { attempt: StageAttempt }): React.JSX
     .sort((a, b) => a.ordinal - b.ordinal)
     .map((session) => {
       const presentation = sessionStatusPresentation(session, t);
-      const usage = handoffUsage[session.id];
+      const usage = contextWindowUsage[session.id];
       const occupancyPercent = usage ? Math.round((usage.usedTokens / usage.windowTokens) * 100) : undefined;
       const sessionCheckpoints: CheckpointViewModel[] = checkpoints
         .filter((checkpoint) => checkpoint.providerSessionId === session.id)
@@ -1294,11 +1294,22 @@ const AttemptSessionsPanel = ({ attempt }: { attempt: StageAttempt }): React.JSX
           : {}),
         // Spec §4.3 and §5.2 make `usageQuality` the thing that separates a measured occupancy from
         // a guessed one; dropping it here rendered a measured 92% and an estimated 92% identically.
+        //
+        // Occupancy is now saved on every report, not only on the one that crosses the threshold,
+        // so the number no longer implies a handoff and the label must not claim one. A session
+        // that did ask for a handoff stopped reporting at that moment, so for it the stored
+        // reading really is the one at handoff and keeps saying so; for every other session it is
+        // simply the window as last measured.
         ...(occupancyPercent === undefined || usage === undefined
           ? {}
           : {
               occupancyPercent,
-              occupancyLabel: t("workflow.sessions.occupancy", { percent: occupancyPercent }),
+              occupancyLabel: t(
+                session.handoffRequestedAt === null
+                  ? "workflow.sessions.occupancy"
+                  : "workflow.sessions.occupancyAtHandoff",
+                { percent: occupancyPercent },
+              ),
               occupancyQualityLabel: t(usageQualityLabelKeys[usage.quality]),
             }),
         ...(sessionCheckpoints.length === 0

@@ -374,6 +374,88 @@ describe("stage attempt session loop", () => {
     expect(abortedSessionIds).toEqual(sessions.map(({ id }) => id));
   });
 
+  // Occupancy is state now (migration 0009), and state is written by a command, so every report
+  // costs a row in the append-only `commands` table -- it always did, because the receipt is
+  // written outside the branch that decided the report changed nothing. The deterministic
+  // `usage-${sessionId}-${percent}` commandId is what bounds that, and this is the assertion that
+  // bounds it: one row per distinct percentage point, not one per report.
+  it("costs one command row per percentage point of occupancy, not one per report", async () => {
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+
+    // Forty-one readings that all round to 10% of the window, one that rounds to 20%, then a
+    // return to 10% carrying a different token count. A live adapter streams occupancy this way:
+    // the number creeps without the percentage point moving, and it can come back down.
+    const crawling: ProviderAdapter = {
+      capabilities: () =>
+        providerCapabilitiesSchema.parse({
+          provider: "MOCK",
+          start: true,
+          interrupt: true,
+          eventStream: true,
+          usageReporting: true,
+          contextWindowReporting: true,
+          checkpointOnRequest: true,
+          contextWindowTokens: 10_000,
+        }),
+      start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) => {
+        for (let usedTokens = 1_000; usedTokens <= 1_040; usedTokens += 1) {
+          listener.onContextWindow({ usedTokens, windowTokens: 10_000, quality: "ACTUAL" });
+        }
+        listener.onContextWindow({ usedTokens: 2_000, windowTokens: 10_000, quality: "ACTUAL" });
+        // A return to a percentage point already reported, with a token count that is not the one
+        // reported at it. Nothing about this is exotic -- dropping a large tool result out of the
+        // window frees points -- and it is the case that punishes a commandId derived from the
+        // percent: reusing the id with different input is COMMAND_ID_REUSED, thrown from inside
+        // this callback, i.e. out of `start()` and through the session loop.
+        listener.onContextWindow({ usedTokens: 1_030, windowTokens: 10_000, quality: "ACTUAL" });
+        return Promise.resolve(completingOutcome());
+      },
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
+    };
+
+    // One `commands` row is written per distinct commandId that reaches `execute` -- a repeat
+    // replays off the receipt and writes nothing, which local-state.integration.test.ts asserts on
+    // the row count directly. `packages/persistence-sqlite` is the only place allowed to open the
+    // database with `node:sqlite`, so what this file can measure is the ids themselves.
+    const handoffCommandIds: string[] = [];
+    const recordingState: LocalState = {
+      ...localState,
+      execute: (command) => {
+        if (command.type === "REQUEST_CONTEXT_HANDOFF") handoffCommandIds.push(command.commandId);
+        return localState.execute(command);
+      },
+    };
+
+    await runStageAttempt(depsFor(localState, seeded, crawling, { state: recordingState }));
+
+    // Forty-three reports, two percentage points, two rows.
+    expect(handoffCommandIds).toHaveLength(2);
+
+    // The window as last measured at a new percentage point. Within one point the first reading
+    // stands, which is exactly the freshness this trade costs -- and exactly what the cockpit,
+    // which renders whole percent, can show anyway.
+    const usage = localState.query({
+      type: "LIST_PROVIDER_SESSIONS",
+      stageAttemptId: seeded.stageAttemptId,
+    });
+    if (usage.type !== "PROVIDER_SESSIONS") throw new Error("Expected provider sessions");
+    const [session] = usage.sessions;
+    if (!session) throw new Error("Expected a provider session");
+    expect(handoffCommandIds).toEqual([`usage-${session.id}-10`, `usage-${session.id}-20`]);
+    // And the session that reported all this finished normally. A reused commandId does not
+    // merely lose one reading: `execute` throws it out of a provider callback, which the loop can
+    // only read as the provider failing, so the session is cut and everything it had not yet
+    // published goes with it.
+    expect(session.endReason).toBe("COMPLETED");
+    expect(usage.contextWindowUsage[session.id]).toEqual({
+      usedTokens: 2_000,
+      windowTokens: 10_000,
+      quality: "ACTUAL",
+    });
+  });
+
   it("opens a Human Request when two sessions in a row produce nothing", async () => {
     // §6.5 needs a HARD pause AND a question to the owner. A pause with no question is a pipeline
     // that stopped without telling its owner anything. `decideSessionEnded` cannot build a Human

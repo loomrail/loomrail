@@ -9,6 +9,7 @@ import {
   budgetPolicySchema,
   checkpointSchema,
   contextPackRecipeSchema,
+  contextWindowUsageSchema,
   decisionSchema,
   domainEventSchema,
   eventPageDirectionSchema,
@@ -310,7 +311,15 @@ const providerSessionRowSchema = z.object({
   started_at: z.string(),
   ended_at: z.string().nullable(),
   version: z.number().int(),
+  // Migration 0009. Null together or present together -- the table CHECK says so, and
+  // `contextWindowUsageFromRow` reads them as the one value they are.
+  context_used_tokens: z.number().int().nullable(),
+  context_window_tokens: z.number().int().nullable(),
+  context_usage_quality: z.string().nullable(),
+  context_usage_reported_at: z.string().nullable(),
 });
+
+type ProviderSessionRow = z.infer<typeof providerSessionRowSchema>;
 
 const contextPackRecipeRowSchema = z.object({
   id: z.string(),
@@ -630,6 +639,24 @@ const providerSessionFromRow = (value: unknown): ProviderSession => {
   });
 };
 
+// The latest window occupancy this session was able to act on, or null if it never received a
+// report. Read off the session's own row rather than reconstructed from CONTEXT_HANDOFF_REQUESTED:
+// current state and audit are separate, and only one of them is allowed to be the source here.
+const contextWindowUsageFromRow = (row: ProviderSessionRow): ContextWindowUsage | null => {
+  if (
+    row.context_used_tokens === null ||
+    row.context_window_tokens === null ||
+    row.context_usage_quality === null
+  ) {
+    return null;
+  }
+  return contextWindowUsageSchema.parse({
+    usedTokens: row.context_used_tokens,
+    windowTokens: row.context_window_tokens,
+    quality: row.context_usage_quality,
+  });
+};
+
 const contextPackRecipeFromRow = (value: unknown): ContextPackRecipe => {
   const row = contextPackRecipeRowSchema.parse(value);
   return contextPackRecipeSchema.parse({
@@ -838,6 +865,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        SET status = ?, end_reason = ?, handoff_requested_at = ?, ended_at = ?, version = ?
        WHERE id = ? AND version = ?`,
     );
+    // Migration 0009. Deliberately no `version` guard and no `version` bump: occupancy is not part
+    // of providerSessionSchema, so no reader holds a version of it that this write could invalidate,
+    // and bumping the column here would make the optimistic update above fail for the very report
+    // that is about to request the handoff.
+    const recordProviderSessionUsage = database.prepare(
+      `UPDATE provider_sessions
+       SET context_used_tokens = ?, context_window_tokens = ?, context_usage_quality = ?,
+           context_usage_reported_at = ?
+       WHERE id = ?`,
+    );
     const insertContextPackRecipe = database.prepare(
       `INSERT INTO context_pack_recipes (
         id, schema_version, provider_session_id, template_id, template_version, spec_source,
@@ -888,20 +925,6 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     );
     const selectRecentEventsForAggregate = database.prepare(
       "SELECT * FROM events WHERE aggregate_id = ? ORDER BY sequence DESC LIMIT ?",
-    );
-    // Scoped to the work item (events carry no stage-attempt column of their own) and then to the
-    // attempt, whose id the payload carries on the session. The JSON predicate is what makes the
-    // LIMIT meaningful: spec §6.2 emits at most one CONTEXT_HANDOFF_REQUESTED per ProviderSession,
-    // so a limit of "one per session of this attempt" is exact, and the caller full-parses at most
-    // that many payloads. Without it this read grew with the work item's whole handoff history --
-    // every session of every attempt -- for a response that only ever describes one attempt.
-    const selectContextHandoffEventsForAttempt = database.prepare(
-      `SELECT * FROM events
-       WHERE aggregate_id = ?
-         AND type = 'CONTEXT_HANDOFF_REQUESTED'
-         AND json_extract(data_json, '$.session.stageAttemptId') = ?
-       ORDER BY sequence
-       LIMIT ?`,
     );
 
     const assertOpen = (): void => {
@@ -2711,6 +2734,20 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             "The StageAttempt backing this ProviderSession is missing",
           );
         }
+        // Spec §6.2 says occupancy is saved, so the reading lands in current state before any
+        // handoff decision is taken -- below the threshold just as much as above it. Only reports
+        // the session can still act on are written: one arriving for an ENDED session, or for one
+        // that has already asked for a handoff, is the race §6.2 calls a safe no-op, and must not
+        // overwrite the reading that was current while it could still change something.
+        if (current.status === "RUNNING" && current.handoffRequestedAt === null) {
+          recordProviderSessionUsage.run(
+            command.payload.usage.usedTokens,
+            command.payload.usage.windowTokens,
+            command.payload.usage.quality,
+            occurredAt,
+            current.id,
+          );
+        }
         // Whether this crossing is the first one is read off the stored session, never taken from
         // the caller: spec §6.2 requires a repeated occupancy report -- including one racing the
         // session's own end -- to be a safe no-op rather than a second request.
@@ -3101,28 +3138,24 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         // under the attempt. Kept out of GET_WORKFLOW_SNAPSHOT deliberately -- the snapshot is
         // fetched on every board render, and session history grows without bound within an attempt.
         case "LIST_PROVIDER_SESSIONS": {
-          const sessions = selectProviderSessionsForAttempt
+          // Occupancy comes off these same rows (migration 0009). It used to be rebuilt by
+          // scanning CONTEXT_HANDOFF_REQUESTED out of the event log, which both collapsed the
+          // separation between current state and audit and could only ever show the one reading
+          // that crossed the threshold -- a running session below it had nothing to show at all.
+          const sessionRows = selectProviderSessionsForAttempt
             .all(queryValue.stageAttemptId)
-            .map(providerSessionFromRow);
-          const attempt = readStageAttempt(queryValue.stageAttemptId);
-          const handoffUsage: Record<string, ContextWindowUsage> = {};
-          if (attempt && sessions.length > 0) {
-            for (const row of selectContextHandoffEventsForAttempt.all(
-              attempt.workItemId,
-              queryValue.stageAttemptId,
-              sessions.length,
-            )) {
-              const event = eventFromRow(row);
-              if (event.type !== "CONTEXT_HANDOFF_REQUESTED") continue;
-              handoffUsage[event.data.session.id] = event.data.usage;
-            }
+            .map((value) => providerSessionRowSchema.parse(value));
+          const contextWindowUsage: Record<string, ContextWindowUsage> = {};
+          for (const row of sessionRows) {
+            const usage = contextWindowUsageFromRow(row);
+            if (usage !== null) contextWindowUsage[row.id] = usage;
           }
           return {
             type: "PROVIDER_SESSIONS",
-            sessions,
+            sessions: sessionRows.map(providerSessionFromRow),
             recipes: selectRecipesForAttempt.all(queryValue.stageAttemptId).map(contextPackRecipeFromRow),
             checkpoints: selectCheckpointsForAttempt.all(queryValue.stageAttemptId).map(checkpointFromRow),
-            handoffUsage,
+            contextWindowUsage,
           };
         }
         default:

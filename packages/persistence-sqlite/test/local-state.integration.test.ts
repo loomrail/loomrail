@@ -13,6 +13,7 @@ import type {
   MoveWorkItemCommand,
   PublishCheckpointCommand,
   RegisterProjectCommand,
+  RequestContextHandoffCommand,
   StartMockPipelineCommand,
   StartProviderSessionCommand,
   UpdateWorkItemCommand,
@@ -513,7 +514,7 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);
@@ -1696,11 +1697,14 @@ describe("SQLite local state", () => {
           SELECT RAISE(ABORT, 'events are append-only');
         END;
       `);
-      raw.prepare("DELETE FROM schema_migrations WHERE version = 6").run();
+      // 0009 adds its occupancy columns to the table 0006 creates, so a database that predates
+      // 0006 predates 0009 too: dropping provider_sessions took those columns with it, and both
+      // migrations have to be pending for the reconstruction to be honest.
+      raw.prepare("DELETE FROM schema_migrations WHERE version IN (6, 9)").run();
       raw.close();
 
       const migrated = await open();
-      expect(migrated.startup.appliedMigrations).toEqual([6]);
+      expect(migrated.startup.appliedMigrations).toEqual([6, 9]);
 
       const after = migrated.query({ type: "LIST_EVENTS" });
       if (after.type !== "EVENTS") throw new Error("Expected events");
@@ -1985,6 +1989,308 @@ describe("SQLite local state", () => {
       );
       if (second.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected the second session to start");
       expect(second.session.ordinal).toBe(2);
+    });
+
+    // Migration 0009. Spec §6.2 says window occupancy is saved; before 0009 it was not, and the
+    // cockpit rebuilt a number by scanning CONTEXT_HANDOFF_REQUESTED out of the audit log.
+    describe("window occupancy storage (migration 0009)", () => {
+      const requestContextHandoffCommand = (
+        commandId: string,
+        providerSessionId: string,
+        usage: RequestContextHandoffCommand["payload"]["usage"],
+        handoffThreshold = 0.75,
+      ): RequestContextHandoffCommand => ({
+        schemaVersion: 1,
+        commandId,
+        correlationId: `correlation-${commandId}`,
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "REQUEST_CONTEXT_HANDOFF",
+        payload: { providerSessionId, usage, handoffThreshold },
+      });
+
+      const readUsage = (
+        localState: LocalState,
+        stageAttemptId: string,
+        providerSessionId: string,
+      ): unknown => {
+        const listed = localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId });
+        if (listed.type !== "PROVIDER_SESSIONS") throw new Error("Expected the attempt's sessions");
+        return listed.contextWindowUsage[providerSessionId];
+      };
+
+      it("stores a below-threshold occupancy report without requesting a handoff", async () => {
+        const localState = await open();
+        const { stageAttemptId } = startWorkflow(
+          localState,
+          "start-below-threshold",
+          "create-below-threshold-item",
+        );
+        const started = localState.execute(
+          startProviderSessionCommand("start-below-threshold-session", stageAttemptId),
+        );
+        if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+
+        const reported = localState.execute(
+          requestContextHandoffCommand("usage-below-threshold", started.session.id, {
+            usedTokens: 400,
+            windowTokens: 1000,
+            quality: "PROVIDER_ESTIMATE",
+          }),
+        );
+        if (reported.type !== "CONTEXT_HANDOFF_REQUESTED") throw new Error("Expected the report result");
+
+        // The decision itself is unchanged: 40% is below the threshold, so nothing winds down.
+        expect(reported.requested).toBe(false);
+        expect(reported.events).toEqual([]);
+        expect(reported.session.handoffRequestedAt).toBeNull();
+
+        // But the reading is now state, readable without any event to replay.
+        expect(readUsage(localState, stageAttemptId, started.session.id)).toEqual({
+          usedTokens: 400,
+          windowTokens: 1000,
+          quality: "PROVIDER_ESTIMATE",
+        });
+      });
+
+      it("keeps a session with no report at all distinct from one reported at zero", async () => {
+        const localState = await open();
+        const { stageAttemptId } = startWorkflow(localState, "start-no-report", "create-no-report-item");
+        const started = localState.execute(
+          startProviderSessionCommand("start-no-report-session", stageAttemptId),
+        );
+        if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+
+        expect(readUsage(localState, stageAttemptId, started.session.id)).toBeUndefined();
+
+        localState.execute(
+          requestContextHandoffCommand("usage-zero", started.session.id, {
+            usedTokens: 0,
+            windowTokens: 1000,
+            quality: "ACTUAL",
+          }),
+        );
+        expect(readUsage(localState, stageAttemptId, started.session.id)).toEqual({
+          usedTokens: 0,
+          windowTokens: 1000,
+          quality: "ACTUAL",
+        });
+      });
+
+      it("requests a handoff exactly once when the threshold is crossed, and again is a no-op", async () => {
+        const localState = await open();
+        const { stageAttemptId } = startWorkflow(localState, "start-crossing", "create-crossing-item");
+        const started = localState.execute(
+          startProviderSessionCommand("start-crossing-session", stageAttemptId),
+        );
+        if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+
+        const first = localState.execute(
+          requestContextHandoffCommand("usage-crossing-first", started.session.id, {
+            usedTokens: 780,
+            windowTokens: 1000,
+            quality: "ACTUAL",
+          }),
+        );
+        if (first.type !== "CONTEXT_HANDOFF_REQUESTED") throw new Error("Expected the first crossing");
+        expect(first.requested).toBe(true);
+        expect(first.session.handoffRequestedAt).toBe(timestamp);
+        expect(first.events.map(({ type }) => type)).toEqual(["CONTEXT_HANDOFF_REQUESTED"]);
+
+        // A second, higher crossing report -- a different commandId, so no receipt replay hides it.
+        const second = localState.execute(
+          requestContextHandoffCommand("usage-crossing-second", started.session.id, {
+            usedTokens: 920,
+            windowTokens: 1000,
+            quality: "ACTUAL",
+          }),
+        );
+        if (second.type !== "CONTEXT_HANDOFF_REQUESTED") throw new Error("Expected the second report");
+        expect(second.requested).toBe(false);
+        expect(second.events).toEqual([]);
+
+        // Exactly one CONTEXT_HANDOFF_REQUESTED, and the stored occupancy is still the reading that
+        // crossed: a report arriving after the session has already been asked to wind down can no
+        // longer change anything, so it must not rewrite what was current when it could.
+        localState.close();
+        state = undefined;
+        const raw = new DatabaseSync(databasePath);
+        expect(countEventsOfType(raw, "CONTEXT_HANDOFF_REQUESTED")).toBe(1);
+        expect(
+          raw
+            .prepare("SELECT context_used_tokens AS used FROM provider_sessions WHERE id = ?")
+            .get(started.session.id),
+        ).toEqual({ used: 780 });
+        raw.close();
+      });
+
+      it("does not let a report reaching an ended session rewrite the occupancy it ended with", async () => {
+        const localState = await open();
+        const { stageAttemptId } = startWorkflow(localState, "start-late-report", "create-late-report-item");
+        const started = localState.execute(
+          startProviderSessionCommand("start-late-report-session", stageAttemptId),
+        );
+        if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+        localState.execute(
+          requestContextHandoffCommand("usage-before-end", started.session.id, {
+            usedTokens: 300,
+            windowTokens: 1000,
+            quality: "ACTUAL",
+          }),
+        );
+        localState.execute(
+          endProviderSessionCommand("end-late-report-session", started.session.id, "CONTEXT_EXHAUSTED"),
+        );
+
+        localState.execute(
+          requestContextHandoffCommand("usage-after-end", started.session.id, {
+            usedTokens: 999,
+            windowTokens: 1000,
+            quality: "ACTUAL",
+          }),
+        );
+        expect(readUsage(localState, stageAttemptId, started.session.id)).toEqual({
+          usedTokens: 300,
+          windowTokens: 1000,
+          quality: "ACTUAL",
+        });
+      });
+
+      // The claim the deterministic `usage-${sessionId}-${percent}` commandId in apps/daemon rests
+      // on: a repeat of the same percent costs nothing and changes nothing. `commands` is
+      // append-only, so "costs nothing" has to be measured as the row count, and "changes nothing"
+      // has to survive the fact that this command now writes occupancy before it decides anything.
+      it("writes no second command receipt, and no stale occupancy, when a report repeats", async () => {
+        const localState = await open();
+        const { stageAttemptId } = startWorkflow(localState, "start-repeat", "create-repeat-item");
+        const started = localState.execute(
+          startProviderSessionCommand("start-repeat-session", stageAttemptId),
+        );
+        if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+        const report = (percent: number, usedTokens: number): void => {
+          localState.execute(
+            requestContextHandoffCommand(
+              `usage-${started.session.id}-${percent.toString()}`,
+              started.session.id,
+              { usedTokens, windowTokens: 1000, quality: "ACTUAL" },
+            ),
+          );
+        };
+
+        const commandRows = (): number => {
+          const raw = new DatabaseSync(databasePath);
+          const count = (raw.prepare("SELECT COUNT(*) AS count FROM commands").get() as { count: number })
+            .count;
+          raw.close();
+          return count;
+        };
+        // The session's own writes are already on disk; `commands` is append-only and WAL-backed,
+        // so a second connection reads what has been committed.
+        const before = commandRows();
+
+        report(42, 420);
+        report(55, 550);
+        expect(commandRows()).toBe(before + 2);
+
+        // The same report again -- the same id and the same input, which is the only repeat the
+        // receipt is allowed to absorb. It costs no row...
+        report(42, 420);
+        expect(commandRows()).toBe(before + 2);
+
+        // ...and it does not drag the stored occupancy back to what it was two reports ago, which
+        // is the failure a receipt replay would introduce now that this command writes state
+        // before it decides whether anything changed.
+        expect(readUsage(localState, stageAttemptId, started.session.id)).toEqual({
+          usedTokens: 550,
+          windowTokens: 1000,
+          quality: "ACTUAL",
+        });
+      });
+
+      // The point of migration 0009: occupancy is current state, so removing the audit log must not
+      // remove it. Before 0009 this read scanned CONTEXT_HANDOFF_REQUESTED and returned nothing here.
+      it("reads occupancy from the session's own columns, not from the events it wrote", async () => {
+        const localState = await open();
+        const { stageAttemptId } = startWorkflow(localState, "start-no-events", "create-no-events-item");
+        const started = localState.execute(
+          startProviderSessionCommand("start-no-events-session", stageAttemptId),
+        );
+        if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+        localState.execute(
+          requestContextHandoffCommand("usage-no-events", started.session.id, {
+            usedTokens: 880,
+            windowTokens: 1000,
+            quality: "LOOMRAIL_ESTIMATE",
+          }),
+        );
+        localState.close();
+        state = undefined;
+
+        // `events` is append-only by trigger, so deleting from it means lifting the trigger first.
+        // Nothing in the product does this; the test does it to prove where the number comes from.
+        const raw = new DatabaseSync(databasePath);
+        raw.exec("DROP TRIGGER events_are_append_only_delete");
+        raw.prepare("DELETE FROM events WHERE type = ?").run("CONTEXT_HANDOFF_REQUESTED");
+        expect(countEventsOfType(raw, "CONTEXT_HANDOFF_REQUESTED")).toBe(0);
+        raw.exec(`
+          CREATE TRIGGER events_are_append_only_delete
+          BEFORE DELETE ON events
+          BEGIN
+            SELECT RAISE(ABORT, 'events are append-only');
+          END;
+        `);
+        raw.close();
+
+        const reopened = await open();
+        expect(readUsage(reopened, stageAttemptId, started.session.id)).toEqual({
+          usedTokens: 880,
+          windowTokens: 1000,
+          quality: "LOOMRAIL_ESTIMATE",
+        });
+      });
+
+      it("adds the occupancy columns to a database that already holds provider_sessions rows", async () => {
+        const localState = await open();
+        const { stageAttemptId } = startWorkflow(localState, "start-pre-0009", "create-pre-0009-item");
+        const started = localState.execute(
+          startProviderSessionCommand("start-pre-0009-session", stageAttemptId),
+        );
+        if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+        localState.close();
+        state = undefined;
+
+        // Revert exactly what 0009 does, leaving the session row 0006 wrote in place: this is a
+        // database that has been running provider sessions since before occupancy had a home.
+        const raw = new DatabaseSync(databasePath);
+        raw.exec("ALTER TABLE provider_sessions DROP COLUMN context_usage_reported_at");
+        raw.exec("ALTER TABLE provider_sessions DROP COLUMN context_usage_quality");
+        raw.exec("ALTER TABLE provider_sessions DROP COLUMN context_window_tokens");
+        raw.exec("ALTER TABLE provider_sessions DROP COLUMN context_used_tokens");
+        raw.prepare("DELETE FROM schema_migrations WHERE version = 9").run();
+        raw.close();
+
+        const migrated = await open();
+        expect(migrated.startup.appliedMigrations).toEqual([9]);
+
+        // The pre-existing session survived with no occupancy rather than a fabricated zero, and
+        // the columns work for it from the first report onward.
+        const listed = migrated.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId });
+        if (listed.type !== "PROVIDER_SESSIONS") throw new Error("Expected the attempt's sessions");
+        expect(listed.sessions.map(({ id }) => id)).toEqual([started.session.id]);
+        expect(listed.contextWindowUsage).toEqual({});
+
+        migrated.execute(
+          requestContextHandoffCommand("usage-after-0009", started.session.id, {
+            usedTokens: 610,
+            windowTokens: 1000,
+            quality: "ACTUAL",
+          }),
+        );
+        expect(readUsage(migrated, stageAttemptId, started.session.id)).toEqual({
+          usedTokens: 610,
+          windowTokens: 1000,
+          quality: "ACTUAL",
+        });
+      });
     });
 
     // Spec §9 asks for this at the package level, and this is the only place the SQL branch behind
