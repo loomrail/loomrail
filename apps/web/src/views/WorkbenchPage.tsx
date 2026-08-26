@@ -445,12 +445,12 @@ const changedFieldLabelKeys: Record<WorkItemChangedField, TranslationKey> = {
   acceptanceCriteria: "field.acceptanceCriteria",
 };
 
-// `isSessionPauseFailureCode` and its four codes come from @loomrail/contracts (imported above),
+// `isSessionPauseFailureCode` and its five codes come from @loomrail/contracts (imported above),
 // not from a local copy: apps/web depends on @loomrail/contracts and @loomrail/ui only, never on
 // @loomrail/domain, and a hand-duplicated list here is exactly what let this file disagree with
 // packages/domain/src/session-pause.ts once already -- every HARD_PAUSED attempt read as a budget
 // pause regardless of the real failureCode. Reading the same exported list both sides use keeps a
-// fifth code added there from silently going stale here.
+// sixth code added there from silently going stale here.
 // A total Record over the contract's own union, so a new quality cannot arrive without this file
 // failing to compile -- the same discipline `hardPauseLabelKeys` below is written under.
 const usageQualityLabelKeys: Record<ContextWindowUsage["quality"], TranslationKey> = {
