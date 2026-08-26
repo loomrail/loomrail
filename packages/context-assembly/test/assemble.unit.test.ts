@@ -90,6 +90,34 @@ describe("context pack assembly", () => {
     expect(result.requiredBytes).toBe(sumOfSectionBytes + (allRequiredSpec.sections.length - 1));
   });
 
+  it("assembles when the required sections fill the budget exactly", () => {
+    // Spec §D8's floor is "does not fit", not "barely fits": a pack whose required core lands on the
+    // budget exactly is a legal pack, and the guard is a strict `>` for that reason. Nothing else in
+    // this suite distinguishes `>` from `>=` -- the neighbouring separator-bytes test sits one byte
+    // on the exceeded side of the same boundary, so flipping the comparison would break nothing
+    // visible without this.
+    const sources = sampleSources();
+    const allRequiredSpec = {
+      schemaVersion: 1 as const,
+      sections: specWithAllSections().sections.map((section) => ({ ...section, required: true })),
+    };
+    const requiredBytes =
+      allRequiredSpec.sections.reduce((sum, section) => sum + renderSection(section.id, sources).bytes, 0) +
+      (allRequiredSpec.sections.length - 1);
+
+    const result = assembleContextPack({
+      sources,
+      spec: allRequiredSpec,
+      budgetTokens: requiredBytes,
+      bytesPerToken: 1,
+    });
+
+    if (result.type !== "ASSEMBLED") throw new Error("expected ASSEMBLED at the floor boundary");
+    expect(Buffer.byteLength(result.pack.text, "utf8")).toBe(requiredBytes);
+    expect(result.recipe.omitted).toEqual([]);
+    expect(result.recipe.sections.map(({ id }) => id)).toEqual(allRequiredSpec.sections.map(({ id }) => id));
+  });
+
   it("estimatedTokens describes the text actually produced, not the sum of its parts", () => {
     const result = assembleContextPack(input(10_000));
     if (result.type !== "ASSEMBLED") throw new Error("not assembled");

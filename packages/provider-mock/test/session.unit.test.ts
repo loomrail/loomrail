@@ -69,10 +69,24 @@ describe("mock provider session behaviour", () => {
 
   it("publishes a checkpoint on the configured cadence", async () => {
     const sink = listener();
-    const provider = createMockProvider({ tokensPerTurn: 100, checkpointEvery: 2 });
+    // Ten turns exactly: occupancy reaches the window on turn 10 and the session hits the wall there.
+    const provider = createMockProvider({
+      contextWindowTokens: 1_000,
+      tokensPerTurn: 100,
+      checkpointEvery: 2,
+    });
     await provider.start(implementInvocation(), sink);
-    expect(sink.checkpoints.length).toBeGreaterThan(0);
-    expect(sink.checkpoints[0]?.summary).toBeTruthy();
+    expect(sink.usages).toHaveLength(10);
+    // Which turns published is what makes this a claim about the cadence. `length > 0` alone held
+    // at every cadence this mock can be configured with, one included -- so it said nothing about
+    // the option whose name the test carries.
+    expect(sink.checkpoints.map(({ summary }) => summary)).toEqual([
+      "Deterministic mock checkpoint after turn 2.",
+      "Deterministic mock checkpoint after turn 4.",
+      "Deterministic mock checkpoint after turn 6.",
+      "Deterministic mock checkpoint after turn 8.",
+      "Deterministic mock checkpoint after turn 10.",
+    ]);
   });
 
   it("ends with HANDED_OFF after a handoff request", async () => {
