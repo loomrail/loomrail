@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { connectEventStream, createSignalCoalescer, scopesForSignal } from "./eventStream";
+import {
+  connectEventStream,
+  createSignalCoalescer,
+  scopesForChannelStatus,
+  scopesForSignal,
+} from "./eventStream";
 
 const workItemSignal = {
   projectId: "p1",
@@ -22,6 +27,22 @@ describe("scopesForSignal", () => {
       ["projects", "p1"],
       ["projects"],
     ]);
+  });
+});
+
+describe("scopesForChannelStatus", () => {
+  it("yields the connection scope for a closed channel", () => {
+    expect(scopesForChannelStatus("closed")).toEqual([["local-daemon", "connection"]]);
+  });
+
+  // A transient blip must not present as a dead session -- the browser is retrying on its own and
+  // the board's cached data is still good, so nothing should be invalidated yet.
+  it("yields nothing for a connecting channel", () => {
+    expect(scopesForChannelStatus("connecting")).toEqual([]);
+  });
+
+  it("yields nothing for a live channel", () => {
+    expect(scopesForChannelStatus("live")).toEqual([]);
   });
 });
 
@@ -166,6 +187,31 @@ describe("connectEventStream", () => {
     source.readyState = 2; // CLOSED
     source.onerror?.({});
     expect(onStatus).toHaveBeenLastCalledWith("closed");
+  });
+
+  // This is the entire mechanism by which a dead channel becomes visible to the app -- nothing
+  // else reads EventChannelStatus -- so it has to be provable through the double, not only by
+  // hand-tracing scopesForChannelStatus in isolation.
+  it("invalidates the connection scope once the channel closes for good", () => {
+    const invalidateScopes = vi.fn();
+    const source = fakeSource();
+    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes, onStatus: vi.fn() });
+
+    source.readyState = 2; // CLOSED
+    source.onerror?.({});
+
+    expect(invalidateScopes).toHaveBeenCalledWith([["local-daemon", "connection"]]);
+  });
+
+  it("does not invalidate the connection scope while merely reconnecting", () => {
+    const invalidateScopes = vi.fn();
+    const source = fakeSource();
+    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes, onStatus: vi.fn() });
+
+    source.readyState = 0; // CONNECTING
+    source.onerror?.({});
+
+    expect(invalidateScopes).not.toHaveBeenCalled();
   });
 
   it("closes the source and drops pending work when disconnected", () => {

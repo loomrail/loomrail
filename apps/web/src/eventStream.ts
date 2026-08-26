@@ -55,6 +55,21 @@ export type EventChannelStatus = "connecting" | "live" | "closed";
 
 const EVENT_SOURCE_CLOSED = 2;
 
+// The connection query's key, named here rather than imported from session.ts so this module stays
+// free of app wiring. Kept beside the mapping that uses it so the two cannot drift apart.
+const LOCAL_CONNECTION_SCOPE: QueryScope = ["local-daemon", "connection"];
+
+/**
+ * Which cached scopes a change in channel status makes stale.
+ *
+ * A permanently closed channel means a non-200 response, which on this route means the session is
+ * gone -- the condition the connection query already detects and the recovery panel already
+ * explains. A reconnecting channel means nothing yet: the browser is retrying on its own and the
+ * board's data is still good.
+ */
+export const scopesForChannelStatus = (status: EventChannelStatus): readonly QueryScope[] =>
+  status === "closed" ? [LOCAL_CONNECTION_SCOPE] : [];
+
 /**
  * The subset of `EventSource` this module relies on.
  *
@@ -72,11 +87,14 @@ export type EventSourceLike = {
 /**
  * Wires an `EventSourceLike` to the coalescer and reports connection status.
  *
- * Two lines here are load bearing (spec D3/D4). `invalidateAll()` on every `open` -- including every
- * reconnect, not only the first -- is what makes a dropped signal harmless: the channel carries no
- * sequence number and never replays, so catching up after any gap is done entirely by refetching.
- * And parsing each frame inside a `try` means a malformed or non-signal frame is dropped rather than
- * thrown, which would otherwise leave the channel silently mute after one bad frame.
+ * Three things here are load bearing (spec D3/D4). `invalidateAll()` on every `open` -- including
+ * every reconnect, not only the first -- is what makes a dropped signal harmless: the channel
+ * carries no sequence number and never replays, so catching up after any gap is done entirely by
+ * refetching. Parsing each frame inside a `try` means a malformed or non-signal frame is dropped
+ * rather than thrown, which would otherwise leave the channel silently mute after one bad frame.
+ * And routing `scopesForChannelStatus` through `invalidateScopes` on every status change is the
+ * entire mechanism by which a permanently closed channel ever becomes visible to the app -- nothing
+ * else observes `EventChannelStatus`, so this line has to be the one under test, not a hook branch.
  */
 export const connectEventStream = (options: {
   source: EventSourceLike;
@@ -105,7 +123,13 @@ export const connectEventStream = (options: {
   };
 
   options.source.onerror = () => {
-    options.onStatus(options.source.readyState === EVENT_SOURCE_CLOSED ? "closed" : "connecting");
+    const status = options.source.readyState === EVENT_SOURCE_CLOSED ? "closed" : "connecting";
+    options.onStatus(status);
+    // Routed through the same invalidateScopes callback the coalescer uses, rather than a branch
+    // in the hook: this makes the closed -> "session is gone" decision reachable through the
+    // injected-double tests in this file, not only by hand-tracing a useEffect.
+    const scopes = scopesForChannelStatus(status);
+    if (scopes.length > 0) options.invalidateScopes(scopes);
   };
 
   return () => {

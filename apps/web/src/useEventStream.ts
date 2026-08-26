@@ -2,18 +2,18 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { connectEventStream, type EventChannelStatus, type EventSourceLike } from "./eventStream";
-import { localConnectionQuery } from "./session";
 
 /**
  * Follows the daemon's SSE channel while `enabled`, reporting its live status.
  *
- * All decision logic lives in `connectEventStream`, which is tested against an injected source
- * double -- see eventStream.test.ts. This hook is deliberately thin: it owns only the real
- * `EventSource` and the React state box, plus one piece of wiring that belongs at this layer
- * rather than in the pure function -- a permanently closed channel means the session is gone
- * (see connectEventStream's CLOSED handling), so it invalidates the same connection query the app
- * already uses to detect and explain an unreachable daemon, instead of introducing a second
- * "daemon is gone" affordance.
+ * All decision logic lives in `connectEventStream` and `scopesForChannelStatus`, both tested
+ * against an injected source double -- see eventStream.test.ts. This hook is deliberately thin: it
+ * owns only the real `EventSource` and the React state box. In particular, what a closed channel
+ * means (the session is gone; invalidate the same connection query the app already uses to detect
+ * and explain an unreachable daemon) is decided by `scopesForChannelStatus` and reaches the query
+ * client through the `invalidateScopes` callback below -- not through a branch here, so that
+ * decision stays covered by connectEventStream's tests instead of living only in an untestable
+ * effect.
  */
 export const useEventStream = (enabled: boolean): EventChannelStatus => {
   const queryClient = useQueryClient();
@@ -34,12 +34,7 @@ export const useEventStream = (enabled: boolean): EventChannelStatus => {
       invalidateScopes: (scopes) => {
         for (const queryKey of scopes) void queryClient.invalidateQueries({ queryKey });
       },
-      onStatus: (nextStatus) => {
-        setStatus(nextStatus);
-        if (nextStatus === "closed") {
-          void queryClient.invalidateQueries({ queryKey: localConnectionQuery.queryKey });
-        }
-      },
+      onStatus: setStatus,
     });
   }, [enabled, queryClient]);
 
