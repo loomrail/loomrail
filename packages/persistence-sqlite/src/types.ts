@@ -2,6 +2,7 @@ import type { ContextSources } from "@loomrail/context-assembly";
 import type {
   Checkpoint,
   ContextPackRecipe,
+  ContextWindowUsage,
   DomainEvent,
   EventPageDirection,
   HumanRequest,
@@ -103,6 +104,10 @@ export type StateQueryResult =
       sessions: ProviderSession[];
       recipes: ContextPackRecipe[];
       checkpoints: Checkpoint[];
+      // Spec §6.2: the only occupancy Loomrail keeps durably is the reading that first crossed the
+      // handoff threshold, carried on CONTEXT_HANDOFF_REQUESTED. Keyed by ProviderSession id; a
+      // session that never crossed the threshold has no entry.
+      handoffUsage: Record<string, ContextWindowUsage>;
     };
 
 export type StateStoreStartup = {

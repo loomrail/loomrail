@@ -6,10 +6,12 @@ import {
   riskSchema,
   type AcceptanceAction,
   type AcceptancePackage,
+  type Checkpoint,
   type DomainEvent,
   type EvidenceArtifact,
   type HumanRequest,
   type PipelineRun,
+  type ProviderSession,
   type StageAttempt,
   type WorkItem,
   type WorkItemChangedField,
@@ -30,6 +32,7 @@ import {
   InspectorSection,
   KanbanColumn,
   PopoverSurface,
+  ProviderSessionTimeline,
   RadioGroup,
   RunSummary,
   SelectControl,
@@ -42,8 +45,11 @@ import {
   TimelineEvent,
   Tooltip,
   type BadgeTone,
+  type CheckpointGroup,
+  type CheckpointViewModel,
   type FilterMessages,
   type FilterNode,
+  type ProviderSessionViewModel,
   type StatusTone,
   type TimelineEventProps,
 } from "@loomrail/ui";
@@ -70,7 +76,9 @@ import {
   usePipelineControl,
   useProjectHumanRequests,
   useProjectWorkItems,
+  useProviderCapabilities,
   useResolveAcceptance,
+  useStageAttemptSessions,
   useStartMockPipeline,
   useUpdateWorkItem,
   useWorkspace,
@@ -434,12 +442,50 @@ const changedFieldLabelKeys: Record<WorkItemChangedField, TranslationKey> = {
   acceptanceCriteria: "field.acceptanceCriteria",
 };
 
+// The four StageAttempt.failureCode values that mark a HARD pause as raised by the session loop
+// (spec §6.5, §D8, §7) rather than by the token budget -- mirrors
+// packages/domain/src/session-pause.ts's sessionPauseFailureCodes. Duplicated as a display literal
+// rather than imported: apps/web depends on @loomrail/contracts and @loomrail/ui only, never on the
+// domain package that owns the decision, and this list is the display-layer's read of a value the
+// backend already computed and put on the wire, not a business rule of its own.
+const hardPauseFailureCodes = [
+  "NO_PROGRESS",
+  "CONTEXT_FLOOR_EXCEEDED",
+  "PROVIDER_REJECTED_PACK",
+  "PROVIDER_START_FAILED",
+] as const;
+type HardPauseFailureCode = (typeof hardPauseFailureCodes)[number];
+const isSessionPauseFailureCode = (code: string | null): code is HardPauseFailureCode =>
+  code !== null && (hardPauseFailureCodes as readonly string[]).includes(code);
+
+const hardPauseLabelKeys: Record<HardPauseFailureCode, TranslationKey> = {
+  NO_PROGRESS: "workflow.hardPause.noProgress",
+  CONTEXT_FLOOR_EXCEEDED: "workflow.hardPause.contextFloor",
+  PROVIDER_REJECTED_PACK: "workflow.hardPause.providerRejected",
+  PROVIDER_START_FAILED: "workflow.hardPause.providerStartFailed",
+};
+
+// A HARD_PAUSED attempt used to read "Budget paused" unconditionally, even though the session loop
+// hard-pauses for reasons that have nothing to do with budget -- and offered an "approve budget
+// override" action that throws for those (decideApproveBudgetOverride refuses a session pause).
+// `failureCode` is what tells the two apart; `budgetFallbackKey` lets both call sites below (the
+// pipeline-level Status badge and the per-stage list label) keep their own existing English text
+// for the genuinely-budget case.
+const hardPauseLabel = (
+  failureCode: string | null,
+  budgetFallbackKey: TranslationKey,
+  t: Translator,
+): string =>
+  isSessionPauseFailureCode(failureCode) ? t(hardPauseLabelKeys[failureCode]) : t(budgetFallbackKey);
+
 const stageAttemptStatusLabel = (attempt: StageAttempt, t: Translator): string => {
   if (attempt.status === "QUEUED") return t("workflow.stage.QUEUED");
   if (attempt.status === "RUNNING") return t("workflow.stage.RUNNING");
   if (attempt.status === "WAITING_HUMAN") return t("workflow.stage.WAITING_HUMAN");
   if (attempt.status === "SOFT_PAUSED") return t("workflow.stage.SOFT_PAUSED");
-  if (attempt.status === "HARD_PAUSED") return t("workflow.stage.HARD_PAUSED");
+  if (attempt.status === "HARD_PAUSED") {
+    return hardPauseLabel(attempt.failureCode, "workflow.stage.HARD_PAUSED", t);
+  }
   if (attempt.status === "INTERRUPTED") return t("workflow.stage.INTERRUPTED");
   if (attempt.status === "CANCELLED") return t("workflow.stage.CANCELLED");
   if (attempt.status === "SUCCEEDED") return t("workflow.stage.SUCCEEDED");
@@ -1130,6 +1176,122 @@ const WorkflowSkeleton = ({ label }: { label?: string }): React.JSX.Element => (
   </div>
 );
 
+// Spec D5's accepted price: splitting the attempt from its execution unit means a healthy long
+// stage no longer looks like a series of failures, but only if the cockpit shows the nesting it
+// introduced. `session.status === "RUNNING"` is checked first because a running session always
+// carries a null endReason, which the switch below still has to type-check against.
+const sessionStatusPresentation = (
+  session: ProviderSession,
+  t: Translator,
+): { label: string; tone: StatusTone } => {
+  if (session.status === "RUNNING") return { label: t("workflow.sessions.status.RUNNING"), tone: "running" };
+  switch (session.endReason) {
+    case "COMPLETED":
+      return { label: t("workflow.sessions.status.COMPLETED"), tone: "complete" };
+    case "HANDOFF":
+      return { label: t("workflow.sessions.status.HANDOFF"), tone: "waiting" };
+    case "CONTEXT_EXHAUSTED":
+      return { label: t("workflow.sessions.status.CONTEXT_EXHAUSTED"), tone: "paused" };
+    case "INTERRUPTED":
+      return { label: t("workflow.sessions.status.INTERRUPTED"), tone: "paused" };
+    case "CANCELLED":
+      return { label: t("workflow.sessions.status.CANCELLED"), tone: "queued" };
+    case null:
+      return { label: t("workflow.stage.other"), tone: "queued" };
+  }
+};
+
+// Spec §8: a checkpoint is provider output Loomrail feeds into the next session's context, and it
+// mitigates a High-rated threat only if the owner can read what is actually being carried forward
+// -- so every list renders here, not just a summary line, and an empty list is left out rather than
+// shown as a hollow heading.
+const checkpointGroups = (checkpoint: Checkpoint, t: Translator): readonly CheckpointGroup[] => [
+  { label: t("workflow.checkpoints.completed"), items: checkpoint.completed },
+  { label: t("workflow.checkpoints.remaining"), items: checkpoint.remaining },
+  { label: t("workflow.checkpoints.deadEnds"), items: checkpoint.deadEnds },
+  { label: t("workflow.checkpoints.openQuestions"), items: checkpoint.openQuestions },
+];
+
+/**
+ * The sessions inside the current stage attempt (spec §D5), with each session's window occupancy
+ * at handoff, whether a handoff was requested, and the full text of every checkpoint it published.
+ * Renders nothing while there is no attempt to nest sessions under, or once it has none yet -- a
+ * brand-new attempt has not started its first session, and an empty "Sessions" heading would just
+ * be noise.
+ */
+const AttemptSessionsPanel = ({ stageAttemptId }: { stageAttemptId: string }): React.JSX.Element | null => {
+  const { locale, t } = useI18n();
+  const sessionsQuery = useStageAttemptSessions(stageAttemptId);
+  const capabilitiesQuery = useProviderCapabilities();
+  const sessions = sessionsQuery.data?.sessions ?? [];
+  const checkpoints = sessionsQuery.data?.checkpoints ?? [];
+  const handoffUsage = sessionsQuery.data?.handoffUsage ?? {};
+
+  if (sessions.length === 0) return null;
+
+  // The single most recently published checkpoint across the whole attempt -- the one that would
+  // feed the next session's context right now -- opens by default; every earlier one stays
+  // collapsed behind its own summary rather than crowding the panel.
+  const mostRecentCheckpointId = checkpoints.reduce<{ id: string; createdAt: string } | null>(
+    (latest, checkpoint) =>
+      latest === null || checkpoint.createdAt > latest.createdAt
+        ? { id: checkpoint.id, createdAt: checkpoint.createdAt }
+        : latest,
+    null,
+  )?.id;
+
+  const sessionViewModels: ProviderSessionViewModel[] = [...sessions]
+    .sort((a, b) => a.ordinal - b.ordinal)
+    .map((session) => {
+      const presentation = sessionStatusPresentation(session, t);
+      const usage = handoffUsage[session.id];
+      const occupancyPercent = usage ? Math.round((usage.usedTokens / usage.windowTokens) * 100) : undefined;
+      const sessionCheckpoints: CheckpointViewModel[] = checkpoints
+        .filter((checkpoint) => checkpoint.providerSessionId === session.id)
+        .sort((a, b) => a.ordinal - b.ordinal)
+        .map((checkpoint) => ({
+          id: checkpoint.id,
+          summary: checkpoint.summary,
+          timeLabel: eventTime(checkpoint.createdAt, locale),
+          defaultOpen: checkpoint.id === mostRecentCheckpointId,
+          groups: checkpointGroups(checkpoint, t),
+        }));
+
+      return {
+        id: session.id,
+        ordinal: session.ordinal,
+        ariaLabel: t("workflow.sessions.ordinal", { ordinal: session.ordinal }),
+        statusLabel: presentation.label,
+        tone: presentation.tone,
+        checkpoints: sessionCheckpoints,
+        // exactOptionalPropertyTypes: an optional field left undefined must be omitted, not set to
+        // undefined, so each one is spread in only when it has a real value.
+        ...(session.handoffRequestedAt !== null
+          ? { handoffRequestedLabel: t("workflow.sessions.handoffRequested") }
+          : {}),
+        ...(occupancyPercent === undefined
+          ? {}
+          : {
+              occupancyPercent,
+              occupancyLabel: t("workflow.sessions.occupancy", { percent: occupancyPercent }),
+            }),
+        ...(sessionCheckpoints.length === 0
+          ? { emptyCheckpointsLabel: t("workflow.checkpoints.empty") }
+          : {}),
+      };
+    });
+
+  return (
+    <ProviderSessionTimeline
+      {...(capabilitiesQuery.data?.checkpointOnRequest === false
+        ? { note: t("workflow.sessions.noCheckpointOnRequest") }
+        : {})}
+      sessions={sessionViewModels}
+      title={t("workflow.sessions.title")}
+    />
+  );
+};
+
 const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const { t } = useI18n();
   const workflowQuery = useWorkItemWorkflow(item.id);
@@ -1177,6 +1339,8 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   }
 
   const run = snapshot.run;
+  const currentAttempt =
+    snapshot.stageAttempts.find((attempt) => attempt.id === run.currentStageAttemptId) ?? null;
   const budgetPolicy = snapshot.budgetPolicies.at(-1) ?? null;
   const used = snapshot.usageRecords.reduce((total, record) => total + record.amount, 0);
   const budgetPercent = budgetPolicy
@@ -1202,7 +1366,11 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
       <div className="workflow-panel__status">
         <span>{t("workflow.mockName")}</span>
         <Status
-          label={t(pipelineStatusLabelKeys[snapshot.run.status])}
+          label={
+            snapshot.run.status === "HARD_PAUSED"
+              ? hardPauseLabel(currentAttempt?.failureCode ?? null, "workflow.status.HARD_PAUSED", t)
+              : t(pipelineStatusLabelKeys[snapshot.run.status])
+          }
           tone={pipelineStatusTones[snapshot.run.status]}
         />
       </div>
@@ -1239,6 +1407,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
           </li>
         ))}
       </ol>
+      {currentAttempt ? <AttemptSessionsPanel stageAttemptId={currentAttempt.id} /> : null}
       {snapshot.acceptancePackage ? (
         <AcceptancePanel
           acceptancePackage={snapshot.acceptancePackage}
@@ -1295,7 +1464,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
               {t("workflow.action.resume")}
             </Button>
           ) : null}
-          {run.status === "HARD_PAUSED" ? (
+          {run.status === "HARD_PAUSED" && !isSessionPauseFailureCode(currentAttempt?.failureCode ?? null) ? (
             <Button
               disabled={controlPending}
               loading={overrideMutation.isPending}

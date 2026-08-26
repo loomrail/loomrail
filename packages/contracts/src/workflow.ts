@@ -1265,6 +1265,35 @@ export const humanRequestsResponseSchema = z
   .object({ schemaVersion: schemaVersionSchema, humanRequests: z.array(humanRequestSchema) })
   .strict();
 
+// Spec §D5's nesting, read back for the Task Cockpit (Task 12). Kept out of workflowSnapshotSchema
+// deliberately, matching persistence-sqlite's LIST_PROVIDER_SESSIONS: the snapshot is fetched on
+// every board render, and an attempt's session history grows without bound. `handoffUsage` is keyed
+// by ProviderSession id and carries only the occupancy recorded at the moment a handoff was first
+// requested (spec §6.2 -- the only occupancy Loomrail keeps durably); a session with no entry never
+// crossed the handoff threshold.
+export const providerSessionsResponseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    sessions: z.array(providerSessionSchema),
+    checkpoints: z.array(checkpointSchema),
+    handoffUsage: z.record(opaqueIdSchema, contextWindowUsageSchema),
+  })
+  .strict();
+
+// The daemon runs a single provider adapter for its whole lifetime (A2 has not landed live
+// adapters yet), so this describes "the provider a session would run on right now" rather than a
+// per-session fact. Trimmed to what the cockpit needs to explain a lost checkpoint tail (spec §7):
+// not the full ProviderCapabilities shape provider-core owns, which apps/web has no reason to
+// depend on.
+export const providerCapabilitiesResponseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    provider: z.string().trim().min(1).max(50),
+    checkpointOnRequest: z.boolean(),
+    contextWindowReporting: z.boolean(),
+  })
+  .strict();
+
 export type WorkflowStage = z.infer<typeof workflowStageSchema>;
 export type WorkflowTemplate = z.infer<typeof workflowTemplateSchema>;
 export type PipelineRun = z.infer<typeof pipelineRunSchema>;
@@ -1314,6 +1343,8 @@ export type ApproveBudgetOverrideCommand = z.infer<typeof approveBudgetOverrideC
 export type ReconcileWorkflowsCommand = z.infer<typeof reconcileWorkflowsCommandSchema>;
 export type ResolveAcceptanceCommand = z.infer<typeof resolveAcceptanceCommandSchema>;
 export type WorkflowSnapshot = z.infer<typeof workflowSnapshotSchema>;
+export type ProviderSessionsResponse = z.infer<typeof providerSessionsResponseSchema>;
+export type ProviderCapabilitiesResponse = z.infer<typeof providerCapabilitiesResponseSchema>;
 export type ContextPackRecipeInput = z.infer<typeof contextPackRecipeInputSchema>;
 export type StartProviderSessionCommand = z.infer<typeof startProviderSessionCommandSchema>;
 export type PublishCheckpointCommand = z.infer<typeof publishCheckpointCommandSchema>;

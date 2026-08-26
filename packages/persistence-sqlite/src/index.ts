@@ -875,6 +875,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectRecentEventsForAggregate = database.prepare(
       "SELECT * FROM events WHERE aggregate_id = ? ORDER BY sequence DESC LIMIT ?",
     );
+    // Scoped to the work item (events carry no stage-attempt column of their own), then narrowed to
+    // this attempt's sessions in JS below -- cheaper than a JSON-extracting SQL predicate and this
+    // package parses event payloads in JS everywhere else (see parseJson).
+    const selectContextHandoffEventsForWorkItem = database.prepare(
+      "SELECT * FROM events WHERE aggregate_id = ? AND type = 'CONTEXT_HANDOFF_REQUESTED' ORDER BY sequence",
+    );
 
     const assertOpen = (): void => {
       if (closed) throw new StateStoreError("STATE_CLOSED", "The local state module is closed");
@@ -3062,15 +3068,29 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         // ordinal order, the recipe each one was assembled from, and every checkpoint published
         // under the attempt. Kept out of GET_WORKFLOW_SNAPSHOT deliberately -- the snapshot is
         // fetched on every board render, and session history grows without bound within an attempt.
-        case "LIST_PROVIDER_SESSIONS":
+        case "LIST_PROVIDER_SESSIONS": {
+          const sessions = selectProviderSessionsForAttempt
+            .all(queryValue.stageAttemptId)
+            .map(providerSessionFromRow);
+          const attempt = readStageAttempt(queryValue.stageAttemptId);
+          const handoffUsage: Record<string, ContextWindowUsage> = {};
+          if (attempt) {
+            const sessionIds = new Set(sessions.map((session) => session.id));
+            for (const row of selectContextHandoffEventsForWorkItem.all(attempt.workItemId)) {
+              const event = eventFromRow(row);
+              if (event.type !== "CONTEXT_HANDOFF_REQUESTED") continue;
+              if (!sessionIds.has(event.data.session.id)) continue;
+              handoffUsage[event.data.session.id] = event.data.usage;
+            }
+          }
           return {
             type: "PROVIDER_SESSIONS",
-            sessions: selectProviderSessionsForAttempt
-              .all(queryValue.stageAttemptId)
-              .map(providerSessionFromRow),
+            sessions,
             recipes: selectRecipesForAttempt.all(queryValue.stageAttemptId).map(contextPackRecipeFromRow),
             checkpoints: selectCheckpointsForAttempt.all(queryValue.stageAttemptId).map(checkpointFromRow),
+            handoffUsage,
           };
+        }
         default:
           return assertNever(queryValue);
       }

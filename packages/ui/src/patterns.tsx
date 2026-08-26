@@ -138,3 +138,107 @@ export const RunSummary = ({ properties }: RunSummaryProps): React.JSX.Element =
     ))}
   </dl>
 );
+
+// Spec D5's nesting: a stage attempt is now a sequence of provider sessions, and the cockpit is
+// obligated to show it or a stalled provider becomes invisible. Every string here arrives already
+// formatted -- this component owns layout and disclosure, not wording or locale, matching every
+// other pattern in this file.
+export type CheckpointGroup = {
+  items: readonly string[];
+  label: string;
+};
+
+export type CheckpointViewModel = {
+  defaultOpen?: boolean;
+  groups: readonly CheckpointGroup[];
+  id: string;
+  summary: string;
+  timeLabel: string;
+};
+
+export type ProviderSessionViewModel = {
+  // Read by assistive tech in place of the bare ordinal digit the badge shows sighted readers, so
+  // "session 1" survives being announced without the visual numbering it leans on.
+  ariaLabel: string;
+  checkpoints: readonly CheckpointViewModel[];
+  emptyCheckpointsLabel?: string;
+  handoffRequestedLabel?: string;
+  id: string;
+  occupancyLabel?: string;
+  occupancyPercent?: number;
+  ordinal: number;
+  statusLabel: string;
+  tone: StatusTone;
+};
+
+export type ProviderSessionTimelineProps = {
+  // A short explanatory line shown above the list -- e.g. that this provider cannot wind down on
+  // request, so losing a session's tail is expected for it rather than a malfunction (spec §7).
+  note?: string;
+  sessions: readonly ProviderSessionViewModel[];
+  title: string;
+};
+
+export const ProviderSessionTimeline = ({
+  note,
+  sessions,
+  title,
+}: ProviderSessionTimelineProps): React.JSX.Element => (
+  <div className="lr-session-timeline-panel">
+    <strong className="lr-session-timeline-panel__title">{title}</strong>
+    {note ? <p className="lr-session-timeline-panel__note">{note}</p> : null}
+    <ol className="lr-session-timeline">
+      {sessions.map((session) => (
+        <li aria-label={session.ariaLabel} className="lr-session-timeline__item" key={session.id}>
+          <span aria-hidden="true" className="lr-session-timeline__ordinal">
+            {session.ordinal}
+          </span>
+          <div className="lr-session-timeline__body">
+            <div className="lr-session-timeline__row">
+              <Status label={session.statusLabel} tone={session.tone} />
+              {session.handoffRequestedLabel ? (
+                <Badge tone="warning">{session.handoffRequestedLabel}</Badge>
+              ) : null}
+            </div>
+            {session.occupancyPercent !== undefined && session.occupancyLabel !== undefined ? (
+              <div className="lr-session-timeline__occupancy">
+                <progress aria-label={session.occupancyLabel} max={100} value={session.occupancyPercent} />
+                <span>{session.occupancyLabel}</span>
+              </div>
+            ) : null}
+            {session.checkpoints.length > 0 ? (
+              <ul className="lr-session-timeline__checkpoints">
+                {session.checkpoints.map((checkpoint) => (
+                  <li key={checkpoint.id}>
+                    <details className="lr-checkpoint-card" open={checkpoint.defaultOpen}>
+                      <summary>
+                        <span>{checkpoint.summary}</span>
+                        <time>{checkpoint.timeLabel}</time>
+                      </summary>
+                      <div className="lr-checkpoint-card__body">
+                        {checkpoint.groups.map((group) =>
+                          group.items.length > 0 ? (
+                            <div key={group.label}>
+                              <strong>{group.label}</strong>
+                              <ul>
+                                {group.items.map((item) => (
+                                  <li key={item}>{item}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null,
+                        )}
+                      </div>
+                    </details>
+                  </li>
+                ))}
+              </ul>
+            ) : session.emptyCheckpointsLabel ? (
+              <p className="lr-session-timeline__empty">{session.emptyCheckpointsLabel}</p>
+            ) : null}
+          </div>
+        </li>
+      ))}
+    </ol>
+  </div>
+);

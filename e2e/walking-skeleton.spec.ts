@@ -6,7 +6,8 @@ import { join, resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
-import { openLocalState } from "../packages/persistence-sqlite/dist/index.js";
+import { openLocalState, type LocalState } from "../packages/persistence-sqlite/dist/index.js";
+import { mockDeliveryTemplate } from "../packages/workflow-engine/dist/index.js";
 
 /**
  * Writes a task carrying more activity than a single page holds. Driving forty moves through the
@@ -72,6 +73,385 @@ const seedLongActivity = async (databasePath: string, title: string): Promise<nu
     }
     // One creation plus forty moves.
     return 41;
+  } finally {
+    localState.close();
+  }
+};
+
+const humanActor = { type: "HUMAN", id: "local-owner" } as const;
+const sessionLoopActor = { type: "SYSTEM", id: "session-loop" } as const;
+
+/**
+ * The recipe every seeded ProviderSession carries. Its content never matters to these tests -- only
+ * that persistence-sqlite accepts a well-formed one -- so it stays fixed rather than parameterised.
+ */
+const seededRecipe = (workItemId: string) => ({
+  schemaVersion: 1 as const,
+  templateId: mockDeliveryTemplate.id,
+  templateVersion: mockDeliveryTemplate.version,
+  specSource: "WORKFLOW_TEMPLATE" as const,
+  sections: [
+    {
+      id: "WORK_ITEM_BRIEF" as const,
+      sources: [{ kind: "WORK_ITEM" as const, id: workItemId, version: 1 }],
+      bytes: 120,
+    },
+  ],
+  omitted: [],
+  contentHash: `sha256:${"0".repeat(64)}`,
+  estimatedTokens: 30,
+  budgetTokens: 1000,
+  estimateQuality: "LOOMRAIL_ESTIMATE" as const,
+});
+
+/**
+ * Registers the fixture project, creates one WorkItem, moves it to Ready, and starts its mock
+ * pipeline's first stage attempt -- through to a RUNNING dispatch, one step short of its first
+ * ProviderSession. Shared by both session-loop fixtures below.
+ *
+ * Seeded through direct commands against the same database file the daemon will later open,
+ * exactly like `seedLongActivity` above -- not by driving `runStageAttempt`, whose mock adapter
+ * replays the same stateless per-turn options on every session it opens and so cannot itself
+ * produce "session 1 hands off with a checkpoint, session 2 hits the wall" or "two sessions in a
+ * row publish nothing": both need each session to end differently, and only direct commands can
+ * hand each one an outcome the last one didn't already use.
+ */
+const seedRunningStageAttempt = (
+  localState: LocalState,
+  title: string,
+): { dispatchId: string; stageAttemptId: string; workItemId: string } => {
+  const created = localState.execute({
+    schemaVersion: 1,
+    commandId: "seed-create-work-item",
+    correlationId: "correlation-seed-create-work-item",
+    actor: humanActor,
+    type: "CREATE_WORK_ITEM",
+    payload: {
+      projectId: "project-web",
+      parentId: null,
+      type: "TASK",
+      title,
+      description: "Seeded to exercise the session loop's nesting directly.",
+      priority: "MEDIUM",
+      risk: "LOW",
+      acceptanceCriteria: [],
+    },
+  });
+  if (created.type !== "WORK_ITEM_CREATED") throw new Error("The seeded WorkItem was not created");
+
+  const moved = localState.execute({
+    schemaVersion: 1,
+    commandId: "seed-move-ready",
+    correlationId: "correlation-seed-move-ready",
+    actor: humanActor,
+    type: "MOVE_WORK_ITEM",
+    payload: {
+      workItemId: created.workItem.id,
+      expectedVersion: created.workItem.version,
+      targetState: "READY",
+    },
+  });
+  if (moved.type !== "WORK_ITEM_MOVED") throw new Error("The seeded WorkItem was not moved to Ready");
+
+  const started = localState.execute({
+    schemaVersion: 1,
+    commandId: "seed-start-pipeline",
+    correlationId: "correlation-seed-start-pipeline",
+    actor: humanActor,
+    type: "START_MOCK_PIPELINE",
+    payload: {
+      workItemId: moved.workItem.id,
+      expectedVersion: moved.workItem.version,
+      template: mockDeliveryTemplate,
+      // Matches the daemon's own DEFAULT_MOCK_BUDGET (apps/daemon/src/server.ts): if a fixture's
+      // stage attempt ever resumes far enough to reach the mock script's IMPLEMENT budget-exhaustion
+      // beat, its usageIncrements (summing to 100) must actually reach this limit, or
+      // decideApplyProviderOutcome rejects the outcome as "budget limit not reached".
+      budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+    },
+  });
+  if (started.type !== "PIPELINE_STARTED") throw new Error("The seeded pipeline did not start");
+
+  const dispatched = localState.execute({
+    schemaVersion: 1,
+    commandId: "seed-mark-dispatch-started",
+    correlationId: "correlation-seed-mark-dispatch-started",
+    actor: sessionLoopActor,
+    type: "MARK_WORKFLOW_DISPATCH_STARTED",
+    payload: { dispatchId: started.dispatch.id },
+  });
+  if (dispatched.type !== "WORKFLOW_DISPATCH_STARTED") throw new Error("The seeded dispatch did not start");
+
+  return {
+    dispatchId: started.dispatch.id,
+    stageAttemptId: started.stageAttempt.id,
+    workItemId: created.workItem.id,
+  };
+};
+
+/**
+ * A stage attempt that survived one context handoff and one reactive cut: session 1 crosses the
+ * handoff threshold, publishes a real checkpoint, and hands off; session 2 crosses it again but
+ * hits the wall anyway, publishing a different checkpoint before it does. Exercises every piece of
+ * spec D5's requirement at once -- ordinal, endReason, occupancy, the handoff-requested fact, and
+ * the full text of two distinct checkpoints -- with the run left healthy (RUNNING), never a series
+ * of failures.
+ */
+const seedHandoffAndExhaustedSessions = async (databasePath: string, title: string): Promise<void> => {
+  let nextId = 0;
+  const localState = await openLocalState({
+    databasePath,
+    now: (() => {
+      let clock = Date.parse("2026-08-25T18:00:00.000Z");
+      return () => new Date((clock += 1000));
+    })(),
+    createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+  });
+  try {
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-register-project",
+      correlationId: "correlation-seed-register-project",
+      actor: humanActor,
+      type: "REGISTER_FIXTURE_PROJECT",
+      payload: {
+        id: "project-web",
+        fixtureId: "web-app-a",
+        name: "Fixture web application",
+        repositoryPath: resolve("fixtures/projects/web-app-a"),
+      },
+    });
+    const { dispatchId, stageAttemptId, workItemId } = seedRunningStageAttempt(localState, title);
+    const recipe = seededRecipe(workItemId);
+
+    const session1 = localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-session-1-start",
+      correlationId: "correlation-seed-session-1-start",
+      actor: sessionLoopActor,
+      type: "START_PROVIDER_SESSION",
+      payload: { stageAttemptId, recipe },
+    });
+    if (session1.type !== "PROVIDER_SESSION_STARTED") throw new Error("Session 1 did not start");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-session-1-handoff",
+      correlationId: "correlation-seed-session-1-handoff",
+      actor: sessionLoopActor,
+      type: "REQUEST_CONTEXT_HANDOFF",
+      payload: {
+        providerSessionId: session1.session.id,
+        usage: { usedTokens: 780, windowTokens: 1000, quality: "ACTUAL" },
+        handoffThreshold: 0.75,
+      },
+    });
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-session-1-checkpoint",
+      correlationId: "correlation-seed-session-1-checkpoint",
+      actor: sessionLoopActor,
+      type: "PUBLISH_CHECKPOINT",
+      payload: {
+        providerSessionId: session1.session.id,
+        checkpoint: {
+          summary: "Mapped the fixture repository's auth module and located the token refresh path.",
+          completed: [
+            "Read through src/auth/session.ts and src/auth/tokens.ts",
+            "Reproduced the expiring-token bug locally",
+          ],
+          remaining: ["Write the regression test", "Patch the refresh race"],
+          deadEnds: ["Assumed the bug was in the HTTP client retry logic -- it was not"],
+          openQuestions: [],
+        },
+      },
+    });
+    const ended1 = localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-session-1-end",
+      correlationId: "correlation-seed-session-1-end",
+      actor: sessionLoopActor,
+      type: "END_PROVIDER_SESSION",
+      payload: { providerSessionId: session1.session.id, endReason: "HANDOFF", providerStarted: true },
+    });
+    if (ended1.type !== "PROVIDER_SESSION_ENDED" || ended1.nextSessionOrdinal === null) {
+      throw new Error("Session 1 did not hand off to a second session");
+    }
+
+    const session2 = localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-session-2-start",
+      correlationId: "correlation-seed-session-2-start",
+      actor: sessionLoopActor,
+      type: "START_PROVIDER_SESSION",
+      payload: { stageAttemptId, recipe },
+    });
+    if (session2.type !== "PROVIDER_SESSION_STARTED") throw new Error("Session 2 did not start");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-session-2-handoff",
+      correlationId: "correlation-seed-session-2-handoff",
+      actor: sessionLoopActor,
+      type: "REQUEST_CONTEXT_HANDOFF",
+      payload: {
+        providerSessionId: session2.session.id,
+        usage: { usedTokens: 920, windowTokens: 1000, quality: "ACTUAL" },
+        handoffThreshold: 0.75,
+      },
+    });
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-session-2-checkpoint",
+      correlationId: "correlation-seed-session-2-checkpoint",
+      actor: sessionLoopActor,
+      type: "PUBLISH_CHECKPOINT",
+      payload: {
+        providerSessionId: session2.session.id,
+        checkpoint: {
+          summary:
+            "Landed the token refresh patch and a regression test; the retry-storm edge case is still open.",
+          completed: [
+            "Wrote a failing regression test for the race",
+            "Serialized the refresh call behind a mutex",
+          ],
+          remaining: ["Cover the retry-storm edge case", "Update the auth module's README"],
+          deadEnds: [],
+          openQuestions: ["Should the refresh mutex be per-session or per-user?"],
+        },
+      },
+    });
+    const ended2 = localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-session-2-end",
+      correlationId: "correlation-seed-session-2-end",
+      actor: sessionLoopActor,
+      type: "END_PROVIDER_SESSION",
+      payload: {
+        providerSessionId: session2.session.id,
+        endReason: "CONTEXT_EXHAUSTED",
+        providerStarted: true,
+      },
+    });
+    if (ended2.type !== "PROVIDER_SESSION_ENDED" || ended2.nextSessionOrdinal === null) {
+      throw new Error("Session 2 did not continue to a third session");
+    }
+
+    // A third session that actually finishes the stage: without this, the attempt's original
+    // dispatch is left durably PENDING (spec §6.1 -- it only completes when the stage does), and a
+    // freshly-started daemon reading this fixture back would treat that exactly like a crash mid-
+    // attempt and mark it INTERRUPTED at startup (spec §6.4). Its own checkpoint history stays
+    // empty on purpose: it exists to close the attempt out cleanly, not to add a third example.
+    const session3 = localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-session-3-start",
+      correlationId: "correlation-seed-session-3-start",
+      actor: sessionLoopActor,
+      type: "START_PROVIDER_SESSION",
+      payload: { stageAttemptId, recipe },
+    });
+    if (session3.type !== "PROVIDER_SESSION_STARTED") throw new Error("Session 3 did not start");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-session-3-end",
+      correlationId: "correlation-seed-session-3-end",
+      actor: sessionLoopActor,
+      type: "END_PROVIDER_SESSION",
+      payload: { providerSessionId: session3.session.id, endReason: "COMPLETED", providerStarted: true },
+    });
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-apply-outcome",
+      correlationId: "correlation-seed-apply-outcome",
+      actor: sessionLoopActor,
+      type: "APPLY_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId,
+        outcome: {
+          type: "NEEDS_HUMAN",
+          request: {
+            kind: "SINGLE_CHOICE",
+            blocking: true,
+            title: "Choose the discovery depth",
+            context: "Resumed after the context handoff; one product decision is still needed.",
+            recommendation: null,
+            options: [
+              {
+                id: "focused-pass",
+                label: "Focused pass",
+                consequence: "Proceed with the smallest sufficient plan.",
+                recommended: true,
+              },
+            ],
+            allowOther: false,
+          },
+        },
+        template: mockDeliveryTemplate,
+      },
+    });
+  } finally {
+    localState.close();
+  }
+};
+
+/**
+ * Two provider sessions in a row publish no checkpoint, which durable state (not daemon memory --
+ * spec §6.5) turns into a HARD pause with `failureCode: "NO_PROGRESS"`. This is the fixture for
+ * Task 11's carried defect: every HARD_PAUSED run used to read "Budget paused" and offer an
+ * "approve budget override" action that throws for exactly this pause (decideApproveBudgetOverride
+ * refuses a session pause).
+ */
+const seedNoProgressHardPause = async (databasePath: string, title: string): Promise<void> => {
+  let nextId = 0;
+  const localState = await openLocalState({
+    databasePath,
+    now: (() => {
+      let clock = Date.parse("2026-08-25T19:00:00.000Z");
+      return () => new Date((clock += 1000));
+    })(),
+    createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+  });
+  try {
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-pause-register-project",
+      correlationId: "correlation-seed-pause-register-project",
+      actor: humanActor,
+      type: "REGISTER_FIXTURE_PROJECT",
+      payload: {
+        id: "project-web",
+        fixtureId: "web-app-a",
+        name: "Fixture web application",
+        repositoryPath: resolve("fixtures/projects/web-app-a"),
+      },
+    });
+    const { stageAttemptId, workItemId } = seedRunningStageAttempt(localState, title);
+    const recipe = seededRecipe(workItemId);
+
+    for (const ordinal of [1, 2]) {
+      const session = localState.execute({
+        schemaVersion: 1,
+        commandId: `seed-pause-session-${ordinal.toString()}-start`,
+        correlationId: `correlation-seed-pause-session-${ordinal.toString()}-start`,
+        actor: sessionLoopActor,
+        type: "START_PROVIDER_SESSION",
+        payload: { stageAttemptId, recipe },
+      });
+      if (session.type !== "PROVIDER_SESSION_STARTED") {
+        throw new Error(`Session ${ordinal.toString()} did not start`);
+      }
+      // Ends with zero checkpoints published: unproductive, per spec §6.5.
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `seed-pause-session-${ordinal.toString()}-end`,
+        correlationId: `correlation-seed-pause-session-${ordinal.toString()}-end`,
+        actor: sessionLoopActor,
+        type: "END_PROVIDER_SESSION",
+        payload: {
+          providerSessionId: session.session.id,
+          endReason: "CONTEXT_EXHAUSTED",
+          providerStarted: true,
+        },
+      });
+    }
   } finally {
     localState.close();
   }
@@ -606,6 +986,154 @@ test.describe("authenticated walking skeleton", () => {
     await expect(page).toHaveURL(/scope=backlog/);
     await expect(page.locator(".lr-kanban-column")).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Human decision workflow" })).toHaveCount(0);
+  });
+
+  test("shows the sessions inside a running stage attempt, with occupancy, handoff, and full checkpoint text", async ({
+    page,
+  }) => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail sessions "));
+    try {
+      const databasePath = join(temporaryDirectory, "local-state.sqlite");
+      const title = "Task carried across two provider sessions";
+      await seedHandoffAndExhaustedSessions(databasePath, title);
+
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        stateDatabasePath: databasePath,
+        webRoot: resolve("apps/web/dist"),
+      });
+
+      await page.goto(daemon.bootstrapUrl);
+      await page.getByRole("button", { name: "All issues", exact: true }).click();
+      await page.getByRole("button", { name: title }).click();
+
+      const inspector = page.getByRole("complementary", { name: title });
+      const workflowSection = inspector
+        .locator(".lr-inspector-section")
+        .filter({ has: page.getByText("Workflow", { exact: true }) });
+
+      // D5's whole point: the owner sees one attempt with its sessions nested inside, identified by
+      // ordinal and how each one ended -- not a series of failures.
+      const session1 = workflowSection.getByRole("listitem", { name: "Session 1" });
+      const session2 = workflowSection.getByRole("listitem", { name: "Session 2" });
+      await expect(session1).toBeVisible();
+      await expect(session2).toBeVisible();
+      await expect(session1.getByText("Handed off", { exact: true })).toBeVisible();
+      await expect(session2.getByText("Context exhausted", { exact: true })).toBeVisible();
+
+      // Occupancy and the fact a handoff was requested are both visible, per session.
+      await expect(session1.getByText("Handoff requested", { exact: true })).toBeVisible();
+      await expect(session1.getByText("78% of the window at handoff", { exact: true })).toBeVisible();
+      await expect(session2.getByText("Handoff requested", { exact: true })).toBeVisible();
+      await expect(session2.getByText("92% of the window at handoff", { exact: true })).toBeVisible();
+
+      // The most recently published checkpoint (session 2's) reads in full without any extra click:
+      // this is what feeds the next session's context, and spec §8 requires the owner to be able to
+      // read it because it is untrusted provider output.
+      await expect(
+        session2.getByText(
+          "Landed the token refresh patch and a regression test; the retry-storm edge case is still open.",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(
+        session2.getByText("Wrote a failing regression test for the race", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        session2.getByText("Should the refresh mutex be per-session or per-user?", { exact: true }),
+      ).toBeVisible();
+
+      // The earlier checkpoint (session 1's) is collapsed by default, but its full text is one
+      // keystroke away, not lost. AGENTS.md requires keyboard operability to be verified, not
+      // assumed -- so this reaches the disclosure by keyboard (Tab, then Space) exactly as a
+      // keyboard-only owner would, not by clicking it.
+      const firstCheckpointSummary = session1.locator("summary").filter({
+        hasText: "Mapped the fixture repository's auth module and located the token refresh path.",
+      });
+      await expect(firstCheckpointSummary).toBeVisible();
+      // A closed <details> still keeps its content in the DOM (native disclosure semantics -- that
+      // is what makes it keyboard-reachable), so the collapsed check must be about visibility, not
+      // presence.
+      await expect(
+        session1.getByText("Reproduced the expiring-token bug locally", { exact: true }),
+      ).not.toBeVisible();
+      await firstCheckpointSummary.focus();
+      await expect(firstCheckpointSummary).toBeFocused();
+      await page.keyboard.press("Space");
+      await expect(
+        session1.getByText("Reproduced the expiring-token bug locally", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        session1.getByText("Assumed the bug was in the HTTP client retry logic -- it was not", {
+          exact: true,
+        }),
+      ).toBeVisible();
+
+      // The default mock provider cannot wind down on request, so losing a session's tail is normal
+      // for it rather than a malfunction (spec §7).
+      await expect(
+        inspector.getByText(
+          "This provider cannot wind down on request — losing recent work when a session is cut is expected for it.",
+          { exact: true },
+        ),
+      ).toBeVisible();
+    } finally {
+      await daemon?.close();
+      daemon = undefined;
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("explains a non-budget hard pause without offering a budget action that would fail", async ({
+    page,
+  }) => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail no-progress "));
+    try {
+      const databasePath = join(temporaryDirectory, "local-state.sqlite");
+      const title = "Task stalled across two empty sessions";
+      await seedNoProgressHardPause(databasePath, title);
+
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        stateDatabasePath: databasePath,
+        webRoot: resolve("apps/web/dist"),
+      });
+
+      await page.goto(daemon.bootstrapUrl);
+      await page.getByRole("button", { name: "All issues", exact: true }).click();
+      await page.getByRole("button", { name: title }).click();
+
+      const inspector = page.getByRole("complementary", { name: title });
+      const workflowSection = inspector
+        .locator(".lr-inspector-section")
+        .filter({ has: page.getByText("Workflow", { exact: true }) });
+
+      // The Task 11 defect: this pause has nothing to do with budget, so the banner must not claim
+      // it does, and the escape hatch that only works for a budget pause must not be offered.
+      await expect(workflowSection.getByText("Budget paused", { exact: true })).toHaveCount(0);
+      await expect(workflowSection.getByText("Paused: no progress", { exact: true }).first()).toBeVisible();
+      await expect(workflowSection.getByRole("button", { name: /Approve .* token budget/ })).toHaveCount(0);
+
+      // The owner is not stuck: the Human Request panel still renders the real question, and
+      // answering it is the action that actually lifts a session-loop pause.
+      await expect(
+        workflowSection.getByRole("heading", {
+          name: "Two provider sessions in a row published no checkpoint",
+        }),
+      ).toBeVisible();
+      await workflowSection.getByRole("radio", { name: "Other" }).click();
+      await workflowSection
+        .getByRole("textbox", { name: "Other" })
+        .fill("Split the WorkItem into two smaller ones and resume.");
+      await workflowSection.getByRole("button", { name: "Answer & resume" }).click();
+      await expect(workflowSection.getByText("Paused: no progress", { exact: true })).toHaveCount(0);
+    } finally {
+      await daemon?.close();
+      daemon = undefined;
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
   });
 
   test("keeps overlays mutually exclusive, dismissible, and responsive", async ({ page }) => {

@@ -24,6 +24,8 @@ import {
   opaqueIdSchema,
   pipelineControlRequestSchema,
   projectsResponseSchema,
+  providerCapabilitiesResponseSchema,
+  providerSessionsResponseSchema,
   registerFixtureProjectRequestSchema,
   resolveAcceptanceRequestSchema,
   sessionExchangeRequestSchema,
@@ -98,6 +100,7 @@ type BootstrapGrant = {
 
 const projectParamsSchema = z.object({ projectId: opaqueIdSchema }).strict();
 const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
+const stageAttemptParamsSchema = z.object({ stageAttemptId: opaqueIdSchema }).strict();
 const humanRequestParamsSchema = z.object({ humanRequestId: opaqueIdSchema }).strict();
 const acceptanceParamsSchema = z
   .object({ workItemId: opaqueIdSchema, acceptancePackageId: opaqueIdSchema })
@@ -591,6 +594,47 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
                 acceptancePackage: null,
               },
         );
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    // Spec §D5's nesting, for the Task Cockpit (Task 12). Kept off GET_WORKFLOW_SNAPSHOT for the
+    // same reason the persistence-layer query is: the snapshot is fetched on every board render,
+    // and an attempt's session history grows without bound within it.
+    app.get("/api/v1/stage-attempts/:stageAttemptId/sessions", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = stageAttemptParamsSchema.parse(request.params);
+        const result = localState.query({
+          type: "LIST_PROVIDER_SESSIONS",
+          stageAttemptId: params.stageAttemptId,
+        });
+        return providerSessionsResponseSchema.parse({
+          schemaVersion: 1,
+          sessions: result.type === "PROVIDER_SESSIONS" ? result.sessions : [],
+          checkpoints: result.type === "PROVIDER_SESSIONS" ? result.checkpoints : [],
+          handoffUsage: result.type === "PROVIDER_SESSIONS" ? result.handoffUsage : {},
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    // The daemon runs one provider adapter for its whole process lifetime, so this is workspace-
+    // wide rather than per work item: it answers "what would a session started right now run on".
+    app.get("/api/v1/provider/capabilities", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const capabilities = providerAdapter.capabilities();
+        return providerCapabilitiesResponseSchema.parse({
+          schemaVersion: 1,
+          provider: capabilities.provider,
+          checkpointOnRequest: capabilities.checkpointOnRequest,
+          contextWindowReporting: capabilities.contextWindowReporting,
+        });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }

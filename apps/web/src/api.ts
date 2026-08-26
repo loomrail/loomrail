@@ -3,6 +3,8 @@ import {
   eventsResponseSchema,
   humanRequestsResponseSchema,
   projectsResponseSchema,
+  providerCapabilitiesResponseSchema,
+  providerSessionsResponseSchema,
   stateCommandResultSchema,
   workItemsResponseSchema,
   workflowSnapshotSchema,
@@ -154,6 +156,15 @@ export const listWorkItemEvents = async (projectId: string, workItemId: string, 
 
 export const getWorkItemWorkflow = async (workItemId: string) =>
   requestLocalApi(`/api/v1/work-items/${encodeURIComponent(workItemId)}/workflow`, workflowSnapshotSchema);
+
+export const listProviderSessions = async (stageAttemptId: string) =>
+  requestLocalApi(
+    `/api/v1/stage-attempts/${encodeURIComponent(stageAttemptId)}/sessions`,
+    providerSessionsResponseSchema,
+  );
+
+export const getProviderCapabilities = async () =>
+  requestLocalApi("/api/v1/provider/capabilities", providerCapabilitiesResponseSchema);
 
 export const listOpenHumanRequests = async (projectId: string) => {
   const query = new URLSearchParams({ projectId, status: "OPEN" });

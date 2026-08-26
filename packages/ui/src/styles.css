@@ -1787,6 +1787,165 @@
   margin: 0;
 }
 
+.lr-session-timeline-panel {
+  display: grid;
+  gap: var(--lr-space-2-5);
+}
+
+.lr-session-timeline-panel__title {
+  color: var(--lr-text);
+  font-size: var(--lr-font-sm);
+  font-weight: var(--lr-weight-semibold);
+}
+
+.lr-session-timeline-panel__note {
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-xs);
+  margin: 0;
+}
+
+.lr-session-timeline {
+  display: grid;
+  gap: var(--lr-space-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.lr-session-timeline__item {
+  display: grid;
+  gap: var(--lr-space-2);
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.lr-session-timeline__ordinal {
+  align-items: center;
+  background: var(--lr-surface-inset);
+  border-radius: var(--lr-radius-full);
+  color: var(--lr-text-muted);
+  display: inline-flex;
+  font-size: var(--lr-font-xs);
+  font-weight: var(--lr-weight-medium);
+  height: 20px;
+  justify-content: center;
+  width: 20px;
+}
+
+.lr-session-timeline__body {
+  display: grid;
+  gap: var(--lr-space-2);
+  min-width: 0;
+}
+
+.lr-session-timeline__row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lr-space-2);
+}
+
+.lr-session-timeline__occupancy {
+  align-items: center;
+  display: grid;
+  gap: var(--lr-space-1);
+  grid-template-columns: minmax(80px, 160px) auto;
+}
+
+.lr-session-timeline__occupancy progress {
+  appearance: none;
+  block-size: 5px;
+  border: none;
+  border-radius: var(--lr-radius-full);
+  inline-size: 100%;
+}
+
+.lr-session-timeline__occupancy progress::-webkit-progress-bar {
+  background: var(--lr-surface-inset);
+  border-radius: var(--lr-radius-full);
+}
+
+.lr-session-timeline__occupancy progress::-webkit-progress-value,
+.lr-session-timeline__occupancy progress::-moz-progress-bar {
+  background: var(--lr-warning);
+  border-radius: var(--lr-radius-full);
+}
+
+.lr-session-timeline__occupancy span {
+  color: var(--lr-text-faint);
+  font-size: var(--lr-font-xs);
+}
+
+.lr-session-timeline__checkpoints {
+  display: grid;
+  gap: var(--lr-space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.lr-session-timeline__empty {
+  color: var(--lr-text-faint);
+  font-size: var(--lr-font-xs);
+  margin: 0;
+}
+
+.lr-checkpoint-card {
+  background: var(--lr-surface-inset);
+  border-radius: var(--lr-radius-control);
+  padding: var(--lr-space-2) var(--lr-space-2-5);
+}
+
+.lr-checkpoint-card > summary {
+  align-items: baseline;
+  cursor: pointer;
+  display: flex;
+  gap: var(--lr-space-2);
+  justify-content: space-between;
+  list-style: none;
+}
+
+.lr-checkpoint-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.lr-checkpoint-card > summary > span {
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-sm);
+  font-weight: var(--lr-weight-medium);
+}
+
+.lr-checkpoint-card > summary > time {
+  color: var(--lr-text-faint);
+  flex-shrink: 0;
+  font-size: var(--lr-font-xs);
+}
+
+.lr-checkpoint-card:focus-within {
+  outline: 2px solid var(--lr-focus);
+  outline-offset: 2px;
+}
+
+.lr-checkpoint-card__body {
+  display: grid;
+  gap: var(--lr-space-2);
+  margin-top: var(--lr-space-2);
+}
+
+.lr-checkpoint-card__body strong {
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-xs);
+  font-weight: var(--lr-weight-medium);
+}
+
+.lr-checkpoint-card__body ul {
+  color: var(--lr-text-secondary);
+  display: grid;
+  font-size: var(--lr-font-xs);
+  gap: 2px;
+  margin: 2px 0 0;
+  padding-left: var(--lr-space-4);
+}
+
 @keyframes lr-spin {
   to {
     transform: rotate(360deg);

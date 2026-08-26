@@ -18,10 +18,12 @@ import {
   answerHumanRequest,
   controlPipeline,
   createWorkItem,
+  getProviderCapabilities,
   getWorkItemWorkflow,
   listOpenHumanRequests,
   listProjects,
   listProjectWorkItems,
+  listProviderSessions,
   listWorkItemEvents,
   moveWorkItem,
   registerFixtureProject,
@@ -41,6 +43,9 @@ const workItemEventsKey = (projectId: string, workItemId: string) =>
 const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "workflow"] as const;
 const projectHumanRequestsKey = (projectId: string) =>
   ["projects", projectId, "human-requests", "OPEN"] as const;
+const stageAttemptSessionsKey = (stageAttemptId: string) =>
+  ["stage-attempts", stageAttemptId, "sessions"] as const;
+const providerCapabilitiesKey = ["provider", "capabilities"] as const;
 
 type WorkspaceContextValue = {
   connection: ConnectionResult | undefined;
@@ -153,6 +158,26 @@ export const useWorkItemWorkflow = (workItemId: string | undefined) =>
     enabled: workItemId !== undefined,
   });
 
+/**
+ * Spec §D5's nesting, read back for the Task Cockpit: the sessions inside a stage attempt, the
+ * checkpoints published under it, and the window occupancy recorded at each handoff request.
+ */
+export const useStageAttemptSessions = (stageAttemptId: string | undefined) =>
+  useQuery({
+    queryKey: stageAttemptId
+      ? stageAttemptSessionsKey(stageAttemptId)
+      : ["stage-attempts", "none", "sessions"],
+    queryFn: () => {
+      if (!stageAttemptId) throw new Error("A stage attempt is required to list its sessions");
+      return listProviderSessions(stageAttemptId);
+    },
+    enabled: stageAttemptId !== undefined,
+  });
+
+/** The provider a session would run on right now (spec §7): whether it can wind down on request. */
+export const useProviderCapabilities = () =>
+  useQuery({ queryKey: providerCapabilitiesKey, queryFn: getProviderCapabilities });
+
 export const useProjectHumanRequests = (projectId: string | undefined) =>
   useQuery({
     queryKey: projectId ? projectHumanRequestsKey(projectId) : ["projects", "none", "human-requests", "OPEN"],
@@ -244,6 +269,7 @@ export const useAnswerHumanRequest = () => {
           queryKey: workItemEventsKey(request.projectId, request.workItemId),
         }),
         queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(request.projectId) }),
+        queryClient.invalidateQueries({ queryKey: stageAttemptSessionsKey(request.stageAttemptId) }),
       ]);
     },
   });
@@ -261,12 +287,13 @@ export const usePipelineControl = () => {
       run: PipelineRun;
       workItem: WorkItem;
     }) => controlPipeline(workItem.id, run, action),
-    onSuccess: async (_, { workItem }) => {
+    onSuccess: async (_, { run, workItem }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(workItem.id) }),
         queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
         queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(workItem.projectId) }),
+        queryClient.invalidateQueries({ queryKey: stageAttemptSessionsKey(run.currentStageAttemptId) }),
       ]);
     },
   });
@@ -284,12 +311,13 @@ export const useApproveBudgetOverride = () => {
       run: PipelineRun;
       workItem: WorkItem;
     }) => approveBudgetOverride(workItem.id, run, maxEstimatedTokens),
-    onSuccess: async (_, { workItem }) => {
+    onSuccess: async (_, { run, workItem }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(workItem.id) }),
         queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
         queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(workItem.projectId) }),
+        queryClient.invalidateQueries({ queryKey: stageAttemptSessionsKey(run.currentStageAttemptId) }),
       ]);
     },
   });
