@@ -6,9 +6,21 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Major bumps are taken deliberately, not by bot. Every npm pull request closed
+    # on 2026-08-26 was a major jump (jsdom 26->30, open 10->11, globals 16->17,
+    # eslint-plugin-react-hooks 6->7, eslint-plugin-react-refresh 0.4->0.5), and
+    # without this they would be reopened on the next weekly scan. Patch and minor
+    # updates still flow, which is where the low-risk fixes live.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    # Deliberately NOT ignoring majors here. The checkout/setup-node v4->v7 bump was
+    # worth taking: it cleared a runtime deprecation GitHub was warning about on every
+    # run. Action majors are a small, reviewable surface and are how that class of
+    # warning reaches us.
