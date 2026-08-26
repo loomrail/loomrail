@@ -25,6 +25,7 @@ const migrations: readonly Migration[] = [
   },
   { version: 5, name: "acceptance_evidence", filename: "0005_acceptance_evidence.sql" },
   { version: 6, name: "session_handoff", filename: "0006_session_handoff.sql" },
+  { version: 7, name: "pack_share_backoff", filename: "0007_pack_share_backoff.sql" },
 ];
 
 const migrationRowSchema = z.object({

@@ -1,6 +1,7 @@
 import { providerOutcomeSchema, type CheckpointDraft, type ProviderOutcome } from "@loomrail/contracts";
 import {
   providerCapabilitiesSchema,
+  ProviderPackTooLargeError,
   type ProviderAdapter,
   type ProviderInvocation,
   type ProviderSessionListener,
@@ -128,6 +129,12 @@ export type MockProviderOptions = {
   ignoreHandoffRequest?: boolean;
   emitInvalidCheckpoint?: boolean;
   hitTheWallAfterTurns?: number;
+  // Spec §7's mis-estimated-pack branch: the adapter is handed a pack Loomrail sized from its own
+  // estimate and refuses it, so a test can drive both the automatic retry with a smaller share and
+  // the give-up after it. Measured in characters of rendered pack text rather than bytes -- this
+  // package deliberately carries no Node typings, and the branch under test is "the provider said
+  // no", for which the unit of the threshold makes no difference.
+  rejectPacksLongerThan?: number;
 };
 
 type ResolvedMockProviderOptions = {
@@ -137,6 +144,7 @@ type ResolvedMockProviderOptions = {
   ignoreHandoffRequest: boolean;
   emitInvalidCheckpoint: boolean;
   hitTheWallAfterTurns: number;
+  rejectPacksLongerThan: number;
 };
 
 const resolveOptions = (options: MockProviderOptions): ResolvedMockProviderOptions => ({
@@ -147,6 +155,8 @@ const resolveOptions = (options: MockProviderOptions): ResolvedMockProviderOptio
   emitInvalidCheckpoint: options.emitInvalidCheckpoint ?? false,
   // No forced wall by default: the session runs until the simulated window itself fills up.
   hitTheWallAfterTurns: options.hitTheWallAfterTurns ?? Number.POSITIVE_INFINITY,
+  // No pack is ever rejected by default.
+  rejectPacksLongerThan: options.rejectPacksLongerThan ?? Number.POSITIVE_INFINITY,
 });
 
 const validCheckpointDraft = (turn: number): CheckpointDraft => ({
@@ -170,6 +180,7 @@ const invalidCheckpointDraft = (): CheckpointDraft => ({
 
 type SessionRuntime = {
   handoffRequested: boolean;
+  aborted: boolean;
 };
 
 // Tracks only which sessions this adapter instance currently has in flight, and whether each has
@@ -184,15 +195,32 @@ const runSession = async (
   runningSessions: Map<string, SessionRuntime>,
 ): Promise<ProviderOutcome> => {
   const sessionId = invocation.session.id;
-  const runtime: SessionRuntime = { handoffRequested: false };
+  const runtime: SessionRuntime = { handoffRequested: false, aborted: false };
   runningSessions.set(sessionId, runtime);
   try {
+    // Spec §7's mis-estimated-pack branch. Thrown before any turn runs, because a provider that
+    // cannot accept the input never starts working on it.
+    if (invocation.contextPack.text.length > options.rejectPacksLongerThan) {
+      throw new ProviderPackTooLargeError(
+        sessionId,
+        `The mock provider accepts at most ${String(options.rejectPacksLongerThan)} characters of context`,
+      );
+    }
     let lastCheckpoint: CheckpointDraft | undefined;
     for (let turn = 1; ; turn += 1) {
       // Yield to the microtask queue so a `requestHandoff` call made concurrently with `start()`
       // (the pattern every handoff test uses) gets a chance to register before this turn reads
       // the flag it sets. No timers and no randomness -- this is a plain microtask tick.
       await Promise.resolve();
+
+      // A hard cut, unlike `requestHandoff` above: the run really stops rather than being asked
+      // to. Checked before the turn does anything, so an aborted session bills for no further
+      // work and publishes nothing more.
+      if (runtime.aborted) {
+        return lastCheckpoint === undefined
+          ? { type: "CONTEXT_EXHAUSTED" }
+          : { type: "CONTEXT_EXHAUSTED", checkpoint: lastCheckpoint };
+      }
 
       const usedTokens = Math.min(options.tokensPerTurn * turn, options.contextWindowTokens);
       listener.onContextWindow({
@@ -261,6 +289,12 @@ export const createMockProvider = (options?: MockProviderOptions): ProviderAdapt
       if (runtime) runtime.handoffRequested = true;
       // Idempotent and safe for a session that has already ended or was never in session-
       // behaviour mode (spec §6.2): there is simply no runtime entry to flag in that case.
+      return Promise.resolve();
+    },
+    abortSession: (sessionId) => {
+      const runtime = runningSessions.get(sessionId);
+      if (runtime) runtime.aborted = true;
+      // Same idempotence as `requestHandoff`: aborting a session that already ended is a no-op.
       return Promise.resolve();
     },
   };

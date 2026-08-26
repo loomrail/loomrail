@@ -258,6 +258,7 @@ const stageAttemptRowSchema = z.object({
   finished_at: z.string().nullable(),
   failure_code: z.string().nullable(),
   unproductive_sessions: z.number().int(),
+  pack_share_backoffs: z.number().int(),
 });
 
 const humanRequestRowSchema = z.object({
@@ -577,6 +578,7 @@ const stageAttemptFromRow = (value: unknown): StageAttempt => {
     finishedAt: row.finished_at,
     failureCode: row.failure_code,
     unproductiveSessions: row.unproductive_sessions,
+    packShareBackoffs: row.pack_share_backoffs,
   });
 };
 
@@ -1458,8 +1460,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO stage_attempts (
             id, pipeline_run_id, project_id, work_item_id, stage, attempt, status, version,
-            started_at, finished_at, failure_code, unproductive_sessions
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            started_at, finished_at, failure_code, unproductive_sessions, pack_share_backoffs
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           attempt.id,
@@ -1474,6 +1476,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           attempt.finishedAt,
           attempt.failureCode,
           attempt.unproductiveSessions,
+          attempt.packShareBackoffs,
         );
     };
 
@@ -1481,7 +1484,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       const update = database
         .prepare(
           `UPDATE stage_attempts SET status = ?, version = ?, started_at = ?, finished_at = ?,
-             failure_code = ?, unproductive_sessions = ? WHERE id = ? AND version = ?`,
+             failure_code = ?, unproductive_sessions = ?, pack_share_backoffs = ?
+           WHERE id = ? AND version = ?`,
         )
         .run(
           attempt.status,
@@ -1490,6 +1494,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           attempt.finishedAt,
           attempt.failureCode,
           attempt.unproductiveSessions,
+          attempt.packShareBackoffs,
           attempt.id,
           attempt.version - 1,
         );
@@ -2570,13 +2575,17 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         ];
 
         // Spec §6.5: the unproductive-session counter, and the pause plus question that the second
-        // unproductive session in a row triggers, belong to this same transaction. An end reason of
-        // INTERRUPTED or CANCELLED is not this decision's business -- recovery and cancellation own
-        // those -- so the counter is left alone for them, exactly as decideSessionEnded demands.
+        // unproductive session in a row triggers, belong to this same transaction. Every end that
+        // reaches this command came from the session loop, INTERRUPTED included -- a session cut
+        // because its checkpoint write failed (§6.2) counts as unproductive exactly like one that
+        // ran into the wall. Recovery after a restart never arrives here: RECONCILE_WORKFLOWS ends
+        // orphaned sessions itself, without this decision, so a dead daemon cannot advance the
+        // counter. CANCELLED is refused by decideSessionEnded and skipped here to match, and so is
+        // a session the provider never started -- see `providerStarted` on the command.
         let attemptAfterEnd = stageAttempt;
         let request: HumanRequest | null = null;
         let nextSessionOrdinal: number | null = null;
-        if (session.endReason !== "INTERRUPTED" && session.endReason !== "CANCELLED") {
+        if (session.endReason !== "CANCELLED" && command.payload.providerStarted) {
           const checkpointsPublished = countRowSchema.parse(countCheckpointsForSession.get(session.id)).count;
           const decision = decideSessionEnded({
             session,
@@ -2603,11 +2612,17 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                   "The workflow state backing this ProviderSession is incomplete",
                 );
               }
+              // The stored attempt carrying the decision's new counter, not the decision's own
+              // attempt: decideStageAttemptHardPause performs the HARD_PAUSED transition itself and
+              // bumps the version once, and a pre-bumped attempt would not match the stored row.
               const paused = decideStageAttemptHardPause({
                 now: occurredAt,
                 workItem,
                 run,
-                stageAttempt: decision.attempt,
+                stageAttempt: {
+                  ...stageAttempt,
+                  unproductiveSessions: decision.attempt.unproductiveSessions,
+                },
                 previousStatus: stageAttempt.status,
                 humanRequestId: createId("humanRequest"),
                 reason: { type: "NO_PROGRESS" },
@@ -2699,6 +2714,53 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           session: decision.session,
           requested: true,
           events: [event],
+        });
+      }
+
+      if (command.type === "REDUCE_CONTEXT_PACK_SHARE") {
+        const stageAttempt = readStageAttempt(command.payload.stageAttemptId);
+        if (!stageAttempt) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The StageAttempt does not exist");
+        }
+        const run = readPipelineRun(stageAttempt.pipelineRunId);
+        if (!run) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_NOT_FOUND",
+            "The PipelineRun backing this StageAttempt is missing",
+          );
+        }
+        // Spec §7. The reduction is durable state, not a log line: the counter survives the restart
+        // that §6.4 makes an ordinary end of a session, and STAGE_ATTEMPT_CHANGED records that it
+        // moved. The next session's ContextPackRecipe then carries the smaller budgetTokens the
+        // reduction produced, so the audit trail shows both the decision and its effect.
+        const reduced = stageAttemptSchema.parse({
+          ...stageAttempt,
+          packShareBackoffs: stageAttempt.packShareBackoffs + 1,
+          version: stageAttempt.version + 1,
+        });
+        updateStageAttempt(reduced);
+        const events = appendWorkflowEvents(
+          [
+            {
+              type: "STAGE_ATTEMPT_CHANGED",
+              data: { run, stageAttempt: reduced, previousStatus: stageAttempt.status },
+            },
+          ],
+          {
+            workItemId: stageAttempt.workItemId,
+            projectId: stageAttempt.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "CONTEXT_PACK_SHARE_REDUCED",
+          replayed: false,
+          workItemId: stageAttempt.workItemId,
+          stageAttempt: reduced,
+          events,
         });
       }
 

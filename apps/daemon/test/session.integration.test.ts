@@ -214,6 +214,7 @@ describe("stage attempt session loop", () => {
         return adapter.start(invocation, listener);
       },
       requestHandoff: (sessionId) => adapter.requestHandoff(sessionId),
+      abortSession: (sessionId) => adapter.abortSession(sessionId),
       get startedSessionIds(): readonly string[] {
         return startedSessionIds;
       },
@@ -227,6 +228,10 @@ describe("stage attempt session loop", () => {
     requestHandoff: async (sessionId) => {
       await first.requestHandoff(sessionId);
       await rest.requestHandoff(sessionId);
+    },
+    abortSession: async (sessionId) => {
+      await first.abortSession(sessionId);
+      await rest.abortSession(sessionId);
     },
   });
 
@@ -244,6 +249,7 @@ describe("stage attempt session loop", () => {
       }),
     start: () => Promise.resolve(completingOutcome()),
     requestHandoff: () => Promise.resolve(),
+    abortSession: () => Promise.resolve(),
   });
 
   it("continues the same attempt in a second session after a handoff", async () => {
@@ -318,6 +324,7 @@ describe("stage attempt session loop", () => {
     // `ignoreHandoffRequest` here would not discriminate: that mock still ends by itself with
     // CONTEXT_EXHAUSTED once its simulated window fills, so the assertion below would pass with no
     // deadline logic at all.
+    const abortedSessionIds: string[] = [];
     const stubborn: ProviderAdapter = {
       capabilities: () =>
         providerCapabilitiesSchema.parse({
@@ -335,6 +342,10 @@ describe("stage attempt session loop", () => {
           listener.onContextWindow({ usedTokens: 3_900, windowTokens: 4_000, quality: "ACTUAL" });
         }),
       requestHandoff: () => Promise.resolve(),
+      abortSession: (sessionId) => {
+        abortedSessionIds.push(sessionId);
+        return Promise.resolve();
+      },
     };
 
     await runStageAttempt(depsFor(localState, seeded, stubborn));
@@ -342,6 +353,10 @@ describe("stage attempt session loop", () => {
     const { sessions } = sessionRows(localState, seeded.stageAttemptId);
     expect(sessions[0]?.endReason).toBe("CONTEXT_EXHAUSTED");
     expect(sessions[0]?.handoffRequestedAt).toBe(timestamp);
+    // Spec §7 promises a *hard* cut. `requestHandoff` cannot deliver one -- the agent is free to
+    // keep ignoring it -- so the cut has to reach the provider through `abortSession`, or the next
+    // session would open while this one was still running and still billing.
+    expect(abortedSessionIds).toEqual(sessions.map(({ id }) => id));
   });
 
   it("opens a Human Request when two sessions in a row produce nothing", async () => {
@@ -398,6 +413,7 @@ describe("stage attempt session loop", () => {
         return Promise.resolve(completingOutcome());
       },
       requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
     };
 
     await runStageAttempt(depsFor(localState, seeded, tinyWindow));
@@ -444,6 +460,7 @@ describe("stage attempt session loop", () => {
           checkpointDelivered?.();
         }),
       requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
     };
 
     // Never resolves: the process is supposed to die while this session is still running.
@@ -474,5 +491,192 @@ describe("stage attempt session loop", () => {
       { kind: "CHECKPOINT", id: resumed.checkpoints[0]?.id, version: 1 },
     ]);
     expect(snapshotOf(restarted, seeded.workItemId).stageAttempts.at(0)?.status).not.toBe("INTERRUPTED");
+  });
+
+  it("retries once with a smaller pack share when the provider rejects the pack, then asks the owner", () => {
+    // Spec §7's mis-estimated-pack branch. Nothing exercised PACK_SHARE_BACKOFF before this.
+    return (async () => {
+      const localState = await open();
+      const seeded = seedRunningAttempt(localState);
+      // Rejects every pack it is handed, so both the retry and the give-up after it are reached.
+      const fussy = createMockProvider({ contextWindowTokens: 4_000, rejectPacksLongerThan: 10 });
+
+      await runStageAttempt(depsFor(localState, seeded, fussy));
+
+      const { sessions, recipes } = sessionRows(localState, seeded.stageAttemptId);
+      expect(sessions).toHaveLength(2);
+      expect(sessions.map(({ endReason }) => endReason)).toEqual(["INTERRUPTED", "INTERRUPTED"]);
+      // The reduction is visible where §7 asks for it to be recorded: the second session's recipe
+      // was assembled against a strictly smaller budget than the first.
+      const firstBudget = recipes[0]?.budgetTokens ?? 0;
+      const secondBudget = recipes[1]?.budgetTokens ?? 0;
+      expect(secondBudget).toBeLessThan(firstBudget);
+
+      const attempt = snapshotOf(localState, seeded.workItemId).stageAttempts.at(0);
+      // One automatic retry, not an unbounded search.
+      expect(attempt?.packShareBackoffs).toBe(1);
+      // A session the provider refused to start never had the chance to publish anything, so
+      // §6.5's guard -- which is about an agent that ran and stayed silent -- must not claim it,
+      // and the owner must be asked one question about this failure rather than two.
+      expect(attempt?.unproductiveSessions).toBe(0);
+      expect(attempt?.status).toBe("HARD_PAUSED");
+      expect(attempt?.failureCode).toBe("PROVIDER_REJECTED_PACK");
+      const requests = snapshotOf(localState, seeded.workItemId).humanRequests;
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.title).toMatch(/context pack/);
+    })();
+  });
+
+  it("keeps a reduced pack share across a restart instead of starting over at the full share", async () => {
+    // §6.5 argues the unproductive counter cannot live in daemon memory because §6.4 makes a
+    // restart an ordinary end of a session. The same is true of the pack share: held in a local,
+    // it would be silently restored to full by the very event the one-retry rule must survive.
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-earlier-backoff",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "REDUCE_CONTEXT_PACK_SHARE",
+      payload: { stageAttemptId: seeded.stageAttemptId },
+    });
+
+    // A brand new loop, as after a restart: it has never reduced anything itself.
+    await runStageAttempt(depsFor(localState, seeded, finishingAdapter(4_000)));
+
+    const atFullShare = Math.floor(4_000 * 0.35);
+    const { recipes } = sessionRows(localState, seeded.stageAttemptId);
+    expect(recipes[0]?.budgetTokens).toBe(Math.floor(4_000 * (0.35 - 0.1)));
+    expect(recipes[0]?.budgetTokens).not.toBe(atFullShare);
+  });
+
+  it("hard-pauses on a provider failure without shrinking the pack first", async () => {
+    // §6.3 routes failures to existing handling; only a size rejection belongs in §7's backoff.
+    // Answering a transient error by shrinking the pack would send the owner after the wrong thing.
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    const broken: ProviderAdapter = {
+      capabilities: () =>
+        providerCapabilitiesSchema.parse({
+          provider: "MOCK",
+          start: true,
+          interrupt: true,
+          eventStream: false,
+          usageReporting: true,
+          contextWindowReporting: false,
+          checkpointOnRequest: false,
+          contextWindowTokens: 4_000,
+        }),
+      start: () => Promise.reject(new Error("the provider socket closed")),
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
+    };
+
+    await runStageAttempt(depsFor(localState, seeded, broken));
+
+    const snapshot = snapshotOf(localState, seeded.workItemId);
+    expect(sessionRows(localState, seeded.stageAttemptId).sessions).toHaveLength(1);
+    expect(snapshot.stageAttempts.at(0)?.packShareBackoffs).toBe(0);
+    expect(snapshot.stageAttempts.at(0)?.failureCode).toBe("PROVIDER_START_FAILED");
+    expect(snapshot.humanRequests[0]?.title).not.toMatch(/context pack/);
+  });
+
+  it("rejects a checkpoint that does not satisfy the contract and leaves the session unproductive", async () => {
+    // Spec §7: half-accepting a checkpoint is not an option, because the next pack is built on it.
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    const sloppy = createMockProvider({
+      contextWindowTokens: 4_000,
+      tokensPerTurn: 100,
+      checkpointEvery: 1,
+      hitTheWallAfterTurns: 1,
+      emitInvalidCheckpoint: true,
+    });
+
+    await runStageAttempt(depsFor(localState, seeded, sloppy));
+
+    const { sessions, checkpoints } = sessionRows(localState, seeded.stageAttemptId);
+    // The provider published on every turn; none of it was accepted, so none of it was recorded.
+    expect(checkpoints).toHaveLength(0);
+    expect(sessions).toHaveLength(2);
+    const snapshot = snapshotOf(localState, seeded.workItemId);
+    expect(snapshot.stageAttempts.at(0)?.unproductiveSessions).toBe(2);
+    expect(snapshot.run?.status).toBe("HARD_PAUSED");
+  });
+
+  it("does not let a failed checkpoint write dissolve into a log line", async () => {
+    // Spec §6.2: the agent believes it published progress and the next pack would be assembled
+    // without it. If the loop merely ended the session, the attempt would sit RUNNING with a
+    // consumed dispatch and nobody would ever be told.
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    const refusesCheckpoints: LocalState = {
+      ...localState,
+      execute: (command) => {
+        if (command.type === "PUBLISH_CHECKPOINT") throw new Error("the checkpoint could not be written");
+        return localState.execute(command);
+      },
+    };
+    const publishing = createMockProvider({
+      contextWindowTokens: 4_000,
+      tokensPerTurn: 100,
+      checkpointEvery: 1,
+      hitTheWallAfterTurns: 1,
+    });
+
+    await runStageAttempt(depsFor(refusesCheckpoints, seeded, publishing));
+
+    const { sessions, checkpoints } = sessionRows(localState, seeded.stageAttemptId);
+    expect(checkpoints).toHaveLength(0);
+    expect(sessions.map(({ endReason }) => endReason)).toEqual(["INTERRUPTED", "INTERRUPTED"]);
+    const snapshot = snapshotOf(localState, seeded.workItemId);
+    expect(snapshot.run?.status).toBe("HARD_PAUSED");
+    expect(snapshot.humanRequests).toHaveLength(1);
+  });
+
+  it("lets the owner answer the hard pause and puts the stage back to work", async () => {
+    // The property the whole pause exists for, and the one nothing proved before: a pause with a
+    // question the system will never accept an answer to is a stopped pipeline, not a question.
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    const unproductive = createMockProvider({
+      contextWindowTokens: 4_000,
+      tokensPerTurn: 100,
+      checkpointEvery: 1_000,
+      hitTheWallAfterTurns: 1,
+    });
+    await runStageAttempt(depsFor(localState, seeded, unproductive));
+
+    const paused = snapshotOf(localState, seeded.workItemId);
+    expect(paused.run?.status).toBe("HARD_PAUSED");
+    const request = paused.humanRequests[0];
+    if (!request) throw new Error("The hard pause did not open a Human Request");
+
+    const answered = localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-answer",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "ANSWER_HUMAN_REQUEST",
+      payload: {
+        humanRequestId: request.id,
+        expectedVersion: request.version,
+        answer: { type: "OTHER", text: "Split the migration out first, then run this stage again." },
+      },
+    });
+    expect(answered.type).toBe("HUMAN_REQUEST_ANSWERED");
+
+    const resumed = snapshotOf(localState, seeded.workItemId);
+    expect(resumed.run?.status).toBe("RUNNING");
+    expect(resumed.stageAttempts.at(0)?.status).toBe("QUEUED");
+    expect(resumed.stageAttempts.at(0)?.failureCode).toBeNull();
+    expect(resumed.humanRequests.every(({ status }) => status === "RESOLVED")).toBe(true);
+    // The owner's words become a Decision, so the next session's pack carries what they said about
+    // the stall -- the reason for asking rather than merely pausing.
+    expect(resumed.decisions).toHaveLength(1);
+    const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+    if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatches");
+    expect(pending.dispatches.map(({ mode }) => mode)).toContain("RESUME");
   });
 });

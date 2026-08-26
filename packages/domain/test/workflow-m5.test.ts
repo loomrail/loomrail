@@ -77,6 +77,7 @@ const stageAttempt: StageAttempt = {
   finishedAt: null,
   failureCode: null,
   unproductiveSessions: 0,
+  packShareBackoffs: 0,
 };
 const dispatch: WorkflowDispatch = {
   schemaVersion: 1,

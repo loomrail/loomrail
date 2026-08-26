@@ -231,4 +231,5 @@ export const decideWorkItemCommand = (
 };
 
 export * from "./workflow.js";
+export * from "./session-pause.js";
 export * from "./session.js";

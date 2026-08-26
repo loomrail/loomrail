@@ -448,7 +448,7 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);
@@ -1171,13 +1171,13 @@ describe("SQLite local state", () => {
       }).toThrow(/append-only/);
       raw2.close();
 
-      // The existing StageAttempt got the new column with its DEFAULT 0, not NULL.
+      // The existing StageAttempt got the new columns with their DEFAULT 0, not NULL. Both session
+      // counters are checked: stageAttemptSchema requires each of them, so a NULL left behind by a
+      // migration would throw on the first read of any pre-existing attempt.
       const snapshot = migrated.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
-      expect(
-        snapshot.type === "WORKFLOW_SNAPSHOT"
-          ? snapshot.snapshot.stageAttempts[0]?.unproductiveSessions
-          : null,
-      ).toBe(0);
+      expect(snapshot.type === "WORKFLOW_SNAPSHOT" ? snapshot.snapshot.stageAttempts[0] : null).toMatchObject(
+        { unproductiveSessions: 0, packShareBackoffs: 0 },
+      );
     });
   });
 
@@ -1263,7 +1263,7 @@ describe("SQLite local state", () => {
       correlationId: `correlation-${commandId}`,
       actor: { type: "SYSTEM", id: "mock-provider" },
       type: "END_PROVIDER_SESSION",
-      payload: { providerSessionId, endReason },
+      payload: { providerSessionId, endReason, providerStarted: true },
     });
 
     const countProviderSessions = (raw: DatabaseSync): number =>

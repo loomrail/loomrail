@@ -75,10 +75,9 @@ export const decideContextWindowReported = (context: {
 
 // Spec §6.3 + §6.5. `endReason` decides what happens next; `checkpointsPublished` decides whether
 // this session counted as progress toward the loop guard. The switch is exhaustive over
-// ProviderSessionEndReason: COMPLETED and the two continuation reasons are handled here,
-// INTERRUPTED and CANCELLED are explicitly rejected because they are already handled by the
-// existing recovery/cancel decisions (decideRecoverInterruptedWorkflow, decideCancelPipeline) --
-// this function is never the one that ends a session for those reasons.
+// ProviderSessionEndReason: COMPLETED finishes the stage, the two continuation reasons and a
+// loop-driven INTERRUPTED continue the attempt, and CANCELLED is refused because
+// decideCancelPipeline owns it.
 export const decideSessionEnded = (context: {
   session: ProviderSession;
   attempt: StageAttempt;
@@ -92,6 +91,14 @@ export const decideSessionEnded = (context: {
     case "COMPLETED":
       return { type: "STAGE_FINISHED" };
 
+    // INTERRUPTED reaches this decision from exactly one place: the session loop cutting a session
+    // whose checkpoint write failed (spec §6.2). Recovery after a daemon restart never does --
+    // reconciliation writes the session's end itself, without this decision -- so counting it here
+    // cannot punish an attempt for the process dying. §6.2 is explicit that a failed checkpoint
+    // write "leaves the session unproductive, i.e. falls under §6.5, rather than dissolving in the
+    // log", which is precisely this branch. CANCELLED stays refused: cancelling is not a session
+    // outcome at all, and decideCancelPipeline owns the whole run.
+    case "INTERRUPTED":
     case "HANDOFF":
     case "CONTEXT_EXHAUSTED": {
       const productive = context.checkpointsPublished > 0;
@@ -123,11 +130,10 @@ export const decideSessionEnded = (context: {
       };
     }
 
-    case "INTERRUPTED":
     case "CANCELLED":
       throw new WorkflowDomainError(
         "SESSION_END_REASON_NOT_HANDLED",
-        "This end reason is handled by the existing recovery and cancellation decisions, not decideSessionEnded",
+        "Cancellation is handled by decideCancelPipeline, not decideSessionEnded",
         { endReason: context.endReason },
       );
   }
@@ -147,7 +153,8 @@ export type StageAttemptPauseReason =
       budgetBytes: number;
       budgetTokens: number;
     }
-  | { type: "PROVIDER_REJECTED_PACK"; sessionOrdinal: number };
+  | { type: "PROVIDER_REJECTED_PACK"; sessionOrdinal: number }
+  | { type: "PROVIDER_START_FAILED"; sessionOrdinal: number };
 
 export type StageAttemptPauseDecision = {
   workItem: WorkItem;
@@ -183,6 +190,15 @@ const pauseWording = (reason: StageAttemptPauseReason): PauseWording => {
           "Split this WorkItem into smaller ones, or run this stage on a provider with a larger context window.",
         pauseReason: "The required context sections do not fit the pack budget.",
       };
+    case "PROVIDER_START_FAILED":
+      return {
+        title: "The provider could not run this stage",
+        context:
+          "Starting the provider session failed for a reason that is not the size of the context pack, and the retry failed too. Loomrail has nothing left to adjust on its own.",
+        recommendation:
+          "Check that the provider is reachable and configured, then resume this stage or cancel the run.",
+        pauseReason: "The provider session failed to start.",
+      };
     case "PROVIDER_REJECTED_PACK":
       return {
         title: "The provider rejected the assembled context pack twice",
@@ -199,19 +215,24 @@ export const decideStageAttemptHardPause = (context: {
   now: string;
   workItem: WorkItem;
   run: PipelineRun;
-  // For NO_PROGRESS this is `decideSessionEnded`'s already-decided attempt, which carries the new
-  // unproductive-session count and is already HARD_PAUSED; the pause below is idempotent so the
-  // same function serves the reasons that arrive with an untouched attempt.
+  // The StageAttempt as it stands in storage, never one another decision has already transitioned:
+  // this function performs the whole transition and bumps the version exactly once, so handing it a
+  // pre-bumped attempt would write a version the stored row cannot match. For NO_PROGRESS the
+  // caller folds `decideSessionEnded`'s new unproductive-session count into the stored attempt and
+  // passes that.
   stageAttempt: StageAttempt;
   previousStatus: StageAttempt["status"];
   humanRequestId: string;
   reason: StageAttemptPauseReason;
 }): StageAttemptPauseDecision => {
   const wording = pauseWording(context.reason);
-  const stageAttempt: StageAttempt =
-    context.stageAttempt.status === "HARD_PAUSED"
-      ? context.stageAttempt
-      : { ...context.stageAttempt, status: "HARD_PAUSED", version: context.stageAttempt.version + 1 };
+  // The failure code is what makes this pause answerable later: see sessionPauseFailureCodes.
+  const stageAttempt: StageAttempt = {
+    ...context.stageAttempt,
+    status: "HARD_PAUSED",
+    failureCode: context.reason.type,
+    version: context.stageAttempt.version + 1,
+  };
   const run: PipelineRun = {
     ...context.run,
     status: "HARD_PAUSED",
@@ -231,9 +252,11 @@ export const decideStageAttemptHardPause = (context: {
     projectId: workItem.projectId,
     workItemId: workItem.id,
     stageAttemptId: stageAttempt.id,
-    // FREE_TEXT with no options: the owner's real answer is an action on the run (resume, cancel,
-    // split the WorkItem), not a choice Loomrail can enumerate. A blocking request keeps the
-    // stalled attempt visible in the owner's inbox instead of leaving a silently paused pipeline.
+    // FREE_TEXT with `allowOther`: the owner's answer is prose, not a choice Loomrail can
+    // enumerate, and answering it is what lifts the pause and queues the stage again (see
+    // decideAnswerHumanRequest's session-pause branch). The answer is recorded as a Decision, so
+    // the next session's pack carries what the owner said about the stall -- which is the point of
+    // asking rather than merely pausing.
     kind: "FREE_TEXT",
     blocking: true,
     title: wording.title,

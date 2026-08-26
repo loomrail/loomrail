@@ -296,6 +296,11 @@ export const stageAttemptSchema = z
     // HARD-pause. Lives on the StageAttempt (not in daemon memory) so a daemon restart -- itself
     // a normal end of a session -- cannot reset the very guard meant to catch that scenario.
     unproductiveSessions: z.number().int().nonnegative(),
+    // §7: how many times the pack share has been stepped down after a provider rejected a pack
+    // Loomrail judged as fitting. Durable for exactly the reason `unproductiveSessions` is: §6.4
+    // makes a daemon restart an ordinary end of a session, so a counter held in daemon memory
+    // would be cleared by the very event the "one automatic retry, then ask" rule must survive.
+    packShareBackoffs: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -890,8 +895,18 @@ export const endProviderSessionCommandSchema = commandBaseSchema.extend({
     .object({
       providerSessionId: opaqueIdSchema,
       endReason: providerSessionEndReasonSchema,
+      // Whether the provider actually began running this session. Spec §6.5's unproductive-session
+      // guard is about an agent that ran and published nothing; a session the adapter refused to
+      // start never had the chance, and §7's pack-size branch owns that case instead. Recording the
+      // fact rather than the rule keeps `endReason` truthful in the audit log: the session really
+      // was interrupted, it just was not the agent's silence that interrupted it.
+      providerStarted: z.boolean(),
     })
-    .strict(),
+    .strict()
+    .refine(
+      (payload) => payload.providerStarted || payload.endReason === "INTERRUPTED",
+      "A session the provider never started can only have ended as INTERRUPTED",
+    ),
 });
 
 // Spec §6.2. The caller supplies the occupancy report and the threshold it is judged against;
@@ -928,7 +943,25 @@ export const stageAttemptHardPauseReasonSchema = z.discriminatedUnion("type", [
       sessionOrdinal: z.number().int().positive(),
     })
     .strict(),
+  // A provider failure that is not a size rejection. Kept apart from PROVIDER_REJECTED_PACK so a
+  // transient error is never answered by shrinking the pack, and so the owner is not asked about
+  // a context size that had nothing to do with it (spec §6.3 routes failures to existing handling).
+  z
+    .object({
+      type: z.literal("PROVIDER_START_FAILED"),
+      sessionOrdinal: z.number().int().positive(),
+    })
+    .strict(),
 ]);
+
+// Spec §7's one automatic retry after a rejected pack. A command of its own rather than a flag on
+// END_PROVIDER_SESSION: the reduction is a durable state change on the StageAttempt with its own
+// audit event, and folding it into the session's end would hide it inside a command about
+// something else.
+export const reduceContextPackShareCommandSchema = commandBaseSchema.extend({
+  type: z.literal("REDUCE_CONTEXT_PACK_SHARE"),
+  payload: z.object({ stageAttemptId: opaqueIdSchema }).strict(),
+});
 
 export const hardPauseStageAttemptCommandSchema = commandBaseSchema.extend({
   type: z.literal("HARD_PAUSE_STAGE_ATTEMPT"),
@@ -1142,6 +1175,17 @@ export const contextHandoffRequestedResultSchema = z
   })
   .strict();
 
+export const contextPackShareReducedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("CONTEXT_PACK_SHARE_REDUCED"),
+    replayed: z.boolean(),
+    workItemId: opaqueIdSchema,
+    stageAttempt: stageAttemptSchema,
+    events: z.array(stageAttemptChangedEventSchema),
+  })
+  .strict();
+
 export const stageAttemptHardPausedResultSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -1287,3 +1331,5 @@ export type HardPauseStageAttemptCommand = z.infer<typeof hardPauseStageAttemptC
 export type StageAttemptHardPauseReason = z.infer<typeof stageAttemptHardPauseReasonSchema>;
 export type ContextHandoffRequestedResult = z.infer<typeof contextHandoffRequestedResultSchema>;
 export type StageAttemptHardPausedResult = z.infer<typeof stageAttemptHardPausedResultSchema>;
+export type ReduceContextPackShareCommand = z.infer<typeof reduceContextPackShareCommandSchema>;
+export type ContextPackShareReducedResult = z.infer<typeof contextPackShareReducedResultSchema>;

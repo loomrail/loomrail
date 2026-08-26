@@ -76,8 +76,32 @@ export type ProviderSessionListener = {
   onCheckpoint: (draft: CheckpointDraft) => void;
 };
 
+// The one failure `start` can report that Loomrail knows how to act on by itself (spec §7): the
+// pack was judged as fitting from a LOOMRAIL_ESTIMATE and the provider disagreed. Every other
+// rejection is a provider failure, and treating the two alike would answer a transient network
+// error by shrinking the pack and then asking the owner the wrong question. A class rather than a
+// string match, so an adapter states the diagnosis instead of Loomrail guessing it from prose.
+export class ProviderPackTooLargeError extends Error {
+  readonly sessionId: string;
+  readonly estimatedTokens: number | null;
+
+  constructor(sessionId: string, message: string, estimatedTokens: number | null = null) {
+    super(message);
+    this.name = "ProviderPackTooLargeError";
+    this.sessionId = sessionId;
+    this.estimatedTokens = estimatedTokens;
+  }
+}
+
 export type ProviderAdapter = {
   capabilities: () => ProviderCapabilities;
   start: (invocation: ProviderInvocation, listener: ProviderSessionListener) => Promise<ProviderOutcome>;
   requestHandoff: (sessionId: string) => Promise<void>;
+  // Spec §7 promises a *hard* cut when a wind-down request is ignored, and `requestHandoff` cannot
+  // deliver one: it is a request the agent is free to keep ignoring. Without this method Loomrail
+  // would stop waiting on `start()` and open the next session while the abandoned one is still
+  // running and still billing -- two concurrent sessions on one StageAttempt, which Task 7's
+  // storage invariant forbids and which the database would nevertheless show as satisfied.
+  // Idempotent, and safe for a session that has already ended.
+  abortSession: (sessionId: string) => Promise<void>;
 };

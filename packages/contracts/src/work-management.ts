@@ -24,6 +24,7 @@ import {
   contextFloorExceededEventSchema,
   contextHandoffRequestedEventSchema,
   contextHandoffRequestedResultSchema,
+  contextPackShareReducedResultSchema,
   endProviderSessionCommandSchema,
   hardPauseStageAttemptCommandSchema,
   humanRequestAnsweredResultSchema,
@@ -46,6 +47,7 @@ import {
   providerSessionStartedResultSchema,
   publishCheckpointCommandSchema,
   reconcileWorkflowsCommandSchema,
+  reduceContextPackShareCommandSchema,
   recoveryReportCreatedEventSchema,
   resolveAcceptanceCommandSchema,
   resumePipelineCommandSchema,
@@ -287,6 +289,7 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   endProviderSessionCommandSchema,
   requestContextHandoffCommandSchema,
   hardPauseStageAttemptCommandSchema,
+  reduceContextPackShareCommandSchema,
 ]);
 
 const commandResultBaseSchema = z
@@ -338,6 +341,7 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   providerSessionEndedResultSchema,
   contextHandoffRequestedResultSchema,
   stageAttemptHardPausedResultSchema,
+  contextPackShareReducedResultSchema,
 ]);
 
 export const registerFixtureProjectRequestSchema = z

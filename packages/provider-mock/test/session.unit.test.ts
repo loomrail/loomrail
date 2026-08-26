@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 
 import { checkpointDraftSchema, type CheckpointDraft, type ContextWindowUsage } from "@loomrail/contracts";
-import { providerCapabilitiesSchema, type ProviderInvocation } from "@loomrail/provider-core";
+import {
+  providerCapabilitiesSchema,
+  ProviderPackTooLargeError,
+  type ProviderInvocation,
+} from "@loomrail/provider-core";
 import { describe, expect, it } from "vitest";
 
 import { createMockProvider } from "../src/index.js";
@@ -154,5 +158,41 @@ describe("mock provider session behaviour", () => {
       checkpointOnRequest: true,
       contextWindowTokens: 64_000,
     });
+  });
+
+  it("stops an aborted session instead of running on after Loomrail has given up on it", async () => {
+    // Spec §7's hard cut. `requestHandoff` is a request the agent may keep ignoring, so without a
+    // working abort the caller stops waiting while the run keeps going -- two live sessions on one
+    // StageAttempt, and one of them still billing. `ignoreHandoffRequest` here makes the wind-down
+    // request useless on purpose, so only the abort can end this run.
+    const provider = createMockProvider({
+      contextWindowTokens: 200_000,
+      tokensPerTurn: 1,
+      checkpointEvery: 1_000_000,
+      ignoreHandoffRequest: true,
+    });
+    const sink = listener();
+    const run = provider.start(implementInvocation(), sink);
+
+    await provider.requestHandoff("session-1");
+    const turnsBeforeAbort = sink.usages.length;
+    await provider.abortSession("session-1");
+
+    await expect(run).resolves.toMatchObject({ type: "CONTEXT_EXHAUSTED" });
+    // Far short of the 200,000 turns this window would otherwise take to fill: a broken abort
+    // fails this assertion on the count rather than passing quietly.
+    expect(sink.usages.length).toBeLessThan(turnsBeforeAbort + 10);
+  });
+
+  it("rejects a pack it considers too large before running any turn", async () => {
+    // Spec §7's mis-estimated-pack branch. A typed rejection, so the caller can tell "your pack is
+    // too big" apart from a transient failure instead of guessing from an error message.
+    const provider = createMockProvider({ rejectPacksLongerThan: 5 });
+    const sink = listener();
+
+    await expect(provider.start(implementInvocation(), sink)).rejects.toBeInstanceOf(
+      ProviderPackTooLargeError,
+    );
+    expect(sink.usages).toHaveLength(0);
   });
 });

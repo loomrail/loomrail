@@ -37,6 +37,8 @@ import type {
 } from "@loomrail/contracts";
 import { nextWorkflowStage, validateWorkflowTemplate } from "@loomrail/workflow-engine";
 
+import { isSessionPauseFailureCode } from "./session-pause.js";
+
 export type WorkflowDomainErrorCode =
   | "WORKFLOW_NOT_READY"
   | "WORKFLOW_ALREADY_ACTIVE"
@@ -294,6 +296,7 @@ export const decideStartMockPipeline = (
     finishedAt: null,
     failureCode: null,
     unproductiveSessions: 0,
+    packShareBackoffs: 0,
   };
   const run: PipelineRun = {
     schemaVersion: 1,
@@ -848,6 +851,7 @@ export const decideApplyProviderOutcome = (
     finishedAt: null,
     failureCode: null,
     unproductiveSessions: 0,
+    packShareBackoffs: 0,
   };
   const run: PipelineRun = {
     ...context.run,
@@ -945,9 +949,20 @@ export const decideAnswerHumanRequest = (
       { status: context.request.status },
     );
   }
+  // A stage waits on its owner in two shapes. The ordinary one is WAITING_HUMAN: the provider asked
+  // a question mid-stage. The second is a HARD pause opened by the session loop (spec §6.5, §D8,
+  // §7), which the spec requires to be a pause *and* a question -- and a question the owner cannot
+  // answer is not one. Such a pause is recognised by its failure code (see session-pause.ts); a
+  // budget hard pause carries none and still requires a budget override, which is the only thing
+  // that actually addresses it.
+  const pausedBySessionLoop =
+    context.run.status === "HARD_PAUSED" &&
+    context.stageAttempt.status === "HARD_PAUSED" &&
+    isSessionPauseFailureCode(context.stageAttempt.failureCode);
+  const waitingOnHuman =
+    context.run.status === "WAITING_HUMAN" && context.stageAttempt.status === "WAITING_HUMAN";
   if (
-    context.run.status !== "WAITING_HUMAN" ||
-    context.stageAttempt.status !== "WAITING_HUMAN" ||
+    (!waitingOnHuman && !pausedBySessionLoop) ||
     context.run.currentStageAttemptId !== context.stageAttempt.id ||
     context.request.stageAttemptId !== context.stageAttempt.id
   ) {
@@ -984,6 +999,10 @@ export const decideAnswerHumanRequest = (
   const stageAttempt: StageAttempt = {
     ...context.stageAttempt,
     status: "QUEUED",
+    // Cleared, so the attempt does not carry the reason for a pause it has just left. The counters
+    // are deliberately not reset: §6.5's guard exists precisely so that answering the question does
+    // not buy an unbounded number of fresh unproductive sessions.
+    failureCode: null,
     version: context.stageAttempt.version + 1,
   };
   const run: PipelineRun = {
@@ -1200,6 +1219,18 @@ export const decideApproveBudgetOverride = (
       "A BudgetPolicy override is only available for a hard-paused pipeline",
     );
   }
+  // Not every hard pause is a budget pause. The session loop's pauses (spec §6.5, §D8, §7) carry a
+  // failure code, and a bigger token budget addresses none of them: it would supersede the attempt
+  // with a fresh one, silently orphaning the question the owner was asked and, for a context floor
+  // that still does not fit, walking straight back into the same pause. Those are answered through
+  // their HumanRequest instead.
+  if (isSessionPauseFailureCode(context.stageAttempt.failureCode)) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "This stage is paused by its provider sessions, not by the budget; answer its open request instead",
+      { failureCode: context.stageAttempt.failureCode },
+    );
+  }
   if (
     command.payload.maxEstimatedTokens <= context.currentBudgetPolicy.maxEstimatedTokens ||
     command.payload.maxEstimatedTokens <= context.cumulativeUsage
@@ -1230,6 +1261,7 @@ export const decideApproveBudgetOverride = (
     stage: context.stageAttempt.stage,
     attempt: context.stageAttempt.attempt + 1,
     unproductiveSessions: 0,
+    packShareBackoffs: 0,
     status: "QUEUED",
     version: 1,
     startedAt: null,
