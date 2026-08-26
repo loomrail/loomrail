@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
+import type { ServerResponse } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { stateCommandResultSchema } from "@loomrail/contracts";
+import type { FastifyBaseLogger } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { createEventStreamRegistry, MAX_OPEN_STREAMS } from "../src/event-stream.js";
 import { startDaemon, type RunningDaemon } from "../src/server.js";
 
 import {
@@ -12,6 +15,37 @@ import {
   mutationHeaders,
   type AuthenticatedSession,
 } from "./server.integration.test.js";
+
+// A FastifyBaseLogger that discards everything: these tests assert on registry behaviour, not on
+// what got logged.
+const noop = (): void => {};
+const silentLogger: FastifyBaseLogger = {
+  level: "silent",
+  fatal: noop,
+  error: noop,
+  warn: noop,
+  info: noop,
+  debug: noop,
+  trace: noop,
+  silent: noop,
+  child: () => silentLogger,
+};
+
+// A minimal ServerResponse double that records written frames and remembers that it was closed,
+// without pulling in a real HTTP response.
+const fakeResponse = (written: string[]) => {
+  const response = {
+    ended: false,
+    write: (frame: string) => {
+      written.push(frame);
+      return true;
+    },
+    end: () => {
+      response.ended = true;
+    },
+  };
+  return response as unknown as ServerResponse & { ended: boolean };
+};
 
 // Reads the body of an SSE response up to the first data frame. Bounded by a chunk count, not a
 // timer: "nothing arrived" here always means "the stream closed or is silent", and a timer cannot
@@ -189,4 +223,51 @@ describe("daemon event stream", () => {
     await expect(Promise.race([closed, timedOut])).resolves.toBe("closed");
     await stream.body?.cancel();
   }, 15_000);
+
+  // Held a stream dolder than the session that opened it turns the channel into a way to hold
+  // authenticated access forever. Proven through `tick()`, not by waiting out the real interval: the
+  // difference between "proven" and "runs" is the one line the production timer calls it with.
+  it("closes an open stream once its session has expired", async () => {
+    const registry = createEventStreamRegistry({ logger: silentLogger });
+    const written: string[] = [];
+    let authorized = true;
+    const response = fakeResponse(written);
+    registry.open({ response, isAuthorized: () => authorized });
+
+    registry.tick();
+    expect(written.at(-1)).toBe(": ping\n\n");
+    expect(registry.openCount()).toBe(1);
+
+    authorized = false;
+    registry.tick();
+    expect(registry.openCount()).toBe(0);
+    expect(response.ended).toBe(true);
+  });
+
+  it("refuses to open more streams than the limit and leaves the open ones alone", () => {
+    const registry = createEventStreamRegistry({ logger: silentLogger });
+    const releases = Array.from({ length: MAX_OPEN_STREAMS }, () =>
+      registry.open({ response: fakeResponse([]), isAuthorized: () => true }),
+    );
+    expect(releases.every((release) => release !== null)).toBe(true);
+    expect(registry.open({ response: fakeResponse([]), isAuthorized: () => true })).toBeNull();
+    expect(registry.openCount()).toBe(MAX_OPEN_STREAMS);
+  });
+
+  it("answers a stream request over the limit with a status rather than an opened stream", async () => {
+    daemon = await startDaemon({ bootstrapToken: token, logger: false });
+    const session = await authenticate(daemon, token);
+    const localDaemon = daemon;
+    const held = await Promise.all(
+      Array.from({ length: MAX_OPEN_STREAMS }, () =>
+        fetch(`${localDaemon.baseUrl}/api/v1/stream`, { headers: { cookie: session.cookie } }),
+      ),
+    );
+    const refused = await fetch(`${localDaemon.baseUrl}/api/v1/stream`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(refused.status).toBe(503);
+    await refused.body?.cancel();
+    await Promise.all(held.map((response) => response.body?.cancel()));
+  });
 });

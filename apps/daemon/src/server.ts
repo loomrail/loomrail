@@ -267,7 +267,10 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     unusedConnections.delete(request.socket);
   });
   app.addHook("preClose", (done) => {
+    // Every shutdown step here is load-bearing on its own account -- each guards a distinct way a
+    // daemon can fail to exit or leak a resource. Add to this list; do not replace an entry in it.
     eventStreams.closeAll();
+    eventStreams.stopHeartbeat();
     for (const socket of unusedConnections) socket.destroy();
     unusedConnections.clear();
     done();

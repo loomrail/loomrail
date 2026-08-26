@@ -19,6 +19,7 @@ export type EventStreamRegistry = {
   tick: () => void;
   closeAll: () => void;
   openCount: () => number;
+  stopHeartbeat: () => void;
 };
 
 export const createEventStreamRegistry = (options: { logger: FastifyBaseLogger }): EventStreamRegistry => {
@@ -43,7 +44,7 @@ export const createEventStreamRegistry = (options: { logger: FastifyBaseLogger }
     }
   };
 
-  return {
+  const registry: EventStreamRegistry = {
     open: (subscriber) => {
       if (subscribers.size >= MAX_OPEN_STREAMS) return null;
       subscribers.add(subscriber);
@@ -69,5 +70,17 @@ export const createEventStreamRegistry = (options: { logger: FastifyBaseLogger }
       subscribers.clear();
     },
     openCount: () => subscribers.size,
+    stopHeartbeat: () => {
+      clearInterval(heartbeat);
+    },
   };
+
+  // The timer does nothing but call `tick`, which is what the tests drive directly. `unref` keeps
+  // an idle daemon from being held alive by its own heartbeat.
+  const heartbeat = setInterval(() => {
+    registry.tick();
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeat.unref();
+
+  return registry;
 };
