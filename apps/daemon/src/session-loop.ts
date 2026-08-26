@@ -229,7 +229,11 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
     // uses, so it reaches the owner exactly the way any other blocking question does -- a HumanRequest,
     // the run and this StageAttempt moved to WAITING_HUMAN, and the pending dispatch completed rather
     // than left to spin the drain.
-    const dispatchDecision = decideDispatchStage({ stage: attempt.stage, capabilities });
+    const dispatchDecision = decideDispatchStage({
+      stage: attempt.stage,
+      provider: capabilities.provider,
+      declaredStages: capabilities.stages,
+    });
     if (dispatchDecision.type === "STAGE_NOT_SERVED") {
       deps.state.execute({
         schemaVersion: 1,

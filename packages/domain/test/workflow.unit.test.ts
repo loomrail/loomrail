@@ -1,28 +1,17 @@
-import type { ProviderCapabilities } from "@loomrail/provider-core";
 import { describe, expect, it } from "vitest";
 
 import { decideDispatchStage } from "../src/index.js";
 
 // A live CODEX adapter, milestone A2: it has no filesystem access before E1, so it declares every
 // stage except the one that needs to change something -- IMPLEMENT.
-const codexCapabilities: ProviderCapabilities = {
-  provider: "CODEX",
-  start: true,
-  interrupt: true,
-  eventStream: true,
-  usageReporting: false,
-  contextWindowReporting: true,
-  checkpointOnRequest: true,
-  contextWindowTokens: 200_000,
-  stages: ["DISCOVERY", "PLAN", "REVIEW", "QA", "ACCEPTANCE"],
-  costReporting: false,
-};
+const codexDeclaredStages = ["DISCOVERY", "PLAN", "REVIEW", "QA", "ACCEPTANCE"] as const;
 
 describe("decideDispatchStage", () => {
   it("refuses to dispatch a stage the adapter did not declare", () => {
     const decision = decideDispatchStage({
       stage: "IMPLEMENT",
-      capabilities: { ...codexCapabilities, stages: ["DISCOVERY", "PLAN", "REVIEW"] },
+      provider: "CODEX",
+      declaredStages: ["DISCOVERY", "PLAN", "REVIEW"],
     });
     expect(decision.type).toBe("STAGE_NOT_SERVED");
   });
@@ -30,7 +19,8 @@ describe("decideDispatchStage", () => {
   it("dispatches a stage the adapter did declare", () => {
     const decision = decideDispatchStage({
       stage: "PLAN",
-      capabilities: { ...codexCapabilities, stages: ["DISCOVERY", "PLAN", "REVIEW"] },
+      provider: "CODEX",
+      declaredStages: ["DISCOVERY", "PLAN", "REVIEW"],
     });
     expect(decision.type).toBe("DISPATCH");
   });
@@ -40,7 +30,11 @@ describe("decideDispatchStage", () => {
   // says which stage or which provider is exactly as unactionable as no request at all -- and would
   // pass a test that only checked `decision.type === "STAGE_NOT_SERVED"`.
   it("opens a Human Request naming the stage and the provider", () => {
-    const decision = decideDispatchStage({ stage: "IMPLEMENT", capabilities: codexCapabilities });
+    const decision = decideDispatchStage({
+      stage: "IMPLEMENT",
+      provider: "CODEX",
+      declaredStages: codexDeclaredStages,
+    });
     expect(decision.type).toBe("STAGE_NOT_SERVED");
     if (decision.type !== "STAGE_NOT_SERVED") throw new Error("unreachable: asserted above");
     expect(decision.request.title).toContain("IMPLEMENT");
@@ -53,12 +47,11 @@ describe("decideDispatchStage", () => {
   // an accident of the one fixture above -- the request has to be built from the arguments, not a
   // constant string that happens to contain "IMPLEMENT" and "CODEX".
   it("names the stage and provider it was actually given, not a fixed pair", () => {
-    const claudeCodeCapabilities: ProviderCapabilities = {
-      ...codexCapabilities,
+    const decision = decideDispatchStage({
+      stage: "REVIEW",
       provider: "CLAUDE_CODE",
-      stages: ["DISCOVERY", "PLAN"],
-    };
-    const decision = decideDispatchStage({ stage: "REVIEW", capabilities: claudeCodeCapabilities });
+      declaredStages: ["DISCOVERY", "PLAN"],
+    });
     expect(decision.type).toBe("STAGE_NOT_SERVED");
     if (decision.type !== "STAGE_NOT_SERVED") throw new Error("unreachable: asserted above");
     expect(decision.request.title).toContain("REVIEW");
@@ -71,13 +64,11 @@ describe("decideDispatchStage", () => {
   // run in the mock milestones). This is the gate's required no-op: every stage the mock declares
   // must dispatch, not merely one of them.
   it("is a no-op for an adapter that declares every stage, like the mock", () => {
-    const mockCapabilities: ProviderCapabilities = {
-      ...codexCapabilities,
-      provider: "MOCK",
-      stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
-    };
-    for (const stage of mockCapabilities.stages) {
-      expect(decideDispatchStage({ stage, capabilities: mockCapabilities })).toEqual({ type: "DISPATCH" });
+    const allStages = ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"] as const;
+    for (const stage of allStages) {
+      expect(decideDispatchStage({ stage, provider: "MOCK", declaredStages: allStages })).toEqual({
+        type: "DISPATCH",
+      });
     }
   });
 });

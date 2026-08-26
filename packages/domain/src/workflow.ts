@@ -37,7 +37,6 @@ import type {
   WorkItem,
   WorkflowDispatch,
 } from "@loomrail/contracts";
-import type { ProviderCapabilities } from "@loomrail/provider-core";
 import { nextWorkflowStage, validateWorkflowTemplate } from "@loomrail/workflow-engine";
 
 import { isSessionPauseFailureCode } from "./session-pause.js";
@@ -268,12 +267,19 @@ export type DispatchStageDecision =
  * Gates a stage against the adapter about to run it (milestone A2).
  *
  * Before milestone E1 a live adapter runs its CLI in an empty temporary directory: it has no
- * filesystem access, so it cannot serve a stage it does not declare in `capabilities().stages`
- * (see the comment on `stages` in `@loomrail/provider-core`) -- most notably IMPLEMENT, which
- * needs something to change. Without this gate the dispatcher would hand the stage to the adapter
+ * filesystem access, so it cannot serve a stage it does not declare (see the comment on `stages`
+ * in `@loomrail/provider-core`'s `ProviderCapabilities`) -- most notably IMPLEMENT, which needs
+ * something to change. Without this gate the dispatcher would hand the stage to the adapter
  * anyway, the adapter would return prose, and the stage would look done with no work behind it --
  * a stage that produced nothing but reported success. That is knowable in advance, from data the
  * adapter already declared, without ever starting a session.
+ *
+ * Takes the stage name, the provider's identity and its declared stages as plain data rather than
+ * a `ProviderCapabilities` object: this decision only ever needs those three values, and importing
+ * the whole adapter contract to get them would give the domain a dependency it does not need --
+ * one more thing this package would have to be reasoned about, and rebuilt, alongside. The caller
+ * in `session-loop.ts` already holds the capabilities object; that is the layer that legitimately
+ * knows what an adapter contract looks like.
  *
  * The refusal has to be visible, not just prevented: a gate that silently declines is a stage that
  * never runs and nobody notices. So a refusal returns a HumanRequestDraft, the same shape
@@ -285,12 +291,13 @@ export type DispatchStageDecision =
  */
 export const decideDispatchStage = (context: {
   stage: WorkflowStage;
-  capabilities: ProviderCapabilities;
+  provider: string;
+  declaredStages: readonly WorkflowStage[];
 }): DispatchStageDecision => {
-  if (context.capabilities.stages.includes(context.stage)) {
+  if (context.declaredStages.includes(context.stage)) {
     return { type: "DISPATCH" };
   }
-  const declaredStages = context.capabilities.stages.join(", ");
+  const declaredStages = context.declaredStages.join(", ");
   return {
     type: "STAGE_NOT_SERVED",
     request: {
@@ -300,8 +307,8 @@ export const decideDispatchStage = (context: {
       // a choice Loomrail can list.
       kind: "FREE_TEXT",
       blocking: true,
-      title: `${context.capabilities.provider} cannot serve ${context.stage}`,
-      context: `The ${context.capabilities.provider} adapter declares only these stages: ${declaredStages}. Dispatching the ${context.stage} stage to it would return prose with no work behind it, so Loomrail refused to start a session.`,
+      title: `${context.provider} cannot serve ${context.stage}`,
+      context: `The ${context.provider} adapter declares only these stages: ${declaredStages}. Dispatching the ${context.stage} stage to it would return prose with no work behind it, so Loomrail refused to start a session.`,
       recommendation:
         "Reassign this stage to an adapter that declares it, or change the workflow template so this stage is not routed to this provider.",
       options: [],

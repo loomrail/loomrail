@@ -154,9 +154,6 @@ importers:
       '@loomrail/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@loomrail/provider-core':
-        specifier: workspace:*
-        version: link:../provider-core
       '@loomrail/workflow-engine':
         specifier: workspace:*
         version: link:../workflow-engine
