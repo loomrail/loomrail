@@ -10,21 +10,32 @@ const recordingPath = fileURLToPath(new URL("./recordings/not-logged-in.jsonl", 
 describe("parseClaudeEvent", () => {
   it("treats an authentication failure as a failure, even though its subtype says success", () => {
     const event = parseClaudeEvent(
-      '{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login","total_cost_usd":0}',
+      '{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0}}',
     );
     expect(event).toEqual({
       type: "result",
       ok: false,
       text: "Not logged in · Please run /login",
       costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
     });
   });
 
   it("treats a real success as a success", () => {
     const event = parseClaudeEvent(
-      '{"type":"result","subtype":"success","is_error":false,"result":"ok","total_cost_usd":0.0031}',
+      '{"type":"result","subtype":"success","is_error":false,"result":"ok","total_cost_usd":0.0031,"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":3}}',
     );
-    expect(event).toEqual({ type: "result", ok: true, text: "ok", costUsd: 0.0031 });
+    expect(event).toEqual({
+      type: "result",
+      ok: true,
+      text: "ok",
+      costUsd: 0.0031,
+      inputTokens: 10,
+      outputTokens: 5,
+      cachedInputTokens: 3,
+    });
   });
 
   // The user's own hooks stream through here carrying their stdout and stderr. They are not provider

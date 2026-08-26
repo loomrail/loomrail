@@ -35,14 +35,18 @@ const SESSION_DEADLINE_MS = 600_000;
 // A2 ships, so this is the figure the pack budget (spec §4.3) is computed against. Chosen to match
 // the smallest window a current Claude model documents, for the same reason provider-codex picks
 // a conservative default over an optimistic one -- overstating the window teaches the budget to
-// assemble packs this provider then has no room for.
+// assemble packs this provider then has no room for. PLAINLY: this is a conservative guess, not a
+// figure checked against the real CLI -- nothing in this milestone's reconnaissance confirmed it.
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 
 // This CLI enforces its own spend cap (`--max-budget-usd`) instead of Loomrail's estimate being
 // the only limit -- BD-001. Until "remaining budget" is threaded through `ProviderInvocation`
 // (it is not, as of this milestone: the type carries `dispatch`/`session`/`contextPack` only),
 // this is a fixed ceiling supplied once at construction, the same way
-// DEFAULT_CONTEXT_WINDOW_TOKENS is a fixed declared figure rather than a per-session one.
+// DEFAULT_CONTEXT_WINDOW_TOKENS is a fixed declared figure rather than a per-session one. PLAINLY:
+// this $5 figure is a conservative guess of "unlikely to bite a real DISCOVERY/PLAN/REVIEW
+// session before it finishes", not a number measured against the real CLI or a spend policy
+// anyone signed off on -- treat it as a placeholder a real policy should replace.
 const DEFAULT_MAX_BUDGET_USD = 5;
 
 export type CreateClaudeCodeProviderOptions = {
@@ -115,11 +119,13 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         interrupt: true,
         eventStream: true,
         usageReporting: true,
-        // `parseClaudeEvent`'s one exposed event carries `costUsd` but no token breakdown (see
-        // its own doc comment -- the wire event's `usage` object is deliberately not surfaced).
-        // There is nothing to report window occupancy from, so Loomrail must estimate it for this
-        // provider (spec §5.2, LOOMRAIL_ESTIMATE) rather than being told ACTUAL figures mid-
-        // session.
+        // `parseClaudeEvent`'s one exposed event now carries real `inputTokens`/`outputTokens`
+        // (see `stream.ts`), which `onUsage` below reports -- but this is deliberately still
+        // `false`: `onContextWindow` is a separate channel (spec BD-001) this adapter does not
+        // call anywhere, so declaring occupancy reporting here would promise a channel nothing
+        // feeds. Loomrail estimates occupancy for this provider instead (spec §5.2,
+        // LOOMRAIL_ESTIMATE) until a future task wires `event.inputTokens` through to
+        // `onContextWindow` too, the way provider-codex's `turn.completed` handler does.
         contextWindowReporting: false,
         // The one thing this adapter can report that provider-codex cannot: `total_cost_usd` on
         // the terminal `result` event is a real figure from the CLI, not something Loomrail has
@@ -152,7 +158,14 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         const jsonSchemaPath = join(workingDir, "checkpoint-json-schema.json");
         await writeFile(jsonSchemaPath, JSON.stringify(z.toJSONSchema(checkpointDraftSchema)), "utf8");
 
-        // Verbatim, exactly as task 1's reconnaissance established it against the real CLI.
+        // Verbatim, exactly as task 1's reconnaissance established it against the real CLI --
+        // with one correction: `claude --help` documents `-p, --print` as a boolean flag ("Print
+        // response and exit"), not an option that takes the prompt as its own value. The prompt
+        // is a separate positional argument; it is placed last, after every named flag, so the
+        // flag block above stays exactly the order reconnaissance recorded and the positional
+        // cannot be misread as belonging to `-p` (or to any flag before it) by a future reader --
+        // `child_process.spawn` receives this as an argv array, not a shell string, so there is no
+        // quoting hazard in appending arbitrary prompt text here either way.
         // `--permission-mode plan` plus the empty `workingDir` above is what keeps this adapter
         // from touching a repository before E1 -- and, per SD-001, this is the only permission
         // mode this adapter ever passes. Never `--dangerously-skip-permissions`, never
@@ -163,7 +176,6 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         // comment in `capabilities` above for why that channel is not built.
         const args = [
           "-p",
-          invocation.contextPack.text,
           "--output-format",
           "stream-json",
           "--verbose",
@@ -174,6 +186,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
           String(resolved.maxBudgetUsd),
           "--json-schema",
           jsonSchemaPath,
+          invocation.contextPack.text,
         ];
 
         let outcome: ProviderOutcome = { type: "CONTEXT_EXHAUSTED" };
@@ -196,12 +209,16 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
             // like a checkpoint, so that a failed login cannot masquerade as a completed session
             // and silently defeat the session loop's guard against repeated failure.
             const usage: ProviderUsage = {
-              // `parseClaudeEvent` does not surface a token breakdown (see the capabilities
-              // comment above) -- 0 here is "not reported", not "measured as zero". `costUsd` is
-              // the one figure in this record that is real, and `quality: "ACTUAL"` describes
-              // that figure, not the token fields the contract otherwise requires.
-              inputTokens: 0,
-              outputTokens: 0,
+              // Real figures from the wire `result` event's own `usage` object -- see
+              // `stream.ts`'s doc comments on `ClaudeEvent`/`rawResultEventSchema` for exactly
+              // which wire fields these are and why `cachedInputTokens` maps to
+              // `cache_read_input_tokens` specifically (the tokens served from a previous cache
+              // entry) and not `cache_creation_input_tokens` (a distinct, separately-billed
+              // quantity with no field of its own here). `quality: "ACTUAL"` is honest for every
+              // field in this record now, not just `costUsd`.
+              inputTokens: event.inputTokens,
+              outputTokens: event.outputTokens,
+              cachedInputTokens: event.cachedInputTokens,
               costUsd: event.costUsd,
               quality: "ACTUAL",
             };

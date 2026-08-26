@@ -10,7 +10,22 @@ import { z } from "zod";
  * `parseClaudeEvent` before it ever reaches a caller: hook events carry `stdout`/`stderr` captured
  * on the owner's machine, and SD-003 forbids Loomrail recording that text.
  */
-export type ClaudeEvent = { type: "result"; ok: boolean; text: string; costUsd: number };
+export type ClaudeEvent = {
+  type: "result";
+  ok: boolean;
+  text: string;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  // Only `cache_read_input_tokens` (the wire's own name for tokens served from a previous cache
+  // entry) maps to this -- it is what "cached input tokens" means in the everyday sense: input
+  // the CLI did not have to reprocess. `cache_creation_input_tokens` (tokens spent *writing* a new
+  // cache entry) is a distinct, separately-billed quantity that is not "cached input" in that
+  // sense; there is no field in the contract it maps to cleanly, so it is read out of `usage`
+  // nowhere in this module rather than folded into either `inputTokens` or `cachedInputTokens` and
+  // invented into a figure the wire event never reported on its own.
+  cachedInputTokens: number;
+};
 
 const rawSystemEventSchema = z.object({
   type: z.literal("system"),
@@ -27,6 +42,15 @@ const rawResultEventSchema = z.object({
   is_error: z.boolean(),
   result: z.string(),
   total_cost_usd: z.number(),
+  // Not `.strict()`: the real `usage` object also carries `cache_creation_input_tokens`,
+  // `server_tool_use`, `service_tier`, and more that this adapter has no use for -- see the
+  // `cachedInputTokens` doc comment on `ClaudeEvent` above for why `cache_creation_input_tokens`
+  // specifically is left unread rather than picked up here and dropped later.
+  usage: z.object({
+    input_tokens: z.number(),
+    output_tokens: z.number(),
+    cache_read_input_tokens: z.number(),
+  }),
 });
 
 const rawClaudeLineSchema = z.discriminatedUnion("type", [rawSystemEventSchema, rawResultEventSchema]);
@@ -65,6 +89,14 @@ export const parseClaudeEvent = (line: string): ClaudeEvent | null => {
       // recorded stream even if a future hook subtype this parser has not seen carries the same.
       return null;
     case "result":
-      return { type: "result", ok: !raw.is_error, text: raw.result, costUsd: raw.total_cost_usd };
+      return {
+        type: "result",
+        ok: !raw.is_error,
+        text: raw.result,
+        costUsd: raw.total_cost_usd,
+        inputTokens: raw.usage.input_tokens,
+        outputTokens: raw.usage.output_tokens,
+        cachedInputTokens: raw.usage.cache_read_input_tokens,
+      };
   }
 };

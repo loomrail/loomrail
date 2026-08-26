@@ -195,6 +195,22 @@ describe("createClaudeCodeProvider", () => {
     expect(usages.at(-1)?.costUsd).toBeGreaterThan(0);
   });
 
+  // `hello.jsonl`'s recorded `usage` object carries real, distinct-enough-to-not-be-confused-with-
+  // each-other figures (input 4, output 214, cache_read 17038) -- this is the fact FINDING 1 named:
+  // `parseClaudeEvent` surfaces real token counts, and the adapter must forward them rather than
+  // reporting zeros tagged `ACTUAL`. `cachedInputTokens` is asserted against `cache_read_input_tokens`
+  // specifically -- see the mapping rationale in `stream.ts`'s `ClaudeEvent` doc comment.
+  it("reports the token counts the CLI reports, not zeros", async () => {
+    const usages: ProviderUsage[] = [];
+    await runAgainstRecording("hello.jsonl", { onUsage: (usage) => usages.push(usage) });
+    expect(usages.at(-1)).toMatchObject({
+      inputTokens: 4,
+      outputTokens: 214,
+      cachedInputTokens: 17038,
+      quality: "ACTUAL",
+    });
+  });
+
   // `hello.jsonl`'s terminal result is JSON conforming to checkpointDraftSchema (what
   // `--json-schema` is supposed to produce on success) -- the adapter must both publish it via
   // `onCheckpoint` and use its `summary` field as the outcome's, not the raw wire text.
