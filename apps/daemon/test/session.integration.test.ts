@@ -524,6 +524,84 @@ describe("stage attempt session loop", () => {
     expect(snapshot.humanRequests[0]?.blocking).toBe(true);
   });
 
+  it("stops without starting a session when one is already running on the attempt", async () => {
+    // Nothing serialises the daemon's drain and the dispatch stays PENDING for the attempt's whole
+    // life, so two callers can enter this loop for the same dispatch. The second one used to reach
+    // START_PROVIDER_SESSION and meet the storage invariant, which the owner saw as a 500.
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    const running = localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-concurrent-session",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "START_PROVIDER_SESSION",
+      payload: {
+        stageAttemptId: seeded.stageAttemptId,
+        recipe: {
+          schemaVersion: 1,
+          templateId: mockDeliveryTemplate.id,
+          templateVersion: mockDeliveryTemplate.version,
+          specSource: "WORKFLOW_TEMPLATE",
+          sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
+          omitted: [],
+          contentHash: `sha256:${"0".repeat(64)}`,
+          estimatedTokens: 10,
+          budgetTokens: 100,
+          estimateQuality: "LOOMRAIL_ESTIMATE",
+        },
+      },
+    });
+    if (running.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a running session");
+
+    const second = recording(finishingAdapter());
+    await runStageAttempt(depsFor(localState, seeded, second));
+
+    // Quietly: no throw, no second session, and the first caller's session is untouched.
+    expect(second.startedSessionIds).toEqual([]);
+    const { sessions } = sessionRows(localState, seeded.stageAttemptId);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({ id: running.session.id, status: "RUNNING" });
+    const snapshot = snapshotOf(localState, seeded.workItemId);
+    expect(snapshot.stageAttempts.at(-1)?.status).toBe("RUNNING");
+    expect(snapshot.humanRequests).toHaveLength(0);
+  });
+
+  it("hard-pauses and withdraws the dispatch when the attempt reaches the session backstop", async () => {
+    // A provider that hands off productively forever never trips §6.5's unproductive counter, and
+    // never moves the token budget either -- usage is recorded only for a BUDGET_LIMIT_REACHED
+    // outcome. The backstop is the only bound, so it has to end the attempt the way every other
+    // terminal path does. Logging and returning left the dispatch PENDING, and the drain came
+    // straight back until it raised its own safety-limit error -- from startup, that rejected
+    // `startDaemon`.
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    const neverFinishing = createMockProvider({
+      contextWindowTokens: 4_000,
+      tokensPerTurn: 3_500,
+      checkpointEvery: 1,
+    });
+
+    await runStageAttempt(depsFor(localState, seeded, neverFinishing));
+
+    const { sessions, checkpoints } = sessionRows(localState, seeded.stageAttemptId);
+    expect(sessions).toHaveLength(50);
+    // Every one of them was productive, so nothing but the backstop could have stopped this.
+    expect(checkpoints.length).toBeGreaterThanOrEqual(50);
+    expect(sessions.every(({ endReason }) => endReason === "HANDOFF")).toBe(true);
+
+    const snapshot = snapshotOf(localState, seeded.workItemId);
+    expect(snapshot.stageAttempts.at(-1)).toMatchObject({
+      status: "HARD_PAUSED",
+      failureCode: "SESSION_LIMIT_REACHED",
+    });
+    expect(snapshot.run?.status).toBe("HARD_PAUSED");
+    expect(snapshot.humanRequests).toHaveLength(1);
+    expect(snapshot.humanRequests[0]).toMatchObject({ blocking: true, status: "OPEN" });
+    // The dispatch is gone from the queue, so the drain has nothing left to hand back.
+    expect(pendingDispatchModes(localState)).toEqual([]);
+  });
+
   it("survives a daemon restart mid-attempt and resumes from the last checkpoint", async () => {
     // §6.4: a restart and a context handoff are the same case -- the session is gone, the state is
     // still there.

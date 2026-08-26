@@ -155,7 +155,8 @@ export type StageAttemptPauseReason =
       budgetTokens: number;
     }
   | { type: "PROVIDER_REJECTED_PACK"; sessionOrdinal: number }
-  | { type: "PROVIDER_START_FAILED"; sessionOrdinal: number };
+  | { type: "PROVIDER_START_FAILED"; sessionOrdinal: number }
+  | { type: "SESSION_LIMIT_REACHED"; sessionOrdinal: number; maxSessions: number };
 
 export type StageAttemptPauseDecision = {
   workItem: WorkItem;
@@ -204,6 +205,14 @@ const pauseWording = (reason: StageAttemptPauseReason): PauseWording => {
         recommendation:
           "Check that the provider is reachable and configured, then resume this stage or cancel the run.",
         pauseReason: "The provider session failed to start.",
+      };
+    case "SESSION_LIMIT_REACHED":
+      return {
+        title: "This stage ran out of provider sessions before it finished",
+        context: `The provider handed this stage off ${reason.maxSessions.toString()} times without ever completing it. Each session published progress, so nothing here looks broken -- the stage is simply larger than one attempt can carry.`,
+        recommendation:
+          "Split this WorkItem into smaller ones, or resume the stage to give the attempt another run of sessions.",
+        pauseReason: `The stage attempt reached its limit of ${reason.maxSessions.toString()} provider sessions.`,
       };
     case "PROVIDER_REJECTED_PACK":
       return {

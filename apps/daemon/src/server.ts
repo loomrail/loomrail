@@ -272,10 +272,26 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   // Spec §6: one stage attempt is a sequence of context-assembled provider sessions, not a single
   // provider call. This drives the queue; `runStageAttempt` owns everything inside one attempt.
   const drainProviderDispatches = async (): Promise<void> => {
+    let previousDispatchId: string | undefined;
     for (let cycle = 0; cycle < 20; cycle += 1) {
       const queued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
       const dispatch = queued.type === "WORKFLOW_DISPATCHES" ? queued.dispatches[0] : undefined;
       if (!dispatch) return;
+
+      // A pass over this dispatch already returned without closing it out. The only way that
+      // happens is that another caller owns the attempt -- nothing serialises this drain, and the
+      // dispatch stays PENDING for the attempt's whole life, so a second concurrent request can
+      // reach the same head. `runStageAttempt` returns quietly in that case; without this the queue
+      // would be handed the same unmoved dispatch until the safety limit below turned someone
+      // else's work into this caller's 500.
+      if (dispatch.id === previousDispatchId) {
+        app.log.info(
+          { dispatchId: dispatch.id, stageAttemptId: dispatch.stageAttemptId },
+          "The pending workflow dispatch is already being run elsewhere; this drain stops",
+        );
+        return;
+      }
+      previousDispatchId = dispatch.id;
 
       const snapshotResult = localState.query({
         type: "GET_WORKFLOW_SNAPSHOT",

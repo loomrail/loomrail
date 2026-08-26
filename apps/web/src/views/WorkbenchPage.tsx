@@ -455,6 +455,7 @@ const hardPauseLabelKeys: Record<SessionPauseFailureCode, TranslationKey> = {
   CONTEXT_FLOOR_EXCEEDED: "workflow.hardPause.contextFloor",
   PROVIDER_REJECTED_PACK: "workflow.hardPause.providerRejected",
   PROVIDER_START_FAILED: "workflow.hardPause.providerStartFailed",
+  SESSION_LIMIT_REACHED: "workflow.hardPause.sessionLimit",
 };
 
 // A HARD_PAUSED attempt used to read "Budget paused" unconditionally, even though the session loop

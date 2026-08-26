@@ -53,9 +53,15 @@ const PACK_SHARE_BACKOFF = 0.1;
 const BYTES_PER_TOKEN = 4;
 
 /**
- * A backstop, not a policy. Spec §6.5's real guards are the unproductive-session counter and the
- * token budget; this exists so that a provider which hands off productively forever cannot spin
- * this loop without bound before either of them fires.
+ * The bound on how many ProviderSessions one StageAttempt may run.
+ *
+ * Spec §6.5's guard is the unproductive-session counter, and it only catches a provider that stops
+ * making progress. The token budget does not back it up here: usage is recorded only when
+ * `decideApplyProviderOutcome` handles a BUDGET_LIMIT_REACHED outcome, so a provider that hands off
+ * productively forever never moves the budget and never trips a threshold. That makes this the only
+ * thing standing between such a provider and an unbounded loop -- which is why reaching it is a
+ * terminal outcome (hard pause, dispatch withdrawn, question to the owner) and not a log line: a
+ * loop that merely returned would leave the dispatch PENDING for the drain to hand straight back.
  */
 const MAX_SESSIONS_PER_ATTEMPT = 50;
 
@@ -138,13 +144,20 @@ const readStageAttempt = (deps: RunStageAttemptDeps): StageAttempt => {
   return attempt;
 };
 
-const nextSessionOrdinalFor = (deps: RunStageAttemptDeps): number => {
+/**
+ * The attempt's sessions, as one read: the next ordinal and "is one already running" are two
+ * questions about the same list, and asking them separately would let the answers disagree.
+ */
+const readAttemptSessions = (deps: RunStageAttemptDeps): { nextOrdinal: number; running: boolean } => {
   const sessions = deps.state.query({
     type: "LIST_PROVIDER_SESSIONS",
     stageAttemptId: deps.dispatch.stageAttemptId,
   });
   if (sessions.type !== "PROVIDER_SESSIONS") throw new Error("Provider sessions could not be read");
-  return sessions.sessions.reduce((highest, { ordinal }) => Math.max(highest, ordinal), 0) + 1;
+  return {
+    nextOrdinal: sessions.sessions.reduce((highest, { ordinal }) => Math.max(highest, ordinal), 0) + 1,
+    running: sessions.sessions.some(({ status }) => status === "RUNNING"),
+  };
 };
 
 const endSessionCommand = (
@@ -187,6 +200,7 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
   const scheduleDeadline = deps.scheduleHandoffDeadline ?? defaultScheduleHandoffDeadline;
   const capabilities = deps.adapter.capabilities();
   const stageAttemptId = deps.dispatch.stageAttemptId;
+  let lastSessionOrdinal = 0;
 
   for (let session = 0; session < MAX_SESSIONS_PER_ATTEMPT; session += 1) {
     const attempt = readStageAttempt(deps);
@@ -198,7 +212,23 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
       return;
     }
 
-    const sessionOrdinal = nextSessionOrdinalFor(deps);
+    const sessions = readAttemptSessions(deps);
+    // Nothing serialises the daemon's drain, and the dispatch stays PENDING for the attempt's whole
+    // life, so two concurrent callers can reach this point for the same dispatch. A session already
+    // running on this attempt means another caller owns it -- which is the same situation as an
+    // attempt that is no longer RUNNING, and is answered the same way. The storage invariant
+    // (PROVIDER_SESSION_ALREADY_RUNNING) stays as the backstop it is; without this check it was the
+    // thing the owner met, as a 500.
+    if (sessions.running) {
+      deps.logger.info(
+        { stageAttemptId },
+        "Another caller is already running a provider session on this stage attempt; the session loop stops",
+      );
+      return;
+    }
+
+    const sessionOrdinal = sessions.nextOrdinal;
+    lastSessionOrdinal = sessionOrdinal;
     const sources = deps.state.query({ type: "READ_CONTEXT_SOURCES", stageAttemptId, sessionOrdinal });
     if (sources.type !== "CONTEXT_SOURCES") throw new Error("The context sources could not be read");
 
@@ -509,8 +539,28 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
     }
   }
 
+  // Reaching the backstop is terminal, like every other way this loop stops without a stage result:
+  // the attempt hard-pauses, its pending dispatch is withdrawn in the same transaction, and the
+  // owner gets a question. Returning here with the dispatch still PENDING sent the drain straight
+  // back into the same attempt until it raised its own safety-limit error -- which, from startup,
+  // rejected `startDaemon`.
+  deps.state.execute({
+    schemaVersion: 1,
+    commandId: deps.createCommandId(),
+    correlationId: deps.correlationId,
+    actor,
+    type: "HARD_PAUSE_STAGE_ATTEMPT",
+    payload: {
+      stageAttemptId,
+      reason: {
+        type: "SESSION_LIMIT_REACHED",
+        sessionOrdinal: lastSessionOrdinal,
+        maxSessions: MAX_SESSIONS_PER_ATTEMPT,
+      },
+    },
+  });
   deps.logger.warn(
-    { stageAttemptId },
-    "The stage attempt reached the session backstop without finishing; the loop stops",
+    { stageAttemptId, maxSessions: MAX_SESSIONS_PER_ATTEMPT },
+    "The stage attempt reached the session backstop without finishing; the attempt is hard-paused",
   );
 };

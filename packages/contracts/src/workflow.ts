@@ -326,6 +326,7 @@ export const sessionPauseFailureCodes = [
   "CONTEXT_FLOOR_EXCEEDED",
   "PROVIDER_REJECTED_PACK",
   "PROVIDER_START_FAILED",
+  "SESSION_LIMIT_REACHED",
 ] as const;
 
 export type SessionPauseFailureCode = (typeof sessionPauseFailureCodes)[number];
@@ -979,6 +980,18 @@ export const stageAttemptHardPauseReasonSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("PROVIDER_START_FAILED"),
       sessionOrdinal: z.number().int().positive(),
+    })
+    .strict(),
+  // The session loop's own backstop (spec §6.5). Not a way a session fails to happen, but the one
+  // way the attempt stops without any session having failed: the provider kept handing off
+  // productively and the attempt never finished. It resolves the same way as the others -- pause,
+  // withdraw the dispatch, ask the owner -- because the alternative is a loop that logs and leaves
+  // its dispatch PENDING for the drain to pick up again.
+  z
+    .object({
+      type: z.literal("SESSION_LIMIT_REACHED"),
+      sessionOrdinal: z.number().int().positive(),
+      maxSessions: z.number().int().positive(),
     })
     .strict(),
 ]);
