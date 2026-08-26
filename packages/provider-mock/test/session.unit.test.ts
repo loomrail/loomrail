@@ -46,6 +46,7 @@ const listener = () => {
     checkpoints,
     onContextWindow: (usage: ContextWindowUsage) => usages.push(usage),
     onCheckpoint: (draft: CheckpointDraft) => checkpoints.push(draft),
+    onUsage: () => undefined,
   };
 };
 

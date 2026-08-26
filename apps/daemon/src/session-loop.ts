@@ -3,6 +3,7 @@ import {
   checkpointDraftSchema,
   contextPackRecipeInputSchema,
   contextWindowUsageSchema,
+  providerUsageSchema,
   type CheckpointDraft,
   type ContextPackSpec,
   type EndProviderSessionCommand,
@@ -440,6 +441,41 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
           return;
         }
         publishCheckpoint(validated.data);
+      },
+      // Spend, not occupancy (see the comment on `ProviderSessionListener.onUsage` in
+      // provider-core): a separate channel from `onContextWindow` because window occupancy drives
+      // handoff while this drives budget thresholds and the HARD pause (BD-001).
+      //
+      // Provider output is untrusted input, exactly like the two listeners above: a report that
+      // does not satisfy the contract is logged and dropped rather than acted on.
+      //
+      // There is nowhere durable to put a valid report yet. `usage_records` and the budget
+      // machinery that reads it (`decideApplyProviderOutcome`'s BUDGET_LIMIT_REACHED branch) are
+      // built around one lump-sum outcome at the end of a bounded mock stage, tied to a
+      // BudgetPolicy and to the IMPLEMENT stage -- not a per-turn stream of real spend from a live
+      // adapter. Recording a report through that path would mean deciding, inside this task, how a
+      // ProviderUsage maps onto that shape; that design belongs to whichever task wires real
+      // budget enforcement to live adapters, not to opening this channel. Until it lands, a valid
+      // report is written to the structured logger so it is visible rather than silently dropped.
+      onUsage: (reported) => {
+        if (live.closed) return;
+        const usage = providerUsageSchema.safeParse(reported);
+        if (!usage.success) {
+          deps.logger.warn(
+            { providerSessionId: providerSession.id },
+            "The provider reported usage that does not satisfy the contract",
+          );
+          return;
+        }
+        deps.logger.info(
+          {
+            providerSessionId: providerSession.id,
+            inputTokens: usage.data.inputTokens,
+            outputTokens: usage.data.outputTokens,
+            quality: usage.data.quality,
+          },
+          "The provider reported usage",
+        );
       },
     };
 

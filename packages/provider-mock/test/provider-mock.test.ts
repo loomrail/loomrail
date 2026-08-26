@@ -44,6 +44,7 @@ const invocation = (
 const listener = (): ProviderSessionListener => ({
   onContextWindow: () => undefined,
   onCheckpoint: () => undefined,
+  onUsage: () => undefined,
 });
 
 describe("mock provider scenario A", () => {

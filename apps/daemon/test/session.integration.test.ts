@@ -27,6 +27,26 @@ const silentLogger: SessionLoopLogger = {
   warn: () => undefined,
 };
 
+type LoggerCall = [Record<string, string | number>, string];
+
+// A logger that records what it was called with instead of discarding it, so a test can assert on
+// what the session loop told it -- used where `silentLogger` would make the behaviour under test
+// unobservable.
+const capturingLogger = (): SessionLoopLogger & { infos: LoggerCall[]; warns: LoggerCall[] } => {
+  const infos: LoggerCall[] = [];
+  const warns: LoggerCall[] = [];
+  return {
+    infos,
+    warns,
+    info: (details, message) => {
+      infos.push([details, message]);
+    },
+    warn: (details, message) => {
+      warns.push([details, message]);
+    },
+  };
+};
+
 // Fires the wind-down deadline on the next macrotask instead of after a real minute. The loop only
 // ever reaches for this through the injected scheduler, which is the whole reason the deadline is
 // injectable: a test for an ignored wind-down request must not wait HANDOFF_DEADLINE_MS.
@@ -464,6 +484,82 @@ describe("stage attempt session loop", () => {
       windowTokens: 10_000,
       quality: "ACTUAL",
     });
+  });
+
+  it("records a usage report the provider sends mid-session, rather than dropping it", async () => {
+    // BD-001: spend is a separate channel from window occupancy (onContextWindow above), because
+    // it drives budget thresholds and the HARD pause, not handoff. There is nowhere in durable
+    // state yet for a live usage report to land -- see the comment on `onUsage` in
+    // session-loop.ts -- so this only proves the report reaches the daemon and is acted on
+    // (through the structured logger) rather than the channel being wired to nothing.
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    const logger = capturingLogger();
+    const reporting: ProviderAdapter = {
+      capabilities: () =>
+        providerCapabilitiesSchema.parse({
+          provider: "MOCK",
+          start: true,
+          interrupt: true,
+          eventStream: true,
+          usageReporting: false,
+          contextWindowReporting: false,
+          checkpointOnRequest: false,
+          contextWindowTokens: 4_000,
+          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+          costReporting: true,
+        }),
+      start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) => {
+        listener.onUsage({ inputTokens: 1_200, outputTokens: 340, quality: "ACTUAL" });
+        return Promise.resolve(completingOutcome());
+      },
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
+    };
+
+    await runStageAttempt(depsFor(localState, seeded, reporting, { logger }));
+
+    expect(logger.infos).toContainEqual([
+      expect.objectContaining({ inputTokens: 1_200, outputTokens: 340, quality: "ACTUAL" }),
+      "The provider reported usage",
+    ]);
+  });
+
+  it("logs and drops a usage report that does not satisfy the contract", async () => {
+    // Provider output is untrusted input, the same rule onContextWindow and onCheckpoint already
+    // follow: a report outside the schema is rejected rather than acted on.
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    const logger = capturingLogger();
+    const reporting: ProviderAdapter = {
+      capabilities: () =>
+        providerCapabilitiesSchema.parse({
+          provider: "MOCK",
+          start: true,
+          interrupt: true,
+          eventStream: true,
+          usageReporting: false,
+          contextWindowReporting: false,
+          checkpointOnRequest: false,
+          contextWindowTokens: 4_000,
+          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+          costReporting: true,
+        }),
+      start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) => {
+        listener.onUsage({ inputTokens: -1, outputTokens: 340, quality: "ACTUAL" });
+        return Promise.resolve(completingOutcome());
+      },
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
+    };
+
+    await runStageAttempt(depsFor(localState, seeded, reporting, { logger }));
+
+    expect(logger.infos.some(([, message]) => message === "The provider reported usage")).toBe(false);
+    expect(logger.warns).toContainEqual([
+      expect.objectContaining({}),
+      "The provider reported usage that does not satisfy the contract",
+    ]);
   });
 
   it("opens a Human Request when two sessions in a row produce nothing", async () => {

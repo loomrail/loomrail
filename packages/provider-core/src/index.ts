@@ -3,6 +3,7 @@ import type {
   ContextPack,
   ContextWindowUsage,
   ProviderOutcome,
+  ProviderUsage,
   WorkflowDispatch,
   WorkflowStage,
 } from "@loomrail/contracts";
@@ -92,6 +93,11 @@ export type ProviderInvocation = {
 export type ProviderSessionListener = {
   onContextWindow: (usage: ContextWindowUsage) => void;
   onCheckpoint: (draft: CheckpointDraft) => void;
+  // Deliberately a separate channel from `onContextWindow`, not another field on
+  // ContextWindowUsage (spec BD-001). Window occupancy drives session handoff; spend drives budget
+  // thresholds and the HARD pause. Those are different quantities with different consumers, and
+  // combining them would oblige the consumer of one to parse the other.
+  onUsage: (usage: ProviderUsage) => void;
 };
 
 // The one failure `start` can report that Loomrail knows how to act on by itself (spec §7): the

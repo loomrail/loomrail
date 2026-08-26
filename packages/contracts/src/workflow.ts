@@ -239,6 +239,24 @@ export const contextWindowUsageSchema = z
   .strict()
   .refine((usage) => usage.usedTokens <= usage.windowTokens, "Usage cannot exceed the window");
 
+// A separate channel from ContextWindowUsage on purpose (spec BD-001). Window occupancy drives
+// session handoff; spend drives budget thresholds and the HARD pause. They are different
+// quantities with different consumers, and folding one into the other would oblige the consumer
+// of one to parse the other. `costUsd` is optional because not every provider prices its own
+// usage; the token fields are the figures every provider can report. `.strict()` matters here more
+// than on most schemas: this is the one channel a provider could otherwise use to smuggle
+// arbitrary content (e.g. a `transcript` field) past the contract as though it were spend.
+export const providerUsageSchema = z
+  .object({
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    cachedInputTokens: z.number().int().nonnegative().optional(),
+    reasoningOutputTokens: z.number().int().nonnegative().optional(),
+    costUsd: z.number().nonnegative().optional(),
+    quality: usageQualitySchema,
+  })
+  .strict();
+
 export type ContextSourceKind = z.infer<typeof contextSourceKindSchema>;
 export type ContextPackRecipeSource = z.infer<typeof contextPackRecipeSourceSchema>;
 export type ContextPackRecipeSection = z.infer<typeof contextPackRecipeSectionSchema>;
@@ -250,6 +268,7 @@ export type ProviderSession = z.infer<typeof providerSessionSchema>;
 export type CheckpointDraft = z.infer<typeof checkpointDraftSchema>;
 export type Checkpoint = z.infer<typeof checkpointSchema>;
 export type ContextWindowUsage = z.infer<typeof contextWindowUsageSchema>;
+export type ProviderUsage = z.infer<typeof providerUsageSchema>;
 
 export const workflowTemplateStageSchema = z
   .object({
