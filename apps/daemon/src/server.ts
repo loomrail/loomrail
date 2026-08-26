@@ -46,6 +46,7 @@ import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
 
+import { broadcastingState } from "./broadcasting-state.js";
 import { createEventStreamRegistry, MAX_OPEN_STREAMS } from "./event-stream.js";
 import { FixtureResolutionError, resolveBundledFixture } from "./fixtures.js";
 import { runStageAttempt } from "./session-loop.js";
@@ -217,10 +218,6 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     used: false,
   };
   const sessions = new Map<string, Session>();
-  const localState = await openLocalState({
-    databasePath: options.stateDatabasePath ?? ":memory:",
-    now,
-  });
   const providerAdapter = options.providerAdapter ?? createMockProvider();
   providerAdapter.capabilities();
 
@@ -248,6 +245,15 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   });
 
   const eventStreams = createEventStreamRegistry({ logger: app.log });
+
+  // The single seam every writer -- request handlers and `runStageAttempt` alike -- publishes
+  // through, because there is exactly one `localState` and it is already wrapped by the time any
+  // of them see it. See broadcasting-state.ts.
+  const localState = broadcastingState(
+    await openLocalState({ databasePath: options.stateDatabasePath ?? ":memory:", now }),
+    eventStreams.publish,
+    app.log,
+  );
 
   /**
    * Connections a client opened without ever sending a request on them.
