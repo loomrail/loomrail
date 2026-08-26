@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -20,11 +20,11 @@ const fakeClaudePath = fileURLToPath(new URL("./fixtures/fake-claude.mjs", impor
 // this adapter depends on stdin being closed the way provider-codex's does), and a later task that
 // needs the same thing reuses this module rather than copying it again.
 
-type Spawned = { args: string[]; readonly recordPath: string };
+type Spawned = { args: string[]; cwd: string; readonly recordPath: string };
 
 const recordSpawn = (): Spawned => {
   const dir = mkdtempSync(join(tmpdir(), "loomrail-claude-test-"));
-  return { args: [], recordPath: join(dir, "spawn-record.json") };
+  return { args: [], cwd: "", recordPath: join(dir, "spawn-record.json") };
 };
 
 const withEnv = async <T>(name: string, value: string, run: () => Promise<T>): Promise<T> => {
@@ -77,8 +77,9 @@ const startWith = async (spawned: Spawned, adapter: ProviderAdapter): Promise<Pr
   const outcome = await withEnv("FAKE_CLAUDE_RECORD_PATH", spawned.recordPath, () =>
     adapter.start(fixtureInvocation(), noopListener()),
   );
-  const recorded = JSON.parse(readFileSync(spawned.recordPath, "utf8")) as { args: string[] };
+  const recorded = JSON.parse(readFileSync(spawned.recordPath, "utf8")) as { args: string[]; cwd: string };
   spawned.args = recorded.args;
+  spawned.cwd = recorded.cwd;
   return outcome;
 };
 
@@ -255,38 +256,56 @@ describe("createClaudeCodeProvider", () => {
     await expect(createClaudeCodeProvider().requestHandoff("providerSession-1")).resolves.toBeUndefined();
   });
 
+  // `spawned.cwd` comes from `fake-claude.mjs`'s own `process.cwd()` (see the fixture's doc
+  // comment) -- the fake process cannot report a cwd it was not actually spawned into, so this
+  // is direct evidence the per-session directory existed while the "CLI" ran, not just an
+  // inference from an argument's value. Nothing on the command line is a path any more (see the
+  // `--json-schema` fix below), so this replaces the old approach of deriving the directory from
+  // that flag's value.
   it("removes its per-session working directory once the session ends", async () => {
     const spawned = recordSpawn();
     await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
-    const schemaFlagIndex = spawned.args.indexOf("--json-schema");
-    expect(schemaFlagIndex).toBeGreaterThanOrEqual(0);
-    const schemaPath = spawned.args[schemaFlagIndex + 1];
-    if (schemaPath === undefined) {
-      throw new Error("expected --json-schema to be followed by the schema file it names");
-    }
-    expect(existsSync(dirname(schemaPath))).toBe(false);
+    expect(spawned.cwd).toContain("loomrail-claude-");
+    expect(existsSync(spawned.cwd)).toBe(false);
   });
 
   // Same cleanup, on the failure path: a session that ends in CONTEXT_EXHAUSTED (the auth-failure
   // recording) must not leak its working directory either.
   it("removes its per-session working directory even when the session fails", async () => {
     const recordingPath = fileURLToPath(new URL("./recordings/not-logged-in.jsonl", import.meta.url));
-    let capturedDir: string | undefined;
-    await withEnv("FAKE_CLAUDE_OUTPUT_FILE", recordingPath, async () => {
-      const spawned = recordSpawn();
-      await withEnv("FAKE_CLAUDE_RECORD_PATH", spawned.recordPath, () =>
+    const spawned = recordSpawn();
+    await withEnv("FAKE_CLAUDE_OUTPUT_FILE", recordingPath, () =>
+      withEnv("FAKE_CLAUDE_RECORD_PATH", spawned.recordPath, () =>
         createClaudeCodeProvider({ command: fakeClaudePath }).start(fixtureInvocation(), noopListener()),
-      );
-      const recorded = JSON.parse(readFileSync(spawned.recordPath, "utf8")) as { args: string[] };
-      const schemaFlagIndex = recorded.args.indexOf("--json-schema");
-      const schemaPath = recorded.args[schemaFlagIndex + 1];
-      if (schemaPath === undefined) {
-        throw new Error("expected --json-schema to be followed by the schema file it names");
-      }
-      capturedDir = dirname(schemaPath);
-    });
-    if (capturedDir === undefined) throw new Error("working directory was never captured");
-    expect(existsSync(capturedDir)).toBe(false);
+      ),
+    );
+    const recorded = JSON.parse(readFileSync(spawned.recordPath, "utf8")) as { cwd: string };
+    expect(recorded.cwd).toContain("loomrail-claude-");
+    expect(existsSync(recorded.cwd)).toBe(false);
+  });
+
+  // FINDING (post-review): `--json-schema` takes the schema as inline JSON *text*, not a path --
+  // confirmed against the installed CLI (v2.1.114): a path made it exit 0 with zero bytes on
+  // stdout/stderr, silently, which `fake-claude.mjs` (it only records and replays argv; it has no
+  // opinion about what the real binary does with those arguments) could never have caught on its
+  // own. This test pins the *shape* of the value instead of merely its presence on disk -- it is
+  // checkable without the real CLI, and it is exactly the check that would have caught the
+  // original defect: the value must parse as JSON and describe a JSON Schema object, not a
+  // filesystem path.
+  it("passes the checkpoint schema inline, not as a file path", async () => {
+    const spawned = recordSpawn();
+    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
+    const schemaFlagIndex = spawned.args.indexOf("--json-schema");
+    expect(schemaFlagIndex).toBeGreaterThanOrEqual(0);
+    const schemaValue = spawned.args[schemaFlagIndex + 1];
+    if (schemaValue === undefined) {
+      throw new Error("expected --json-schema to be followed by the schema itself");
+    }
+    const parsed: unknown = JSON.parse(schemaValue);
+    expect(parsed).toMatchObject({ type: "object" });
+    // Not a path: nothing in the working directory the adapter created should exist there for
+    // this flag to have named.
+    expect(existsSync(schemaValue)).toBe(false);
   });
 
   // A spawn failure (missing executable) must become a session failure, not an unhandled

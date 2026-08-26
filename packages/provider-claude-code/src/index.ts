@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -69,12 +69,14 @@ const resolveOptions = (options: CreateClaudeCodeProviderOptions): ResolvedOptio
   maxBudgetUsd: options.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
 });
 
-// `--json-schema <file>` (established by task 1's reconnaissance against the real CLI) is what
-// lets a single `claude -p` turn deliver a structured answer instead of free prose: on success the
-// terminal `result` event's text is expected to be JSON conforming to `checkpointDraftSchema`.
-// Untrusted process output either way -- a line that fails to parse or fails the shape check
-// returns `null` rather than throwing, exactly like `tryParseStructuredCheckpoint` in
-// provider-codex.
+// `--json-schema <inline JSON>` (established by task 1's reconnaissance, and corrected by a later
+// review that verified against the installed CLI: the flag's value is the schema text itself, not
+// a path -- `claude --help` shows this in the flag's own usage text, and passing a path instead
+// makes the real CLI exit 0 with no output at all, silently) is what lets a single `claude -p`
+// turn deliver a structured answer instead of free prose: on success the terminal `result`
+// event's text is expected to be JSON conforming to `checkpointDraftSchema`. Untrusted process
+// output either way -- a line that fails to parse or fails the shape check returns `null` rather
+// than throwing, exactly like `tryParseStructuredCheckpoint` in provider-codex.
 const tryParseStructuredCheckpoint = (text: string): CheckpointDraft | null => {
   let candidate: unknown;
   try {
@@ -156,8 +158,10 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
       // enforces that. Leaking one would leak whatever the agent wrote into it.
       const workingDir = await mkdtemp(join(tmpdir(), "loomrail-claude-"));
       try {
-        const jsonSchemaPath = join(workingDir, "checkpoint-json-schema.json");
-        await writeFile(jsonSchemaPath, JSON.stringify(z.toJSONSchema(checkpointDraftSchema)), "utf8");
+        // Inline JSON text, not a path -- see the doc comment on `tryParseStructuredCheckpoint`
+        // above for why. Nothing writes this to `workingDir`: there is no reader left for a file
+        // version of it, and a file created for no reader is one more thing to leak.
+        const checkpointJsonSchema = JSON.stringify(z.toJSONSchema(checkpointDraftSchema));
 
         // Verbatim, exactly as task 1's reconnaissance established it against the real CLI --
         // with one correction: `claude --help` documents `-p, --print` as a boolean flag ("Print
@@ -186,7 +190,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
           "--max-budget-usd",
           String(resolved.maxBudgetUsd),
           "--json-schema",
-          jsonSchemaPath,
+          checkpointJsonSchema,
           invocation.contextPack.text,
         ];
 
