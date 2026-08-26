@@ -82,9 +82,10 @@ export const gatedAdapter = (contextWindowTokens = 200_000): GatedAdapter => {
         artifacts,
       };
     },
-    requestHandoff: async () => undefined,
-    abortSession: async (sessionId) => {
+    requestHandoff: () => Promise.resolve(undefined),
+    abortSession: (sessionId) => {
       aborted.push(sessionId);
+      return Promise.resolve();
     },
   };
   return adapter;

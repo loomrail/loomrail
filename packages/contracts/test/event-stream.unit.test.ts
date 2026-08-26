@@ -20,7 +20,8 @@ describe("eventSignalSchema", () => {
   });
 
   it("rejects a missing project", () => {
-    const { projectId: _omitted, ...withoutProject } = validSignal;
+    const withoutProject: Record<string, unknown> = { ...validSignal };
+    delete withoutProject["projectId"];
     expect(() => eventSignalSchema.parse(withoutProject)).toThrow();
   });
 

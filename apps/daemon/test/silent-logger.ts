@@ -7,7 +7,7 @@ import type { FastifyBaseLogger } from "fastify";
 // `*.integration.test.ts` (see vitest.config.ts), and importing a module that vitest does treat as
 // a test file re-executes its top-level `describe` blocks in the importer's own test run. Keeping
 // this constant in a plain module lets more than one test file share it without that side effect.
-const noop = (): void => {};
+const noop = (): void => undefined;
 export const silentLogger: FastifyBaseLogger = {
   level: "silent",
   fatal: noop,

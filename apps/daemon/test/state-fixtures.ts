@@ -22,7 +22,7 @@ const FIXTURE_PROJECT_ID = "project-web";
  * treats a second `REGISTER_FIXTURE_PROJECT` for the same id as `PROJECT_ALREADY_REGISTERED`, not as
  * a no-op.
  */
-export const registerFixtureProject = (
+const registerFixtureProject = (
   localState: LocalState,
   createCommandId: () => string,
   temporaryDirectory: string,
@@ -48,7 +48,7 @@ export const registerFixtureProject = (
 
 // A WorkItem in READY with no pipeline, and so no dispatch: a daemon can boot on this with its
 // startup drain finding nothing, which is what lets a test choose when the first drain runs.
-export const seedReadyWorkItem = (
+const seedReadyWorkItem = (
   localState: LocalState,
   createCommandId: () => string,
   title = "Carry a stage attempt across provider sessions",

@@ -66,11 +66,9 @@ const adapterThatDoesNothing = (): ProviderAdapter => ({
     checkpointOnRequest: false,
     contextWindowTokens: 200_000,
   }),
-  start: async () => {
-    throw new Error("adapterThatDoesNothing.start should never be called");
-  },
-  requestHandoff: async () => undefined,
-  abortSession: async () => undefined,
+  start: () => Promise.reject(new Error("adapterThatDoesNothing.start should never be called")),
+  requestHandoff: () => Promise.resolve(undefined),
+  abortSession: () => Promise.resolve(undefined),
 });
 
 // `capabilities()` is called synchronously at the very top of `runStageAttempt`, outside any
@@ -81,11 +79,9 @@ const adapterThatThrows = (): ProviderAdapter => ({
   capabilities: () => {
     throw new Error("synthetic capabilities failure");
   },
-  start: async () => {
-    throw new Error("unreachable: capabilities() throws first");
-  },
-  requestHandoff: async () => undefined,
-  abortSession: async () => undefined,
+  start: () => Promise.reject(new Error("unreachable: capabilities() throws first")),
+  requestHandoff: () => Promise.resolve(undefined),
+  abortSession: () => Promise.resolve(undefined),
 });
 
 // Measured against "takes another pass", the heaviest test in this file: two work items cascading
@@ -107,7 +103,9 @@ const awaitIdle = async (worker: Pick<SessionWorker, "whenIdle">): Promise<void>
     const settled = await Promise.race([
       worker.whenIdle().then((): "idle" => "idle"),
       new Promise<"timeout">((resolve) => {
-        timer = setTimeout(() => resolve("timeout"), IDLE_TIMEOUT_MS);
+        timer = setTimeout(() => {
+          resolve("timeout");
+        }, IDLE_TIMEOUT_MS);
       }),
     ]);
     expect(settled).toBe("idle");

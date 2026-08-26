@@ -971,12 +971,23 @@ describe("local daemon session and state boundary", () => {
   });
 });
 
+// Bounds every "the answer must arrive before the gate opens" race below. This machine periodically
+// runs at load average 60-90 (session-worker.integration.test.ts:97 measures the same class of
+// concern), where vitest's own blanket per-test timeout firing first would report the exact same
+// message a real defect produces -- the ambiguity this project cannot afford. A bound this generous
+// costs nothing in the passing case, since a correct answer arrives near-instantly; only a genuinely
+// regressed handler ever waits it out.
+const BOOT_ANSWER_BUDGET_MS = 15_000;
+
 // Task 8 (A1.5 spec D4-D6): the dispatch queue moved off the startup path and the four mutation
 // handlers onto a background `SessionWorker`. Every test here uses `gatedAdapter` (test/gated-
 // adapter.ts) to hold a provider session open on purpose, so a handler or startup pass that
 // regressed back to awaiting the drain in-line would leave its test hanging on the same gate the
 // adapter is held by, rather than answering early -- the whole point of this milestone.
-describe("background session worker wiring", () => {
+//
+// The describe-level timeout (well above BOOT_ANSWER_BUDGET_MS) exists so a regression is reported
+// by the race's own assertion, not by vitest's blanket per-test timeout winning the tie against it.
+describe("background session worker wiring", { timeout: 20_000 }, () => {
   const temporaryDirectories: string[] = [];
   let databasePath = "";
   let token = "";
@@ -1070,32 +1081,47 @@ describe("background session worker wiring", () => {
   };
 
   it("listens while a resumed attempt is still running", async () => {
-    // The point of the whole task, asserted without a timer: the adapter is held, so the attempt is
-    // provably still in flight when the daemon answers. Before the change `startDaemon` itself would
-    // not have returned, and this test could not have reached its first line.
+    // The point of the whole task, asserted by racing the boot pass against a generous budget
+    // instead of a bare timer: under the regression this proves against (an `await` restored on the
+    // boot pass before `app.listen`), `startup` never resolves, and the race's own assertion reports
+    // that -- not vitest's blanket per-test timeout, which would print the identical message for an
+    // unrelated slow machine.
     const adapter = gatedAdapter();
     const seeded = await seedQueuedAttemptOnDisk(databasePath);
 
-    const daemon = await startDaemon({
+    const startup = startDaemon({
       bootstrapToken: token,
       stateDatabasePath: databasePath,
       logger: false,
       providerAdapter: adapter,
     });
+    let daemon: RunningDaemon | undefined;
     try {
-      await adapter.started;
+      await adapter.started; // the boot pass really opened a session
+      const outcome = await Promise.race([
+        startup.then(() => "listening" as const),
+        delay(BOOT_ANSWER_BUDGET_MS).then(() => "held on the boot pass" as const),
+      ]);
+      expect(outcome).toBe("listening");
+      daemon = await startup;
+
       const health = await fetch(`${daemon.baseUrl}/health/ready`);
       expect(health.status).toBe(200);
       expect((await sessionRows(databasePath, seeded.stageAttemptId)).sessions).toHaveLength(1);
     } finally {
       adapter.release();
-      await daemon.whenIdle();
-      await daemon.close();
+      if (daemon) {
+        await daemon.whenIdle();
+        await daemon.close();
+      }
     }
   });
 
   // The other half: a request that starts a stage must answer before the stage ends, or "answer a
   // Human Request" would hold the response open for the whole stage once the provider is live.
+  // Raced against the same generous budget as the boot pass above, for the same reason: under the
+  // regression this proves against (an `await` restored in the handler after `worker.wake()`), the
+  // response never arrives, and the race's own assertion has to be the one that reports that.
   it("answers a pipeline start before the stage has finished", async () => {
     const adapter = gatedAdapter();
     const daemon = await startDaemon({
@@ -1107,15 +1133,24 @@ describe("background session worker wiring", () => {
     try {
       const session = await authenticate(daemon, token);
       const workItemId = await createReadyWorkItem(daemon, session, "pipeline-start-under-test");
-      const response = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
+      const response = fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
         method: "POST",
         headers: mutationHeaders(daemon, session),
         body: JSON.stringify({ schemaVersion: 1, commandId: "start-under-test", expectedVersion: 2 }),
       });
-      expect(response.status).toBe(200);
-      const snapshot = workflowSnapshotSchema.parse(await response.json());
+      await adapter.started; // the handler's own wake() really opened a session
+      const outcome = await Promise.race([
+        response.then(() => "answered" as const),
+        delay(BOOT_ANSWER_BUDGET_MS).then(() => "held on the stage" as const),
+      ]);
+      expect(outcome).toBe("answered");
+      const settled = await response;
+      expect(settled.status).toBe(200);
+      const snapshot = workflowSnapshotSchema.parse(await settled.json());
       expect(snapshot.run?.status).toBe("RUNNING");
-      expect(adapter.releasedCount).toBe(0);
+      // Proves a session was actually opened, not merely that the test hasn't released it yet
+      // (`releasedCount` only ever changes because the test itself calls `adapter.release()` below).
+      expect(adapter.startCallCount).toBe(1);
     } finally {
       adapter.release();
       await daemon.whenIdle();
@@ -1138,7 +1173,7 @@ describe("background session worker wiring", () => {
     fixture: PreparedFixture,
   ) => Promise<Response>;
 
-  const noPreparation: Prepare = async () => ({ workItemId: "" });
+  const noPreparation: Prepare = () => Promise.resolve({ workItemId: "" });
 
   // Drives a fresh WorkItem through a throwaway, unblocked daemon until the workflow's kickoff stage
   // raises its SINGLE_CHOICE HumanRequest -- reaching that needs a real (if fast) session, which the
@@ -1280,6 +1315,9 @@ describe("background session worker wiring", () => {
   // Spec §9 names all four handlers, not one. They receive the identical one-line change, so the
   // cheap mistake is changing three and missing the fourth -- which no other test would notice,
   // because a handler that still awaits the drain simply answers later and answers correctly.
+  // Each row races its own `act` against the same generous budget as the two tests above, for the
+  // same reason: a handler that regressed back to awaiting the drain must fail this by assertion,
+  // not by vitest's blanket per-test timeout.
   it.each<[string, Prepare, Act]>([
     ["pipeline start", noPreparation, startPipeline],
     ["pipeline resume", noPreparation, resumePipeline],
@@ -1296,9 +1334,18 @@ describe("background session worker wiring", () => {
     });
     try {
       const session = await authenticate(daemon, token);
-      const response = await act(daemon, session, fixture);
-      expect(response.status).toBe(200);
-      expect(adapter.releasedCount).toBe(0);
+      const response = act(daemon, session, fixture);
+      await adapter.started; // the handler's own wake() really opened a session
+      const outcome = await Promise.race([
+        response.then(() => "answered" as const),
+        delay(BOOT_ANSWER_BUDGET_MS).then(() => "held on the stage" as const),
+      ]);
+      expect(outcome).toBe("answered");
+      const settled = await response;
+      expect(settled.status).toBe(200);
+      // Proves a session was actually opened, not merely that the test hasn't released it yet
+      // (`releasedCount` only ever changes because the test itself calls `adapter.release()` below).
+      expect(adapter.startCallCount).toBe(1);
     } finally {
       adapter.release();
       await daemon.whenIdle();
@@ -1328,13 +1375,70 @@ describe("background session worker wiring", () => {
     await adapter.started;
 
     const closed = daemon.close().then(() => "closed" as const);
-    const timedOut = new Promise<"hung">((resolve) => {
-      setTimeout(() => {
-        resolve("hung");
-      }, 5_000);
-    });
+    const timedOut = delay(5_000, "hung" as const);
     await expect(Promise.race([closed, timedOut])).resolves.toBe("closed");
     expect(adapter.abortedSessions).toHaveLength(1);
-    adapter.release();
+    // Deliberately never released: `close()` does not wait for the live session (spec D5), so it is
+    // still gated on `await gate` inside `runStageAttempt` at this point. Releasing it here would let
+    // that call resume and try to write through `localState` -- which `close()`'s `finally` has
+    // already closed -- and the only thing standing between that and a stray error escaping this
+    // test is the worker pump's own catch-and-log (muted here by `logger: false`). Leaving the gate
+    // shut is simpler than proving the write is harmless: nothing awaits the gated promise, so it
+    // is inert, and there is nothing left in this test that needs the session to finish.
+  });
+
+  // IMPORTANT (fix round): the ordering `close()` depends on -- `worker.stop()` asking the live
+  // session to abort *before* `app.close()` starts dropping connections -- had no test that could
+  // observe the order, only that both eventually happened. This makes the order observable with two
+  // independently timestamped markers: the abort request (recorded by wrapping the adapter) and the
+  // SSE stream actually dropping (recorded by reading it to its end, which only happens once
+  // `preClose`'s `closeAll()` runs `response.end()` on it -- see event-stream.ts). Both markers are
+  // pushed onto one array in the order they're observed, so the array itself is the assertion: if
+  // `close()` ever reordered the two lines, `closeAll()` would run first and the stream would drop
+  // before the abort request was ever recorded.
+  it("stops the live session before it starts dropping open connections", async () => {
+    const adapter = gatedAdapter();
+    const events: string[] = [];
+    const originalAbortSession = adapter.abortSession;
+    adapter.abortSession = (sessionId: string): Promise<void> => {
+      events.push("session asked to abort");
+      return originalAbortSession(sessionId);
+    };
+
+    const daemon = await startDaemon({
+      bootstrapToken: token,
+      stateDatabasePath: databasePath,
+      logger: false,
+      providerAdapter: adapter,
+    });
+    // Fastify refuses `addHook` once the instance is already listening
+    // (FST_ERR_INSTANCE_ALREADY_LISTENING), and `startDaemon` only ever hands back an instance past
+    // that point, so the only seam left is the call itself: `close()` (server.ts) is literally
+    // `await worker.stop(); await app.close();`, and intercepting `app.close` records the exact
+    // in-process moment that second statement runs, with none of the network round-trip latency a
+    // client-observed effect would add. Two earlier versions of this test tried exactly that -- an
+    // SSE stream read to `done`, then a raw socket's `close` event -- and both were consistently
+    // *slower* than the rest of `close()` finishing, which made the test pass regardless of which
+    // line in `close()` actually ran first. That gap is the false confidence this test exists to
+    // rule out; only an in-process interception closes it.
+    const originalAppClose = daemon.app.close.bind(daemon.app) as () => Promise<undefined>;
+    daemon.app.close = ((): Promise<undefined> => {
+      events.push("connections started closing");
+      return originalAppClose();
+    }) as unknown as typeof daemon.app.close;
+
+    const session = await authenticate(daemon, token);
+    const workItemId = await createReadyWorkItem(daemon, session, "close-ordering-under-test");
+    await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({ schemaVersion: 1, commandId: "start-close-ordering", expectedVersion: 2 }),
+    });
+    await adapter.started;
+
+    await daemon.close();
+
+    expect(events).toEqual(["session asked to abort", "connections started closing"]);
+    // Left gated, same as the test above and for the same reason.
   });
 });
