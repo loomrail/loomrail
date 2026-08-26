@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { stateCommandResultSchema } from "@loomrail/contracts";
+import { openLocalState } from "@loomrail/persistence-sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -10,8 +14,9 @@ import {
   MAX_OPEN_STREAMS,
   type EventStreamRegistry,
 } from "../src/event-stream.js";
-import { startDaemon, type RunningDaemon } from "../src/server.js";
+import { startDaemon, SESSION_TTL_MS, type RunningDaemon } from "../src/server.js";
 
+import { gatedAdapter } from "./gated-adapter.js";
 import {
   authenticate,
   bootstrapToken,
@@ -19,6 +24,7 @@ import {
   type AuthenticatedSession,
 } from "./server.integration.test.js";
 import { silentLogger } from "./silent-logger.js";
+import { FIXTURE_PROJECT_ID, seedQueuedAttempt } from "./state-fixtures.js";
 
 // A minimal ServerResponse double that records written frames and remembers that it was closed,
 // without pulling in a real HTTP response.
@@ -82,6 +88,25 @@ const readFirstDataFrameText = async (body: ReadableStream<Uint8Array>): Promise
   throw new Error("No data frame arrived within the frame budget");
 };
 
+// Drains an SSE body until the server ends it, discarding whatever frames arrive on the way.
+// Answers "ended" or "open" rather than hanging: a stream the daemon never closes has to fail the
+// assertion that names that behaviour, not vitest's blanket per-test timeout, which names nothing.
+const streamOutcome = async (
+  body: ReadableStream<Uint8Array>,
+  budgetMs: number,
+): Promise<"ended" | "open"> => {
+  const reader = body.getReader();
+  const drained = (async (): Promise<"ended"> => {
+    for (;;) {
+      const { done } = await reader.read();
+      if (done) return "ended";
+    }
+  })();
+  const outcome = await Promise.race([drained, delay(budgetMs, "open" as const)]);
+  if (outcome === "open") await reader.cancel();
+  return outcome;
+};
+
 // Registers the bundled "web-app-a" fixture on its own, ahead of opening a stream a test wants to
 // observe. REGISTER_FIXTURE_PROJECT commits its own PROJECT_REGISTERED event and is now published
 // like any other command -- a test that opens the stream first and calls `createWorkItem` alone
@@ -142,6 +167,7 @@ const createWorkItem = async (
 
 describe("daemon event stream", () => {
   let daemon: RunningDaemon | undefined;
+  const temporaryDirectories: string[] = [];
   const token = bootstrapToken();
   // Registries built directly (not via startDaemon) own an unref'd heartbeat timer that only
   // `stopHeartbeat()` clears; without this, each such test leaks one live interval per run.
@@ -156,6 +182,9 @@ describe("daemon event stream", () => {
     daemon = undefined;
     for (const registry of openRegistries) registry.stopHeartbeat();
     openRegistries.length = 0;
+    for (const directory of temporaryDirectories.splice(0)) {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("refuses a stream to a caller without a session", async () => {
@@ -214,6 +243,62 @@ describe("daemon event stream", () => {
     await stream.body.cancel();
   }, 10_000);
 
+  // Spec §9: «signal reaches the client for an event written by background work». Every other
+  // delivery test in this file drives a handler command, and handlers get the wrapped `localState`
+  // whichever state `createSessionWorker` was handed -- so handing the *worker* the unwrapped one
+  // disconnects the entire background half of the product from the channel with all 87 daemon and
+  // 28 browser tests still green. Here the daemon is parked inside `runStageAttempt` before the
+  // stream is even opened, so every event after `release()` is worker-written and nothing else can
+  // account for the frame that arrives.
+  it("delivers a signal for an event written by the background worker", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail event stream "));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "local state.sqlite");
+    let nextCommandId = 0;
+    const seedState = await openLocalState({ databasePath });
+    const seeded = seedQueuedAttempt(seedState, () => `seed-${(nextCommandId += 1).toString()}`, directory);
+    seedState.close();
+
+    const adapter = gatedAdapter();
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      stateDatabasePath: databasePath,
+      providerAdapter: adapter,
+    });
+    const localDaemon = daemon;
+    const session = await authenticate(localDaemon, token);
+    // The daemon's startup `wake()` already put the worker inside the seeded attempt; the gate is
+    // what guarantees it has written nothing since, so the stream opened below cannot miss anything
+    // and cannot see anything written before it.
+    await adapter.started;
+
+    const stream = await fetch(`${localDaemon.baseUrl}/api/v1/stream`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(stream.status).toBe(200);
+    if (!stream.body) throw new Error("The stream carried no body");
+    const signalArrived = readFirstSignal(stream.body);
+
+    adapter.release();
+
+    // Raced against a bounded delay for the same reason as the handler test above: a signal that
+    // never arrives has to fail this assertion rather than run out the per-test timeout.
+    const outcome = await Promise.race([
+      signalArrived.then((signal) => ({ arrived: true as const, signal })),
+      delay(5_000, { arrived: false as const, signal: undefined }),
+    ]);
+    expect(outcome).toEqual({
+      arrived: true,
+      signal: {
+        projectId: FIXTURE_PROJECT_ID,
+        aggregateType: "WORK_ITEM",
+        aggregateId: seeded.workItemId,
+      },
+    });
+    await stream.body.cancel();
+  }, 15_000);
+
   it("opens a stream for a session and flushes headers immediately", async () => {
     daemon = await startDaemon({ bootstrapToken: token, logger: false });
     const session = await authenticate(daemon, token);
@@ -227,13 +312,11 @@ describe("daemon event stream", () => {
 
   // Spec §7, last row: the frame carries opaque identifiers and no content. Proven by mutation:
   // publishing `{ ...signal, leaked: event.data.workItem.title }` for WORK_ITEM_CREATED in
-  // `broadcastingState` makes this test go red. It previously used `readRawFrames(stream.body, 1)`,
-  // which is satisfied by the connect-time `: open\n\n` comment -- the first frame this route ever
-  // produces -- so the assertion never actually waited for a signal frame and stayed green even with
-  // the WorkItem title on the wire. `readFirstDataFrameText` waits for a frame carrying a `data:`
-  // line instead, and the fixture is registered before the stream opens -- see
-  // registerFixtureProject's comment -- so that first data frame is the WORK_ITEM_CREATED signal
-  // this test means to inspect, not the PROJECT_REGISTERED one from registration.
+  // `broadcastingState` makes this test go red. `readFirstDataFrameText` rather than "the first
+  // frame": the connect-time `: open\n\n` comment is a frame too, and waiting for any frame would
+  // leave this assertion green with the WorkItem title on the wire. The fixture is registered before
+  // the stream opens -- see registerFixtureProject's comment -- so the first frame carrying a
+  // `data:` line is the WORK_ITEM_CREATED signal this test means to inspect, not PROJECT_REGISTERED.
   it("carries no work item text on the wire", async () => {
     daemon = await startDaemon({ bootstrapToken: token, logger: false });
     const session = await authenticate(daemon, token);
@@ -262,9 +345,12 @@ describe("daemon event stream", () => {
     await stream.body?.cancel();
   }, 15_000);
 
-  // Held a stream dolder than the session that opened it turns the channel into a way to hold
-  // authenticated access forever. Proven through `tick()`, not by waiting out the real interval: the
-  // difference between "proven" and "runs" is the one line the production timer calls it with.
+  // Holding a stream older than the session that opened it turns the channel into a way to hold
+  // authenticated access forever. This covers the registry's middle link on its own -- `tick()`
+  // drops a subscriber whose `isAuthorized` says no -- with a flag the test owns. The two links on
+  // either side of it (the timer that calls `tick`, and the `isAuthorized` the route actually
+  // builds) are covered by "closes a real stream once its session has expired" below, which is what
+  // makes the chain claimed by THREAT-MODEL.md's T03 delta true end to end.
   it("closes an open stream once its session has expired", () => {
     const registry = trackRegistry(createEventStreamRegistry({ logger: silentLogger }));
     const written: string[] = [];
@@ -291,6 +377,34 @@ describe("daemon event stream", () => {
     expect(registry.open({ response: fakeResponse([]), isAuthorized: () => true })).toBeNull();
     expect(registry.openCount()).toBe(MAX_OPEN_STREAMS);
   });
+
+  // The whole chain THREAT-MODEL.md's T03 delta and ADR-0003's required tests claim, driven through
+  // a real HTTP stream: the heartbeat timer fires, `tick()` re-asks the `isAuthorized` the route
+  // itself built, the injected clock has taken the session past `SESSION_TTL_MS`, and the held
+  // response ends. Proven by mutation twice, because the chain has two links the registry test
+  // above cannot reach: pinning `isAuthorized: () => true` on the route, and dropping the
+  // `registry.tick()` call from the interval callback, each turn this red on the assertion below.
+  it("closes a real stream once its session has expired", async () => {
+    let clock = new Date("2026-08-26T00:00:00.000Z");
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      now: () => clock,
+      // The interval length is not what is under test -- the recheck it drives is. Shortening it is
+      // what keeps this test from having to wait out the real fifteen seconds to observe that.
+      heartbeatIntervalMs: 10,
+    });
+    const session = await authenticate(daemon, token);
+    const stream = await fetch(`${daemon.baseUrl}/api/v1/stream`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(stream.status).toBe(200);
+    if (!stream.body) throw new Error("The stream carried no body");
+
+    clock = new Date(clock.getTime() + SESSION_TTL_MS + 1_000);
+
+    await expect(streamOutcome(stream.body, 3_000)).resolves.toBe("ended");
+  }, 15_000);
 
   it("answers a stream request over the limit with a status rather than an opened stream", async () => {
     daemon = await startDaemon({ bootstrapToken: token, logger: false });

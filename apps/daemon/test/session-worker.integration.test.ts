@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSessionWorker, type SessionWorker } from "../src/session-worker.js";
 import { gatedAdapter } from "./gated-adapter.js";
 import {
+  pendingDispatchModes,
   seedQueuedAttempt as seedQueuedAttemptFixture,
   snapshotOf,
   type SeededAttempt,
@@ -92,11 +93,54 @@ const adapterThatThrows = (): ProviderAdapter => ({
 // worker that is genuinely stuck rather than a race against one that is merely slow.
 const IDLE_TIMEOUT_MS = 15_000;
 
-// Bounds every "wait for the worker to finish" checkpoint below. A mutation that breaks the pump's
-// re-looping (a single `if` instead of `while (pending && !stopping)`, for instance) leaves
-// `whenIdle()` never resolving; without this, a broken implementation fails the whole test on
-// vitest's blanket per-test timeout rather than on the assertion that names the behaviour under
-// test, which is exactly the "incidental failure" the task's own review has flagged twice before.
+// Bounds every "wait for the worker to finish" checkpoint below, so that a worker which is
+// genuinely stuck -- a pass that never returns, an idle waiter nothing ever settles -- fails on the
+// `expect` here rather than on vitest's blanket per-test timeout, which reports the whole test as
+// having timed out and names no behaviour at all.
+//
+// It is a backstop, not a discriminator: none of the mutations these tests are written against
+// leave `whenIdle()` unresolved. `settleIdle()` runs in `pump`'s `finally` unconditionally, so
+// every pass that starts settles its waiters however it ends. Any test that means to discriminate
+// has to assert something else as well; see "takes another pass ..." below.
+type HidingState = LocalState & { hideUntilQueueLooksEmpty: (workItemId: string) => void };
+
+/**
+ * A `LocalState` that withholds one work item's dispatches from `LIST_PENDING_DISPATCHES` until the
+ * worker has read the queue and found it (apparently) empty, and reveals them from then on.
+ *
+ * This is what gives "takes another pass" a discriminator. `runOnce`'s own cycle loop re-reads the
+ * pending-dispatch table on every cycle, so work enqueued while a pass is still running is picked up
+ * by *that* pass -- which is why asserting on a drained queue alone cannot tell
+ * `while (pending && !stopping)` from a single `if`. Withholding the second work item until the
+ * running pass has already concluded the queue is empty puts it strictly out of that pass's reach:
+ * only a pass that starts afterwards can see it, and only the `while` starts one.
+ *
+ * Nothing else is intercepted -- every other query and every `execute` goes straight through -- so
+ * the worker still drives the real persistence layer and the real workflow template.
+ */
+const stateHidingOneWorkItem = (localState: LocalState): HidingState => {
+  let hiddenWorkItemId: string | null = null;
+  return {
+    ...localState,
+    hideUntilQueueLooksEmpty: (workItemId) => {
+      hiddenWorkItemId = workItemId;
+    },
+    query: (request) => {
+      const result = localState.query(request);
+      if (hiddenWorkItemId === null) return result;
+      if (request.type !== "LIST_PENDING_DISPATCHES" || result.type !== "WORKFLOW_DISPATCHES") {
+        return result;
+      }
+      const visible = result.dispatches.filter(({ workItemId }) => workItemId !== hiddenWorkItemId);
+      // The read that returns nothing is the one that ends the pass in progress (`runOnce` returns
+      // on an empty head). Revealing here, on that read, means the reveal lands after that pass has
+      // committed to finishing and before any later pass takes its first look.
+      if (visible.length === 0) hiddenWorkItemId = null;
+      return { ...result, dispatches: visible };
+    },
+  };
+};
+
 const awaitIdle = async (worker: Pick<SessionWorker, "whenIdle">): Promise<void> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -233,36 +277,50 @@ describe("session worker", () => {
     expect(settled).toBe(true);
   }, 20_000);
 
-  // The wake that arrived mid-attempt has to be honoured after it, or a dispatch created by a
-  // request while a stage was running would sit in the queue until something unrelated woke the
-  // worker.
+  // Spec §4, «сигнал не теряется»: the wake that arrived mid-attempt has to be honoured after it,
+  // or a dispatch enqueued by an HTTP request after `runOnce`'s last queue read would sit there
+  // until something unrelated woke the worker.
+  //
+  // The discriminator is `stateHidingOneWorkItem`, not `awaitIdle`. `pending` is cleared at the top
+  // of the pump's loop body and `settleIdle()` in its `finally` is unconditional, so reducing
+  // `while (pending && !stopping)` to a single `if` strands nothing and leaves `whenIdle()`
+  // resolving exactly as before -- an earlier version of this test claimed otherwise and stayed
+  // green under that mutation. What the second pass is genuinely needed for is work the first pass
+  // could no longer see, which is what the hiding state manufactures deterministically.
   it("takes another pass for a wake that arrived while it was busy", async () => {
     const localState = state();
+    const workerState = stateHidingOneWorkItem(localState);
     const adapter = gatedAdapter();
+    const logger = createRecordingLogger();
     const worker = createSessionWorker({
-      state: localState,
+      state: workerState,
       adapter,
       template: mockDeliveryTemplate,
       createCommandId,
-      logger: createRecordingLogger(),
+      logger,
     });
     seedQueuedAttempt(localState);
 
     worker.wake();
     await adapter.started;
-    seedQueuedAttempt(localState);
+    const late = seedQueuedAttempt(localState);
+    workerState.hideUntilQueueLooksEmpty(late.workItemId);
     worker.wake();
     adapter.release();
 
-    // Not `expect(pendingDispatchModes(localState)).toEqual([])`: `runOnce`'s own cycle loop
-    // re-queries the pending-dispatch table on every cycle, so once the gate opens it discovers and
-    // drains the second seeded attempt on its own, inside the very first pass -- well within
-    // DISPATCH_CYCLE_LIMIT -- regardless of whether `pump` ever takes a second one. That assertion
-    // would hold even with `while (pending && !stopping)` reduced to a single `if`. `awaitIdle` is
-    // what actually depends on the re-loop: under that mutation, `pending` (set by the second
-    // `wake()` above, mid-flight) is stranded `true` once the lone pass exits, `finally` never
-    // settles the idle waiters, and this call times out instead of resolving.
     await awaitIdle(worker);
+
+    // The late work item was invisible to the pass that was running when it was seeded, so a queue
+    // that is empty now says a *second* pass ran and drained it. Under `if`, its dispatch is still
+    // sitting here.
+    expect(pendingDispatchModes(localState)).toEqual([]);
+    expect(snapshotOf(localState, late.workItemId).run?.status).not.toBe("RUNNING");
+    // The reveal is triggered by a read that comes back empty, and a pass that stops at
+    // DISPATCH_CYCLE_LIMIT never makes one -- so a template long enough to hit the limit would
+    // strand the late item for a reason that has nothing to do with the property under test.
+    expect(logger.records.map(({ msg }) => msg)).not.toContain(
+      "The workflow dispatch queue exceeded its safety limit",
+    );
   }, 20_000);
 
   it("resolves whenIdle only once the queue is empty", async () => {

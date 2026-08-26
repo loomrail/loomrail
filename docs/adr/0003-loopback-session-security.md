@@ -77,6 +77,8 @@ Bootstrap tokens expire within one minute and cannot be replayed.
 - missing/expired/replayed bootstrap token rejected;
 - cookie alone cannot perform mutation without CSRF header;
 - the event stream rejects an anonymous session and, when an Origin header is sent, a mismatched one;
-- an open event stream is closed once its session expires;
+- an open event stream, opened over HTTP and read to its end, is closed once its session expires — the
+  heartbeat timer, the session recheck and the route's own authorization check together, not any one of
+  them alone;
 - token/cookie absent from logs and browser-visible URL after exchange;
 - logout and expiry prevent reconnect.

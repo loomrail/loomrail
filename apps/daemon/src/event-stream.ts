@@ -22,7 +22,14 @@ export type EventStreamRegistry = {
   stopHeartbeat: () => void;
 };
 
-export const createEventStreamRegistry = (options: { logger: FastifyBaseLogger }): EventStreamRegistry => {
+export const createEventStreamRegistry = (options: {
+  logger: FastifyBaseLogger;
+  // Test-only, and injected in exactly the same spirit as `startDaemon`'s `providerAdapter`: this
+  // is the only behaviour in the module that a test cannot reach through a request, so leaving it
+  // on the real fifteen-second interval means the timer is the one link in "a held stream cannot
+  // outlive its session" that no test drives. Production passes nothing.
+  intervalMs?: number;
+}): EventStreamRegistry => {
   const subscribers = new Set<EventStreamSubscriber>();
 
   const drop = (subscriber: EventStreamSubscriber): void => {
@@ -75,11 +82,13 @@ export const createEventStreamRegistry = (options: { logger: FastifyBaseLogger }
     },
   };
 
-  // The timer does nothing but call `tick`, which is what the tests drive directly. `unref` keeps
+  // The timer does nothing but call `tick`. That one line is the link between the clock and the
+  // session recheck, so it is driven end to end by "closes a real stream once its session expires"
+  // through `intervalMs` above, not only by the tests that call `tick()` themselves. `unref` keeps
   // an idle daemon from being held alive by its own heartbeat.
   const heartbeat = setInterval(() => {
     registry.tick();
-  }, HEARTBEAT_INTERVAL_MS);
+  }, options.intervalMs ?? HEARTBEAT_INTERVAL_MS);
   heartbeat.unref();
 
   return registry;

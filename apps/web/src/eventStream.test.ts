@@ -6,6 +6,7 @@ import {
   scopesForChannelStatus,
   scopesForSignal,
 } from "./eventStream";
+import { localConnectionQuery } from "./session";
 
 const workItemSignal = {
   projectId: "p1",
@@ -31,8 +32,12 @@ describe("scopesForSignal", () => {
 });
 
 describe("scopesForChannelStatus", () => {
+  // Asserted against the query's own key, not against a second copy of the literal.
+  // `eventStream.ts` names the scope inline to stay free of app wiring, so this is the only thing
+  // that would notice `localConnectionQuery`'s key being renamed: without it the channel would go
+  // on invalidating a key nothing uses, and a dead session would stop being detected at all.
   it("yields the connection scope for a closed channel", () => {
-    expect(scopesForChannelStatus("closed")).toEqual([["local-daemon", "connection"]]);
+    expect(scopesForChannelStatus("closed")).toEqual([localConnectionQuery.queryKey]);
   });
 
   // A transient blip must not present as a dead session -- the browser is retrying on its own and
@@ -114,7 +119,7 @@ describe("connectEventStream", () => {
   it("invalidates everything on open, which is what makes a lost signal harmless", () => {
     const invalidateAll = vi.fn();
     const source = fakeSource();
-    connectEventStream({ source, invalidateAll, invalidateScopes: vi.fn(), onStatus: vi.fn() });
+    connectEventStream({ source, invalidateAll, invalidateScopes: vi.fn() });
 
     source.onopen?.({});
 
@@ -124,7 +129,7 @@ describe("connectEventStream", () => {
   it("invalidates everything again on every reconnect, not only the first connection", () => {
     const invalidateAll = vi.fn();
     const source = fakeSource();
-    connectEventStream({ source, invalidateAll, invalidateScopes: vi.fn(), onStatus: vi.fn() });
+    connectEventStream({ source, invalidateAll, invalidateScopes: vi.fn() });
 
     source.onopen?.({});
     source.onerror?.({});
@@ -137,7 +142,7 @@ describe("connectEventStream", () => {
     vi.useFakeTimers();
     const invalidateScopes = vi.fn();
     const source = fakeSource();
-    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes, onStatus: vi.fn(), windowMs: 50 });
+    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes, windowMs: 50 });
 
     source.onmessage?.({
       data: JSON.stringify({ projectId: "p1", aggregateType: "WORK_ITEM", aggregateId: "w1" }),
@@ -158,7 +163,7 @@ describe("connectEventStream", () => {
     vi.useFakeTimers();
     const invalidateScopes = vi.fn();
     const source = fakeSource();
-    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes, onStatus: vi.fn(), windowMs: 50 });
+    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes, windowMs: 50 });
 
     expect(() => source.onmessage?.({ data: "{not json" })).not.toThrow();
     expect(() => source.onmessage?.({ data: JSON.stringify({ projectId: "p1" }) })).not.toThrow();
@@ -174,28 +179,14 @@ describe("connectEventStream", () => {
   });
 
   // Per the HTML spec EventSource reconnects itself on a network error but closes permanently on a
-  // non-200 response. So CLOSED means "the session is gone", and the UI must not keep looking live.
-  it("reports a permanently closed channel apart from a reconnecting one", () => {
-    const onStatus = vi.fn();
-    const source = fakeSource();
-    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes: vi.fn(), onStatus });
-
-    source.readyState = 0; // CONNECTING
-    source.onerror?.({});
-    expect(onStatus).toHaveBeenLastCalledWith("connecting");
-
-    source.readyState = 2; // CLOSED
-    source.onerror?.({});
-    expect(onStatus).toHaveBeenLastCalledWith("closed");
-  });
-
-  // This is the entire mechanism by which a dead channel becomes visible to the app -- nothing
-  // else reads EventChannelStatus -- so it has to be provable through the double, not only by
-  // hand-tracing scopesForChannelStatus in isolation.
+  // non-200 response. So CLOSED means "the session is gone", and the app must not keep looking live.
+  // That distinction is asserted by this test and the one after it together -- the same `onerror`
+  // handler, the same two readyStates, opposite expectations -- rather than by watching a reported
+  // status, because the invalidation *is* the whole visible consequence of the distinction.
   it("invalidates the connection scope once the channel closes for good", () => {
     const invalidateScopes = vi.fn();
     const source = fakeSource();
-    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes, onStatus: vi.fn() });
+    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes });
 
     source.readyState = 2; // CLOSED
     source.onerror?.({});
@@ -206,10 +197,23 @@ describe("connectEventStream", () => {
   it("does not invalidate the connection scope while merely reconnecting", () => {
     const invalidateScopes = vi.fn();
     const source = fakeSource();
-    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes, onStatus: vi.fn() });
+    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes });
 
     source.readyState = 0; // CONNECTING
     source.onerror?.({});
+
+    expect(invalidateScopes).not.toHaveBeenCalled();
+  });
+
+  // The third status. `announce("live")` on open has to map to no scopes: invalidating the
+  // connection query here would refetch the session on every reconnect and, worse, make a healthy
+  // channel indistinguishable from a dead one at the only place that difference is observable.
+  it("does not invalidate the connection scope when the channel opens", () => {
+    const invalidateScopes = vi.fn();
+    const source = fakeSource();
+    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes });
+
+    source.onopen?.({});
 
     expect(invalidateScopes).not.toHaveBeenCalled();
   });
@@ -222,7 +226,6 @@ describe("connectEventStream", () => {
       source,
       invalidateAll: vi.fn(),
       invalidateScopes,
-      onStatus: vi.fn(),
       windowMs: 50,
     });
 

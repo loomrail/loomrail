@@ -14,7 +14,7 @@ export type SeededAttempt = {
   dispatch: WorkflowDispatch;
 };
 
-const FIXTURE_PROJECT_ID = "project-web";
+export const FIXTURE_PROJECT_ID = "project-web";
 
 /**
  * Registers the shared fixture project, once per `LocalState`. Idempotent: a worker test seeds more

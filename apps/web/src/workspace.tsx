@@ -36,7 +36,6 @@ import {
 } from "./api";
 import { localConnectionQuery, type ConnectionResult } from "./session";
 import { useEventStream } from "./useEventStream";
-import type { EventChannelStatus } from "./eventStream";
 
 const projectsKey = ["projects"] as const;
 const projectWorkItemsKey = (projectId: string) => ["projects", projectId, "work-items"] as const;
@@ -53,7 +52,6 @@ type WorkspaceContextValue = {
   connection: ConnectionResult | undefined;
   connectionPending: boolean;
   error: Error | null;
-  eventChannelStatus: EventChannelStatus;
   projects: readonly Project[];
   projectsPending: boolean;
   selectedProject: Project | null;
@@ -75,7 +73,9 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }): React.
   const projects = projectsQuery.data?.projects ?? [];
   const selectedProject =
     projects.find((project) => project.id === requestedProjectId) ?? projects.at(0) ?? null;
-  const eventChannelStatus = useEventStream(connected);
+  // Nothing is returned: the channel's only effect on this component tree is the invalidation it
+  // performs through the query client (see useEventStream), not a status anything renders.
+  useEventStream(connected);
 
   const value = useMemo<WorkspaceContextValue>(
     () => ({
@@ -89,7 +89,6 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }): React.
             : projectsQuery.error instanceof Error
               ? projectsQuery.error
               : null,
-      eventChannelStatus,
       projects,
       projectsPending: connected && projectsQuery.isPending,
       retryConnection: () => {
@@ -106,7 +105,6 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }): React.
       connectionQuery.error,
       connectionQuery.isPending,
       connectionQuery.refetch,
-      eventChannelStatus,
       projects,
       projectsQuery.error,
       projectsQuery.isPending,

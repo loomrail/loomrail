@@ -47,7 +47,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { z, ZodError } from "zod";
 
 import { broadcastingState } from "./broadcasting-state.js";
-import { createEventStreamRegistry, MAX_OPEN_STREAMS } from "./event-stream.js";
+import { createEventStreamRegistry } from "./event-stream.js";
 import { FixtureResolutionError, resolveBundledFixture } from "./fixtures.js";
 import { createSessionWorker } from "./session-worker.js";
 
@@ -56,7 +56,7 @@ const DAEMON_VERSION = "0.0.0";
 const SESSION_COOKIE = "loomrail_session";
 const CSRF_HEADER = "x-loomrail-csrf";
 const BOOTSTRAP_TTL_MS = 60_000;
-const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
+export const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
 const DEFAULT_MOCK_BUDGET = 100;
 const DEFAULT_MOCK_BUDGET_THRESHOLDS = [0.5, 0.8, 0.95] as const;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1"]);
@@ -80,6 +80,12 @@ export type StartDaemonOptions = {
   // calling `runStageAttempt` directly, which is how a jam in the drain around those paths stayed
   // invisible. Production always gets the default mock provider.
   providerAdapter?: ProviderAdapter;
+  // Injected for the same reason as `providerAdapter` above, and only for it: the heartbeat is the
+  // one mechanism here that is driven by wall-clock time rather than by a request, so without a
+  // shorter interval the only way to observe it end a stream is to wait out the real fifteen
+  // seconds -- which is why the chain from the timer through `tick()` to the session recheck was
+  // covered only in its middle link. Production always gets HEARTBEAT_INTERVAL_MS.
+  heartbeatIntervalMs?: number;
 };
 
 export type RunningDaemon = {
@@ -248,7 +254,12 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     genReqId: () => randomUUID(),
   });
 
-  const eventStreams = createEventStreamRegistry({ logger: app.log });
+  const eventStreams = createEventStreamRegistry({
+    logger: app.log,
+    // Spread rather than assigned, because `exactOptionalPropertyTypes` makes an explicit
+    // `undefined` a different thing from an absent key -- the same shape `loggerStream` uses above.
+    ...(options.heartbeatIntervalMs === undefined ? {} : { intervalMs: options.heartbeatIntervalMs }),
+  });
 
   // The single seam every writer -- request handlers and `runStageAttempt` alike -- publishes
   // through, because there is exactly one `localState` and it is already wrapped by the time any
@@ -1019,12 +1030,22 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           .code(403)
           .send(createError("ORIGIN_REJECTED", "The request origin is not allowed", correlationId));
       }
-      // Before `hijack()`, because after it there is no reply left to send a status on.
-      if (eventStreams.openCount() >= MAX_OPEN_STREAMS) {
+      // The limit has exactly one enforcement point, and it is `open()` itself: asking the registry
+      // first, while there is still a reply to answer on, means a refusal is a 503 the client can
+      // read rather than a 200 that closes immediately -- which `EventSource` would retry forever.
+      // Registering the subscriber before the headers go out is safe because nothing between here
+      // and the `write` below yields: `execute` and therefore `publish` are synchronous, so no
+      // signal can reach this response ahead of its own status line.
+      const release = eventStreams.open({
+        response: reply.raw,
+        isAuthorized: () => sessionForRequest(request) !== undefined,
+      });
+      if (!release) {
         return reply
           .code(503)
           .send(createError("STREAM_LIMIT_REACHED", "Too many open event streams", correlationId));
       }
+      request.raw.on("close", release);
 
       reply.hijack();
       reply.raw.writeHead(200, {
@@ -1035,16 +1056,6 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       // Flushes the headers now, so the client's `open` fires immediately instead of whenever the
       // first real signal happens to arrive.
       reply.raw.write(": open\n\n");
-
-      const release = eventStreams.open({
-        response: reply.raw,
-        isAuthorized: () => sessionForRequest(request) !== undefined,
-      });
-      if (!release) {
-        reply.raw.end();
-        return;
-      }
-      request.raw.on("close", release);
     });
 
     if (options.webRoot) {

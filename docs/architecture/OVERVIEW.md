@@ -13,7 +13,7 @@ directly decide that a WorkItem is complete.
 flowchart LR
     CLI[CLI] -->|start + one-time bootstrap| D[Local daemon]
     UI[Browser UI] <-->|authenticated HTTP| D
-    UI -. later: resumable WS .-> D
+    UI -. SSE invalidation signals .-> D
 
     D --> APP[Application commands and queries]
     APP --> DOMAIN[Domain state machines]
@@ -63,7 +63,7 @@ persistence/provider/browser/git adapters
 ```
 
 - domain packages have no infrastructure imports;
-- contracts validate data at HTTP, WebSocket, config and provider boundaries;
+- contracts validate data at HTTP, event-stream, config and provider boundaries;
 - provider-specific payloads remain inside provider adapters;
 - database rows do not leak as public API shapes;
 - platform-specific paths/processes remain behind adapters;
@@ -78,7 +78,7 @@ sequenceDiagram
     participant API as Daemon API
     participant APP as Command handler
     participant DB as SQLite transaction
-    participant WS as Event stream
+    participant SSE as Event stream (SSE)
 
     UI->>API: authenticated command + commandId + expectedVersion
     API->>APP: validated command
@@ -87,12 +87,14 @@ sequenceDiagram
     DB-->>APP: commit
     APP-->>API: accepted result
     API-->>UI: command response
-    APP->>WS: committed event sequence
-    WS-->>UI: event
+    APP->>SSE: committed events
+    SSE-->>UI: signal (projectId, aggregateType, aggregateId)
 ```
 
-On reconnect the UI supplies its last event sequence. Missing history is replayed from SQLite; a gap outside the
-supported replay window forces an explicit query refresh.
+The signal carries no content and no sequence number: it says that something changed at a scope, and the UI
+refetches that scope. There is no replay. On connect and on every reconnect the UI invalidates every cached query
+instead, which is what makes a lost signal harmless — see `docs/plans/09-background-execution-and-event-stream-spec.ru.md`
+D3 and ADR-0002.
 
 ## Phase 0 module responsibilities
 
@@ -108,7 +110,7 @@ supported replay window forces an explicit query refresh.
 
 - composition root;
 - loopback listener and session security;
-- API/WS transport;
+- API and event-stream transport;
 - startup migrations/reconciliation;
 - structured log/redaction policy.
 
@@ -135,7 +137,7 @@ knowing SQLite or HTTP.
 
 - versioned Zod wire schemas;
 - DTO/domain mapping;
-- HTTP/WS error envelope;
+- HTTP error envelope and event-stream frame schema;
 - unknown version/enum rejection.
 
 ### `packages/persistence-sqlite`
@@ -200,7 +202,7 @@ logs without redaction.
 - transition matrix and invariants;
 - duplicate command idempotency;
 - migration/backup/reopen;
-- WebSocket replay/reconnect;
+- event-stream signal delivery and invalidate-everything on reconnect (replay is excluded by design);
 - unauthenticated/cross-origin rejection;
 - macOS/Windows path/process behavior;
 - fixture flow across restart.

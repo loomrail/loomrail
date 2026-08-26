@@ -162,7 +162,16 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
     wake: () => {
       if (stopping) return;
       pending = true;
-      void pump();
+      // `pump()` cannot reject today -- every path inside it that can throw is already wrapped by
+      // the try/catch around `runOnce()`. The catch is here because nothing enforces that: a future
+      // edit that moves work outside that try would turn a rejection here into an unhandled promise
+      // rejection, which on Node's default settings terminates the daemon rather than logging.
+      void pump().catch((error: unknown) => {
+        deps.logger.error(
+          { error: error instanceof Error ? error.name : "unknown" },
+          "The background session worker's pump rejected",
+        );
+      });
     },
     whenIdle: () =>
       stopping || (!running && !pending)

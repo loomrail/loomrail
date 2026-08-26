@@ -10,11 +10,27 @@ type QueryScope = readonly string[];
  * Query keys are prefix-shaped (workspace.tsx:39-48), so one entry per scope covers everything
  * nested under it. The stage-attempt scope is invalidated whole because events carry no attempt
  * id -- the client holds one or two attempts, so the cost is one refetch.
+ *
+ * A switch with a `never` check rather than a ternary on `=== "WORK_ITEM"`, because a third
+ * `aggregateType` would otherwise degrade in silence: `eventSignalSchema` would accept the frame,
+ * and everything that is not WORK_ITEM would quietly take the PROJECT branch and invalidate the
+ * wrong keys. The daemon side of the same widening is caught by the compiler already -- publishing
+ * a `DomainEvent`'s `aggregateType` (broadcasting-state.ts) is an assignment to `EventSignal`, so
+ * an event type the frame schema does not list fails to compile there. This closes the other door:
+ * widen the schema to match and this function stops compiling until its mapping is decided.
  */
-export const scopesForSignal = (signal: EventSignal): readonly QueryScope[] =>
-  signal.aggregateType === "WORK_ITEM"
-    ? [["projects", signal.projectId], ["work-items", signal.aggregateId], ["stage-attempts"]]
-    : [["projects", signal.projectId], ["projects"]];
+export const scopesForSignal = (signal: EventSignal): readonly QueryScope[] => {
+  switch (signal.aggregateType) {
+    case "WORK_ITEM":
+      return [["projects", signal.projectId], ["work-items", signal.aggregateId], ["stage-attempts"]];
+    case "PROJECT":
+      return [["projects", signal.projectId], ["projects"]];
+    default: {
+      const unhandled: never = signal.aggregateType;
+      throw new Error(`Unhandled event signal aggregate type: ${String(unhandled)}`);
+    }
+  }
+};
 
 /**
  * Collects signals arriving inside one window and flushes their union once.
@@ -56,7 +72,9 @@ export type EventChannelStatus = "connecting" | "live" | "closed";
 const EVENT_SOURCE_CLOSED = 2;
 
 // The connection query's key, named here rather than imported from session.ts so this module stays
-// free of app wiring. Kept beside the mapping that uses it so the two cannot drift apart.
+// free of app wiring. That duplication is only safe because eventStream.test.ts asserts this
+// mapping against `localConnectionQuery.queryKey` itself -- the test file is free to import
+// session.ts, so the drift this literal would otherwise invite is caught there.
 const LOCAL_CONNECTION_SCOPE: QueryScope = ["local-daemon", "connection"];
 
 /**
@@ -85,28 +103,36 @@ export type EventSourceLike = {
 };
 
 /**
- * Wires an `EventSourceLike` to the coalescer and reports connection status.
+ * Wires an `EventSourceLike` to the coalescer, and turns a change of connection status into the
+ * invalidation it implies.
  *
  * Three things here are load bearing (spec D3/D4). `invalidateAll()` on every `open` -- including
  * every reconnect, not only the first -- is what makes a dropped signal harmless: the channel
  * carries no sequence number and never replays, so catching up after any gap is done entirely by
  * refetching. Parsing each frame inside a `try` means a malformed or non-signal frame is dropped
  * rather than thrown, which would otherwise leave the channel silently mute after one bad frame.
- * And routing `scopesForChannelStatus` through `invalidateScopes` on every status change is the
- * entire mechanism by which a permanently closed channel ever becomes visible to the app -- nothing
- * else observes `EventChannelStatus`, so this line has to be the one under test, not a hook branch.
+ * And `announce` below is the entire mechanism by which a permanently closed channel becomes
+ * visible to the app: the status is consumed here, by `scopesForChannelStatus`, and is not reported
+ * outward. It used to be handed to the caller as well, threaded through the workspace context and
+ * rendered by nothing -- a wire with nothing on the far end, which no test could tell from a broken
+ * one. Anything that wants to *show* channel status should start from this function, not from a
+ * status value some caller is already receiving.
  */
 export const connectEventStream = (options: {
   source: EventSourceLike;
   invalidateAll: () => void;
   invalidateScopes: (scopes: readonly (readonly string[])[]) => void;
-  onStatus: (status: EventChannelStatus) => void;
   windowMs?: number;
 }): (() => void) => {
   const coalescer = createSignalCoalescer(options.invalidateScopes, options.windowMs);
 
+  const announce = (status: EventChannelStatus): void => {
+    const scopes = scopesForChannelStatus(status);
+    if (scopes.length > 0) options.invalidateScopes(scopes);
+  };
+
   options.source.onopen = () => {
-    options.onStatus("live");
+    announce("live");
     options.invalidateAll();
   };
 
@@ -123,13 +149,10 @@ export const connectEventStream = (options: {
   };
 
   options.source.onerror = () => {
-    const status = options.source.readyState === EVENT_SOURCE_CLOSED ? "closed" : "connecting";
-    options.onStatus(status);
-    // Routed through the same invalidateScopes callback the coalescer uses, rather than a branch
-    // in the hook: this makes the closed -> "session is gone" decision reachable through the
+    // Routed through the same invalidateScopes callback the coalescer uses, rather than a branch in
+    // the hook: this makes the closed -> "session is gone" decision reachable through the
     // injected-double tests in this file, not only by hand-tracing a useEffect.
-    const scopes = scopesForChannelStatus(status);
-    if (scopes.length > 0) options.invalidateScopes(scopes);
+    announce(options.source.readyState === EVENT_SOURCE_CLOSED ? "closed" : "connecting");
   };
 
   return () => {
