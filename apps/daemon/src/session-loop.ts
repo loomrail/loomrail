@@ -475,7 +475,13 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
       endReason = "COMPLETED";
       stageResult = result.outcome;
     }
-    if (live.checkpointWriteFailed) endReason = "INTERRUPTED";
+    // Only when the session ended without a stage result. §6.2 cuts a session whose checkpoint
+    // could not be persisted because the *next* session's pack would be assembled without it -- and
+    // a session that finished the stage has no next session on this attempt, so nothing is carried
+    // forward and nothing is lost. Rewriting the reason there would also route a completed stage
+    // through §6.5, hard-pause the attempt on the second occurrence, and then hand
+    // APPLY_PROVIDER_OUTCOME an attempt that is no longer RUNNING.
+    if (live.checkpointWriteFailed && stageResult === null) endReason = "INTERRUPTED";
 
     const ended = deps.state.execute(endSessionCommand(deps, providerSession.id, endReason));
     if (ended.type !== "PROVIDER_SESSION_ENDED") throw new Error("The ProviderSession did not end");

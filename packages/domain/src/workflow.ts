@@ -222,7 +222,18 @@ const requireCurrentStage = (run: PipelineRun, stageAttempt: StageAttempt): void
   }
 };
 
-const pendingDispatchFailed = (dispatch: WorkflowDispatch | null, now: string): WorkflowDispatch | null => {
+/**
+ * Closes out a dispatch that will never be answered.
+ *
+ * A PENDING dispatch is a standing instruction to the daemon's drain: pick this stage up and run
+ * it. Whenever a decision stops the stage without producing a provider outcome -- a pause, a
+ * cancellation -- the instruction has to be withdrawn in the same transaction, or the drain finds a
+ * pending dispatch whose StageAttempt is no longer runnable and fails on it every cycle.
+ */
+export const pendingDispatchFailed = (
+  dispatch: WorkflowDispatch | null,
+  now: string,
+): WorkflowDispatch | null => {
   if (dispatch?.status !== "PENDING") return dispatch;
   return { ...dispatch, status: "FAILED", completedAt: now };
 };

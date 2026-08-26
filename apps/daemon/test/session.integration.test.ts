@@ -10,6 +10,7 @@ import type {
   ProviderSession,
   WorkflowDispatch,
 } from "@loomrail/contracts";
+import { workflowSnapshotSchema } from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import {
   providerCapabilitiesSchema,
@@ -21,7 +22,7 @@ import { createMockProvider } from "@loomrail/provider-mock";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { startDaemon } from "../src/server.js";
+import { startDaemon, type RunningDaemon } from "../src/server.js";
 import { runStageAttempt, type RunStageAttemptDeps, type SessionLoopLogger } from "../src/session-loop.js";
 
 const timestamp = "2026-08-25T18:00:00.000Z";
@@ -45,6 +46,27 @@ const immediateDeadline: NonNullable<RunStageAttemptDeps["scheduleHandoffDeadlin
     },
   };
 };
+
+type AuthenticatedSession = { cookie: string; csrfToken: string };
+
+const authenticate = async (daemon: RunningDaemon, token: string): Promise<AuthenticatedSession> => {
+  const exchange = await fetch(`${daemon.baseUrl}/api/session/exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: daemon.baseUrl },
+    body: JSON.stringify({ bootstrapToken: token }),
+  });
+  const cookie = exchange.headers.get("set-cookie")?.split(";", 1)[0];
+  if (!cookie) throw new Error("Session exchange did not return a cookie");
+  const body = (await exchange.json()) as { csrfToken: string };
+  return { cookie, csrfToken: body.csrfToken };
+};
+
+const mutationHeaders = (daemon: RunningDaemon, session: AuthenticatedSession): Record<string, string> => ({
+  "content-type": "application/json",
+  cookie: session.cookie,
+  origin: daemon.baseUrl,
+  "x-loomrail-csrf": session.csrfToken,
+});
 
 type SeededAttempt = {
   workItemId: string;
@@ -89,7 +111,7 @@ describe("stage attempt session loop", () => {
 
   const createCommandId = (): string => `command-${(nextCommandId += 1).toString()}`;
 
-  const seedRunningAttempt = (localState: LocalState): SeededAttempt => {
+  const seedQueuedAttempt = (localState: LocalState): SeededAttempt => {
     localState.execute({
       schemaVersion: 1,
       commandId: createCommandId(),
@@ -143,20 +165,28 @@ describe("stage attempt session loop", () => {
       },
     });
     if (started.type !== "PIPELINE_STARTED") throw new Error("Expected a started pipeline");
+    return {
+      workItemId: created.workItem.id,
+      stageAttemptId: started.stageAttempt.id,
+      dispatch: started.dispatch,
+    };
+  };
+
+  // The same fixture with its dispatch already marked started, i.e. what `runStageAttempt` expects
+  // to be handed. Tests that go through the daemon use the queued form instead and let the daemon's
+  // own drain mark it.
+  const seedRunningAttempt = (localState: LocalState): SeededAttempt => {
+    const seeded = seedQueuedAttempt(localState);
     const dispatched = localState.execute({
       schemaVersion: 1,
       commandId: createCommandId(),
       correlationId: "correlation-seed-dispatch",
       actor: { type: "SYSTEM", id: "session-loop" },
       type: "MARK_WORKFLOW_DISPATCH_STARTED",
-      payload: { dispatchId: started.dispatch.id },
+      payload: { dispatchId: seeded.dispatch.id },
     });
     if (dispatched.type !== "WORKFLOW_DISPATCH_STARTED") throw new Error("Expected a started dispatch");
-    return {
-      workItemId: created.workItem.id,
-      stageAttemptId: started.stageAttempt.id,
-      dispatch: dispatched.dispatch,
-    };
+    return { ...seeded, dispatch: dispatched.dispatch };
   };
 
   const depsFor = (
@@ -180,6 +210,12 @@ describe("stage attempt session loop", () => {
     const result = localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId });
     if (result.type !== "PROVIDER_SESSIONS") throw new Error("Expected provider sessions");
     return { sessions: result.sessions, recipes: result.recipes, checkpoints: result.checkpoints };
+  };
+
+  const pendingDispatchModes = (localState: LocalState): string[] => {
+    const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+    if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatches");
+    return pending.dispatches.map(({ mode }) => mode);
   };
 
   const eventTypes = (localState: LocalState): string[] => {
@@ -675,8 +711,79 @@ describe("stage attempt session loop", () => {
     // The owner's words become a Decision, so the next session's pack carries what they said about
     // the stall -- the reason for asking rather than merely pausing.
     expect(resumed.decisions).toHaveLength(1);
-    const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
-    if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatches");
-    expect(pending.dispatches.map(({ mode }) => mode)).toContain("RESUME");
+    // The exact set, not "contains a RESUME": the pause withdraws the attempt's own START dispatch,
+    // so a second standing instruction must not be left beside the new one. `toContain` passed with
+    // either one dispatch or two, which is precisely the difference between a resumable stage and a
+    // drain that fails on an orphaned dispatch every cycle.
+    expect(pendingDispatchModes(localState)).toEqual(["RESUME"]);
+  });
+
+  it("keeps the daemon's own drain working across a hard pause and the answer that lifts it", async () => {
+    // Every other test here calls `runStageAttempt` directly, which is exactly why a jam in the
+    // drain around these paths stayed invisible: the escape route was verified everywhere except
+    // where the owner actually walks it. This one drives the whole thing through the product --
+    // the daemon's boot drain, its HTTP answer endpoint, and the drain that endpoint runs after.
+    const localState = await open();
+    const seeded = seedQueuedAttempt(localState);
+    localState.close();
+    state = undefined;
+
+    // Publishes nothing and runs into the wall on its first turn, so the attempt reaches §6.5's
+    // hard pause inside the daemon's own boot drain.
+    const token = randomBytes(32).toString("base64url");
+    const daemon = await startDaemon({
+      bootstrapToken: token,
+      stateDatabasePath: databasePath,
+      logger: false,
+      providerAdapter: createMockProvider({
+        contextWindowTokens: 4_000,
+        tokensPerTurn: 100,
+        checkpointEvery: 1_000,
+        hitTheWallAfterTurns: 1,
+      }),
+    });
+
+    try {
+      // Reaching here at all is half the assertion: with the attempt's START dispatch left pending,
+      // the drain's next cycle calls MARK_WORKFLOW_DISPATCH_STARTED on a hard-paused attempt and
+      // startDaemon rejects with WORKFLOW_CONTROL_NOT_ALLOWED before ever returning.
+      const session = await authenticate(daemon, token);
+      const pausedResponse = await fetch(
+        `${daemon.baseUrl}/api/v1/work-items/${seeded.workItemId}/workflow`,
+        { headers: { cookie: session.cookie } },
+      );
+      expect(pausedResponse.status).toBe(200);
+      const paused = workflowSnapshotSchema.parse(await pausedResponse.json());
+      expect(paused.run?.status).toBe("HARD_PAUSED");
+      const request = paused.humanRequests.find(({ status }) => status === "OPEN");
+      if (!request) throw new Error("The hard pause did not open a Human Request");
+
+      const answerResponse = await fetch(`${daemon.baseUrl}/api/v1/human-requests/${request.id}/answer`, {
+        method: "POST",
+        headers: mutationHeaders(daemon, session),
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "answer-session-pause",
+          expectedVersion: request.version,
+          answer: { type: "OTHER", text: "Try it once more before I split the task up." },
+        }),
+      });
+      // With a stale START dispatch left beside the new RESUME one, this endpoint's own drain
+      // fails on the orphaned dispatch and the owner gets a 500 instead of a resumed stage.
+      expect(answerResponse.status).toBe(200);
+    } finally {
+      await daemon.close();
+    }
+
+    const after = await open();
+    // No standing instruction is left behind by either the pause or the answer: the drain has
+    // nothing to trip over, which is what "does not jam" means in terms a drain can observe.
+    expect(pendingDispatchModes(after)).toEqual([]);
+    const snapshot = snapshotOf(after, seeded.workItemId);
+    // The answer really put the stage back to work: it ran again, produced nothing again, and
+    // paused again cleanly rather than wedging.
+    expect(sessionRows(after, seeded.stageAttemptId).sessions).toHaveLength(3);
+    expect(snapshot.run?.status).toBe("HARD_PAUSED");
+    expect(snapshot.humanRequests.map(({ status }) => status).sort()).toEqual(["OPEN", "RESOLVED"]);
   });
 });

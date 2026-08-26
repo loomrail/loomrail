@@ -10,10 +10,11 @@ import type {
   ProviderSessionEndReason,
   StageAttempt,
   StageAttemptChangedEvent,
+  WorkflowDispatch,
   WorkItem,
 } from "@loomrail/contracts";
 
-import { WorkflowDomainError } from "./workflow.js";
+import { pendingDispatchFailed, WorkflowDomainError } from "./workflow.js";
 
 // Same shape as the EventIntent<T> helper in workflow.ts (Pick<T, "data" | "type">): the
 // persistence layer stamps sequence/id/aggregateId/actor/occurredAt/correlationId onto the intent
@@ -161,6 +162,11 @@ export type StageAttemptPauseDecision = {
   run: PipelineRun;
   stageAttempt: StageAttempt;
   request: HumanRequest;
+  // The attempt's pending dispatch, failed. A hard pause stops the stage without producing a
+  // provider outcome, so nothing else would ever close that dispatch out, and the daemon's drain
+  // would keep finding a standing instruction to run a StageAttempt that is no longer runnable.
+  // Null when the attempt had no pending dispatch.
+  dispatch: WorkflowDispatch | null;
   events: (
     | EventIntent<ContextFloorExceededEvent>
     | EventIntent<StageAttemptChangedEvent>
@@ -222,6 +228,9 @@ export const decideStageAttemptHardPause = (context: {
   // passes that.
   stageAttempt: StageAttempt;
   previousStatus: StageAttempt["status"];
+  // The attempt's pending dispatch, if it still has one. Withdrawn below, in this same decision, so
+  // that pausing and un-queueing the stage cannot come apart.
+  pendingDispatch: WorkflowDispatch | null;
   humanRequestId: string;
   reason: StageAttemptPauseReason;
 }): StageAttemptPauseDecision => {
@@ -290,5 +299,12 @@ export const decideStageAttemptHardPause = (context: {
     { type: "HUMAN_REQUEST_OPENED", data: { request } },
   );
 
-  return { workItem, run, stageAttempt, request, events };
+  return {
+    workItem,
+    run,
+    stageAttempt,
+    request,
+    dispatch: pendingDispatchFailed(context.pendingDispatch, context.now),
+    events,
+  };
 };

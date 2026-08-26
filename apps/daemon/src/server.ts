@@ -38,6 +38,7 @@ import {
 } from "@loomrail/contracts";
 import { WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
 import { openLocalState, StateStoreError } from "@loomrail/persistence-sqlite";
+import type { ProviderAdapter } from "@loomrail/provider-core";
 import { createMockProvider } from "@loomrail/provider-mock";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -70,6 +71,11 @@ export type StartDaemonOptions = {
   now?: Clock;
   logger?: DaemonLoggerOption;
   loggerStream?: DaemonLoggerStream;
+  // Injected so a test can drive the daemon's own dispatch drain with an adapter that hands off,
+  // stalls, or runs into a wall. Without it the session-handoff paths are only ever reachable by
+  // calling `runStageAttempt` directly, which is how a jam in the drain around those paths stayed
+  // invisible. Production always gets the default mock provider.
+  providerAdapter?: ProviderAdapter;
 };
 
 export type RunningDaemon = {
@@ -211,7 +217,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     databasePath: options.stateDatabasePath ?? ":memory:",
     now,
   });
-  const providerAdapter = createMockProvider();
+  const providerAdapter = options.providerAdapter ?? createMockProvider();
   providerAdapter.capabilities();
 
   let allowedOrigin = "";

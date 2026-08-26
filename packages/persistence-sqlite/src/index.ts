@@ -922,6 +922,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       return value === undefined ? null : pipelineRunFromRow(value);
     };
 
+    const readPendingDispatchForAttempt = (stageAttemptId: string): WorkflowDispatch | null => {
+      const row = selectPendingDispatchByStageAttempt.get(stageAttemptId);
+      return row === undefined ? null : workflowDispatchFromRow(row);
+    };
+
     const readStageAttempt = (stageAttemptId: string): StageAttempt | null => {
       const value = selectStageAttemptById.get(stageAttemptId);
       return value === undefined ? null : stageAttemptFromRow(value);
@@ -2624,6 +2629,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                   unproductiveSessions: decision.attempt.unproductiveSessions,
                 },
                 previousStatus: stageAttempt.status,
+                pendingDispatch: readPendingDispatchForAttempt(stageAttempt.id),
                 humanRequestId: createId("humanRequest"),
                 reason: { type: "NO_PROGRESS" },
               });
@@ -2632,6 +2638,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               updateStageAttempt(paused.stageAttempt);
               updatePipelineRun(paused.run);
               updateWorkflowWorkItem(paused.workItem);
+              if (paused.dispatch) updateWorkflowDispatch(paused.dispatch);
               insertHumanRequest(paused.request);
               events.push(...appendWorkflowEvents(paused.events, eventMetadata));
               break;
@@ -2783,12 +2790,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           run,
           stageAttempt,
           previousStatus: stageAttempt.status,
+          pendingDispatch: readPendingDispatchForAttempt(stageAttempt.id),
           humanRequestId: createId("humanRequest"),
           reason: command.payload.reason,
         });
         updateStageAttempt(decision.stageAttempt);
         updatePipelineRun(decision.run);
         updateWorkflowWorkItem(decision.workItem);
+        if (decision.dispatch) updateWorkflowDispatch(decision.dispatch);
         insertHumanRequest(decision.request);
         const events = appendWorkflowEvents(decision.events, {
           workItemId: workItem.id,

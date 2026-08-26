@@ -1,4 +1,11 @@
-import type { HumanRequest, PipelineRun, ProviderSession, StageAttempt, WorkItem } from "@loomrail/contracts";
+import type {
+  HumanRequest,
+  PipelineRun,
+  ProviderSession,
+  StageAttempt,
+  WorkflowDispatch,
+  WorkItem,
+} from "@loomrail/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -76,6 +83,19 @@ const workItemFixture: WorkItem = {
   version: 1,
   createdAt: "2026-08-25T15:00:00.000Z",
   updatedAt: "2026-08-25T15:00:00.000Z",
+};
+
+const pendingDispatchFixture: WorkflowDispatch = {
+  schemaVersion: 1,
+  id: "dispatch-1",
+  projectId: "project-1",
+  workItemId: "work-item-1",
+  pipelineRunId: "run-1",
+  stageAttemptId: "attempt-1",
+  mode: "START",
+  status: "PENDING",
+  createdAt: "2026-08-25T16:00:00.000Z",
+  completedAt: null,
 };
 
 describe("provider session decisions", () => {
@@ -291,9 +311,18 @@ describe("provider session decisions", () => {
         run: runWith(),
         stageAttempt: attemptWith(),
         previousStatus: "RUNNING",
+        pendingDispatch: pendingDispatchFixture,
         humanRequestId: "human-request-1",
         reason,
       });
+
+    it("withdraws the attempt's pending dispatch so the daemon's drain has nothing to trip over", () => {
+      // A PENDING dispatch is a standing instruction to run this stage. A hard pause produces no
+      // provider outcome, so nothing else would ever close it out, and the drain would keep finding
+      // an instruction to run a StageAttempt that is no longer runnable.
+      const decision = pause({ type: "NO_PROGRESS" });
+      expect(decision.dispatch).toMatchObject({ id: "dispatch-1", status: "FAILED" });
+    });
 
     it("marks the pause with a failure code that says it was not the budget", () => {
       // The code is the only thing distinguishing this pause from a budget one, and both the
