@@ -264,16 +264,12 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       // placeholder pack keeps the daemon's one dispatch-per-attempt flow running against the new
       // adapter boundary; it carries no real content and is not persisted as a ContextPackRecipe.
       //
-      // The one line an adapter can rely on is the "Attempt: N" line, in the same wording
-      // context-assembly's real WORKFLOW_POSITION section already renders (see
-      // packages/context-assembly/src/render.ts, renderWorkflowPosition). It's read fresh from
-      // persisted state every cycle -- unlike adapter-local bookkeeping, it survives a daemon
-      // restart, and it doesn't bleed between concurrently-running work items, because it's
-      // carried on this invocation's own pack rather than kept in the adapter instance.
-      const placeholderPackText = [
-        `placeholder pack for stage attempt ${started.stageAttempt.id}`,
-        `Attempt: ${String(started.stageAttempt.attempt)}`,
-      ].join("\n");
+      // `attempt` is read fresh from persisted state every cycle and passed structurally on
+      // `session` (see `ProviderSessionRef` in packages/provider-core/src/index.ts) rather than
+      // rendered into the pack text for an adapter to parse back out -- unlike adapter-local
+      // bookkeeping, it survives a daemon restart, and it doesn't bleed between concurrently-
+      // running work items, because it's carried on this invocation's own session ref.
+      const placeholderPackText = `placeholder pack for stage attempt ${started.stageAttempt.id}`;
       const invocation = {
         dispatch,
         session: {
@@ -281,6 +277,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           ordinal: 1,
           stageAttemptId: started.stageAttempt.id,
           stage: started.stageAttempt.stage,
+          attempt: started.stageAttempt.attempt,
         },
         contextPack: {
           schemaVersion: 1 as const,

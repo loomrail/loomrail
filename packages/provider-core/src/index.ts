@@ -42,12 +42,18 @@ export const providerCapabilitiesSchema = z
 export type ProviderCapabilities = z.infer<typeof providerCapabilitiesSchema>;
 
 // `stage` is kept on the session reference on purpose: choosing a model tier and a tool set is
-// legitimate adapter work and needs something to key on.
+// legitimate adapter work and needs something to key on. `attempt` is kept for the same reason,
+// and for one more: it is the durable, persisted `StageAttempt.attempt` (spec §6.5), passed
+// through structurally instead of being re-derived by an adapter parsing prose out of the
+// rendered pack. Prose parsing coupled a mock's control flow to wording `context-assembly`'s
+// render step owns and could change without warning; a typed field on the invocation cannot
+// drift out from under an adapter the way a regex over rendered text can.
 export type ProviderSessionRef = {
   id: string;
   ordinal: number;
   stageAttemptId: string;
   stage: WorkflowStage;
+  attempt: number;
 };
 
 // Decisions and the brief are now sections of `contextPack`, not separate fields: the adapter's

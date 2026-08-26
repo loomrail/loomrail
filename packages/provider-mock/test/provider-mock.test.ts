@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import { createMockProvider } from "../src/index.js";
 
-const contextPack = (attempt: number): ContextPack => {
-  const text = `Workflow Position\nAttempt: ${String(attempt)}`;
+const contextPack = (): ContextPack => {
+  const text = "Workflow Position";
   return { schemaVersion: 1, text, contentHash: `sha256:${createHash("sha256").update(text).digest("hex")}` };
 };
 
@@ -30,8 +30,14 @@ const invocation = (
       createdAt: "2026-08-24T10:00:00.000Z",
       completedAt: null,
     },
-    session: { id: `session-${stageAttemptId}`, ordinal: 1, stageAttemptId, stage },
-    contextPack: contextPack(options.attempt ?? 1),
+    session: {
+      id: `session-${stageAttemptId}`,
+      ordinal: 1,
+      stageAttemptId,
+      stage,
+      attempt: options.attempt ?? 1,
+    },
+    contextPack: contextPack(),
   };
 };
 
@@ -67,7 +73,7 @@ describe("mock provider scenario A", () => {
     ).resolves.toMatchObject({ type: "COMPLETED" });
   });
 
-  it("reads the attempt from the pack, not from adapter-local bookkeeping", async () => {
+  it("reads the attempt from the session ref, not from adapter-local bookkeeping", async () => {
     // The retry attempt must complete even on a brand-new adapter instance (a daemon restart
     // between the override and the retry) and a first attempt for a different work item must
     // still exhaust its budget even after another work item has already run IMPLEMENT on the

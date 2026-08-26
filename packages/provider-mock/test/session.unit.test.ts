@@ -1,0 +1,123 @@
+import { createHash } from "node:crypto";
+
+import { checkpointDraftSchema, type CheckpointDraft, type ContextWindowUsage } from "@loomrail/contracts";
+import type { ProviderInvocation } from "@loomrail/provider-core";
+import { describe, expect, it } from "vitest";
+
+import { createMockProvider } from "../src/index.js";
+
+// A single fixed invocation shared by every scenario below: the session-behaviour options this
+// file exercises are orthogonal to stage or dispatch content, so nothing about the scenario
+// depends on which stage or attempt is named here. The session id "session-1" is what
+// `requestHandoff` targets in the tests that call it.
+const implementInvocation = (): ProviderInvocation => {
+  const text = "placeholder pack for session-behaviour tests";
+  return {
+    dispatch: {
+      schemaVersion: 1,
+      id: "dispatch-1",
+      projectId: "project-1",
+      workItemId: "work-item-1",
+      pipelineRunId: "run-1",
+      stageAttemptId: "attempt-1",
+      mode: "START",
+      status: "PENDING",
+      createdAt: "2026-08-24T10:00:00.000Z",
+      completedAt: null,
+    },
+    session: { id: "session-1", ordinal: 1, stageAttemptId: "attempt-1", stage: "IMPLEMENT", attempt: 1 },
+    contextPack: {
+      schemaVersion: 1,
+      text,
+      contentHash: `sha256:${createHash("sha256").update(text).digest("hex")}`,
+    },
+  };
+};
+
+const listener = () => {
+  const usages: ContextWindowUsage[] = [];
+  const checkpoints: CheckpointDraft[] = [];
+  return {
+    usages,
+    checkpoints,
+    onContextWindow: (usage: ContextWindowUsage) => usages.push(usage),
+    onCheckpoint: (draft: CheckpointDraft) => checkpoints.push(draft),
+  };
+};
+
+describe("mock provider session behaviour", () => {
+  it("reports occupancy that grows every turn", async () => {
+    const sink = listener();
+    const provider = createMockProvider({ contextWindowTokens: 1_000, tokensPerTurn: 100 });
+    await provider.start(implementInvocation(), sink);
+    const used = sink.usages.map(({ usedTokens }) => usedTokens);
+    // Discriminating on more than two samples: a merely-large final value would also pass a
+    // buggy implementation that jumps straight to the ceiling on turn one.
+    expect(used.length).toBeGreaterThan(2);
+    used.reduce((previous, current) => {
+      expect(current).toBeGreaterThan(previous);
+      return current;
+    });
+  });
+
+  it("publishes a checkpoint on the configured cadence", async () => {
+    const sink = listener();
+    const provider = createMockProvider({ tokensPerTurn: 100, checkpointEvery: 2 });
+    await provider.start(implementInvocation(), sink);
+    expect(sink.checkpoints.length).toBeGreaterThan(0);
+    expect(sink.checkpoints[0]?.summary).toBeTruthy();
+  });
+
+  it("ends with HANDED_OFF after a handoff request", async () => {
+    const sink = listener();
+    const provider = createMockProvider({ tokensPerTurn: 100, checkpointEvery: 1 });
+    const running = provider.start(implementInvocation(), sink);
+    await provider.requestHandoff("session-1");
+    await expect(running).resolves.toMatchObject({ type: "HANDED_OFF" });
+  });
+
+  it("keeps running to a different terminal outcome when configured to ignore the handoff request", async () => {
+    // Needed for the deadline check in Task 11: without a disobedient mock there is nothing to
+    // exercise the overdue-request branch against. Asserting a different terminal outcome type
+    // than the obedient case (HANDED_OFF above) is what actually proves the request was
+    // ignored, rather than merely honoured late.
+    const sink = listener();
+    const provider = createMockProvider({ ignoreHandoffRequest: true, hitTheWallAfterTurns: 5 });
+    const running = provider.start(implementInvocation(), sink);
+    await provider.requestHandoff("session-1");
+    await expect(running).resolves.toMatchObject({ type: "CONTEXT_EXHAUSTED" });
+  });
+
+  it("ends with CONTEXT_EXHAUSTED when it hits the wall", async () => {
+    const sink = listener();
+    const provider = createMockProvider({ hitTheWallAfterTurns: 2, checkpointEvery: 10 });
+    await expect(provider.start(implementInvocation(), sink)).resolves.toMatchObject({
+      type: "CONTEXT_EXHAUSTED",
+    });
+    // The wall arrived before the first checkpoint cadence -- the session is unproductive per
+    // spec §6.5.
+    expect(sink.checkpoints).toHaveLength(0);
+  });
+
+  it("emits a checkpoint that fails validation when asked to", async () => {
+    // Feeds the "checkpoint arrived invalid" branch of spec §7.
+    const sink = listener();
+    const provider = createMockProvider({ emitInvalidCheckpoint: true, checkpointEvery: 1 });
+    await provider.start(implementInvocation(), sink);
+    expect(sink.checkpoints.length).toBeGreaterThan(0);
+    expect(() => checkpointDraftSchema.parse(sink.checkpoints[0])).toThrow();
+  });
+
+  it("keeps the default-constructed provider behaving exactly as before", async () => {
+    // Options must be opt-in: an untouched createMockProvider() must not switch into
+    // session-behaviour mode. It still resolves synchronously with the M6 script and never
+    // touches the listener.
+    const sink = listener();
+    const provider = createMockProvider();
+    await expect(provider.start(implementInvocation(), sink)).resolves.toMatchObject({
+      type: "BUDGET_LIMIT_REACHED",
+    });
+    expect(sink.usages).toHaveLength(0);
+    expect(sink.checkpoints).toHaveLength(0);
+  });
+});
