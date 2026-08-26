@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import type { ProviderOutcome, ProviderUsage } from "@loomrail/contracts";
+import type { ContextWindowUsage, ProviderOutcome, ProviderUsage } from "@loomrail/contracts";
 import type { ProviderAdapter, ProviderInvocation, ProviderSessionListener } from "@loomrail/provider-core";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -209,6 +209,27 @@ describe("createClaudeCodeProvider", () => {
       cachedInputTokens: 17038,
       quality: "ACTUAL",
     });
+  });
+
+  // Spec §7 declares `contextWindowReporting: true` for this adapter, on the grounds that usage
+  // arrives in the stream -- this is the test behind that capability (mirrors provider-codex's
+  // identical "reports window occupancy..." test). `usedTokens` must be the recording's real
+  // `input_tokens` (4), not an estimate, and `windowTokens` the declared window passed at
+  // construction.
+  it("reports window occupancy from the input tokens the CLI reports, not an estimate", async () => {
+    // Asserted alongside the behaviour, in the same test, on purpose: a capability and the
+    // behaviour behind it must not be able to drift apart. `capabilities()` claiming `true` while
+    // nothing calls `onContextWindow` (or vice versa) is exactly the gap this single test is
+    // built to catch either half of.
+    expect(createClaudeCodeProvider().capabilities().contextWindowReporting).toBe(true);
+
+    const seen: ContextWindowUsage[] = [];
+    await runAgainstRecording(
+      "hello.jsonl",
+      { onContextWindow: (usage) => seen.push(usage) },
+      { contextWindowTokens: 200_000 },
+    );
+    expect(seen.at(-1)).toEqual({ usedTokens: 4, windowTokens: 200_000, quality: "ACTUAL" });
   });
 
   // `hello.jsonl`'s terminal result is JSON conforming to checkpointDraftSchema (what

@@ -119,14 +119,15 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         interrupt: true,
         eventStream: true,
         usageReporting: true,
-        // `parseClaudeEvent`'s one exposed event now carries real `inputTokens`/`outputTokens`
-        // (see `stream.ts`), which `onUsage` below reports -- but this is deliberately still
-        // `false`: `onContextWindow` is a separate channel (spec BD-001) this adapter does not
-        // call anywhere, so declaring occupancy reporting here would promise a channel nothing
-        // feeds. Loomrail estimates occupancy for this provider instead (spec §5.2,
-        // LOOMRAIL_ESTIMATE) until a future task wires `event.inputTokens` through to
-        // `onContextWindow` too, the way provider-codex's `turn.completed` handler does.
-        contextWindowReporting: false,
+        // Spec §7 lists this adapter with `contextWindowReporting: true`, on the grounds that
+        // usage arrives in both `assistant` and `result` events -- and `parseClaudeEvent`'s
+        // `result` event now carries real `inputTokens` (see `stream.ts`) to satisfy it.
+        // `eventStream: true` above is what the contract's own refine (provider-core) requires
+        // before this can be `true` at all: occupancy has exactly one channel, `onContextWindow`
+        // on the session listener, and an adapter with no stream would have nothing to deliver it
+        // on. This one does -- see the `onContextWindow` call below, mirroring provider-codex's
+        // `turn.completed` handler.
+        contextWindowReporting: true,
         // The one thing this adapter can report that provider-codex cannot: `total_cost_usd` on
         // the terminal `result` event is a real figure from the CLI, not something Loomrail has
         // to estimate.
@@ -223,6 +224,16 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
               quality: "ACTUAL",
             };
             listener.onUsage(usage);
+            // The whole reason this can be ACTUAL rather than an estimate: `event.inputTokens`
+            // is the real prompt-token count the CLI itself reported on this turn, not a guess
+            // Loomrail made about it (spec §5.2's LOOMRAIL_ESTIMATE is for adapters with nothing
+            // better). Mirrors provider-codex's identical `turn.completed` -> `onContextWindow`
+            // call.
+            listener.onContextWindow({
+              usedTokens: event.inputTokens,
+              windowTokens: resolved.contextWindowTokens,
+              quality: "ACTUAL",
+            });
 
             if (!event.ok) {
               outcome = { type: "CONTEXT_EXHAUSTED" };
