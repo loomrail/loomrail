@@ -336,6 +336,55 @@ describe("createClaudeCodeProvider", () => {
     });
   });
 
+  // Spec §9, first line: an adapter must not promise a provider whose CLI is not on this machine.
+  // Task 9's gate (session-loop.ts) already refuses to dispatch a stage the adapter did not
+  // declare, so an empty `stages` array is enough to make that gate turn this into a refusal
+  // rather than a provider error surfacing mid-session.
+  it("declares itself unavailable when its CLI is not installed", () => {
+    const capabilities = createClaudeCodeProvider({ command: "/nonexistent/claude" }).capabilities();
+    expect(capabilities.start).toBe(false);
+    expect(capabilities.stages).toEqual([]);
+  });
+
+  // A1's D1 removed the second execution path deliberately (a session is always rebuilt from
+  // durable state, never continued as a conversation): reinstating it through a CLI flag --
+  // `--resume`, `--continue`, or `--fork-session` -- would undo that decision without anyone
+  // deciding to.
+  it("never resumes a provider-side session", async () => {
+    const spawned = recordSpawn();
+    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
+    const line = spawned.args.join(" ");
+    expect(line).not.toContain("resume");
+    expect(line).not.toContain("--continue");
+    expect(line).not.toContain("--fork-session");
+  });
+
+  // The only reliable protection against the owner's own hook stdout/stderr ending up in
+  // Loomrail's diagnostics is to never keep the raw stream at all. `not-logged-in.jsonl` is used
+  // here rather than `hello.jsonl` on purpose: `hello.jsonl` never carries a hook event to begin
+  // with (its only lines are `system:init` and `result`), so a check against it would pass
+  // whether or not this adapter actually drops hook lines -- it would not fail under the defect
+  // it names. `not-logged-in.jsonl` is a real recording carrying genuine `hook_started` /
+  // `hook_response` / `hook_progress` system events, each with a real `hook_id` UUID that appears
+  // nowhere in any shape this adapter derives (`ClaudeEvent` only ever surfaces the terminal
+  // `result` event -- see stream.ts), so its presence anywhere this adapter hands back is direct
+  // evidence a raw line leaked through. Collected across every observable surface (the outcome
+  // AND everything delivered to the listener), not just the outcome alone: an outcome-only check
+  // would still pass if a raw line leaked through `onUsage`/`onCheckpoint`/`onContextWindow`
+  // instead, since `ProviderOutcome` has no field a raw line could occupy in the first place.
+  it("keeps no raw provider output after the session ends", async () => {
+    const observed: unknown[] = [];
+    const outcome = await runAgainstRecording("not-logged-in.jsonl", {
+      onUsage: (usage) => observed.push(usage),
+      onContextWindow: (usage) => observed.push(usage),
+      onCheckpoint: (checkpoint) => observed.push(checkpoint),
+    });
+    observed.push(outcome);
+    const serialized = JSON.stringify(observed);
+    expect(serialized).not.toContain("hook");
+    expect(serialized).not.toContain("f467fbe7-7a9d-4d75-a74d-97d6b6dfe45f");
+  });
+
   // The defect provider-codex's milestone was named for closing, and this adapter must not
   // reopen: the OS process table, not this module's own bookkeeping, is the ground truth (mirrors
   // provider-core's own test of `runProcess.stop` for the same reason).

@@ -1,6 +1,7 @@
+import { accessSync, constants as fsConstants } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, isAbsolute, join, sep } from "node:path";
 
 import {
   checkpointDraftSchema,
@@ -12,6 +13,7 @@ import {
   providerCapabilitiesSchema,
   runProcess,
   type ProviderAdapter,
+  type ProviderCapabilities,
   type ProviderInvocation,
   type ProviderSessionListener,
 } from "@loomrail/provider-core";
@@ -56,6 +58,31 @@ const resolveOptions = (options: CreateCodexProviderOptions): ResolvedOptions =>
   contextWindowTokens: options.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
 });
 
+// Spec §9, first line: `capabilities()` must not promise a provider whose CLI is not on this
+// machine. A bare command (the default "codex", relying on PATH) is resolved against `PATH` the
+// same way the shell/`child_process.spawn` would, rather than checked as a literal relative path
+// -- otherwise the default would misreport itself as missing on every machine where "codex" is
+// not a file in the daemon's own working directory. A path (absolute, or containing a separator)
+// is checked directly. `accessSync(..., X_OK)` is used over `existsSync` because a file that
+// exists but is not executable is exactly as unusable to `runProcess` as one that is absent.
+const isExecutableOnDisk = (command: string): boolean => {
+  const candidates =
+    isAbsolute(command) || command.includes(sep)
+      ? [command]
+      : (process.env["PATH"] ?? "")
+          .split(delimiter)
+          .filter((dir) => dir.length > 0)
+          .map((dir) => join(dir, command));
+  return candidates.some((candidate) => {
+    try {
+      accessSync(candidate, fsConstants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+};
+
 // `codex exec --output-schema <file>` makes the CLI print one line, distinct from the `--json`
 // event stream, that is the final turn's answer constrained to the given JSON Schema -- not
 // wrapped in a `{"type": ...}` envelope, so `parseCodexEvent` (which only knows the four wire
@@ -84,6 +111,30 @@ type SessionRuntime = {
 // promise the daemon could hang on.
 export const createCodexProvider = (options: CreateCodexProviderOptions = {}): ProviderAdapter => {
   const resolved = resolveOptions(options);
+  // Checked once, here, at construction -- not inside `capabilities()`, which is called
+  // repeatedly, including on paths where the answer must be cheap. The filesystem does not
+  // change under a running daemon in a way that matters for this decision, so one probe per
+  // adapter instance is enough.
+  const cliAvailable = isExecutableOnDisk(resolved.command);
+  // Every capability this adapter could claim depends on a running `codex exec` child: no CLI
+  // means no process, no event stream, nothing to report. `stages: []` is what task 9's gate
+  // (session-loop.ts's `decideDispatchStage`) already knows how to turn into a clean refusal
+  // instead of a dispatch that would surface as a provider error mid-session. Built directly, not
+  // through `providerCapabilitiesSchema.parse()`: that schema requires `stages` to be non-empty
+  // (an adapter that serves no stage at all is otherwise never a value worth declaring), so an
+  // unavailable adapter's capabilities are the one shape this module does not run past `.parse()`.
+  const unavailableCapabilities: ProviderCapabilities = {
+    provider: "CODEX",
+    start: false,
+    interrupt: false,
+    eventStream: false,
+    usageReporting: false,
+    contextWindowReporting: false,
+    checkpointOnRequest: false,
+    contextWindowTokens: resolved.contextWindowTokens,
+    stages: [],
+    costReporting: false,
+  };
   // Keyed by ProviderSession id, not stage-attempt id: A2 runs one live session per `start()`
   // call, and this map exists only so `abortSession` can find the child that call is still
   // waiting on. An entry is removed the moment its session ends, aborted or not.
@@ -91,27 +142,29 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
 
   return {
     capabilities: () =>
-      providerCapabilitiesSchema.parse({
-        provider: "CODEX",
-        // Established by probing the real CLI, not by policy: before E1 this adapter runs in an
-        // empty temporary directory with no repository, so IMPLEMENT and QA -- which need one --
-        // are not offered.
-        stages: ["DISCOVERY", "PLAN", "REVIEW"],
-        start: true,
-        // A running child can always be killed, which is what `interrupt` promises here -- a
-        // harder guarantee than `checkpointOnRequest`, which asks the CLI to wind down on its
-        // own and which `codex exec` has no channel to honour.
-        interrupt: true,
-        eventStream: true,
-        usageReporting: true,
-        contextWindowReporting: true,
-        // No cost figure appears anywhere in the JSONL stream.
-        costReporting: false,
-        // SD-001 note lives on `requestHandoff` below, not here: this field just states the fact
-        // that follows from it -- a one-shot process cannot be asked to wind down early.
-        checkpointOnRequest: false,
-        contextWindowTokens: resolved.contextWindowTokens,
-      }),
+      cliAvailable
+        ? providerCapabilitiesSchema.parse({
+            provider: "CODEX",
+            // Established by probing the real CLI, not by policy: before E1 this adapter runs in
+            // an empty temporary directory with no repository, so IMPLEMENT and QA -- which need
+            // one -- are not offered.
+            stages: ["DISCOVERY", "PLAN", "REVIEW"],
+            start: true,
+            // A running child can always be killed, which is what `interrupt` promises here -- a
+            // harder guarantee than `checkpointOnRequest`, which asks the CLI to wind down on its
+            // own and which `codex exec` has no channel to honour.
+            interrupt: true,
+            eventStream: true,
+            usageReporting: true,
+            contextWindowReporting: true,
+            // No cost figure appears anywhere in the JSONL stream.
+            costReporting: false,
+            // SD-001 note lives on `requestHandoff` below, not here: this field just states the
+            // fact that follows from it -- a one-shot process cannot be asked to wind down early.
+            checkpointOnRequest: false,
+            contextWindowTokens: resolved.contextWindowTokens,
+          })
+        : unavailableCapabilities,
 
     start: async (
       invocation: ProviderInvocation,

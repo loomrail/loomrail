@@ -228,6 +228,48 @@ describe("createCodexProvider", () => {
     expect(existsSync(workingDir)).toBe(false);
   });
 
+  // Spec §9, first line: an adapter must not promise a provider whose CLI is not on this machine.
+  // Task 9's gate (session-loop.ts) already refuses to dispatch a stage the adapter did not
+  // declare, so an empty `stages` array is enough to make that gate turn this into a refusal
+  // rather than a provider error surfacing mid-session.
+  it("declares itself unavailable when its CLI is not installed", () => {
+    const capabilities = createCodexProvider({ command: "/nonexistent/codex" }).capabilities();
+    expect(capabilities.start).toBe(false);
+    expect(capabilities.stages).toEqual([]);
+  });
+
+  // A1's D1 removed the second execution path deliberately (a session is always rebuilt from
+  // durable state, never continued as a conversation): reinstating it through a CLI flag would
+  // undo that decision without anyone deciding to.
+  it("never resumes a provider-side session", async () => {
+    const spawned = recordSpawn();
+    await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
+    const line = spawned.args.join(" ");
+    expect(line).not.toContain("resume");
+    expect(line).not.toContain("--continue");
+    expect(line).not.toContain("--fork-session");
+  });
+
+  // The only reliable protection against ever recording a raw wire line is not to keep one at
+  // all. `hello.jsonl`'s first line carries a real `thread_id` UUID that appears nowhere in any
+  // parsed shape this adapter produces (usage/context-window/checkpoint all use camelCase fields
+  // derived from the event, never the wire line itself) -- so its presence in anything this
+  // adapter hands back is direct evidence a raw line leaked through. Collected across every
+  // observable surface (the outcome AND everything delivered to the listener), not just the
+  // outcome alone: an outcome-only check would still pass if a raw line leaked through
+  // `onUsage`/`onCheckpoint`/`onContextWindow` instead, since `ProviderOutcome` has no field a raw
+  // line could occupy in the first place.
+  it("keeps no raw provider output after the session ends", async () => {
+    const observed: unknown[] = [];
+    const outcome = await runAgainstRecording("hello.jsonl", {
+      onUsage: (usage) => observed.push(usage),
+      onContextWindow: (usage) => observed.push(usage),
+      onCheckpoint: (checkpoint) => observed.push(checkpoint),
+    });
+    observed.push(outcome);
+    expect(JSON.stringify(observed)).not.toContain("thread_id");
+  });
+
   // The defect this milestone is named for closing: the previous milestone's adapter resolved
   // `abortSession` without the process actually having stopped. The OS process table, not this
   // module's own bookkeeping, is the ground truth (mirrors provider-core's own test of
