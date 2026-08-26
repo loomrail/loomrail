@@ -111,7 +111,16 @@ describe("stage attempt session loop", () => {
 
   const createCommandId = (): string => `command-${(nextCommandId += 1).toString()}`;
 
-  const seedQueuedAttempt = (localState: LocalState): SeededAttempt => {
+  // A clock that never returns the same instant twice. `created_at` is the first key the pending
+  // dispatch queue orders by, so a fixed clock would leave the queue order of two dispatches
+  // written in the same millisecond up to their generated ids.
+  const advancingClock = (): (() => Date) => {
+    const base = Date.parse(timestamp);
+    let elapsed = 0;
+    return () => new Date(base + (elapsed += 1));
+  };
+
+  const registerFixtureProject = (localState: LocalState): void => {
     localState.execute({
       schemaVersion: 1,
       commandId: createCommandId(),
@@ -125,6 +134,14 @@ describe("stage attempt session loop", () => {
         repositoryPath: join(temporaryDirectory, "project-web"),
       },
     });
+  };
+
+  // A WorkItem in READY with no pipeline, and so no dispatch: a daemon can boot on this with its
+  // startup drain finding nothing, which is what lets a test choose when the first drain runs.
+  const seedReadyWorkItem = (
+    localState: LocalState,
+    title = "Carry a stage attempt across provider sessions",
+  ): string => {
     const created = localState.execute({
       schemaVersion: 1,
       commandId: createCommandId(),
@@ -135,7 +152,7 @@ describe("stage attempt session loop", () => {
         projectId: "project-web",
         parentId: null,
         type: "TASK",
-        title: "Carry a stage attempt across provider sessions",
+        title,
         description: "Synthetic fixture work for the session loop.",
         priority: "MEDIUM",
         risk: "LOW",
@@ -151,6 +168,12 @@ describe("stage attempt session loop", () => {
       type: "MOVE_WORK_ITEM",
       payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
     });
+    return created.workItem.id;
+  };
+
+  const seedQueuedAttempt = (localState: LocalState): SeededAttempt => {
+    registerFixtureProject(localState);
+    const workItemId = seedReadyWorkItem(localState);
     const started = localState.execute({
       schemaVersion: 1,
       commandId: createCommandId(),
@@ -158,7 +181,7 @@ describe("stage attempt session loop", () => {
       actor: { type: "HUMAN", id: "local-owner" },
       type: "START_MOCK_PIPELINE",
       payload: {
-        workItemId: created.workItem.id,
+        workItemId,
         expectedVersion: 2,
         template: mockDeliveryTemplate,
         budget: { maxEstimatedTokens: 100_000, warningThresholds: [0.5, 0.8, 0.95] },
@@ -166,7 +189,7 @@ describe("stage attempt session loop", () => {
     });
     if (started.type !== "PIPELINE_STARTED") throw new Error("Expected a started pipeline");
     return {
-      workItemId: created.workItem.id,
+      workItemId,
       stageAttemptId: started.stageAttempt.id,
       dispatch: started.dispatch,
     };
@@ -855,6 +878,104 @@ describe("stage attempt session loop", () => {
     // either one dispatch or two, which is precisely the difference between a resumable stage and a
     // drain that fails on an orphaned dispatch every cycle.
     expect(pendingDispatchModes(localState)).toEqual(["RESUME"]);
+  });
+
+  // The drain's guard against being handed the same unmoved dispatch cycle after cycle. It landed
+  // without a test, and the shape it guards -- two callers reaching the same PENDING head while one
+  // of them owns the attempt -- is not reachable by calling `runStageAttempt` directly, because
+  // nothing there loops.
+  it("stops the drain pass when the head dispatch is already being run elsewhere", async () => {
+    const localState = await open();
+    registerFixtureProject(localState);
+    const held = seedReadyWorkItem(localState, "held-by-a-concurrent-caller");
+    const behind = seedReadyWorkItem(localState, "queued-behind-it");
+    localState.close();
+    state = undefined;
+
+    // Holds the first provider session open until the test lets go, so the second caller's drain
+    // reaches the same head dispatch while the first caller still owns the attempt. Only the first
+    // session is held; everything after it runs at the mock provider's own speed.
+    let enteredFirstStart = (): void => undefined;
+    const firstStartEntered = new Promise<void>((resolve) => {
+      enteredFirstStart = resolve;
+    });
+    let releaseFirstStart = (): void => undefined;
+    const firstStartGate = new Promise<void>((resolve) => {
+      releaseFirstStart = resolve;
+    });
+    const inner = createMockProvider({
+      contextWindowTokens: 4_000,
+      tokensPerTurn: 100,
+      checkpointEvery: 1_000,
+      hitTheWallAfterTurns: 1,
+    });
+    let holding = false;
+    const holdingAdapter: ProviderAdapter = {
+      capabilities: () => inner.capabilities(),
+      start: async (invocation: ProviderInvocation, listener: ProviderSessionListener) => {
+        if (!holding) {
+          holding = true;
+          enteredFirstStart();
+          await firstStartGate;
+        }
+        return inner.start(invocation, listener);
+      },
+      requestHandoff: (sessionId: string) => inner.requestHandoff(sessionId),
+      abortSession: (sessionId: string) => inner.abortSession(sessionId),
+    };
+
+    const logLines: string[] = [];
+    const token = randomBytes(32).toString("base64url");
+    const daemon = await startDaemon({
+      bootstrapToken: token,
+      stateDatabasePath: databasePath,
+      // Strictly increasing, so the two dispatches cannot share a `created_at` and the queue order
+      // the assertions below rest on is the order the test set up.
+      now: advancingClock(),
+      // No `logger` option: it replaces the default configuration whole, `loggerStream` included,
+      // and the drain's own info line is the assertion below.
+      loggerStream: {
+        write: (message: string) => {
+          logLines.push(message);
+        },
+      },
+      providerAdapter: holdingAdapter,
+    });
+
+    let firstResponse: Promise<Response> | undefined;
+    try {
+      const session = await authenticate(daemon, token);
+      const startPipeline = (workItemId: string, commandId: string): Promise<Response> =>
+        fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
+          method: "POST",
+          headers: mutationHeaders(daemon, session),
+          body: JSON.stringify({ schemaVersion: 1, commandId, expectedVersion: 2 }),
+        });
+
+      firstResponse = startPipeline(held, "start-held-attempt");
+      await firstStartEntered;
+
+      // Without the guard this caller asks for the same unmoved dispatch until the drain's safety
+      // limit turns the *other* caller's work into a 500 on this request.
+      const secondResponse = await startPipeline(behind, "start-queued-behind");
+      expect(secondResponse.status).toBe(200);
+      expect(logLines.some((line) => line.includes("is already being run elsewhere"))).toBe(true);
+
+      // Documented rather than desired: the guard ends the whole pass instead of moving to the next
+      // queued dispatch, so this caller's own work item is still QUEUED when its request returns
+      // and waits for whatever drain runs next. Changing that is a drain restructure, not a guard.
+      const queued = workflowSnapshotSchema.parse(await secondResponse.json());
+      expect(queued.stageAttempts.at(0)?.status).toBe("QUEUED");
+    } finally {
+      releaseFirstStart();
+      if (firstResponse) expect((await firstResponse).status).toBe(200);
+      await daemon.close();
+    }
+
+    // The next drain -- here, the one the first caller's own request finishes with -- picks the
+    // second work item up, so nothing is stranded.
+    const after = await open();
+    expect(snapshotOf(after, behind).stageAttempts.at(0)?.status).not.toBe("QUEUED");
   });
 
   it("keeps the daemon's own drain working across a hard pause and the answer that lifts it", async () => {
