@@ -7,7 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { stateCommandResultSchema } from "@loomrail/contracts";
 import { openLocalState } from "@loomrail/persistence-sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createEventStreamRegistry,
@@ -366,6 +366,36 @@ describe("daemon event stream", () => {
     registry.tick();
     expect(registry.openCount()).toBe(0);
     expect(response.ended).toBe(true);
+  });
+
+  // THREAT-MODEL.md's T03 delta states the heartbeat as fifteen seconds, but every other test in
+  // this file injects `intervalMs`, so `HEARTBEAT_INTERVAL_MS` itself is never exercised -- it could
+  // be changed to an hour and the suite would stay green while the document's stated bound quietly
+  // stopped being true. This pins the schedule a registry actually uses when nothing is injected
+  // against that fifteen-second figure written as a literal, deliberately not against an imported
+  // `HEARTBEAT_INTERVAL_MS`: importing it would make the boundary move in lockstep with any change
+  // to the constant, so a mutated constant and a correctly-wired fallback would look identical to
+  // this test. Fake timers rather than a real wait: `tick()` is a public method precisely so the
+  // heartbeat's own cadence never has to be driven by the clock in a test, and this machine's load
+  // average makes a duration-based assertion indistinguishable from a defect. The boundary pair is
+  // the point: advancing straight past the interval would pass for any constant smaller than the
+  // advance, so this stops one millisecond short and asserts silence before crossing into the ping.
+  it("schedules its heartbeat on HEARTBEAT_INTERVAL_MS (15s) when no intervalMs is injected", () => {
+    const documentedHeartbeatIntervalMs = 15_000;
+    vi.useFakeTimers();
+    try {
+      const registry = trackRegistry(createEventStreamRegistry({ logger: silentLogger }));
+      const written: string[] = [];
+      registry.open({ response: fakeResponse(written), isAuthorized: () => true });
+
+      vi.advanceTimersByTime(documentedHeartbeatIntervalMs - 1);
+      expect(written).toEqual([]);
+
+      vi.advanceTimersByTime(1);
+      expect(written).toEqual([": ping\n\n"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses to open more streams than the limit and leaves the open ones alone", () => {
