@@ -2752,6 +2752,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         // Only reports the session can still act on are written at all: one arriving for an ENDED
         // session, or for one that has already asked for a handoff, is the race §6.2 calls a safe
         // no-op, and must not disturb what that session recorded while the number still mattered.
+        //
+        // "Higher" is a larger share of the window, not a larger token count. These columns are
+        // per-session, so a provider swap between sessions can never put two window sizes in one
+        // row -- what makes the unit matter is a window that changes WITHIN a session, which is
+        // exactly what an adapter that compacts its own context does. More tokens against a bigger
+        // window can be less of it.
         const reported = command.payload.usage;
         const storedPeak = peakContextWindowUsageFromRow(sessionRowParsed);
         const isNewPeak =

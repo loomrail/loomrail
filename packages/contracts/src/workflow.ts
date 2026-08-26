@@ -1316,6 +1316,9 @@ export const humanRequestsResponseSchema = z
 // peak and not the current reading: it answers "how full did this session get", which is what
 // explains a cut, and it does not move under a provider that compacts its own window. A session
 // with no entry has never had its window measured, which is not the same as one measured at zero.
+// For a session that asked to wind down the figure is the reading at handoff rather than the true
+// peak, because reporting stops there -- see the note in packages/persistence-sqlite/src/types.ts.
+// The cockpit labels that case "at handoff" and never as a peak, so the wording stays honest.
 export const providerSessionsResponseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,

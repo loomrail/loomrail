@@ -109,6 +109,14 @@ export type StateQueryResult =
       // rather than the current reading -- it is what "how full did this session get" asks, and it
       // is what survives a provider that compacts its own window. Keyed by ProviderSession id; a
       // session never measured has no entry, which is a different fact from one measured at zero.
+      //
+      // One state where "peak" is imprecise, and deliberately so: once a session has asked to wind
+      // down, apps/daemon stops reporting (`live.handoffRequested`) and this command refuses a
+      // later report anyway, so occupancy that keeps climbing after the threshold never reaches
+      // here. The field then holds the reading AT HANDOFF, which is a floor on the true peak
+      // rather than the peak itself. Nothing user-visible lies -- the cockpit labels exactly that
+      // session "N% of the window at handoff" and never the peak wording -- but a reader reaching
+      // for a true high-water mark should know this is where it stops being one.
       peakContextWindowUsage: Record<string, ContextWindowUsage>;
     };
 

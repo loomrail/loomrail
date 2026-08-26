@@ -2197,9 +2197,11 @@ describe("SQLite local state", () => {
         });
       });
 
-      // A provider swap between sessions is spec §6.4's ordinary case, and window sizes differ
-      // across providers, so "higher" has to mean a larger share of the window rather than a
-      // larger token count.
+      // Not because two providers might disagree about the window -- these columns are per-session,
+      // so a swap between sessions can never put two window sizes in one row. It is a window that
+      // changes WITHIN a session that makes the unit matter: an adapter that compacts its own
+      // context can report against a different window than it did a moment ago, and then more
+      // tokens can be less of the window. "Higher" has to mean the share.
       it("compares peaks as a share of the window, not as a token count", async () => {
         const localState = await open();
         const { stageAttemptId } = startWorkflow(localState, "start-share", "create-share-item");
