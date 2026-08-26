@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import type { ComponentPropsWithoutRef, ReactElement, ReactNode } from "react";
 import {
   Dialog as DialogPrimitive,
@@ -19,7 +19,18 @@ export type TooltipProps = {
 export const Tooltip = ({ children, label, side = "bottom" }: TooltipProps): React.JSX.Element => (
   <TooltipPrimitive.Provider delayDuration={350} skipDelayDuration={150}>
     <TooltipPrimitive.Root>
-      <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
+      <TooltipPrimitive.Trigger
+        asChild
+        // Radix opens a tooltip on any focus at all. A popover or dialog hands focus to its first
+        // control the moment it opens, so a tooltip on that control would announce itself to an
+        // owner who only clicked the overlay open. Focus the browser calls keyboard focus still
+        // earns the tooltip; a click that merely lands focus here does not.
+        onFocus={(event) => {
+          if (!event.currentTarget.matches(":focus-visible")) event.preventDefault();
+        }}
+      >
+        {children}
+      </TooltipPrimitive.Trigger>
       <TooltipPrimitive.Portal>
         <TooltipPrimitive.Content className="lr-tooltip" side={side} sideOffset={6}>
           {label}
@@ -118,29 +129,52 @@ export const PopoverSurface = ({
   side = "bottom",
   trigger,
   triggerTooltip,
-}: PopoverSurfaceProps): React.JSX.Element => (
-  <PopoverPrimitive.Root>
-    {triggerTooltip ? (
-      <Tooltip label={triggerTooltip}>
+}: PopoverSurfaceProps): React.JSX.Element => {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+
+  return (
+    <PopoverPrimitive.Root onOpenChange={setOpen} open={open}>
+      {triggerTooltip ? (
+        <Tooltip label={triggerTooltip}>
+          <PopoverPrimitive.Trigger asChild>{trigger}</PopoverPrimitive.Trigger>
+        </Tooltip>
+      ) : (
         <PopoverPrimitive.Trigger asChild>{trigger}</PopoverPrimitive.Trigger>
-      </Tooltip>
-    ) : (
-      <PopoverPrimitive.Trigger asChild>{trigger}</PopoverPrimitive.Trigger>
-    )}
-    <PopoverPrimitive.Portal>
-      <PopoverPrimitive.Content
-        align={align}
-        aria-label={label}
-        className={cn("lr-popover", className)}
-        collisionPadding={8}
-        side={side}
-        sideOffset={6}
-      >
-        {children}
-      </PopoverPrimitive.Content>
-    </PopoverPrimitive.Portal>
-  </PopoverPrimitive.Root>
-);
+      )}
+      <PopoverPrimitive.Portal>
+        <PopoverPrimitive.Content
+          align={align}
+          aria-label={label}
+          className={cn("lr-popover", className)}
+          collisionPadding={8}
+          // Radix hands Escape to the topmost dismissable layer alone, and a tooltip standing over
+          // this surface is that layer -- which would leave the surface sitting through the press
+          // meant to close it. It answers for its own Escape instead, and only for one pressed on
+          // the surface itself: a portalled menu or select still answers for the presses it owns.
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            if (!(event.target instanceof Node)) return;
+            if (!event.currentTarget.contains(event.target)) return;
+            setOpen(false);
+          }}
+          // Radix would arm whichever control sits first inside, ringing it and offering it to the
+          // next keypress -- a choice the owner never made by opening the surface. The surface
+          // itself takes the focus instead: it still announces its label and Tab still walks in.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            contentRef.current?.focus();
+          }}
+          ref={contentRef}
+          side={side}
+          sideOffset={6}
+        >
+          {children}
+        </PopoverPrimitive.Content>
+      </PopoverPrimitive.Portal>
+    </PopoverPrimitive.Root>
+  );
+};
 
 export type DialogSurfaceProps = {
   children: ReactNode;

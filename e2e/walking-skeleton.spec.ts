@@ -1192,6 +1192,33 @@ test.describe("authenticated walking skeleton", () => {
     await expect(displayPopover).toBeHidden();
     await expect(filterPopover).toBeVisible();
     await page.keyboard.press("Escape");
+    await expect(filterPopover).toBeHidden();
+
+    // An opened popover takes the focus onto its own surface rather than arming whichever control
+    // happens to sit first inside it -- and so no tooltip of that control's is pulled open either.
+    const sortDirection = displayPopover.getByRole("button", { name: "Sort ascending" });
+    const sortTooltip = page.getByRole("tooltip", { name: "Sort ascending" });
+    await displayTrigger.click();
+    await expect(displayPopover).toBeFocused();
+    await expect(sortTooltip).toBeHidden();
+    // A select of its own answers for the Escape pressed on it, and leaves the surface standing.
+    const ordering = displayPopover.getByRole("combobox", { name: "Order tasks by" });
+    await ordering.click();
+    await expect(page.getByRole("listbox")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("listbox")).toBeHidden();
+    await expect(displayPopover).toBeVisible();
+    // Tab still walks the surface's own controls, and focus a keyboard placed on one does earn the
+    // tooltip a click's focus did not.
+    await page.keyboard.press("Shift+Tab");
+    await expect(sortDirection).toBeFocused();
+    await expect(sortTooltip).toBeVisible();
+    // One Escape closes the popover even with that tooltip standing over it, and hands the focus
+    // back to the trigger the owner pressed.
+    await page.keyboard.press("Escape");
+    await expect(sortTooltip).toBeHidden();
+    await expect(displayPopover).toBeHidden();
+    await expect(displayTrigger).toBeFocused();
 
     const dialogTrigger = page.getByRole("button", { name: "New task" });
     await dialogTrigger.click();
