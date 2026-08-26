@@ -19,16 +19,21 @@ import type {
 } from "@loomrail/contracts";
 import { contextPackRecipeSectionSchema, maxContextPackRecipeSources } from "@loomrail/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ZodError } from "zod";
 
 import { openLocalState, StateStoreError, type LocalState } from "../src/index.js";
 
 const timestamp = "2026-08-22T18:00:00.000Z";
 
-// Removes the two fields `stageAttemptSchema` gained in A1 from every embedded StageAttempt,
-// wherever one appears in a stored payload -- i.e. turns a payload this branch wrote into the shape
-// an owner's pre-A1 database actually holds.
-const withoutSessionCounters = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(withoutSessionCounters);
+// Removes the named A1 fields from every embedded StageAttempt, wherever one appears in a stored
+// payload -- i.e. turns a payload this branch wrote into the shape an older database actually
+// holds. Both fields together is the pre-A1 shape; `packShareBackoffs` alone is what a build
+// between migration 0006 and 0007 wrote.
+const mapStageAttempts = (
+  value: unknown,
+  map: (attempt: Record<string, unknown>) => Record<string, unknown>,
+): unknown => {
+  if (Array.isArray(value)) return value.map((nested) => mapStageAttempts(nested, map));
   if (value === null || typeof value !== "object") return value;
   const result: Record<string, unknown> = {};
   for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
@@ -38,19 +43,35 @@ const withoutSessionCounters = (value: unknown): unknown => {
       typeof nested === "object" &&
       !Array.isArray(nested)
     ) {
-      const attempt: Record<string, unknown> = { ...(nested as Record<string, unknown>) };
-      delete attempt["unproductiveSessions"];
-      delete attempt["packShareBackoffs"];
-      result[key] = withoutSessionCounters(attempt);
+      result[key] = mapStageAttempts(map({ ...(nested as Record<string, unknown>) }), map);
       continue;
     }
-    result[key] = withoutSessionCounters(nested);
+    result[key] = mapStageAttempts(nested, map);
   }
   return result;
 };
 
-// How many embedded StageAttempts anywhere in the stored payloads still lack the counters. Asserted
-// non-zero before the migration runs and zero after it, so the test cannot pass by finding nothing.
+const withoutSessionCounters = (value: unknown): unknown =>
+  mapStageAttempts(value, (attempt) => {
+    delete attempt["unproductiveSessions"];
+    delete attempt["packShareBackoffs"];
+    return attempt;
+  });
+
+// The shape a build between migration 0006 and 0007 wrote: `unproductiveSessions` present -- and
+// deliberately non-zero, so a backfill that overwrites the field instead of filling it in shows up
+// as a changed count -- and `packShareBackoffs` absent.
+const halfLegacySessionCounters = (value: unknown): unknown =>
+  mapStageAttempts(value, (attempt) => {
+    attempt["unproductiveSessions"] = 2;
+    delete attempt["packShareBackoffs"];
+    return attempt;
+  });
+
+// How many embedded StageAttempts anywhere in the stored payloads still lack *either* counter.
+// Asserted non-zero before the migration runs and zero after it, so the test cannot pass by finding
+// nothing. Either, not just the first: a payload carrying `unproductiveSessions` and not
+// `packShareBackoffs` fails `stageAttemptSchema` exactly as hard as one missing both.
 const countLegacyStageAttempts = (raw: DatabaseSync): { events: number; commands: number } => {
   const count = (table: "events" | "commands", column: "data_json" | "result_json"): number =>
     (
@@ -59,7 +80,8 @@ const countLegacyStageAttempts = (raw: DatabaseSync): { events: number; commands
           `SELECT COUNT(*) AS count FROM ${table}, json_tree(${table}.${column}) AS tree
            WHERE tree.key IN ('stageAttempt', 'previousStageAttempt')
              AND tree.type = 'object'
-             AND json_type(tree.value, '$.unproductiveSessions') IS NULL`,
+             AND (json_type(tree.value, '$.unproductiveSessions') IS NULL
+                  OR json_type(tree.value, '$.packShareBackoffs') IS NULL)`,
         )
         .get() as { count: number }
     ).count;
@@ -949,6 +971,163 @@ describe("SQLite local state", () => {
     const swept = new DatabaseSync(databasePath);
     expect(countLegacyStageAttempts(swept)).toEqual({ events: 0, commands: 0 });
     swept.close();
+  });
+
+  // The half-legacy shape the test above cannot reach: it strips both counters, so a backfill that
+  // keys its guard on `unproductiveSessions` alone still passes it. A database written by a build
+  // between migration 0006 (which added `unproductive_sessions`) and 0007 (which added
+  // `pack_share_backoffs`) holds payloads with the first field and not the second, and 0008 is
+  // recorded as applied whether or not it touched them -- so a skip here is permanent.
+  it("backfills a StageAttempt payload that carries one session counter and not the other", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-half-legacy-item"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-half-legacy", created.workItem.id, 1, "READY"));
+    const startCommand: StartMockPipelineCommand = {
+      schemaVersion: 1,
+      commandId: "start-half-legacy",
+      correlationId: "correlation-start-half-legacy",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: mockTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    };
+    if (localState.execute(startCommand).type !== "PIPELINE_STARTED") {
+      throw new Error("Expected pipeline start");
+    }
+    localState.close();
+    state = undefined;
+
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("DROP TRIGGER events_are_append_only_update");
+    raw.exec("DROP TRIGGER commands_are_append_only_update");
+    const rewritten = { events: 0, commands: 0 };
+    for (const row of raw.prepare("SELECT sequence, data_json FROM events").all() as {
+      sequence: number;
+      data_json: string;
+    }[]) {
+      const halfLegacy = JSON.stringify(halfLegacySessionCounters(JSON.parse(row.data_json)));
+      if (halfLegacy === row.data_json) continue;
+      rewritten.events += 1;
+      raw.prepare("UPDATE events SET data_json = ? WHERE sequence = ?").run(halfLegacy, row.sequence);
+    }
+    for (const row of raw.prepare("SELECT command_id, result_json FROM commands").all() as {
+      command_id: string;
+      result_json: string;
+    }[]) {
+      const halfLegacy = JSON.stringify(halfLegacySessionCounters(JSON.parse(row.result_json)));
+      if (halfLegacy === row.result_json) continue;
+      rewritten.commands += 1;
+      raw.prepare("UPDATE commands SET result_json = ? WHERE command_id = ?").run(halfLegacy, row.command_id);
+    }
+    expect(rewritten.events).toBeGreaterThan(0);
+    expect(rewritten.commands).toBeGreaterThan(0);
+    raw.exec(`
+      CREATE TRIGGER events_are_append_only_update
+      BEFORE UPDATE ON events
+      BEGIN
+        SELECT RAISE(ABORT, 'events are append-only');
+      END;
+    `);
+    raw.exec(`
+      CREATE TRIGGER commands_are_append_only_update
+      BEFORE UPDATE ON commands
+      BEGIN
+        SELECT RAISE(ABORT, 'commands are append-only');
+      END;
+    `);
+    raw.close();
+
+    // Migration 8 stays recorded as applied here, which is the whole point: this is the state a
+    // skipped payload is left in for good. The history has to be unreadable in it, or the assertion
+    // after the re-run would prove nothing.
+    const skipped = await open();
+    expect(skipped.startup.appliedMigrations).toEqual([]);
+    expect(() => skipped.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id })).toThrow(
+      StateStoreError,
+    );
+    expect(() => skipped.execute(startCommand)).toThrow();
+    skipped.close();
+    state = undefined;
+
+    const reset = new DatabaseSync(databasePath);
+    reset.prepare("DELETE FROM schema_migrations WHERE version = 8").run();
+    reset.close();
+
+    const migrated = await open();
+    expect(migrated.startup.appliedMigrations).toEqual([8]);
+    const after = migrated.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id });
+    if (after.type !== "EVENTS") throw new Error("Expected events");
+    const startedEvent = after.events.find(({ type }) => type === "PIPELINE_STARTED");
+    if (startedEvent?.type !== "PIPELINE_STARTED") throw new Error("Expected the start event");
+    // `unproductiveSessions` keeps the count the payload already carried: the backfill fills the
+    // absent field in, it does not stamp both counters back to zero over a real count.
+    expect(startedEvent.data.stageAttempt).toMatchObject({
+      unproductiveSessions: 2,
+      packShareBackoffs: 0,
+    });
+    expect(migrated.execute(startCommand)).toMatchObject({
+      type: "PIPELINE_STARTED",
+      replayed: true,
+      stageAttempt: { unproductiveSessions: 2, packShareBackoffs: 0 },
+    });
+    migrated.close();
+    state = undefined;
+
+    const swept = new DatabaseSync(databasePath);
+    expect(countLegacyStageAttempts(swept)).toEqual({ events: 0, commands: 0 });
+    swept.close();
+  });
+
+  // A stored payload this build cannot parse is a storage fault, not a malformed request. Left as
+  // the bare ZodError it starts as, apps/daemon answered the owner with 400 INVALID_REQUEST -- "the
+  // request payload is invalid" for a request that was fine, and a status no log filter reads as a
+  // server fault. Migration 0008 removes the known trigger, not the class.
+  it("surfaces an unreadable stored Event payload as PERSISTENCE_FAILURE", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-unreadable-item"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.close();
+    state = undefined;
+
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("DROP TRIGGER events_are_append_only_update");
+    // Stands in for any field a future schema makes required after this payload was written.
+    raw
+      .prepare("UPDATE events SET data_json = json_remove(data_json, '$.workItem') WHERE type = ?")
+      .run("WORK_ITEM_CREATED");
+    raw.exec(`
+      CREATE TRIGGER events_are_append_only_update
+      BEFORE UPDATE ON events
+      BEGIN
+        SELECT RAISE(ABORT, 'events are append-only');
+      END;
+    `);
+    raw.close();
+
+    const reopened = await open();
+    const thrown = (() => {
+      try {
+        reopened.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id });
+      } catch (error: unknown) {
+        return error;
+      }
+      return undefined;
+    })();
+    expect(thrown).toBeInstanceOf(StateStoreError);
+    expect(thrown).not.toBeInstanceOf(ZodError);
+    expect((thrown as StateStoreError).code).toBe("PERSISTENCE_FAILURE");
+    // The ZodError is kept as the cause, so the structured log still says what failed to parse.
+    expect((thrown as StateStoreError).cause).toBeInstanceOf(ZodError);
+    // A malformed *request* is still the caller's fault and still a ZodError, so the daemon keeps
+    // answering that one with 400.
+    expect(() => reopened.query({ type: "LIST_EVENTS", limit: -1 } as never)).toThrow(ZodError);
   });
 
   it("fails closed when an applied migration checksum drifts", async () => {

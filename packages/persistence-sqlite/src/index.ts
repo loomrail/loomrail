@@ -2986,9 +2986,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       }
     };
 
-    const query = (input: StateQuery): StateQueryResult => {
-      assertOpen();
-      const queryValue = stateQuerySchema.parse(input);
+    const runQuery = (queryValue: z.output<typeof stateQuerySchema>): StateQueryResult => {
       switch (queryValue.type) {
         case "LIST_PROJECTS":
           return {
@@ -3129,6 +3127,36 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         }
         default:
           return assertNever(queryValue);
+      }
+    };
+
+    // The request is validated outside the try below on purpose: a malformed StateQuery really is
+    // the caller's fault and stays a ZodError, which apps/daemon maps to 400 INVALID_REQUEST.
+    // Everything past that point is reading what this database already holds, and a parse failure
+    // there is a storage fault, not a request fault -- an Event payload written by an older build
+    // that a schema has since made stricter is exactly the shape migration 0008 exists to repair.
+    // Left raw, that ZodError reached the owner as "The request payload is invalid" with a 400,
+    // which no log filter treats as a server fault, so an unreadable history would be triaged as
+    // owner error. Mapped to the typed PERSISTENCE_FAILURE the rest of this module already uses,
+    // it becomes a 500 with a code callers can branch on instead of a message they must parse.
+    const query = (input: StateQuery): StateQueryResult => {
+      assertOpen();
+      const queryValue = stateQuerySchema.parse(input);
+      try {
+        return runQuery(queryValue);
+      } catch (error: unknown) {
+        if (
+          error instanceof WorkItemDomainError ||
+          error instanceof WorkflowDomainError ||
+          error instanceof StateStoreError
+        )
+          throw error;
+        throw new StateStoreError(
+          "PERSISTENCE_FAILURE",
+          "The stored state could not be read",
+          { query: queryValue.type },
+          { cause: error },
+        );
       }
     };
 
