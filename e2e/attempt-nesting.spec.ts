@@ -30,7 +30,9 @@ const createTask = async (page: Page, title: string): Promise<void> => {
   const submit = dialog.getByRole("button", { name: "Create task" });
   await expect(submit).toBeDisabled();
   await dialog.getByPlaceholder("What should the team deliver?").fill(title);
-  await dialog.getByPlaceholder("Outcome, constraints, relevant files…").fill("Exercises the attempt header.");
+  await dialog
+    .getByPlaceholder("Outcome, constraints, relevant files…")
+    .fill("Exercises the attempt header.");
   await expect(submit).toBeEnabled();
   await submit.click();
   await expect(dialog).toBeHidden();
@@ -76,5 +78,19 @@ test.describe("attempt nesting", () => {
     const attemptHeader = sessionsPanel.locator(".lr-session-timeline__row").first();
     await expect(attemptHeader.getByText("Attempt 1", { exact: true })).toBeVisible();
     await expect(attemptHeader.locator(".lr-status")).toBeVisible();
+
+    // D5 names the attempt as the CONTAINER of its sessions -- the attempt heading must render
+    // above the "Sessions" list label, not below it. A bounding-box comparison checks what the
+    // screen actually shows (the thing an owner reads top to bottom), not just DOM order, so it
+    // catches a CSS-only inversion (e.g. `order`/flex-reverse) as well as a markup one.
+    const sessionsLabel = sessionsPanel.getByText("Sessions", { exact: true });
+    const [attemptBox, sessionsBox] = await Promise.all([
+      attemptHeader.boundingBox(),
+      sessionsLabel.boundingBox(),
+    ]);
+    if (attemptBox === null || sessionsBox === null) {
+      throw new Error("expected both the attempt header and the Sessions label to have a layout box");
+    }
+    expect(attemptBox.y).toBeLessThan(sessionsBox.y);
   });
 });

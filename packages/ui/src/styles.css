@@ -1798,6 +1798,12 @@
   font-weight: var(--lr-weight-semibold);
 }
 
+.lr-session-timeline-panel__subtitle {
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-xs);
+  font-weight: var(--lr-weight-medium);
+}
+
 .lr-session-timeline-panel__note {
   color: var(--lr-text-muted);
   font-size: var(--lr-font-xs);

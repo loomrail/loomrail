@@ -205,13 +205,18 @@ export const ProviderSessionTimeline = ({
   title,
 }: ProviderSessionTimelineProps): React.JSX.Element => (
   <div className="lr-session-timeline-panel">
-    <strong className="lr-session-timeline-panel__title">{title}</strong>
     {attempt ? (
       <div className="lr-session-timeline__row">
         <strong className="lr-session-timeline-panel__title">{attempt.heading}</strong>
         <Status label={attempt.statusLabel} tone={attempt.tone} />
       </div>
     ) : null}
+    {/* Subordinate to the attempt heading above it -- "Sessions" names the list, it doesn't own the
+        panel. When there's no attempt to nest under (a caller with no attempt to name, e.g. a story
+        or preview), title is promoted back to the panel's heading rather than left visually orphaned. */}
+    <strong className={attempt ? "lr-session-timeline-panel__subtitle" : "lr-session-timeline-panel__title"}>
+      {title}
+    </strong>
     {note ? <p className="lr-session-timeline-panel__note">{note}</p> : null}
     <ol className="lr-session-timeline">
       {sessions.map((session) => (
