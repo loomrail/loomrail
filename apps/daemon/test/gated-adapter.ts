@@ -17,10 +17,12 @@ export type GatedAdapter = ProviderAdapter & {
 
 // `capabilityOverrides` is here for Task 9's stage-capability gate (server.integration.test.ts):
 // every other caller wants the adapter to declare every stage, so `stages` defaults to `ALL_STAGES`
-// and only the gate test narrows it.
+// and only the gate test narrows it. `start` is here for the same reason, added for task 10.5's own
+// half of that gate (an adapter whose CLI is not installed): every other caller wants a startable
+// adapter, so `start` defaults to `true` and only that test overrides it to `false`.
 export const gatedAdapter = (
   contextWindowTokens = 200_000,
-  capabilityOverrides: { provider?: ProviderId; stages?: readonly WorkflowStage[] } = {},
+  capabilityOverrides: { provider?: ProviderId; stages?: readonly WorkflowStage[]; start?: boolean } = {},
 ): GatedAdapter => {
   let announceStarted: () => void = () => undefined;
   const started = new Promise<void>((resolve) => {
@@ -45,7 +47,7 @@ export const gatedAdapter = (
     },
     capabilities: () => ({
       provider: capabilityOverrides.provider ?? "MOCK",
-      start: true,
+      start: capabilityOverrides.start ?? true,
       interrupt: false,
       eventStream: false,
       usageReporting: false,

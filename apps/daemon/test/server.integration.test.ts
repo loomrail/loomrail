@@ -1545,4 +1545,93 @@ describe("stage capability gate", () => {
       await daemon.close();
     }
   });
+
+  // Task 10.5's own half of this gate: `capabilities().start` is `false` when the adapter's CLI is
+  // not installed on this machine at all, and `decideDispatchStage` (packages/domain/src/workflow.ts)
+  // must refuse on that alone, before it ever looks at `declaredStages`. Every prior test of that
+  // check (packages/domain/test/workflow.unit.test.ts) exercises the pure decision function
+  // directly -- nothing before this test drove the actual wiring at the `session-loop.ts` call site
+  // that reads `capabilities.start` and passes it through as `canStart`. Hardcoding `canStart: true`
+  // there (or wiring a different field) would make this refusal vanish silently, and nothing else in
+  // this suite would notice.
+  it("refuses to dispatch to an adapter that cannot start at all, and asks the owner", async () => {
+    // Deliberately left at the default `stages` (every stage, like the mock) -- unlike the sibling
+    // test above, this adapter declares everything. A decision to refuse here can therefore only be
+    // explained by the gate reading `start`, not by any stage being undeclared. DISCOVERY is the
+    // very first stage the workflow would dispatch, so a mutation that skipped this check would let
+    // the run proceed past it instead of stopping before the first session ever opens.
+    const adapter = gatedAdapter(200_000, { provider: "CODEX", start: false });
+    adapter.release();
+    const daemon = await startDaemon({
+      bootstrapToken: token,
+      stateDatabasePath: databasePath,
+      logger: false,
+      providerAdapter: adapter,
+    });
+    try {
+      const session = await authenticate(daemon, token);
+      const headers = mutationHeaders(daemon, session);
+      await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "register-start-gate-fixture",
+          fixtureId: "web-app-a",
+        }),
+      });
+      const createResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "create-start-gate-item",
+          projectId: "project-fixture-web-app-a",
+          type: "TASK",
+          title: "Start-capability gate under test",
+        }),
+      });
+      const created = stateCommandResultSchema.parse(await createResponse.json());
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      await fetch(`${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/move`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "ready-start-gate-item",
+          expectedVersion: 1,
+          targetState: "READY",
+        }),
+      });
+      await fetch(`${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/pipeline/start`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ schemaVersion: 1, commandId: "start-start-gate-item", expectedVersion: 2 }),
+      });
+      await daemon.whenIdle();
+
+      const snapshot = await fetchWorkflowSnapshot(daemon, session.cookie, created.workItem.id);
+      expect(snapshot.run?.status).toBe("WAITING_HUMAN");
+      expect(snapshot.stageAttempts.map(({ stage, status }) => ({ stage, status }))).toEqual([
+        { stage: "DISCOVERY", status: "WAITING_HUMAN" },
+      ]);
+      // The strongest form of this proof: not merely that the adapter was not asked to run a stage
+      // it does not declare (it declares all of them), but that `start()` was never called at all --
+      // the refusal happens before a session ever opens.
+      expect(adapter.startCallCount).toBe(0);
+      expect(snapshot.humanRequests).toHaveLength(1);
+      const request = snapshot.humanRequests[0];
+      expect(request).toMatchObject({ status: "OPEN", kind: "FREE_TEXT", blocking: true });
+      const wording = `${request?.title ?? ""} ${request?.context ?? ""}`;
+      expect(wording).toContain("CODEX");
+      expect(wording).toContain("not installed");
+      // Distinguishes this from the sibling "stage not declared" refusal above -- reusing that
+      // branch's wording here would point the owner at the wrong fix (reassign the stage, when the
+      // actual fix is installing the CLI).
+      expect(wording).not.toContain("cannot serve");
+    } finally {
+      await daemon.whenIdle();
+      await daemon.close();
+    }
+  });
 });
