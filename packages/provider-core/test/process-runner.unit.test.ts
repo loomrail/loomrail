@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runProcess, type ProcessExitOutcome } from "../src/process-runner.js";
+import { ProcessSpawnError, runProcess, type ProcessExitOutcome } from "../src/process-runner.js";
 
 // A real child process, not a double: the thing under test IS the process boundary. A double
 // would only prove that the double behaves as written.
@@ -161,5 +161,20 @@ describe("runProcess", () => {
     });
     await run.exited;
     expect(lines).toEqual(["kept"]);
+  });
+
+  // With no `error` listener on the child, a bad executable is an uncaught exception that takes
+  // the daemon down instead of something a caller can react to -- and a later task has to turn
+  // exactly this into "provider unavailable" when a CLI is not installed.
+  it("reports a spawn failure through `exited` instead of crashing the process", async () => {
+    const run = runProcess({
+      command: "/definitely/not/a/real/executable-loomrail-test",
+      args: [],
+      cwd: process.cwd(),
+      onLine: () => undefined,
+      onStderr: () => undefined,
+      deadlineMs: 5_000,
+    });
+    await expect(run.exited).rejects.toBeInstanceOf(ProcessSpawnError);
   });
 });

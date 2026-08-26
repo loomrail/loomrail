@@ -11,7 +11,7 @@ import { workflowStageSchema } from "@loomrail/contracts";
 import { z } from "zod";
 
 export type { ProcessExitOutcome, ProcessRun, RunProcessOptions } from "./process-runner.js";
-export { runProcess } from "./process-runner.js";
+export { ProcessSpawnError, runProcess } from "./process-runner.js";
 
 // The set of adapters Loomrail can dispatch to. A live adapter is not a MOCK wearing a different
 // label -- it is a distinct identity the daemon and the audit trail key on, so the enum is closed

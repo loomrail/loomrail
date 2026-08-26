@@ -12,8 +12,22 @@ const DEFAULT_GRACE_MS = 5_000;
 
 export type ProcessExitOutcome = { code: number | null; signal: NodeJS.Signals | null };
 
+// Rejects `exited` when the child could never be started at all -- e.g. its executable does not
+// exist. Kept distinct from a normal exit (which always *resolves* `exited`, never rejects it) so
+// a caller can tell "the process ran and finished, however badly" apart from "the process never
+// ran" by an `instanceof` check, with nothing to parse out of a message string. That distinction
+// is load-bearing for an adapter that must report a provider as unavailable (its CLI is not
+// installed) rather than as having failed a session it never got to start.
+export class ProcessSpawnError extends Error {
+  constructor(command: string, cause: Error) {
+    super(`failed to start "${command}": ${cause.message}`, { cause });
+    this.name = "ProcessSpawnError";
+  }
+}
+
 export type ProcessRun = {
-  /** Resolves only after the child has actually exited. */
+  /** Resolves only after the child has actually exited; rejects with `ProcessSpawnError` if it
+   * never started at all. */
   readonly exited: Promise<ProcessExitOutcome>;
   readonly pid: number | undefined;
   /** Terminate signal, grace period, then unconditional kill. Idempotent. */
@@ -30,15 +44,21 @@ export type RunProcessOptions = {
   graceMs?: number;
 };
 
-// Promise executors run synchronously, so `resolve` is always assigned before `createDeferred`
-// returns; the placeholder only exists to satisfy strict initialization without a definite
-// assignment assertion.
-const createDeferred = <T>(): { promise: Promise<T>; resolve: (value: T) => void } => {
+// Promise executors run synchronously, so `resolve`/`reject` are always assigned before
+// `createDeferred` returns; the placeholders only exist to satisfy strict initialization without
+// a definite assignment assertion.
+const createDeferred = <T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+} => {
   let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((res) => {
+  let reject: (reason: unknown) => void = () => undefined;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 };
 
 // Timeout used only to race against `exited`; never allowed to keep the daemon alive on its own.
@@ -127,6 +147,17 @@ export const runProcess = (options: RunProcessOptions): ProcessRun => {
     exitedFlag = true;
     clearTimeout(deadlineTimer);
     deferredExit.resolve({ code, signal });
+  });
+
+  // With no listener here, a spawn failure (e.g. ENOENT -- the executable does not exist) is an
+  // uncaught exception that takes the whole daemon down instead of something a caller can react
+  // to. Routed into the same `exited` a caller already awaits for every other ending, just
+  // rejected instead of resolved: the process is "gone" in the sense that matters to `stop()`
+  // (there is nothing left to signal), but it never produced an outcome to resolve with.
+  child.on("error", (err) => {
+    exitedFlag = true;
+    clearTimeout(deadlineTimer);
+    deferredExit.reject(new ProcessSpawnError(options.command, err));
   });
 
   let stopPromise: Promise<void> | undefined;
