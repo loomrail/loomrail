@@ -43,6 +43,8 @@ export const gatedAdapter = (contextWindowTokens = 200_000): GatedAdapter => {
       contextWindowReporting: false,
       checkpointOnRequest: false,
       contextWindowTokens,
+      stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+      costReporting: false,
     }),
     start: async (invocation) => {
       adapter.startCallCount += 1;

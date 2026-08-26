@@ -66,6 +66,8 @@ const adapterThatDoesNothing = (): ProviderAdapter => ({
     contextWindowReporting: false,
     checkpointOnRequest: false,
     contextWindowTokens: 200_000,
+    stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+    costReporting: false,
   }),
   start: () => Promise.reject(new Error("adapterThatDoesNothing.start should never be called")),
   requestHandoff: () => Promise.resolve(undefined),

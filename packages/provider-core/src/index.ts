@@ -6,14 +6,21 @@ import type {
   WorkflowDispatch,
   WorkflowStage,
 } from "@loomrail/contracts";
+import { workflowStageSchema } from "@loomrail/contracts";
 import { z } from "zod";
+
+// The set of adapters Loomrail can dispatch to. A live adapter is not a MOCK wearing a different
+// label -- it is a distinct identity the daemon and the audit trail key on, so the enum is closed
+// rather than left as a bare string an adapter could misspell.
+export const providerIdSchema = z.enum(["MOCK", "CODEX", "CLAUDE_CODE"]);
+export type ProviderId = z.infer<typeof providerIdSchema>;
 
 // `contextWindowTokens` is required, not optional: the pack budget (spec §4.3) is computed as a
 // share of the window before the session starts, so an adapter that cannot declare its window
 // size cannot be started at all -- assembling a pack against an unknown budget means guessing.
 export const providerCapabilitiesSchema = z
   .object({
-    provider: z.literal("MOCK"),
+    provider: providerIdSchema,
     start: z.boolean(),
     interrupt: z.boolean(),
     eventStream: z.boolean(),
@@ -21,6 +28,17 @@ export const providerCapabilitiesSchema = z
     contextWindowReporting: z.boolean(),
     checkpointOnRequest: z.boolean(),
     contextWindowTokens: z.number().int().positive(),
+    // Before E1 a live adapter runs its CLI in an empty temporary directory: it has no
+    // filesystem access and therefore nothing to change, so it cannot serve IMPLEMENT. Without
+    // this declaration the dispatcher would send it that stage anyway, it would return prose,
+    // and the stage would look done with no work behind it. `.min(1)` is deliberate: an adapter
+    // that serves no stage at all can never be dispatched to, so declaring at least one is not
+    // optional the way an empty list would otherwise imply.
+    stages: z.array(workflowStageSchema).min(1),
+    // Whether the adapter can report what a session cost. Distinct from `usageReporting`, which
+    // is about context-window consumption, not spend -- an adapter can know how full its window
+    // got without knowing what that turn billed, and vice versa.
+    costReporting: z.boolean(),
   })
   .strict()
   .refine(

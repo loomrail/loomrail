@@ -204,6 +204,8 @@ describe("stage attempt session loop", () => {
         contextWindowReporting: false,
         checkpointOnRequest: false,
         contextWindowTokens,
+        stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+        costReporting: false,
       }),
     start: () => Promise.resolve(completingOutcome()),
     requestHandoff: () => Promise.resolve(),
@@ -279,6 +281,8 @@ describe("stage attempt session loop", () => {
           contextWindowReporting: true,
           checkpointOnRequest: true,
           contextWindowTokens: 4_000,
+          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+          costReporting: false,
         }),
       // Never resolves: the first provider's process is gone before it ends itself, exactly the
       // orphaned-session case "survives a daemon restart mid-attempt" already covers.
@@ -351,6 +355,8 @@ describe("stage attempt session loop", () => {
           contextWindowReporting: true,
           checkpointOnRequest: true,
           contextWindowTokens: 4_000,
+          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+          costReporting: false,
         }),
       start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) =>
         new Promise<ProviderOutcome>(() => {
@@ -397,6 +403,8 @@ describe("stage attempt session loop", () => {
           contextWindowReporting: true,
           checkpointOnRequest: true,
           contextWindowTokens: 10_000,
+          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+          costReporting: false,
         }),
       start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) => {
         for (let usedTokens = 1_000; usedTokens <= 1_040; usedTokens += 1) {
@@ -506,6 +514,8 @@ describe("stage attempt session loop", () => {
           contextWindowReporting: false,
           checkpointOnRequest: false,
           contextWindowTokens: 40,
+          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+          costReporting: false,
         }),
       start: () => {
         started += 1;
@@ -624,6 +634,8 @@ describe("stage attempt session loop", () => {
           contextWindowReporting: true,
           checkpointOnRequest: true,
           contextWindowTokens: 4_000,
+          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+          costReporting: false,
         }),
       start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) =>
         new Promise<ProviderOutcome>(() => {
@@ -744,6 +756,8 @@ describe("stage attempt session loop", () => {
           contextWindowReporting: false,
           checkpointOnRequest: false,
           contextWindowTokens: 4_000,
+          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+          costReporting: false,
         }),
       start: () => Promise.reject(new Error("the provider socket closed")),
       requestHandoff: () => Promise.resolve(),

@@ -279,6 +279,11 @@ export const createMockProvider = (options?: MockProviderOptions): ProviderAdapt
         contextWindowReporting: sessionBehaviourEnabled,
         checkpointOnRequest: sessionBehaviourEnabled,
         contextWindowTokens: sessionBehaviourEnabled ? resolvedOptions.contextWindowTokens : 128_000,
+        // Every stage of `mockDeliveryTemplate` (packages/workflow-engine): the mock is what the
+        // whole daemon and e2e suite dispatches through, so it must be able to serve every stage
+        // those suites drive it across, not just the ones a real adapter can serve before E1.
+        stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+        costReporting: false,
       }),
     start: (invocation, listener) =>
       sessionBehaviourEnabled

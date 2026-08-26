@@ -11,6 +11,8 @@ const validCapabilities = {
   contextWindowReporting: true,
   checkpointOnRequest: true,
   contextWindowTokens: 128_000,
+  stages: ["DISCOVERY", "PLAN"] as const,
+  costReporting: false,
 };
 
 const withoutField = (field: keyof typeof validCapabilities) =>
@@ -78,5 +80,24 @@ describe("provider capabilities", () => {
 
   it("rejects an unknown capability field", () => {
     expect(() => providerCapabilitiesSchema.parse({ ...validCapabilities, resume: true })).toThrow();
+  });
+
+  it("accepts a live provider identity", () => {
+    expect(providerCapabilitiesSchema.parse({ ...validCapabilities, provider: "CODEX" }).provider).toBe(
+      "CODEX",
+    );
+  });
+
+  it("rejects a provider identity outside the enum", () => {
+    expect(() => providerCapabilitiesSchema.parse({ ...validCapabilities, provider: "GPT" })).toThrow();
+  });
+
+  // An adapter that serves no stage can never be dispatched to; declaring one is not optional.
+  it("rejects capabilities that declare no stage at all", () => {
+    expect(() => providerCapabilitiesSchema.parse({ ...validCapabilities, stages: [] })).toThrow();
+  });
+
+  it("rejects an unknown stage", () => {
+    expect(() => providerCapabilitiesSchema.parse({ ...validCapabilities, stages: ["DEPLOY"] })).toThrow();
   });
 });
