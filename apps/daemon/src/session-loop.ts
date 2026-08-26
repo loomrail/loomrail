@@ -405,22 +405,30 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
       },
     };
 
-    const result: SessionOutcome = await Promise.race([
-      deps.adapter
-        .start(
+    // Wrapped in its own async function rather than chaining `.then(onSuccess, onFailure)` off the
+    // call directly: `.then` only catches a *rejected* promise, and an adapter that throws
+    // synchronously instead of rejecting (or a synchronous throw from `providerSessionRef` itself)
+    // would otherwise escape `Promise.race` entirely, skipping `live.closed = true` and
+    // `onSessionLive(null)` below and leaving `liveSessionId` pointed at a session that is no
+    // longer live for a later `stop()` to mis-abort. `await` inside a try/catch converts either
+    // failure mode into the same FAILED outcome the reject path already produces.
+    const startSession = async (): Promise<SessionOutcome> => {
+      try {
+        const outcome = await deps.adapter.start(
           {
             dispatch: deps.dispatch,
             session: providerSessionRef(providerSession, attempt),
             contextPack: assembled.pack,
           },
           listener,
-        )
-        .then(
-          (outcome): SessionOutcome => ({ type: "OUTCOME", outcome }),
-          (error: unknown): SessionOutcome => ({ type: "FAILED", error }),
-        ),
-      deadlineReached,
-    ]);
+        );
+        return { type: "OUTCOME", outcome };
+      } catch (error: unknown) {
+        return { type: "FAILED", error };
+      }
+    };
+
+    const result: SessionOutcome = await Promise.race([startSession(), deadlineReached]);
     live.closed = true;
     deps.onSessionLive?.(null);
     deadline?.cancel();

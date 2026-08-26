@@ -55,6 +55,11 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
   const runOnce = async (): Promise<void> => {
     let previousDispatchId: string | undefined;
     for (let cycle = 0; cycle < DISPATCH_CYCLE_LIMIT; cycle += 1) {
+      // `stop()` only sets a flag and aborts the live session -- it does not (and per spec D5,
+      // cannot) unwind an `await runStageAttempt(...)` already in flight. Without this check, the
+      // cycle that resumes once that await settles would happily pull the *next* pending dispatch
+      // and open a brand-new provider session on a daemon that was just told to shut down.
+      if (stopping) return;
       const queued = deps.state.query({ type: "LIST_PENDING_DISPATCHES" });
       const dispatch = queued.type === "WORKFLOW_DISPATCHES" ? queued.dispatches[0] : undefined;
       if (!dispatch) return;
@@ -146,7 +151,10 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
       }
     } finally {
       running = false;
-      if (!pending || stopping) settleIdle();
+      // The `while` loop above can only exit once `!pending || stopping` already holds -- nothing
+      // between that exit and here can change either flag -- so settling here is unconditional
+      // rather than re-testing a condition that is always true by construction.
+      settleIdle();
     }
   };
 
@@ -157,7 +165,7 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
       void pump();
     },
     whenIdle: () =>
-      !running && !pending
+      stopping || (!running && !pending)
         ? Promise.resolve()
         : new Promise<void>((resolve) => {
             idleWaiters.push(resolve);

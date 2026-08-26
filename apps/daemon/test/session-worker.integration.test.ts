@@ -12,7 +12,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSessionWorker, type SessionWorker } from "../src/session-worker.js";
 import { gatedAdapter } from "./gated-adapter.js";
 import {
-  pendingDispatchModes,
   seedQueuedAttempt as seedQueuedAttemptFixture,
   snapshotOf,
   type SeededAttempt,
@@ -89,7 +88,13 @@ const adapterThatThrows = (): ProviderAdapter => ({
   abortSession: async () => undefined,
 });
 
-const IDLE_TIMEOUT_MS = 2_000;
+// Measured against "takes another pass", the heaviest test in this file: two work items cascading
+// through all six `mockDeliveryTemplate` stages (~24 provider sessions, each with context assembly
+// and synchronous SQLite writes) took well under a second on an idle machine. This machine
+// periodically runs at load average 60-90, though, where the same work can take many times that --
+// so the bound is set an order of magnitude above the idle measurement, as a backstop against a
+// worker that is genuinely stuck rather than a race against one that is merely slow.
+const IDLE_TIMEOUT_MS = 15_000;
 
 // Bounds every "wait for the worker to finish" checkpoint below. A mutation that breaks the pump's
 // re-looping (a single `if` instead of `while (pending && !stopping)`, for instance) leaves
@@ -97,11 +102,18 @@ const IDLE_TIMEOUT_MS = 2_000;
 // vitest's blanket per-test timeout rather than on the assertion that names the behaviour under
 // test, which is exactly the "incidental failure" the task's own review has flagged twice before.
 const awaitIdle = async (worker: Pick<SessionWorker, "whenIdle">): Promise<void> => {
-  const settled = await Promise.race([
-    worker.whenIdle().then((): "idle" => "idle"),
-    new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), IDLE_TIMEOUT_MS)),
-  ]);
-  expect(settled).toBe("idle");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const settled = await Promise.race([
+      worker.whenIdle().then((): "idle" => "idle"),
+      new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), IDLE_TIMEOUT_MS);
+      }),
+    ]);
+    expect(settled).toBe("idle");
+  } finally {
+    clearTimeout(timer);
+  }
 };
 
 describe("session worker", () => {
@@ -221,7 +233,7 @@ describe("session worker", () => {
     adapter.release();
     await awaitIdle(worker);
     expect(settled).toBe(true);
-  });
+  }, 20_000);
 
   // The wake that arrived mid-attempt has to be honoured after it, or a dispatch created by a
   // request while a stage was running would sit in the queue until something unrelated woke the
@@ -243,10 +255,17 @@ describe("session worker", () => {
     seedQueuedAttempt(localState);
     worker.wake();
     adapter.release();
-    await awaitIdle(worker);
 
-    expect(pendingDispatchModes(localState)).toEqual([]);
-  });
+    // Not `expect(pendingDispatchModes(localState)).toEqual([])`: `runOnce`'s own cycle loop
+    // re-queries the pending-dispatch table on every cycle, so once the gate opens it discovers and
+    // drains the second seeded attempt on its own, inside the very first pass -- well within
+    // DISPATCH_CYCLE_LIMIT -- regardless of whether `pump` ever takes a second one. That assertion
+    // would hold even with `while (pending && !stopping)` reduced to a single `if`. `awaitIdle` is
+    // what actually depends on the re-loop: under that mutation, `pending` (set by the second
+    // `wake()` above, mid-flight) is stranded `true` once the lone pass exits, `finally` never
+    // settles the idle waiters, and this call times out instead of resolving.
+    await awaitIdle(worker);
+  }, 20_000);
 
   it("resolves whenIdle only once the queue is empty", async () => {
     const localState = state();
@@ -262,20 +281,24 @@ describe("session worker", () => {
     worker.wake();
     await adapter.started;
 
+    // Registered while `running` is true and the session is still gated, this waiter is only ever
+    // notified through `settleIdle()` -- a fresh call to `whenIdle()` made *after* the queue empties
+    // would instead take the immediate `Promise.resolve()` branch and prove nothing about this one.
+    // There is no check here for "still unsettled before release()": nothing between registering
+    // this waiter and calling release() re-enters `pump()`, which is the only place a premature
+    // settle could happen, so that check would hold no matter what `settleIdle()` did. The
+    // discriminating question is only answered after release(): does *this* waiter get notified.
     let settled = false;
     void worker.whenIdle().then(() => {
       settled = true;
     });
-    await Promise.resolve();
-    expect(settled).toBe(false);
 
     adapter.release();
     await awaitIdle(worker);
     expect(settled).toBe(true);
-  });
+  }, 20_000);
 
-  // The guard that used to catch a second concurrent drain now catches an unmovable head. Without it
-  // the loop would spin on the same row to the cycle limit.
+  // Without this guard the loop would spin on the same unmovable head row to the cycle limit.
   it("stops the pass when the head of the queue did not move", async () => {
     const localState = state();
     const logger = createRecordingLogger();
@@ -294,7 +317,7 @@ describe("session worker", () => {
     expect(logger.records.map(({ msg }) => msg)).toContain(
       "The pending workflow dispatch is already being run elsewhere; this drain stops",
     );
-  });
+  }, 20_000);
 
   // The background loop has no caller to hand a 500 to. A throw must stay inside it, and must not
   // leave the worker permanently busy -- which is what would make every later wake a no-op.
@@ -336,7 +359,7 @@ describe("session worker", () => {
     healthy.wake();
     await awaitIdle(healthy);
     expect(snapshotOf(localState, seeded.workItemId).run?.status).not.toBe("RUNNING");
-  });
+  }, 20_000);
 
   it("asks the live session to abort when stopped", async () => {
     const localState = state();
@@ -356,5 +379,69 @@ describe("session worker", () => {
 
     expect(adapter.abortedSessions).toHaveLength(1);
     adapter.release();
-  });
+  }, 20_000);
+
+  // Before the fix, `whenIdle()` called after `stop()` still took the "register a waiter" branch
+  // whenever a pass was in flight, and only `pump`'s own `finally` -- reached when the gated session
+  // actually finishes -- could resolve it. `stopping` is never reset and `wake()` is a permanent
+  // no-op once it is set, so that waiter was unreachable: nothing left could ever call `settleIdle()`
+  // again. `stop()` exists precisely so a caller does not have to wait for the in-flight session; a
+  // `whenIdle()` call made here, before `release()`, while the session is still gated, can only pass
+  // if `whenIdle()` itself short-circuits on `stopping` rather than waiting on the pass to finish.
+  it("resolves whenIdle immediately after stop, even mid-pass", async () => {
+    const localState = state();
+    const adapter = gatedAdapter();
+    const worker = createSessionWorker({
+      state: localState,
+      adapter,
+      template: mockDeliveryTemplate,
+      createCommandId,
+      logger: createRecordingLogger(),
+    });
+    seedQueuedAttempt(localState);
+    worker.wake();
+    await adapter.started;
+
+    await worker.stop();
+    await awaitIdle(worker);
+
+    adapter.release();
+  }, 20_000);
+
+  // `stop()` only sets a flag and aborts the *live* session -- it cannot unwind an
+  // `await runStageAttempt(...)` already in flight. Without a check inside `runOnce`'s own cycle
+  // loop, the cycle that resumes once that await settles would carry straight on to the next
+  // pending dispatch and open a brand-new provider session on a daemon that was just told to stop.
+  it("does not open a new session in the same pass once stopped", async () => {
+    const localState = state();
+    const adapter = gatedAdapter();
+    const worker = createSessionWorker({
+      state: localState,
+      adapter,
+      template: mockDeliveryTemplate,
+      createCommandId,
+      logger: createRecordingLogger(),
+    });
+    seedQueuedAttempt(localState);
+    seedQueuedAttempt(localState);
+    worker.wake();
+    await adapter.started;
+
+    await worker.stop();
+    adapter.release();
+
+    // Not `awaitIdle(worker)`: `whenIdle()` short-circuits the instant `stopping` is set (the fix
+    // above), so it resolves immediately here regardless of what the in-flight pass goes on to do
+    // next -- that immediacy is exactly what it is *for*, which is also exactly why it cannot be
+    // used to observe whether that pass wrongly starts a second session afterwards. This instead
+    // flushes the promise chain `release()` sets off (the gated session ending, its outcome being
+    // applied, the cycle loop's next iteration) with a macrotask tick: Node drains the entire
+    // microtask queue, however many hops long, before any timer callback runs, so one
+    // `setTimeout(0)` is enough regardless of how deep that chain is.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The gated adapter's own count of `start()` invocations -- a real number, not a log line. The
+    // second seeded dispatch must never reach it.
+    expect(adapter.startCallCount).toBe(1);
+  }, 20_000);
 });
