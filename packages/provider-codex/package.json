@@ -1,0 +1,23 @@
+{
+  "name": "@loomrail/provider-codex",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/stream.d.ts",
+      "default": "./dist/stream.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run"
+  },
+  "dependencies": {
+    "@loomrail/contracts": "workspace:*",
+    "@loomrail/provider-core": "workspace:*",
+    "zod": "^4.0.0"
+  }
+}
