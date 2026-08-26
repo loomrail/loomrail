@@ -1,10 +1,13 @@
 import type { ContextSources } from "@loomrail/context-assembly";
 import type {
+  Checkpoint,
+  ContextPackRecipe,
   DomainEvent,
   EventPageDirection,
   HumanRequest,
   HumanRequestStatus,
   Project,
+  ProviderSession,
   StateCommand,
   StateCommandResult,
   WorkItem,
@@ -76,6 +79,13 @@ export type StateQuery =
       type: "READ_CONTEXT_SOURCES";
       stageAttemptId: string;
       sessionOrdinal: number;
+    }
+  | {
+      // Spec §D5: an attempt's sessions, the recipe each was assembled from, and the checkpoints
+      // published under it. Separate from GET_WORKFLOW_SNAPSHOT because session history grows
+      // within a single attempt and the snapshot is read on every board render.
+      type: "LIST_PROVIDER_SESSIONS";
+      stageAttemptId: string;
     };
 
 export type StateQueryResult =
@@ -87,7 +97,13 @@ export type StateQueryResult =
   | { type: "WORKFLOW_DISPATCHES"; dispatches: WorkflowDispatch[] }
   | { type: "WORK_ITEMS"; workItems: WorkItem[] }
   | { type: "EVENTS"; events: DomainEvent[]; nextSequence: number; hasMore: boolean }
-  | { type: "CONTEXT_SOURCES"; sources: ContextSources };
+  | { type: "CONTEXT_SOURCES"; sources: ContextSources }
+  | {
+      type: "PROVIDER_SESSIONS";
+      sessions: ProviderSession[];
+      recipes: ContextPackRecipe[];
+      checkpoints: Checkpoint[];
+    };
 
 export type StateStoreStartup = {
   appliedMigrations: number[];

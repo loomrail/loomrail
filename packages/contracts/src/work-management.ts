@@ -21,8 +21,11 @@ import {
   cancelPipelineCommandSchema,
   checkpointPublishedEventSchema,
   checkpointPublishedResultSchema,
+  contextFloorExceededEventSchema,
   contextHandoffRequestedEventSchema,
+  contextHandoffRequestedResultSchema,
   endProviderSessionCommandSchema,
+  hardPauseStageAttemptCommandSchema,
   humanRequestAnsweredResultSchema,
   humanRequestOpenedEventSchema,
   humanRequestResolvedEventSchema,
@@ -46,7 +49,9 @@ import {
   recoveryReportCreatedEventSchema,
   resolveAcceptanceCommandSchema,
   resumePipelineCommandSchema,
+  requestContextHandoffCommandSchema,
   stageAttemptChangedEventSchema,
+  stageAttemptHardPausedResultSchema,
   startMockPipelineCommandSchema,
   startProviderSessionCommandSchema,
   usageRecordedEventSchema,
@@ -188,6 +193,7 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   checkpointPublishedEventSchema,
   contextHandoffRequestedEventSchema,
   providerSessionEndedEventSchema,
+  contextFloorExceededEventSchema,
 ]);
 
 const commandBaseSchema = z
@@ -279,6 +285,8 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   startProviderSessionCommandSchema,
   publishCheckpointCommandSchema,
   endProviderSessionCommandSchema,
+  requestContextHandoffCommandSchema,
+  hardPauseStageAttemptCommandSchema,
 ]);
 
 const commandResultBaseSchema = z
@@ -328,6 +336,8 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   providerSessionStartedResultSchema,
   checkpointPublishedResultSchema,
   providerSessionEndedResultSchema,
+  contextHandoffRequestedResultSchema,
+  stageAttemptHardPausedResultSchema,
 ]);
 
 export const registerFixtureProjectRequestSchema = z

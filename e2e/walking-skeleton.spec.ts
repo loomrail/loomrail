@@ -573,6 +573,9 @@ test.describe("authenticated walking skeleton", () => {
     await expect(workflowSection.getByText("QA report", { exact: true })).toBeVisible();
     await expect(workflowSection.getByText("Needs decision", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /Needs your decision/ })).toBeVisible();
+    // Each stage attempt now records its ProviderSession as well (spec §6), so a full mock delivery
+    // fills more than one page of activity and the discovery decision has moved off the newest one.
+    await restoredInspector.getByRole("button", { name: "Show more" }).click();
     await expect(restoredInspector.getByText("Decision recorded", { exact: true })).toBeVisible();
     const acceptanceResponsePromise = page.waitForResponse(
       (response) => response.url().includes("/acceptance/") && response.url().endsWith("/resolve"),

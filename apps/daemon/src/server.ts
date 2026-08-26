@@ -44,6 +44,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { z, ZodError } from "zod";
 
 import { FixtureResolutionError, resolveBundledFixture } from "./fixtures.js";
+import { runStageAttempt } from "./session-loop.js";
 
 const API_VERSION = "v1" as const;
 const DAEMON_VERSION = "0.0.0";
@@ -210,106 +211,9 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     databasePath: options.stateDatabasePath ?? ":memory:",
     now,
   });
-  const mockProvider = createMockProvider();
-  mockProvider.capabilities();
+  const providerAdapter = createMockProvider();
+  providerAdapter.capabilities();
 
-  const drainMockDispatches = async (): Promise<void> => {
-    for (let cycle = 0; cycle < 20; cycle += 1) {
-      const queued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
-      const dispatch = queued.type === "WORKFLOW_DISPATCHES" ? queued.dispatches[0] : undefined;
-      if (!dispatch) return;
-
-      const workItemResult = localState.query({ type: "GET_WORK_ITEM", workItemId: dispatch.workItemId });
-      const snapshotResult = localState.query({
-        type: "GET_WORKFLOW_SNAPSHOT",
-        workItemId: dispatch.workItemId,
-      });
-      const workItem = workItemResult.type === "WORK_ITEM" ? workItemResult.workItem : null;
-      const snapshot =
-        snapshotResult.type === "WORKFLOW_SNAPSHOT"
-          ? snapshotResult.snapshot
-          : workflowSnapshotSchema.parse({
-              schemaVersion: 1,
-              run: null,
-              stageAttempts: [],
-              humanRequests: [],
-              decisions: [],
-              budgetPolicies: [],
-              usageRecords: [],
-              recoveryReports: [],
-              artifacts: [],
-              acceptancePackage: null,
-            });
-      const stageAttempt = snapshot.stageAttempts.find(({ id }) => id === dispatch.stageAttemptId);
-      if (!workItem || !stageAttempt || !snapshot.run) {
-        throw new StateStoreError("PERSISTENCE_FAILURE", "A pending workflow dispatch is incomplete");
-      }
-
-      const started = localState.execute({
-        schemaVersion: 1,
-        commandId: `mark-started-${dispatch.id}`,
-        correlationId: `dispatch-${dispatch.id}`,
-        actor: { type: "SYSTEM", id: "mock-provider" },
-        type: "MARK_WORKFLOW_DISPATCH_STARTED",
-        payload: { dispatchId: dispatch.id },
-      });
-      if (started.type !== "WORKFLOW_DISPATCH_STARTED") {
-        throw new StateStoreError("PERSISTENCE_FAILURE", "The mock workflow dispatch did not start");
-      }
-      // Task 9 collapses `start`/`resume` into one context-pack invocation (spec §5), but a real
-      // assembled ContextPack needs the stage's ContextPackSpec, a consistent snapshot of context
-      // sources, and a token budget derived from the adapter's declared context window -- wiring
-      // that in end to end, alongside real ProviderSession persistence and the session lifecycle
-      // decisions in packages/domain/src/session.ts, is Task 11's job (spec §6). Until then this
-      // placeholder pack keeps the daemon's one dispatch-per-attempt flow running against the new
-      // adapter boundary; it carries no real content and is not persisted as a ContextPackRecipe.
-      //
-      // `attempt` is read fresh from persisted state every cycle and passed structurally on
-      // `session` (see `ProviderSessionRef` in packages/provider-core/src/index.ts) rather than
-      // rendered into the pack text for an adapter to parse back out -- unlike adapter-local
-      // bookkeeping, it survives a daemon restart, and it doesn't bleed between concurrently-
-      // running work items, because it's carried on this invocation's own session ref.
-      const placeholderPackText = `placeholder pack for stage attempt ${started.stageAttempt.id}`;
-      const invocation = {
-        dispatch,
-        session: {
-          id: dispatch.id,
-          ordinal: 1,
-          stageAttemptId: started.stageAttempt.id,
-          stage: started.stageAttempt.stage,
-          attempt: started.stageAttempt.attempt,
-        },
-        contextPack: {
-          schemaVersion: 1 as const,
-          text: placeholderPackText,
-          contentHash: `sha256:${createHash("sha256").update(placeholderPackText).digest("hex")}`,
-        },
-      };
-      const outcome = await mockProvider.start(invocation, {
-        onContextWindow: () => undefined,
-        onCheckpoint: () => undefined,
-      });
-      localState.execute({
-        schemaVersion: 1,
-        commandId: `apply-${dispatch.id}`,
-        correlationId: `dispatch-${dispatch.id}`,
-        actor: { type: "SYSTEM", id: "mock-provider" },
-        type: "APPLY_PROVIDER_OUTCOME",
-        payload: { dispatchId: dispatch.id, outcome, template: mockDeliveryTemplate },
-      });
-    }
-    throw new StateStoreError("PERSISTENCE_FAILURE", "The mock dispatch queue exceeded its safety limit");
-  };
-
-  localState.execute({
-    schemaVersion: 1,
-    commandId: `reconcile-${randomUUID()}`,
-    correlationId: `startup-${randomUUID()}`,
-    actor: { type: "SYSTEM", id: "local-daemon" },
-    type: "RECONCILE_WORKFLOWS",
-    payload: {},
-  });
-  await drainMockDispatches();
   let allowedOrigin = "";
   let closing = false;
 
@@ -355,6 +259,66 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     unusedConnections.clear();
     done();
   });
+
+  // Spec §6: one stage attempt is a sequence of context-assembled provider sessions, not a single
+  // provider call. This drives the queue; `runStageAttempt` owns everything inside one attempt.
+  const drainProviderDispatches = async (): Promise<void> => {
+    for (let cycle = 0; cycle < 20; cycle += 1) {
+      const queued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      const dispatch = queued.type === "WORKFLOW_DISPATCHES" ? queued.dispatches[0] : undefined;
+      if (!dispatch) return;
+
+      const snapshotResult = localState.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: dispatch.workItemId,
+      });
+      const stageAttempt =
+        snapshotResult.type === "WORKFLOW_SNAPSHOT"
+          ? snapshotResult.snapshot.stageAttempts.find(({ id }) => id === dispatch.stageAttemptId)
+          : undefined;
+      if (!stageAttempt) {
+        throw new StateStoreError("PERSISTENCE_FAILURE", "A pending workflow dispatch is incomplete");
+      }
+
+      // A dispatch whose attempt is already RUNNING was picked back up after a restart: spec §6.4
+      // makes that the ordinary end of a ProviderSession, so reconciliation closed the orphaned
+      // session and the attempt keeps going from its last checkpoint rather than starting over.
+      if (stageAttempt.status !== "RUNNING") {
+        const started = localState.execute({
+          schemaVersion: 1,
+          commandId: `mark-started-${dispatch.id}`,
+          correlationId: `dispatch-${dispatch.id}`,
+          actor: { type: "SYSTEM", id: "local-daemon" },
+          type: "MARK_WORKFLOW_DISPATCH_STARTED",
+          payload: { dispatchId: dispatch.id },
+        });
+        if (started.type !== "WORKFLOW_DISPATCH_STARTED") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow dispatch did not start");
+        }
+      }
+
+      await runStageAttempt({
+        state: localState,
+        adapter: providerAdapter,
+        dispatch,
+        template: mockDeliveryTemplate,
+        createCommandId: () => `session-${randomUUID()}`,
+        correlationId: `dispatch-${dispatch.id}`,
+        logger: app.log,
+      });
+    }
+    throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow dispatch queue exceeded its safety limit");
+  };
+
+  localState.execute({
+    schemaVersion: 1,
+    commandId: `reconcile-${randomUUID()}`,
+    correlationId: `startup-${randomUUID()}`,
+    actor: { type: "SYSTEM", id: "local-daemon" },
+    type: "RECONCILE_WORKFLOWS",
+    payload: {},
+  });
+  await drainProviderDispatches();
 
   const sessionForRequest = (request: FastifyRequest): Session | undefined => {
     const sessionToken = request.cookies[SESSION_COOKIE];
@@ -740,7 +704,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             },
           },
         });
-        await drainMockDispatches();
+        await drainProviderDispatches();
         const result = localState.query({
           type: "GET_WORKFLOW_SNAPSHOT",
           workItemId: params.workItemId,
@@ -815,7 +779,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             expectedVersion: body.expectedVersion,
           },
         });
-        await drainMockDispatches();
+        await drainProviderDispatches();
         const result = localState.query({
           type: "GET_WORKFLOW_SNAPSHOT",
           workItemId: params.workItemId,
@@ -891,7 +855,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             maxEstimatedTokens: body.maxEstimatedTokens,
           },
         });
-        await drainMockDispatches();
+        await drainProviderDispatches();
         const result = localState.query({
           type: "GET_WORKFLOW_SNAPSHOT",
           workItemId: params.workItemId,
@@ -926,7 +890,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         if (answered.type !== "HUMAN_REQUEST_ANSWERED") {
           throw new StateStoreError("PERSISTENCE_FAILURE", "The HumanRequest answer was not applied");
         }
-        await drainMockDispatches();
+        await drainProviderDispatches();
         const result = localState.query({
           type: "GET_WORKFLOW_SNAPSHOT",
           workItemId: answered.workItemId,

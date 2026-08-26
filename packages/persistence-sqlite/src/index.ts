@@ -34,6 +34,7 @@ import {
   type AcceptancePackage,
   type Checkpoint,
   type ContextPackRecipe,
+  type ContextWindowUsage,
   type Decision,
   type DomainEvent,
   type EvidenceArtifact,
@@ -57,11 +58,14 @@ import {
   decideAnswerHumanRequest,
   decideApplyProviderOutcome,
   decideCancelPipeline,
+  decideContextWindowReported,
   decideMarkWorkflowDispatchStarted,
   decidePausePipeline,
   decideRecoverInterruptedWorkflow,
   decideResolveAcceptance,
   decideResumePipeline,
+  decideSessionEnded,
+  decideStageAttemptHardPause,
   decideStartMockPipeline,
   decideWorkItemCommand,
   WorkflowDomainError,
@@ -73,6 +77,7 @@ import {
   type MarkDispatchStartedDecision,
   type PipelineControlDecision,
   type RecoveryDecision,
+  type StageAttemptPauseDecision,
   type StartWorkflowDecision,
   type WorkItemCommand,
   type WorkItemDecision,
@@ -305,6 +310,22 @@ const providerSessionRowSchema = z.object({
   version: z.number().int(),
 });
 
+const contextPackRecipeRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  provider_session_id: z.string(),
+  template_id: z.string(),
+  template_version: z.number().int(),
+  spec_source: z.string(),
+  sections_json: z.string(),
+  omitted_json: z.string(),
+  content_hash: z.string(),
+  estimated_tokens: z.number().int(),
+  budget_tokens: z.number().int(),
+  estimate_quality: z.string(),
+  created_at: z.string(),
+});
+
 const checkpointRowSchema = z.object({
   id: z.string(),
   schema_version: z.number().int(),
@@ -320,6 +341,7 @@ const checkpointRowSchema = z.object({
 });
 
 const maxOrdinalRowSchema = z.object({ max_ordinal: z.number().int() });
+const countRowSchema = z.object({ count: z.number().int() });
 
 const workflowDispatchRowSchema = z.object({
   id: z.string(),
@@ -371,6 +393,7 @@ const stateQuerySchema = z.discriminatedUnion("type", [
       sessionOrdinal: z.number().int().positive(),
     })
     .strict(),
+  z.object({ type: z.literal("LIST_PROVIDER_SESSIONS"), stageAttemptId: opaqueIdSchema }).strict(),
 ]);
 
 // `ORDER BY` direction is structure rather than a value, so it cannot be bound. The two statements are
@@ -604,6 +627,25 @@ const providerSessionFromRow = (value: unknown): ProviderSession => {
   });
 };
 
+const contextPackRecipeFromRow = (value: unknown): ContextPackRecipe => {
+  const row = contextPackRecipeRowSchema.parse(value);
+  return contextPackRecipeSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    providerSessionId: row.provider_session_id,
+    templateId: row.template_id,
+    templateVersion: row.template_version,
+    specSource: row.spec_source,
+    sections: parseJson(row.sections_json),
+    omitted: parseJson(row.omitted_json),
+    contentHash: row.content_hash,
+    estimatedTokens: row.estimated_tokens,
+    budgetTokens: row.budget_tokens,
+    estimateQuality: row.estimate_quality,
+    createdAt: row.created_at,
+  });
+};
+
 const checkpointFromRow = (value: unknown): Checkpoint => {
   const row = checkpointRowSchema.parse(value);
   return checkpointSchema.parse({
@@ -792,6 +834,26 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         sections_json, omitted_json, content_hash, estimated_tokens, budget_tokens,
         estimate_quality, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectProviderSessionsForAttempt = database.prepare(
+      "SELECT * FROM provider_sessions WHERE stage_attempt_id = ? ORDER BY ordinal",
+    );
+    const selectRecipesForAttempt = database.prepare(
+      `SELECT context_pack_recipes.* FROM context_pack_recipes
+       INNER JOIN provider_sessions ON provider_sessions.id = context_pack_recipes.provider_session_id
+       WHERE provider_sessions.stage_attempt_id = ?
+       ORDER BY provider_sessions.ordinal`,
+    );
+    const selectCheckpointsForAttempt = database.prepare(
+      "SELECT * FROM checkpoints WHERE stage_attempt_id = ? ORDER BY created_at, ordinal, id",
+    );
+    const countCheckpointsForSession = database.prepare(
+      "SELECT COUNT(*) AS count FROM checkpoints WHERE provider_session_id = ?",
+    );
+    const selectOrphanedRunningSessions = database.prepare(
+      `SELECT provider_sessions.* FROM provider_sessions
+       WHERE provider_sessions.status = 'RUNNING'
+       ORDER BY provider_sessions.stage_attempt_id, provider_sessions.ordinal`,
     );
     const selectMaxCheckpointOrdinal = database.prepare(
       "SELECT COALESCE(MAX(ordinal), 0) AS max_ordinal FROM checkpoints WHERE provider_session_id = ?",
@@ -1202,7 +1264,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       | PipelineControlDecision["events"][number]
       | BudgetOverrideDecision["events"][number]
       | RecoveryDecision["events"][number]
-      | AcceptanceResolutionDecision["events"][number];
+      | AcceptanceResolutionDecision["events"][number]
+      | StageAttemptPauseDecision["events"][number];
 
     const appendWorkflowEvents = (
       intents: readonly WorkflowEventIntent[],
@@ -1247,7 +1310,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     type SessionEventIntent =
       | { type: "PROVIDER_SESSION_STARTED"; data: { session: ProviderSession; recipe: ContextPackRecipe } }
       | { type: "CHECKPOINT_PUBLISHED"; data: { checkpoint: Checkpoint } }
-      | { type: "PROVIDER_SESSION_ENDED"; data: { session: ProviderSession } };
+      | { type: "PROVIDER_SESSION_ENDED"; data: { session: ProviderSession } }
+      | {
+          type: "CONTEXT_HANDOFF_REQUESTED";
+          data: { session: ProviderSession; usage: ContextWindowUsage };
+        };
 
     const appendSessionEvent = (
       intent: SessionEventIntent,
@@ -2189,6 +2256,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       }
 
       if (command.type === "RECONCILE_WORKFLOWS") {
+        const interruptedSessions: ProviderSession[] = [];
         const orphanedDispatches = database
           .prepare(
             `SELECT workflow_dispatches.* FROM workflow_dispatches
@@ -2203,7 +2271,63 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           .map(workflowDispatchFromRow);
         const recoveryReports: RecoveryReport[] = [];
         const events: DomainEvent[] = [];
+
+        // Spec §6.4: a daemon restart is the ordinary end of a ProviderSession, not a failed
+        // StageAttempt. A session still marked RUNNING at startup is orphaned by definition -- the
+        // process that ran it is gone -- so it ends as ENDED/INTERRUPTED and the attempt keeps its
+        // pending dispatch, which the session loop picks up and continues from the last checkpoint.
+        // Attempts recovered this way are therefore excluded from the dispatch-level recovery
+        // below, which exists for the case where no session ever started.
+        const attemptsWithInterruptedSession = new Set<string>();
+        for (const sessionRow of selectOrphanedRunningSessions.all()) {
+          const current = providerSessionFromRow(sessionRow);
+          const sessionAttempt = readStageAttempt(current.stageAttemptId);
+          if (!sessionAttempt) {
+            throw new WorkflowDomainError(
+              "WORKFLOW_NOT_FOUND",
+              "The StageAttempt backing an orphaned ProviderSession is missing",
+            );
+          }
+          const session = providerSessionSchema.parse({
+            ...current,
+            status: "ENDED",
+            endReason: "INTERRUPTED",
+            endedAt: occurredAt,
+            version: current.version + 1,
+          });
+          const sessionUpdate = updateProviderSession.run(
+            session.status,
+            session.endReason,
+            session.handoffRequestedAt,
+            session.endedAt,
+            session.version,
+            session.id,
+            current.version,
+          );
+          if (sessionUpdate.changes !== 1) {
+            throw new WorkflowDomainError(
+              "WORKFLOW_VERSION_CONFLICT",
+              "An orphaned ProviderSession changed while it was being interrupted",
+            );
+          }
+          interruptedSessions.push(session);
+          attemptsWithInterruptedSession.add(session.stageAttemptId);
+          events.push(
+            appendSessionEvent(
+              { type: "PROVIDER_SESSION_ENDED", data: { session } },
+              {
+                workItemId: sessionAttempt.workItemId,
+                projectId: sessionAttempt.projectId,
+                actor: command.actor,
+                occurredAt,
+                correlationId: command.correlationId,
+              },
+            ),
+          );
+        }
+
         for (const dispatch of orphanedDispatches) {
+          if (attemptsWithInterruptedSession.has(dispatch.stageAttemptId)) continue;
           const run = readPipelineRun(dispatch.pipelineRunId);
           const stageAttempt = readStageAttempt(dispatch.stageAttemptId);
           const workItem = readWorkItem(dispatch.workItemId);
@@ -2239,6 +2363,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           type: "WORKFLOWS_RECONCILED",
           replayed: false,
           recoveryReports,
+          interruptedSessions,
           events,
         });
       }
@@ -2433,23 +2558,192 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             "The ProviderSession changed while it was being ended",
           );
         }
-        const event = appendSessionEvent(
-          { type: "PROVIDER_SESSION_ENDED", data: { session } },
-          {
-            workItemId: stageAttempt.workItemId,
-            projectId: stageAttempt.projectId,
-            actor: command.actor,
-            occurredAt,
-            correlationId: command.correlationId,
-          },
-        );
+        const eventMetadata = {
+          workItemId: stageAttempt.workItemId,
+          projectId: stageAttempt.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        };
+        const events: DomainEvent[] = [
+          appendSessionEvent({ type: "PROVIDER_SESSION_ENDED", data: { session } }, eventMetadata),
+        ];
+
+        // Spec §6.5: the unproductive-session counter, and the pause plus question that the second
+        // unproductive session in a row triggers, belong to this same transaction. An end reason of
+        // INTERRUPTED or CANCELLED is not this decision's business -- recovery and cancellation own
+        // those -- so the counter is left alone for them, exactly as decideSessionEnded demands.
+        let attemptAfterEnd = stageAttempt;
+        let request: HumanRequest | null = null;
+        let nextSessionOrdinal: number | null = null;
+        if (session.endReason !== "INTERRUPTED" && session.endReason !== "CANCELLED") {
+          const checkpointsPublished = countRowSchema.parse(countCheckpointsForSession.get(session.id)).count;
+          const decision = decideSessionEnded({
+            session,
+            attempt: stageAttempt,
+            endReason: command.payload.endReason,
+            checkpointsPublished,
+            now: occurredAt,
+          });
+          switch (decision.type) {
+            case "STAGE_FINISHED":
+              break;
+            case "START_NEXT_SESSION": {
+              attemptAfterEnd = decision.attempt;
+              updateStageAttempt(decision.attempt);
+              nextSessionOrdinal = decision.nextOrdinal;
+              break;
+            }
+            case "HARD_PAUSE": {
+              const run = readPipelineRun(stageAttempt.pipelineRunId);
+              const workItem = readWorkItem(stageAttempt.workItemId);
+              if (!run || !workItem) {
+                throw new WorkflowDomainError(
+                  "WORKFLOW_NOT_FOUND",
+                  "The workflow state backing this ProviderSession is incomplete",
+                );
+              }
+              const paused = decideStageAttemptHardPause({
+                now: occurredAt,
+                workItem,
+                run,
+                stageAttempt: decision.attempt,
+                previousStatus: stageAttempt.status,
+                humanRequestId: createId("humanRequest"),
+                reason: { type: "NO_PROGRESS" },
+              });
+              attemptAfterEnd = paused.stageAttempt;
+              request = paused.request;
+              updateStageAttempt(paused.stageAttempt);
+              updatePipelineRun(paused.run);
+              updateWorkflowWorkItem(paused.workItem);
+              insertHumanRequest(paused.request);
+              events.push(...appendWorkflowEvents(paused.events, eventMetadata));
+              break;
+            }
+          }
+        }
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "PROVIDER_SESSION_ENDED",
           replayed: false,
           workItemId: stageAttempt.workItemId,
           session,
+          stageAttempt: attemptAfterEnd,
+          request,
+          nextSessionOrdinal,
+          events,
+        });
+      }
+
+      if (command.type === "REQUEST_CONTEXT_HANDOFF") {
+        const sessionRow = selectProviderSessionById.get(command.payload.providerSessionId);
+        if (sessionRow === undefined) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The ProviderSession does not exist");
+        }
+        const current = providerSessionFromRow(sessionRow);
+        const stageAttempt = readStageAttempt(current.stageAttemptId);
+        if (!stageAttempt) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_NOT_FOUND",
+            "The StageAttempt backing this ProviderSession is missing",
+          );
+        }
+        // Whether this crossing is the first one is read off the stored session, never taken from
+        // the caller: spec §6.2 requires a repeated occupancy report -- including one racing the
+        // session's own end -- to be a safe no-op rather than a second request.
+        const decision = decideContextWindowReported({
+          session: current,
+          usage: command.payload.usage,
+          handoffThreshold: command.payload.handoffThreshold,
+          now: occurredAt,
+        });
+        if (decision.type === "NO_ACTION") {
+          return stateCommandResultSchema.parse({
+            schemaVersion: 1,
+            type: "CONTEXT_HANDOFF_REQUESTED",
+            replayed: false,
+            workItemId: stageAttempt.workItemId,
+            session: current,
+            requested: false,
+            events: [],
+          });
+        }
+        const update = updateProviderSession.run(
+          decision.session.status,
+          decision.session.endReason,
+          decision.session.handoffRequestedAt,
+          decision.session.endedAt,
+          decision.session.version,
+          decision.session.id,
+          current.version,
+        );
+        if (update.changes !== 1) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_VERSION_CONFLICT",
+            "The ProviderSession changed while a handoff was being requested",
+          );
+        }
+        const event = appendSessionEvent(decision.event, {
+          workItemId: stageAttempt.workItemId,
+          projectId: stageAttempt.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "CONTEXT_HANDOFF_REQUESTED",
+          replayed: false,
+          workItemId: stageAttempt.workItemId,
+          session: decision.session,
+          requested: true,
           events: [event],
+        });
+      }
+
+      if (command.type === "HARD_PAUSE_STAGE_ATTEMPT") {
+        const stageAttempt = readStageAttempt(command.payload.stageAttemptId);
+        if (!stageAttempt) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The StageAttempt does not exist");
+        }
+        const run = readPipelineRun(stageAttempt.pipelineRunId);
+        const workItem = readWorkItem(stageAttempt.workItemId);
+        if (!run || !workItem) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_NOT_FOUND",
+            "The workflow state backing this StageAttempt is incomplete",
+          );
+        }
+        const decision = decideStageAttemptHardPause({
+          now: occurredAt,
+          workItem,
+          run,
+          stageAttempt,
+          previousStatus: stageAttempt.status,
+          humanRequestId: createId("humanRequest"),
+          reason: command.payload.reason,
+        });
+        updateStageAttempt(decision.stageAttempt);
+        updatePipelineRun(decision.run);
+        updateWorkflowWorkItem(decision.workItem);
+        insertHumanRequest(decision.request);
+        const events = appendWorkflowEvents(decision.events, {
+          workItemId: workItem.id,
+          projectId: workItem.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "STAGE_ATTEMPT_HARD_PAUSED",
+          replayed: false,
+          workItemId: workItem.id,
+          run: decision.run,
+          stageAttempt: decision.stageAttempt,
+          request: decision.request,
+          events,
         });
       }
 
@@ -2692,6 +2986,19 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           return {
             type: "CONTEXT_SOURCES",
             sources: readContextSourcesSnapshot(queryValue.stageAttemptId, queryValue.sessionOrdinal),
+          };
+        // The nesting spec §D5 introduces, read back in one place: the attempt's sessions in
+        // ordinal order, the recipe each one was assembled from, and every checkpoint published
+        // under the attempt. Kept out of GET_WORKFLOW_SNAPSHOT deliberately -- the snapshot is
+        // fetched on every board render, and session history grows without bound within an attempt.
+        case "LIST_PROVIDER_SESSIONS":
+          return {
+            type: "PROVIDER_SESSIONS",
+            sessions: selectProviderSessionsForAttempt
+              .all(queryValue.stageAttemptId)
+              .map(providerSessionFromRow),
+            recipes: selectRecipesForAttempt.all(queryValue.stageAttemptId).map(contextPackRecipeFromRow),
+            checkpoints: selectCheckpointsForAttempt.all(queryValue.stageAttemptId).map(checkpointFromRow),
           };
         default:
           return assertNever(queryValue);

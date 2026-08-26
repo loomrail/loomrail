@@ -1,9 +1,16 @@
 import type {
+  ContextFloorExceededEvent,
   ContextHandoffRequestedEvent,
   ContextWindowUsage,
+  HumanRequest,
+  HumanRequestOpenedEvent,
+  PipelinePausedEvent,
+  PipelineRun,
   ProviderSession,
   ProviderSessionEndReason,
   StageAttempt,
+  StageAttemptChangedEvent,
+  WorkItem,
 } from "@loomrail/contracts";
 
 import { WorkflowDomainError } from "./workflow.js";
@@ -124,4 +131,141 @@ export const decideSessionEnded = (context: {
         { endReason: context.endReason },
       );
   }
+};
+
+// Spec §6.5 and §D8/§7 pair a HARD pause with a question to the owner. `decideSessionEnded` above
+// cannot build that question: its signature sees a ProviderSession and a StageAttempt, not the
+// WorkItem, the PipelineRun or a durable id for a HumanRequest. That pairing is decided here, in
+// one place for all three ways an attempt stops making progress -- a pause with no question is a
+// pipeline that stopped without telling its owner anything.
+export type StageAttemptPauseReason =
+  | { type: "NO_PROGRESS" }
+  | {
+      type: "CONTEXT_FLOOR_EXCEEDED";
+      sessionOrdinal: number;
+      requiredBytes: number;
+      budgetBytes: number;
+      budgetTokens: number;
+    }
+  | { type: "PROVIDER_REJECTED_PACK"; sessionOrdinal: number };
+
+export type StageAttemptPauseDecision = {
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  request: HumanRequest;
+  events: (
+    | EventIntent<ContextFloorExceededEvent>
+    | EventIntent<StageAttemptChangedEvent>
+    | EventIntent<PipelinePausedEvent>
+    | EventIntent<HumanRequestOpenedEvent>
+  )[];
+};
+
+type PauseWording = { title: string; context: string; recommendation: string; pauseReason: string };
+
+const pauseWording = (reason: StageAttemptPauseReason): PauseWording => {
+  switch (reason.type) {
+    case "NO_PROGRESS":
+      return {
+        title: "Two provider sessions in a row published no checkpoint",
+        context:
+          "The context pack was reassembled and handed to the provider twice, and neither session recorded any progress. Continuing would keep spending the budget on the same starting point.",
+        recommendation:
+          "Check whether this stage is too large for one attempt, then resume it or cancel the run.",
+        pauseReason: "Two consecutive provider sessions published no checkpoint.",
+      };
+    case "CONTEXT_FLOOR_EXCEEDED":
+      return {
+        title: "The required context does not fit the provider's window",
+        context: `The sections this stage marks required need ${reason.requiredBytes.toString()} bytes, and the pack budget for this provider is ${reason.budgetBytes.toString()}. Trimming a required section would hand the agent an input Loomrail knows is incomplete.`,
+        recommendation:
+          "Split this WorkItem into smaller ones, or run this stage on a provider with a larger context window.",
+        pauseReason: "The required context sections do not fit the pack budget.",
+      };
+    case "PROVIDER_REJECTED_PACK":
+      return {
+        title: "The provider rejected the assembled context pack twice",
+        context:
+          "Loomrail estimated the pack as fitting, the provider disagreed, and the one automatic retry with a smaller pack share was also rejected. Shrinking the share further without knowing why would be guessing.",
+        recommendation:
+          "Check the provider's own limits for this stage before resuming, or run the stage on another provider.",
+        pauseReason: "The provider rejected the assembled context pack after one automatic retry.",
+      };
+  }
+};
+
+export const decideStageAttemptHardPause = (context: {
+  now: string;
+  workItem: WorkItem;
+  run: PipelineRun;
+  // For NO_PROGRESS this is `decideSessionEnded`'s already-decided attempt, which carries the new
+  // unproductive-session count and is already HARD_PAUSED; the pause below is idempotent so the
+  // same function serves the reasons that arrive with an untouched attempt.
+  stageAttempt: StageAttempt;
+  previousStatus: StageAttempt["status"];
+  humanRequestId: string;
+  reason: StageAttemptPauseReason;
+}): StageAttemptPauseDecision => {
+  const wording = pauseWording(context.reason);
+  const stageAttempt: StageAttempt =
+    context.stageAttempt.status === "HARD_PAUSED"
+      ? context.stageAttempt
+      : { ...context.stageAttempt, status: "HARD_PAUSED", version: context.stageAttempt.version + 1 };
+  const run: PipelineRun = {
+    ...context.run,
+    status: "HARD_PAUSED",
+    version: context.run.version + 1,
+    updatedAt: context.now,
+  };
+  const workItem: WorkItem = {
+    ...context.workItem,
+    state: "BLOCKED",
+    currentStage: stageAttempt.stage,
+    version: context.workItem.version + 1,
+    updatedAt: context.now,
+  };
+  const request: HumanRequest = {
+    schemaVersion: 1,
+    id: context.humanRequestId,
+    projectId: workItem.projectId,
+    workItemId: workItem.id,
+    stageAttemptId: stageAttempt.id,
+    // FREE_TEXT with no options: the owner's real answer is an action on the run (resume, cancel,
+    // split the WorkItem), not a choice Loomrail can enumerate. A blocking request keeps the
+    // stalled attempt visible in the owner's inbox instead of leaving a silently paused pipeline.
+    kind: "FREE_TEXT",
+    blocking: true,
+    title: wording.title,
+    context: wording.context,
+    recommendation: wording.recommendation,
+    options: [],
+    allowOther: true,
+    status: "OPEN",
+    version: 1,
+    createdAt: context.now,
+    resolvedAt: null,
+  };
+
+  const events: StageAttemptPauseDecision["events"] = [];
+  if (context.reason.type === "CONTEXT_FLOOR_EXCEEDED") {
+    events.push({
+      type: "CONTEXT_FLOOR_EXCEEDED",
+      data: {
+        run,
+        stageAttempt,
+        sessionOrdinal: context.reason.sessionOrdinal,
+        requiredBytes: context.reason.requiredBytes,
+        budgetBytes: context.reason.budgetBytes,
+        budgetTokens: context.reason.budgetTokens,
+      },
+    });
+  }
+  events.push(
+    { type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt, previousStatus: context.previousStatus } },
+    { type: "PIPELINE_PAUSED", data: { run, stageAttempt, kind: "HARD", reason: wording.pauseReason } },
+    { type: "HUMAN_REQUEST_OPENED", data: { request } },
+  );
+
+  return { workItem, run, stageAttempt, request, events };
 };

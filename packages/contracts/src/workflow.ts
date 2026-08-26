@@ -715,6 +715,25 @@ export const providerSessionEndedEventSchema = eventBaseSchema.extend({
   data: z.object({ session: providerSessionSchema }).strict(),
 });
 
+// Spec §D8 and §6.1 step 3: the required sections did not fit the pack budget, so no session was
+// started at all. The byte figures are on the event rather than only in a log line because "the
+// required core does not fit" is only actionable to an owner who can see by how much -- and because
+// no ContextPackRecipe exists to carry them: the assembly stopped before producing one.
+export const contextFloorExceededEventSchema = eventBaseSchema.extend({
+  type: z.literal("CONTEXT_FLOOR_EXCEEDED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z
+    .object({
+      run: pipelineRunSchema,
+      stageAttempt: stageAttemptSchema,
+      sessionOrdinal: z.number().int().positive(),
+      requiredBytes: z.number().int().nonnegative(),
+      budgetBytes: z.number().int().nonnegative(),
+      budgetTokens: z.number().int().positive(),
+    })
+    .strict(),
+});
+
 const commandBaseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -875,6 +894,52 @@ export const endProviderSessionCommandSchema = commandBaseSchema.extend({
     .strict(),
 });
 
+// Spec §6.2. The caller supplies the occupancy report and the threshold it is judged against;
+// whether this is the first crossing (and therefore whether a handoff is requested at all) is
+// decided from the stored session, not from the caller, so a repeated report is a safe no-op.
+export const requestContextHandoffCommandSchema = commandBaseSchema.extend({
+  type: z.literal("REQUEST_CONTEXT_HANDOFF"),
+  payload: z
+    .object({
+      providerSessionId: opaqueIdSchema,
+      usage: contextWindowUsageSchema,
+      handoffThreshold: budgetThresholdSchema,
+    })
+    .strict(),
+});
+
+// The two ways a session fails to happen at all, both of which spec §D8/§7 resolve the same way:
+// a HARD pause plus a question to the owner. Kept as one command with a discriminated reason
+// rather than two near-identical commands, because everything except the wording of the question
+// and one event is shared.
+export const stageAttemptHardPauseReasonSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("CONTEXT_FLOOR_EXCEEDED"),
+      sessionOrdinal: z.number().int().positive(),
+      requiredBytes: z.number().int().nonnegative(),
+      budgetBytes: z.number().int().nonnegative(),
+      budgetTokens: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("PROVIDER_REJECTED_PACK"),
+      sessionOrdinal: z.number().int().positive(),
+    })
+    .strict(),
+]);
+
+export const hardPauseStageAttemptCommandSchema = commandBaseSchema.extend({
+  type: z.literal("HARD_PAUSE_STAGE_ATTEMPT"),
+  payload: z
+    .object({
+      stageAttemptId: opaqueIdSchema,
+      reason: stageAttemptHardPauseReasonSchema,
+    })
+    .strict(),
+});
+
 export const pipelineStartedResultSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -982,7 +1047,12 @@ export const workflowsReconciledResultSchema = z
     type: z.literal("WORKFLOWS_RECONCILED"),
     replayed: z.boolean(),
     recoveryReports: z.array(recoveryReportSchema),
-    events: z.array(recoveryReportCreatedEventSchema),
+    // Spec §6.4 makes a daemon restart the ordinary end of a ProviderSession, so reconciliation
+    // now closes orphaned sessions as well as orphaned dispatches and reports both kinds of event.
+    interruptedSessions: z.array(providerSessionSchema),
+    events: z.array(
+      z.discriminatedUnion("type", [recoveryReportCreatedEventSchema, providerSessionEndedEventSchema]),
+    ),
   })
   .strict();
 
@@ -1031,6 +1101,11 @@ export const checkpointPublishedResultSchema = z
   })
   .strict();
 
+// Ending a session is never only a session-level write: spec §6.5 makes the unproductive-session
+// counter part of the same transaction, and the second unproductive session in a row also pauses
+// the run and opens a question to the owner. `nextSessionOrdinal` is the caller-facing answer to
+// "does another session follow?" -- null covers both "the stage finished" and "the attempt was
+// hard-paused", which the caller distinguishes by `stageAttempt.status`.
 export const providerSessionEndedResultSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -1038,7 +1113,52 @@ export const providerSessionEndedResultSchema = z
     replayed: z.boolean(),
     workItemId: opaqueIdSchema,
     session: providerSessionSchema,
-    events: z.array(providerSessionEndedEventSchema),
+    stageAttempt: stageAttemptSchema,
+    request: humanRequestSchema.nullable(),
+    nextSessionOrdinal: z.number().int().positive().nullable(),
+    events: z.array(
+      z.discriminatedUnion("type", [
+        providerSessionEndedEventSchema,
+        stageAttemptChangedEventSchema,
+        pipelinePausedEventSchema,
+        humanRequestOpenedEventSchema,
+      ]),
+    ),
+  })
+  .strict();
+
+export const contextHandoffRequestedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("CONTEXT_HANDOFF_REQUESTED"),
+    replayed: z.boolean(),
+    workItemId: opaqueIdSchema,
+    session: providerSessionSchema,
+    // False when the threshold had already been crossed, or the session had already ended: the
+    // caller uses it to decide whether to actually ask the adapter to wind down and to arm the
+    // deadline, so a repeated occupancy report does neither twice.
+    requested: z.boolean(),
+    events: z.array(contextHandoffRequestedEventSchema),
+  })
+  .strict();
+
+export const stageAttemptHardPausedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("STAGE_ATTEMPT_HARD_PAUSED"),
+    replayed: z.boolean(),
+    workItemId: opaqueIdSchema,
+    run: pipelineRunSchema,
+    stageAttempt: stageAttemptSchema,
+    request: humanRequestSchema,
+    events: z.array(
+      z.discriminatedUnion("type", [
+        contextFloorExceededEventSchema,
+        stageAttemptChangedEventSchema,
+        pipelinePausedEventSchema,
+        humanRequestOpenedEventSchema,
+      ]),
+    ),
   })
   .strict();
 
@@ -1161,3 +1281,9 @@ export type ProviderSessionEndedEvent = z.infer<typeof providerSessionEndedEvent
 export type ProviderSessionStartedResult = z.infer<typeof providerSessionStartedResultSchema>;
 export type CheckpointPublishedResult = z.infer<typeof checkpointPublishedResultSchema>;
 export type ProviderSessionEndedResult = z.infer<typeof providerSessionEndedResultSchema>;
+export type ContextFloorExceededEvent = z.infer<typeof contextFloorExceededEventSchema>;
+export type RequestContextHandoffCommand = z.infer<typeof requestContextHandoffCommandSchema>;
+export type HardPauseStageAttemptCommand = z.infer<typeof hardPauseStageAttemptCommandSchema>;
+export type StageAttemptHardPauseReason = z.infer<typeof stageAttemptHardPauseReasonSchema>;
+export type ContextHandoffRequestedResult = z.infer<typeof contextHandoffRequestedResultSchema>;
+export type StageAttemptHardPausedResult = z.infer<typeof stageAttemptHardPausedResultSchema>;

@@ -666,6 +666,17 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.providerSessionEnded"),
         tone: event.data.session.endReason === "COMPLETED" ? "success" : "neutral",
       };
+    case "CONTEXT_FLOOR_EXCEEDED":
+      return {
+        detail: t("event.contextFloorExceededDetail", {
+          ordinal: event.data.sessionOrdinal,
+          requiredBytes: event.data.requiredBytes,
+          budgetBytes: event.data.budgetBytes,
+        }),
+        icon: "pause",
+        label: t("event.contextFloorExceeded"),
+        tone: "warning",
+      };
   }
 };
 
