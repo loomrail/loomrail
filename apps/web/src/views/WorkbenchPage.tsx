@@ -16,6 +16,7 @@ import {
   type ProviderSession,
   type SessionPauseFailureCode,
   type StageAttempt,
+  type StageAttemptStatus,
   type WorkItem,
   type WorkItemChangedField,
   type WorkItemState,
@@ -52,6 +53,7 @@ import {
   type CheckpointViewModel,
   type FilterMessages,
   type FilterNode,
+  type ProviderSessionTimelineAttempt,
   type ProviderSessionViewModel,
   type StatusTone,
   type TimelineEventProps,
@@ -492,6 +494,25 @@ const stageAttemptStatusLabel = (attempt: StageAttempt, t: Translator): string =
   if (attempt.status === "CANCELLED") return t("workflow.stage.CANCELLED");
   if (attempt.status === "SUCCEEDED") return t("workflow.stage.SUCCEEDED");
   return t("workflow.stage.other");
+};
+
+// A total Record over the contract's own union, matching `stateTones` and `pipelineStatusTones`
+// below: a status added to `stageAttemptStatusSchema` without a tone here must fail to compile
+// rather than silently fall through, since the attempt header (D5) is the one place on screen that
+// names which attempt the sessions list belongs to.
+const stageAttemptStatusTones: Record<StageAttemptStatus, StatusTone> = {
+  PENDING: "queued",
+  QUEUED: "queued",
+  RUNNING: "running",
+  WAITING_HUMAN: "waiting",
+  SOFT_PAUSED: "paused",
+  HARD_PAUSED: "waiting",
+  SUCCEEDED: "complete",
+  FAILED: "paused",
+  CANCELLED: "paused",
+  INTERRUPTED: "paused",
+  RECOVERING: "running",
+  STALE: "waiting",
 };
 
 const pipelineStatusLabelKeys: Record<PipelineRun["status"], TranslationKey> = {
@@ -1221,9 +1242,9 @@ const checkpointGroups = (checkpoint: Checkpoint, t: Translator): readonly Check
  * brand-new attempt has not started its first session, and an empty "Sessions" heading would just
  * be noise.
  */
-const AttemptSessionsPanel = ({ stageAttemptId }: { stageAttemptId: string }): React.JSX.Element | null => {
+const AttemptSessionsPanel = ({ attempt }: { attempt: StageAttempt }): React.JSX.Element | null => {
   const { locale, t } = useI18n();
-  const sessionsQuery = useStageAttemptSessions(stageAttemptId);
+  const sessionsQuery = useStageAttemptSessions(attempt.id);
   const capabilitiesQuery = useProviderCapabilities();
   const sessions = sessionsQuery.data?.sessions ?? [];
   const checkpoints = sessionsQuery.data?.checkpoints ?? [];
@@ -1286,8 +1307,15 @@ const AttemptSessionsPanel = ({ stageAttemptId }: { stageAttemptId: string }): R
       };
     });
 
+  const attemptHeader: ProviderSessionTimelineAttempt = {
+    heading: t("workflow.sessions.attemptHeading", { attempt: attempt.attempt }),
+    statusLabel: stageAttemptStatusLabel(attempt, t),
+    tone: stageAttemptStatusTones[attempt.status],
+  };
+
   return (
     <ProviderSessionTimeline
+      attempt={attemptHeader}
       {...(capabilitiesQuery.data?.checkpointOnRequest === false
         ? { note: t("workflow.sessions.noCheckpointOnRequest") }
         : {})}
@@ -1412,7 +1440,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
           </li>
         ))}
       </ol>
-      {currentAttempt ? <AttemptSessionsPanel stageAttemptId={currentAttempt.id} /> : null}
+      {currentAttempt ? <AttemptSessionsPanel attempt={currentAttempt} /> : null}
       {snapshot.acceptancePackage ? (
         <AcceptancePanel
           acceptancePackage={snapshot.acceptancePackage}

@@ -176,7 +176,21 @@ export type ProviderSessionViewModel = {
   tone: StatusTone;
 };
 
+// D5's other half of the nesting fix: a sessions list with no attempt identity reads as belonging
+// to whichever attempt the owner was last looking at, which stops being true the moment a second
+// attempt exists (e.g. a budget-override retry). `heading` and `statusLabel` arrive pre-formatted
+// for the same reason every other string in this file does; `tone` pairs with `statusLabel` through
+// `Status` so the attempt's status is never conveyed by colour alone.
+export type ProviderSessionTimelineAttempt = {
+  heading: string;
+  statusLabel: string;
+  tone: StatusTone;
+};
+
 export type ProviderSessionTimelineProps = {
+  // Identifies the attempt these sessions nest under. Optional: a caller with no attempt to name
+  // (e.g. a story or preview with synthetic sessions) can omit it rather than fabricate one.
+  attempt?: ProviderSessionTimelineAttempt;
   // A short explanatory line shown above the list -- e.g. that this provider cannot wind down on
   // request, so losing a session's tail is expected for it rather than a malfunction (spec §7).
   note?: string;
@@ -185,12 +199,19 @@ export type ProviderSessionTimelineProps = {
 };
 
 export const ProviderSessionTimeline = ({
+  attempt,
   note,
   sessions,
   title,
 }: ProviderSessionTimelineProps): React.JSX.Element => (
   <div className="lr-session-timeline-panel">
     <strong className="lr-session-timeline-panel__title">{title}</strong>
+    {attempt ? (
+      <div className="lr-session-timeline__row">
+        <strong className="lr-session-timeline-panel__title">{attempt.heading}</strong>
+        <Status label={attempt.statusLabel} tone={attempt.tone} />
+      </div>
+    ) : null}
     {note ? <p className="lr-session-timeline-panel__note">{note}</p> : null}
     <ol className="lr-session-timeline">
       {sessions.map((session) => (
