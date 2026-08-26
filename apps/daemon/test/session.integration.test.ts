@@ -3,13 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type {
-  Checkpoint,
-  ContextPackRecipe,
-  ProviderOutcome,
-  ProviderSession,
-  WorkflowDispatch,
-} from "@loomrail/contracts";
+import type { Checkpoint, ContextPackRecipe, ProviderOutcome, ProviderSession } from "@loomrail/contracts";
 import { workflowSnapshotSchema } from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import {
@@ -24,6 +18,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { startDaemon, type RunningDaemon } from "../src/server.js";
 import { runStageAttempt, type RunStageAttemptDeps, type SessionLoopLogger } from "../src/session-loop.js";
+import {
+  pendingDispatchModes,
+  registerFixtureProject,
+  seedQueuedAttempt,
+  seedReadyWorkItem,
+  snapshotOf,
+  type SeededAttempt,
+} from "./state-fixtures.js";
 
 const timestamp = "2026-08-25T18:00:00.000Z";
 
@@ -67,12 +69,6 @@ const mutationHeaders = (daemon: RunningDaemon, session: AuthenticatedSession): 
   origin: daemon.baseUrl,
   "x-loomrail-csrf": session.csrfToken,
 });
-
-type SeededAttempt = {
-  workItemId: string;
-  stageAttemptId: string;
-  dispatch: WorkflowDispatch;
-};
 
 type SessionRows = {
   sessions: ProviderSession[];
@@ -120,86 +116,21 @@ describe("stage attempt session loop", () => {
     return () => new Date(base + (elapsed += 1));
   };
 
-  const registerFixtureProject = (localState: LocalState): void => {
-    localState.execute({
-      schemaVersion: 1,
-      commandId: createCommandId(),
-      correlationId: "correlation-seed-project",
-      actor: { type: "HUMAN", id: "local-owner" },
-      type: "REGISTER_FIXTURE_PROJECT",
-      payload: {
-        id: "project-web",
-        fixtureId: "web-app-a",
-        name: "Web fixture",
-        repositoryPath: join(temporaryDirectory, "project-web"),
-      },
-    });
-  };
-
-  // A WorkItem in READY with no pipeline, and so no dispatch: a daemon can boot on this with its
-  // startup drain finding nothing, which is what lets a test choose when the first drain runs.
-  const seedReadyWorkItem = (
-    localState: LocalState,
-    title = "Carry a stage attempt across provider sessions",
-  ): string => {
-    const created = localState.execute({
-      schemaVersion: 1,
-      commandId: createCommandId(),
-      correlationId: "correlation-seed-item",
-      actor: { type: "HUMAN", id: "local-owner" },
-      type: "CREATE_WORK_ITEM",
-      payload: {
-        projectId: "project-web",
-        parentId: null,
-        type: "TASK",
-        title,
-        description: "Synthetic fixture work for the session loop.",
-        priority: "MEDIUM",
-        risk: "LOW",
-        acceptanceCriteria: ["The attempt survives a context handoff"],
-      },
-    });
-    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected a WorkItem");
-    localState.execute({
-      schemaVersion: 1,
-      commandId: createCommandId(),
-      correlationId: "correlation-seed-ready",
-      actor: { type: "HUMAN", id: "local-owner" },
-      type: "MOVE_WORK_ITEM",
-      payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
-    });
-    return created.workItem.id;
-  };
-
-  const seedQueuedAttempt = (localState: LocalState): SeededAttempt => {
-    registerFixtureProject(localState);
-    const workItemId = seedReadyWorkItem(localState);
-    const started = localState.execute({
-      schemaVersion: 1,
-      commandId: createCommandId(),
-      correlationId: "correlation-seed-pipeline",
-      actor: { type: "HUMAN", id: "local-owner" },
-      type: "START_MOCK_PIPELINE",
-      payload: {
-        workItemId,
-        expectedVersion: 2,
-        template: mockDeliveryTemplate,
-        budget: { maxEstimatedTokens: 100_000, warningThresholds: [0.5, 0.8, 0.95] },
-      },
-    });
-    if (started.type !== "PIPELINE_STARTED") throw new Error("Expected a started pipeline");
-    return {
-      workItemId,
-      stageAttemptId: started.stageAttempt.id,
-      dispatch: started.dispatch,
-    };
-  };
+  // Thin bindings over the shared fixtures in `state-fixtures.ts`: this file's `createCommandId` and
+  // `temporaryDirectory` live in this `describe`'s closure, so every call site just needs the
+  // `LocalState` it's already passing.
+  const registerProject = (localState: LocalState): void =>
+    registerFixtureProject(localState, createCommandId, temporaryDirectory);
+  const readyWorkItem = (localState: LocalState, title?: string): string =>
+    seedReadyWorkItem(localState, createCommandId, title);
+  const queuedAttempt = (localState: LocalState): SeededAttempt =>
+    seedQueuedAttempt(localState, createCommandId, temporaryDirectory);
 
   // The same fixture with its dispatch already marked started, i.e. what `runStageAttempt` expects
   // to be handed. Tests that go through the daemon use the queued form instead and let the daemon's
   // own drain mark it.
   const seedRunningAttempt = (localState: LocalState): SeededAttempt => {
-    const seeded = seedQueuedAttempt(localState);
+    const seeded = queuedAttempt(localState);
     const dispatched = localState.execute({
       schemaVersion: 1,
       commandId: createCommandId(),
@@ -235,22 +166,10 @@ describe("stage attempt session loop", () => {
     return { sessions: result.sessions, recipes: result.recipes, checkpoints: result.checkpoints };
   };
 
-  const pendingDispatchModes = (localState: LocalState): string[] => {
-    const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
-    if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatches");
-    return pending.dispatches.map(({ mode }) => mode);
-  };
-
   const eventTypes = (localState: LocalState): string[] => {
     const events = localState.query({ type: "LIST_EVENTS", limit: 500 });
     if (events.type !== "EVENTS") throw new Error("Expected events");
     return events.events.map(({ type }) => type);
-  };
-
-  const snapshotOf = (localState: LocalState, workItemId: string) => {
-    const result = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
-    if (result.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected a workflow snapshot");
-    return result.snapshot;
   };
 
   const completingOutcome = (): ProviderOutcome => ({
@@ -886,9 +805,9 @@ describe("stage attempt session loop", () => {
   // nothing there loops.
   it("stops the drain pass when the head dispatch is already being run elsewhere", async () => {
     const localState = await open();
-    registerFixtureProject(localState);
-    const held = seedReadyWorkItem(localState, "held-by-a-concurrent-caller");
-    const behind = seedReadyWorkItem(localState, "queued-behind-it");
+    registerProject(localState);
+    const held = readyWorkItem(localState, "held-by-a-concurrent-caller");
+    const behind = readyWorkItem(localState, "queued-behind-it");
     localState.close();
     state = undefined;
 
@@ -984,7 +903,7 @@ describe("stage attempt session loop", () => {
     // where the owner actually walks it. This one drives the whole thing through the product --
     // the daemon's boot drain, its HTTP answer endpoint, and the drain that endpoint runs after.
     const localState = await open();
-    const seeded = seedQueuedAttempt(localState);
+    const seeded = queuedAttempt(localState);
     localState.close();
     state = undefined;
 

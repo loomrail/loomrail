@@ -91,6 +91,13 @@ export type RunStageAttemptDeps = {
   correlationId: string;
   logger: SessionLoopLogger;
   scheduleHandoffDeadline?: ScheduleHandoffDeadline;
+  /**
+   * Called with the live session's id when one opens and with `null` when it closes.
+   *
+   * `stop()` has to reach the running session to abort it (spec D5) and only this loop knows which
+   * one that is. Optional and side-effect free, like `scheduleHandoffDeadline` above it.
+   */
+  onSessionLive?: (providerSessionId: string | null) => void;
 };
 
 const defaultScheduleHandoffDeadline: ScheduleHandoffDeadline = (delayMs, onDeadline) => {
@@ -302,6 +309,7 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
     });
     if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("The ProviderSession did not start");
     const providerSession = started.session;
+    deps.onSessionLive?.(providerSession.id);
 
     // One mutable record rather than four `let`s: the listener callbacks below run while `start()`
     // is still in flight, so these are shared between this function body and those closures.
@@ -414,6 +422,7 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
       deadlineReached,
     ]);
     live.closed = true;
+    deps.onSessionLive?.(null);
     deadline?.cancel();
 
     if (result.type === "FAILED") {
