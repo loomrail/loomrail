@@ -99,7 +99,7 @@ const registerFixtureProject = async (
     body: JSON.stringify({ schemaVersion: 1, commandId: "register-web-app-a", fixtureId: "web-app-a" }),
   });
   if (response.status !== 200) {
-    throw new Error(`Fixture registration failed with status ${response.status}`);
+    throw new Error(`Fixture registration failed with status ${String(response.status)}`);
   }
 };
 
@@ -120,7 +120,7 @@ const createWorkItem = async (
     body: JSON.stringify({ schemaVersion: 1, commandId: `register-${fixtureId}`, fixtureId }),
   });
   if (registration.status !== 200) {
-    throw new Error(`Fixture registration failed with status ${registration.status}`);
+    throw new Error(`Fixture registration failed with status ${String(registration.status)}`);
   }
 
   const response = await fetch(`${daemon.baseUrl}/api/v1/work-items`, {
@@ -265,7 +265,7 @@ describe("daemon event stream", () => {
   // Held a stream dolder than the session that opened it turns the channel into a way to hold
   // authenticated access forever. Proven through `tick()`, not by waiting out the real interval: the
   // difference between "proven" and "runs" is the one line the production timer calls it with.
-  it("closes an open stream once its session has expired", async () => {
+  it("closes an open stream once its session has expired", () => {
     const registry = trackRegistry(createEventStreamRegistry({ logger: silentLogger }));
     const written: string[] = [];
     let authorized = true;
@@ -306,6 +306,6 @@ describe("daemon event stream", () => {
     });
     expect(refused.status).toBe(503);
     await refused.body?.cancel();
-    await Promise.all(held.map((response) => response.body?.cancel()));
+    await Promise.all(held.map((response) => response.body?.cancel() ?? Promise.resolve()));
   });
 });
