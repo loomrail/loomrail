@@ -26,6 +26,17 @@ export const providerCapabilitiesSchema = z
   .refine(
     (capabilities) => !capabilities.checkpointOnRequest || capabilities.eventStream,
     "Winding down on request needs an event stream to deliver the checkpoint on",
+  )
+  // Occupancy has exactly one channel: `onContextWindow` on the session listener (spec §4.3
+  // amended -- occupancy arrives only in the stream, not with the outcome too; no outcome member
+  // carries a ContextWindowUsage). An adapter that cannot stream has no way to satisfy this
+  // capability, so claiming it without `eventStream` is exactly as unsatisfiable as claiming
+  // `checkpointOnRequest` without `eventStream` above. An adapter that cannot report occupancy at
+  // all should leave `contextWindowReporting: false`; Loomrail then estimates and tags the result
+  // `LOOMRAIL_ESTIMATE` (spec §5.2).
+  .refine(
+    (capabilities) => !capabilities.contextWindowReporting || capabilities.eventStream,
+    "Reporting context-window occupancy needs an event stream to deliver it on",
   );
 
 export type ProviderCapabilities = z.infer<typeof providerCapabilitiesSchema>;

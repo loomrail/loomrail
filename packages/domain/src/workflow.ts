@@ -736,6 +736,14 @@ export const decideApplyProviderOutcome = (
     };
   }
 
+  // HANDED_OFF and CONTEXT_EXHAUSTED are session-level results (spec §5.2, §6.3): a session
+  // wound down before the stage itself finished. They belong to the session loop (spec §6),
+  // not to this stage-level decision -- this is the boundary between the two, stated rather
+  // than left to fall through the COMPLETED-shaped code below by accident.
+  if (command.payload.outcome.type !== "COMPLETED") {
+    throw new WorkflowDomainError("WORKFLOW_STAGE_MISMATCH", "A session-level outcome is not a stage result");
+  }
+
   const artifactDrafts = command.payload.outcome.artifacts ?? [];
   const expectedArtifactKind =
     context.stageAttempt.stage === "REVIEW"

@@ -1,4 +1,4 @@
-import { providerOutcomeSchema } from "@loomrail/contracts";
+import { providerOutcomeSchema, type ContextPack } from "@loomrail/contracts";
 import {
   providerCapabilitiesSchema,
   type ProviderAdapter,
@@ -100,46 +100,45 @@ const exhaustInitialImplementationBudget = () =>
 // (spec §5) stopped handing the adapter a raw `StageAttempt`. The old script gated the
 // budget-exhaustion beat on `stageAttempt.attempt === 1`; that field no longer exists on
 // `ProviderInvocation` by design (an adapter that cannot see raw state cannot diverge from
-// what the pack says it was given). Counting distinct IMPLEMENT `stageAttemptId`s this adapter
-// instance has been asked to run is the mechanical equivalent for this fixed, one-flow-at-a-time
-// script: the budget-override path always mints a new StageAttempt, so the first IMPLEMENT
-// StageAttempt still exhausts its budget and every later one still completes. A real adapter
-// deciding this from pack content instead of adapter-local bookkeeping is Task 10's job.
-const createOutcomeFor = () => {
-  const seenImplementAttempts = new Set<string>();
-
-  return (invocation: ProviderInvocation) => {
-    const { stage, stageAttemptId } = invocation.session;
-    if (stage === "DISCOVERY" && invocation.dispatch.mode === "START") {
-      return discoveryQuestion();
-    }
-    if (stage === "IMPLEMENT") {
-      seenImplementAttempts.add(stageAttemptId);
-      if (seenImplementAttempts.size === 1) return exhaustInitialImplementationBudget();
-    }
-    if (stage === "ACCEPTANCE") return requestAcceptance();
-    return complete(invocation);
-  };
+// what the pack says it was given). The daemon's placeholder pack carries an "Attempt: N" line
+// in the same wording context-assembly's real WORKFLOW_POSITION section renders (spec §4.2), so
+// reading it from the pack is the honest replacement, not adapter-local bookkeeping: a `Set`
+// keyed by StageAttempt id counted here would span every work item this adapter instance ever
+// runs and would forget everything on a daemon restart -- exactly the hazard spec §6.5 names for
+// the real unproductive-session counter, which is why that one lives on the StageAttempt and not
+// in daemon memory. Reading the pack instead keeps this script correct across both.
+const attemptFromPack = (pack: ContextPack): number => {
+  const match = /^Attempt: (\d+)$/m.exec(pack.text);
+  return match ? Number(match[1]) : 1;
 };
 
-export const createMockProvider = (): ProviderAdapter => {
-  const outcomeFor = createOutcomeFor();
-  return {
-    capabilities: () =>
-      providerCapabilitiesSchema.parse({
-        provider: "MOCK",
-        start: true,
-        interrupt: true,
-        eventStream: false,
-        usageReporting: true,
-        contextWindowReporting: false,
-        checkpointOnRequest: false,
-        contextWindowTokens: 128_000,
-      }),
-    start: (invocation) => Promise.resolve(outcomeFor(invocation)),
-    // This mock resolves synchronously with a scripted outcome and never streams, so there is
-    // never a session in flight to wind down. A real handoff (Task 10) needs an adapter that is
-    // actually still running when the request arrives.
-    requestHandoff: () => Promise.resolve(),
-  };
+const outcomeFor = (invocation: ProviderInvocation) => {
+  const { stage } = invocation.session;
+  if (stage === "DISCOVERY" && invocation.dispatch.mode === "START") {
+    return discoveryQuestion();
+  }
+  if (stage === "IMPLEMENT" && attemptFromPack(invocation.contextPack) === 1) {
+    return exhaustInitialImplementationBudget();
+  }
+  if (stage === "ACCEPTANCE") return requestAcceptance();
+  return complete(invocation);
 };
+
+export const createMockProvider = (): ProviderAdapter => ({
+  capabilities: () =>
+    providerCapabilitiesSchema.parse({
+      provider: "MOCK",
+      start: true,
+      interrupt: true,
+      eventStream: false,
+      usageReporting: true,
+      contextWindowReporting: false,
+      checkpointOnRequest: false,
+      contextWindowTokens: 128_000,
+    }),
+  start: (invocation) => Promise.resolve(outcomeFor(invocation)),
+  // This mock resolves synchronously with a scripted outcome and never streams, so there is
+  // never a session in flight to wind down. A real handoff (Task 10) needs an adapter that is
+  // actually still running when the request arrives.
+  requestHandoff: () => Promise.resolve(),
+});

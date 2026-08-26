@@ -142,6 +142,56 @@ describe("M5 workflow decisions", () => {
     ).toEqual([0.5, 0.8, 0.95, 1]);
   });
 
+  it("rejects a session-level outcome as a stage result", () => {
+    // HANDED_OFF and CONTEXT_EXHAUSTED (spec \u00a75.2) are session-level: the session loop
+    // (spec \u00a76.3) handles them, not this stage-level decision. Built by breaking exactly
+    // the outcome's `type` off an otherwise-identical, accepted COMPLETED command, so the
+    // rejection can only be attributed to that field.
+    const command: ApplyProviderOutcomeCommand = {
+      schemaVersion: 1,
+      commandId: "apply-completed",
+      correlationId: "correlation-apply-completed",
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "APPLY_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId: dispatch.id,
+        template,
+        outcome: { type: "COMPLETED", summary: "Implementation complete." },
+      },
+    };
+    const context = {
+      now,
+      workItem,
+      run,
+      stageAttempt,
+      dispatch,
+      budgetPolicy,
+      existingUsageRecords: [],
+      usageRecordIds: [],
+    };
+    expect(() => decideApplyProviderOutcome(command, context)).not.toThrow();
+
+    const handedOff: ApplyProviderOutcomeCommand = {
+      ...command,
+      payload: {
+        ...command.payload,
+        outcome: {
+          type: "HANDED_OFF",
+          checkpoint: {
+            summary: "Wired the mock adapter's checkpoint.",
+            completed: [],
+            remaining: [],
+            deadEnds: [],
+            openQuestions: [],
+          },
+        },
+      },
+    };
+    expect(() => decideApplyProviderOutcome(handedOff, context)).toThrow(
+      expect.objectContaining({ code: "WORKFLOW_STAGE_MISMATCH" }),
+    );
+  });
+
   it("requires an immutable budget override before a hard-paused run can continue", () => {
     const hardRun = { ...run, status: "HARD_PAUSED" as const };
     const hardAttempt = { ...stageAttempt, status: "HARD_PAUSED" as const };

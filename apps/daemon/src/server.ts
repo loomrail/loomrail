@@ -263,7 +263,17 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       // decisions in packages/domain/src/session.ts, is Task 11's job (spec §6). Until then this
       // placeholder pack keeps the daemon's one dispatch-per-attempt flow running against the new
       // adapter boundary; it carries no real content and is not persisted as a ContextPackRecipe.
-      const placeholderPackText = `placeholder pack for stage attempt ${started.stageAttempt.id}`;
+      //
+      // The one line an adapter can rely on is the "Attempt: N" line, in the same wording
+      // context-assembly's real WORKFLOW_POSITION section already renders (see
+      // packages/context-assembly/src/render.ts, renderWorkflowPosition). It's read fresh from
+      // persisted state every cycle -- unlike adapter-local bookkeeping, it survives a daemon
+      // restart, and it doesn't bleed between concurrently-running work items, because it's
+      // carried on this invocation's own pack rather than kept in the adapter instance.
+      const placeholderPackText = [
+        `placeholder pack for stage attempt ${started.stageAttempt.id}`,
+        `Attempt: ${String(started.stageAttempt.attempt)}`,
+      ].join("\n");
       const invocation = {
         dispatch,
         session: {

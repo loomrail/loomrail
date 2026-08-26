@@ -57,9 +57,23 @@ describe("provider capabilities", () => {
       providerCapabilitiesSchema.parse({
         ...validCapabilities,
         checkpointOnRequest: false,
+        contextWindowReporting: false,
         eventStream: false,
       }),
     ).toMatchObject({ checkpointOnRequest: false, eventStream: false });
+  });
+
+  it("rejects a capability set that claims contextWindowReporting without eventStream", () => {
+    // Occupancy has exactly one channel: onContextWindow on the session listener (spec §4.3
+    // amended -- occupancy arrives only in the stream, never with the outcome). Isolated from
+    // the checkpointOnRequest pairing above by proving a checkpointOnRequest: false baseline is
+    // valid first, then breaking exactly eventStream off it, so the rejection can only be
+    // attributed to the contextWindowReporting pairing.
+    const validWindowReportingOnly = { ...validCapabilities, checkpointOnRequest: false };
+    expect(() => providerCapabilitiesSchema.parse(validWindowReportingOnly)).not.toThrow();
+    expect(() =>
+      providerCapabilitiesSchema.parse({ ...validWindowReportingOnly, eventStream: false }),
+    ).toThrow();
   });
 
   it("rejects an unknown capability field", () => {

@@ -516,6 +516,23 @@ export const providerOutcomeSchema = z.discriminatedUnion("type", [
       quality: usageQualitySchema,
     })
     .strict(),
+  // Session-level results (spec §5.2, §6.3): the session wound down before the stage finished.
+  // HANDED_OFF always carries the checkpoint it wound down with; CONTEXT_EXHAUSTED may not --
+  // the adapter hit the wall before it could publish one, which is exactly the unproductive-
+  // session case spec §6.5 guards against. Both are handled by the session loop, not by
+  // decideApplyProviderOutcome (see the guard there).
+  z
+    .object({
+      type: z.literal("HANDED_OFF"),
+      checkpoint: checkpointDraftSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("CONTEXT_EXHAUSTED"),
+      checkpoint: checkpointDraftSchema.optional(),
+    })
+    .strict(),
 ]);
 
 const eventBaseSchema = z
