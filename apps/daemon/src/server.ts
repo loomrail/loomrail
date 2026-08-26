@@ -46,6 +46,7 @@ import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
 
+import { createEventStreamRegistry, MAX_OPEN_STREAMS } from "./event-stream.js";
 import { FixtureResolutionError, resolveBundledFixture } from "./fixtures.js";
 import { runStageAttempt } from "./session-loop.js";
 
@@ -246,6 +247,8 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     genReqId: () => randomUUID(),
   });
 
+  const eventStreams = createEventStreamRegistry({ logger: app.log });
+
   /**
    * Connections a client opened without ever sending a request on them.
    *
@@ -264,6 +267,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     unusedConnections.delete(request.socket);
   });
   app.addHook("preClose", (done) => {
+    eventStreams.closeAll();
     for (const socket of unusedConnections) socket.destroy();
     unusedConnections.clear();
     done();
@@ -1037,6 +1041,47 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }
+    });
+
+    app.get("/api/v1/stream", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      const session = requireSession(request, reply, correlationId);
+      if (!session) return;
+      // Checked when it is sent and not pretended to be checked when it is not: a same-origin GET
+      // carries no Origin at all, so `sameSite: "strict"` plus the session is the actual defence --
+      // the same footing every other GET on this daemon already stands on.
+      const { origin } = request.headers;
+      if (origin !== undefined && origin !== allowedOrigin) {
+        return reply
+          .code(403)
+          .send(createError("ORIGIN_REJECTED", "The request origin is not allowed", correlationId));
+      }
+      // Before `hijack()`, because after it there is no reply left to send a status on.
+      if (eventStreams.openCount() >= MAX_OPEN_STREAMS) {
+        return reply
+          .code(503)
+          .send(createError("STREAM_LIMIT_REACHED", "Too many open event streams", correlationId));
+      }
+
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-store",
+        connection: "keep-alive",
+      });
+      // Flushes the headers now, so the client's `open` fires immediately instead of whenever the
+      // first real signal happens to arrive.
+      reply.raw.write(": open\n\n");
+
+      const release = eventStreams.open({
+        response: reply.raw,
+        isAuthorized: () => sessionForRequest(request) !== undefined,
+      });
+      if (!release) {
+        reply.raw.end();
+        return;
+      }
+      request.raw.on("close", release);
     });
 
     if (options.webRoot) {

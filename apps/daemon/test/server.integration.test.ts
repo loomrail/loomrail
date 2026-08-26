@@ -22,15 +22,17 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { startDaemon, type RunningDaemon } from "../src/server.js";
 
-const bootstrapToken = (): string => randomBytes(32).toString("base64url");
+// Exported so `event-stream.integration.test.ts` (and future daemon integration suites) can reuse
+// the same session-bootstrap plumbing rather than pasting a second copy.
+export const bootstrapToken = (): string => randomBytes(32).toString("base64url");
 
-type AuthenticatedSession = {
+export type AuthenticatedSession = {
   cookie: string;
   csrfToken: string;
   setCookie: string;
 };
 
-const authenticate = async (daemon: RunningDaemon, token: string): Promise<AuthenticatedSession> => {
+export const authenticate = async (daemon: RunningDaemon, token: string): Promise<AuthenticatedSession> => {
   const exchange = await fetch(`${daemon.baseUrl}/api/session/exchange`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: daemon.baseUrl },
@@ -43,7 +45,10 @@ const authenticate = async (daemon: RunningDaemon, token: string): Promise<Authe
   return { cookie, csrfToken: session.csrfToken, setCookie };
 };
 
-const mutationHeaders = (daemon: RunningDaemon, session: AuthenticatedSession): Record<string, string> => ({
+export const mutationHeaders = (
+  daemon: RunningDaemon,
+  session: AuthenticatedSession,
+): Record<string, string> => ({
   "content-type": "application/json",
   cookie: session.cookie,
   origin: daemon.baseUrl,
