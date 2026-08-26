@@ -1138,6 +1138,13 @@ test.describe("authenticated walking skeleton", () => {
         .getByRole("textbox", { name: "Other" })
         .fill("Split the WorkItem into two smaller ones and resume.");
       await workflowSection.getByRole("button", { name: "Answer & resume" }).click();
+      // Milestone A1.5: resuming no longer finishes inside this click's HTTP response -- the
+      // worker resumes DISCOVERY, then auto-completes PLAN, then re-hits the same deterministic
+      // IMPLEMENT budget wall in the background, and the channel is what tells this page. Waiting
+      // on the new pause actually landing (a presence assertion) before trusting that the old one
+      // is gone keeps this from passing on the very first poll, against a panel that has not
+      // caught up with the resume yet.
+      await expect(workflowSection.getByText("Budget paused", { exact: true }).first()).toBeVisible();
       await expect(workflowSection.getByText("Paused: no progress", { exact: true })).toHaveCount(0);
     } finally {
       await daemon?.close();
