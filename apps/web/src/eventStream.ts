@@ -1,4 +1,4 @@
-import type { EventSignal } from "@loomrail/contracts";
+import { eventSignalSchema, type EventSignal } from "@loomrail/contracts";
 
 export const COALESCE_WINDOW_MS = 50;
 
@@ -48,5 +48,68 @@ export const createSignalCoalescer = (
       timer = undefined;
       pending.clear();
     },
+  };
+};
+
+export type EventChannelStatus = "connecting" | "live" | "closed";
+
+const EVENT_SOURCE_CLOSED = 2;
+
+/**
+ * The subset of `EventSource` this module relies on.
+ *
+ * `EventSource` has no jsdom implementation, so tests drive this shape with a plain object double
+ * instead of a real browser API -- keeping the milestone's no-new-dependencies rule intact.
+ */
+export type EventSourceLike = {
+  readyState: number;
+  onopen: ((event: unknown) => void) | null;
+  onmessage: ((event: { data: string }) => void) | null;
+  onerror: ((event: unknown) => void) | null;
+  close: () => void;
+};
+
+/**
+ * Wires an `EventSourceLike` to the coalescer and reports connection status.
+ *
+ * Two lines here are load bearing (spec D3/D4). `invalidateAll()` on every `open` -- including every
+ * reconnect, not only the first -- is what makes a dropped signal harmless: the channel carries no
+ * sequence number and never replays, so catching up after any gap is done entirely by refetching.
+ * And parsing each frame inside a `try` means a malformed or non-signal frame is dropped rather than
+ * thrown, which would otherwise leave the channel silently mute after one bad frame.
+ */
+export const connectEventStream = (options: {
+  source: EventSourceLike;
+  invalidateAll: () => void;
+  invalidateScopes: (scopes: readonly (readonly string[])[]) => void;
+  onStatus: (status: EventChannelStatus) => void;
+  windowMs?: number;
+}): (() => void) => {
+  const coalescer = createSignalCoalescer(options.invalidateScopes, options.windowMs);
+
+  options.source.onopen = () => {
+    options.onStatus("live");
+    options.invalidateAll();
+  };
+
+  options.source.onmessage = (message) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(message.data);
+    } catch {
+      return;
+    }
+    const signal = eventSignalSchema.safeParse(parsed);
+    if (!signal.success) return;
+    coalescer.push(signal.data);
+  };
+
+  options.source.onerror = () => {
+    options.onStatus(options.source.readyState === EVENT_SOURCE_CLOSED ? "closed" : "connecting");
+  };
+
+  return () => {
+    coalescer.dispose();
+    options.source.close();
   };
 };

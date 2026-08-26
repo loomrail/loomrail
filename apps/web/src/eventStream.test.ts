@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createSignalCoalescer, scopesForSignal } from "./eventStream";
+import { connectEventStream, createSignalCoalescer, scopesForSignal } from "./eventStream";
 
 const workItemSignal = {
   projectId: "p1",
@@ -71,6 +71,123 @@ describe("createSignalCoalescer", () => {
     coalescer.dispose();
     vi.advanceTimersByTime(50);
     expect(flush).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+});
+
+const fakeSource = () => {
+  const source = {
+    readyState: 0,
+    onopen: null as ((event: unknown) => void) | null,
+    onmessage: null as ((event: { data: string }) => void) | null,
+    onerror: null as ((event: unknown) => void) | null,
+    closed: false,
+    close() {
+      this.closed = true;
+    },
+  };
+  return source;
+};
+
+describe("connectEventStream", () => {
+  it("invalidates everything on open, which is what makes a lost signal harmless", () => {
+    const invalidateAll = vi.fn();
+    const source = fakeSource();
+    connectEventStream({ source, invalidateAll, invalidateScopes: vi.fn(), onStatus: vi.fn() });
+
+    source.onopen?.({});
+
+    expect(invalidateAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates everything again on every reconnect, not only the first connection", () => {
+    const invalidateAll = vi.fn();
+    const source = fakeSource();
+    connectEventStream({ source, invalidateAll, invalidateScopes: vi.fn(), onStatus: vi.fn() });
+
+    source.onopen?.({});
+    source.onerror?.({});
+    source.onopen?.({});
+
+    expect(invalidateAll).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates the signalled scopes once the window closes", () => {
+    vi.useFakeTimers();
+    const invalidateScopes = vi.fn();
+    const source = fakeSource();
+    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes, onStatus: vi.fn(), windowMs: 50 });
+
+    source.onmessage?.({
+      data: JSON.stringify({ projectId: "p1", aggregateType: "WORK_ITEM", aggregateId: "w1" }),
+    });
+    vi.advanceTimersByTime(50);
+
+    expect(invalidateScopes).toHaveBeenCalledWith([
+      ["projects", "p1"],
+      ["work-items", "w1"],
+      ["stage-attempts"],
+    ]);
+    vi.useRealTimers();
+  });
+
+  // A frame that is not JSON, and a frame that is JSON but not a signal, are both provider-adjacent
+  // untrusted input. Either one throwing out of the handler would leave the channel silently mute.
+  it("drops a malformed frame without throwing and keeps working afterwards", () => {
+    vi.useFakeTimers();
+    const invalidateScopes = vi.fn();
+    const source = fakeSource();
+    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes, onStatus: vi.fn(), windowMs: 50 });
+
+    expect(() => source.onmessage?.({ data: "{not json" })).not.toThrow();
+    expect(() => source.onmessage?.({ data: JSON.stringify({ projectId: "p1" }) })).not.toThrow();
+    vi.advanceTimersByTime(50);
+    expect(invalidateScopes).not.toHaveBeenCalled();
+
+    source.onmessage?.({
+      data: JSON.stringify({ projectId: "p1", aggregateType: "WORK_ITEM", aggregateId: "w1" }),
+    });
+    vi.advanceTimersByTime(50);
+    expect(invalidateScopes).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  // Per the HTML spec EventSource reconnects itself on a network error but closes permanently on a
+  // non-200 response. So CLOSED means "the session is gone", and the UI must not keep looking live.
+  it("reports a permanently closed channel apart from a reconnecting one", () => {
+    const onStatus = vi.fn();
+    const source = fakeSource();
+    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes: vi.fn(), onStatus });
+
+    source.readyState = 0; // CONNECTING
+    source.onerror?.({});
+    expect(onStatus).toHaveBeenLastCalledWith("connecting");
+
+    source.readyState = 2; // CLOSED
+    source.onerror?.({});
+    expect(onStatus).toHaveBeenLastCalledWith("closed");
+  });
+
+  it("closes the source and drops pending work when disconnected", () => {
+    vi.useFakeTimers();
+    const invalidateScopes = vi.fn();
+    const source = fakeSource();
+    const disconnect = connectEventStream({
+      source,
+      invalidateAll: vi.fn(),
+      invalidateScopes,
+      onStatus: vi.fn(),
+      windowMs: 50,
+    });
+
+    source.onmessage?.({
+      data: JSON.stringify({ projectId: "p1", aggregateType: "WORK_ITEM", aggregateId: "w1" }),
+    });
+    disconnect();
+    vi.advanceTimersByTime(50);
+
+    expect(source.closed).toBe(true);
+    expect(invalidateScopes).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 });
