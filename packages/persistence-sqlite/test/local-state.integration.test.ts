@@ -17,11 +17,54 @@ import type {
   StartProviderSessionCommand,
   UpdateWorkItemCommand,
 } from "@loomrail/contracts";
+import { contextPackRecipeSectionSchema, maxContextPackRecipeSources } from "@loomrail/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { openLocalState, StateStoreError, type LocalState } from "../src/index.js";
 
 const timestamp = "2026-08-22T18:00:00.000Z";
+
+// Removes the two fields `stageAttemptSchema` gained in A1 from every embedded StageAttempt,
+// wherever one appears in a stored payload -- i.e. turns a payload this branch wrote into the shape
+// an owner's pre-A1 database actually holds.
+const withoutSessionCounters = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(withoutSessionCounters);
+  if (value === null || typeof value !== "object") return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (
+      (key === "stageAttempt" || key === "previousStageAttempt") &&
+      nested !== null &&
+      typeof nested === "object" &&
+      !Array.isArray(nested)
+    ) {
+      const attempt: Record<string, unknown> = { ...(nested as Record<string, unknown>) };
+      delete attempt["unproductiveSessions"];
+      delete attempt["packShareBackoffs"];
+      result[key] = withoutSessionCounters(attempt);
+      continue;
+    }
+    result[key] = withoutSessionCounters(nested);
+  }
+  return result;
+};
+
+// How many embedded StageAttempts anywhere in the stored payloads still lack the counters. Asserted
+// non-zero before the migration runs and zero after it, so the test cannot pass by finding nothing.
+const countLegacyStageAttempts = (raw: DatabaseSync): { events: number; commands: number } => {
+  const count = (table: "events" | "commands", column: "data_json" | "result_json"): number =>
+    (
+      raw
+        .prepare(
+          `SELECT COUNT(*) AS count FROM ${table}, json_tree(${table}.${column}) AS tree
+           WHERE tree.key IN ('stageAttempt', 'previousStageAttempt')
+             AND tree.type = 'object'
+             AND json_type(tree.value, '$.unproductiveSessions') IS NULL`,
+        )
+        .get() as { count: number }
+    ).count;
+  return { events: count("events", "data_json"), commands: count("commands", "result_json") };
+};
 
 const contextPack: StartMockPipelineCommand["payload"]["template"]["stages"][number]["contextPack"] = {
   schemaVersion: 1,
@@ -448,7 +491,7 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);
@@ -462,45 +505,78 @@ describe("SQLite local state", () => {
     localState.execute(registerProject());
     const created = localState.execute(createWorkItem("create-legacy-outcome-item"));
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-legacy-outcome", created.workItem.id, 1, "READY"));
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-legacy-outcome",
+      correlationId: "correlation-start-legacy-outcome",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: mockTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "mark-legacy-outcome-started",
+      correlationId: "correlation-mark-legacy-outcome-started",
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "MARK_WORKFLOW_DISPATCH_STARTED",
+      payload: { dispatchId: started.dispatch.id },
+    });
+    // The pre-rename discriminant, still accepted so that a receipt recorded under it stays
+    // replayable (docs/plans/07-a1-session-handoff-spec.ru.md §5.3).
+    const legacyApply: LegacyApplyMockProviderOutcomeCommand = {
+      schemaVersion: 1,
+      commandId: "legacy-apply-outcome",
+      correlationId: "correlation-legacy-apply-outcome",
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "APPLY_MOCK_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId: started.dispatch.id,
+        template: mockTemplate,
+        outcome: { type: "COMPLETED", summary: "Legacy discovery completed." },
+      },
+    };
+    const applied = localState.execute(legacyApply);
+    if (applied.type !== "MOCK_PROVIDER_OUTCOME_APPLIED") throw new Error("Expected the legacy outcome");
     localState.close();
     state = undefined;
 
-    // The commands table is append-only audit history and is never rewritten (see the provider
-    // rename decision in docs/plans/07-a1-session-handoff-spec.ru.md §5.3): a receipt recorded
-    // under the pre-rename command_type must remain exactly as it was written.
-    const raw = new DatabaseSync(databasePath);
-    raw.exec("DROP TRIGGER commands_are_append_only_update");
-    raw
-      .prepare(
-        `INSERT INTO commands (command_id, command_type, input_hash, result_json, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(
-        "legacy-apply-outcome",
-        "APPLY_MOCK_PROVIDER_OUTCOME",
-        "0".repeat(64),
-        JSON.stringify({ schemaVersion: 1, type: "MOCK_PROVIDER_OUTCOME_APPLIED", replayed: false }),
-        timestamp,
-      );
-    raw.exec(`
-      CREATE TRIGGER commands_are_append_only_update
-      BEFORE UPDATE ON commands
-      BEGIN
-        SELECT RAISE(ABORT, 'commands are append-only');
-      END;
-    `);
-    raw.close();
+    const stored = new DatabaseSync(databasePath);
+    const receipt = stored
+      .prepare("SELECT command_type, result_json FROM commands WHERE command_id = ?")
+      .get("legacy-apply-outcome") as { command_type: string; result_json: string };
+    stored.close();
 
+    // "Readable" is the claim, so it is read: the receipt goes back through `execute`, which parses
+    // it with stateCommandResultSchema before returning it. Asserting only that the row survived
+    // would pass even for a receipt no reader can parse -- which is precisely what a stored payload
+    // missing a newly required field is.
     const reopened = await open();
+    const replayed = reopened.execute(legacyApply);
+    expect(replayed).toMatchObject({
+      type: "MOCK_PROVIDER_OUTCOME_APPLIED",
+      replayed: true,
+      run: { id: applied.run.id },
+      stageAttempt: { id: applied.stageAttempt.id, status: applied.stageAttempt.status },
+    });
     const events = reopened.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id });
     expect(events.type).toBe("EVENTS");
     reopened.close();
     state = undefined;
 
+    // And the audit row itself was neither renamed nor rewritten by the replay.
     const verify = new DatabaseSync(databasePath);
     expect(
-      verify.prepare("SELECT command_type FROM commands WHERE command_id = ?").get("legacy-apply-outcome"),
-    ).toEqual({ command_type: "APPLY_MOCK_PROVIDER_OUTCOME" });
+      verify
+        .prepare("SELECT command_type, result_json FROM commands WHERE command_id = ?")
+        .get("legacy-apply-outcome"),
+    ).toEqual(receipt);
     verify.close();
   });
 
@@ -637,6 +713,242 @@ describe("SQLite local state", () => {
       artifacts: [],
       acceptancePackage: null,
     });
+  });
+
+  // Every other test in this file starts from an empty database, so every payload it stores already
+  // has the post-A1 shape -- which is exactly why nothing caught migration 0006 copying `data_json`
+  // verbatim while `stageAttemptSchema` gained two required fields. This one starts from payloads
+  // that lack them, i.e. from what an owner's pre-A1 database actually holds.
+  it("backfills the session counters into StageAttempt payloads stored before A1", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-pre-a1-counters-item"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-pre-a1-counters", created.workItem.id, 1, "READY"));
+    const acceptanceTemplate: StartMockPipelineCommand["payload"]["template"] = {
+      schemaVersion: 1,
+      id: "pre-a1-counters-v1",
+      version: 1,
+      name: "Pre-A1 counters fixture",
+      stages: [
+        { stage: "REVIEW", ordinal: 0, contextPack },
+        { stage: "QA", ordinal: 1, contextPack },
+        { stage: "ACCEPTANCE", ordinal: 2, contextPack },
+      ],
+    };
+    const startCommand: StartMockPipelineCommand = {
+      schemaVersion: 1,
+      commandId: "start-pre-a1-counters",
+      correlationId: "correlation-start-pre-a1-counters",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: acceptanceTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    };
+    localState.execute(startCommand);
+
+    const applyNext = (outcome: ApplyProviderOutcomeCommand["payload"]["outcome"]): void => {
+      const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
+      const dispatch = pending.dispatches[0];
+      if (!dispatch) throw new Error("Expected a pending dispatch");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `mark-${dispatch.id}`,
+        correlationId: `correlation-mark-${dispatch.id}`,
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: dispatch.id },
+      });
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `apply-${dispatch.id}`,
+        correlationId: `correlation-apply-${dispatch.id}`,
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: { dispatchId: dispatch.id, template: acceptanceTemplate, outcome },
+      });
+    };
+
+    applyNext({
+      type: "COMPLETED",
+      summary: "Review passed.",
+      artifacts: [
+        {
+          kind: "REVIEW_REPORT",
+          title: "Review report",
+          summary: "Review passed.",
+          checks: ["Contract review passed."],
+        },
+      ],
+    });
+    applyNext({
+      type: "COMPLETED",
+      summary: "QA passed.",
+      artifacts: [
+        { kind: "QA_REPORT", title: "QA report", summary: "QA passed.", checks: ["Scenario D passed."] },
+      ],
+    });
+    applyNext({
+      type: "READY_FOR_ACCEPTANCE",
+      releaseNote: "Ready for owner acceptance.",
+      verifyInstructions: ["Run pnpm verify."],
+    });
+
+    const pending = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: created.workItem.id });
+    if (
+      pending.type !== "WORKFLOW_SNAPSHOT" ||
+      !pending.snapshot.run ||
+      !pending.snapshot.acceptancePackage
+    ) {
+      throw new Error("Expected a pending acceptance snapshot");
+    }
+    const acceptanceCommand = {
+      schemaVersion: 1,
+      commandId: "accept-pre-a1-counters",
+      correlationId: "correlation-accept-pre-a1-counters",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "RESOLVE_ACCEPTANCE",
+      payload: {
+        acceptancePackageId: pending.snapshot.acceptancePackage.id,
+        expectedVersion: pending.snapshot.acceptancePackage.version,
+        expectedRunVersion: pending.snapshot.run.version,
+        action: "ACCEPT",
+        reason: "Evidence accepted.",
+      },
+    } as const;
+    localState.execute(acceptanceCommand);
+
+    const before = localState.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id });
+    if (before.type !== "EVENTS") throw new Error("Expected events");
+    const originalEvents = before.events.map((event) => ({ sequence: event.sequence, type: event.type }));
+    const budgetPolicy = pending.snapshot.budgetPolicies[0];
+    const anyAttempt = pending.snapshot.stageAttempts[0];
+    if (!budgetPolicy || !anyAttempt) throw new Error("Expected a budget policy and a stage attempt");
+    localState.close();
+    state = undefined;
+
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("DROP TRIGGER events_are_append_only_update");
+    raw.exec("DROP TRIGGER commands_are_append_only_update");
+    // BUDGET_OVERRIDE_APPROVED is the one event type that embeds two StageAttempts, under two
+    // different keys. The fixture above never triggers a budget override, so it is written here --
+    // in the post-A1 shape, so that the strip below is what makes it legacy, the same as every
+    // other row.
+    raw
+      .prepare(
+        `INSERT INTO events (
+          id, schema_version, type, aggregate_type, aggregate_id, project_id,
+          actor_type, actor_id, occurred_at, correlation_id, data_json
+        ) VALUES ('event-pre-a1-override', 1, 'BUDGET_OVERRIDE_APPROVED', 'WORK_ITEM', ?, ?,
+          'HUMAN', 'local-owner', ?, 'correlation-pre-a1-override', ?)`,
+      )
+      .run(
+        created.workItem.id,
+        created.workItem.projectId,
+        timestamp,
+        JSON.stringify({
+          run: pending.snapshot.run,
+          previousStageAttempt: anyAttempt,
+          stageAttempt: { ...anyAttempt, version: anyAttempt.version + 1 },
+          budgetPolicy,
+        }),
+      );
+
+    // The strip walks the stored JSON in JS rather than mirroring migration 0008's SQL: a test that
+    // reverted the migration with the migration's own statements would only prove the statements
+    // are their own inverse.
+    const stripped = { events: 0, commands: 0 };
+    for (const row of raw.prepare("SELECT sequence, data_json FROM events").all() as {
+      sequence: number;
+      data_json: string;
+    }[]) {
+      const legacy = JSON.stringify(withoutSessionCounters(JSON.parse(row.data_json)));
+      if (legacy === row.data_json) continue;
+      stripped.events += 1;
+      raw.prepare("UPDATE events SET data_json = ? WHERE sequence = ?").run(legacy, row.sequence);
+    }
+    for (const row of raw.prepare("SELECT command_id, result_json FROM commands").all() as {
+      command_id: string;
+      result_json: string;
+    }[]) {
+      const legacy = JSON.stringify(withoutSessionCounters(JSON.parse(row.result_json)));
+      if (legacy === row.result_json) continue;
+      stripped.commands += 1;
+      raw.prepare("UPDATE commands SET result_json = ? WHERE command_id = ?").run(legacy, row.command_id);
+    }
+    // Without this the whole test would still pass if the fixture stopped storing StageAttempts.
+    expect(stripped.events).toBeGreaterThan(0);
+    expect(stripped.commands).toBeGreaterThan(0);
+    const legacyBefore = countLegacyStageAttempts(raw);
+    // Strictly greater: the override event above holds two StageAttempts in one row.
+    expect(legacyBefore.events).toBeGreaterThan(stripped.events);
+    expect(legacyBefore.commands).toBeGreaterThan(0);
+
+    raw.exec(`
+      CREATE TRIGGER events_are_append_only_update
+      BEFORE UPDATE ON events
+      BEGIN
+        SELECT RAISE(ABORT, 'events are append-only');
+      END;
+    `);
+    raw.exec(`
+      CREATE TRIGGER commands_are_append_only_update
+      BEFORE UPDATE ON commands
+      BEGIN
+        SELECT RAISE(ABORT, 'commands are append-only');
+      END;
+    `);
+    raw.prepare("DELETE FROM schema_migrations WHERE version = 8").run();
+    raw.close();
+
+    const migrated = await open();
+    expect(migrated.startup.appliedMigrations).toEqual([8]);
+
+    // The failure this migration exists for: `eventFromRow` runs domainEventSchema.parse over every
+    // stored payload, so a single StageAttempt missing either counter makes the whole timeline
+    // unreadable rather than degrading one row.
+    const after = migrated.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id });
+    if (after.type !== "EVENTS") throw new Error("Expected events");
+    expect(
+      after.events
+        .filter(({ type }) => type !== "BUDGET_OVERRIDE_APPROVED")
+        .map((event) => ({
+          sequence: event.sequence,
+          type: event.type,
+        })),
+    ).toEqual(originalEvents);
+    const override = after.events.find(({ type }) => type === "BUDGET_OVERRIDE_APPROVED");
+    if (override?.type !== "BUDGET_OVERRIDE_APPROVED") throw new Error("Expected the override event");
+    expect(override.data.stageAttempt).toMatchObject({ unproductiveSessions: 0, packShareBackoffs: 0 });
+    expect(override.data.previousStageAttempt).toMatchObject({
+      unproductiveSessions: 0,
+      packShareBackoffs: 0,
+    });
+
+    // The commands pass: a receipt written before A1 is replayed through stateCommandResultSchema,
+    // which requires both counters just as strictly.
+    const replayedStart = migrated.execute(startCommand);
+    expect(replayedStart).toMatchObject({
+      type: "PIPELINE_STARTED",
+      replayed: true,
+      stageAttempt: { unproductiveSessions: 0, packShareBackoffs: 0 },
+    });
+    expect(migrated.execute(acceptanceCommand)).toMatchObject({
+      type: "ACCEPTANCE_RESOLVED",
+      replayed: true,
+      stageAttempt: { unproductiveSessions: 0, packShareBackoffs: 0 },
+    });
+    migrated.close();
+    state = undefined;
+
+    const swept = new DatabaseSync(databasePath);
+    expect(countLegacyStageAttempts(swept)).toEqual({ events: 0, commands: 0 });
+    swept.close();
   });
 
   it("fails closed when an applied migration checksum drifts", async () => {
@@ -1043,31 +1355,84 @@ describe("SQLite local state", () => {
       raw.close();
     });
 
-    it("persists StageAttempt.unproductiveSessions across a restart with a zero default", async () => {
+    // Both counters exist for one reason (spec §6.5, §7): a daemon restart is the ordinary end of a
+    // ProviderSession, so a guard held in daemon memory would be cleared by the very event it has to
+    // survive. Asserting only the DEFAULT 0 would pass even if `updateStageAttempt` never wrote
+    // either field -- so each counter is driven to a non-zero value first, and read back after the
+    // reopen.
+    it("persists both StageAttempt session counters across a restart, not just their zero default", async () => {
       const localState = await open();
       const { workItemId, stageAttemptId } = startWorkflow(
         localState,
-        "start-unproductive-sessions",
-        "create-unproductive-sessions-item",
+        "start-session-counters",
+        "create-session-counters-item",
       );
-      const snapshotBeforeRestart = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
-      expect(
-        snapshotBeforeRestart.type === "WORKFLOW_SNAPSHOT"
-          ? snapshotBeforeRestart.snapshot.stageAttempts.find((attempt) => attempt.id === stageAttemptId)
-              ?.unproductiveSessions
-          : null,
-      ).toBe(0);
+      const counters = (
+        activeState: LocalState,
+      ): { unproductiveSessions: number; packShareBackoffs: number } => {
+        const snapshot = activeState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+        const attempt =
+          snapshot.type === "WORKFLOW_SNAPSHOT"
+            ? snapshot.snapshot.stageAttempts.find((candidate) => candidate.id === stageAttemptId)
+            : undefined;
+        if (!attempt) throw new Error("Expected the StageAttempt in the snapshot");
+        return {
+          unproductiveSessions: attempt.unproductiveSessions,
+          packShareBackoffs: attempt.packShareBackoffs,
+        };
+      };
+      expect(counters(localState)).toEqual({ unproductiveSessions: 0, packShareBackoffs: 0 });
+
+      // One session that ends without ever publishing a checkpoint: §6.5's definition of
+      // unproductive, and the only thing that moves the counter.
+      const session = localState.execute({
+        schemaVersion: 1,
+        commandId: "start-session-counters-session",
+        correlationId: "correlation-start-session-counters-session",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "START_PROVIDER_SESSION",
+        payload: {
+          stageAttemptId,
+          recipe: {
+            schemaVersion: 1,
+            templateId: mockTemplate.id,
+            templateVersion: mockTemplate.version,
+            specSource: "WORKFLOW_TEMPLATE",
+            sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
+            omitted: [],
+            contentHash: `sha256:${"0".repeat(64)}`,
+            estimatedTokens: 10,
+            budgetTokens: 100,
+            estimateQuality: "LOOMRAIL_ESTIMATE",
+          },
+        },
+      });
+      if (session.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "end-session-counters-session",
+        correlationId: "correlation-end-session-counters-session",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "END_PROVIDER_SESSION",
+        payload: { providerSessionId: session.session.id, endReason: "HANDOFF", providerStarted: true },
+      });
+      // §7's one automatic step-down after a provider rejected a pack Loomrail judged as fitting.
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "reduce-session-counters-share",
+        correlationId: "correlation-reduce-session-counters-share",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "REDUCE_CONTEXT_PACK_SHARE",
+        payload: { stageAttemptId },
+      });
+
+      const beforeRestart = counters(localState);
+      expect(beforeRestart).toEqual({ unproductiveSessions: 1, packShareBackoffs: 1 });
       localState.close();
       state = undefined;
 
       const reopened = await open();
-      const snapshot = reopened.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
-      expect(
-        snapshot.type === "WORKFLOW_SNAPSHOT"
-          ? snapshot.snapshot.stageAttempts.find((attempt) => attempt.id === stageAttemptId)
-              ?.unproductiveSessions
-          : null,
-      ).toBe(0);
+      expect(counters(reopened)).toEqual(beforeRestart);
     });
 
     it("migrates a pre-M6 database without losing Events or their sequence numbers", async () => {
@@ -1443,6 +1808,77 @@ describe("SQLite local state", () => {
       expect(second.session.ordinal).toBe(2);
     });
 
+    // Spec §9 asks for this at the package level, and this is the only place the SQL branch behind
+    // `selectOrphanedRunningSessions` is reachable: a session left RUNNING when the process that
+    // ran it is gone. §6.4 makes that the ordinary end of a session, not a failed StageAttempt, so
+    // the dispatch must survive for the session loop to pick the attempt back up.
+    it("ends a ProviderSession left RUNNING at reconciliation without failing its StageAttempt", async () => {
+      const localState = await open();
+      const { workItemId, stageAttemptId } = startWorkflow(
+        localState,
+        "start-orphaned-session",
+        "create-orphaned-session-item",
+      );
+      const queued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (queued.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected the dispatch queue");
+      const dispatch = queued.dispatches[0];
+      if (!dispatch) throw new Error("Expected a pending dispatch");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "mark-orphaned-session-started",
+        correlationId: "correlation-mark-orphaned-session-started",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: dispatch.id },
+      });
+      const started = localState.execute(
+        startProviderSessionCommand("start-orphaned-provider-session", stageAttemptId),
+      );
+      if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+
+      // No END_PROVIDER_SESSION: the row stays RUNNING, which is what a daemon that died mid-session
+      // leaves behind.
+      const reconciled = localState.execute({
+        schemaVersion: 1,
+        commandId: "reconcile-orphaned-session",
+        correlationId: "correlation-reconcile-orphaned-session",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "RECONCILE_WORKFLOWS",
+        payload: {},
+      });
+      if (reconciled.type !== "WORKFLOWS_RECONCILED") throw new Error("Expected reconciliation");
+      expect(reconciled.interruptedSessions).toEqual([
+        expect.objectContaining({
+          id: started.session.id,
+          status: "ENDED",
+          endReason: "INTERRUPTED",
+          endedAt: timestamp,
+        }),
+      ]);
+      expect(reconciled.events.filter(({ type }) => type === "PROVIDER_SESSION_ENDED")).toHaveLength(1);
+      // The attempt was not routed through dispatch-level recovery: no RecoveryReport, the dispatch
+      // is still PENDING, and the attempt is still RUNNING.
+      expect(reconciled.recoveryReports).toEqual([]);
+      const stillQueued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      expect(
+        stillQueued.type === "WORKFLOW_DISPATCHES" ? stillQueued.dispatches.map(({ id }) => id) : [],
+      ).toEqual([dispatch.id]);
+      const snapshot = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+      expect(
+        snapshot.type === "WORKFLOW_SNAPSHOT"
+          ? snapshot.snapshot.stageAttempts.find(({ id }) => id === stageAttemptId)?.status
+          : null,
+      ).toBe("RUNNING");
+
+      localState.close();
+      state = undefined;
+      const raw = new DatabaseSync(databasePath);
+      expect(
+        raw.prepare("SELECT status, end_reason FROM provider_sessions WHERE id = ?").get(started.session.id),
+      ).toEqual({ status: "ENDED", end_reason: "INTERRUPTED" });
+      raw.close();
+    });
+
     it("assembles the context sources snapshot from a published Checkpoint, Evidence, and a Decision", async () => {
       const localState = await open();
       const { workItemId, stageAttemptId, projectId } = startWorkflow(
@@ -1534,6 +1970,59 @@ describe("SQLite local state", () => {
           answer: "Use pdf-lib.",
         },
       ]);
+    });
+
+    // The recipe assembled from these sources is parsed with contextPackRecipeSectionSchema, whose
+    // `sources` array is capped. An uncapped read made that cap a failure mode rather than a bound:
+    // a work item with more decisions than the cap threw out of `runStageAttempt`, and out of
+    // `startDaemon` when the boot drain was the caller. The boundary is asserted with the exported
+    // constant, so raising one number cannot leave the other behind.
+    it("caps the decisions a context pack cites at the recipe's own source limit", async () => {
+      const localState = await open();
+      const { workItemId, stageAttemptId, projectId } = startWorkflow(
+        localState,
+        "start-decision-cap",
+        "create-decision-cap-item",
+      );
+      localState.close();
+      state = undefined;
+
+      const total = maxContextPackRecipeSources + 1;
+      const idOf = (index: number): string => `decision-cap-${index.toString().padStart(4, "0")}`;
+      const raw = new DatabaseSync(databasePath);
+      for (let index = 0; index < total; index += 1) {
+        seedDecision(raw, {
+          humanRequestId: `human-request-cap-${index.toString().padStart(4, "0")}`,
+          decisionId: idOf(index),
+          projectId,
+          workItemId,
+          stageAttemptId,
+        });
+      }
+      raw.close();
+
+      const reopened = await open();
+      const sources = reopened.query({ type: "READ_CONTEXT_SOURCES", stageAttemptId, sessionOrdinal: 1 });
+      if (sources.type !== "CONTEXT_SOURCES") throw new Error("Expected the context sources");
+      const cited = sources.sources.decisions;
+      expect(cited).toHaveLength(maxContextPackRecipeSources);
+      // The oldest decision is the one dropped, and the order the pack renders stays chronological.
+      expect(cited.at(0)?.id).toBe(idOf(1));
+      expect(cited.at(-1)?.id).toBe(idOf(total - 1));
+
+      // What the read returns is exactly what the recipe contract accepts -- the property the cap
+      // exists for, asserted against the schema itself rather than against a copy of its number.
+      expect(() =>
+        contextPackRecipeSectionSchema.parse({
+          id: "DECISIONS",
+          sources: cited.map((decision) => ({
+            kind: "DECISION",
+            id: decision.id,
+            version: decision.version,
+          })),
+          bytes: 0,
+        }),
+      ).not.toThrow();
     });
 
     it("reads context sources even when a recent Event's type is not modeled by domainEventSchema", async () => {

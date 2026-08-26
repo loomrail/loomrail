@@ -15,6 +15,7 @@ import {
   evidenceArtifactSchema,
   humanRequestSchema,
   humanRequestStatusSchema,
+  maxContextPackRecipeSources,
   opaqueIdSchema,
   pipelineRunSchema,
   projectSchema,
@@ -677,6 +678,13 @@ const humanizeEventType = (type: string): string =>
 
 const MAX_ACTIVITY_EVENTS = 20;
 
+// How many records one collection section of a context pack may cite. Taken from
+// @loomrail/contracts rather than restated, because it is the same number that
+// `contextPackRecipeSectionSchema` enforces on the recipe written from these sources: a work item
+// with more decisions than this once produced a recipe the contract rejected, which threw out of
+// the session loop instead of narrowing the pack.
+const MAX_CONTEXT_SOURCE_RECORDS = maxContextPackRecipeSources;
+
 const describeDecisionAnswer = (
   answer: Decision["answer"],
   options: readonly { id: string; label: string }[],
@@ -872,14 +880,28 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectDecisionsForWorkItem = database.prepare(
       "SELECT * FROM decisions WHERE work_item_id = ? ORDER BY created_at, id",
     );
+    // The context-pack variant of the read above. Newest-first with a LIMIT, then reversed by the
+    // caller, exactly as ACTIVITY is read: the cap has to bind on the end that would be dropped, and
+    // the most recent decisions are the ones the next session needs. See MAX_CONTEXT_SOURCE_RECORDS.
+    const selectRecentDecisionsForWorkItem = database.prepare(
+      "SELECT * FROM decisions WHERE work_item_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+    );
     const selectRecentEventsForAggregate = database.prepare(
       "SELECT * FROM events WHERE aggregate_id = ? ORDER BY sequence DESC LIMIT ?",
     );
-    // Scoped to the work item (events carry no stage-attempt column of their own), then narrowed to
-    // this attempt's sessions in JS below -- cheaper than a JSON-extracting SQL predicate and this
-    // package parses event payloads in JS everywhere else (see parseJson).
-    const selectContextHandoffEventsForWorkItem = database.prepare(
-      "SELECT * FROM events WHERE aggregate_id = ? AND type = 'CONTEXT_HANDOFF_REQUESTED' ORDER BY sequence",
+    // Scoped to the work item (events carry no stage-attempt column of their own) and then to the
+    // attempt, whose id the payload carries on the session. The JSON predicate is what makes the
+    // LIMIT meaningful: spec §6.2 emits at most one CONTEXT_HANDOFF_REQUESTED per ProviderSession,
+    // so a limit of "one per session of this attempt" is exact, and the caller full-parses at most
+    // that many payloads. Without it this read grew with the work item's whole handoff history --
+    // every session of every attempt -- for a response that only ever describes one attempt.
+    const selectContextHandoffEventsForAttempt = database.prepare(
+      `SELECT * FROM events
+       WHERE aggregate_id = ?
+         AND type = 'CONTEXT_HANDOFF_REQUESTED'
+         AND json_extract(data_json, '$.session.stageAttemptId') = ?
+       ORDER BY sequence
+       LIMIT ?`,
     );
 
     const assertOpen = (): void => {
@@ -954,6 +976,20 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare("SELECT * FROM evidence_artifacts WHERE pipeline_run_id = ? ORDER BY created_at, id")
         .all(pipelineRunId)
         .map(evidenceArtifactFromRow);
+
+    // The context-pack variant, bounded for the same reason as the decisions read. Today the
+    // UNIQUE (pipeline_run_id, kind) constraint on evidence_artifacts already holds this to two rows
+    // per run, so the LIMIT never binds -- it is here so that the bound belongs to the section that
+    // has to satisfy MAX_CONTEXT_SOURCE_RECORDS rather than to a uniqueness rule that exists for an
+    // unrelated reason and could be widened by a later evidence kind.
+    const readRecentEvidenceArtifacts = (pipelineRunId: string, limit: number): EvidenceArtifact[] =>
+      database
+        .prepare(
+          "SELECT * FROM evidence_artifacts WHERE pipeline_run_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+        )
+        .all(pipelineRunId, limit)
+        .map(evidenceArtifactFromRow)
+        .reverse();
 
     const readAcceptancePackage = (acceptancePackageId: string): AcceptancePackage | null => {
       const value = selectAcceptancePackageById.get(acceptancePackageId);
@@ -1096,7 +1132,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
         const decisions = decisionRowSchema
           .array()
-          .parse(selectDecisionsForWorkItem.all(workItem.id))
+          .parse(selectRecentDecisionsForWorkItem.all(workItem.id, MAX_CONTEXT_SOURCE_RECORDS))
+          .reverse()
           .map(decisionFromRow)
           .map((decision) => {
             const request = readHumanRequest(decision.humanRequestId);
@@ -1124,7 +1161,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 openQuestions: latestCheckpointEntity.openQuestions,
               };
 
-        const evidence = readEvidenceArtifacts(run.id).map((artifact) => ({
+        const evidence = readRecentEvidenceArtifacts(run.id, MAX_CONTEXT_SOURCE_RECORDS).map((artifact) => ({
           id: artifact.id,
           version: 1,
           kind: artifact.kind,
@@ -3074,12 +3111,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             .map(providerSessionFromRow);
           const attempt = readStageAttempt(queryValue.stageAttemptId);
           const handoffUsage: Record<string, ContextWindowUsage> = {};
-          if (attempt) {
-            const sessionIds = new Set(sessions.map((session) => session.id));
-            for (const row of selectContextHandoffEventsForWorkItem.all(attempt.workItemId)) {
+          if (attempt && sessions.length > 0) {
+            for (const row of selectContextHandoffEventsForAttempt.all(
+              attempt.workItemId,
+              queryValue.stageAttemptId,
+              sessions.length,
+            )) {
               const event = eventFromRow(row);
               if (event.type !== "CONTEXT_HANDOFF_REQUESTED") continue;
-              if (!sessionIds.has(event.data.session.id)) continue;
               handoffUsage[event.data.session.id] = event.data.usage;
             }
           }

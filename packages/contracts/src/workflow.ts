@@ -135,10 +135,18 @@ export const contextPackRecipeSourceSchema = z
   })
   .strict();
 
+// The cap on how many source records one section of a recipe may cite. Exported rather than
+// inlined because the persistence layer's collection reads (READ_CONTEXT_SOURCES) have to be
+// bounded by the *same* number: a work item with more decisions than this used to produce a recipe
+// that `contextPackRecipeInputSchema.parse` rejected, which threw out of the session loop -- and out
+// of daemon startup, if the attempt was picked up by the boot drain. A narrower pack is a degraded
+// session; an unparseable recipe is no session at all.
+export const maxContextPackRecipeSources = 200;
+
 export const contextPackRecipeSectionSchema = z
   .object({
     id: contextSectionIdSchema,
-    sources: z.array(contextPackRecipeSourceSchema).max(200),
+    sources: z.array(contextPackRecipeSourceSchema).max(maxContextPackRecipeSources),
     bytes: z.number().int().nonnegative(),
   })
   .strict();
