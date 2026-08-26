@@ -14,6 +14,7 @@ import type {
   EvidenceArtifactRecordedEvent,
   HumanRequest,
   HumanRequestAnswer,
+  HumanRequestDraft,
   HumanRequestResolvedEvent,
   MarkWorkflowDispatchStartedCommand,
   PausePipelineCommand,
@@ -32,9 +33,11 @@ import type {
   StartMockPipelineCommand,
   UsageRecord,
   UsageRecordedEvent,
+  WorkflowStage,
   WorkItem,
   WorkflowDispatch,
 } from "@loomrail/contracts";
+import type { ProviderCapabilities } from "@loomrail/provider-core";
 import { nextWorkflowStage, validateWorkflowTemplate } from "@loomrail/workflow-engine";
 
 import { isSessionPauseFailureCode } from "./session-pause.js";
@@ -257,6 +260,55 @@ const createDispatch = (
   createdAt: now,
   completedAt: null,
 });
+
+export type DispatchStageDecision =
+  { type: "DISPATCH" } | { type: "STAGE_NOT_SERVED"; request: HumanRequestDraft };
+
+/**
+ * Gates a stage against the adapter about to run it (milestone A2).
+ *
+ * Before milestone E1 a live adapter runs its CLI in an empty temporary directory: it has no
+ * filesystem access, so it cannot serve a stage it does not declare in `capabilities().stages`
+ * (see the comment on `stages` in `@loomrail/provider-core`) -- most notably IMPLEMENT, which
+ * needs something to change. Without this gate the dispatcher would hand the stage to the adapter
+ * anyway, the adapter would return prose, and the stage would look done with no work behind it --
+ * a stage that produced nothing but reported success. That is knowable in advance, from data the
+ * adapter already declared, without ever starting a session.
+ *
+ * The refusal has to be visible, not just prevented: a gate that silently declines is a stage that
+ * never runs and nobody notices. So a refusal returns a HumanRequestDraft, the same shape
+ * `decideApplyProviderOutcome`'s NEEDS_HUMAN branch already uses to turn a blocking provider
+ * outcome into an owner-facing question -- the caller completes the pending dispatch through that
+ * same APPLY_PROVIDER_OUTCOME command, which is how the id and timestamps this pure function does
+ * not have get attached and how the request reaches the owner. The request names both the stage
+ * and the provider: "something could not run" is not actionable, "CODEX cannot serve IMPLEMENT" is.
+ */
+export const decideDispatchStage = (context: {
+  stage: WorkflowStage;
+  capabilities: ProviderCapabilities;
+}): DispatchStageDecision => {
+  if (context.capabilities.stages.includes(context.stage)) {
+    return { type: "DISPATCH" };
+  }
+  const declaredStages = context.capabilities.stages.join(", ");
+  return {
+    type: "STAGE_NOT_SERVED",
+    request: {
+      // FREE_TEXT with `allowOther`, no enumerable options: same convention as the session loop's
+      // other pause requests (packages/domain/src/session.ts's `pauseWording`) for a question whose
+      // right answer is out-of-band -- reassign the workflow template or add a capable adapter, not
+      // a choice Loomrail can list.
+      kind: "FREE_TEXT",
+      blocking: true,
+      title: `${context.capabilities.provider} cannot serve ${context.stage}`,
+      context: `The ${context.capabilities.provider} adapter declares only these stages: ${declaredStages}. Dispatching the ${context.stage} stage to it would return prose with no work behind it, so Loomrail refused to start a session.`,
+      recommendation:
+        "Reassign this stage to an adapter that declares it, or change the workflow template so this stage is not routed to this provider.",
+      options: [],
+      allowOther: true,
+    },
+  };
+};
 
 export const decideStartMockPipeline = (
   command: StartMockPipelineCommand,

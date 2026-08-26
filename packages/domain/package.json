@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@loomrail/contracts": "workspace:*",
+    "@loomrail/provider-core": "workspace:*",
     "@loomrail/workflow-engine": "workspace:*"
   }
 }

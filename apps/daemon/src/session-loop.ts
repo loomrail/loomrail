@@ -13,6 +13,7 @@ import {
   type WorkflowDispatch,
   type WorkflowTemplate,
 } from "@loomrail/contracts";
+import { decideDispatchStage } from "@loomrail/domain";
 import type { LocalState } from "@loomrail/persistence-sqlite";
 import {
   ProviderPackTooLargeError,
@@ -216,6 +217,35 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
       deps.logger.info(
         { stageAttemptId, status: attempt.status },
         "The stage attempt is no longer running; the session loop stops",
+      );
+      return;
+    }
+
+    // Task 9 (milestone A2): before E1 a live adapter has no filesystem access, so it cannot serve
+    // a stage it did not declare in `capabilities().stages` -- most notably IMPLEMENT. Checked here,
+    // before a session ever opens: starting one anyway would let the adapter return prose for a
+    // stage it never touched, and the stage would look done with no work behind it. The refusal is
+    // completed through the same APPLY_PROVIDER_OUTCOME command a provider's own NEEDS_HUMAN outcome
+    // uses, so it reaches the owner exactly the way any other blocking question does -- a HumanRequest,
+    // the run and this StageAttempt moved to WAITING_HUMAN, and the pending dispatch completed rather
+    // than left to spin the drain.
+    const dispatchDecision = decideDispatchStage({ stage: attempt.stage, capabilities });
+    if (dispatchDecision.type === "STAGE_NOT_SERVED") {
+      deps.state.execute({
+        schemaVersion: 1,
+        commandId: deps.createCommandId(),
+        correlationId: deps.correlationId,
+        actor,
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: deps.dispatch.id,
+          outcome: { type: "NEEDS_HUMAN", request: dispatchDecision.request },
+          template: deps.template,
+        },
+      });
+      deps.logger.warn(
+        { stageAttemptId, stage: attempt.stage, provider: capabilities.provider },
+        "The adapter does not declare this stage; the dispatch was refused and the owner was asked",
       );
       return;
     }

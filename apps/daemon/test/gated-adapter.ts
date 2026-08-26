@@ -1,4 +1,7 @@
-import type { ProviderAdapter } from "@loomrail/provider-core";
+import type { WorkflowStage } from "@loomrail/contracts";
+import type { ProviderAdapter, ProviderId } from "@loomrail/provider-core";
+
+const ALL_STAGES: readonly WorkflowStage[] = ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"];
 
 // An adapter whose start() does not resolve until the test lets it. Every session-worker test is
 // deterministic because of this: nothing ever waits on a duration, only on a gate the test itself
@@ -12,7 +15,13 @@ export type GatedAdapter = ProviderAdapter & {
   abortedSessions: readonly string[];
 };
 
-export const gatedAdapter = (contextWindowTokens = 200_000): GatedAdapter => {
+// `capabilityOverrides` is here for Task 9's stage-capability gate (server.integration.test.ts):
+// every other caller wants the adapter to declare every stage, so `stages` defaults to `ALL_STAGES`
+// and only the gate test narrows it.
+export const gatedAdapter = (
+  contextWindowTokens = 200_000,
+  capabilityOverrides: { provider?: ProviderId; stages?: readonly WorkflowStage[] } = {},
+): GatedAdapter => {
   let announceStarted: () => void = () => undefined;
   const started = new Promise<void>((resolve) => {
     announceStarted = resolve;
@@ -35,7 +44,7 @@ export const gatedAdapter = (contextWindowTokens = 200_000): GatedAdapter => {
       openGate();
     },
     capabilities: () => ({
-      provider: "MOCK",
+      provider: capabilityOverrides.provider ?? "MOCK",
       start: true,
       interrupt: false,
       eventStream: false,
@@ -43,7 +52,7 @@ export const gatedAdapter = (contextWindowTokens = 200_000): GatedAdapter => {
       contextWindowReporting: false,
       checkpointOnRequest: false,
       contextWindowTokens,
-      stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+      stages: [...(capabilityOverrides.stages ?? ALL_STAGES)],
       costReporting: false,
     }),
     start: async (invocation) => {

@@ -1442,3 +1442,107 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
     // Left gated, same as the test above and for the same reason.
   });
 });
+
+// Task 9 (milestone A2): before E1 a live adapter has no filesystem access and cannot serve
+// IMPLEMENT (packages/domain/src/workflow.ts's `decideDispatchStage`). Without this gate the
+// dispatcher would hand IMPLEMENT to the adapter anyway, the adapter would return prose, and the
+// stage would look done with no work behind it.
+describe("stage capability gate", () => {
+  const temporaryDirectories: string[] = [];
+  let databasePath = "";
+  let token = "";
+
+  beforeEach(async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail stage gate "));
+    temporaryDirectories.push(temporaryDirectory);
+    databasePath = join(temporaryDirectory, "state.sqlite");
+    token = bootstrapToken();
+  });
+
+  afterEach(async () => {
+    await Promise.all(
+      temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+    );
+  });
+
+  it("refuses to dispatch IMPLEMENT to an adapter that does not declare it, and asks the owner", async () => {
+    // DISCOVERY and PLAN are declared and must run to completion through this same adapter; only
+    // IMPLEMENT is missing. Released immediately: nothing in this test wants to hold a session open,
+    // and an ungated adapter would leave a mutated "always DISPATCH" gate hanging on `await gate`
+    // inside `runStageAttempt` forever, turning a defect this test exists to catch into a timeout
+    // instead of the assertion failures below.
+    const adapter = gatedAdapter(200_000, { provider: "CODEX", stages: ["DISCOVERY", "PLAN"] });
+    adapter.release();
+    const daemon = await startDaemon({
+      bootstrapToken: token,
+      stateDatabasePath: databasePath,
+      logger: false,
+      providerAdapter: adapter,
+    });
+    try {
+      const session = await authenticate(daemon, token);
+      const headers = mutationHeaders(daemon, session);
+      await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "register-gate-fixture",
+          fixtureId: "web-app-a",
+        }),
+      });
+      const createResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "create-gate-item",
+          projectId: "project-fixture-web-app-a",
+          type: "TASK",
+          title: "Stage gate under test",
+        }),
+      });
+      const created = stateCommandResultSchema.parse(await createResponse.json());
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      await fetch(`${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/move`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "ready-gate-item",
+          expectedVersion: 1,
+          targetState: "READY",
+        }),
+      });
+      await fetch(`${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/pipeline/start`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ schemaVersion: 1, commandId: "start-gate-item", expectedVersion: 2 }),
+      });
+      await daemon.whenIdle();
+
+      const snapshot = await fetchWorkflowSnapshot(daemon, session.cookie, created.workItem.id);
+      expect(snapshot.run?.status).toBe("WAITING_HUMAN");
+      expect(snapshot.stageAttempts.map(({ stage, status }) => ({ stage, status }))).toEqual([
+        { stage: "DISCOVERY", status: "SUCCEEDED" },
+        { stage: "PLAN", status: "SUCCEEDED" },
+        { stage: "IMPLEMENT", status: "WAITING_HUMAN" },
+      ]);
+      // Proves the adapter was never asked to run the stage it does not declare -- not merely that
+      // the daemon recovered after trying. Under the mutation that always dispatches, this call
+      // count climbs past 2 (IMPLEMENT, and whatever the mock-shaped COMPLETED outcome lets run
+      // after it), which is what actually catches the defect; the stageAttempts assertion above
+      // would already have failed by then too.
+      expect(adapter.startCallCount).toBe(2);
+      expect(snapshot.humanRequests).toHaveLength(1);
+      const request = snapshot.humanRequests[0];
+      expect(request).toMatchObject({ status: "OPEN", kind: "FREE_TEXT", blocking: true });
+      const wording = `${request?.title ?? ""} ${request?.context ?? ""}`;
+      expect(wording).toContain("IMPLEMENT");
+      expect(wording).toContain("CODEX");
+    } finally {
+      await daemon.whenIdle();
+      await daemon.close();
+    }
+  });
+});
