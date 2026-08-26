@@ -67,7 +67,7 @@ React 19 + TanStack Query 5, встроенный в браузер `EventSource
 | Файл                                                  | Ответственность                                               |
 | ----------------------------------------------------- | ------------------------------------------------------------- |
 | `packages/contracts/src/event-stream.ts`              | схема кадра `EventSignal` — единственный контракт канала      |
-| `packages/contracts/test/event-stream.unit.test.ts`         | негативные тесты схемы                                        |
+| `packages/contracts/test/event-stream.unit.test.ts`   | негативные тесты схемы                                        |
 | `apps/daemon/src/event-stream.ts`                     | реестр открытых потоков, запись кадра, закрытие, heartbeat    |
 | `apps/daemon/src/session-worker.ts`                   | цикл очереди, признак простоя, остановка                      |
 | `apps/daemon/test/event-stream.integration.test.ts`   | маршрут, аутентификация, доставка, закрытие, истечение сессии |
