@@ -49,7 +49,9 @@ For each command:
 8. commit;
 9. publish committed Event to realtime subscribers.
 
-WebSocket publication failure does not roll back state; reconnect replays from `events.sequence`.
+Publication failure does not roll back state. The channel carries an invalidation signal, not event
+data: on connect and on every reconnect the client invalidates everything, which catches up on any work
+done while disconnected; there is no replay from `events.sequence`, and none is required (A1.5).
 
 ## Spike result
 

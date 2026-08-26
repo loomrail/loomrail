@@ -218,7 +218,7 @@ The accepted baseline remains:
 - TanStack Router 1.x for typed routes, route params and route-level loading boundaries;
 - TanStack Query 5.x for daemon-owned server state, caching, mutation lifecycle and invalidation;
 - Tailwind CSS 4.3 as the composition layer over committed semantic CSS tokens;
-- Zod 4.x for runtime validation of HTTP, WebSocket and persisted UI boundaries;
+- Zod 4.x for runtime validation of HTTP, SSE and persisted UI boundaries;
 - headless Radix only behind Loomrail wrappers where native HTML is insufficient;
 - local React state for ephemeral view state.
 
@@ -236,11 +236,12 @@ requirement and must include keyboard and non-drag alternatives.
 1. Route loader establishes the minimum query dependencies.
 2. TanStack Query reads canonical state from the daemon HTTP API.
 3. Commands mutate through typed daemon endpoints with idempotency and expected version.
-4. WebSocket delivers only committed events.
-5. An event patches a safe normalized record or invalidates the smallest affected query.
-6. Reconnect resumes from the last event cursor and then reconciles with HTTP.
+4. SSE delivers only committed events; the frame carries three opaque identifiers and no content.
+5. A signal invalidates the smallest matching query scope; nothing patches a normalized record.
+6. Connecting and every reconnect invalidate everything, catching up on any work missed while disconnected;
+   there is no event cursor and no replay.
 
-WebSocket payloads never become an independent UI store, and provider-native events never bypass Loomrail's domain
+SSE payloads never become an independent UI store, and provider-native events never bypass Loomrail's domain
 contracts.
 
 ## 7. Review and acceptance gate

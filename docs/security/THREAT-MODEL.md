@@ -65,27 +65,27 @@ data. A Git worktree is collision isolation, not a security sandbox.
 
 ## 6. Phase 0 threats and controls
 
-| ID  | Threat                                                    | Risk     | Required controls                                                                                                            | Verification / gate                                         |
-| --- | --------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| T01 | Host binds to LAN/all interfaces                          | Critical | explicit loopback bind and startup assertion                                                                                 | M1/M2 integration asserts the listener address              |
-| T02 | Malicious site sends localhost commands                   | Critical | one-time bootstrap, HttpOnly SameSite session, exact Origin, CSRF header, no wildcard CORS                                   | M1/M2 foreign-Origin, session and CSRF integration tests    |
-| T03 | Cross-site WebSocket hijacking                            | High     | session + exact Origin on upgrade                                                                                            | WS gate: anonymous and untrusted upgrade tests before ship  |
-| T04 | Bootstrap token leaks in URL/log/referrer                 | High     | URL fragment, one-minute TTL, hash storage, atomic consume, log redaction                                                    | M1/M2 replay, request-URL, fragment, referrer and log tests |
-| T05 | Stored XSS through WorkItem/artifact                      | High     | output escaping, no raw HTML Markdown, CSP, size limits                                                                      | M3 persisted-text browser test and CSP                      |
-| T06 | Path traversal in fixture project                         | High     | canonical path containment and no symlink escape                                                                             | M2 HTTP traversal plus directory/manifest symlink tests     |
-| T07 | Duplicate command/dispatch                                | High     | command ID idempotency, transaction + unique constraints                                                                     | M2 concurrent retry and command-reuse tests                 |
-| T08 | False Done/approval tampering                             | High     | state-machine gate, append-only Event/Decision/evidence, optimistic version                                                  | M2 transition tests; M6 Scenario D and acceptance replay    |
-| T09 | SQLite corruption/migration failure                       | High     | WAL, short transactions, backup before migration, fail closed                                                                | M2 backup/checksum/reopen tests; full restore drill in M7   |
-| T10 | Sensitive values in logs/errors                           | High     | structured allowlisted fields and pre-persistence redaction                                                                  | M2 bootstrap/session canary redaction test                  |
-| T11 | Event/resource exhaustion                                 | Medium   | payload limits, pagination, queue bounds, WS slow-consumer policy                                                            | M2 body/query bounds; WS flood/slow-consumer gate           |
-| T12 | Dependency/supply-chain compromise                        | High     | lockfile, trusted registry, minimum release age, audit, reviewed updates                                                     | pinned CI install, production audit and reviewed updates    |
-| T13 | Private data committed publicly                           | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                                                          | automated public-tree scan; full history scan in M7         |
-| T14 | Theme/UI hides critical state                             | Medium   | text/icon semantics, contrast, no color-only gates                                                                           | M1–M3 light/dark, keyboard and state browser checks         |
-| T15 | Checkpoint steers the next provider session across a swap | High     | schema-validated checkpoint, explicit untrusted-data delimiters in the pack, full text visible to owner (see A1 delta below) | see A1 delta below                                          |
+| ID  | Threat                                                    | Risk     | Required controls                                                                                                                                                                      | Verification / gate                                         |
+| --- | --------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| T01 | Host binds to LAN/all interfaces                          | Critical | explicit loopback bind and startup assertion                                                                                                                                           | M1/M2 integration asserts the listener address              |
+| T02 | Malicious site sends localhost commands                   | Critical | one-time bootstrap, HttpOnly SameSite session, exact Origin, CSRF header, no wildcard CORS                                                                                             | M1/M2 foreign-Origin, session and CSRF integration tests    |
+| T03 | Unauthorized or persistent access to the event stream     | High     | `requireSession` on the SSE route, same as every other GET; `Origin` compared when sent, `SameSite=Strict` otherwise; heartbeat closes the stream on session expiry; open-stream limit | see A1.5 event-channel delta below                          |
+| T04 | Bootstrap token leaks in URL/log/referrer                 | High     | URL fragment, one-minute TTL, hash storage, atomic consume, log redaction                                                                                                              | M1/M2 replay, request-URL, fragment, referrer and log tests |
+| T05 | Stored XSS through WorkItem/artifact                      | High     | output escaping, no raw HTML Markdown, CSP, size limits                                                                                                                                | M3 persisted-text browser test and CSP                      |
+| T06 | Path traversal in fixture project                         | High     | canonical path containment and no symlink escape                                                                                                                                       | M2 HTTP traversal plus directory/manifest symlink tests     |
+| T07 | Duplicate command/dispatch                                | High     | command ID idempotency, transaction + unique constraints                                                                                                                               | M2 concurrent retry and command-reuse tests                 |
+| T08 | False Done/approval tampering                             | High     | state-machine gate, append-only Event/Decision/evidence, optimistic version                                                                                                            | M2 transition tests; M6 Scenario D and acceptance replay    |
+| T09 | SQLite corruption/migration failure                       | High     | WAL, short transactions, backup before migration, fail closed                                                                                                                          | M2 backup/checksum/reopen tests; full restore drill in M7   |
+| T10 | Sensitive values in logs/errors                           | High     | structured allowlisted fields and pre-persistence redaction                                                                                                                            | M2 bootstrap/session canary redaction test                  |
+| T11 | Event/resource exhaustion                                 | Medium   | payload limits, pagination, queue bounds, WS slow-consumer policy                                                                                                                      | M2 body/query bounds; WS flood/slow-consumer gate           |
+| T12 | Dependency/supply-chain compromise                        | High     | lockfile, trusted registry, minimum release age, audit, reviewed updates                                                                                                               | pinned CI install, production audit and reviewed updates    |
+| T13 | Private data committed publicly                           | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                                                                                                                    | automated public-tree scan; full history scan in M7         |
+| T14 | Theme/UI hides critical state                             | Medium   | text/icon semantics, contrast, no color-only gates                                                                                                                                     | M1–M3 light/dark, keyboard and state browser checks         |
+| T15 | Checkpoint steers the next provider session across a swap | High     | schema-validated checkpoint, explicit untrusted-data delimiters in the pack, full text visible to owner (see A1 delta below)                                                           | see A1 delta below                                          |
 
-`M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present;
-WebSocket remains a separate Phase 0 capability and T03 stays open until its own implementation and security tests
-land.
+`M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
+event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
+the delta below.
 
 ### A1 session-handoff delta (T15)
 
@@ -124,6 +124,39 @@ the delimiter tokens themselves. A provider could emit the literal text `END UNT
 own checkpoint fields, followed by fabricated content shaped like instructions, attempting a delimiter-collision
 escape out of the untrusted block. This is a known property of textual delimiter framing in general and is not
 eliminated here; the owner-visible full-text mitigation above is the backstop for it, not a substitute.
+
+### A1.5 event-channel delta (T03)
+
+A1.5 (`docs/plans/09-background-execution-and-event-stream-spec.ru.md`) adds exactly one new authenticated
+surface: `GET /api/v1/stream`, an SSE connection that stays open (`apps/daemon/src/server.ts`). Its five
+mitigations, verified in code:
+
+- no session, no stream: `requireSession` gates the route exactly like every other GET, verified by
+  `apps/daemon/test/event-stream.integration.test.ts`'s "refuses a stream to a caller without a session";
+- a foreign page cannot open it: `SameSite=Strict` on the session cookie is the real defense, since a
+  same-origin `EventSource` request carries no `Origin` header at all; `Origin` is compared when it is sent,
+  verified by "refuses a stream when an Origin is sent and does not match";
+- a held stream cannot outlive its session: a 15-second heartbeat (`HEARTBEAT_INTERVAL_MS`,
+  `apps/daemon/src/event-stream.ts`) rechecks the session on every tick and drops the stream once it has
+  expired, verified by "closes an open stream once its session has expired";
+- a local process cannot exhaust file descriptors through it: open streams are capped at `MAX_OPEN_STREAMS`
+  (8), enforced at both the registry and the HTTP layer, verified by "refuses to open more streams than the
+  limit and leaves the open ones alone" and "answers a stream request over the limit with a status rather
+  than an opened stream";
+- the channel carries no content: `eventSignalSchema` (`packages/contracts/src/event-stream.ts`) is a
+  `.strict()` object of exactly three opaque identifiers — `projectId`, `aggregateType`, `aggregateId` — so a
+  field cannot be added to the frame by accident, verified at the byte level by "carries no work item text on
+  the wire" and at the schema level by `packages/contracts/test/event-stream.unit.test.ts`'s "rejects any
+  field beyond the three, so content cannot be added by accident".
+
+Publication does not add a new way for state and channel to diverge: `apps/daemon/test/broadcasting-state.integration.test.ts`
+verifies that a rolled-back command publishes nothing ("publishes nothing when the command was rolled back")
+and that a publish failure still leaves the command applied ("keeps the command applied when publication
+throws"), so ADR-0002's "publication failure does not roll back state" holds for the shipped channel.
+
+**Does not expand T15.** The channel does not widen the untrusted-checkpoint threat above: not because the
+code is careful with text, but because there is no text in the frame at all, by schema. The mitigation and the
+test are the same one cited for content leakage above — "carries no work item text on the wire".
 
 ## 7. Future execution threats
 

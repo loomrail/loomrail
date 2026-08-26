@@ -38,7 +38,11 @@ Bootstrap tokens expire within one minute and cannot be replayed.
   configurations may reject on numeric loopback;
 - every non-idempotent request requires exact Origin, JSON content type and a session-bound CSRF header;
 - CORS is disabled for arbitrary origins;
-- WebSocket upgrade validates Origin and the same session;
+- the SSE event stream requires the same session as any other GET; a same-origin `EventSource` request
+  carries no `Origin` header at all, so the actual cross-site defense here is `SameSite=Strict` on the
+  session cookie, the same footing every other GET already stands on, and `Origin` is compared only when
+  the browser does send it;
+- an open event stream is closed once its session expires, not merely refused a new connection;
 - session logout/revocation is durable;
 - daemon restart preserves valid sessions but never preserves unused plaintext bootstrap tokens.
 
@@ -58,7 +62,7 @@ Bootstrap tokens expire within one minute and cannot be replayed.
 - one-command browser opening remains simple;
 - token does not enter normal request URLs or Git/config;
 - hostile websites cannot use ambient localhost access as Loomrail authority;
-- WebSocket and HTTP share one session model.
+- the SSE event stream and HTTP mutations share one session model.
 
 ### Costs and risks
 
@@ -72,6 +76,7 @@ Bootstrap tokens expire within one minute and cannot be replayed.
 - external Host/Origin rejected;
 - missing/expired/replayed bootstrap token rejected;
 - cookie alone cannot perform mutation without CSRF header;
-- WebSocket rejects untrusted Origin and anonymous session;
+- the event stream rejects an anonymous session and, when an Origin header is sent, a mismatched one;
+- an open event stream is closed once its session expires;
 - token/cookie absent from logs and browser-visible URL after exchange;
 - logout and expiry prevent reconnect.
