@@ -198,7 +198,11 @@ const runSession = async (
       listener.onContextWindow({
         usedTokens,
         windowTokens: options.contextWindowTokens,
-        quality: "PROVIDER_ESTIMATE",
+        // ACTUAL, not PROVIDER_ESTIMATE: `usedTokens` is an exact deterministic formula
+        // (min(tokensPerTurn * turn, contextWindowTokens)) that defines its own ground truth --
+        // nothing here is being approximated, so a label borrowed from a real adapter's
+        // imprecision would misdescribe what this double actually reports.
+        quality: "ACTUAL",
       });
 
       if (turn % options.checkpointEvery === 0) {

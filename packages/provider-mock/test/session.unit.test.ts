@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { checkpointDraftSchema, type CheckpointDraft, type ContextWindowUsage } from "@loomrail/contracts";
-import type { ProviderInvocation } from "@loomrail/provider-core";
+import { providerCapabilitiesSchema, type ProviderInvocation } from "@loomrail/provider-core";
 import { describe, expect, it } from "vitest";
 
 import { createMockProvider } from "../src/index.js";
@@ -58,6 +58,9 @@ describe("mock provider session behaviour", () => {
       expect(current).toBeGreaterThan(previous);
       return current;
     });
+    // The mock's occupancy formula is exact and deterministic, not an approximation of
+    // something it cannot fully see -- ACTUAL is the honest label, not PROVIDER_ESTIMATE.
+    expect(sink.usages.every(({ quality }) => quality === "ACTUAL")).toBe(true);
   });
 
   it("publishes a checkpoint on the configured cadence", async () => {
@@ -119,5 +122,37 @@ describe("mock provider session behaviour", () => {
     });
     expect(sink.usages).toHaveLength(0);
     expect(sink.checkpoints).toHaveLength(0);
+  });
+
+  it("declares legacy capabilities on a default-constructed provider", () => {
+    // The default instance's capability shape is otherwise only exercised transitively through
+    // daemon integration tests -- asserted here directly, in the package that owns it, so it
+    // cannot drift while the M6 flow (which assumes eventStream: false) depends on it. Parsed
+    // through the schema, not just compared field by field, so the two capability refines
+    // (checkpointOnRequest/contextWindowReporting each imply eventStream) are actually exercised.
+    const capabilities = providerCapabilitiesSchema.parse(createMockProvider().capabilities());
+    expect(capabilities).toMatchObject({
+      eventStream: false,
+      contextWindowReporting: false,
+      checkpointOnRequest: false,
+      contextWindowTokens: 128_000,
+    });
+  });
+
+  it("declares streaming capabilities when session behaviour is configured", () => {
+    // This is the one judgment call whose correctness a downstream task (Task 11) depends on:
+    // a mis-wired boolean here would throw the first time Task 11 calls .capabilities() on a
+    // configured mock, since providerCapabilitiesSchema's refines reject
+    // checkpointOnRequest/contextWindowReporting without eventStream. Parsed through the schema
+    // for the same reason as the default case above.
+    const capabilities = providerCapabilitiesSchema.parse(
+      createMockProvider({ contextWindowTokens: 64_000 }).capabilities(),
+    );
+    expect(capabilities).toMatchObject({
+      eventStream: true,
+      contextWindowReporting: true,
+      checkpointOnRequest: true,
+      contextWindowTokens: 64_000,
+    });
   });
 });
