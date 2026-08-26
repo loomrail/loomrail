@@ -914,6 +914,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
            context_usage_reported_at = ?
        WHERE id = ?`,
     );
+    // Unlike the peak-occupancy write above, `pid` IS part of providerSessionSchema -- but still no
+    // `version` guard and no bump. It is written at most once, from null to a real pid, and every
+    // reader that matters (RECONCILE_WORKFLOWS, END_PROVIDER_SESSION) re-reads the row fresh
+    // immediately before its own version-guarded update rather than holding a copy across time, so
+    // there is no stale-version window for a pid write to invalidate.
+    const recordProviderSessionProcessPid = database.prepare(
+      `UPDATE provider_sessions SET process_pid = ? WHERE id = ?`,
+    );
     const insertContextPackRecipe = database.prepare(
       `INSERT INTO context_pack_recipes (
         id, schema_version, provider_session_id, template_id, template_version, spec_source,
@@ -2571,6 +2579,42 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           session,
           recipe,
           events: [event],
+        });
+      }
+
+      // Spec §8 follow-up: the durable side of `ProviderSessionListener.onProcessStarted`
+      // (@loomrail/provider-core) -- a live adapter's own report of the pid it just spawned,
+      // arriving well after START_PROVIDER_SESSION already created this session. No event: a pid is
+      // current state for reconciliation to act on, not something the audit log or the owner needs
+      // to see (see providerSessionProcessRecordedResultSchema's comment in @loomrail/contracts).
+      if (command.type === "RECORD_PROVIDER_SESSION_PROCESS") {
+        const sessionRow = selectProviderSessionById.get(command.payload.providerSessionId);
+        if (sessionRow === undefined) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The ProviderSession does not exist");
+        }
+        const current = providerSessionFromRow(sessionRow);
+        if (current.status !== "RUNNING") {
+          throw new StateStoreError(
+            "PROVIDER_SESSION_NOT_RUNNING",
+            "A process cannot be recorded for a ProviderSession that has already ended",
+          );
+        }
+        const stageAttempt = readStageAttempt(current.stageAttemptId);
+        if (!stageAttempt) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_NOT_FOUND",
+            "The StageAttempt backing this ProviderSession is missing",
+          );
+        }
+        recordProviderSessionProcessPid.run(command.payload.pid, current.id);
+        const session = providerSessionSchema.parse({ ...current, pid: command.payload.pid });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROVIDER_SESSION_PROCESS_RECORDED",
+          replayed: false,
+          workItemId: stageAttempt.workItemId,
+          session,
+          events: [],
         });
       }
 

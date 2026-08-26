@@ -3,6 +3,7 @@ import {
   checkpointDraftSchema,
   contextPackRecipeInputSchema,
   contextWindowUsageSchema,
+  providerSessionProcessPidSchema,
   providerUsageSchema,
   type CheckpointDraft,
   type ContextPackSpec,
@@ -340,13 +341,10 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
           // well the provider can measure itself.
           estimateQuality: "LOOMRAIL_ESTIMATE",
         }),
-        // Task 10 / spec §8: `pid` is what lets a future reconciliation find and kill this
-        // session's process if the daemon dies without doing so itself. It is left unrecorded
-        // here rather than guessed: `ProviderAdapter.start()` below spawns the child deep inside
-        // its own implementation and only returns once the whole session has ended, so there is
-        // no channel back to this loop for the pid while the process is still running. Recording
-        // one honestly requires the adapter interface itself to grow a way to report it early,
-        // which is not something this task changes.
+        // Always null here, never guessed: `ProviderAdapter.start()` below has not even been
+        // called yet at this point, and it is `start()` that spawns the child, deep inside its own
+        // implementation. The real pid, if any, arrives later on `listener.onProcessStarted` and is
+        // recorded through its own RECORD_PROVIDER_SESSION_PROCESS command below, once it is known.
         pid: null,
       },
     });
@@ -517,6 +515,37 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
             quality: usage.data.quality,
           },
           "The provider reported usage",
+        );
+      },
+      // Spec §8 follow-up: the durable half of `ProviderSessionListener.onProcessStarted`
+      // (@loomrail/provider-core) -- a live adapter calls this at most once, right after its
+      // process runner returns a pid, and MOCK (and any adapter that spawns nothing) never calls
+      // it at all, which is exactly what leaves the session's `pid` null. Written through its own
+      // command, like every other durable report in this loop, rather than as a direct write --
+      // the commandId is keyed on the session alone (not a value like `onContextWindow`'s percent)
+      // because a pid is reported at most once per session, so there is nothing to distinguish
+      // repeat reports by.
+      onProcessStarted: (pid) => {
+        if (live.closed) return;
+        const validated = providerSessionProcessPidSchema.safeParse(pid);
+        if (!validated.success) {
+          deps.logger.warn(
+            { providerSessionId: providerSession.id },
+            "The adapter reported a process id that does not satisfy the contract",
+          );
+          return;
+        }
+        deps.state.execute({
+          schemaVersion: 1,
+          commandId: `process-${providerSession.id}`,
+          correlationId: deps.correlationId,
+          actor,
+          type: "RECORD_PROVIDER_SESSION_PROCESS",
+          payload: { providerSessionId: providerSession.id, pid: validated.data },
+        });
+        deps.logger.info(
+          { providerSessionId: providerSession.id, pid: validated.data },
+          "Recorded the process this session is driving",
         );
       },
     };

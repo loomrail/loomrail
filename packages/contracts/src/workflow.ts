@@ -181,6 +181,13 @@ export const contextPackRecipeSchema = z
   })
   .strict();
 
+// The OS pid of the child process a live session actually spawned. Shared between
+// `providerSessionSchema` (what a session carries once one is known) and
+// `recordProviderSessionProcessCommandSchema` (how one gets there) so the daemon's own validation
+// of what `ProviderSessionListener.onProcessStarted` reports (@loomrail/provider-core) can never
+// disagree with what the persisted column will accept.
+export const providerSessionProcessPidSchema = z.number().int().positive();
+
 export const providerSessionSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -193,12 +200,13 @@ export const providerSessionSchema = z
     startedAt: utcTimestampSchema,
     endedAt: utcTimestampSchema.nullable(),
     version: z.number().int().positive(),
-    // Task 10 / spec §8: the OS pid of the child process this RUNNING session is driving, so a
-    // daemon that dies without killing it can still find and kill that process on the next start.
-    // Nullable, not defaulted to 0 -- "no process was ever started" and "a process whose pid is 0"
-    // are different facts, and a defaulted column could not tell them apart. Set once, at start;
-    // nothing here updates it later.
-    pid: z.number().int().positive().nullable(),
+    // Spec §8: the OS pid of the child process this RUNNING session is driving, so a daemon that
+    // dies without killing it can still find and kill that process on the next start. Nullable, not
+    // defaulted to 0 -- "no process was ever started" and "a process whose pid is 0" are different
+    // facts, and a defaulted column could not tell them apart. Starts null and is filled in later,
+    // if at all, by RECORD_PROVIDER_SESSION_PROCESS (MOCK and any adapter that spawns nothing never
+    // sends one, and the session simply stays null -- see `ProviderSessionListener.onProcessStarted`).
+    pid: providerSessionProcessPidSchema.nullable(),
   })
   .strict()
   .refine(
@@ -930,14 +938,31 @@ export const startProviderSessionCommandSchema = commandBaseSchema.extend({
     .object({
       stageAttemptId: opaqueIdSchema,
       recipe: contextPackRecipeInputSchema,
-      // Optional, not required: no live adapter today has a channel to report its child's pid
-      // back to the caller before `ProviderAdapter.start()` resolves (it spawns the process deep
-      // inside its own `start()` call and only returns once the session has already ended), so
-      // every existing caller omits it and the session is recorded with no known process. A
-      // caller that does know a pid up front -- a test, or a future adapter with a real channel --
-      // can still record it here. Omitted and `null` are treated identically by the command
-      // handler; the ProviderSession itself always carries `pid` as `null`, not absent.
-      pid: z.number().int().positive().nullable().optional(),
+      // Optional, not required: a pid is never known at START time -- `ProviderAdapter.start()`
+      // has not even been called yet here, and it is `start()` that spawns the process (see
+      // `ProviderSessionListener.onProcessStarted` in @loomrail/provider-core). Every real caller
+      // omits it and the session is recorded with no known process until (and unless)
+      // `RECORD_PROVIDER_SESSION_PROCESS` reports one later. A caller that does know a pid up
+      // front -- a test -- can still record it here. Omitted and `null` are treated identically by
+      // the command handler; the ProviderSession itself always carries `pid` as `null`, not absent.
+      pid: providerSessionProcessPidSchema.nullable().optional(),
+    })
+    .strict(),
+});
+
+// The one durable write `ProviderSessionListener.onProcessStarted` produces (see
+// @loomrail/provider-core): a live adapter spawns its child deep inside `start()`, after
+// START_PROVIDER_SESSION has already run and the session already exists, so there is no way to
+// carry a pid on that command -- it has to arrive as a follow-up write to the session it belongs
+// to. Kept as its own command rather than folded into another one: unlike checkpoints or usage
+// reports, a pid is reported at most once per session and has no natural host command to ride
+// along with.
+export const recordProviderSessionProcessCommandSchema = commandBaseSchema.extend({
+  type: z.literal("RECORD_PROVIDER_SESSION_PROCESS"),
+  payload: z
+    .object({
+      providerSessionId: opaqueIdSchema,
+      pid: providerSessionProcessPidSchema,
     })
     .strict(),
 });
@@ -1198,6 +1223,22 @@ export const providerSessionStartedResultSchema = z
   })
   .strict();
 
+// A pid is current state, not a business event -- nothing an owner reads through the audit log
+// needs to know which OS process a session used, only that reconciliation can find it. Every other
+// command result in this union carries `events`; this one keeps the field for shape uniformity but
+// types it `z.array(z.never())`, which only the empty array can ever satisfy, so the schema itself
+// states that this command never produces one rather than leaving `[]` looking like an omission.
+export const providerSessionProcessRecordedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("PROVIDER_SESSION_PROCESS_RECORDED"),
+    replayed: z.boolean(),
+    workItemId: opaqueIdSchema,
+    session: providerSessionSchema,
+    events: z.array(z.never()),
+  })
+  .strict();
+
 export const checkpointPublishedResultSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -1428,6 +1469,8 @@ export type ProviderSessionsResponse = z.infer<typeof providerSessionsResponseSc
 export type ProviderCapabilitiesResponse = z.infer<typeof providerCapabilitiesResponseSchema>;
 export type ContextPackRecipeInput = z.infer<typeof contextPackRecipeInputSchema>;
 export type StartProviderSessionCommand = z.infer<typeof startProviderSessionCommandSchema>;
+export type RecordProviderSessionProcessCommand = z.infer<typeof recordProviderSessionProcessCommandSchema>;
+export type ProviderSessionProcessRecordedResult = z.infer<typeof providerSessionProcessRecordedResultSchema>;
 export type PublishCheckpointCommand = z.infer<typeof publishCheckpointCommandSchema>;
 export type EndProviderSessionCommand = z.infer<typeof endProviderSessionCommandSchema>;
 export type ProviderSessionStartedEvent = z.infer<typeof providerSessionStartedEventSchema>;

@@ -8,6 +8,7 @@ import { workflowSnapshotSchema } from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import {
   providerCapabilitiesSchema,
+  runProcess,
   type ProviderAdapter,
   type ProviderInvocation,
   type ProviderSessionListener,
@@ -232,18 +233,78 @@ describe("stage attempt session loop", () => {
     abortSession: () => Promise.resolve(),
   });
 
-  // Task 10 / spec §8: the pid column exists so reconciliation can find and kill an orphaned
-  // process (see local-state.integration.test.ts in @loomrail/persistence-sqlite), but no adapter
-  // -- MOCK included -- has a channel to report a child's pid back to this loop before
-  // `ProviderAdapter.start()` resolves (its own `start()` call spawns and awaits the whole session
-  // internally; see the comment on the `pid` field in session-loop.ts). Recording a made-up value
-  // would be worse than recording none: reconciliation reads a null pid as "no process to look
-  // for" and correctly leaves the session alone, while a wrong pid could point reconciliation at a
-  // process that has nothing to do with this session.
-  it("does not invent a process id for a session no adapter has reported one for", async () => {
+  // A stand-in for a live adapter (provider-codex, provider-claude-code): it drives its session
+  // through a *real* `runProcess` call against a real, short-lived child, exactly like they do, and
+  // reports that child's pid on `listener.onProcessStarted` the same way they do -- right after
+  // `runProcess` returns, before awaiting `exited`. `onSpawn` hands the test the pid the runner
+  // actually produced, so the test can assert the persisted session recorded *that* value and not
+  // one the test typed in by hand.
+  const spawningAdapter = (onSpawn: (pid: number) => void): ProviderAdapter => ({
+    capabilities: () =>
+      providerCapabilitiesSchema.parse({
+        provider: "CODEX",
+        start: true,
+        interrupt: true,
+        eventStream: true,
+        usageReporting: false,
+        contextWindowReporting: false,
+        checkpointOnRequest: false,
+        contextWindowTokens: 128_000,
+        stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+        costReporting: false,
+      }),
+    start: async (_invocation, listener) => {
+      const run = runProcess({
+        command: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        cwd: process.cwd(),
+        onLine: () => undefined,
+        onStderr: () => undefined,
+        deadlineMs: 5_000,
+      });
+      if (run.pid === undefined) throw new Error("The probe child did not start");
+      onSpawn(run.pid);
+      listener.onProcessStarted?.(run.pid);
+      await run.exited;
+      return completingOutcome();
+    },
+    requestHandoff: () => Promise.resolve(),
+    abortSession: () => Promise.resolve(),
+  });
+
+  // The point of the whole feature: a pid reconciliation could actually use, arriving through the
+  // real channel (`ProviderSessionListener.onProcessStarted`) rather than written by hand into the
+  // test's fixture. A double that merely called the listener with a made-up number would only prove
+  // the listener plumbing forwards whatever it is given -- this drives an actual OS process through
+  // `runProcess`, the same helper the live adapters use, and asserts the persisted session carries
+  // the pid that process really got.
+  it("records the pid a spawning adapter's process runner actually got", async () => {
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
-    await runStageAttempt(depsFor(localState, seeded, finishingAdapter()));
+    let actualPid: number | undefined;
+    await runStageAttempt(
+      depsFor(
+        localState,
+        seeded,
+        spawningAdapter((pid) => (actualPid = pid)),
+      ),
+    );
+    const { sessions } = sessionRows(localState, seeded.stageAttemptId);
+    expect(sessions).toHaveLength(1);
+    expect(actualPid).toBeDefined();
+    expect(sessions[0]?.pid).toBe(actualPid);
+  });
+
+  // Task 10 / spec §8: the pid column exists so reconciliation can find and kill an orphaned
+  // process (see local-state.integration.test.ts in @loomrail/persistence-sqlite). MOCK spawns no
+  // process at all and correctly never calls `onProcessStarted`, which is what leaves the column
+  // null -- recording a made-up value would be worse than recording none: reconciliation reads a
+  // null pid as "no process to look for" and correctly leaves the session alone, while a wrong pid
+  // could point reconciliation at a process that has nothing to do with this session.
+  it("leaves the pid null for a session MOCK drove, since MOCK spawns no process", async () => {
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    await runStageAttempt(depsFor(localState, seeded, createMockProvider()));
     const { sessions } = sessionRows(localState, seeded.stageAttemptId);
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.pid).toBeNull();

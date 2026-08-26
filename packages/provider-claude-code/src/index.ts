@@ -265,6 +265,11 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         });
 
         runningSessions.set(sessionId, { stop: run.stop });
+        // `run.pid` is `undefined` only if the child failed to spawn at all -- `runProcess`
+        // reports that by rejecting `exited`, not by leaving `pid` unset while carrying on, so
+        // this branch only skips the (impossible in practice) case of a runtime that returns no
+        // pid for a process that did start.
+        if (run.pid !== undefined) listener.onProcessStarted?.(run.pid);
         try {
           await run.exited;
         } catch (err) {

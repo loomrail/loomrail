@@ -101,6 +101,14 @@ export type ProviderSessionListener = {
   // thresholds and the HARD pause. Those are different quantities with different consumers, and
   // combining them would oblige the consumer of one to parse the other.
   onUsage: (usage: ProviderUsage) => void;
+  // Spec §8: the pid of the child process this session is actually driving, so a daemon that dies
+  // without killing it can still find and kill that process on the next start
+  // (@loomrail/persistence-sqlite's `provider_sessions.process_pid`). Optional, unlike the three
+  // listeners above: most sessions have nothing to report here. MOCK spawns no process at all and
+  // must simply never call this -- that silence is exactly what the column's nullability exists to
+  // represent, not a gap to fill in. A live adapter that does spawn one calls it at most once, right
+  // after its process runner returns a pid, not on every turn the way occupancy and usage stream.
+  onProcessStarted?: (pid: number) => void;
 };
 
 // The one failure `start` can report that Loomrail knows how to act on by itself (spec §7): the
