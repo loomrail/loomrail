@@ -330,20 +330,81 @@ describe("stage attempt session loop", () => {
   });
 
   it("continues after the adapter is swapped between sessions", async () => {
-    // The property PD-008 claims: a handoff survives a change of provider.
+    // The property PD-008 claims: a handoff survives a change of provider. `server.ts` runs one
+    // provider adapter for the daemon's whole process lifetime, so the real swap boundary is a
+    // restart: RECONCILE_WORKFLOWS ends the orphaned session and leaves the pending dispatch for a
+    // *fresh* `runStageAttempt` call, which is where a newly configured adapter would actually be
+    // read. A single call routed to two adapters through a test-only wrapper cannot exercise that
+    // boundary -- `capabilities()` is read once at the top of `runStageAttempt`, before the loop
+    // even knows there will be a second session, so whichever adapter answers `capabilities()`
+    // first (here, always the wrapper's declared `first`) silently supplies every session's budget
+    // and the wrapper's own routing logic, not the loop's, decides who starts each session. This
+    // version instead makes two genuinely separate `runStageAttempt` calls, one per adapter, the
+    // way a restart would -- so an adapter-selection defect, or a budget computed from the wrong
+    // provider's declared window, has somewhere real to be wrong.
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
-    const firstAdapter = recording(
-      createMockProvider({ contextWindowTokens: 4_000, tokensPerTurn: 3_500, checkpointEvery: 1 }),
-    );
-    const secondAdapter = recording(finishingAdapter(4_000));
 
-    await runStageAttempt(depsFor(localState, seeded, routedByOrdinal(firstAdapter, secondAdapter)));
+    let checkpointDelivered: (() => void) | undefined;
+    const checkpointPublished = new Promise<void>((resolve) => {
+      checkpointDelivered = resolve;
+    });
+    const firstAdapter = recording({
+      capabilities: () =>
+        providerCapabilitiesSchema.parse({
+          provider: "MOCK",
+          start: true,
+          interrupt: true,
+          eventStream: true,
+          usageReporting: true,
+          contextWindowReporting: true,
+          checkpointOnRequest: true,
+          contextWindowTokens: 4_000,
+        }),
+      // Never resolves: the first provider's process is gone before it ends itself, exactly the
+      // orphaned-session case "survives a daemon restart mid-attempt" already covers.
+      start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) =>
+        new Promise<ProviderOutcome>(() => {
+          listener.onCheckpoint({
+            summary: "The first provider made progress before the swap.",
+            completed: ["Read the brief."],
+            remaining: ["Finish the implementation."],
+            deadEnds: [],
+            openQuestions: [],
+          });
+          checkpointDelivered?.();
+        }),
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
+    });
+
+    void runStageAttempt(depsFor(localState, seeded, firstAdapter)).catch(() => undefined);
+    await checkpointPublished;
+
+    // What a fresh daemon process does at startup, before it drains the dispatch queue: end the
+    // orphaned session and leave the attempt's pending dispatch for the session loop to continue.
+    localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-session-loop",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "RECONCILE_WORKFLOWS",
+      payload: {},
+    });
+
+    // A declared window that differs from the first adapter's (8,000 vs. 4,000): if the second
+    // session's budget were computed from the first provider's capabilities -- the defect the
+    // previous version of this test could not catch, because it never read the second adapter's
+    // `capabilities()` at all -- this number would come out wrong.
+    const secondAdapter = recording(finishingAdapter(8_000));
+    await runStageAttempt(depsFor(localState, seeded, secondAdapter));
 
     const { sessions, recipes, checkpoints } = sessionRows(localState, seeded.stageAttemptId);
     expect(sessions).toHaveLength(2);
+    expect(sessions[0]?.endReason).toBe("INTERRUPTED");
     expect(firstAdapter.startedSessionIds).toEqual([sessions[0]?.id]);
     expect(secondAdapter.startedSessionIds).toEqual([sessions[1]?.id]);
+    expect(recipes[1]?.budgetTokens).toBe(Math.floor(8_000 * 0.35));
     // The swap is only meaningful if the work crossed it: the second provider's pack carries the
     // first provider's checkpoint.
     expect(recipes[1]?.sections.find(({ id }) => id === "LATEST_CHECKPOINT")?.sources).toEqual([

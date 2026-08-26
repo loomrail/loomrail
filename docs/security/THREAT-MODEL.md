@@ -1,7 +1,7 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-08-24
+**Updated:** 2026-08-26
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
@@ -65,26 +65,65 @@ data. A Git worktree is collision isolation, not a security sandbox.
 
 ## 6. Phase 0 threats and controls
 
-| ID  | Threat                                    | Risk     | Required controls                                                                          | Verification / gate                                         |
-| --- | ----------------------------------------- | -------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
-| T01 | Host binds to LAN/all interfaces          | Critical | explicit loopback bind and startup assertion                                               | M1/M2 integration asserts the listener address              |
-| T02 | Malicious site sends localhost commands   | Critical | one-time bootstrap, HttpOnly SameSite session, exact Origin, CSRF header, no wildcard CORS | M1/M2 foreign-Origin, session and CSRF integration tests    |
-| T03 | Cross-site WebSocket hijacking            | High     | session + exact Origin on upgrade                                                          | WS gate: anonymous and untrusted upgrade tests before ship  |
-| T04 | Bootstrap token leaks in URL/log/referrer | High     | URL fragment, one-minute TTL, hash storage, atomic consume, log redaction                  | M1/M2 replay, request-URL, fragment, referrer and log tests |
-| T05 | Stored XSS through WorkItem/artifact      | High     | output escaping, no raw HTML Markdown, CSP, size limits                                    | M3 persisted-text browser test and CSP                      |
-| T06 | Path traversal in fixture project         | High     | canonical path containment and no symlink escape                                           | M2 HTTP traversal plus directory/manifest symlink tests     |
-| T07 | Duplicate command/dispatch                | High     | command ID idempotency, transaction + unique constraints                                   | M2 concurrent retry and command-reuse tests                 |
-| T08 | False Done/approval tampering             | High     | state-machine gate, append-only Event/Decision/evidence, optimistic version                | M2 transition tests; M6 Scenario D and acceptance replay    |
-| T09 | SQLite corruption/migration failure       | High     | WAL, short transactions, backup before migration, fail closed                              | M2 backup/checksum/reopen tests; full restore drill in M7   |
-| T10 | Sensitive values in logs/errors           | High     | structured allowlisted fields and pre-persistence redaction                                | M2 bootstrap/session canary redaction test                  |
-| T11 | Event/resource exhaustion                 | Medium   | payload limits, pagination, queue bounds, WS slow-consumer policy                          | M2 body/query bounds; WS flood/slow-consumer gate           |
-| T12 | Dependency/supply-chain compromise        | High     | lockfile, trusted registry, minimum release age, audit, reviewed updates                   | pinned CI install, production audit and reviewed updates    |
-| T13 | Private data committed publicly           | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                        | automated public-tree scan; full history scan in M7         |
-| T14 | Theme/UI hides critical state             | Medium   | text/icon semantics, contrast, no color-only gates                                         | M1–M3 light/dark, keyboard and state browser checks         |
+| ID  | Threat                                                    | Risk     | Required controls                                                                                                            | Verification / gate                                         |
+| --- | --------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| T01 | Host binds to LAN/all interfaces                          | Critical | explicit loopback bind and startup assertion                                                                                 | M1/M2 integration asserts the listener address              |
+| T02 | Malicious site sends localhost commands                   | Critical | one-time bootstrap, HttpOnly SameSite session, exact Origin, CSRF header, no wildcard CORS                                   | M1/M2 foreign-Origin, session and CSRF integration tests    |
+| T03 | Cross-site WebSocket hijacking                            | High     | session + exact Origin on upgrade                                                                                            | WS gate: anonymous and untrusted upgrade tests before ship  |
+| T04 | Bootstrap token leaks in URL/log/referrer                 | High     | URL fragment, one-minute TTL, hash storage, atomic consume, log redaction                                                    | M1/M2 replay, request-URL, fragment, referrer and log tests |
+| T05 | Stored XSS through WorkItem/artifact                      | High     | output escaping, no raw HTML Markdown, CSP, size limits                                                                      | M3 persisted-text browser test and CSP                      |
+| T06 | Path traversal in fixture project                         | High     | canonical path containment and no symlink escape                                                                             | M2 HTTP traversal plus directory/manifest symlink tests     |
+| T07 | Duplicate command/dispatch                                | High     | command ID idempotency, transaction + unique constraints                                                                     | M2 concurrent retry and command-reuse tests                 |
+| T08 | False Done/approval tampering                             | High     | state-machine gate, append-only Event/Decision/evidence, optimistic version                                                  | M2 transition tests; M6 Scenario D and acceptance replay    |
+| T09 | SQLite corruption/migration failure                       | High     | WAL, short transactions, backup before migration, fail closed                                                                | M2 backup/checksum/reopen tests; full restore drill in M7   |
+| T10 | Sensitive values in logs/errors                           | High     | structured allowlisted fields and pre-persistence redaction                                                                  | M2 bootstrap/session canary redaction test                  |
+| T11 | Event/resource exhaustion                                 | Medium   | payload limits, pagination, queue bounds, WS slow-consumer policy                                                            | M2 body/query bounds; WS flood/slow-consumer gate           |
+| T12 | Dependency/supply-chain compromise                        | High     | lockfile, trusted registry, minimum release age, audit, reviewed updates                                                     | pinned CI install, production audit and reviewed updates    |
+| T13 | Private data committed publicly                           | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                                                          | automated public-tree scan; full history scan in M7         |
+| T14 | Theme/UI hides critical state                             | Medium   | text/icon semantics, contrast, no color-only gates                                                                           | M1–M3 light/dark, keyboard and state browser checks         |
+| T15 | Checkpoint steers the next provider session across a swap | High     | schema-validated checkpoint, explicit untrusted-data delimiters in the pack, full text visible to owner (see A1 delta below) | see A1 delta below                                          |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present;
 WebSocket remains a separate Phase 0 capability and T03 stays open until its own implementation and security tests
 land.
+
+### A1 session-handoff delta (T15)
+
+A `StageAttempt` now runs as a sequence of provider sessions, each reassembled from durable state, and a session
+ends by publishing a checkpoint that becomes part of the _next_ session's context (spec
+`docs/plans/07-a1-session-handoff-spec.ru.md` §6, §8). A checkpoint is provider output, i.e. untrusted input under
+AGENTS.md; what A1 adds is a durable, reliable delivery channel for that untrusted text into a following session's
+context, one that survives a change of provider adapter. A compromised or derailed agent can therefore write text
+into a checkpoint aimed at steering the session that picks up its work, and Loomrail itself delivers it across
+that trust boundary. Rated **High**: the channel is durable, crosses a boundary, and is invisible to the owner
+unless the checkpoint is actually shown.
+
+Mitigations, verified in code:
+
+- the checkpoint is structured and schema-validated (`checkpointDraftSchema`, enforced in
+  `apps/daemon/src/session-loop.ts`) rather than accepted as a free-form blob; an invalid checkpoint is rejected
+  rather than half-accepted, since the next pack is built on it;
+- it is rendered into the pack wrapped in explicit `BEGIN/END UNTRUSTED AGENT REPORT` delimiters and framed as
+  data describing past work, never as instructions (`packages/context-assembly/src/render.ts`, the `untrusted`
+  helper), verified by `packages/context-assembly/test/render.unit.test.ts`
+  ("marks a checkpoint as untrusted provider output");
+- the full checkpoint text — summary, completed, remaining, dead ends, open questions — is visible to the owner in
+  the Task Cockpit, not summarized or truncated (`packages/ui/src/patterns.tsx`'s checkpoint disclosure,
+  wired from real session data in `apps/web/src/views/WorkbenchPage.tsx`), verified by the `e2e/walking-skeleton.spec.ts`
+  test "shows the sessions inside a running stage attempt, with occupancy, handoff, and full checkpoint text";
+- the channel surviving a provider swap specifically — session 1 on one adapter, session 2 on a genuinely
+  different one, the checkpoint still carried into the second session's pack — is verified by
+  `apps/daemon/test/session.integration.test.ts` ("continues after the adapter is swapped between sessions"),
+  which drives two separate `runStageAttempt` calls (mirroring the daemon-restart boundary that is the only way a
+  swap can happen, since one daemon process runs one provider adapter for its whole lifetime) rather than a
+  single call routed by a test-only wrapper, so a defect in which session's declared context window drives the
+  next pack's budget has somewhere real to surface.
+
+**Known limitation.** The untrusted-block framing in `render.ts` is plain string concatenation with no escaping of
+the delimiter tokens themselves. A provider could emit the literal text `END UNTRUSTED AGENT REPORT` inside its
+own checkpoint fields, followed by fabricated content shaped like instructions, attempting a delimiter-collision
+escape out of the untrusted block. This is a known property of textual delimiter framing in general and is not
+eliminated here; the owner-visible full-text mitigation above is the backstop for it, not a substitute.
 
 ## 7. Future execution threats
 
@@ -205,7 +244,11 @@ HumanRequest is never a secret-input channel.
   protections;
 - provider-native browser/session tools may expose authenticated data after explicit user grant;
 - dependency compromise cannot be eliminated, only reduced through pinning, review and provenance;
-- LLM output remains untrusted even after independent review.
+- LLM output remains untrusted even after independent review;
+- the untrusted-checkpoint delimiter framing (`packages/context-assembly/src/render.ts`) is plain string
+  concatenation with no escaping of the delimiter tokens: a provider could emit the literal END delimiter
+  followed by fabricated instructions and attempt a collision escape out of the untrusted block (T15). Owner
+  visibility of the full checkpoint text is the mitigation this residual risk relies on, not a fix for it.
 
 ## 12. Review checklist
 
