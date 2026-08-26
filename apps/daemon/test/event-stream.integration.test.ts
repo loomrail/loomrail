@@ -155,9 +155,15 @@ describe("daemon event stream", () => {
     await stream.body?.cancel();
   });
 
-  // Spec §7, last row: the frame carries opaque identifiers and no content. Asserted on the bytes,
-  // because "we did not add a text field" is a claim about intent and this is a claim about the wire.
-  it("carries no work item text on the wire", async () => {
+  // Spec §7, last row: the frame carries opaque identifiers and no content. This cannot be proven
+  // yet: `readRawFrames(stream.body, 1)` is satisfied by the connect-time `: open\n\n` comment, which
+  // is the only frame this route can produce before Task 4 wires `eventStreams.publish` in -- nothing
+  // calls `publish` yet, so the assertion never actually waits for a signal frame and would pass even
+  // if a future `publish()` put the WorkItem title on the wire. Same missing wiring as the skipped
+  // "delivers a signal" test above; skipped for the same honest reason rather than left green on a
+  // technicality. Task 4 takes over both tests, replaces `readRawFrames` with a helper that stops on
+  // the first *data* frame, and carries a mutation that puts real text into the frame so this goes red.
+  it.skip("carries no work item text on the wire", async () => {
     daemon = await startDaemon({ bootstrapToken: token, logger: false });
     const session = await authenticate(daemon, token);
     const stream = await fetch(`${daemon.baseUrl}/api/v1/stream`, { headers: { cookie: session.cookie } });
@@ -177,8 +183,10 @@ describe("daemon event stream", () => {
     const stream = await fetch(`${daemon.baseUrl}/api/v1/stream`, { headers: { cookie: session.cookie } });
     expect(stream.status).toBe(200);
     const closed = daemon.close().then(() => "closed" as const);
-    const timedOut = delay(5_000, "hung" as const);
+    // Kept well under the 15s test timeout below, so a real hang is decided by this race -- as an
+    // assertion failure -- rather than by Vitest's own default per-test timeout winning the tie.
+    const timedOut = delay(3_000, "hung" as const);
     await expect(Promise.race([closed, timedOut])).resolves.toBe("closed");
     await stream.body?.cancel();
-  });
+  }, 15_000);
 });
