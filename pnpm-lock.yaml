@@ -173,6 +173,18 @@ importers:
         specifier: ^4.0.0
         version: 4.4.3
 
+  packages/provider-claude-code:
+    dependencies:
+      '@loomrail/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@loomrail/provider-core':
+        specifier: workspace:*
+        version: link:../provider-core
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
+
   packages/provider-codex:
     dependencies:
       '@loomrail/contracts':
