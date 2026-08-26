@@ -10,18 +10,6 @@ const MAX_STREAM_LINE_BYTES = 1_000_000;
 // will not.
 const DEFAULT_GRACE_MS = 5_000;
 
-// A freshly spawned child may not yet have reached the point (if any) in its own startup where it
-// installs its own signal handlers: a signal delivered before that point is handled by the OS
-// default disposition (terminate) no matter what the child's own code would eventually have done
-// with it. Sending the first termination signal that early does not observe "a child that ignores
-// SIGTERM" -- it just wins a race the child never got a chance to run in, and misreports a normal
-// shutdown as an escalation. This floor gives a child a minimum amount of wall-clock time to get
-// there before `stop()`'s first signal goes out. Measured against real child-process startup
-// under load (this daemon's actual target -- a developer machine already busy with other work,
-// not an idle CI box) rather than against the sub-millisecond case, so it costs nothing that
-// matters for `codex`/`claude`-scale processes.
-const MIN_CHILD_AGE_BEFORE_FIRST_SIGNAL_MS = 600;
-
 export type ProcessExitOutcome = { code: number | null; signal: NodeJS.Signals | null };
 
 export type ProcessRun = {
@@ -109,7 +97,6 @@ export const runProcess = (options: RunProcessOptions): ProcessRun => {
     cwd: options.cwd,
     stdio: ["pipe", "pipe", "pipe"] as const,
   });
-  const spawnedAt = Date.now();
 
   // `codex exec` reads stdin even when the prompt arrives as a positional argument, and hangs
   // waiting for it. This module never writes a prompt of its own -- callers fold it into `args`
@@ -145,12 +132,6 @@ export const runProcess = (options: RunProcessOptions): ProcessRun => {
   let stopPromise: Promise<void> | undefined;
   const stop = (): Promise<void> => {
     stopPromise ??= (async () => {
-      if (!hasExited()) {
-        const age = Date.now() - spawnedAt;
-        if (age < MIN_CHILD_AGE_BEFORE_FIRST_SIGNAL_MS) {
-          await Promise.race([exited, delay(MIN_CHILD_AGE_BEFORE_FIRST_SIGNAL_MS - age)]);
-        }
-      }
       if (!hasExited()) {
         child.kill("SIGTERM");
         await Promise.race([exited, delay(graceMs)]);

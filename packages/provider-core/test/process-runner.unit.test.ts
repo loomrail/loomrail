@@ -1,10 +1,50 @@
 import { describe, expect, it } from "vitest";
 
-import { runProcess } from "../src/process-runner.js";
+import { runProcess, type ProcessExitOutcome } from "../src/process-runner.js";
 
 // A real child process, not a double: the thing under test IS the process boundary. A double
 // would only prove that the double behaves as written.
 const node = process.execPath;
+
+// Timeout used only to race against a promise under test; never left to keep the test runner
+// itself alive.
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+  });
+
+// Waits for the child to print a specific line before the test signals it. Sending a signal
+// before a freshly spawned child has installed its own handler races the child's startup: on a
+// loaded machine the OS default disposition (terminate) can win before the handler exists, which
+// would kill the child outright instead of exercising escalation. Rather than guess a duration,
+// the child announces the handler is installed and the test waits for that announcement -- a real
+// synchronisation on the thing being waited for, which holds at any load.
+const waitForLine = (marker: string): { promise: Promise<void>; onLine: (line: string) => void } => {
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    onLine: (line) => {
+      if (line === marker) {
+        resolvePromise?.();
+      }
+    },
+  };
+};
+
+const HUNG = "hung" as const;
+
+// Bounds a wait on `exited` against a generous, explicit deadline so that a regression which
+// makes the child un-killable reads as a real assertion failure ("expected 'hung' not to be
+// 'hung'") instead of an opaque harness timeout, which is indistinguishable from this machine
+// merely being slow.
+const raceAgainstHang = (
+  exited: Promise<ProcessExitOutcome>,
+  boundMs: number,
+): Promise<ProcessExitOutcome | typeof HUNG> => Promise.race([exited, delay(boundMs).then(() => HUNG)]);
 
 describe("runProcess", () => {
   it("delivers stdout as whole lines even when the child writes them in pieces", async () => {
@@ -21,39 +61,63 @@ describe("runProcess", () => {
     expect(lines).toEqual(['{"a":1}', '{"b":2}']);
   });
 
-  // The claim A1.5 deferred to this milestone: resolving is not the same as having stopped.
+  // The claim A1.5 deferred to this milestone: resolving is not the same as having stopped. The
+  // check is against the real OS process table (`process.kill(pid, 0)`), not against this
+  // module's own bookkeeping -- otherwise a `stop()` that resolves `exited` itself, instead of
+  // waiting for the real `exit` event, would look identical to a correct implementation, since
+  // both make `exited` become true by the time `stop()` returns.
   it("resolves `exited` only after the child has really gone", async () => {
+    const armed = waitForLine("armed");
     const run = runProcess({
       command: node,
-      args: ["-e", "setInterval(() => {}, 1000);"],
+      args: ["-e", "process.on('SIGTERM', () => {}); console.log('armed'); setInterval(() => {}, 1000);"],
       cwd: process.cwd(),
-      onLine: () => undefined,
+      onLine: armed.onLine,
       onStderr: () => undefined,
       deadlineMs: 30_000,
       graceMs: 200,
     });
-    let exited = false;
+    await armed.promise;
+
+    const pid = run.pid;
+    if (pid === undefined) {
+      throw new Error("expected runProcess to report a pid for a spawned child");
+    }
+
+    let aliveWhenExitedResolved = true;
     void run.exited.then(() => {
-      exited = true;
+      try {
+        process.kill(pid, 0);
+        aliveWhenExitedResolved = true;
+      } catch {
+        // ESRCH: the OS confirms the process is really gone.
+        aliveWhenExitedResolved = false;
+      }
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(exited).toBe(false);
+
     await run.stop();
-    expect(exited).toBe(true);
+    expect(aliveWhenExitedResolved).toBe(false);
   });
 
   it("kills a child that ignores the terminate signal", async () => {
+    const armed = waitForLine("armed");
     const run = runProcess({
       command: node,
-      args: ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
+      args: ["-e", "process.on('SIGTERM', () => {}); console.log('armed'); setInterval(() => {}, 1000);"],
       cwd: process.cwd(),
-      onLine: () => undefined,
+      onLine: armed.onLine,
       onStderr: () => undefined,
       deadlineMs: 30_000,
       graceMs: 200,
     });
-    await run.stop();
-    const outcome = await run.exited;
+    await armed.promise;
+    void run.stop();
+
+    const outcome = await raceAgainstHang(run.exited, 2_000);
+    expect(outcome).not.toBe(HUNG);
+    if (outcome === HUNG) {
+      return;
+    }
     expect(outcome.signal).toBe("SIGKILL");
   });
 
