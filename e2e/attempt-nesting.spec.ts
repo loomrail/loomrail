@@ -77,7 +77,13 @@ test.describe("attempt nesting", () => {
     // sessions list, not just a bare "Sessions" heading.
     const attemptHeader = sessionsPanel.locator(".lr-session-timeline__row").first();
     await expect(attemptHeader.getByText("Attempt 1", { exact: true })).toBeVisible();
-    await expect(attemptHeader.locator(".lr-status")).toBeVisible();
+    // Not just present -- readable. AGENTS.md requires status is never colour-only, and a
+    // container-only check (".lr-status" visible) still passes if the label text inside it is
+    // dropped, leaving a bare coloured dot. "Waiting" is workflow.stage.WAITING_HUMAN, the status
+    // this attempt is in at the point the test reaches it (same fixed-string approach the
+    // neighbouring "Attempt 1" assertion above already takes, rather than pulling in the
+    // translator for one known string).
+    await expect(attemptHeader.locator(".lr-status")).toContainText("Waiting");
 
     // D5 names the attempt as the CONTAINER of its sessions -- the attempt heading must render
     // above the "Sessions" list label, not below it. A bounding-box comparison checks what the
