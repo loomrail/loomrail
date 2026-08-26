@@ -1875,6 +1875,21 @@
   font-size: var(--lr-font-xs);
 }
 
+.lr-session-timeline__occupancy-text {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lr-space-1);
+  margin: 0;
+}
+
+/* Spec §4.3/§5.2: the occupancy figure means different things measured and estimated, so the
+   qualifier travels with the number rather than being dropped. Not colour-coded -- it is a
+   provenance note, not a status. */
+.lr-session-timeline__occupancy .lr-session-timeline__occupancy-quality {
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-xs);
+}
+
 .lr-session-timeline__checkpoints {
   display: grid;
   gap: var(--lr-space-2);
@@ -1933,7 +1948,11 @@
   font-size: var(--lr-font-xs);
 }
 
-.lr-checkpoint-card:focus-within {
+/* The card's only focusable descendant is its <summary>, which already draws a ring. `:focus-within`
+   put a second one around the whole card, and fired on a mouse click as well -- unlike every
+   comparable rule in this file, which uses `:focus-visible`. One ring, on the focused element, for
+   keyboard focus. */
+.lr-checkpoint-card > summary:focus-visible {
   outline: 2px solid var(--lr-focus);
   outline-offset: 2px;
 }

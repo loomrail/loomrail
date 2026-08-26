@@ -8,6 +8,7 @@ import {
   type AcceptanceAction,
   type AcceptancePackage,
   type Checkpoint,
+  type ContextWindowUsage,
   type DomainEvent,
   type EvidenceArtifact,
   type HumanRequest,
@@ -450,6 +451,14 @@ const changedFieldLabelKeys: Record<WorkItemChangedField, TranslationKey> = {
 // packages/domain/src/session-pause.ts once already -- every HARD_PAUSED attempt read as a budget
 // pause regardless of the real failureCode. Reading the same exported list both sides use keeps a
 // fifth code added there from silently going stale here.
+// A total Record over the contract's own union, so a new quality cannot arrive without this file
+// failing to compile -- the same discipline `hardPauseLabelKeys` below is written under.
+const usageQualityLabelKeys: Record<ContextWindowUsage["quality"], TranslationKey> = {
+  ACTUAL: "workflow.sessions.usageQuality.ACTUAL",
+  PROVIDER_ESTIMATE: "workflow.sessions.usageQuality.PROVIDER_ESTIMATE",
+  LOOMRAIL_ESTIMATE: "workflow.sessions.usageQuality.LOOMRAIL_ESTIMATE",
+};
+
 const hardPauseLabelKeys: Record<SessionPauseFailureCode, TranslationKey> = {
   NO_PROGRESS: "workflow.hardPause.noProgress",
   CONTEXT_FLOOR_EXCEEDED: "workflow.hardPause.contextFloor",
@@ -1262,11 +1271,14 @@ const AttemptSessionsPanel = ({ stageAttemptId }: { stageAttemptId: string }): R
         ...(session.handoffRequestedAt !== null
           ? { handoffRequestedLabel: t("workflow.sessions.handoffRequested") }
           : {}),
-        ...(occupancyPercent === undefined
+        // Spec §4.3 and §5.2 make `usageQuality` the thing that separates a measured occupancy from
+        // a guessed one; dropping it here rendered a measured 92% and an estimated 92% identically.
+        ...(occupancyPercent === undefined || usage === undefined
           ? {}
           : {
               occupancyPercent,
               occupancyLabel: t("workflow.sessions.occupancy", { percent: occupancyPercent }),
+              occupancyQualityLabel: t(usageQualityLabelKeys[usage.quality]),
             }),
         ...(sessionCheckpoints.length === 0
           ? { emptyCheckpointsLabel: t("workflow.checkpoints.empty") }

@@ -166,6 +166,11 @@ export type ProviderSessionViewModel = {
   id: string;
   occupancyLabel?: string;
   occupancyPercent?: number;
+  // How the occupancy number was arrived at (spec §4.3, §5.2): a measured 92% and a guessed 92%
+  // render identically without it, and the two mean different things to an owner deciding whether
+  // a session was cut too early. Optional for the same reason `occupancyLabel` is -- a session that
+  // never crossed the handoff threshold has no occupancy to qualify.
+  occupancyQualityLabel?: string;
   ordinal: number;
   statusLabel: string;
   tone: StatusTone;
@@ -202,8 +207,17 @@ export const ProviderSessionTimeline = ({
             </div>
             {session.occupancyPercent !== undefined && session.occupancyLabel !== undefined ? (
               <div className="lr-session-timeline__occupancy">
-                <progress aria-label={session.occupancyLabel} max={100} value={session.occupancyPercent} />
-                <span>{session.occupancyLabel}</span>
+                {/* Presentational: the span beside it carries the same number as text, and an
+                    aria-label here made a screen reader announce the figure twice in a row. */}
+                <progress aria-hidden="true" max={100} value={session.occupancyPercent} />
+                <p className="lr-session-timeline__occupancy-text">
+                  <span>{session.occupancyLabel}</span>
+                  {session.occupancyQualityLabel === undefined ? null : (
+                    <span className="lr-session-timeline__occupancy-quality">
+                      {session.occupancyQualityLabel}
+                    </span>
+                  )}
+                </p>
               </div>
             ) : null}
             {session.checkpoints.length > 0 ? (

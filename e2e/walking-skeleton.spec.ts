@@ -1028,6 +1028,12 @@ test.describe("authenticated walking skeleton", () => {
       await expect(session2.getByText("Handoff requested", { exact: true })).toBeVisible();
       await expect(session2.getByText("92% of the window at handoff", { exact: true })).toBeVisible();
 
+      // Spec §4.3/§5.2: the occupancy figure is shown with how it was arrived at. Both of these
+      // sessions reported a measured figure; without the qualifier a measured 92% and a guessed
+      // one would read identically, and only one of them is evidence about the provider.
+      await expect(session1.getByText("(measured)", { exact: true })).toBeVisible();
+      await expect(session2.getByText("(measured)", { exact: true })).toBeVisible();
+
       // The most recently published checkpoint (session 2's) reads in full without any extra click:
       // this is what feeds the next session's context, and spec §8 requires the owner to be able to
       // read it because it is untrusted provider output.

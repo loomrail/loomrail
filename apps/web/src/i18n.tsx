@@ -220,6 +220,9 @@ const en = {
   "workflow.sessions.status.CANCELLED": "Cancelled",
   "workflow.sessions.handoffRequested": "Handoff requested",
   "workflow.sessions.occupancy": "{percent}% of the window at handoff",
+  "workflow.sessions.usageQuality.ACTUAL": "(measured)",
+  "workflow.sessions.usageQuality.PROVIDER_ESTIMATE": "(provider estimate)",
+  "workflow.sessions.usageQuality.LOOMRAIL_ESTIMATE": "(Loomrail estimate)",
   "workflow.sessions.noCheckpointOnRequest":
     "This provider cannot wind down on request — losing recent work when a session is cut is expected for it.",
   "workflow.checkpoints.empty": "No checkpoint was published in this session.",
@@ -525,6 +528,9 @@ const ru = {
   "workflow.sessions.status.CANCELLED": "Отменена",
   "workflow.sessions.handoffRequested": "Запрошена передача",
   "workflow.sessions.occupancy": "{percent}% окна на момент передачи",
+  "workflow.sessions.usageQuality.ACTUAL": "(измерено)",
+  "workflow.sessions.usageQuality.PROVIDER_ESTIMATE": "(оценка провайдера)",
+  "workflow.sessions.usageQuality.LOOMRAIL_ESTIMATE": "(оценка Loomrail)",
   "workflow.sessions.noCheckpointOnRequest":
     "Этот провайдер не умеет сворачиваться по запросу — для него штатно терять недавнюю работу при обрыве сессии.",
   "workflow.checkpoints.empty": "В этой сессии checkpoint не публиковался.",
