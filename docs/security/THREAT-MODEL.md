@@ -1,7 +1,7 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-08-26
+**Updated:** 2026-08-27
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
@@ -65,23 +65,26 @@ data. A Git worktree is collision isolation, not a security sandbox.
 
 ## 6. Phase 0 threats and controls
 
-| ID  | Threat                                                    | Risk     | Required controls                                                                                                                                                                            | Verification / gate                                         |
-| --- | --------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| T01 | Host binds to LAN/all interfaces                          | Critical | explicit loopback bind and startup assertion                                                                                                                                                 | M1/M2 integration asserts the listener address              |
-| T02 | Malicious site sends localhost commands                   | Critical | one-time bootstrap, HttpOnly SameSite session, exact Origin, CSRF header, no wildcard CORS                                                                                                   | M1/M2 foreign-Origin, session and CSRF integration tests    |
-| T03 | Unauthorized or persistent access to the event stream     | High     | `requireSession` on the SSE route, same as every other GET; `Origin` compared when sent, `SameSite=Strict` otherwise; heartbeat closes the stream on session expiry; open-stream limit       | see A1.5 event-channel delta below                          |
-| T04 | Bootstrap token leaks in URL/log/referrer                 | High     | URL fragment, one-minute TTL, hash storage, atomic consume, log redaction                                                                                                                    | M1/M2 replay, request-URL, fragment, referrer and log tests |
-| T05 | Stored XSS through WorkItem/artifact                      | High     | output escaping, no raw HTML Markdown, CSP, size limits                                                                                                                                      | M3 persisted-text browser test and CSP                      |
-| T06 | Path traversal in fixture project                         | High     | canonical path containment and no symlink escape                                                                                                                                             | M2 HTTP traversal plus directory/manifest symlink tests     |
-| T07 | Duplicate command/dispatch                                | High     | command ID idempotency, transaction + unique constraints                                                                                                                                     | M2 concurrent retry and command-reuse tests                 |
-| T08 | False Done/approval tampering                             | High     | state-machine gate, append-only Event/Decision/evidence, optimistic version                                                                                                                  | M2 transition tests; M6 Scenario D and acceptance replay    |
-| T09 | SQLite corruption/migration failure                       | High     | WAL, short transactions, backup before migration, fail closed                                                                                                                                | M2 backup/checksum/reopen tests; full restore drill in M7   |
-| T10 | Sensitive values in logs/errors                           | High     | structured allowlisted fields and pre-persistence redaction                                                                                                                                  | M2 bootstrap/session canary redaction test                  |
-| T11 | Event/resource exhaustion                                 | Medium   | payload limits, pagination, queue bounds, open-stream cap; event-stream frames are three opaque identifiers and are not queued per subscriber (no slow-consumer policy — see the A1.5 delta) | M2 body/query bounds; A1.5 open-stream limit tests          |
-| T12 | Dependency/supply-chain compromise                        | High     | lockfile, trusted registry, minimum release age, audit, reviewed updates                                                                                                                     | pinned CI install, production audit and reviewed updates    |
-| T13 | Private data committed publicly                           | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                                                                                                                          | automated public-tree scan; full history scan in M7         |
-| T14 | Theme/UI hides critical state                             | Medium   | text/icon semantics, contrast, no color-only gates                                                                                                                                           | M1–M3 light/dark, keyboard and state browser checks         |
-| T15 | Checkpoint steers the next provider session across a swap | High     | schema-validated checkpoint, explicit untrusted-data delimiters in the pack, full text visible to owner (see A1 delta below)                                                                 | see A1 delta below                                          |
+| ID  | Threat                                                        | Risk     | Required controls                                                                                                                                                                            | Verification / gate                                         |
+| --- | ------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| T01 | Host binds to LAN/all interfaces                              | Critical | explicit loopback bind and startup assertion                                                                                                                                                 | M1/M2 integration asserts the listener address              |
+| T02 | Malicious site sends localhost commands                       | Critical | one-time bootstrap, HttpOnly SameSite session, exact Origin, CSRF header, no wildcard CORS                                                                                                   | M1/M2 foreign-Origin, session and CSRF integration tests    |
+| T03 | Unauthorized or persistent access to the event stream         | High     | `requireSession` on the SSE route, same as every other GET; `Origin` compared when sent, `SameSite=Strict` otherwise; heartbeat closes the stream on session expiry; open-stream limit       | see A1.5 event-channel delta below                          |
+| T04 | Bootstrap token leaks in URL/log/referrer                     | High     | URL fragment, one-minute TTL, hash storage, atomic consume, log redaction                                                                                                                    | M1/M2 replay, request-URL, fragment, referrer and log tests |
+| T05 | Stored XSS through WorkItem/artifact                          | High     | output escaping, no raw HTML Markdown, CSP, size limits                                                                                                                                      | M3 persisted-text browser test and CSP                      |
+| T06 | Path traversal in fixture project                             | High     | canonical path containment and no symlink escape                                                                                                                                             | M2 HTTP traversal plus directory/manifest symlink tests     |
+| T07 | Duplicate command/dispatch                                    | High     | command ID idempotency, transaction + unique constraints                                                                                                                                     | M2 concurrent retry and command-reuse tests                 |
+| T08 | False Done/approval tampering                                 | High     | state-machine gate, append-only Event/Decision/evidence, optimistic version                                                                                                                  | M2 transition tests; M6 Scenario D and acceptance replay    |
+| T09 | SQLite corruption/migration failure                           | High     | WAL, short transactions, backup before migration, fail closed                                                                                                                                | M2 backup/checksum/reopen tests; full restore drill in M7   |
+| T10 | Sensitive values in logs/errors                               | High     | structured allowlisted fields and pre-persistence redaction                                                                                                                                  | M2 bootstrap/session canary redaction test                  |
+| T11 | Event/resource exhaustion                                     | Medium   | payload limits, pagination, queue bounds, open-stream cap; event-stream frames are three opaque identifiers and are not queued per subscriber (no slow-consumer policy — see the A1.5 delta) | M2 body/query bounds; A1.5 open-stream limit tests          |
+| T12 | Dependency/supply-chain compromise                            | High     | lockfile, trusted registry, minimum release age, audit, reviewed updates                                                                                                                     | pinned CI install, production audit and reviewed updates    |
+| T13 | Private data committed publicly                               | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                                                                                                                          | automated public-tree scan; full history scan in M7         |
+| T14 | Theme/UI hides critical state                                 | Medium   | text/icon semantics, contrast, no color-only gates                                                                                                                                           | M1–M3 light/dark, keyboard and state browser checks         |
+| T15 | Checkpoint steers the next provider session across a swap     | High     | schema-validated checkpoint, explicit untrusted-data delimiters in the pack, full text visible to owner (see A1 delta below)                                                                 | see A1 delta below                                          |
+| T16 | Live adapter spawns an owner-privileged child process         | High     | argv array to `child_process.spawn`, no shell interpolation; never enable a provider's permission-bypass flag automatically (SD-001)                                                         | see A2 delta below                                          |
+| T17 | Child process orphaned by a dead daemon outlives it           | Medium   | pid recorded on the `ProviderSession`; startup reconciliation kills it before the session is marked ended                                                                                    | see A2 delta below                                          |
+| T18 | Untrusted provider stream carries the owner's own hook output | High     | only typed fields cross the adapter boundary; no raw wire line is retained anywhere a caller can observe                                                                                     | see A2 delta below                                          |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -172,6 +175,71 @@ throws"), so ADR-0002's "publication failure does not roll back state" holds for
 **Does not expand T15.** The channel does not widen the untrusted-checkpoint threat above: not because the
 code is careful with text, but because there is no text in the frame at all, by schema. The mitigation and the
 test are the same one cited for content leakage above — "carries no work item text on the wire".
+
+### A2 live-provider-adapters delta (T16, T17, T18)
+
+A2 (`docs/plans/11-a2-live-provider-adapters-spec.ru.md`) replaces the synthetic mock provider with two live
+adapters, `packages/provider-codex` and `packages/provider-claude-code`, that spawn the real `codex` and
+`claude` CLIs as child processes of the daemon, running as the same OS user who launched Loomrail. This is the
+first place in the tree where Loomrail does anything beyond read SQLite and the filesystem it already owns.
+
+**T16 — a live adapter spawns an owner-privileged child process.** Rated High: a child that inherits the
+owner's full permissions is exactly the actor SD-001 exists to keep out of "no approval needed" territory.
+Mitigations, verified in code:
+
+- every invocation is built as an argv array passed directly to `child_process.spawn`
+  (`packages/provider-core/src/process-runner.ts`'s `runProcess`), never through a shell, so appending
+  contextPack text or any other value to the command line has no interpolation hazard;
+- neither adapter ever builds a command carrying a permission-bypass flag. A single named, closed list of
+  every spelling either CLI accepts — `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`,
+  `--dangerously-bypass-approvals-and-sandbox`, `--permission-mode bypassPermissions` — is checked by one test
+  per adapter, so a future CLI version adding another spelling is a decision made to that list, not a silent
+  gap: `packages/provider-codex/test/adapter.unit.test.ts`'s "never builds a command carrying a
+  permission-bypass flag (SD-001)" and `packages/provider-claude-code/test/adapter.unit.test.ts`'s test of the
+  same name;
+- before E1 there is nothing on disk for a bypassed permission to reach anyway: both adapters run their CLI in
+  a fresh, empty temporary directory (spec §6/§7, D1), bounding the blast radius independently of the flag
+  check above.
+
+**T17 — a process orphaned by a dead daemon outlives it.** Rated Medium: bounded to the one process a single
+`start()` call spawned, and self-healing at the next daemon start, but real while it lasts — an unwatched
+child keeps running, and for Claude Code keeps spending against `--max-budget-usd`, with no daemon left to end
+its session. Mitigation, verified in code:
+
+- the child's pid is recorded on its `ProviderSession` (`packages/persistence-sqlite/migrations/0010_provider_session_pid.sql`,
+  `apps/daemon/src/session-loop.ts`), and startup reconciliation
+  (`RECONCILE_WORKFLOWS`, `packages/persistence-sqlite/src/index.ts`'s `killOrphanedSessionProcess`) sends it
+  `SIGKILL` before the session is marked `ENDED` — kill first, mark second, so a crash between the two steps
+  can never commit a session that reads as over while its process is still running. Verified against a real
+  detached child process, not a mock, by
+  `packages/persistence-sqlite/test/local-state.integration.test.ts`'s "kills a process orphaned by a daemon
+  restart before ending its session".
+
+**T18 — the untrusted provider stream carries the owner's own hook output.** Rated High: reconnaissance found
+Claude Code's event stream carries `hook_started`/`hook_response` events with the owner's own hook `stdout`
+and `stderr` inside them (spec §2, D7) — arbitrary text from the owner's machine that Loomrail would otherwise
+write straight into its own diagnostics. Codex's stream carries no hook channel, so the same underlying
+discipline — never retain a raw wire line anywhere a caller can observe — is what both adapters are held to.
+Mitigation, verified in code:
+
+- `parseCodexEvent`/`parseClaudeEvent` extract only the few typed fields each adapter forwards (usage,
+  context-window occupancy, the structured checkpoint); everything else, hook events included, is dropped
+  inside the stream parser before it can reach a listener or the outcome. For Claude Code this is checked
+  against a recording that carries real `hook_started`/`hook_response`/`hook_progress` events with a real,
+  distinguishing `hook_id` UUID absent from every parsed shape, across every observable surface (the outcome
+  and every listener callback), not the outcome alone:
+  `packages/provider-claude-code/test/adapter.unit.test.ts`'s "keeps no raw provider output after the session
+  ends". For Codex, which has no hook channel to record, the same test name and technique instead pins a real
+  `thread_id` UUID from the recording — the closest analogue available to it — in
+  `packages/provider-codex/test/adapter.unit.test.ts`.
+
+**Known gap, not yet mitigated.** Reported spend (`ProviderUsage`, `onUsage`) is validated but has nowhere
+durable to go: `usage_records` (`packages/persistence-sqlite/migrations/0003_budget_pause_recovery.sql`) is
+constrained in SQL to a single estimated-tokens kind and one `amount` column, so a live adapter's real,
+per-turn spend is logged (`apps/daemon/src/session-loop.ts`'s `onUsage` listener) rather than accumulated
+against a budget threshold. This is a budget-enforcement gap (BD-001), not a new confidentiality or integrity
+threat — spend already visible to the owner in the CLI's own output is merely not yet durable inside
+Loomrail — and is tracked as follow-up work, not part of A2 (spec §3 D4).
 
 ## 7. Future execution threats
 

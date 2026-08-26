@@ -11,6 +11,19 @@ import { createClaudeCodeProvider } from "../src/index.js";
 
 const fakeClaudePath = fileURLToPath(new URL("./fixtures/fake-claude.mjs", import.meta.url));
 
+// SD-001 forbids Loomrail from ever enabling a provider's permission-bypass mode automatically --
+// every spelling either CLI accepts for that bypass is named here once, so that a future CLI
+// version adding another one is a decision someone makes to this list, not something that quietly
+// never happens. Shared verbatim with provider-codex's own copy of this list (no test-only module
+// is common to both packages yet, so -- per this task's own convention for helpers needed by two
+// packages -- duplicating a four-line constant is preferable to creating one for this alone).
+const FORBIDDEN_PERMISSION_BYPASS_FLAGS: readonly string[] = [
+  "--dangerously-skip-permissions",
+  "--allow-dangerously-skip-permissions",
+  "--dangerously-bypass-approvals-and-sandbox",
+  "--permission-mode bypassPermissions",
+];
+
 // --- Test scaffolding -------------------------------------------------------------------------
 //
 // `recordSpawn`, `startWith`, `runAgainstRecording`, `fakeClaudePath` mirror provider-codex's own
@@ -150,13 +163,16 @@ describe("createClaudeCodeProvider", () => {
     expect(createClaudeCodeProvider().capabilities().checkpointOnRequest).toBe(false);
   });
 
-  // SD-001 again, and for this CLI there are two flags to stay away from, not one.
-  it("never builds a command carrying a permission-bypass flag", async () => {
+  // SD-001 again. Every named spelling is checked, not just the ones this adapter happens to
+  // build today -- adding a flag to FORBIDDEN_PERMISSION_BYPASS_FLAGS is what makes a future
+  // regression here fail loudly, instead of a check that only ever knew about two flags.
+  it("never builds a command carrying a permission-bypass flag (SD-001)", async () => {
     const spawned = recordSpawn();
     await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
-    const line = spawned.args.join(" ");
-    expect(line).not.toContain("dangerously");
-    expect(line).not.toContain("bypassPermissions");
+    const commandLine = spawned.args.join(" ");
+    for (const forbidden of FORBIDDEN_PERMISSION_BYPASS_FLAGS) {
+      expect(commandLine).not.toContain(forbidden);
+    }
   });
 
   // The other half of the controller ruling above: not only must `checkpointOnRequest` read

@@ -11,6 +11,20 @@ import { createCodexProvider } from "../src/index.js";
 
 const fakeCodexPath = fileURLToPath(new URL("./fixtures/fake-codex.mjs", import.meta.url));
 
+// SD-001 forbids Loomrail from ever enabling a provider's permission-bypass mode automatically --
+// every spelling either CLI accepts for that bypass is named here once, so that a future CLI
+// version adding another one is a decision someone makes to this list, not something that quietly
+// never happens. Shared verbatim with provider-claude-code's own copy of this list (no test-only
+// module is common to both packages yet, so -- per this task's own convention for helpers needed
+// by two packages -- duplicating a four-line constant is preferable to creating one for this
+// alone).
+const FORBIDDEN_PERMISSION_BYPASS_FLAGS: readonly string[] = [
+  "--dangerously-skip-permissions",
+  "--allow-dangerously-skip-permissions",
+  "--dangerously-bypass-approvals-and-sandbox",
+  "--permission-mode bypassPermissions",
+];
+
 // --- Test scaffolding -------------------------------------------------------------------------
 //
 // These helpers (`recordSpawn`, `startWith`, `runAgainstRecording`, `fakeCodexPath`) do not exist
@@ -157,11 +171,16 @@ describe("createCodexProvider", () => {
   });
 
   // SD-001 forbids enabling a permission bypass automatically; this is the test, not the
-  // convention.
-  it("never builds a command carrying a permission-bypass flag", async () => {
+  // convention. Every named spelling is checked, not just the one this adapter happens to build
+  // today -- adding a flag to FORBIDDEN_PERMISSION_BYPASS_FLAGS is what makes a future regression
+  // here fail loudly, instead of a check that only ever knew about one flag.
+  it("never builds a command carrying a permission-bypass flag (SD-001)", async () => {
     const spawned = recordSpawn();
     await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
-    expect(spawned.args.join(" ")).not.toContain("dangerously");
+    const commandLine = spawned.args.join(" ");
+    for (const forbidden of FORBIDDEN_PERMISSION_BYPASS_FLAGS) {
+      expect(commandLine).not.toContain(forbidden);
+    }
   });
 
   it("reports the usage of every completed turn", async () => {
