@@ -13,7 +13,6 @@ import {
   providerCapabilitiesSchema,
   runProcess,
   type ProviderAdapter,
-  type ProviderCapabilities,
   type ProviderInvocation,
   type ProviderSessionListener,
 } from "@loomrail/provider-core";
@@ -116,25 +115,6 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
   // change under a running daemon in a way that matters for this decision, so one probe per
   // adapter instance is enough.
   const cliAvailable = isExecutableOnDisk(resolved.command);
-  // Every capability this adapter could claim depends on a running `codex exec` child: no CLI
-  // means no process, no event stream, nothing to report. `stages: []` is what task 9's gate
-  // (session-loop.ts's `decideDispatchStage`) already knows how to turn into a clean refusal
-  // instead of a dispatch that would surface as a provider error mid-session. Built directly, not
-  // through `providerCapabilitiesSchema.parse()`: that schema requires `stages` to be non-empty
-  // (an adapter that serves no stage at all is otherwise never a value worth declaring), so an
-  // unavailable adapter's capabilities are the one shape this module does not run past `.parse()`.
-  const unavailableCapabilities: ProviderCapabilities = {
-    provider: "CODEX",
-    start: false,
-    interrupt: false,
-    eventStream: false,
-    usageReporting: false,
-    contextWindowReporting: false,
-    checkpointOnRequest: false,
-    contextWindowTokens: resolved.contextWindowTokens,
-    stages: [],
-    costReporting: false,
-  };
   // Keyed by ProviderSession id, not stage-attempt id: A2 runs one live session per `start()`
   // call, and this map exists only so `abortSession` can find the child that call is still
   // waiting on. An entry is removed the moment its session ends, aborted or not.
@@ -142,29 +122,37 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
 
   return {
     capabilities: () =>
-      cliAvailable
-        ? providerCapabilitiesSchema.parse({
-            provider: "CODEX",
-            // Established by probing the real CLI, not by policy: before E1 this adapter runs in
-            // an empty temporary directory with no repository, so IMPLEMENT and QA -- which need
-            // one -- are not offered.
-            stages: ["DISCOVERY", "PLAN", "REVIEW"],
-            start: true,
-            // A running child can always be killed, which is what `interrupt` promises here -- a
-            // harder guarantee than `checkpointOnRequest`, which asks the CLI to wind down on its
-            // own and which `codex exec` has no channel to honour.
-            interrupt: true,
-            eventStream: true,
-            usageReporting: true,
-            contextWindowReporting: true,
-            // No cost figure appears anywhere in the JSONL stream.
-            costReporting: false,
-            // SD-001 note lives on `requestHandoff` below, not here: this field just states the
-            // fact that follows from it -- a one-shot process cannot be asked to wind down early.
-            checkpointOnRequest: false,
-            contextWindowTokens: resolved.contextWindowTokens,
-          })
-        : unavailableCapabilities,
+      providerCapabilitiesSchema.parse({
+        provider: "CODEX",
+        // Established by probing the real CLI, not by policy: before E1 this adapter runs in an
+        // empty temporary directory with no repository, so IMPLEMENT and QA -- which need one --
+        // are not offered. Declared the same whether or not the CLI is currently on this machine
+        // -- `stages` says what this adapter would serve if it could run, `start` below is the
+        // separate claim that it currently can. Overloading `stages` to also mean "unavailable"
+        // (an earlier version of this adapter emptied it) collided with
+        // `providerCapabilitiesSchema`'s own `stages.min(1)`, which exists to guarantee a
+        // *working* adapter always declares somewhere to dispatch -- a guarantee that has nothing
+        // to say about an adapter that cannot start at all. Task 9's gate
+        // (session-loop.ts's `decideDispatchStage`) reads `start` directly for that case now.
+        stages: ["DISCOVERY", "PLAN", "REVIEW"],
+        // Spec §9, first line: false when the executable this adapter would spawn is not on this
+        // machine, checked once above at construction. `providerCapabilitiesSchema.parse()` runs
+        // unconditionally on this object either way -- there is no branch that skips validation.
+        start: cliAvailable,
+        // A running child can always be killed, which is what `interrupt` promises here -- a
+        // harder guarantee than `checkpointOnRequest`, which asks the CLI to wind down on its
+        // own and which `codex exec` has no channel to honour.
+        interrupt: true,
+        eventStream: true,
+        usageReporting: true,
+        contextWindowReporting: true,
+        // No cost figure appears anywhere in the JSONL stream.
+        costReporting: false,
+        // SD-001 note lives on `requestHandoff` below, not here: this field just states the fact
+        // that follows from it -- a one-shot process cannot be asked to wind down early.
+        checkpointOnRequest: false,
+        contextWindowTokens: resolved.contextWindowTokens,
+      }),
 
     start: async (
       invocation: ProviderInvocation,

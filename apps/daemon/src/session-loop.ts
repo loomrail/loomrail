@@ -223,17 +223,23 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
     }
 
     // Task 9 (milestone A2): before E1 a live adapter has no filesystem access, so it cannot serve
-    // a stage it did not declare in `capabilities().stages` -- most notably IMPLEMENT. Checked here,
-    // before a session ever opens: starting one anyway would let the adapter return prose for a
-    // stage it never touched, and the stage would look done with no work behind it. The refusal is
-    // completed through the same APPLY_PROVIDER_OUTCOME command a provider's own NEEDS_HUMAN outcome
-    // uses, so it reaches the owner exactly the way any other blocking question does -- a HumanRequest,
-    // the run and this StageAttempt moved to WAITING_HUMAN, and the pending dispatch completed rather
-    // than left to spin the drain.
+    // a stage it did not declare in `capabilities().stages` -- most notably IMPLEMENT. Task 10.5
+    // added the other half: `capabilities().start` is `false` when the adapter's CLI is not on this
+    // machine at all, and that must refuse every stage, not just the ones it happens not to
+    // declare -- an adapter with no executable still declares its normal `stages` (task 10.5
+    // deliberately keeps `start` and `stages` as separate claims; see provider-codex/provider-
+    // claude-code's `capabilities()`), so checking `declaredStages` alone would have dispatched to
+    // it anyway. Checked here, before a session ever opens: starting one anyway would either fail to
+    // spawn or let the adapter return prose for a stage it never touched, and the stage would look
+    // done with no work behind it. The refusal is completed through the same APPLY_PROVIDER_OUTCOME
+    // command a provider's own NEEDS_HUMAN outcome uses, so it reaches the owner exactly the way any
+    // other blocking question does -- a HumanRequest, the run and this StageAttempt moved to
+    // WAITING_HUMAN, and the pending dispatch completed rather than left to spin the drain.
     const dispatchDecision = decideDispatchStage({
       stage: attempt.stage,
       provider: capabilities.provider,
       declaredStages: capabilities.stages,
+      canStart: capabilities.start,
     });
     if (dispatchDecision.type === "STAGE_NOT_SERVED") {
       deps.state.execute({
@@ -249,8 +255,13 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
         },
       });
       deps.logger.warn(
-        { stageAttemptId, stage: attempt.stage, provider: capabilities.provider },
-        "The adapter does not declare this stage; the dispatch was refused and the owner was asked",
+        {
+          stageAttemptId,
+          stage: attempt.stage,
+          provider: capabilities.provider,
+          canStart: String(capabilities.start),
+        },
+        "The adapter refused this dispatch; the owner was asked",
       );
       return;
     }

@@ -337,13 +337,16 @@ describe("createClaudeCodeProvider", () => {
   });
 
   // Spec §9, first line: an adapter must not promise a provider whose CLI is not on this machine.
-  // Task 9's gate (session-loop.ts) already refuses to dispatch a stage the adapter did not
-  // declare, so an empty `stages` array is enough to make that gate turn this into a refusal
-  // rather than a provider error surfacing mid-session.
-  it("declares itself unavailable when its CLI is not installed", () => {
+  // `start` alone carries that claim -- `stages` stays the adapter's normal declaration (what it
+  // would serve if it could run), because `providerCapabilitiesSchema`'s `stages.min(1)` exists
+  // to guarantee a *working* adapter always declares somewhere to dispatch, a guarantee that
+  // says nothing about an adapter that cannot start at all. `packages/domain/src/workflow.ts`'s
+  // `decideDispatchStage` reads `start` directly (task 10.5) to refuse this adapter regardless of
+  // what `stages` says.
+  it("declares itself unavailable when its CLI is not installed, but still declares its stages", () => {
     const capabilities = createClaudeCodeProvider({ command: "/nonexistent/claude" }).capabilities();
     expect(capabilities.start).toBe(false);
-    expect(capabilities.stages).toEqual([]);
+    expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "REVIEW"]);
   });
 
   // A1's D1 removed the second execution path deliberately (a session is always rebuilt from

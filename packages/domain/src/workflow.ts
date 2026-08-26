@@ -266,34 +266,58 @@ export type DispatchStageDecision =
 /**
  * Gates a stage against the adapter about to run it (milestone A2).
  *
- * Before milestone E1 a live adapter runs its CLI in an empty temporary directory: it has no
- * filesystem access, so it cannot serve a stage it does not declare (see the comment on `stages`
- * in `@loomrail/provider-core`'s `ProviderCapabilities`) -- most notably IMPLEMENT, which needs
+ * Two separate reasons can make an adapter wrong for a stage, and they are checked in order
+ * because they are different claims. `canStart: false` means the adapter's CLI is not on this
+ * machine at all -- it cannot run *any* stage, not just this one (task 10.5: `capabilities().start`
+ * is what an adapter's own missing-executable check feeds into). Before milestone E1, a live
+ * adapter that *can* start still runs its CLI in an empty temporary directory with no filesystem
+ * access, so it cannot serve a stage it does not declare (see the comment on `stages` in
+ * `@loomrail/provider-core`'s `ProviderCapabilities`) -- most notably IMPLEMENT, which needs
  * something to change. Without this gate the dispatcher would hand the stage to the adapter
- * anyway, the adapter would return prose, and the stage would look done with no work behind it --
- * a stage that produced nothing but reported success. That is knowable in advance, from data the
- * adapter already declared, without ever starting a session.
+ * anyway -- either to a process that fails to spawn, or to one that returns prose for a stage it
+ * never touched, and the stage would look done with no work behind it. Both are knowable in
+ * advance, from data the adapter already declared, without ever starting a session.
  *
- * Takes the stage name, the provider's identity and its declared stages as plain data rather than
- * a `ProviderCapabilities` object: this decision only ever needs those three values, and importing
- * the whole adapter contract to get them would give the domain a dependency it does not need --
- * one more thing this package would have to be reasoned about, and rebuilt, alongside. The caller
- * in `session-loop.ts` already holds the capabilities object; that is the layer that legitimately
- * knows what an adapter contract looks like.
+ * Takes the stage name, the provider's identity, whether it can start at all, and its declared
+ * stages as plain data rather than a `ProviderCapabilities` object: this decision only ever needs
+ * those four values, and importing the whole adapter contract to get them would give the domain a
+ * dependency it does not need -- one more thing this package would have to be reasoned about, and
+ * rebuilt, alongside. The caller in `session-loop.ts` already holds the capabilities object; that
+ * is the layer that legitimately knows what an adapter contract looks like.
  *
  * The refusal has to be visible, not just prevented: a gate that silently declines is a stage that
  * never runs and nobody notices. So a refusal returns a HumanRequestDraft, the same shape
  * `decideApplyProviderOutcome`'s NEEDS_HUMAN branch already uses to turn a blocking provider
  * outcome into an owner-facing question -- the caller completes the pending dispatch through that
  * same APPLY_PROVIDER_OUTCOME command, which is how the id and timestamps this pure function does
- * not have get attached and how the request reaches the owner. The request names both the stage
- * and the provider: "something could not run" is not actionable, "CODEX cannot serve IMPLEMENT" is.
+ * not have get attached and how the request reaches the owner. Each branch's request names the
+ * actual reason: "something could not run" is not actionable, "CODEX is not installed on this
+ * machine" and "CODEX cannot serve IMPLEMENT" each are, and they call for different fixes.
  */
 export const decideDispatchStage = (context: {
   stage: WorkflowStage;
   provider: string;
   declaredStages: readonly WorkflowStage[];
+  canStart: boolean;
 }): DispatchStageDecision => {
+  if (!context.canStart) {
+    return {
+      type: "STAGE_NOT_SERVED",
+      request: {
+        // Same FREE_TEXT/allowOther convention as the "stage not declared" branch below -- see
+        // its own comment for why: the right fix is out-of-band (install the CLI, or reassign),
+        // not a choice Loomrail can enumerate.
+        kind: "FREE_TEXT",
+        blocking: true,
+        title: `${context.provider} is not installed on this machine`,
+        context: `The ${context.provider} adapter could not find its CLI on this machine, so it cannot start a session for the ${context.stage} stage -- or any other stage. Loomrail refused to dispatch rather than starting a session that could only fail.`,
+        recommendation:
+          "Install the provider's CLI on this machine, or reassign this stage to a different, available adapter.",
+        options: [],
+        allowOther: true,
+      },
+    };
+  }
   if (context.declaredStages.includes(context.stage)) {
     return { type: "DISPATCH" };
   }

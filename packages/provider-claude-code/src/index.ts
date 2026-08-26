@@ -14,7 +14,6 @@ import {
   runProcess,
   ProcessSpawnError,
   type ProviderAdapter,
-  type ProviderCapabilities,
   type ProviderInvocation,
   type ProviderSessionListener,
 } from "@loomrail/provider-core";
@@ -132,25 +131,6 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
   // repeatedly, including on paths where the answer must be cheap -- see provider-codex's
   // identical check for the identical reason.
   const cliAvailable = isExecutableOnDisk(resolved.command);
-  // Every capability this adapter could claim depends on a running `claude -p` child: no CLI
-  // means no process, no event stream, nothing to report. `stages: []` is what task 9's gate
-  // (session-loop.ts's `decideDispatchStage`) already knows how to turn into a clean refusal
-  // instead of a dispatch that would surface as a provider error mid-session. Built directly, not
-  // through `providerCapabilitiesSchema.parse()` -- see provider-codex's identical comment: that
-  // schema requires `stages` to be non-empty, so an unavailable adapter's capabilities are the
-  // one shape this module does not run past `.parse()`.
-  const unavailableCapabilities: ProviderCapabilities = {
-    provider: "CLAUDE_CODE",
-    start: false,
-    interrupt: false,
-    eventStream: false,
-    usageReporting: false,
-    contextWindowReporting: false,
-    checkpointOnRequest: false,
-    contextWindowTokens: resolved.contextWindowTokens,
-    stages: [],
-    costReporting: false,
-  };
   // Keyed by ProviderSession id, not stage-attempt id -- see provider-codex's identical map for
   // the identical reason: this exists only so `abortSession` can find the child a given `start()`
   // call is still waiting on.
@@ -158,46 +138,51 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
 
   return {
     capabilities: () =>
-      cliAvailable
-        ? providerCapabilitiesSchema.parse({
-            provider: "CLAUDE_CODE",
-            // Established by the same reasoning as provider-codex's `stages`: before E1 this
-            // adapter runs in an empty temporary directory with no repository, so IMPLEMENT and
-            // QA -- which need one -- are not offered.
-            stages: ["DISCOVERY", "PLAN", "REVIEW"],
-            start: true,
-            // A running child can always be killed -- see `abortSession` below, which awaits the
-            // real exit rather than merely sending a signal.
-            interrupt: true,
-            eventStream: true,
-            usageReporting: true,
-            // Spec §7 lists this adapter with `contextWindowReporting: true`, on the grounds that
-            // usage arrives in both `assistant` and `result` events -- and `parseClaudeEvent`'s
-            // `result` event now carries real `inputTokens` (see `stream.ts`) to satisfy it.
-            // `eventStream: true` above is what the contract's own refine (provider-core)
-            // requires before this can be `true` at all: occupancy has exactly one channel,
-            // `onContextWindow` on the session listener, and an adapter with no stream would have
-            // nothing to deliver it on. This one does -- see the `onContextWindow` call below,
-            // mirroring provider-codex's `turn.completed` handler.
-            contextWindowReporting: true,
-            // The one thing this adapter can report that provider-codex cannot: `total_cost_usd`
-            // on the terminal `result` event is a real figure from the CLI, not something
-            // Loomrail has to estimate.
-            costReporting: true,
-            // CONTROLLER RULING (task 8): the brief makes this conditional on reconnaissance
-            // confirming that `--input-format stream-json` actually injects a message into an
-            // already-running `claude -p` session. That reconnaissance could not be run in this
-            // environment -- the `claude` CLI here is not authenticated (`is_error: true`, "Not
-            // logged in · Please run /login"), and neither an agent nor the operator may
-            // authenticate one on the owner's behalf. So the documented fallback applies:
-            // declared `false`, and `requestHandoff` below is a no-op that resolves, exactly as
-            // it would be if the CLI had no such channel at all. Nothing here speculates about
-            // how the injection would work -- raising this capability needs the recon run first,
-            // on an authenticated CLI, by the owner.
-            checkpointOnRequest: false,
-            contextWindowTokens: resolved.contextWindowTokens,
-          })
-        : unavailableCapabilities,
+      providerCapabilitiesSchema.parse({
+        provider: "CLAUDE_CODE",
+        // Established by the same reasoning as provider-codex's `stages`: before E1 this adapter
+        // runs in an empty temporary directory with no repository, so IMPLEMENT and QA -- which
+        // need one -- are not offered. Declared the same whether or not the CLI is currently on
+        // this machine -- see provider-codex's identical comment: `stages` says what this
+        // adapter would serve if it could run, `start` below is the separate claim that it
+        // currently can, and task 9's gate (session-loop.ts's `decideDispatchStage`) reads
+        // `start` directly to refuse an unavailable adapter regardless of what it declares here.
+        stages: ["DISCOVERY", "PLAN", "REVIEW"],
+        // Spec §9, first line: false when the executable this adapter would spawn is not on this
+        // machine, checked once above at construction. `providerCapabilitiesSchema.parse()` runs
+        // unconditionally on this object either way -- there is no branch that skips validation.
+        start: cliAvailable,
+        // A running child can always be killed -- see `abortSession` below, which awaits the
+        // real exit rather than merely sending a signal.
+        interrupt: true,
+        eventStream: true,
+        usageReporting: true,
+        // Spec §7 lists this adapter with `contextWindowReporting: true`, on the grounds that
+        // usage arrives in both `assistant` and `result` events -- and `parseClaudeEvent`'s
+        // `result` event now carries real `inputTokens` (see `stream.ts`) to satisfy it.
+        // `eventStream: true` above is what the contract's own refine (provider-core) requires
+        // before this can be `true` at all: occupancy has exactly one channel, `onContextWindow`
+        // on the session listener, and an adapter with no stream would have nothing to deliver it
+        // on. This one does -- see the `onContextWindow` call below, mirroring provider-codex's
+        // `turn.completed` handler.
+        contextWindowReporting: true,
+        // The one thing this adapter can report that provider-codex cannot: `total_cost_usd` on
+        // the terminal `result` event is a real figure from the CLI, not something Loomrail has
+        // to estimate.
+        costReporting: true,
+        // CONTROLLER RULING (task 8): the brief makes this conditional on reconnaissance
+        // confirming that `--input-format stream-json` actually injects a message into an
+        // already-running `claude -p` session. That reconnaissance could not be run in this
+        // environment -- the `claude` CLI here is not authenticated (`is_error: true`, "Not
+        // logged in · Please run /login"), and neither an agent nor the operator may authenticate
+        // one on the owner's behalf. So the documented fallback applies: declared `false`, and
+        // `requestHandoff` below is a no-op that resolves, exactly as it would be if the CLI had
+        // no such channel at all. Nothing here speculates about how the injection would work --
+        // raising this capability needs the recon run first, on an authenticated CLI, by the
+        // owner.
+        checkpointOnRequest: false,
+        contextWindowTokens: resolved.contextWindowTokens,
+      }),
 
     start: async (
       invocation: ProviderInvocation,
