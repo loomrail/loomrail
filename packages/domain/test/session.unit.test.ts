@@ -30,6 +30,7 @@ const runningSession = (overrides: Partial<ProviderSession> = {}): ProviderSessi
   startedAt: "2026-08-25T17:00:00.000Z",
   endedAt: null,
   version: 1,
+  pid: null,
   ...overrides,
 });
 

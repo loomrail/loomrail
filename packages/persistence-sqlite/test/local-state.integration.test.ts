@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,7 @@ import type {
   LegacyApplyMockProviderOutcomeCommand,
   MoveWorkItemCommand,
   PublishCheckpointCommand,
+  ReconcileWorkflowsCommand,
   RegisterProjectCommand,
   RequestContextHandoffCommand,
   StartMockPipelineCommand,
@@ -514,7 +516,7 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);
@@ -1697,14 +1699,14 @@ describe("SQLite local state", () => {
           SELECT RAISE(ABORT, 'events are append-only');
         END;
       `);
-      // 0009 adds its occupancy columns to the table 0006 creates, so a database that predates
-      // 0006 predates 0009 too: dropping provider_sessions took those columns with it, and both
+      // 0009 and 0010 both add columns to the table 0006 creates, so a database that predates 0006
+      // predates them too: dropping provider_sessions took those columns with it, and all three
       // migrations have to be pending for the reconstruction to be honest.
-      raw.prepare("DELETE FROM schema_migrations WHERE version IN (6, 9)").run();
+      raw.prepare("DELETE FROM schema_migrations WHERE version IN (6, 9, 10)").run();
       raw.close();
 
       const migrated = await open();
-      expect(migrated.startup.appliedMigrations).toEqual([6, 9]);
+      expect(migrated.startup.appliedMigrations).toEqual([6, 9, 10]);
 
       const after = migrated.query({ type: "LIST_EVENTS" });
       if (after.type !== "EVENTS") throw new Error("Expected events");
@@ -2388,6 +2390,138 @@ describe("SQLite local state", () => {
         raw.prepare("SELECT status, end_reason FROM provider_sessions WHERE id = ?").get(started.session.id),
       ).toEqual({ status: "ENDED", end_reason: "INTERRUPTED" });
       raw.close();
+    });
+
+    // Task 10: no production caller sets `process_pid` yet -- no live adapter has a channel to
+    // report its child's pid back to the session loop before `ProviderAdapter.start()` resolves
+    // (see apps/daemon/src/session-loop.ts), so `startProviderSessionCommand` above never carries
+    // one. This pokes the column directly over a second connection, the same way the migration
+    // tests above reach past the command surface to set up a fact the public API cannot produce
+    // today.
+    const setProviderSessionProcessPid = (providerSessionId: string, pid: number): void => {
+      const raw = new DatabaseSync(databasePath);
+      raw.prepare("UPDATE provider_sessions SET process_pid = ? WHERE id = ?").run(pid, providerSessionId);
+      raw.close();
+    };
+
+    const readProviderSessionRow = (
+      providerSessionId: string,
+    ): { status: string; process_pid: number | null } => {
+      const raw = new DatabaseSync(databasePath);
+      const row = raw
+        .prepare("SELECT status, process_pid FROM provider_sessions WHERE id = ?")
+        .get(providerSessionId) as { status: string; process_pid: number | null } | undefined;
+      raw.close();
+      if (!row) throw new Error("Expected the ProviderSession row to exist");
+      return row;
+    };
+
+    const reconcileWorkflowsCommand = (commandId: string): ReconcileWorkflowsCommand => ({
+      schemaVersion: 1,
+      commandId,
+      correlationId: `correlation-${commandId}`,
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "RECONCILE_WORKFLOWS",
+      payload: {},
+    });
+
+    // `process.kill(pid, 0)` sends no signal -- it only asks the kernel whether a process with
+    // this pid still exists, throwing ESRCH when it does not. This is the same liveness check
+    // reconciliation itself uses (packages/persistence-sqlite/src/index.ts), reused here so the
+    // test asserts the fact reconciliation acts on rather than a proxy for it.
+    const isProcessAlive = (pid: number): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const PROCESS_EXIT_CONFIRMATION_TIMEOUT_MS = 2_000;
+    const PROCESS_EXIT_POLL_INTERVAL_MS = 5;
+
+    // Test-only: waits for a pid this test process itself spawned to actually be reaped, by
+    // yielding to the event loop between checks (see the comment at its call site for why a
+    // synchronous check right after `execute` cannot observe this). Nothing in production code
+    // needs this -- an orphan reconciliation kills was never this daemon's own child, so there is
+    // no reap for it to wait on.
+    const waitUntilProcessExits = async (pid: number, timeoutMs: number): Promise<void> => {
+      const deadline = Date.now() + timeoutMs;
+      while (isProcessAlive(pid) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, PROCESS_EXIT_POLL_INTERVAL_MS));
+      }
+    };
+
+    it("remembers the process a running session is driving", async () => {
+      const localState = await open();
+      const { stageAttemptId } = startWorkflow(localState, "start-pid-session", "create-pid-item");
+      const started = localState.execute(
+        startProviderSessionCommand("start-pid-provider-session", stageAttemptId),
+      );
+      if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+      setProviderSessionProcessPid(started.session.id, 4242);
+
+      const listed = localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId });
+      if (listed.type !== "PROVIDER_SESSIONS") throw new Error("Expected the attempt's sessions");
+      expect(listed.sessions.find(({ id }) => id === started.session.id)?.pid).toBe(4242);
+    });
+
+    // "no process was ever started" and "a process whose pid is 0" are different facts, and a
+    // NOT NULL DEFAULT 0 column cannot tell them apart -- which is the difference between
+    // reconciliation skipping a session and reconciliation trying to signal init.
+    it("leaves the pid null for a session that never started a process", async () => {
+      const localState = await open();
+      const { stageAttemptId } = startWorkflow(localState, "start-no-pid-session", "create-no-pid-item");
+      const started = localState.execute(
+        startProviderSessionCommand("start-no-pid-provider-session", stageAttemptId),
+      );
+      if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+
+      const listed = localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId });
+      if (listed.type !== "PROVIDER_SESSIONS") throw new Error("Expected the attempt's sessions");
+      expect(listed.sessions.find(({ id }) => id === started.session.id)?.pid).toBeNull();
+    });
+
+    // The claim reconciliation makes is "killed first, marked second". Proven with a REAL detached
+    // child, spawned outside anything this state store manages, because the whole point is that the
+    // process outlives the daemon that spawned it.
+    it("kills a process orphaned by a daemon restart before ending its session", async () => {
+      const before = await open();
+      const { stageAttemptId } = startWorkflow(before, "start-orphan-pid-session", "create-orphan-pid-item");
+      const started = before.execute(
+        startProviderSessionCommand("start-orphan-pid-provider-session", stageAttemptId),
+      );
+      if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { detached: true });
+      const pid = child.pid;
+      if (pid === undefined) throw new Error("The probe child did not start");
+      child.unref();
+      setProviderSessionProcessPid(started.session.id, pid);
+
+      // No END_PROVIDER_SESSION: the row stays RUNNING with its pid recorded, which is what a
+      // daemon that died mid-session -- without killing its own child -- leaves behind.
+      before.close();
+      state = undefined;
+
+      const after = await open();
+      const reconciled = after.execute(reconcileWorkflowsCommand("reconcile-orphan-pid-session"));
+      if (reconciled.type !== "WORKFLOWS_RECONCILED") throw new Error("Expected reconciliation");
+
+      // `execute` sends SIGKILL synchronously and returns without waiting for it to land -- and in
+      // production that is the whole story, because the orphan is never this process's own child.
+      // Here it is: this test spawned the probe itself, so this process is the one the kernel
+      // expects to reap it, and that reap only happens on an event-loop turn this synchronous
+      // `execute` call never yields. Polling with a real `await` between checks is what lets that
+      // turn happen; it is a fact about this test harness, not about reconciliation, which already
+      // sent the kill before this line ever runs.
+      await waitUntilProcessExits(pid, PROCESS_EXIT_CONFIRMATION_TIMEOUT_MS);
+      expect(isProcessAlive(pid)).toBe(false);
+      expect(reconciled.interruptedSessions.find(({ id }) => id === started.session.id)?.status).toBe(
+        "ENDED",
+      );
+      expect(readProviderSessionRow(started.session.id).status).toBe("ENDED");
     });
 
     it("assembles the context sources snapshot from a published Checkpoint, Evidence, and a Decision", async () => {

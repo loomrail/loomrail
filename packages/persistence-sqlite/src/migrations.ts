@@ -32,6 +32,7 @@ const migrations: readonly Migration[] = [
     filename: "0008_stage_attempt_counter_backfill.sql",
   },
   { version: 9, name: "session_window_occupancy", filename: "0009_session_window_occupancy.sql" },
+  { version: 10, name: "provider_session_pid", filename: "0010_provider_session_pid.sql" },
 ];
 
 const migrationRowSchema = z.object({

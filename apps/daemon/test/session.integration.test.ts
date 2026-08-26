@@ -232,6 +232,23 @@ describe("stage attempt session loop", () => {
     abortSession: () => Promise.resolve(),
   });
 
+  // Task 10 / spec §8: the pid column exists so reconciliation can find and kill an orphaned
+  // process (see local-state.integration.test.ts in @loomrail/persistence-sqlite), but no adapter
+  // -- MOCK included -- has a channel to report a child's pid back to this loop before
+  // `ProviderAdapter.start()` resolves (its own `start()` call spawns and awaits the whole session
+  // internally; see the comment on the `pid` field in session-loop.ts). Recording a made-up value
+  // would be worse than recording none: reconciliation reads a null pid as "no process to look
+  // for" and correctly leaves the session alone, while a wrong pid could point reconciliation at a
+  // process that has nothing to do with this session.
+  it("does not invent a process id for a session no adapter has reported one for", async () => {
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    await runStageAttempt(depsFor(localState, seeded, finishingAdapter()));
+    const { sessions } = sessionRows(localState, seeded.stageAttemptId);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.pid).toBeNull();
+  });
+
   it("continues the same attempt in a second session after a handoff", async () => {
     // The point of A1: the work survives the context window filling up.
     const localState = await open();

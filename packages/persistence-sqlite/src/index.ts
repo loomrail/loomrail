@@ -318,6 +318,9 @@ const providerSessionRowSchema = z.object({
   context_window_tokens: z.number().int().nullable(),
   context_usage_quality: z.string().nullable(),
   context_usage_reported_at: z.string().nullable(),
+  // Migration 0010: the OS pid of the child process a RUNNING session is driving, or null if none
+  // was ever recorded for it.
+  process_pid: z.number().int().nullable(),
 });
 
 type ProviderSessionRow = z.infer<typeof providerSessionRowSchema>;
@@ -639,6 +642,7 @@ const providerSessionFromParsedRow = (row: ProviderSessionRow): ProviderSession 
     startedAt: row.started_at,
     endedAt: row.ended_at,
     version: row.version,
+    pid: row.process_pid,
   });
 };
 
@@ -759,6 +763,37 @@ const assertNever = (value: never): never => {
   });
 };
 
+// `process.kill(pid, 0)` sends no signal at all -- it only asks the kernel whether a process with
+// this pid exists, throwing ESRCH when it does not. This is the same check RECONCILE_WORKFLOWS
+// uses below to decide whether an orphaned ProviderSession's recorded pid is still worth acting on,
+// so both agree on what "alive" means.
+const isProcessAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// Spec §8: kills the process an orphaned ProviderSession was driving, if it is still alive. Called
+// before that session is marked ENDED (see the RECONCILE_WORKFLOWS handler below) -- the reverse
+// order would let a crash between the two steps commit a session that reads as "ended" while its
+// process is still running and still spending the owner's money, and reconciliation's own query
+// only ever looks for a pid on a session it still considers RUNNING, so a session already marked
+// ENDED is a process the next start will never look for again.
+//
+// SIGKILL, not the graceful terminate-then-wait `runProcess`'s `stop()` uses: `execute` is
+// synchronous end to end, so there is no way to await a termination grace period here, and an
+// orphan with no daemon left watching it has no stdout listener or checkpoint write to let finish
+// anyway. Checked for liveness with `isProcessAlive` first, not signalled unconditionally, so a
+// retry after a crash -- the pid already dead, the ENDED write never having committed -- never
+// risks signalling whatever unrelated process the OS has since reused that pid for.
+const killOrphanedSessionProcess = (pid: number): void => {
+  if (!isProcessAlive(pid)) return;
+  process.kill(pid, "SIGKILL");
+};
+
 export const openLocalState = async (options: OpenLocalStateOptions): Promise<LocalState> => {
   const now = options.now ?? (() => new Date());
   const createId = options.createId ?? ((kind) => `${kind}-${randomUUID()}`);
@@ -861,8 +896,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const insertProviderSession = database.prepare(
       `INSERT INTO provider_sessions (
         id, schema_version, stage_attempt_id, ordinal, status, end_reason, handoff_requested_at,
-        started_at, ended_at, version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        started_at, ended_at, version, process_pid
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const updateProviderSession = database.prepare(
       `UPDATE provider_sessions
@@ -2365,6 +2400,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               "The StageAttempt backing an orphaned ProviderSession is missing",
             );
           }
+          // Kill first, mark second (see killOrphanedSessionProcess): a session with no recorded
+          // pid never reached the point of having a process to kill, and is simply marked ENDED.
+          if (current.pid !== null) killOrphanedSessionProcess(current.pid);
           const session = providerSessionSchema.parse({
             ...current,
             status: "ENDED",
@@ -2466,6 +2504,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           startedAt: occurredAt,
           endedAt: null,
           version: 1,
+          // Undefined and null both mean "no process known yet" -- every caller today omits this
+          // (see startProviderSessionCommandSchema), so this normalises the absent case to the same
+          // `null` a caller who knows there is no process would pass explicitly.
+          pid: command.payload.pid ?? null,
         });
         // No existence pre-check on stageAttemptId: the FK on provider_sessions.stage_attempt_id
         // rejects a non-existent StageAttempt right here, inside this command's transaction, which
@@ -2481,6 +2523,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           session.startedAt,
           session.endedAt,
           session.version,
+          session.pid,
         );
         const recipe = contextPackRecipeSchema.parse({
           ...command.payload.recipe,

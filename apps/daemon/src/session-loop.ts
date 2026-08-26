@@ -340,6 +340,14 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
           // well the provider can measure itself.
           estimateQuality: "LOOMRAIL_ESTIMATE",
         }),
+        // Task 10 / spec §8: `pid` is what lets a future reconciliation find and kill this
+        // session's process if the daemon dies without doing so itself. It is left unrecorded
+        // here rather than guessed: `ProviderAdapter.start()` below spawns the child deep inside
+        // its own implementation and only returns once the whole session has ended, so there is
+        // no channel back to this loop for the pid while the process is still running. Recording
+        // one honestly requires the adapter interface itself to grow a way to report it early,
+        // which is not something this task changes.
+        pid: null,
       },
     });
     if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("The ProviderSession did not start");

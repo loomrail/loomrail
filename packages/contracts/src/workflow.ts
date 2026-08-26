@@ -193,6 +193,12 @@ export const providerSessionSchema = z
     startedAt: utcTimestampSchema,
     endedAt: utcTimestampSchema.nullable(),
     version: z.number().int().positive(),
+    // Task 10 / spec §8: the OS pid of the child process this RUNNING session is driving, so a
+    // daemon that dies without killing it can still find and kill that process on the next start.
+    // Nullable, not defaulted to 0 -- "no process was ever started" and "a process whose pid is 0"
+    // are different facts, and a defaulted column could not tell them apart. Set once, at start;
+    // nothing here updates it later.
+    pid: z.number().int().positive().nullable(),
   })
   .strict()
   .refine(
@@ -924,6 +930,14 @@ export const startProviderSessionCommandSchema = commandBaseSchema.extend({
     .object({
       stageAttemptId: opaqueIdSchema,
       recipe: contextPackRecipeInputSchema,
+      // Optional, not required: no live adapter today has a channel to report its child's pid
+      // back to the caller before `ProviderAdapter.start()` resolves (it spawns the process deep
+      // inside its own `start()` call and only returns once the session has already ended), so
+      // every existing caller omits it and the session is recorded with no known process. A
+      // caller that does know a pid up front -- a test, or a future adapter with a real channel --
+      // can still record it here. Omitted and `null` are treated identically by the command
+      // handler; the ProviderSession itself always carries `pid` as `null`, not absent.
+      pid: z.number().int().positive().nullable().optional(),
     })
     .strict(),
 });
