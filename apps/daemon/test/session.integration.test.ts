@@ -18,14 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { startDaemon, type RunningDaemon } from "../src/server.js";
 import { runStageAttempt, type RunStageAttemptDeps, type SessionLoopLogger } from "../src/session-loop.js";
-import {
-  pendingDispatchModes,
-  registerFixtureProject,
-  seedQueuedAttempt,
-  seedReadyWorkItem,
-  snapshotOf,
-  type SeededAttempt,
-} from "./state-fixtures.js";
+import { pendingDispatchModes, seedQueuedAttempt, snapshotOf, type SeededAttempt } from "./state-fixtures.js";
 
 const timestamp = "2026-08-25T18:00:00.000Z";
 
@@ -107,22 +100,9 @@ describe("stage attempt session loop", () => {
 
   const createCommandId = (): string => `command-${(nextCommandId += 1).toString()}`;
 
-  // A clock that never returns the same instant twice. `created_at` is the first key the pending
-  // dispatch queue orders by, so a fixed clock would leave the queue order of two dispatches
-  // written in the same millisecond up to their generated ids.
-  const advancingClock = (): (() => Date) => {
-    const base = Date.parse(timestamp);
-    let elapsed = 0;
-    return () => new Date(base + (elapsed += 1));
-  };
-
-  // Thin bindings over the shared fixtures in `state-fixtures.ts`: this file's `createCommandId` and
-  // `temporaryDirectory` live in this `describe`'s closure, so every call site just needs the
+  // Thin binding over the shared fixture in `state-fixtures.ts`: this file's `createCommandId` and
+  // `temporaryDirectory` live in this `describe`'s closure, so the call site just needs the
   // `LocalState` it's already passing.
-  const registerProject = (localState: LocalState): void =>
-    registerFixtureProject(localState, createCommandId, temporaryDirectory);
-  const readyWorkItem = (localState: LocalState, title?: string): string =>
-    seedReadyWorkItem(localState, createCommandId, title);
   const queuedAttempt = (localState: LocalState): SeededAttempt =>
     seedQueuedAttempt(localState, createCommandId, temporaryDirectory);
 
@@ -276,14 +256,11 @@ describe("stage attempt session loop", () => {
     // provider adapter for the daemon's whole process lifetime, so the real swap boundary is a
     // restart: RECONCILE_WORKFLOWS ends the orphaned session and leaves the pending dispatch for a
     // *fresh* `runStageAttempt` call, which is where a newly configured adapter would actually be
-    // read. A single call routed to two adapters through a test-only wrapper cannot exercise that
-    // boundary -- `capabilities()` is read once at the top of `runStageAttempt`, before the loop
-    // even knows there will be a second session, so whichever adapter answers `capabilities()`
-    // first (here, always the wrapper's declared `first`) silently supplies every session's budget
-    // and the wrapper's own routing logic, not the loop's, decides who starts each session. This
-    // version instead makes two genuinely separate `runStageAttempt` calls, one per adapter, the
-    // way a restart would -- so an adapter-selection defect, or a budget computed from the wrong
-    // provider's declared window, has somewhere real to be wrong.
+    // read. Hence two genuinely separate `runStageAttempt` calls, one per adapter, the way a
+    // restart would -- not one call routed to two adapters through a test-only wrapper.
+    // `capabilities()` is read once at the top of `runStageAttempt`, before the loop knows there
+    // will be a second session, so a single call takes every session's budget from whichever
+    // adapter answers first and leaves an adapter-selection defect nowhere to be wrong.
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
 
@@ -335,9 +312,8 @@ describe("stage attempt session loop", () => {
     });
 
     // A declared window that differs from the first adapter's (8,000 vs. 4,000): if the second
-    // session's budget were computed from the first provider's capabilities -- the defect the
-    // previous version of this test could not catch, because it never read the second adapter's
-    // `capabilities()` at all -- this number would come out wrong.
+    // session's budget were computed from the first provider's capabilities, this number would come
+    // out wrong.
     const secondAdapter = recording(finishingAdapter(8_000));
     await runStageAttempt(depsFor(localState, seeded, secondAdapter));
 
@@ -611,7 +587,7 @@ describe("stage attempt session loop", () => {
   });
 
   it("retries once with a smaller pack share when the provider rejects the pack, then asks the owner", () => {
-    // Spec §7's mis-estimated-pack branch. Nothing exercised PACK_SHARE_BACKOFF before this.
+    // Spec §7's mis-estimated-pack branch, and the only coverage of PACK_SHARE_BACKOFF.
     return (async () => {
       const localState = await open();
       const seeded = seedRunningAttempt(localState);
@@ -799,104 +775,6 @@ describe("stage attempt session loop", () => {
     expect(pendingDispatchModes(localState)).toEqual(["RESUME"]);
   });
 
-  // The drain's guard against being handed the same unmoved dispatch cycle after cycle. It landed
-  // without a test, and the shape it guards -- two callers reaching the same PENDING head while one
-  // of them owns the attempt -- is not reachable by calling `runStageAttempt` directly, because
-  // nothing there loops.
-  it("stops the drain pass when the head dispatch is already being run elsewhere", async () => {
-    const localState = await open();
-    registerProject(localState);
-    const held = readyWorkItem(localState, "held-by-a-concurrent-caller");
-    const behind = readyWorkItem(localState, "queued-behind-it");
-    localState.close();
-    state = undefined;
-
-    // Holds the first provider session open until the test lets go, so the second caller's drain
-    // reaches the same head dispatch while the first caller still owns the attempt. Only the first
-    // session is held; everything after it runs at the mock provider's own speed.
-    let enteredFirstStart = (): void => undefined;
-    const firstStartEntered = new Promise<void>((resolve) => {
-      enteredFirstStart = resolve;
-    });
-    let releaseFirstStart = (): void => undefined;
-    const firstStartGate = new Promise<void>((resolve) => {
-      releaseFirstStart = resolve;
-    });
-    const inner = createMockProvider({
-      contextWindowTokens: 4_000,
-      tokensPerTurn: 100,
-      checkpointEvery: 1_000,
-      hitTheWallAfterTurns: 1,
-    });
-    let holding = false;
-    const holdingAdapter: ProviderAdapter = {
-      capabilities: () => inner.capabilities(),
-      start: async (invocation: ProviderInvocation, listener: ProviderSessionListener) => {
-        if (!holding) {
-          holding = true;
-          enteredFirstStart();
-          await firstStartGate;
-        }
-        return inner.start(invocation, listener);
-      },
-      requestHandoff: (sessionId: string) => inner.requestHandoff(sessionId),
-      abortSession: (sessionId: string) => inner.abortSession(sessionId),
-    };
-
-    const logLines: string[] = [];
-    const token = randomBytes(32).toString("base64url");
-    const daemon = await startDaemon({
-      bootstrapToken: token,
-      stateDatabasePath: databasePath,
-      // Strictly increasing, so the two dispatches cannot share a `created_at` and the queue order
-      // the assertions below rest on is the order the test set up.
-      now: advancingClock(),
-      // No `logger` option: it replaces the default configuration whole, `loggerStream` included,
-      // and the drain's own info line is the assertion below.
-      loggerStream: {
-        write: (message: string) => {
-          logLines.push(message);
-        },
-      },
-      providerAdapter: holdingAdapter,
-    });
-
-    let firstResponse: Promise<Response> | undefined;
-    try {
-      const session = await authenticate(daemon, token);
-      const startPipeline = (workItemId: string, commandId: string): Promise<Response> =>
-        fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
-          method: "POST",
-          headers: mutationHeaders(daemon, session),
-          body: JSON.stringify({ schemaVersion: 1, commandId, expectedVersion: 2 }),
-        });
-
-      firstResponse = startPipeline(held, "start-held-attempt");
-      await firstStartEntered;
-
-      // Without the guard this caller asks for the same unmoved dispatch until the drain's safety
-      // limit turns the *other* caller's work into a 500 on this request.
-      const secondResponse = await startPipeline(behind, "start-queued-behind");
-      expect(secondResponse.status).toBe(200);
-      expect(logLines.some((line) => line.includes("is already being run elsewhere"))).toBe(true);
-
-      // Documented rather than desired: the guard ends the whole pass instead of moving to the next
-      // queued dispatch, so this caller's own work item is still QUEUED when its request returns
-      // and waits for whatever drain runs next. Changing that is a drain restructure, not a guard.
-      const queued = workflowSnapshotSchema.parse(await secondResponse.json());
-      expect(queued.stageAttempts.at(0)?.status).toBe("QUEUED");
-    } finally {
-      releaseFirstStart();
-      if (firstResponse) expect((await firstResponse).status).toBe(200);
-      await daemon.close();
-    }
-
-    // The next drain -- here, the one the first caller's own request finishes with -- picks the
-    // second work item up, so nothing is stranded.
-    const after = await open();
-    expect(snapshotOf(after, behind).stageAttempts.at(0)?.status).not.toBe("QUEUED");
-  });
-
   it("keeps the daemon's own drain working across a hard pause and the answer that lifts it", async () => {
     // Every other test here calls `runStageAttempt` directly, which is exactly why a jam in the
     // drain around these paths stayed invisible: the escape route was verified everywhere except
@@ -923,9 +801,11 @@ describe("stage attempt session loop", () => {
     });
 
     try {
-      // Reaching here at all is half the assertion: with the attempt's START dispatch left pending,
-      // the drain's next cycle calls MARK_WORKFLOW_DISPATCH_STARTED on a hard-paused attempt and
-      // startDaemon rejects with WORKFLOW_CONTROL_NOT_ALLOWED before ever returning.
+      // The boot pass now runs in the background, so the assertion moves from "startDaemon
+      // returned" to "the background pass finished without leaving a standing instruction behind".
+      // Both halves of the original jam are still asserted: the hard pause is reachable through
+      // HTTP, and the answer really puts the stage back to work instead of wedging the queue.
+      await daemon.whenIdle();
       const session = await authenticate(daemon, token);
       const pausedResponse = await fetch(
         `${daemon.baseUrl}/api/v1/work-items/${seeded.workItemId}/workflow`,
@@ -947,9 +827,11 @@ describe("stage attempt session loop", () => {
           answer: { type: "OTHER", text: "Try it once more before I split the task up." },
         }),
       });
-      // With a stale START dispatch left beside the new RESUME one, this endpoint's own drain
-      // fails on the orphaned dispatch and the owner gets a 500 instead of a resumed stage.
       expect(answerResponse.status).toBe(200);
+      // With a stale START dispatch left beside the new RESUME one, this endpoint's own background
+      // pass fails on the orphaned dispatch and the owner would be left with a wedged queue instead
+      // of a resumed stage.
+      await daemon.whenIdle();
     } finally {
       await daemon.close();
     }

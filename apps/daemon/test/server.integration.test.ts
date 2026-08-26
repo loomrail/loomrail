@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
@@ -15,12 +15,16 @@ import {
   workItemsResponseSchema,
   workflowSnapshotSchema,
   type ContextPackSpec,
+  type ProviderSession,
+  type WorkflowSnapshot,
 } from "@loomrail/contracts";
 import { openLocalState } from "@loomrail/persistence-sqlite";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { startDaemon, type RunningDaemon } from "../src/server.js";
+import { gatedAdapter } from "./gated-adapter.js";
+import { seedQueuedAttempt, type SeededAttempt } from "./state-fixtures.js";
 
 // Exported so `event-stream.integration.test.ts` (and future daemon integration suites) can reuse
 // the same session-bootstrap plumbing rather than pasting a second copy.
@@ -54,6 +58,21 @@ export const mutationHeaders = (
   origin: daemon.baseUrl,
   "x-loomrail-csrf": session.csrfToken,
 });
+
+// A mutation handler now answers with the snapshot as of immediately after its own command, before
+// the background worker has necessarily run (spec D4/D6): a test that wants the state a stage
+// reaches once the worker drains it has to re-fetch, not read the mutation's own response body.
+// Pair with `daemon.whenIdle()` -- called first -- so the read lands after the drain settles.
+const fetchWorkflowSnapshot = async (
+  daemon: RunningDaemon,
+  cookie: string,
+  workItemId: string,
+): Promise<WorkflowSnapshot> => {
+  const response = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/workflow`, {
+    headers: { cookie },
+  });
+  return workflowSnapshotSchema.parse(await response.json());
+};
 
 // The context pack a legacy (pre-current) persisted template still carries: DISCOVERY and PLAN
 // never had an EVIDENCE section, since this legacy fixture only exercises those two stages.
@@ -517,8 +536,11 @@ describe("local daemon session and state boundary", () => {
         }),
       },
     );
-    const waiting = workflowSnapshotSchema.parse(await startResponse.json());
     expect(startResponse.status).toBe(200);
+    // The handler answers as of immediately after its own command now (spec D6), before the
+    // background worker has necessarily run a single pass -- wait for it to drain, then re-read.
+    await firstDaemon.whenIdle();
+    const waiting = await fetchWorkflowSnapshot(firstDaemon, firstSession.cookie, created.workItem.id);
     expect(waiting).toMatchObject({
       run: { status: "WAITING_HUMAN" },
       humanRequests: [{ status: "OPEN", kind: "SINGLE_CHOICE", blocking: true }],
@@ -549,8 +571,9 @@ describe("local daemon session and state boundary", () => {
       headers: mutationHeaders(daemon, secondSession),
       body: answerBody,
     });
-    const hardPaused = workflowSnapshotSchema.parse(await answerResponse.json());
     expect(answerResponse.status).toBe(200);
+    await daemon.whenIdle();
+    const hardPaused = await fetchWorkflowSnapshot(daemon, secondSession.cookie, created.workItem.id);
     expect(hardPaused.run?.status).toBe("HARD_PAUSED");
     expect(hardPaused.stageAttempts.map(({ stage, status }) => ({ stage, status }))).toEqual([
       { stage: "DISCOVERY", status: "SUCCEEDED" },
@@ -574,8 +597,9 @@ describe("local daemon session and state boundary", () => {
         }),
       },
     );
-    const awaitingAcceptance = workflowSnapshotSchema.parse(await overrideResponse.json());
     expect(overrideResponse.status).toBe(200);
+    await daemon.whenIdle();
+    const awaitingAcceptance = await fetchWorkflowSnapshot(daemon, secondSession.cookie, created.workItem.id);
     expect(awaitingAcceptance.run?.status).toBe("WAITING_HUMAN");
     expect(
       awaitingAcceptance.budgetPolicies.map(({ revision, maxEstimatedTokens }) => ({
@@ -808,7 +832,9 @@ describe("local daemon session and state boundary", () => {
 
     const startBody: unknown = await startResponse.json();
     expect(startResponse.status, JSON.stringify(startBody)).toBe(200);
-    expect(workflowSnapshotSchema.parse(startBody)).toMatchObject({
+    await daemon.whenIdle();
+    const started = await fetchWorkflowSnapshot(daemon, session.cookie, created.workItem.id);
+    expect(started).toMatchObject({
       run: { workflowVersion: mockDeliveryTemplate.version, status: "WAITING_HUMAN" },
     });
   });
@@ -919,8 +945,9 @@ describe("local daemon session and state boundary", () => {
         }),
       },
     );
-    const resumed = workflowSnapshotSchema.parse(await resumeResponse.json());
     expect(resumeResponse.status).toBe(200);
+    await daemon.whenIdle();
+    const resumed = await fetchWorkflowSnapshot(daemon, session.cookie, listed.workItems[0]?.id ?? "missing");
     expect(resumed).toMatchObject({
       run: { status: "HARD_PAUSED" },
       recoveryReports: [{ reason: "DAEMON_RESTART" }],
@@ -941,5 +968,373 @@ describe("local daemon session and state boundary", () => {
     const cancelled = workflowSnapshotSchema.parse(await cancelResponse.json());
     expect(cancelResponse.status).toBe(200);
     expect(cancelled.run?.status).toBe("CANCELLED");
+  });
+});
+
+// Task 8 (A1.5 spec D4-D6): the dispatch queue moved off the startup path and the four mutation
+// handlers onto a background `SessionWorker`. Every test here uses `gatedAdapter` (test/gated-
+// adapter.ts) to hold a provider session open on purpose, so a handler or startup pass that
+// regressed back to awaiting the drain in-line would leave its test hanging on the same gate the
+// adapter is held by, rather than answering early -- the whole point of this milestone.
+describe("background session worker wiring", () => {
+  const temporaryDirectories: string[] = [];
+  let databasePath = "";
+  let token = "";
+
+  beforeEach(async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail worker wiring "));
+    temporaryDirectories.push(temporaryDirectory);
+    databasePath = join(temporaryDirectory, "state.sqlite");
+    token = bootstrapToken();
+  });
+
+  afterEach(async () => {
+    await Promise.all(
+      temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+    );
+  });
+
+  // Seeds a queued dispatch directly on disk, the way a real restart finds one: through a plain
+  // `LocalState` connection that is fully closed again before the daemon under test ever opens the
+  // same file, never concurrently with it.
+  const seedQueuedAttemptOnDisk = async (stateDatabasePath: string): Promise<SeededAttempt> => {
+    const localState = await openLocalState({ databasePath: stateDatabasePath });
+    try {
+      let nextCommandId = 0;
+      return seedQueuedAttempt(
+        localState,
+        () => `seed-command-${(nextCommandId += 1).toString()}`,
+        dirname(stateDatabasePath),
+      );
+    } finally {
+      localState.close();
+    }
+  };
+
+  // A second, independent connection onto the daemon's own database file. WAL mode (set at open,
+  // packages/persistence-sqlite/src/index.ts) lets a fresh reader see everything the daemon's own
+  // connection has already committed without contending with it -- exactly what's needed to prove a
+  // session row exists while that same session is still gated open on the daemon side.
+  const sessionRows = async (
+    stateDatabasePath: string,
+    stageAttemptId: string,
+  ): Promise<{ sessions: ProviderSession[] }> => {
+    const localState = await openLocalState({ databasePath: stateDatabasePath });
+    try {
+      const result = localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId });
+      if (result.type !== "PROVIDER_SESSIONS") throw new Error("Expected provider sessions");
+      return { sessions: result.sessions };
+    } finally {
+      localState.close();
+    }
+  };
+
+  // Registers the bundled fixture, creates a WorkItem under it and moves it to READY -- none of
+  // which ever touches the ProviderAdapter, so this is safe to run live against a daemon whose
+  // adapter is gated shut for the rest of the test.
+  const createReadyWorkItem = async (
+    daemon: RunningDaemon,
+    session: AuthenticatedSession,
+    title: string,
+  ): Promise<string> => {
+    const headers = mutationHeaders(daemon, session);
+    await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ schemaVersion: 1, commandId: `register-${title}`, fixtureId: "web-app-a" }),
+    });
+    const createResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: `create-${title}`,
+        projectId: "project-fixture-web-app-a",
+        type: "TASK",
+        title,
+      }),
+    });
+    const created = stateCommandResultSchema.parse(await createResponse.json());
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    await fetch(`${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/move`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: `ready-${title}`,
+        expectedVersion: 1,
+        targetState: "READY",
+      }),
+    });
+    return created.workItem.id;
+  };
+
+  it("listens while a resumed attempt is still running", async () => {
+    // The point of the whole task, asserted without a timer: the adapter is held, so the attempt is
+    // provably still in flight when the daemon answers. Before the change `startDaemon` itself would
+    // not have returned, and this test could not have reached its first line.
+    const adapter = gatedAdapter();
+    const seeded = await seedQueuedAttemptOnDisk(databasePath);
+
+    const daemon = await startDaemon({
+      bootstrapToken: token,
+      stateDatabasePath: databasePath,
+      logger: false,
+      providerAdapter: adapter,
+    });
+    try {
+      await adapter.started;
+      const health = await fetch(`${daemon.baseUrl}/health/ready`);
+      expect(health.status).toBe(200);
+      expect((await sessionRows(databasePath, seeded.stageAttemptId)).sessions).toHaveLength(1);
+    } finally {
+      adapter.release();
+      await daemon.whenIdle();
+      await daemon.close();
+    }
+  });
+
+  // The other half: a request that starts a stage must answer before the stage ends, or "answer a
+  // Human Request" would hold the response open for the whole stage once the provider is live.
+  it("answers a pipeline start before the stage has finished", async () => {
+    const adapter = gatedAdapter();
+    const daemon = await startDaemon({
+      bootstrapToken: token,
+      stateDatabasePath: databasePath,
+      logger: false,
+      providerAdapter: adapter,
+    });
+    try {
+      const session = await authenticate(daemon, token);
+      const workItemId = await createReadyWorkItem(daemon, session, "pipeline-start-under-test");
+      const response = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
+        method: "POST",
+        headers: mutationHeaders(daemon, session),
+        body: JSON.stringify({ schemaVersion: 1, commandId: "start-under-test", expectedVersion: 2 }),
+      });
+      expect(response.status).toBe(200);
+      const snapshot = workflowSnapshotSchema.parse(await response.json());
+      expect(snapshot.run?.status).toBe("RUNNING");
+      expect(adapter.releasedCount).toBe(0);
+    } finally {
+      adapter.release();
+      await daemon.whenIdle();
+      await daemon.close();
+    }
+  });
+
+  // State a case's `act` needs, prepared before the gated daemon under test ever opens the database
+  // (`prepare`), and handed to `act` once that daemon is up. `workItemId` is set for every case;
+  // `humanRequestId`/`humanRequestVersion` only for the case that needs one.
+  type PreparedFixture = {
+    workItemId: string;
+    humanRequestId?: string;
+    humanRequestVersion?: number;
+  };
+  type Prepare = (stateDatabasePath: string) => Promise<PreparedFixture>;
+  type Act = (
+    daemon: RunningDaemon,
+    session: AuthenticatedSession,
+    fixture: PreparedFixture,
+  ) => Promise<Response>;
+
+  const noPreparation: Prepare = async () => ({ workItemId: "" });
+
+  // Drives a fresh WorkItem through a throwaway, unblocked daemon until the workflow's kickoff stage
+  // raises its SINGLE_CHOICE HumanRequest -- reaching that needs a real (if fast) session, which the
+  // gated adapter under test can never let finish, so it has to happen on a different daemon
+  // instance entirely. That daemon is fully closed before the one under test ever opens the same
+  // database file; the two never touch it at once.
+  const seedOpenHumanRequest: Prepare = async (stateDatabasePath) => {
+    const prelimToken = bootstrapToken();
+    const prelim = await startDaemon({ bootstrapToken: prelimToken, logger: false, stateDatabasePath });
+    try {
+      const session = await authenticate(prelim, prelimToken);
+      const workItemId = await createReadyWorkItem(prelim, session, "kickoff-request-fixture");
+      await fetch(`${prelim.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
+        method: "POST",
+        headers: mutationHeaders(prelim, session),
+        body: JSON.stringify({ schemaVersion: 1, commandId: "start-kickoff-fixture", expectedVersion: 2 }),
+      });
+      await prelim.whenIdle();
+      const opened = await fetchWorkflowSnapshot(prelim, session.cookie, workItemId);
+      const request = opened.humanRequests.find(({ status }) => status === "OPEN");
+      if (!request) throw new Error("Expected the kickoff HumanRequest to be open");
+      return { workItemId, humanRequestId: request.id, humanRequestVersion: request.version };
+    } finally {
+      await prelim.close();
+    }
+  };
+
+  // Builds on the same kickoff fixture, then answers it and lets the (still unblocked) daemon run
+  // IMPLEMENT far enough to hit the default budget -- the same path
+  // "restores a blocking HumanRequest after restart and answers it exactly once" proves reaches a
+  // budget HARD_PAUSED, not a session-pause one, which is the only kind `APPROVE_BUDGET_OVERRIDE`
+  // accepts (packages/domain/src/session-pause.ts).
+  const seedBudgetHardPause: Prepare = async (stateDatabasePath) => {
+    const seeded = await seedOpenHumanRequest(stateDatabasePath);
+    if (!seeded.humanRequestId || seeded.humanRequestVersion === undefined) {
+      throw new Error("Expected a seeded HumanRequest");
+    }
+    const prelimToken = bootstrapToken();
+    const prelim = await startDaemon({ bootstrapToken: prelimToken, logger: false, stateDatabasePath });
+    try {
+      const session = await authenticate(prelim, prelimToken);
+      await fetch(`${prelim.baseUrl}/api/v1/human-requests/${seeded.humanRequestId}/answer`, {
+        method: "POST",
+        headers: mutationHeaders(prelim, session),
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "answer-kickoff-fixture",
+          expectedVersion: seeded.humanRequestVersion,
+          answer: { type: "OPTION", optionIds: ["focused-pass"] },
+        }),
+      });
+      await prelim.whenIdle();
+      const paused = await fetchWorkflowSnapshot(prelim, session.cookie, seeded.workItemId);
+      if (paused.run?.status !== "HARD_PAUSED") {
+        throw new Error(`Expected a budget hard pause, got ${paused.run?.status ?? "no run"}`);
+      }
+      return { workItemId: seeded.workItemId };
+    } finally {
+      await prelim.close();
+    }
+  };
+
+  const startPipeline: Act = async (daemon, session) => {
+    const workItemId = await createReadyWorkItem(daemon, session, "pipeline-start-each");
+    return fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({ schemaVersion: 1, commandId: "start-under-test-each", expectedVersion: 2 }),
+    });
+  };
+
+  // SOFT_PAUSED is reachable without any session ever running: `PAUSE_PIPELINE` only requires the
+  // current StageAttempt to be QUEUED/RUNNING/RECOVERING (packages/domain/src/workflow.ts), which it
+  // already is the instant `START_MOCK_PIPELINE` returns. So this drives start-then-pause live
+  // against the very daemon under test -- both are synchronous domain commands the gated adapter
+  // never sees -- and only the final `resume` call is the one being tested.
+  const resumePipeline: Act = async (daemon, session) => {
+    const workItemId = await createReadyWorkItem(daemon, session, "pipeline-resume-each");
+    const startResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({ schemaVersion: 1, commandId: "start-for-resume-each", expectedVersion: 2 }),
+    });
+    const started = workflowSnapshotSchema.parse(await startResponse.json());
+    if (!started.run) throw new Error("Expected a PipelineRun");
+    const pauseResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/pause`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "pause-for-resume-each",
+        expectedVersion: started.run.version,
+      }),
+    });
+    const paused = workflowSnapshotSchema.parse(await pauseResponse.json());
+    if (!paused.run) throw new Error("Expected a paused PipelineRun");
+    return fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/resume`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "resume-under-test-each",
+        expectedVersion: paused.run.version,
+      }),
+    });
+  };
+
+  const approveBudgetOverride: Act = async (daemon, session, fixture) => {
+    const snapshot = await fetchWorkflowSnapshot(daemon, session.cookie, fixture.workItemId);
+    if (!snapshot.run) throw new Error("Expected a PipelineRun");
+    return fetch(`${daemon.baseUrl}/api/v1/work-items/${fixture.workItemId}/pipeline/budget-override`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "budget-override-under-test-each",
+        expectedVersion: snapshot.run.version,
+        maxEstimatedTokens: 200,
+      }),
+    });
+  };
+
+  const answerOpenRequest: Act = async (daemon, session, fixture) => {
+    if (!fixture.humanRequestId || fixture.humanRequestVersion === undefined) {
+      throw new Error("Expected a seeded HumanRequest");
+    }
+    return fetch(`${daemon.baseUrl}/api/v1/human-requests/${fixture.humanRequestId}/answer`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "answer-under-test-each",
+        expectedVersion: fixture.humanRequestVersion,
+        answer: { type: "OPTION", optionIds: ["focused-pass"] },
+      }),
+    });
+  };
+
+  // Spec §9 names all four handlers, not one. They receive the identical one-line change, so the
+  // cheap mistake is changing three and missing the fourth -- which no other test would notice,
+  // because a handler that still awaits the drain simply answers later and answers correctly.
+  it.each<[string, Prepare, Act]>([
+    ["pipeline start", noPreparation, startPipeline],
+    ["pipeline resume", noPreparation, resumePipeline],
+    ["budget override", seedBudgetHardPause, approveBudgetOverride],
+    ["human request answer", seedOpenHumanRequest, answerOpenRequest],
+  ])("answers %s before the stage it triggers has finished", async (_name, prepare, act) => {
+    const fixture = await prepare(databasePath);
+    const adapter = gatedAdapter();
+    const daemon = await startDaemon({
+      bootstrapToken: token,
+      stateDatabasePath: databasePath,
+      logger: false,
+      providerAdapter: adapter,
+    });
+    try {
+      const session = await authenticate(daemon, token);
+      const response = await act(daemon, session, fixture);
+      expect(response.status).toBe(200);
+      expect(adapter.releasedCount).toBe(0);
+    } finally {
+      adapter.release();
+      await daemon.whenIdle();
+      await daemon.close();
+    }
+  });
+
+  it("closes while an attempt is still in flight and asks it to abort", async () => {
+    const adapter = gatedAdapter();
+    const daemon = await startDaemon({
+      bootstrapToken: token,
+      stateDatabasePath: databasePath,
+      logger: false,
+      providerAdapter: adapter,
+    });
+    const session = await authenticate(daemon, token);
+    const workItemId = await createReadyWorkItem(daemon, session, "close-while-in-flight");
+    await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "start-close-while-in-flight",
+        expectedVersion: 2,
+      }),
+    });
+    await adapter.started;
+
+    const closed = daemon.close().then(() => "closed" as const);
+    const timedOut = new Promise<"hung">((resolve) => {
+      setTimeout(() => {
+        resolve("hung");
+      }, 5_000);
+    });
+    await expect(Promise.race([closed, timedOut])).resolves.toBe("closed");
+    expect(adapter.abortedSessions).toHaveLength(1);
+    adapter.release();
   });
 });

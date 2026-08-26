@@ -49,7 +49,7 @@ import { z, ZodError } from "zod";
 import { broadcastingState } from "./broadcasting-state.js";
 import { createEventStreamRegistry, MAX_OPEN_STREAMS } from "./event-stream.js";
 import { FixtureResolutionError, resolveBundledFixture } from "./fixtures.js";
-import { runStageAttempt } from "./session-loop.js";
+import { createSessionWorker } from "./session-worker.js";
 
 const API_VERSION = "v1" as const;
 const DAEMON_VERSION = "0.0.0";
@@ -86,6 +86,10 @@ export type RunningDaemon = {
   app: FastifyInstance;
   baseUrl: string;
   bootstrapUrl: string;
+  // Exposed for tests (spec D6): the alternative is a wait loop with a timeout in every test, and
+  // on a loaded machine a timeout is indistinguishable from a defect. Resolves once the background
+  // session worker has no pass running and none scheduled.
+  whenIdle: () => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -283,70 +287,15 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   });
 
   // Spec §6: one stage attempt is a sequence of context-assembled provider sessions, not a single
-  // provider call. This drives the queue; `runStageAttempt` owns everything inside one attempt.
-  const drainProviderDispatches = async (): Promise<void> => {
-    let previousDispatchId: string | undefined;
-    for (let cycle = 0; cycle < 20; cycle += 1) {
-      const queued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
-      const dispatch = queued.type === "WORKFLOW_DISPATCHES" ? queued.dispatches[0] : undefined;
-      if (!dispatch) return;
-
-      // A pass over this dispatch already returned without closing it out. The only way that
-      // happens is that another caller owns the attempt -- nothing serialises this drain, and the
-      // dispatch stays PENDING for the attempt's whole life, so a second concurrent request can
-      // reach the same head. `runStageAttempt` returns quietly in that case; without this the queue
-      // would be handed the same unmoved dispatch until the safety limit below turned someone
-      // else's work into this caller's 500.
-      if (dispatch.id === previousDispatchId) {
-        app.log.info(
-          { dispatchId: dispatch.id, stageAttemptId: dispatch.stageAttemptId },
-          "The pending workflow dispatch is already being run elsewhere; this drain stops",
-        );
-        return;
-      }
-      previousDispatchId = dispatch.id;
-
-      const snapshotResult = localState.query({
-        type: "GET_WORKFLOW_SNAPSHOT",
-        workItemId: dispatch.workItemId,
-      });
-      const stageAttempt =
-        snapshotResult.type === "WORKFLOW_SNAPSHOT"
-          ? snapshotResult.snapshot.stageAttempts.find(({ id }) => id === dispatch.stageAttemptId)
-          : undefined;
-      if (!stageAttempt) {
-        throw new StateStoreError("PERSISTENCE_FAILURE", "A pending workflow dispatch is incomplete");
-      }
-
-      // A dispatch whose attempt is already RUNNING was picked back up after a restart: spec §6.4
-      // makes that the ordinary end of a ProviderSession, so reconciliation closed the orphaned
-      // session and the attempt keeps going from its last checkpoint rather than starting over.
-      if (stageAttempt.status !== "RUNNING") {
-        const started = localState.execute({
-          schemaVersion: 1,
-          commandId: `mark-started-${dispatch.id}`,
-          correlationId: `dispatch-${dispatch.id}`,
-          actor: { type: "SYSTEM", id: "local-daemon" },
-          type: "MARK_WORKFLOW_DISPATCH_STARTED",
-          payload: { dispatchId: dispatch.id },
-        });
-        if (started.type !== "WORKFLOW_DISPATCH_STARTED") {
-          throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow dispatch did not start");
-        }
-      }
-
-      await runStageAttempt({
-        state: localState,
-        adapter: providerAdapter,
-        dispatch,
-        template: mockDeliveryTemplate,
-        createCommandId: () => `session-${randomUUID()}`,
-        correlationId: `dispatch-${dispatch.id}`,
-        logger: app.log,
-      });
-    }
-    throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow dispatch queue exceeded its safety limit");
-  };
+  // provider call. The worker owns the whole dispatch queue as a background pass (A1.5 spec D4/D5);
+  // `runStageAttempt` still owns everything inside one attempt.
+  const worker = createSessionWorker({
+    state: localState,
+    adapter: providerAdapter,
+    template: mockDeliveryTemplate,
+    createCommandId: () => `session-${randomUUID()}`,
+    logger: app.log,
+  });
 
   localState.execute({
     schemaVersion: 1,
@@ -356,7 +305,12 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     type: "RECONCILE_WORKFLOWS",
     payload: {},
   });
-  await drainProviderDispatches();
+  // A behaviour improvement, not just a refactor: before this, a resumed attempt that could not run
+  // kept the daemon from ever starting to listen at all. `wake()` schedules the first pass and
+  // returns immediately, so the daemon reaches `app.listen` regardless of how that pass turns out --
+  // a failure inside it is caught and logged by the worker's own pump (session-worker.ts), never
+  // thrown here, so it is visible but never fatal to startup.
+  worker.wake();
 
   const sessionForRequest = (request: FastifyRequest): Session | undefined => {
     const sessionToken = request.cookies[SESSION_COOKIE];
@@ -783,7 +737,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             },
           },
         });
-        await drainProviderDispatches();
+        worker.wake();
         const result = localState.query({
           type: "GET_WORKFLOW_SNAPSHOT",
           workItemId: params.workItemId,
@@ -858,7 +812,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             expectedVersion: body.expectedVersion,
           },
         });
-        await drainProviderDispatches();
+        worker.wake();
         const result = localState.query({
           type: "GET_WORKFLOW_SNAPSHOT",
           workItemId: params.workItemId,
@@ -934,7 +888,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             maxEstimatedTokens: body.maxEstimatedTokens,
           },
         });
-        await drainProviderDispatches();
+        worker.wake();
         const result = localState.query({
           type: "GET_WORKFLOW_SNAPSHOT",
           workItemId: params.workItemId,
@@ -969,7 +923,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         if (answered.type !== "HUMAN_REQUEST_ANSWERED") {
           throw new StateStoreError("PERSISTENCE_FAILURE", "The HumanRequest answer was not applied");
         }
-        await drainProviderDispatches();
+        worker.wake();
         const result = localState.query({
           type: "GET_WORKFLOW_SNAPSHOT",
           workItemId: answered.workItemId,
@@ -1122,10 +1076,13 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       app,
       baseUrl,
       bootstrapUrl,
+      whenIdle: () => worker.whenIdle(),
       close: async () => {
         if (closing) return;
         closing = true;
         try {
+          // The live session must be asked to stop before the server starts closing connections.
+          await worker.stop();
           await app.close();
         } finally {
           localState.close();
