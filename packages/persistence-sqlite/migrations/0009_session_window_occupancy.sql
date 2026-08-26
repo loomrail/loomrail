@@ -6,9 +6,12 @@
 -- LIST_PROVIDER_SESSIONS then rebuilt a displayable number by scanning that event log, which is
 -- exactly the separation of current state from audit that AGENTS.md forbids collapsing.
 --
--- These four columns give the reading a home in current state. All nullable together: a session
--- that has never received a report has no occupancy at all, and that is a different fact from a
--- session reported at zero.
+-- These four columns give the reading a home in current state. What they hold is the HIGHEST
+-- occupancy the session has been observed at, not its current one: that is the figure that answers
+-- "how full did this session get", which is what explains a cut after the fact, and the write in
+-- REQUEST_CONTEXT_HANDOFF enforces it rather than trusting the order reports arrive in. All four
+-- are nullable together: a session that has never been measured has no occupancy at all, and that
+-- is a different fact from a session measured at zero.
 
 ALTER TABLE provider_sessions
   ADD COLUMN context_used_tokens INTEGER

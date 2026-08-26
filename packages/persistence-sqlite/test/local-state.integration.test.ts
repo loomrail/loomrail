@@ -1992,8 +1992,9 @@ describe("SQLite local state", () => {
     });
 
     // Migration 0009. Spec §6.2 says window occupancy is saved; before 0009 it was not, and the
-    // cockpit rebuilt a number by scanning CONTEXT_HANDOFF_REQUESTED out of the audit log.
-    describe("window occupancy storage (migration 0009)", () => {
+    // cockpit rebuilt a number by scanning CONTEXT_HANDOFF_REQUESTED out of the audit log. What a
+    // session keeps is the highest occupancy it was observed at.
+    describe("peak window occupancy storage (migration 0009)", () => {
       const requestContextHandoffCommand = (
         commandId: string,
         providerSessionId: string,
@@ -2015,7 +2016,7 @@ describe("SQLite local state", () => {
       ): unknown => {
         const listed = localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId });
         if (listed.type !== "PROVIDER_SESSIONS") throw new Error("Expected the attempt's sessions");
-        return listed.contextWindowUsage[providerSessionId];
+        return listed.peakContextWindowUsage[providerSessionId];
       };
 
       it("stores a below-threshold occupancy report without requesting a handoff", async () => {
@@ -2155,16 +2156,15 @@ describe("SQLite local state", () => {
         });
       });
 
-      // The claim the deterministic `usage-${sessionId}-${percent}` commandId in apps/daemon rests
-      // on: a repeat of the same percent costs nothing and changes nothing. `commands` is
-      // append-only, so "costs nothing" has to be measured as the row count, and "changes nothing"
-      // has to survive the fact that this command now writes occupancy before it decides anything.
-      it("writes no second command receipt, and no stale occupancy, when a report repeats", async () => {
+      // The column is named for the peak, so the store has to make that true rather than inherit it
+      // from the order a caller happens to report in. The daemon suppresses a return to a
+      // percentage band it has already visited, which makes its own stream effectively monotonic
+      // -- but a band never visited on the way up arrives here as a genuine, lower report, and a
+      // column called "peak" that then dropped would be a falsehood the cockpit repeats.
+      it("keeps the highest reading a session was observed at, not the last one", async () => {
         const localState = await open();
-        const { stageAttemptId } = startWorkflow(localState, "start-repeat", "create-repeat-item");
-        const started = localState.execute(
-          startProviderSessionCommand("start-repeat-session", stageAttemptId),
-        );
+        const { stageAttemptId } = startWorkflow(localState, "start-peak", "create-peak-item");
+        const started = localState.execute(startProviderSessionCommand("start-peak-session", stageAttemptId));
         if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
         const report = (percent: number, usedTokens: number): void => {
           localState.execute(
@@ -2176,31 +2176,55 @@ describe("SQLite local state", () => {
           );
         };
 
-        const commandRows = (): number => {
-          const raw = new DatabaseSync(databasePath);
-          const count = (raw.prepare("SELECT COUNT(*) AS count FROM commands").get() as { count: number })
-            .count;
-          raw.close();
-          return count;
-        };
-        // The session's own writes are already on disk; `commands` is append-only and WAL-backed,
-        // so a second connection reads what has been committed.
-        const before = commandRows();
+        report(30, 300);
+        expect(readUsage(localState, stageAttemptId, started.session.id)).toMatchObject({
+          usedTokens: 300,
+        });
 
-        report(42, 420);
-        report(55, 550);
-        expect(commandRows()).toBe(before + 2);
+        // Up: a higher reading is the new peak.
+        report(66, 660);
+        expect(readUsage(localState, stageAttemptId, started.session.id)).toMatchObject({
+          usedTokens: 660,
+        });
 
-        // The same report again -- the same id and the same input, which is the only repeat the
-        // receipt is allowed to absorb. It costs no row...
-        report(42, 420);
-        expect(commandRows()).toBe(before + 2);
-
-        // ...and it does not drag the stored occupancy back to what it was two reports ago, which
-        // is the failure a receipt replay would introduce now that this command writes state
-        // before it decides whether anything changed.
+        // Down, into a band this session has never been in -- so nothing upstream suppresses it and
+        // the report really does arrive here. The peak must not follow it down.
+        report(45, 450);
         expect(readUsage(localState, stageAttemptId, started.session.id)).toEqual({
-          usedTokens: 550,
+          usedTokens: 660,
+          windowTokens: 1000,
+          quality: "ACTUAL",
+        });
+      });
+
+      // A provider swap between sessions is spec §6.4's ordinary case, and window sizes differ
+      // across providers, so "higher" has to mean a larger share of the window rather than a
+      // larger token count.
+      it("compares peaks as a share of the window, not as a token count", async () => {
+        const localState = await open();
+        const { stageAttemptId } = startWorkflow(localState, "start-share", "create-share-item");
+        const started = localState.execute(
+          startProviderSessionCommand("start-share-session", stageAttemptId),
+        );
+        if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+
+        localState.execute(
+          requestContextHandoffCommand("usage-share-small-window", started.session.id, {
+            usedTokens: 600,
+            windowTokens: 1000,
+            quality: "ACTUAL",
+          }),
+        );
+        // Five times the tokens, a fifth of the window. The peak is the share, so this is not it.
+        localState.execute(
+          requestContextHandoffCommand("usage-share-large-window", started.session.id, {
+            usedTokens: 3000,
+            windowTokens: 15_000,
+            quality: "ACTUAL",
+          }),
+        );
+        expect(readUsage(localState, stageAttemptId, started.session.id)).toEqual({
+          usedTokens: 600,
           windowTokens: 1000,
           quality: "ACTUAL",
         });
@@ -2276,7 +2300,7 @@ describe("SQLite local state", () => {
         const listed = migrated.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId });
         if (listed.type !== "PROVIDER_SESSIONS") throw new Error("Expected the attempt's sessions");
         expect(listed.sessions.map(({ id }) => id)).toEqual([started.session.id]);
-        expect(listed.contextWindowUsage).toEqual({});
+        expect(listed.peakContextWindowUsage).toEqual({});
 
         migrated.execute(
           requestContextHandoffCommand("usage-after-0009", started.session.id, {

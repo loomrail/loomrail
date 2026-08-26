@@ -609,7 +609,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           schemaVersion: 1,
           sessions: result.type === "PROVIDER_SESSIONS" ? result.sessions : [],
           checkpoints: result.type === "PROVIDER_SESSIONS" ? result.checkpoints : [],
-          contextWindowUsage: result.type === "PROVIDER_SESSIONS" ? result.contextWindowUsage : {},
+          peakContextWindowUsage: result.type === "PROVIDER_SESSIONS" ? result.peakContextWindowUsage : {},
         });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);

@@ -164,7 +164,7 @@ export const useWorkItemWorkflow = (workItemId: string | undefined) =>
 
 /**
  * Spec §D5's nesting, read back for the Task Cockpit: the sessions inside a stage attempt, the
- * checkpoints published under it, and the latest window occupancy each session recorded.
+ * checkpoints published under it, and the highest window occupancy each session was measured at.
  */
 export const useStageAttemptSessions = (stageAttemptId: string | undefined) =>
   useQuery({

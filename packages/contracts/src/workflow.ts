@@ -1309,17 +1309,19 @@ export const humanRequestsResponseSchema = z
 
 // Spec §D5's nesting, read back for the Task Cockpit (Task 12). Kept out of workflowSnapshotSchema
 // deliberately, matching persistence-sqlite's LIST_PROVIDER_SESSIONS: the snapshot is fetched on
-// every board render, and an attempt's session history grows without bound. `contextWindowUsage` is
-// keyed by ProviderSession id and carries the latest occupancy each session was able to act on
-// (spec §6.2 -- saved on every report, not only the one that crosses the handoff threshold); a
-// session with no entry has never had its window measured, which is not the same as a session
-// measured at zero.
+// every board render, and an attempt's session history grows without bound.
+// `peakContextWindowUsage` is keyed by ProviderSession id and carries the highest occupancy each
+// session has been observed at (spec §6.2 -- occupancy is saved on every report, not only the one
+// that crosses the handoff threshold, and the highest of them is what is kept). Deliberately the
+// peak and not the current reading: it answers "how full did this session get", which is what
+// explains a cut, and it does not move under a provider that compacts its own window. A session
+// with no entry has never had its window measured, which is not the same as one measured at zero.
 export const providerSessionsResponseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
     sessions: z.array(providerSessionSchema),
     checkpoints: z.array(checkpointSchema),
-    contextWindowUsage: z.record(opaqueIdSchema, contextWindowUsageSchema),
+    peakContextWindowUsage: z.record(opaqueIdSchema, contextWindowUsageSchema),
   })
   .strict();
 

@@ -104,11 +104,12 @@ export type StateQueryResult =
       sessions: ProviderSession[];
       recipes: ContextPackRecipe[];
       checkpoints: Checkpoint[];
-      // Spec §6.2: the latest window occupancy each session was able to act on, read from the
-      // session's own columns (migration 0009) rather than replayed out of the audit log. Keyed by
-      // ProviderSession id; a session that never received a report has no entry, which is a
-      // different fact from a session reported at zero.
-      contextWindowUsage: Record<string, ContextWindowUsage>;
+      // Spec §6.2: the highest window occupancy each session has been observed at, read from the
+      // session's own columns (migration 0009) rather than replayed out of the audit log. The peak
+      // rather than the current reading -- it is what "how full did this session get" asks, and it
+      // is what survives a provider that compacts its own window. Keyed by ProviderSession id; a
+      // session never measured has no entry, which is a different fact from one measured at zero.
+      peakContextWindowUsage: Record<string, ContextWindowUsage>;
     };
 
 export type StateStoreStartup = {

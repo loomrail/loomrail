@@ -311,8 +311,9 @@ const providerSessionRowSchema = z.object({
   started_at: z.string(),
   ended_at: z.string().nullable(),
   version: z.number().int(),
-  // Migration 0009. Null together or present together -- the table CHECK says so, and
-  // `contextWindowUsageFromRow` reads them as the one value they are.
+  // Migration 0009: the highest occupancy this session has been observed at. Null together or
+  // present together -- the table CHECK says so, and `peakContextWindowUsageFromRow` reads them as
+  // the one value they are.
   context_used_tokens: z.number().int().nullable(),
   context_window_tokens: z.number().int().nullable(),
   context_usage_quality: z.string().nullable(),
@@ -623,8 +624,10 @@ const workflowDispatchFromRow = (value: unknown): WorkflowDispatch => {
   });
 };
 
-const providerSessionFromRow = (value: unknown): ProviderSession => {
-  const row = providerSessionRowSchema.parse(value);
+const providerSessionFromRow = (value: unknown): ProviderSession =>
+  providerSessionFromParsedRow(providerSessionRowSchema.parse(value));
+
+const providerSessionFromParsedRow = (row: ProviderSessionRow): ProviderSession => {
   return providerSessionSchema.parse({
     schemaVersion: row.schema_version,
     id: row.id,
@@ -639,10 +642,11 @@ const providerSessionFromRow = (value: unknown): ProviderSession => {
   });
 };
 
-// The latest window occupancy this session was able to act on, or null if it never received a
-// report. Read off the session's own row rather than reconstructed from CONTEXT_HANDOFF_REQUESTED:
-// current state and audit are separate, and only one of them is allowed to be the source here.
-const contextWindowUsageFromRow = (row: ProviderSessionRow): ContextWindowUsage | null => {
+// The highest window occupancy this session has been observed at, or null if it has never been
+// measured. Read off the session's own row rather than reconstructed from
+// CONTEXT_HANDOFF_REQUESTED: current state and audit are separate, and only one of them is allowed
+// to be the source here.
+const peakContextWindowUsageFromRow = (row: ProviderSessionRow): ContextWindowUsage | null => {
   if (
     row.context_used_tokens === null ||
     row.context_window_tokens === null ||
@@ -865,11 +869,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        SET status = ?, end_reason = ?, handoff_requested_at = ?, ended_at = ?, version = ?
        WHERE id = ? AND version = ?`,
     );
-    // Migration 0009. Deliberately no `version` guard and no `version` bump: occupancy is not part
-    // of providerSessionSchema, so no reader holds a version of it that this write could invalidate,
-    // and bumping the column here would make the optimistic update above fail for the very report
-    // that is about to request the handoff.
-    const recordProviderSessionUsage = database.prepare(
+    // Migration 0009. Deliberately no `version` guard and no `version` bump: the peak occupancy is
+    // not part of providerSessionSchema, so no reader holds a version of it that this write could
+    // invalidate, and bumping the column here would make the optimistic update above fail for the
+    // very report that is about to request the handoff.
+    const recordPeakProviderSessionUsage = database.prepare(
       `UPDATE provider_sessions
        SET context_used_tokens = ?, context_window_tokens = ?, context_usage_quality = ?,
            context_usage_reported_at = ?
@@ -2726,7 +2730,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (sessionRow === undefined) {
           throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The ProviderSession does not exist");
         }
-        const current = providerSessionFromRow(sessionRow);
+        // Parsed once: this branch needs both the ProviderSession the row describes and the peak
+        // occupancy stored alongside it, and the row schema is the same for both.
+        const sessionRowParsed = providerSessionRowSchema.parse(sessionRow);
+        const current = providerSessionFromParsedRow(sessionRowParsed);
         const stageAttempt = readStageAttempt(current.stageAttemptId);
         if (!stageAttempt) {
           throw new WorkflowDomainError(
@@ -2735,15 +2742,26 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           );
         }
         // Spec §6.2 says occupancy is saved, so the reading lands in current state before any
-        // handoff decision is taken -- below the threshold just as much as above it. Only reports
-        // the session can still act on are written: one arriving for an ENDED session, or for one
-        // that has already asked for a handoff, is the race §6.2 calls a safe no-op, and must not
-        // overwrite the reading that was current while it could still change something.
-        if (current.status === "RUNNING" && current.handoffRequestedAt === null) {
-          recordProviderSessionUsage.run(
-            command.payload.usage.usedTokens,
-            command.payload.usage.windowTokens,
-            command.payload.usage.quality,
+        // handoff decision is taken -- below the threshold just as much as above it. What is kept
+        // is the highest occupancy the session has been observed at, which is what "how full did
+        // this session get" asks and what explains a cut after the fact. Enforced here rather than
+        // assumed from the order reports arrive in: occupancy is not monotonic for a provider that
+        // compacts its own window, and a column named for the peak has to hold the peak whatever
+        // the caller sends.
+        //
+        // Only reports the session can still act on are written at all: one arriving for an ENDED
+        // session, or for one that has already asked for a handoff, is the race §6.2 calls a safe
+        // no-op, and must not disturb what that session recorded while the number still mattered.
+        const reported = command.payload.usage;
+        const storedPeak = peakContextWindowUsageFromRow(sessionRowParsed);
+        const isNewPeak =
+          storedPeak === null ||
+          reported.usedTokens / reported.windowTokens > storedPeak.usedTokens / storedPeak.windowTokens;
+        if (current.status === "RUNNING" && current.handoffRequestedAt === null && isNewPeak) {
+          recordPeakProviderSessionUsage.run(
+            reported.usedTokens,
+            reported.windowTokens,
+            reported.quality,
             occurredAt,
             current.id,
           );
@@ -3138,24 +3156,24 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         // under the attempt. Kept out of GET_WORKFLOW_SNAPSHOT deliberately -- the snapshot is
         // fetched on every board render, and session history grows without bound within an attempt.
         case "LIST_PROVIDER_SESSIONS": {
-          // Occupancy comes off these same rows (migration 0009). It used to be rebuilt by
-          // scanning CONTEXT_HANDOFF_REQUESTED out of the event log, which both collapsed the
-          // separation between current state and audit and could only ever show the one reading
-          // that crossed the threshold -- a running session below it had nothing to show at all.
+          // Peak occupancy comes off these same rows (migration 0009), parsed once and read twice.
+          // It used to be rebuilt by scanning CONTEXT_HANDOFF_REQUESTED out of the event log, which
+          // both collapsed the separation between current state and audit and could only ever show
+          // the reading that crossed the threshold -- a session below it had nothing to show.
           const sessionRows = selectProviderSessionsForAttempt
             .all(queryValue.stageAttemptId)
             .map((value) => providerSessionRowSchema.parse(value));
-          const contextWindowUsage: Record<string, ContextWindowUsage> = {};
+          const peakContextWindowUsage: Record<string, ContextWindowUsage> = {};
           for (const row of sessionRows) {
-            const usage = contextWindowUsageFromRow(row);
-            if (usage !== null) contextWindowUsage[row.id] = usage;
+            const usage = peakContextWindowUsageFromRow(row);
+            if (usage !== null) peakContextWindowUsage[row.id] = usage;
           }
           return {
             type: "PROVIDER_SESSIONS",
-            sessions: sessionRows.map(providerSessionFromRow),
+            sessions: sessionRows.map(providerSessionFromParsedRow),
             recipes: selectRecipesForAttempt.all(queryValue.stageAttemptId).map(contextPackRecipeFromRow),
             checkpoints: selectCheckpointsForAttempt.all(queryValue.stageAttemptId).map(checkpointFromRow),
-            contextWindowUsage,
+            peakContextWindowUsage,
           };
         }
         default:

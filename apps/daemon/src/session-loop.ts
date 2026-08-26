@@ -384,7 +384,18 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
         // monotonic (dropping a large tool result out of the window frees points), so a session
         // can return to a percent it has left. A repeat would then reuse the commandId with a
         // different token count in the payload, and `execute` rejects a reused id whose input
-        // hashes differently -- COMMAND_ID_REUSED, thrown from inside a provider callback.
+        // hashes differently -- COMMAND_ID_REUSED, thrown from inside a provider callback, which
+        // this loop can only read as the provider failing.
+        //
+        // Two consequences, both accepted deliberately. First, a handoff fires on the first
+        // reading in the percentage band that contains the threshold and every later reading in
+        // that band is suppressed, so a 75% threshold can be crossed at up to just under 76% --
+        // simulated at 75.51%. Second, what a session stores is its PEAK occupancy, not its
+        // current one: readings that fall back into a band already visited never reach state at
+        // all, and persistence keeps the highest reading regardless. Showing true current
+        // occupancy for a provider that compacts its own window would need a command id that
+        // survives revisiting a percent, and belongs to A2, when such an adapter exists. Do not
+        // build it here.
         const reportedPercent = Math.round((usage.data.usedTokens / usage.data.windowTokens) * 100);
         if (live.reportedPercents.has(reportedPercent)) return;
         live.reportedPercents.add(reportedPercent);

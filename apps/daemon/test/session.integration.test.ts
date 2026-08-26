@@ -433,9 +433,11 @@ describe("stage attempt session loop", () => {
     // Forty-three reports, two percentage points, two rows.
     expect(handoffCommandIds).toHaveLength(2);
 
-    // The window as last measured at a new percentage point. Within one point the first reading
-    // stands, which is exactly the freshness this trade costs -- and exactly what the cockpit,
-    // which renders whole percent, can show anyway.
+    // The PEAK, deliberately, not the current reading. The stream ended below where it had been:
+    // 2,000 was reached, then it fell back to 1,030, which lands in the 10% band this session had
+    // already visited and so never reaches state at all. Persistence keeps the highest reading in
+    // any case. "How full did this session get" is the question a cut has to be explained by, and
+    // 20% is its answer here even though the session finished at 10%.
     const usage = localState.query({
       type: "LIST_PROVIDER_SESSIONS",
       stageAttemptId: seeded.stageAttemptId,
@@ -449,7 +451,7 @@ describe("stage attempt session loop", () => {
     // only read as the provider failing, so the session is cut and everything it had not yet
     // published goes with it.
     expect(session.endReason).toBe("COMPLETED");
-    expect(usage.contextWindowUsage[session.id]).toEqual({
+    expect(usage.peakContextWindowUsage[session.id]).toEqual({
       usedTokens: 2_000,
       windowTokens: 10_000,
       quality: "ACTUAL",
