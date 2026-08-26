@@ -1074,10 +1074,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           }
           return request;
         });
-      const decisions = database
-        .prepare("SELECT * FROM decisions WHERE work_item_id = ? ORDER BY created_at, id")
-        .all(workItemId)
-        .map(decisionFromRow);
+      const decisions = selectDecisionsForWorkItem.all(workItemId).map(decisionFromRow);
       const budgetPolicies = database
         .prepare("SELECT * FROM budget_policies WHERE pipeline_run_id = ? ORDER BY revision")
         .all(run.id)
