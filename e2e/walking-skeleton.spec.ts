@@ -1418,11 +1418,27 @@ test.describe("authenticated walking skeleton", () => {
 
       // A task that never needed a repository shows no section at all -- headings over blanks read
       // as a panel that failed to load.
+      //
+      // The absence check below must not run before the workspace query has actually resolved.
+      // `WorkspacePanel` renders nothing while its query is pending, for the same reason it renders
+      // nothing once the query settles with no workspace (WorkbenchPage.tsx) -- so a `toHaveCount(0)`
+      // fired right after the heading (which paints from `item`, before any query starts) could be
+      // satisfied at the very first poll, against a panel that has not loaded yet, and would keep
+      // passing even if that panel went on to render a shell a moment later. Unlike the sibling
+      // absence check upstream, there is no positive state to reach for on the workspace query
+      // itself -- still-loading and genuinely-empty both render nothing -- so this borrows one from
+      // `WorkflowPanel` next to it instead: it shows a loading skeleton while its own query is
+      // pending, and the real "Start mock workflow" button once that query resolves. Both queries are
+      // fired from the same mount, `useWorkItemWorkflow` before `useWorkItemWorkspace` in render
+      // order, so proving the workflow query has landed proves the workspace one has had at least as
+      // long to land too -- and a fetch to the same idle local daemon that started no later does not
+      // finish meaningfully later.
       await page.getByRole("button", { name: seeded.noWorkspaceTitle }).click();
       const bareInspector = page.getByRole("complementary", { name: seeded.noWorkspaceTitle });
       await expect(
         bareInspector.getByRole("heading", { level: 2, name: seeded.noWorkspaceTitle }),
       ).toBeVisible();
+      await expect(bareInspector.getByRole("button", { name: "Start mock workflow" })).toBeVisible();
       await expect(bareInspector.getByText("Workspace", { exact: true })).toHaveCount(0);
     } finally {
       await daemon?.close();
