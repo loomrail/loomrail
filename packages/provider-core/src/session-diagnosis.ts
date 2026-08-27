@@ -135,7 +135,11 @@ export const describeUnproductiveSession = (report: UnproductiveSessionReport): 
       blocking: true,
       title: truncate(titleFor(report), 200),
       context,
-      recommendation: recommendationFor(report),
+      // Truncated like the other two. `command` is Loomrail's own configuration rather than provider
+      // output, so this is not the untrusted-text guard -- it is the same rule as `context`: a
+      // session that already failed must not fail AGAIN inside this builder's own validation because
+      // its diagnosis was too long to state.
+      recommendation: truncate(recommendationFor(report), CONTEXT_LIMIT),
       options: [],
       allowOther: true,
     }),

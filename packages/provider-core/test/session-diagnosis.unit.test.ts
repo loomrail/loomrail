@@ -70,6 +70,17 @@ describe("describeUnproductiveSession", () => {
     expect(() => humanRequestDraftSchema.parse(request)).not.toThrow();
   });
 
+  // Every field the builder fills is bounded, not just the one carrying provider text: a request it
+  // cannot validate is a failed session failing a second time, inside the diagnosis of the first.
+  it("stays within the contract even when the executable path is absurdly long", () => {
+    const build = (): ReturnType<typeof describeUnproductiveSession> =>
+      describeUnproductiveSession(report({ reason: "SPAWN_FAILED", command: "/x".repeat(9_000) }));
+    expect(build).not.toThrow();
+    const request = requestOf(build());
+    expect(request.recommendation?.length ?? 0).toBeLessThanOrEqual(4_000);
+    expect(request.context.length).toBeLessThanOrEqual(4_000);
+  });
+
   it("names the executable when the process could never be started", () => {
     const request = requestOf(
       describeUnproductiveSession(report({ reason: "SPAWN_FAILED", command: "/nowhere/codex" })),
