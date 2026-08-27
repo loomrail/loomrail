@@ -1,8 +1,13 @@
 import { humanRequestDraftSchema, type ProviderOutcome } from "@loomrail/contracts";
 
 /**
- * Turns "the session ended and there is nothing to show for it" into a question the owner can act
- * on.
+ * Turns "the session ended and there is no result to close the stage on" into a question the owner
+ * can act on.
+ *
+ * Four of the five reasons below are sessions with nothing at all to show. The fifth
+ * (`SESSION_ENDED_UNFINISHED`) is a session that published a checkpoint and then died before
+ * finishing, which is not the same thing and does not read the same way to an owner -- see
+ * `carryForwardLine`.
  *
  * Both live adapters used to answer every one of these situations with `CONTEXT_EXHAUSTED` -- a
  * *business result*, and a false one: neither `codex exec` nor `claude -p` reports context
@@ -36,7 +41,21 @@ export type UnproductiveSessionReason =
   /** The CLI ran and reported its own failure -- an auth refusal, a rate limit, a model error. */
   | "PROVIDER_REPORTED_FAILURE"
   /** The CLI ran, said nothing about failing, and still produced no structured result. */
-  | "NO_STRUCTURED_RESULT";
+  | "NO_STRUCTURED_RESULT"
+  /**
+   * The CLI produced a structured result but never finished the turn it was given -- it was killed,
+   * or it exited before reporting the turn complete.
+   *
+   * The one reason on this list where the session DID publish something. It exists because a
+   * checkpoint is not evidence that a session finished: `codex exec` emits its `agent_message`
+   * items as it goes, and the first of them, on a real recorded run, is the agent stating what it
+   * is ABOUT to do, with `completed: []`. A session killed after that line has published a
+   * checkpoint that reads exactly like a final answer, and closing the stage on it reports work
+   * that never happened -- through a daemon shutdown, the session deadline, or any non-zero exit.
+   * So the checkpoint is kept (it is a real checkpoint, and the next session resumes from it) and
+   * the stage is not closed.
+   */
+  | "SESSION_ENDED_UNFINISHED";
 
 export type UnproductiveSessionReport = {
   provider: string;
@@ -147,6 +166,8 @@ const openingLine = (report: UnproductiveSessionReport): string => {
       return `The ${report.provider} CLI reported that its own turn failed, so this session produced no result.`;
     case "NO_STRUCTURED_RESULT":
       return `The ${report.provider} session ended without the structured result Loomrail asked it for, and without saying why.`;
+    case "SESSION_ENDED_UNFINISHED":
+      return `The ${report.provider} session was cut off before it finished. It did publish a checkpoint, but a checkpoint written while a session is still working states what the agent meant to do next, not what it did, so Loomrail will not close a stage on it.`;
   }
 };
 
@@ -160,6 +181,8 @@ const recommendationFor = (report: UnproductiveSessionReport): string => {
       return "Read the provider's own message above -- an authentication prompt, a rate limit and a model error each need a different fix -- then resume the attempt.";
     case "NO_STRUCTURED_RESULT":
       return "Check that the provider CLI on this machine still accepts the flags this adapter sends (a CLI upgrade can move where the final answer arrives), then resume the attempt.";
+    case "SESSION_ENDED_UNFINISHED":
+      return "Nothing has to be repaired if this was a shutdown or a timeout: resume the attempt and the next session carries on from the checkpoint this one published. If the process ended on its own, read the exit above and the provider's own message before resuming.";
   }
 };
 
@@ -173,8 +196,20 @@ const titleFor = (report: UnproductiveSessionReport): string => {
       return `${report.provider} reported a failed turn`;
     case "NO_STRUCTURED_RESULT":
       return `${report.provider} ended a session with no result`;
+    case "SESSION_ENDED_UNFINISHED":
+      return `${report.provider} was cut off before it finished this stage`;
   }
 };
+
+// The last sentence of every diagnosis, and the one place a published checkpoint changes what is
+// true. SESSION_ENDED_UNFINISHED is the only reason on this list reached with a checkpoint in hand:
+// the adapter published it live as the stream delivered it, so telling the owner nothing was
+// carried forward would be false, and telling them the stage completed would be the defect this
+// reason exists to close.
+const carryForwardLine = (report: UnproductiveSessionReport): string =>
+  report.reason === "SESSION_ENDED_UNFINISHED"
+    ? "The checkpoint this session published is kept, so a resumed attempt starts from it rather than from nothing; the stage itself is not closed on it."
+    : "No checkpoint was published, so nothing from this session is carried forward.";
 
 /**
  * Builds the `NEEDS_HUMAN` outcome for a session that ended with nothing to carry forward.
@@ -195,7 +230,7 @@ export const describeUnproductiveSession = (report: UnproductiveSessionReport): 
       describeExit(report),
       describeLines(report),
       providerText,
-      "No checkpoint was published, so nothing from this session is carried forward.",
+      carryForwardLine(report),
     ].join(" "),
     CONTEXT_LIMIT,
   );

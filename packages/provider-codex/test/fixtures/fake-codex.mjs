@@ -16,6 +16,22 @@
 //                                  standing in for a real `codex exec --json` recording, then
 //                                  exit.
 //
+// Two further variables modify how a run ENDS, rather than what it does. Both are combined with
+// FAKE_CODEX_OUTPUT_FILE, because the shape they exist to reproduce is a stream that arrived and a
+// process that then died without finishing: a checkpoint the adapter has already seen, followed by
+// an end the adapter must not read as success.
+//
+//   FAKE_CODEX_EXIT_CODE        -- exit with this code instead of 0, after the output is written.
+//                                  Stands in for a `codex exec` that gave up on its own.
+//   FAKE_CODEX_KILL_SELF        -- SIGKILL this process once the output has actually reached the
+//                                  pipe. Stands in for the daemon's own shutdown killing the child
+//                                  (`abortSession`), and for the session deadline doing the same.
+//
+// The kill waits for the write CALLBACK rather than firing straight after `write` returns: a pipe
+// write is asynchronous, and killing before it drains would truncate the stream the test is about,
+// turning a test of the adapter's outcome into a test of pipe timing. A ref'd interval holds the
+// event loop open until the kill lands, so the process cannot instead exit 0 on its own.
+//
 // The hang mode aside, this never hangs: the real `codex exec` hangs forever on an open stdin,
 // which is exactly the defect one of the adapter's tests exists to catch, so this stand-in cannot
 // itself rely on an unbounded wait for the same event -- a bug in the adapter must fail that
@@ -30,6 +46,8 @@ if (hangMarkerPath !== undefined) {
 } else {
   const recordPath = process.env.FAKE_CODEX_RECORD_PATH;
   const outputFile = process.env.FAKE_CODEX_OUTPUT_FILE;
+  const exitCode = Number(process.env.FAKE_CODEX_EXIT_CODE ?? "0");
+  const killSelf = process.env.FAKE_CODEX_KILL_SELF !== undefined;
 
   let finished = false;
   let stdinClosed = false;
@@ -46,6 +64,18 @@ if (hangMarkerPath !== undefined) {
     if (recordPath !== undefined) {
       writeFileSync(recordPath, JSON.stringify({ args: process.argv.slice(2), stdinClosed }));
     }
+    if (killSelf) {
+      // Held open so the only way out of this process is the signal below, never a natural exit
+      // with code 0 -- which the test would read as a session that ended normally.
+      const untilKilled = setInterval(() => {}, 1_000);
+      const kill = () => {
+        clearInterval(untilKilled);
+        process.kill(process.pid, "SIGKILL");
+      };
+      if (outputFile === undefined) kill();
+      else process.stdout.write(readFileSync(outputFile, "utf8"), kill);
+      return;
+    }
     if (outputFile !== undefined) {
       process.stdout.write(readFileSync(outputFile, "utf8"));
     }
@@ -54,7 +84,7 @@ if (hangMarkerPath !== undefined) {
     // larger than the pipe buffer would be truncated, and the adapter under test would see a
     // stream ending mid-line for reasons that have nothing to do with the adapter. Setting the
     // code lets the event loop empty naturally and exit on its own.
-    process.exitCode = 0;
+    process.exitCode = exitCode;
   };
 
   process.stdin.on("end", () => {

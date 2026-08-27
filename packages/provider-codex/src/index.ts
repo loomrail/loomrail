@@ -313,6 +313,11 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // deliberately unused. Reported as one number, a failed session of that shape accuses the
         // parser; reported as two, it clears it (see `linesUnreadable` in provider-core).
         let linesUnreadable = 0;
+        // The CLI's own statement that the turn it was given ran to its end. `turn.completed` is
+        // the last line of every successful run recorded in test/recordings/, and the only event
+        // that carries the turn's real token usage -- a session that never emits it did not finish,
+        // whatever else arrived before it. Read below as one half of "this session ended normally".
+        let turnCompleted = false;
 
         const run = runProcess({
           command: resolved.command,
@@ -349,6 +354,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
                 }
               }
               if (event.type === "turn.completed") {
+                turnCompleted = true;
                 const usage: ProviderUsage = {
                   inputTokens: event.usage.inputTokens,
                   outputTokens: event.usage.outputTokens,
@@ -430,13 +436,46 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // every situation that reached it, this milestone's Critical included. Nothing is
         // initialised to a valid outcome any more: the decision is made here, at the end, from
         // what actually happened.
-        if (finalCheckpoint !== undefined) {
+        //
+        // A CHECKPOINT IS NOT ENOUGH, and this is the second Critical on the same line. `codex
+        // exec` streams its `agent_message` items as it works, and on a real recorded run
+        // (test/recordings/workspace-write.jsonl, line 3) the FIRST of them is the agent saying
+        // what it is about to do -- schema-valid, with `completed: []`, indistinguishable in shape
+        // from the real answer eight lines later. Last-wins (D9) only helps when the real answer
+        // arrives. If the process dies after line 3 -- the owner pressing Ctrl+C on the daemon
+        // (which kills the child through `abortSession`, while the resolved outcome is still
+        // applied to the attempt), the 600-second session deadline, or any non-zero exit -- line 3
+        // IS the last match, and returning COMPLETED on it closes the stage with the agent's
+        // opening sentence as the result of work that never happened.
+        //
+        // So "the session ended normally" is asked as well, and both halves of it are asked because
+        // they answer different failure modes. `turnCompleted` is the CLI's own account of the turn:
+        // it excludes a stream that stopped mid-work and a turn the CLI itself reported as failed
+        // after an intention message. The process exit is the OS's account of the same session: it
+        // excludes a kill (a signal -- shutdown, deadline, `abortSession`) and a CLI that gave up
+        // with a non-zero code. Neither one subsumes the other, and each on its own leaves a route
+        // by which an intention becomes a stage result. The cost of asking both is a session that
+        // finished but whose CLI stopped saying so being reported as unfinished -- which asks the
+        // owner a question instead of inventing an answer, the direction this project chooses.
+        //
+        // `provider-claude-code` needs none of this: its outcome comes from the CLI's own terminal
+        // `result` event, so a killed session simply never produces one.
+        const endedNormally = exit.signal === null && exit.code === 0;
+        if (finalCheckpoint !== undefined && turnCompleted && endedNormally) {
           return { type: "COMPLETED", summary: finalCheckpoint.summary };
         }
+        // A turn the CLI said failed is named as that even when a checkpoint arrived first: it is
+        // the more specific fact, and it is the one carrying the provider's own message.
+        const reason =
+          providerFailureText !== undefined
+            ? "PROVIDER_REPORTED_FAILURE"
+            : finalCheckpoint !== undefined
+              ? "SESSION_ENDED_UNFINISHED"
+              : "NO_STRUCTURED_RESULT";
         return describeUnproductiveSession({
           provider: "CODEX",
           command: resolved.command,
-          reason: providerFailureText === undefined ? "NO_STRUCTURED_RESULT" : "PROVIDER_REPORTED_FAILURE",
+          reason,
           exitCode: exit.code,
           signal: exit.signal,
           linesReceived,

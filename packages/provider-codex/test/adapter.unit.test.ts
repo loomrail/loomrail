@@ -290,6 +290,60 @@ const runAgainstLines = async (
   );
 };
 
+// The terminal event of a `codex exec` turn, copied from the shape every recording in recordings/
+// ends on. A stream that is otherwise synthetic still has to carry it to stand for a FINISHED
+// session: the adapter closes a stage only on a turn the CLI itself reported complete, because a
+// checkpoint alone is published mid-work and says what the agent meant to do next (see "does not
+// close a stage on the checkpoint a killed session left behind" below).
+const COMPLETED_TURN_LINE =
+  '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}';
+
+// How a run under test ENDS, independently of what it streamed. `fake-codex.mjs` honours both
+// (see its header): an exit code instead of 0, or a SIGKILL once the output has reached the pipe.
+type SessionEnding = { exitCode: number } | { killed: true };
+
+// The first `lines` lines of a real recording, which is exactly what a process killed mid-session
+// leaves on the pipe: the lines that had already arrived, and nothing after them. Sliced off the
+// capture rather than written out here, so the checkpoint these tests are about is the CLI's own
+// intention message verbatim -- recordings/README.md's rule is that a hand-written line is a
+// fixture wearing a recording's name, and this stays the recording's bytes.
+//
+// The length is asserted rather than assumed: a recording that shrank would otherwise silently
+// hand these tests a stream with no checkpoint in it at all, and they would pass for the wrong
+// reason -- a session that published nothing is refused by a branch that predates this fix.
+const recordingPrefix = (file: string, lines: number): string => {
+  const recordingPath = fileURLToPath(new URL(`./recordings/${file}`, import.meta.url));
+  const prefix = readFileSync(recordingPath, "utf8").split("\n").slice(0, lines);
+  expect(prefix).toHaveLength(lines);
+  return `${prefix.join("\n")}\n`;
+};
+
+const wholeRecording = (file: string): string =>
+  readFileSync(fileURLToPath(new URL(`./recordings/${file}`, import.meta.url)), "utf8");
+
+// Runs the adapter against a given stream and a given ending. The stream is written to a temporary
+// file and delivered by `fake-codex.mjs` exactly as `runAgainstRecording` delivers a whole
+// recording; only the ending differs.
+const runAgainstStreamEnding = async (
+  stream: string,
+  ending: SessionEnding,
+  listener: Partial<ProviderSessionListener> = {},
+): Promise<ProviderOutcome> => {
+  const dir = mkdtempSync(join(tmpdir(), "loomrail-codex-ending-"));
+  const streamPath = join(dir, "stream.jsonl");
+  writeFileSync(streamPath, stream, "utf8");
+  const adapter = createCodexProvider({ command: fakeCodexPath });
+  const environment =
+    "killed" in ending
+      ? { name: "FAKE_CODEX_KILL_SELF", value: "1" }
+      : { name: "FAKE_CODEX_EXIT_CODE", value: String(ending.exitCode) };
+  return withEnv("FAKE_CODEX_OUTPUT_FILE", streamPath, () =>
+    withEnv(environment.name, environment.value, () =>
+      adapter.start(fixtureInvocation(), { ...noopListener(), ...listener }),
+    ),
+  );
+};
+
 // Polls a file the fake process writes on its own, synchronously, as soon as it starts hanging
 // (see FAKE_CODEX_HANG_MARKER_PATH in the fixture) -- there is no other signal available for
 // "the child is now running and its pid is known".
@@ -330,6 +384,8 @@ describe("createCodexProvider", () => {
     delete process.env["FAKE_CODEX_RECORD_PATH"];
     delete process.env["FAKE_CODEX_OUTPUT_FILE"];
     delete process.env["FAKE_CODEX_HANG_MARKER_PATH"];
+    delete process.env["FAKE_CODEX_EXIT_CODE"];
+    delete process.env["FAKE_CODEX_KILL_SELF"];
   });
 
   // IMPLEMENT and QA were withheld for exactly one reason -- the adapter ran in an empty temporary
@@ -548,6 +604,7 @@ describe("createCodexProvider", () => {
     const outcome = await runAgainstLines([
       '{"type":"turn.started"}',
       '{"summary":"Bare-line answer.","completed":[],"remaining":[],"deadEnds":[],"openQuestions":[]}',
+      COMPLETED_TURN_LINE,
     ]);
     expect(outcome).toEqual({ type: "COMPLETED", summary: "Bare-line answer." });
   });
@@ -558,6 +615,7 @@ describe("createCodexProvider", () => {
     const outcome = await runAgainstLines([
       '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\\"summary\\":\\"First.\\",\\"completed\\":[],\\"remaining\\":[],\\"deadEnds\\":[],\\"openQuestions\\":[]}"}}',
       '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\\"summary\\":\\"Last.\\",\\"completed\\":[],\\"remaining\\":[],\\"deadEnds\\":[],\\"openQuestions\\":[]}"}}',
+      COMPLETED_TURN_LINE,
     ]);
     expect(outcome).toEqual({ type: "COMPLETED", summary: "Last." });
   });
@@ -586,6 +644,92 @@ describe("createCodexProvider", () => {
       "Export added to `greet.js`.",
       "Command output: `Goodbye, world`.",
     ]);
+  });
+
+  // The other half of the same defect, and the one last-wins (D9) cannot reach. Last-wins picks the
+  // final match in the stream -- which only helps when the real answer arrived. `workspace-write`'s
+  // line 3 is a schema-valid `agent_message` emitted BEFORE any tool work, stating an intention with
+  // `completed: []`; if the process dies after it, line 3 IS the last match, and an adapter that
+  // reads a checkpoint as a finished session closes the stage COMPLETED carrying the agent's opening
+  // sentence as the result of work that never happened.
+  //
+  // Reachable three ways in the product, all of them ordinary: the owner pressing Ctrl+C on the
+  // daemon (shutdown -> `worker.stop()` -> `abortSession`, which kills the child while the resolved
+  // outcome is still applied to the attempt), the 600-second session deadline, and any non-zero
+  // exit. The stream is the recording's own first three lines and the ending is a real kill of a
+  // real child process, so what is asserted is the adapter's answer to the event, not to a fixture
+  // describing one.
+  it("does not close a stage on the checkpoint a killed session left behind", async () => {
+    const checkpoints: CheckpointDraft[] = [];
+    const outcome = await runAgainstStreamEnding(
+      recordingPrefix("workspace-write.jsonl", 3),
+      { killed: true },
+      { onCheckpoint: (checkpoint) => checkpoints.push(checkpoint) },
+    );
+
+    // Asserted first: this is what makes the rest of the test mean anything. The adapter really did
+    // receive a schema-valid checkpoint -- the intention, with nothing completed -- so a NEEDS_HUMAN
+    // outcome below is the adapter refusing to close on it, not an empty stream being refused by the
+    // branch that has always refused empty streams.
+    expect(checkpoints).toHaveLength(1);
+    expect(checkpoints[0]?.completed).toEqual([]);
+    const intention = checkpoints[0]?.summary ?? "";
+    expect(intention).toContain("inspect");
+
+    const request = expectNeedsHuman(outcome);
+    // The defect, stated directly: the agent's opening sentence must appear nowhere in the outcome
+    // this stage is closed on.
+    expect(JSON.stringify(outcome)).not.toContain(intention);
+    expect(request.title).toContain("cut off before it finished");
+    expect(request.context).toContain("killed by SIGKILL");
+    // And the checkpoint is not disowned either -- it was published as it arrived, the daemon has
+    // persisted it, and a resumed attempt starts from it.
+    expect(request.context).toContain("checkpoint this session published is kept");
+  });
+
+  // The same rule for the ending a CLI reaches on its own. `exit.code` was assigned by this adapter
+  // and then read nowhere on the success path: an exit of 3 after the intention message produced
+  // `{"type":"COMPLETED","summary":"I'll inspect ..."}` exactly as the kill above did.
+  it("does not close a stage on the checkpoint a session that exited non-zero left behind", async () => {
+    const checkpoints: CheckpointDraft[] = [];
+    const outcome = await runAgainstStreamEnding(
+      recordingPrefix("workspace-write.jsonl", 3),
+      { exitCode: 3 },
+      { onCheckpoint: (checkpoint) => checkpoints.push(checkpoint) },
+    );
+
+    expect(checkpoints).toHaveLength(1);
+    const intention = checkpoints[0]?.summary ?? "";
+    expect(intention).toContain("inspect");
+
+    const request = expectNeedsHuman(outcome);
+    expect(JSON.stringify(outcome)).not.toContain(intention);
+    expect(request.context).toContain("exited with code 3");
+  });
+
+  // Both halves of "ended normally" are asked, and each one answers a failure the other misses, so
+  // each is pinned on its own here.
+  //
+  // First run: the WHOLE capture -- the turn ran to `turn.completed` and the final answer is the
+  // real one -- ending on a non-zero exit. A CLI that gives up after answering is telling Loomrail
+  // something went wrong, and the honest response is the owner's question, not a closed stage.
+  //
+  // Second run: the truncated stream ending at exit 0, which is what a `turn.failed` after an
+  // intention message, or a CLI that stops mid-work, looks like from outside. The exit says nothing
+  // is wrong; the missing `turn.completed` says the turn never finished.
+  it("needs both the CLI's own completed turn and a clean exit before it closes a stage", async () => {
+    const afterCompletedTurn = await runAgainstStreamEnding(wholeRecording("workspace-write.jsonl"), {
+      exitCode: 3,
+    });
+    expect(JSON.stringify(afterCompletedTurn)).not.toContain("Added and verified");
+    expect(expectNeedsHuman(afterCompletedTurn).context).toContain("exited with code 3");
+
+    const withoutCompletedTurn = await runAgainstStreamEnding(recordingPrefix("workspace-write.jsonl", 3), {
+      exitCode: 0,
+    });
+    const request = expectNeedsHuman(withoutCompletedTurn);
+    expect(request.title).toContain("cut off before it finished");
+    expect(request.context).toContain("exited with code 0");
   });
 
   // `hello.jsonl` ends on a plain `turn.completed` whose agent message is prose, not a checkpoint.

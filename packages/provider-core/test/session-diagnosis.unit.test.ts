@@ -147,6 +147,23 @@ describe("describeUnproductiveSession", () => {
     expect(request.recommendation).toContain('Nothing is wrong with "codex"');
   });
 
+  // The one reason reached WITH something published. A session killed after its first
+  // `agent_message` has already streamed a checkpoint to the daemon, which persisted it -- so the
+  // closing sentence every other diagnosis ends on ("No checkpoint was published") would be false
+  // here, and it is the sentence an owner reads to decide whether anything survived. Both halves
+  // are asserted: what it must say, and what it must no longer say.
+  it("tells the owner the checkpoint survives when a session was cut off after publishing one", () => {
+    const request = requestOf(
+      describeUnproductiveSession(
+        report({ reason: "SESSION_ENDED_UNFINISHED", exitCode: null, signal: "SIGKILL" }),
+      ),
+    );
+    expect(request.title).toContain("cut off before it finished");
+    expect(request.context).toContain("killed by SIGKILL");
+    expect(request.context).toContain("checkpoint this session published is kept");
+    expect(request.context).not.toContain("No checkpoint was published");
+  });
+
   it("names the executable when the process could never be started", () => {
     const request = requestOf(
       describeUnproductiveSession(report({ reason: "SPAWN_FAILED", command: "/nowhere/codex" })),
