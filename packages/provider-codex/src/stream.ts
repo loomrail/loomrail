@@ -9,6 +9,10 @@ export type CodexEvent =
   | { type: "thread.started"; threadId: string }
   | { type: "turn.started" }
   | { type: "item.completed"; item: { id: string; type: "agent_message"; text: string } }
+  // The CLI's own report that the turn it was running failed -- a rate limit, an auth refusal, a
+  // model error. Captured from the real CLI (see recordings/turn-failed.jsonl): the diagnostic
+  // arrives as `error.message`, and is untrusted process output like every other field here.
+  | { type: "turn.failed"; errorMessage: string }
   | {
       type: "turn.completed";
       usage: {
@@ -37,6 +41,11 @@ const rawItemCompletedSchema = z.object({
   }),
 });
 
+const rawTurnFailedSchema = z.object({
+  type: z.literal("turn.failed"),
+  error: z.object({ message: z.string() }),
+});
+
 const rawTurnCompletedSchema = z.object({
   type: z.literal("turn.completed"),
   usage: z.object({
@@ -51,6 +60,7 @@ const rawCodexEventSchema = z.discriminatedUnion("type", [
   rawThreadStartedSchema,
   rawTurnStartedSchema,
   rawItemCompletedSchema,
+  rawTurnFailedSchema,
   rawTurnCompletedSchema,
 ]);
 
@@ -80,6 +90,8 @@ const toCodexEvent = (raw: z.infer<typeof rawCodexEventSchema>): CodexEvent => {
         type: "item.completed",
         item: { id: raw.item.id, type: raw.item.type, text: raw.item.text },
       };
+    case "turn.failed":
+      return { type: "turn.failed", errorMessage: raw.error.message };
     case "turn.completed":
       return {
         type: "turn.completed",

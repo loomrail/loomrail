@@ -10,9 +10,11 @@ import {
   type ProviderUsage,
 } from "@loomrail/contracts";
 import {
+  describeUnproductiveSession,
   providerCapabilitiesSchema,
   runProcess,
   ProcessSpawnError,
+  type ProcessExitOutcome,
   type ProviderAdapter,
   type ProviderInvocation,
   type ProviderSessionListener,
@@ -230,15 +232,36 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
           invocation.contextPack.text,
         ];
 
-        let outcome: ProviderOutcome = { type: "CONTEXT_EXHAUSTED" };
+        // Deliberately `undefined`, not a valid business result. Initialising this to
+        // `CONTEXT_EXHAUSTED` -- which `claude -p` never reports -- meant that every silent way a
+        // session could end (a wrong flag, a stream the parser could make nothing of, a CLI that
+        // exited before saying anything) arrived at the daemon labelled as a measured fact. The
+        // decision is made once, at the end of `start()`, from what actually happened.
+        let outcome: ProviderOutcome | undefined;
+        // The CLI's own last diagnostic, kept so a failed session can quote it -- this is the
+        // "Not logged in · Please run /login" text spec §9 line 291 promised the owner and never
+        // delivered.
+        let providerFailureText: string | undefined;
+        // Spec §9's "invalid JSON -> the line is dropped with a record". `parseClaudeEvent` stays
+        // pure (no logger), so the record is a count kept here and stated in the session's own
+        // diagnosis. Note this counts every line the parser surfaced nothing for, which includes
+        // the `system` and `assistant` events it drops by design -- the wording in
+        // `describeUnproductiveSession` says exactly that, and the number is only ever shown for a
+        // session that produced no result at all.
+        let linesReceived = 0;
+        let linesUnused = 0;
 
         const run = runProcess({
           command: resolved.command,
           args,
           cwd: workingDir,
           onLine: (line) => {
+            linesReceived += 1;
             const event = parseClaudeEvent(line);
-            if (event === null) return;
+            if (event === null) {
+              linesUnused += 1;
+              return;
+            }
 
             // The one event `parseClaudeEvent` ever surfaces is the terminal `result` (system
             // events, including the owner's hook output, are dropped upstream -- see that
@@ -276,7 +299,12 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
             });
 
             if (!event.ok) {
-              outcome = { type: "CONTEXT_EXHAUSTED" };
+              // Spec §9 line 291: an unauthenticated CLI becomes a Human Request carrying the
+              // provider's own text. This is the "Not logged in · Please run /login" case -- the
+              // one string that tells the owner what to do, and the one this adapter used to
+              // discard in favour of a CONTEXT_EXHAUSTED it had measured nothing to support.
+              providerFailureText = event.text;
+              outcome = undefined;
               return;
             }
 
@@ -291,7 +319,13 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
             // `event.ok` said so, and that reading must not be re-derived from parseability here
             // -- so the outcome is still COMPLETED, just without a structured checkpoint to
             // publish, falling back to the CLI's own text as the summary.
-            outcome = { type: "COMPLETED", summary: event.text.slice(0, 4_000) || "(no summary text)" };
+            // `.trim() ||`, not `||`: a result of "   " is not the empty string, so it survived the
+            // fallback and then failed `providerOutcomeSchema`'s own `.trim().min(1)` deep inside
+            // the daemon's `execute`, turning a completed stage into a persistence error.
+            outcome = {
+              type: "COMPLETED",
+              summary: event.text.slice(0, 4_000).trim() || "(no summary text)",
+            };
           },
           // The CLI's own diagnostics, not an event stream Loomrail parses. Untrusted process
           // output either way, so nothing here is fed to a structured logger unexamined.
@@ -306,19 +340,39 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         // this branch only skips the (impossible in practice) case of a runtime that returns no
         // pid for a process that did start.
         if (run.pid !== undefined) listener.onProcessStarted?.(run.pid);
+        let exit: ProcessExitOutcome;
         try {
-          await run.exited;
+          exit = await run.exited;
         } catch (err) {
           if (!(err instanceof ProcessSpawnError)) throw err;
           // `runProcess` rejects `exited` with `ProcessSpawnError` when the executable itself
           // could never be started (e.g. missing). That must become a session failure, not an
-          // unhandled rejection that would take the daemon down -- CONTEXT_EXHAUSTED, with no
-          // checkpoint, is the same honest label used everywhere else in this method for "the
-          // session ended without one".
-          return { type: "CONTEXT_EXHAUSTED" };
+          // unhandled rejection that would take the daemon down -- and the request names the
+          // executable, because "install this, or fix your PATH" is the only fix and Loomrail
+          // cannot make it.
+          return describeUnproductiveSession({
+            provider: "CLAUDE_CODE",
+            command: resolved.command,
+            reason: "SPAWN_FAILED",
+            exitCode: null,
+            signal: null,
+            linesReceived,
+            linesUnused,
+            providerText: err.message,
+          });
         }
 
-        return outcome;
+        if (outcome !== undefined) return outcome;
+        return describeUnproductiveSession({
+          provider: "CLAUDE_CODE",
+          command: resolved.command,
+          reason: providerFailureText === undefined ? "NO_STRUCTURED_RESULT" : "PROVIDER_REPORTED_FAILURE",
+          exitCode: exit.code,
+          signal: exit.signal,
+          linesReceived,
+          linesUnused,
+          providerText: providerFailureText ?? null,
+        });
       } finally {
         runningSessions.delete(sessionId);
         await rm(workingDir, { recursive: true, force: true });

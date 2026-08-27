@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ContextWindowUsage, ProviderOutcome, ProviderUsage } from "@loomrail/contracts";
+import type {
+  ContextWindowUsage,
+  HumanRequestDraft,
+  ProviderOutcome,
+  ProviderUsage,
+} from "@loomrail/contracts";
 import type { ProviderAdapter, ProviderInvocation, ProviderSessionListener } from "@loomrail/provider-core";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -175,6 +180,15 @@ const isAlive = (pid: number): boolean => {
   }
 };
 
+// Asserts -- rather than merely narrows -- that the outcome is the owner-facing question, and hands
+// back its request. A bare `if (...) throw` would report a regression as a thrown Error instead of
+// as a failed assertion, which is the difference between a test that fails and a test that crashes.
+const expectNeedsHuman = (outcome: ProviderOutcome): HumanRequestDraft => {
+  expect(outcome).toMatchObject({ type: "NEEDS_HUMAN" });
+  if (outcome.type !== "NEEDS_HUMAN") throw new Error("unreachable: asserted immediately above");
+  return outcome.request;
+};
+
 // --- Tests -------------------------------------------------------------------------------------
 
 describe("createCodexProvider", () => {
@@ -298,11 +312,46 @@ describe("createCodexProvider", () => {
     expect(outcome).toEqual({ type: "COMPLETED", summary: "Last." });
   });
 
-  // `hello.jsonl` ends on a plain `turn.completed`, with no structured final line -- the honest
-  // outcome for a one-shot process that produced nothing to hand off.
-  it("reports context exhaustion when the process ends without a structured answer", async () => {
+  // `hello.jsonl` ends on a plain `turn.completed` whose agent message is prose, not a checkpoint.
+  // This used to report CONTEXT_EXHAUSTED -- a business result `codex exec` never measures and
+  // never reports, and the label that made this milestone's Critical silent. The honest answer is a
+  // blocking question that names what actually happened, including how many lines arrived and how
+  // many of them the adapter could make nothing of.
+  it("asks the owner, naming the exit and the line counts, when no structured answer arrives", async () => {
     const outcome = await runAgainstRecording("hello.jsonl");
-    expect(outcome).toEqual({ type: "CONTEXT_EXHAUSTED" });
+    const request = expectNeedsHuman(outcome);
+    expect(request.blocking).toBe(true);
+    expect(request.title).toContain("CODEX");
+    // Four lines arrive; the one the adapter could not use is the prose agent message.
+    expect(request.context).toContain("Lines received from the CLI: 4");
+    expect(request.context).toContain("exited with code 0");
+  });
+
+  // M1/R25: `turn.failed` is where a rate limit, an auth refusal or a model error arrives. The
+  // parser used to drop it and the adapter used to absorb the session into CONTEXT_EXHAUSTED, so
+  // the one text that says what went wrong never reached the owner. `turn-failed.jsonl` is a real
+  // capture (a bogus `-m` value against the authenticated CLI); the assertion is on the provider's
+  // own words, which only reach the request if they were actually carried.
+  it("carries the provider's own error text when the CLI reports a failed turn", async () => {
+    const outcome = await runAgainstRecording("turn-failed.jsonl");
+    const request = expectNeedsHuman(outcome);
+    expect(request.title).toContain("failed turn");
+    expect(request.context).toContain("is not supported when using Codex with a ChatGPT account");
+  });
+
+  // M4: the sibling adapter has always caught `ProcessSpawnError`; this one let it reject out of
+  // `start()`. The session loop does contain it, but as a generic PROVIDER_START_FAILED pause that
+  // never names the executable -- which is the only actionable fact there is.
+  it("asks the owner, naming the executable, when the CLI cannot be spawned at all", async () => {
+    const missing = join(tmpdir(), "loomrail-codex-test-does-not-exist");
+    const started = createCodexProvider({ command: missing }).start(fixtureInvocation(), noopListener());
+    // Asserted through `resolves`, not a bare `await`: the defect this guards against is `start()`
+    // REJECTING instead of answering, and a bare await would surface that as a thrown spawn error
+    // rather than as a failed assertion about the outcome.
+    await expect(started).resolves.toMatchObject({ type: "NEEDS_HUMAN" });
+    const outcome = await started;
+    const request = expectNeedsHuman(outcome);
+    expect(request.context).toContain(missing);
   });
 
   it("removes its per-session working directory once the session ends", async () => {

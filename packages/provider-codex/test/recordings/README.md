@@ -6,10 +6,11 @@ an assumption tests the assumption instead of the CLI. This file is the inventor
 where its file came from; an entry that cannot say "captured from the real CLI" has to say what it
 is instead.
 
-| file              | provenance                                                                                                                                                                                           |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hello.jsonl`     | Captured from the real `codex` CLI (authenticated, empty temporary directory) on a trivial prompt, without `--output-schema`. Verbatim except for redaction; no line was written by hand.            |
-| `completed.jsonl` | Captured from the real `codex` CLI v0.144.1 (authenticated, empty temporary directory) driven with **this adapter's exact argv**, `--output-schema` included. Verbatim; no line was written by hand. |
+| file                | provenance                                                                                                                                                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `hello.jsonl`       | Captured from the real `codex` CLI (authenticated, empty temporary directory) on a trivial prompt, without `--output-schema`. Verbatim except for redaction; no line was written by hand.                                            |
+| `completed.jsonl`   | Captured from the real `codex` CLI v0.144.1 (authenticated, empty temporary directory) driven with **this adapter's exact argv**, `--output-schema` included. Verbatim; no line was written by hand.                                 |
+| `turn-failed.jsonl` | Captured from the real `codex` CLI v0.144.1 (authenticated, empty temporary directory) by adding `-m definitely-not-a-real-model-xyz`, which makes the model endpoint refuse the turn. Verbatim stdout; no line was written by hand. |
 
 `completed.jsonl` replaced an earlier file of the same name that was **not** a recording: its final
 line was an invented, un-enveloped checkpoint object, which is where the adapter wrongly expected

@@ -10,8 +10,11 @@ import {
   type ProviderUsage,
 } from "@loomrail/contracts";
 import {
+  describeUnproductiveSession,
   providerCapabilitiesSchema,
   runProcess,
+  ProcessSpawnError,
+  type ProcessExitOutcome,
   type ProviderAdapter,
   type ProviderInvocation,
   type ProviderSessionListener,
@@ -192,14 +195,28 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         ];
 
         let finalCheckpoint: CheckpointDraft | undefined;
+        // The provider's own last diagnostic, when it gave one. Kept so a failed session can name
+        // what the CLI said instead of inventing a business result for it (see
+        // `describeUnproductiveSession`).
+        let providerFailureText: string | undefined;
+        // Spec §9 promised that an unusable line is dropped "with a record". The parser stays pure
+        // -- it takes no logger -- so the record is a count kept here and reported in the session's
+        // own diagnosis. A session that received four hundred lines and understood none of them is
+        // exactly the fact that would have made this milestone's Critical loud instead of silent.
+        let linesReceived = 0;
+        let linesUnused = 0;
 
         const run = runProcess({
           command: resolved.command,
           args,
           cwd: workingDir,
           onLine: (line) => {
+            linesReceived += 1;
             const event = parseCodexEvent(line);
             if (event !== null) {
+              if (event.type === "turn.failed") {
+                providerFailureText = event.errorMessage;
+              }
               if (event.type === "item.completed") {
                 // The documented path for `--output-schema`'s answer (see
                 // `tryParseStructuredCheckpoint` above). The LAST match in the stream wins: a turn
@@ -234,7 +251,9 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
             if (checkpoint !== null) {
               finalCheckpoint = checkpoint;
               listener.onCheckpoint(checkpoint);
+              return;
             }
+            linesUnused += 1;
           },
           // Codex's own diagnostics, not an event stream Loomrail parses. Untrusted process
           // output either way, so nothing here is fed to a structured logger unexamined.
@@ -249,17 +268,48 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // this branch only skips the (impossible in practice) case of a runtime that returns no
         // pid for a process that did start.
         if (run.pid !== undefined) listener.onProcessStarted?.(run.pid);
-        await run.exited;
+        let exit: ProcessExitOutcome;
+        try {
+          exit = await run.exited;
+        } catch (err) {
+          if (!(err instanceof ProcessSpawnError)) throw err;
+          // `runProcess` rejects `exited` with `ProcessSpawnError` when the executable could never
+          // be started -- it vanished between this adapter's construction-time
+          // `isExecutableOnDisk` probe and the spawn. Symmetric with provider-claude-code, which
+          // has always caught this: two sibling adapters answering the same event differently is
+          // the divergence that bites later.
+          return describeUnproductiveSession({
+            provider: "CODEX",
+            command: resolved.command,
+            reason: "SPAWN_FAILED",
+            exitCode: null,
+            signal: null,
+            linesReceived,
+            linesUnused,
+            providerText: err.message,
+          });
+        }
 
         // `codex exec` is one-shot: the single turn it ran either produced a structured answer
-        // conforming to the checkpoint schema we asked for, or it did not (a crash, a refusal, an
-        // abort). There is no partial-progress state to distinguish from a clean stage
-        // completion, so this is the whole decision -- CONTEXT_EXHAUSTED is the honest label for
-        // "the session ended without one", matching the mock adapter's own use of that outcome
-        // for a session that produced no checkpoint.
-        return finalCheckpoint === undefined
-          ? { type: "CONTEXT_EXHAUSTED" }
-          : { type: "COMPLETED", summary: finalCheckpoint.summary };
+        // conforming to the checkpoint schema we asked for, or it did not. What it must NOT do is
+        // report a business result nobody measured -- this branch used to return
+        // `CONTEXT_EXHAUSTED`, which `codex exec` never reports and which was therefore a lie in
+        // every situation that reached it, this milestone's Critical included. Nothing is
+        // initialised to a valid outcome any more: the decision is made here, at the end, from
+        // what actually happened.
+        if (finalCheckpoint !== undefined) {
+          return { type: "COMPLETED", summary: finalCheckpoint.summary };
+        }
+        return describeUnproductiveSession({
+          provider: "CODEX",
+          command: resolved.command,
+          reason: providerFailureText === undefined ? "NO_STRUCTURED_RESULT" : "PROVIDER_REPORTED_FAILURE",
+          exitCode: exit.code,
+          signal: exit.signal,
+          linesReceived,
+          linesUnused,
+          providerText: providerFailureText ?? null,
+        });
       } finally {
         runningSessions.delete(sessionId);
         await rm(workingDir, { recursive: true, force: true });

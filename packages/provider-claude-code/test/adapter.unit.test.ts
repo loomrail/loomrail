@@ -1,9 +1,14 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import type { ContextWindowUsage, ProviderOutcome, ProviderUsage } from "@loomrail/contracts";
+import type {
+  ContextWindowUsage,
+  HumanRequestDraft,
+  ProviderOutcome,
+  ProviderUsage,
+} from "@loomrail/contracts";
 import type { ProviderAdapter, ProviderInvocation, ProviderSessionListener } from "@loomrail/provider-core";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -123,6 +128,23 @@ const runAgainstRecording = async (
   );
 };
 
+// Runs the adapter against an ad-hoc stream written out as a temporary file. Used ONLY where the
+// point of the test is a stream no CLI observed here produces (a wrong-flag stream carrying no
+// JSONL at all, a result whose text is whitespace); anything asserting what the real CLI does goes
+// through `runAgainstRecording` and a file in recordings/, per spec §11.
+const runAgainstLines = async (
+  lines: readonly string[],
+  listener: Partial<ProviderSessionListener> = {},
+): Promise<ProviderOutcome> => {
+  const dir = mkdtempSync(join(tmpdir(), "loomrail-claude-stream-"));
+  const streamPath = join(dir, "stream.jsonl");
+  writeFileSync(streamPath, lines.map((line) => `${line}\n`).join(""), "utf8");
+  const adapter = createClaudeCodeProvider({ command: fakeClaudePath });
+  return withEnv("FAKE_CLAUDE_OUTPUT_FILE", streamPath, () =>
+    adapter.start(fixtureInvocation(), { ...noopListener(), ...listener }),
+  );
+};
+
 // Polls a file the fake process writes on its own, synchronously, as soon as it starts hanging
 // (see FAKE_CLAUDE_HANG_MARKER_PATH in the fixture) -- there is no other signal available for
 // "the child is now running and its pid is known".
@@ -145,6 +167,15 @@ const isAlive = (pid: number): boolean => {
   } catch {
     return false;
   }
+};
+
+// Asserts -- rather than merely narrows -- that the outcome is the owner-facing question, and hands
+// back its request. A bare `if (...) throw` would report a regression as a thrown Error instead of
+// as a failed assertion, which is the difference between a test that fails and a test that crashes.
+const expectNeedsHuman = (outcome: ProviderOutcome): HumanRequestDraft => {
+  expect(outcome).toMatchObject({ type: "NEEDS_HUMAN" });
+  if (outcome.type !== "NEEDS_HUMAN") throw new Error("unreachable: asserted immediately above");
+  return outcome.request;
 };
 
 // --- Tests -------------------------------------------------------------------------------------
@@ -224,9 +255,38 @@ describe("createClaudeCodeProvider", () => {
     expect(spawned.args[spawned.args.indexOf("--max-budget-usd") + 1]).toBe("1.25");
   });
 
-  it("fails the session when the CLI reports an authentication failure", async () => {
+  // Spec §9 line 291 promised the owner a Human Request carrying the provider's own text when the
+  // CLI is not authenticated. It was never implemented: the session reported CONTEXT_EXHAUSTED, the
+  // owner saw an unproductive session, and "Not logged in · Please run /login" -- the one string
+  // that says what to do -- was discarded. Asserted on that string, so a request that reaches the
+  // owner without the provider's words still fails.
+  it("asks the owner with the CLI's own words when it reports an authentication failure", async () => {
     const outcome = await runAgainstRecording("not-logged-in.jsonl");
-    expect(outcome.type).not.toBe("COMPLETED");
+    const request = expectNeedsHuman(outcome);
+    expect(request.blocking).toBe(true);
+    expect(request.context).toContain("Not logged in");
+    expect(request.context).toContain("Please run /login");
+  });
+
+  // M10: `|| "(no summary text)"` only caught the empty string. A result of "   " survived it and
+  // then failed `providerOutcomeSchema`'s own `.trim().min(1)` deep inside the daemon's `execute`,
+  // turning a stage the CLI had actually completed into a persistence error.
+  it("completes a turn whose result text is nothing but whitespace", async () => {
+    const outcome = await runAgainstLines([
+      '{"type":"result","subtype":"success","is_error":false,"result":"   ","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":0}}',
+    ]);
+    expect(outcome).toEqual({ type: "COMPLETED", summary: "(no summary text)" });
+  });
+
+  // The other half of R25: a stream the adapter can make nothing of at all (a wrong flag makes the
+  // CLI print plain text instead of JSONL) used to arrive as CONTEXT_EXHAUSTED -- a business result
+  // `claude -p` never reports. The line counts are the diagnosis: three lines arrived, none of them
+  // carried anything.
+  it("asks the owner, naming the line counts, when nothing in the stream is usable", async () => {
+    const outcome = await runAgainstLines(["not json at all", "still not json", "nor this"]);
+    const request = expectNeedsHuman(outcome);
+    expect(request.context).toContain("Lines received from the CLI: 3");
+    expect(request.context).toContain("3 carried nothing this adapter could use");
   });
 
   it("reports the cost the CLI reports", async () => {
@@ -348,14 +408,18 @@ describe("createClaudeCodeProvider", () => {
   });
 
   // A spawn failure (missing executable) must become a session failure, not an unhandled
-  // rejection that would take the daemon down with it.
-  it("reports a session failure, not an unhandled rejection, when the executable cannot be spawned", async () => {
-    const adapter = createClaudeCodeProvider({
-      command: join(tmpdir(), "loomrail-claude-code-test-does-not-exist"),
-    });
-    await expect(adapter.start(fixtureInvocation(), noopListener())).resolves.toEqual({
-      type: "CONTEXT_EXHAUSTED",
-    });
+  // rejection that would take the daemon down with it -- and the question must name the executable,
+  // because installing it or fixing PATH is the only fix and Loomrail cannot make it.
+  it("asks the owner, naming the executable, when it cannot be spawned", async () => {
+    const missing = join(tmpdir(), "loomrail-claude-code-test-does-not-exist");
+    const started = createClaudeCodeProvider({ command: missing }).start(fixtureInvocation(), noopListener());
+    // Asserted through `resolves`, not a bare `await`: the defect this guards against is `start()`
+    // REJECTING instead of answering, and a bare await would surface that as a thrown spawn error
+    // rather than as a failed assertion about the outcome.
+    await expect(started).resolves.toMatchObject({ type: "NEEDS_HUMAN" });
+    const outcome = await started;
+    const request = expectNeedsHuman(outcome);
+    expect(request.context).toContain(missing);
   });
 
   // Spec §9, first line: an adapter must not promise a provider whose CLI is not on this machine.

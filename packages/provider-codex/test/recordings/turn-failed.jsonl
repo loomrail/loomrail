@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"01a040b1-671c-7531-a4a7-cbe05fb50ae9"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Configured service tier `priority` is not advertised as supported for model `definitely-not-a-real-model-xyz` and will be omitted from requests."}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"Model metadata for `definitely-not-a-real-model-xyz` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'definitely-not-a-real-model-xyz' model is not supported when using Codex with a ChatGPT account.\"}}"}
+{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'definitely-not-a-real-model-xyz' model is not supported when using Codex with a ChatGPT account.\"}}"}}

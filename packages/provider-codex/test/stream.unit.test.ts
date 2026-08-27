@@ -28,6 +28,26 @@ describe("parseCodexEvent", () => {
     });
   });
 
+  // M1: the parser knew four of the seven event types the shipped binary defines, and `turn.failed`
+  // -- where a rate limit, an auth refusal or a model error arrives -- was one of the three it
+  // dropped. The line below is verbatim from `recordings/turn-failed.jsonl`, captured by pointing
+  // the real CLI at a model that does not exist.
+  it("reads the failure a turn reports, rather than dropping it", () => {
+    const event = parseCodexEvent(
+      '{"type":"turn.failed","error":{"message":"The model is not supported when using Codex with a ChatGPT account."}}',
+    );
+    expect(event).toEqual({
+      type: "turn.failed",
+      errorMessage: "The model is not supported when using Codex with a ChatGPT account.",
+    });
+  });
+
+  it("reads the recorded stream of a real failed run", () => {
+    const failedPath = fileURLToPath(new URL("./recordings/turn-failed.jsonl", import.meta.url));
+    const events = readFileSync(failedPath, "utf8").split("\n").filter(Boolean).map(parseCodexEvent);
+    expect(events.at(-1)?.type).toBe("turn.failed");
+  });
+
   // Provider output is untrusted input: a line that cannot be used is dropped, never thrown on.
   it("drops a line that is not JSON", () => {
     expect(parseCodexEvent("Reading additional input from stdin…")).toBeNull();
