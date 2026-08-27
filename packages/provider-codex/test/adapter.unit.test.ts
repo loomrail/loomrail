@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -566,6 +566,30 @@ describe("createCodexProvider", () => {
     const outcome = await started;
     const request = expectNeedsHuman(outcome);
     expect(request.context).toContain(missing);
+  });
+
+  // The worktree is checked by the daemon before it dispatches, and can still go away in the window
+  // between that check and this launch -- an owner cleaning up, a script, the agent of another
+  // attempt. `spawn` answers a missing cwd with the SAME ENOENT it gives a missing executable, so
+  // the outcome named `codex` and the owner was told to install a CLI that was there all along.
+  // Asserted in both directions: the directory has to be named, and the executable has to be
+  // cleared, because a diagnosis that merely omits the wrong fact still leaves the owner guessing.
+  it("names the vanished worktree, not the CLI, when the directory it was given is gone", async () => {
+    const worktree = workspaceDirectory();
+    rmSync(worktree, { recursive: true, force: true });
+    const started = createCodexProvider({ command: fakeCodexPath }).start(
+      fixtureInvocation("session-1", fixtureWorkspace(worktree)),
+      noopListener(),
+    );
+    // Through `resolves`, like the spawn-failure case below it: the failure mode being guarded
+    // against is `start()` REJECTING instead of answering, and a bare await would report that as a
+    // thrown error rather than as a failed assertion about the outcome.
+    await expect(started).resolves.toMatchObject({ type: "NEEDS_HUMAN" });
+    const request = expectNeedsHuman(await started);
+    expect(request.context).toContain(worktree);
+    expect(request.title).toContain("no directory to run in");
+    expect(request.recommendation).toContain(worktree);
+    expect(request.title).not.toContain("could not start its CLI");
   });
 
   // Spec D8, and the launch this whole milestone exists for. Every flag was established by probing

@@ -1,5 +1,5 @@
 import { accessSync, constants as fsConstants } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, sep } from "node:path";
 
@@ -107,6 +107,23 @@ const tryParseStructuredCheckpoint = (line: string): CheckpointDraft | null => {
   return result.success ? result.data : null;
 };
 
+// Whether the CLI can actually be launched in `path`. Asked before the spawn, because `spawn`
+// answers a missing cwd with the SAME failure it gives a missing executable (ENOENT on the child),
+// and this adapter's SPAWN_FAILED diagnosis names the executable -- so a worktree that went away
+// between the daemon's dispatch check and this launch reached the owner as "codex is not
+// installed", which is false and points at the wrong repair entirely.
+//
+// A file at the path is as unusable as nothing at all, so `isDirectory` is the question rather than
+// mere existence. Any other error (a permissions problem on a parent) answers "not usable" too:
+// this is a pre-flight, and the launch below is what reports the real failure if this was wrong.
+const isUsableWorkingDirectory = async (path: string): Promise<boolean> => {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
 type SessionRuntime = {
   // `.exited` is awaited directly by abortSession, not merely started -- resolving `stop()`
   // without waiting for it is the A1 defect this milestone is named for closing.
@@ -199,6 +216,24 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // nothing to reach. Given a workspace, the CLI runs in the work item's own worktree
         // instead, which is the point of this milestone.
         const workingDir = workspace?.path ?? scratchDir;
+        // The scratch directory was created two lines up and is always there, so this only ever
+        // asks about a workspace: the daemon checks the worktree before it dispatches, and this is
+        // the window between that check and this launch. Reported as its own reason rather than
+        // allowed to surface as a spawn failure -- see `isUsableWorkingDirectory` above.
+        if (!(await isUsableWorkingDirectory(workingDir))) {
+          return describeUnproductiveSession({
+            provider: "CODEX",
+            command: resolved.command,
+            reason: "WORKING_DIRECTORY_MISSING",
+            workingDirectory: workingDir,
+            exitCode: null,
+            signal: null,
+            linesReceived: 0,
+            linesUnused: 0,
+            linesUnreadable: 0,
+            providerText: null,
+          });
+        }
 
         // Every flag below was established by probing the real CLI, not by reading its help. Never
         // `--dangerously-bypass-approvals-and-sandbox` or any other permission-bypass flag --

@@ -24,6 +24,15 @@ import { humanRequestDraftSchema, type ProviderOutcome } from "@loomrail/contrac
 export type UnproductiveSessionReason =
   /** The executable could not be started at all (`ProcessSpawnError`). */
   | "SPAWN_FAILED"
+  /**
+   * The directory the CLI was to be launched in is not there, so nothing was launched.
+   *
+   * Distinct from SPAWN_FAILED on purpose, and the reason this member exists: a `spawn` into a
+   * missing cwd fails the same way a missing executable does, and the diagnosis then names the
+   * executable -- the owner reads "codex is not installed", which is false and sends them to fix
+   * something that was never broken. The directory is the fact, and it is a different fact.
+   */
+  | "WORKING_DIRECTORY_MISSING"
   /** The CLI ran and reported its own failure -- an auth refusal, a rate limit, a model error. */
   | "PROVIDER_REPORTED_FAILURE"
   /** The CLI ran, said nothing about failing, and still produced no structured result. */
@@ -34,6 +43,17 @@ export type UnproductiveSessionReport = {
   /** The executable this adapter tried to spawn -- the one thing a SPAWN_FAILED owner must see. */
   command: string;
   reason: UnproductiveSessionReason;
+  /**
+   * The directory the CLI was to run in, named only when that directory is what went wrong
+   * (`WORKING_DIRECTORY_MISSING`).
+   *
+   * Optional rather than required of every report for the same reason `linesUnreadable` is: a
+   * caller reporting one of the other three reasons has measured nothing about the working
+   * directory and should say nothing about it. A report that carries the reason without the path
+   * still produces a valid question -- it just cannot name the directory, which is a caller bug
+   * this builder describes honestly rather than throwing on top of a session that already failed.
+   */
+  workingDirectory?: string;
   /** `null` when the process never ran, or when a signal ended it. */
   exitCode: number | null;
   signal: string | null;
@@ -104,8 +124,14 @@ const describeLines = (report: UnproductiveSessionReport): string => {
     : `${counted}, and ${String(report.linesUnreadable)} of them could not be read at all.`;
 };
 
+// The path when the caller named one, and a phrase that makes no claim about it when it did not.
+const workingDirectoryOf = (report: UnproductiveSessionReport): string =>
+  report.workingDirectory ?? "the directory it was given";
+
 const describeExit = (report: UnproductiveSessionReport): string => {
-  if (report.reason === "SPAWN_FAILED") return `The process never started.`;
+  if (report.reason === "SPAWN_FAILED" || report.reason === "WORKING_DIRECTORY_MISSING") {
+    return `The process never started.`;
+  }
   if (report.signal !== null) return `The process was killed by ${report.signal}.`;
   if (report.exitCode !== null) return `The process exited with code ${String(report.exitCode)}.`;
   return `The process ended without reporting an exit code.`;
@@ -115,6 +141,8 @@ const openingLine = (report: UnproductiveSessionReport): string => {
   switch (report.reason) {
     case "SPAWN_FAILED":
       return `Loomrail could not start "${report.command}", the executable the ${report.provider} adapter runs.`;
+    case "WORKING_DIRECTORY_MISSING":
+      return `Loomrail did not start the ${report.provider} CLI: the directory this session was to run in is not there (${workingDirectoryOf(report)}). The workspace this stage was given has been removed or moved since it was recorded.`;
     case "PROVIDER_REPORTED_FAILURE":
       return `The ${report.provider} CLI reported that its own turn failed, so this session produced no result.`;
     case "NO_STRUCTURED_RESULT":
@@ -126,6 +154,8 @@ const recommendationFor = (report: UnproductiveSessionReport): string => {
   switch (report.reason) {
     case "SPAWN_FAILED":
       return `Check that "${report.command}" is installed and executable on this machine, then resume the attempt.`;
+    case "WORKING_DIRECTORY_MISSING":
+      return `Restore ${workingDirectoryOf(report)} -- the work item's own worktree, cut from the project's repository -- then resume the attempt. Nothing is wrong with "${report.command}" or with this machine's install of it.`;
     case "PROVIDER_REPORTED_FAILURE":
       return "Read the provider's own message above -- an authentication prompt, a rate limit and a model error each need a different fix -- then resume the attempt.";
     case "NO_STRUCTURED_RESULT":
@@ -137,6 +167,8 @@ const titleFor = (report: UnproductiveSessionReport): string => {
   switch (report.reason) {
     case "SPAWN_FAILED":
       return `${report.provider} could not start its CLI`;
+    case "WORKING_DIRECTORY_MISSING":
+      return `${report.provider} had no directory to run in`;
     case "PROVIDER_REPORTED_FAILURE":
       return `${report.provider} reported a failed turn`;
     case "NO_STRUCTURED_RESULT":

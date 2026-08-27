@@ -126,6 +126,27 @@ describe("describeUnproductiveSession", () => {
     expect(request.context.length).toBeLessThanOrEqual(4_000);
   });
 
+  // A `spawn` into a missing cwd fails exactly the way a missing executable does, so this used to
+  // arrive as SPAWN_FAILED and tell the owner their CLI was not installed -- false, and a repair
+  // for something that was never broken. The directory is the fact, and the executable must be
+  // cleared by name rather than merely left unmentioned.
+  it("names the directory, not the executable, when there was nowhere to run", () => {
+    const request = requestOf(
+      describeUnproductiveSession(
+        report({
+          reason: "WORKING_DIRECTORY_MISSING",
+          command: "codex",
+          workingDirectory: "/var/loomrail/worktrees/work-item-1",
+        }),
+      ),
+    );
+    expect(request.title).toContain("no directory to run in");
+    expect(request.context).toContain("/var/loomrail/worktrees/work-item-1");
+    expect(request.context).toContain("The process never started.");
+    expect(request.recommendation).toContain("/var/loomrail/worktrees/work-item-1");
+    expect(request.recommendation).toContain('Nothing is wrong with "codex"');
+  });
+
   it("names the executable when the process could never be started", () => {
     const request = requestOf(
       describeUnproductiveSession(report({ reason: "SPAWN_FAILED", command: "/nowhere/codex" })),
