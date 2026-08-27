@@ -241,15 +241,24 @@ export const workItemWorkspaceOrphanedResultSchema = z
 // A response object rather than the bare workspace for the same reason every other listing here
 // wraps its payload (projectsResponseSchema, workItemsResponseSchema): a top-level `null` body
 // carries no schemaVersion, so a later field could not be added without breaking every reader.
+//
+// `leaseHolder` is deliberately not on it. The lease is how the daemon keeps two StageAttempts from
+// writing the same worktree at once (spec D6); no caller of this route reads it, and none is
+// planned to -- the cockpit shows where the agent writes, not which attempt currently holds the
+// pen. A field on a response nobody reads is a declaration without a consumer, so the response
+// projects the stored workspace rather than forwarding it whole.
+export const publishedWorkItemWorkspaceSchema = workItemWorkspaceSchema.omit({ leaseHolder: true });
+
 export const workItemWorkspaceResponseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
-    workspace: workItemWorkspaceSchema.nullable(),
+    workspace: publishedWorkItemWorkspaceSchema.nullable(),
   })
   .strict();
 
 export type WorkItemWorkspaceStatus = z.infer<typeof workItemWorkspaceStatusSchema>;
 export type WorkItemWorkspaceResponse = z.infer<typeof workItemWorkspaceResponseSchema>;
+export type PublishedWorkItemWorkspace = z.infer<typeof publishedWorkItemWorkspaceSchema>;
 export type WorkItemWorkspace = z.infer<typeof workItemWorkspaceSchema>;
 export type WorkItemWorkspaceCreatedEvent = z.infer<typeof workItemWorkspaceCreatedEventSchema>;
 export type WorkItemWorkspaceOrphanedEvent = z.infer<typeof workItemWorkspaceOrphanedEventSchema>;

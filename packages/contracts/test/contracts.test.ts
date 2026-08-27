@@ -5,6 +5,8 @@ import {
   daemonStatusResponseSchema,
   domainEventSchema,
   healthResponseSchema,
+  registerProjectCommandSchema,
+  registerRepositoryProjectRequestSchema,
   sessionExchangeRequestSchema,
 } from "../src/index.js";
 
@@ -17,6 +19,47 @@ describe("walking-skeleton contracts", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  // A relative path resolves against whatever directory the daemon was launched from, which is not
+  // something the owner chose and not the same on the next start. The rule lives on the command and
+  // on the Project itself rather than only at the HTTP edge, so no route or fixture can put one in
+  // the database by a path that skips the edge check.
+  it("refuses to record a Project at a relative repository path", () => {
+    const registerAt = (repositoryPath: string) =>
+      registerProjectCommandSchema.safeParse({
+        schemaVersion: 1,
+        commandId: "command-1",
+        correlationId: "correlation-1",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_PROJECT",
+        payload: { id: "project-1", fixtureId: null, name: "acme-invoicing", repositoryPath },
+      });
+
+    // The exact thing typing `.` into the Settings field used to register, and the relative forms
+    // beside it.
+    expect(registerAt(".").success).toBe(false);
+    expect(registerAt("./repos/acme").success).toBe(false);
+    expect(registerAt("../acme").success).toBe(false);
+    expect(registerAt("repos/acme").success).toBe(false);
+    // Both blocking platforms' spellings of an absolute path pass: the daemon runs on macOS and on
+    // Windows, and this contract is read on both.
+    expect(registerAt("/srv/repositories/acme-invoicing").success).toBe(true);
+    expect(registerAt("C:\\repositories\\acme-invoicing").success).toBe(true);
+  });
+
+  // The request the Settings field sends is deliberately *not* held to the same rule: it accepts
+  // what the owner typed so the daemon can answer which of the possible problems it is. A schema
+  // refusal here would collapse "not absolute", "not a repository" and "inside a repository" into
+  // one "the request payload is invalid".
+  it("accepts a relative path in the register request, so the daemon can say what is wrong with it", () => {
+    expect(
+      registerRepositoryProjectRequestSchema.safeParse({
+        schemaVersion: 1,
+        commandId: "command-1",
+        repositoryPath: ".",
+      }).success,
+    ).toBe(true);
   });
 
   it("rejects short bootstrap tokens", () => {

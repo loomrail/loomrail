@@ -278,6 +278,42 @@ against a budget threshold. This is a budget-enforcement gap (BD-001), not a new
 threat — spend already visible to the owner in the CLI's own output is merely not yet durable inside
 Loomrail — and is tracked as follow-up work, not part of A2 (spec §3 D4).
 
+### E1 workspace-execution delta (registering a repository)
+
+E1 (`docs/plans/13-e1-workspace-execution-spec.ru.md`) is where a Project stops being one of two bundled
+fixtures and becomes any local Git repository the owner names by path, and where a stage that changes files
+runs in a Git worktree cut from it. Two registration decisions belong on the record here, because both are
+things Loomrail deliberately does not refuse.
+
+**A repository's own top level is always accepted — including Loomrail's own checkout.** `resolveRegisteredRepository`
+(`apps/daemon/src/fixtures.ts`) refuses a path that is not a Git repository, and refuses a directory _inside_
+one, but a repository root always passes and nothing special-cases this one. That is the decision, not an
+oversight: the owner who types this checkout's path has named it deliberately, and a tool that cannot be
+pointed at its own source is a poorer tool for it. It is also, after this milestone, the one remaining way to
+hand a live agent Loomrail's own code, which is why it is written down rather than left implicit.
+
+What protects the owner in that case is the shape of the work rather than a refusal:
+
+- **the agent never writes in the repository.** A workspace is a Git worktree cut _outside_ it, under
+  Loomrail's own data directory (`<data>/workspaces/<projectId>/<workItemId>`, spec D2), on its own
+  `loomrail/…` branch. The owner's working copy, index and checked-out branch are untouched;
+- **Loomrail commits nothing to the repository's own branches and pushes nothing, anywhere.** The single
+  commit it creates is the carry-in snapshot on the workspace's own branch (spec §2.9). No remote is
+  contacted at any point in this milestone;
+- **the refusal that remains is the one that matters.** A _subdirectory_ of a repository is still refused
+  (`REPOSITORY_PATH_INSIDE_REPOSITORY`), because registering one would silently branch the enclosing
+  repository and hand the agent everything in it — which the owner did not choose and would not see.
+
+No confirmation dialog stands in front of this, by decision: a prompt that appears whenever a path resembles
+Loomrail's own would train the owner to dismiss it, and it protects nothing the three properties above do not.
+
+**A Project's repository path must be absolute.** A relative path resolves against whatever directory the
+daemon was launched from — a shell, a launcher, a login item — so a stored relative path names a different
+repository on the next start than it did on this one. `repositoryPathSchema`
+(`packages/contracts/src/work-management.ts`) enforces it on the command and on the Project itself, so no route
+or fixture can put one in the database, and `resolveRegisteredRepository` answers `REPOSITORY_PATH_NOT_ABSOLUTE`
+naming the path, rather than letting the owner discover it as a Project pointing somewhere they never chose.
+
 ## 7. Future execution threats
 
 The following controls are required before their corresponding feature can ship:

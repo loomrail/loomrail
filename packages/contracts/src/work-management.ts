@@ -92,7 +92,39 @@ export const riskSchema = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
 
 const titleSchema = z.string().trim().min(1).max(200);
 const descriptionSchema = z.string().trim().max(20_000);
-const repositoryPathSchema = z.string().min(1).max(4_096);
+/**
+ * A repository path exactly as an owner typed it, before anything has judged it.
+ *
+ * Bounded only in length, because this is the *request* side: a path that is relative, or points at
+ * something that is not a repository, has to reach the daemon so the owner can be told which of
+ * those it was. Rejecting it here would collapse both into one "the request payload is invalid".
+ */
+const repositoryPathTextSchema = z.string().min(1).max(4_096);
+
+// Absolute, tested here rather than with `node:path`'s `isAbsolute`, because this package is parsed
+// in the browser as well as in the daemon and must not import a Node builtin -- and because
+// `isAbsolute` answers for the platform it is running on, while a contract has to mean the same
+// thing wherever it is read. Both platform spellings are accepted: a rooted POSIX path, a
+// drive-letter path, and a UNC share, since macOS and Windows are both blocking platforms.
+const absolutePathPattern = /^(?:[/\\]|[A-Za-z]:[/\\])/;
+
+/**
+ * A repository path a Project may actually *record*.
+ *
+ * Absolute, without exception. A relative path has no meaning outside the process that resolved it:
+ * typing `.` into the Settings field used to register whatever directory the daemon happened to be
+ * launched from, silently and with a 200, while every field description promised an absolute path.
+ * A Project's path is read back by a daemon started from somewhere else entirely -- a launcher, a
+ * login item, a different shell -- so a stored relative path names a different repository on the
+ * next start than it did on this one.
+ *
+ * Enforced on the command and on the Project itself rather than only at the HTTP edge, so no route,
+ * fixture or test can put a relative path into the database by a path that skips the edge check.
+ */
+const repositoryPathSchema = repositoryPathTextSchema.regex(
+  absolutePathPattern,
+  "A repository path must be absolute",
+);
 const acceptanceCriteriaSchema = z.array(z.string().trim().min(1).max(500)).max(50);
 
 export const projectSchema = z
@@ -148,6 +180,16 @@ const eventBaseSchema = z
   })
   .strict();
 
+/**
+ * Records that, at this moment, this Project is registered at this repository path.
+ *
+ * REPOINT_FIXTURE_PROJECT emits this too, and deliberately not an event type of its own. What the
+ * repoint changes is exactly what this event already carries -- the Project, path included -- and
+ * the path it moved *off* is not lost by reusing the type: it is the `repositoryPath` on this same
+ * Project's earlier PROJECT_REGISTERED event, which the append-only log still holds. A second event
+ * type would have bought a field the log already answers, at the price of rebuilding the `events`
+ * CHECK constraint (migration 0011's shape) on the owner's real database.
+ */
 export const projectRegisteredEventSchema = eventBaseSchema.extend({
   type: z.literal("PROJECT_REGISTERED"),
   aggregateType: z.literal("PROJECT"),
@@ -250,6 +292,41 @@ export const registerProjectCommandSchema = commandBaseSchema.extend({
     .strict(),
 });
 
+/**
+ * Moves a fixture-backed Project off the bundled template it still records, onto the repository
+ * that template has just been materialised into.
+ *
+ * Why this exists at all: the two demo Projects were registered before a bundled fixture became a
+ * real repository, so their `repository_path` names a directory *inside Loomrail's own checkout*.
+ * Migration 0012 carried those paths across verbatim -- correctly, because a migration cannot know
+ * the data directory, which is runtime configuration -- and pressing "Initialize demo workspace"
+ * afterwards materialised the repository and then answered PROJECT_ALREADY_REGISTERED, leaving the
+ * fresh repository orphaned on disk and the Project pointing at the template forever. Every stage
+ * that needs a workspace is refused at such a path, and no route repaired it.
+ *
+ * A command of its own rather than a widening of REGISTER_PROJECT, because it is a different claim:
+ * that one asserts nothing is registered here yet, this one asserts something is and names both the
+ * path it must currently record and the path it should record instead.
+ *
+ * `expectedRepositoryPath` is the guard, not a convenience. The persistence layer applies this only
+ * when the row still carries exactly that path, so a Project the owner registered by path can never
+ * be moved by it, and a concurrent registration that already fixed the row is refused rather than
+ * silently re-applied.
+ */
+export const repointFixtureProjectCommandSchema = commandBaseSchema.extend({
+  type: z.literal("REPOINT_FIXTURE_PROJECT"),
+  payload: z
+    .object({
+      projectId: opaqueIdSchema,
+      // Non-nullable, unlike REGISTER_PROJECT's: only a fixture-backed Project can be re-pointed,
+      // and requiring the fixture here is half of what keeps a path-registered one out of reach.
+      fixtureId: fixtureProjectIdSchema,
+      expectedRepositoryPath: repositoryPathSchema,
+      repositoryPath: repositoryPathSchema,
+    })
+    .strict(),
+});
+
 export const createWorkItemCommandSchema = commandBaseSchema.extend({
   type: z.literal("CREATE_WORK_ITEM"),
   payload: z
@@ -301,6 +378,7 @@ export const moveWorkItemCommandSchema = commandBaseSchema.extend({
 
 export const stateCommandSchema = z.discriminatedUnion("type", [
   registerProjectCommandSchema,
+  repointFixtureProjectCommandSchema,
   createWorkItemCommandSchema,
   updateWorkItemCommandSchema,
   moveWorkItemCommandSchema,
@@ -405,12 +483,18 @@ export const registerFixtureProjectRequestSchema = z
  *
  * The path is the only field. There is deliberately no `name`: see the daemon's
  * `registerRepositoryProject`, which takes the repository directory's own name.
+ *
+ * `repositoryPathTextSchema`, not `repositoryPathSchema`: the request accepts what the owner typed
+ * so that the daemon can answer *why* it is not usable -- "this path is not absolute", "this is not
+ * a repository", "this is a directory inside the repository at X" are three different fixes, and a
+ * schema refusal at the edge would give all three the same "the request payload is invalid".
+ * `repositoryPathSchema` still guards what is ultimately recorded, on the command below.
  */
 export const registerRepositoryProjectRequestSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
     commandId: opaqueIdSchema,
-    repositoryPath: repositoryPathSchema,
+    repositoryPath: repositoryPathTextSchema,
   })
   .strict();
 
@@ -473,6 +557,7 @@ export type WorkItemCreatedEvent = z.infer<typeof workItemCreatedEventSchema>;
 export type WorkItemUpdatedEvent = z.infer<typeof workItemUpdatedEventSchema>;
 export type WorkItemStateChangedEvent = z.infer<typeof workItemStateChangedEventSchema>;
 export type RegisterProjectCommand = z.infer<typeof registerProjectCommandSchema>;
+export type RepointFixtureProjectCommand = z.infer<typeof repointFixtureProjectCommandSchema>;
 export type CreateWorkItemCommand = z.infer<typeof createWorkItemCommandSchema>;
 export type UpdateWorkItemCommand = z.infer<typeof updateWorkItemCommandSchema>;
 export type MoveWorkItemCommand = z.infer<typeof moveWorkItemCommandSchema>;

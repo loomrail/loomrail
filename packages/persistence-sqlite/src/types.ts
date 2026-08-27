@@ -23,6 +23,11 @@ export type StateStoreErrorCode =
   | "COMMAND_ID_REUSED"
   | "PROJECT_NOT_FOUND"
   | "PROJECT_ALREADY_REGISTERED"
+  // REPOINT_FIXTURE_PROJECT declined: the Project is not the fixture-backed one it named, no longer
+  // records the path the command expected, or already has a workspace cut from it. Distinct from
+  // PROJECT_ALREADY_REGISTERED because the two say opposite things -- that one refuses because a
+  // Project exists, this one refuses although one does, and only its narrow preconditions failed.
+  | "PROJECT_REPOINT_REFUSED"
   | "MIGRATION_DRIFT"
   | "MIGRATION_FAILED"
   | "PERSISTENCE_FAILURE"

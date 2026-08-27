@@ -20,7 +20,7 @@ import {
   type WorkItem,
   type WorkItemChangedField,
   type WorkItemState,
-  type WorkItemWorkspace,
+  type PublishedWorkItemWorkspace,
   type WorkItemWorkspaceStatus,
 } from "@loomrail/contracts";
 import {
@@ -1394,7 +1394,9 @@ const baseCommitDisplayLength = 12;
 const WorkspacePanel = ({ item }: { item: WorkItem }): React.JSX.Element | null => {
   const { t } = useI18n();
   const { projects } = useWorkspace();
-  const workspace: WorkItemWorkspace | null = useWorkItemWorkspace(item.id).data?.workspace ?? null;
+  // The published shape, not the stored one: the route deliberately does not send `leaseHolder`, and
+  // the card has no use for it.
+  const workspace: PublishedWorkItemWorkspace | null = useWorkItemWorkspace(item.id).data?.workspace ?? null;
 
   if (!workspace) return null;
 

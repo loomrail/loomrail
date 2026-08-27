@@ -49,6 +49,7 @@ import {
   type ProviderSession,
   type RecoveryReport,
   type RegisterProjectCommand,
+  type RepointFixtureProjectCommand,
   type StageAttempt,
   type StartMockPipelineCommand,
   type StateCommand,
@@ -1633,9 +1634,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       });
     };
 
+    // Takes either command that leaves a Project registered at a repository path: the first
+    // registration, and the repoint that moves a demo Project off the bundled template it still
+    // records. Both record the same fact -- see projectRegisteredEventSchema's note on why the
+    // repoint reuses this event type rather than introducing one.
     const appendProjectEvent = (
       project: Project,
-      command: RegisterProjectCommand,
+      command: RegisterProjectCommand | RepointFixtureProjectCommand,
       occurredAt: string,
     ): DomainEvent => {
       const eventId = createId("event");
@@ -2343,6 +2348,94 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           type: "PROJECT_REGISTERED",
           replayed: false,
           project,
+          event,
+        });
+      }
+
+      if (command.type === "REPOINT_FIXTURE_PROJECT") {
+        // Four preconditions, each of which is the whole of what makes this write safe. They are
+        // checked here rather than in the caller because they have to hold at the moment of the
+        // write, inside the same transaction, not at the moment the caller looked.
+        const project = readProject(command.payload.projectId);
+        if (!project) {
+          throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+        // 1. It is the fixture-backed Project this command names. A Project the owner registered by
+        //    path carries a null `fixtureId` and can never satisfy this, which is the guarantee that
+        //    this command cannot move a repository the owner chose.
+        if (project.fixtureId !== command.payload.fixtureId) {
+          throw new StateStoreError(
+            "PROJECT_REPOINT_REFUSED",
+            "The Project is not backed by the bundled fixture this command names",
+          );
+        }
+        // 2. It still records exactly the path the caller found. Anything else -- a concurrent
+        //    registration that already moved it, a path the owner edited -- is left alone.
+        if (project.repositoryPath !== command.payload.expectedRepositoryPath) {
+          throw new StateStoreError(
+            "PROJECT_REPOINT_REFUSED",
+            "The Project no longer records the repository path this command expected",
+          );
+        }
+        // 3. Nothing has ever been cut from it. Provisioning refuses a path that is not its own
+        //    repository's top level (apps/daemon/src/session-loop.ts), and the bundled template is
+        //    a directory inside Loomrail's checkout, so in practice there is nothing to find --
+        //    unless an owner ran `git init` in the template themselves, which is the one way a
+        //    workspace could exist under a stale path. This check makes the write safe without
+        //    depending on that reasoning: a workspace names a branch and a worktree cut from one
+        //    specific repository, and moving the Project out from under it would leave every future
+        //    stage branching a different repository than the one already holding the work.
+        const workspace = database
+          .prepare("SELECT 1 AS present FROM work_item_workspaces WHERE project_id = ? LIMIT 1")
+          .get(project.id);
+        if (workspace !== undefined) {
+          throw new StateStoreError(
+            "PROJECT_REPOINT_REFUSED",
+            "The Project already has a workspace cut from its current repository path",
+          );
+        }
+        // 4. The destination is free. `projects.repository_path` is UNIQUE, so this would otherwise
+        //    surface as a raw constraint failure rather than the answer the owner needs.
+        const occupant = database
+          .prepare("SELECT id FROM projects WHERE repository_path = ? AND id <> ? LIMIT 1")
+          .get(command.payload.repositoryPath, project.id);
+        if (occupant !== undefined) {
+          throw new StateStoreError(
+            "PROJECT_ALREADY_REGISTERED",
+            "A Project is already registered at this repository path",
+          );
+        }
+
+        const repointed = projectSchema.parse({
+          ...project,
+          repositoryPath: command.payload.repositoryPath,
+          version: project.version + 1,
+          updatedAt: occurredAt,
+        });
+        const update = database
+          .prepare(
+            `UPDATE projects SET repository_path = ?, version = ?, updated_at = ?
+             WHERE id = ? AND version = ?`,
+          )
+          .run(
+            repointed.repositoryPath,
+            repointed.version,
+            repointed.updatedAt,
+            repointed.id,
+            project.version,
+          );
+        if (update.changes !== 1) {
+          throw new StateStoreError(
+            "PROJECT_REPOINT_REFUSED",
+            "The Project changed while the repoint was being applied",
+          );
+        }
+        const event = appendProjectEvent(repointed, command, occurredAt);
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_REGISTERED",
+          replayed: false,
+          project: repointed,
           event,
         });
       }

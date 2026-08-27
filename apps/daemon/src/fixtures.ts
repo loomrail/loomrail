@@ -108,6 +108,7 @@ export const resolveBundledFixture = async (
 };
 
 export type ProjectRegistrationErrorCode =
+  | "REPOSITORY_PATH_NOT_ABSOLUTE"
   | "REPOSITORY_PATH_NOT_A_REPOSITORY"
   | "REPOSITORY_PATH_INSIDE_REPOSITORY"
   | "FIXTURE_TEMPLATE_UNSUPPORTED_ENTRY"
@@ -141,6 +142,24 @@ const canonicalPathOf = async (path: string): Promise<string | null> => {
 const pathExists = async (path: string): Promise<boolean> => (await canonicalPathOf(path)) !== null;
 
 /**
+ * Whether two paths name the same directory that is actually on disk.
+ *
+ * Canonical forms are compared, not the strings: a Project's `repositoryPath` was recorded by some
+ * earlier version of Loomrail and may spell a directory differently from the way this process
+ * resolves it -- macOS's `/var` -> `/private/var` is the everyday case, an owner's symlinked
+ * checkout the next one. The string comparison is kept first only because it answers without two
+ * `realpath` calls in the common case.
+ *
+ * A path that does not resolve is never "the same" as anything, `null === null` included: this
+ * answers a question about a directory, and two missing directories are not one.
+ */
+export const isSameExistingPath = async (left: string, right: string): Promise<boolean> => {
+  if (left === right) return await pathExists(left);
+  const [canonicalLeft, canonicalRight] = await Promise.all([canonicalPathOf(left), canonicalPathOf(right)]);
+  return canonicalLeft !== null && canonicalLeft === canonicalRight;
+};
+
+/**
  * Settles whether a path may be registered as a Project's repository, and refuses in the owner's
  * words when it may not.
  *
@@ -154,8 +173,31 @@ const pathExists = async (path: string): Promise<boolean> => (await canonicalPat
  * question than provisioning does: an owner whose repository is mid a rebase should still be able
  * to register it. The rebase is transient; whether the path is a repository at all is not. The
  * mid-operation refusal stays where it belongs, at the moment a workspace is actually cut.
+ *
+ * **A repository's own top level is always accepted, Loomrail's own checkout included, and that is
+ * a decision rather than an oversight.** Nothing here special-cases this repository, and nothing
+ * will: an owner who types this checkout's path has named it deliberately, and a tool that refuses
+ * to work on its own source is a poorer tool for it. What protects the owner in that case is not a
+ * refusal but the shape of the work -- the agent is given a Git worktree cut *outside* the
+ * repository, under Loomrail's own data directory, never the checkout itself; and Loomrail commits
+ * to that worktree's branch and pushes nothing, so nothing an agent does reaches the owner's
+ * working copy, their history, or any remote. The one thing this refusal does still keep out is a
+ * *subdirectory* of a repository, which would branch the enclosing repository by surprise. See
+ * `docs/security/THREAT-MODEL.md`, E1 delta.
  */
 export const resolveRegisteredRepository = async (path: string): Promise<string> => {
+  // Absolute first, before anything touches the filesystem. A relative path resolves against
+  // whatever directory this daemon was launched from -- typing `.` used to register the daemon's
+  // own working directory with a 200 -- and the next daemon start resolves it somewhere else. The
+  // owner-facing wording says which of the two problems it is: the path is fine as a directory and
+  // wrong as a Project's path, and a "this is not a Git repository" answer would send them looking
+  // for the wrong thing.
+  if (!isAbsolute(path)) {
+    throw new ProjectRegistrationError(
+      "REPOSITORY_PATH_NOT_ABSOLUTE",
+      `A Project's repository path must be absolute, and ${path} is relative. A relative path is resolved against whatever directory the Loomrail daemon was started from, which is not something you chose and not the same on the next start. Enter the repository's full path, starting from the root of the filesystem.`,
+    );
+  }
   const canonical = await canonicalPathOf(path);
   const inspected = canonical === null ? null : await inspectRepository(canonical);
   // git reports its top level as a physical path, so the comparison is against the canonical form

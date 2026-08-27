@@ -8,6 +8,7 @@ import {
   releaseWorkspaceLeaseCommandSchema,
   workItemWorkspaceCreatedEventSchema,
   workItemWorkspaceOrphanedEventSchema,
+  workItemWorkspaceResponseSchema,
   workItemWorkspaceSchema,
 } from "../src/index.js";
 
@@ -326,5 +327,22 @@ describe("work item workspace contracts", () => {
     const { payload, ...rest } = validMarkOrphanedCommand();
     const payloadWithoutId = omitField(payload, "workspaceId");
     expect(() => markWorkspaceOrphanedCommandSchema.parse({ ...rest, payload: payloadWithoutId })).toThrow();
+  });
+
+  // The lease is how the daemon keeps two StageAttempts out of one worktree. It is stored, and it
+  // is deliberately not published: no caller of the workspace route reads it, and a field on a
+  // response with no consumer is a defect rather than a convenience.
+  it("refuses a workspace response that carries the lease holder", () => {
+    expect(() =>
+      workItemWorkspaceResponseSchema.parse({ schemaVersion: 1, workspace: validWorkspace() }),
+    ).toThrow();
+    expect(
+      workItemWorkspaceResponseSchema.parse({
+        schemaVersion: 1,
+        workspace: omitField(validWorkspace(), "leaseHolder"),
+      }).workspace?.worktreePath,
+    ).toBe("/var/loomrail/worktrees/workspace-1");
+    // And "no workspace at all" is still the ordinary answer, not an error.
+    expect(workItemWorkspaceResponseSchema.parse({ schemaVersion: 1, workspace: null }).workspace).toBeNull();
   });
 });

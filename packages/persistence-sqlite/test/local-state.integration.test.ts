@@ -1236,6 +1236,187 @@ describe("SQLite local state", () => {
     expect(second.type).toBe("PROJECT_REGISTERED");
   });
 
+  // The repair for the one database that matters. The owner's two demo Projects were registered
+  // before a bundled fixture became a real repository, so their `repository_path` names a directory
+  // inside Loomrail's own checkout; migration 0012 carried those paths across verbatim, as it must,
+  // since a migration cannot know the data directory. Every stage that needs a workspace is refused
+  // at such a path, and until REPOINT_FIXTURE_PROJECT nothing could move it.
+  it("moves a fixture Project off the path it was registered at, and leaves that path in the log", async () => {
+    const localState = await open();
+    const stalePath = join(temporaryDirectory, "checkout", "fixtures", "projects", "web-app-a");
+    const freshPath = join(temporaryDirectory, "data", "demo-projects", "web-app-a");
+    const registered = localState.execute({
+      ...registerProject("project-fixture-web-app-a", "register-stale-fixture"),
+      payload: {
+        id: "project-fixture-web-app-a",
+        fixtureId: "web-app-a",
+        name: "Fixture web application",
+        repositoryPath: stalePath,
+      },
+    });
+    if (registered.type !== "PROJECT_REGISTERED") throw new Error("Expected the stale Project");
+
+    const repointed = localState.execute({
+      schemaVersion: 1,
+      commandId: "repoint-web-app-a",
+      correlationId: "correlation-repoint-web-app-a",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "REPOINT_FIXTURE_PROJECT",
+      payload: {
+        projectId: "project-fixture-web-app-a",
+        fixtureId: "web-app-a",
+        expectedRepositoryPath: stalePath,
+        repositoryPath: freshPath,
+      },
+    });
+    if (repointed.type !== "PROJECT_REGISTERED") throw new Error("Expected the Project to be repointed");
+    expect(repointed.project.repositoryPath).toBe(freshPath);
+    // A change to the row, so the version moves; everything else about the Project is the same one.
+    expect(repointed.project.version).toBe(registered.project.version + 1);
+    expect(repointed.project.id).toBe(registered.project.id);
+    expect(repointed.project.createdAt).toBe(registered.project.createdAt);
+
+    // Read back through the store, not taken from the result: the point of the command is the row.
+    const stored = localState.query({ type: "GET_PROJECT", projectId: "project-fixture-web-app-a" });
+    expect(stored.type === "PROJECT" ? stored.project?.repositoryPath : null).toBe(freshPath);
+
+    // Nothing is lost by reusing PROJECT_REGISTERED for the repoint: the append-only log holds both
+    // paths, in order, so the path the Project was moved *off* is still recoverable.
+    const events = localState.query({ type: "LIST_EVENTS" });
+    expect(
+      (events.type === "EVENTS" ? events.events : [])
+        .filter((event) => event.type === "PROJECT_REGISTERED")
+        .map((event) => event.data.project.repositoryPath),
+    ).toEqual([stalePath, freshPath]);
+
+    // And a second repoint naming the path the Project no longer records is refused rather than
+    // applied twice: `expectedRepositoryPath` is the guard, not a convenience.
+    let thrown: unknown;
+    try {
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "repoint-web-app-a-again",
+        correlationId: "correlation-repoint-web-app-a-again",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REPOINT_FIXTURE_PROJECT",
+        payload: {
+          projectId: "project-fixture-web-app-a",
+          fixtureId: "web-app-a",
+          expectedRepositoryPath: stalePath,
+          repositoryPath: join(temporaryDirectory, "data", "somewhere-else"),
+        },
+      });
+    } catch (error: unknown) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(StateStoreError);
+    expect((thrown as StateStoreError).code).toBe("PROJECT_REPOINT_REFUSED");
+    const unchanged = localState.query({ type: "GET_PROJECT", projectId: "project-fixture-web-app-a" });
+    expect(unchanged.type === "PROJECT" ? unchanged.project?.repositoryPath : null).toBe(freshPath);
+  });
+
+  // The two hard constraints on the repair above. Both are checked here rather than in the daemon
+  // route that issues the command, because they have to hold at the moment of the write.
+  it("refuses to move a Project the owner registered by path, or one that already has a workspace", async () => {
+    const localState = await open();
+    const ownPath = join(temporaryDirectory, "acme-invoicing");
+    const own = localState.execute({
+      ...registerProject("project-own-repository", "register-own-repository"),
+      payload: {
+        id: "project-own-repository",
+        fixtureId: null,
+        name: "acme-invoicing",
+        repositoryPath: ownPath,
+      },
+    });
+    if (own.type !== "PROJECT_REGISTERED") throw new Error("Expected the owner's Project");
+
+    // A Project registered by path carries a null fixture, so it can never match the fixture this
+    // command names -- which is the whole of what keeps a repository the owner chose out of reach.
+    let ownThrown: unknown;
+    try {
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "repoint-owners-project",
+        correlationId: "correlation-repoint-owners-project",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REPOINT_FIXTURE_PROJECT",
+        payload: {
+          projectId: "project-own-repository",
+          fixtureId: "web-app-a",
+          expectedRepositoryPath: ownPath,
+          repositoryPath: join(temporaryDirectory, "data", "demo-projects", "web-app-a"),
+        },
+      });
+    } catch (error: unknown) {
+      ownThrown = error;
+    }
+    expect(ownThrown).toBeInstanceOf(StateStoreError);
+    expect((ownThrown as StateStoreError).code).toBe("PROJECT_REPOINT_REFUSED");
+    const stillOwn = localState.query({ type: "GET_PROJECT", projectId: "project-own-repository" });
+    expect(stillOwn.type === "PROJECT" ? stillOwn.project?.repositoryPath : null).toBe(ownPath);
+
+    // A fixture Project that has already had a workspace cut from it. Provisioning refuses a path
+    // that is not its own repository's top level, so in practice the bundled template never has one
+    // -- unless an owner ran `git init` in it themselves. This check makes the move safe without
+    // depending on that: a workspace names a branch and a worktree in one specific repository, and
+    // moving the Project out from under it would leave every later stage branching another one.
+    const stalePath = join(temporaryDirectory, "checkout", "fixtures", "projects", "web-app-a");
+    localState.execute({
+      ...registerProject("project-fixture-web-app-a", "register-fixture-with-workspace"),
+      payload: {
+        id: "project-fixture-web-app-a",
+        fixtureId: "web-app-a",
+        name: "Fixture web application",
+        repositoryPath: stalePath,
+      },
+    });
+    const workItem = localState.execute(
+      createWorkItem("create-item-with-workspace", "project-fixture-web-app-a"),
+    );
+    if (workItem.type !== "WORK_ITEM_CREATED") throw new Error("Expected a WorkItem");
+    const workspace = localState.execute({
+      schemaVersion: 1,
+      commandId: "record-workspace-under-stale-path",
+      correlationId: "correlation-record-workspace-under-stale-path",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "CREATE_WORK_ITEM_WORKSPACE",
+      payload: {
+        workItemId: workItem.workItem.id,
+        projectId: "project-fixture-web-app-a",
+        branch: "loomrail/already-cut",
+        worktreePath: join(temporaryDirectory, "workspaces", "already-cut"),
+        baseCommit: null,
+        snapshotCommit: null,
+        carriedPaths: [],
+      },
+    });
+    expect(workspace.type).toBe("WORK_ITEM_WORKSPACE_CREATED");
+
+    let workspaceThrown: unknown;
+    try {
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "repoint-project-with-workspace",
+        correlationId: "correlation-repoint-project-with-workspace",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REPOINT_FIXTURE_PROJECT",
+        payload: {
+          projectId: "project-fixture-web-app-a",
+          fixtureId: "web-app-a",
+          expectedRepositoryPath: stalePath,
+          repositoryPath: join(temporaryDirectory, "data", "demo-projects", "web-app-a"),
+        },
+      });
+    } catch (error: unknown) {
+      workspaceThrown = error;
+    }
+    expect(workspaceThrown).toBeInstanceOf(StateStoreError);
+    expect((workspaceThrown as StateStoreError).code).toBe("PROJECT_REPOINT_REFUSED");
+    const stillStale = localState.query({ type: "GET_PROJECT", projectId: "project-fixture-web-app-a" });
+    expect(stillStale.type === "PROJECT" ? stillStale.project?.repositoryPath : null).toBe(stalePath);
+  });
+
   // Migration 0012 runs with `PRAGMA foreign_keys` off -- SQLite's own procedure for rebuilding a
   // table thirteen others reference -- which makes this the one place in the codebase that turns
   // the check off. It used to turn it back ON unconditionally, which is right only for as long as

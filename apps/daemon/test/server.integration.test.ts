@@ -16,13 +16,17 @@ import {
   workflowSnapshotSchema,
   type ContextPackSpec,
   type ProviderSession,
+  type WorkflowTemplate,
 } from "@loomrail/contracts";
-import { openLocalState } from "@loomrail/persistence-sqlite";
+import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import { createCodexProvider } from "@loomrail/provider-codex";
+import { providerCapabilitiesSchema, type ProviderAdapter } from "@loomrail/provider-core";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
-import { inspectRepository } from "@loomrail/workspace";
+import { inspectRepository, listWorktrees } from "@loomrail/workspace";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { resolveBundledFixture } from "../src/fixtures.js";
+import { runStageAttempt } from "../src/session-loop.js";
 import { startDaemon, type RunningDaemon } from "../src/server.js";
 import {
   authenticate,
@@ -47,6 +51,101 @@ const legacyContextPack: ContextPackSpec = {
     { id: "LATEST_CHECKPOINT", ordinal: 3, required: true },
     { id: "ACTIVITY", ordinal: 4, required: false },
   ],
+};
+
+// IMPLEMENT alone, so a seeded pipeline's first dispatch is already the stage that needs a
+// repository -- the stage the stale demo path used to make impossible.
+const implementStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "IMPLEMENT");
+if (!implementStage) throw new Error("The mock delivery template no longer declares IMPLEMENT");
+const implementOnlyTemplate: WorkflowTemplate = {
+  ...mockDeliveryTemplate,
+  id: "demo-repair-implement-v1",
+  version: 1,
+  name: "Demo repair implement",
+  stages: [{ ...implementStage, ordinal: 0 }],
+};
+
+// An adapter that does nothing and reports the stage done. Everything under test here happens
+// before the adapter is called -- the worktree is cut, or the stage is refused -- so what the
+// session does inside it is not the subject.
+const completingAdapter = (): ProviderAdapter => ({
+  capabilities: () =>
+    providerCapabilitiesSchema.parse({
+      provider: "MOCK",
+      start: true,
+      interrupt: true,
+      eventStream: false,
+      usageReporting: false,
+      contextWindowReporting: false,
+      checkpointOnRequest: false,
+      contextWindowTokens: 128_000,
+      stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+      costReporting: false,
+    }),
+  start: () => Promise.resolve({ type: "COMPLETED", summary: "The mock session finished the stage." }),
+  requestHandoff: () => Promise.resolve(),
+  abortSession: () => Promise.resolve(),
+});
+
+// A READY WorkItem under an existing Project, an IMPLEMENT-only pipeline, and its dispatch already
+// marked started -- the shape `runStageAttempt` expects to be handed.
+const seedImplementAttempt = (localState: LocalState, projectId: string): SeededAttempt => {
+  let nextCommandId = 0;
+  const commandId = (): string => `seed-implement-${(nextCommandId += 1).toString()}`;
+  const created = localState.execute({
+    schemaVersion: 1,
+    commandId: commandId(),
+    correlationId: "correlation-seed-implement-item",
+    actor: { type: "HUMAN", id: "local-owner" },
+    type: "CREATE_WORK_ITEM",
+    payload: {
+      projectId,
+      parentId: null,
+      type: "TASK",
+      title: "Fix the login redirect",
+      description: "Synthetic work for the demo Project repair.",
+      priority: "MEDIUM",
+      risk: "LOW",
+      acceptanceCriteria: ["The stage runs in a real worktree"],
+    },
+  });
+  if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected a WorkItem");
+  localState.execute({
+    schemaVersion: 1,
+    commandId: commandId(),
+    correlationId: "correlation-seed-implement-ready",
+    actor: { type: "HUMAN", id: "local-owner" },
+    type: "MOVE_WORK_ITEM",
+    payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
+  });
+  const started = localState.execute({
+    schemaVersion: 1,
+    commandId: commandId(),
+    correlationId: "correlation-seed-implement-pipeline",
+    actor: { type: "HUMAN", id: "local-owner" },
+    type: "START_MOCK_PIPELINE",
+    payload: {
+      workItemId: created.workItem.id,
+      expectedVersion: 2,
+      template: implementOnlyTemplate,
+      budget: { maxEstimatedTokens: 100_000, warningThresholds: [0.5, 0.8, 0.95] },
+    },
+  });
+  if (started.type !== "PIPELINE_STARTED") throw new Error("Expected a started pipeline");
+  const dispatched = localState.execute({
+    schemaVersion: 1,
+    commandId: commandId(),
+    correlationId: "correlation-seed-implement-dispatch",
+    actor: { type: "SYSTEM", id: "session-loop" },
+    type: "MARK_WORKFLOW_DISPATCH_STARTED",
+    payload: { dispatchId: started.dispatch.id },
+  });
+  if (dispatched.type !== "WORKFLOW_DISPATCH_STARTED") throw new Error("Expected a started dispatch");
+  return {
+    workItemId: created.workItem.id,
+    stageAttemptId: started.stageAttempt.id,
+    dispatch: dispatched.dispatch,
+  };
 };
 
 describe("local daemon session and state boundary", () => {
@@ -344,6 +443,188 @@ describe("local daemon session and state boundary", () => {
     expect(await readFile(join(demoProjectsRoot, "web-app-a", "README.md"), "utf8")).toContain(
       "Fixture web application",
     );
+  });
+
+  // The one database that matters, and the only defect in this batch that breaks it completely.
+  //
+  // The owner's two demo Projects were registered before a bundled fixture became a real
+  // repository, so their `repository_path` names a directory inside Loomrail's own checkout.
+  // Migration 0012 carried those paths across verbatim -- correctly, since a migration cannot know
+  // the data directory, which is runtime configuration. Pressing "Initialize demo workspace"
+  // afterwards materialised the repository and then answered 409 PROJECT_ALREADY_REGISTERED: the
+  // fresh repository orphaned on disk, both Projects pointing at the template forever, every
+  // pipeline reaching IMPLEMENT refused at the provisioning guard, and no route in the UI to repair
+  // it. This test starts from that exact row.
+  it("repairs a demo Project still recording the bundled template, and cuts a workspace from the repository it then names", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail stale demo project "));
+    temporaryDirectories.push(temporaryDirectory);
+    const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    const demoProjectsRoot = join(temporaryDirectory, "demo-projects");
+    const workspacesRoot = join(temporaryDirectory, "workspaces");
+    // Not a path spelled out here: the bundled template's own path, resolved the same way the
+    // daemon resolves it, which is what the pre-milestone registration wrote into the row.
+    const fixture = await resolveBundledFixture("web-app-a");
+
+    const seedState = await openLocalState({ databasePath: stateDatabasePath });
+    try {
+      seedState.execute({
+        schemaVersion: 1,
+        commandId: "register-stale-demo-project",
+        correlationId: "correlation-register-stale-demo",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_PROJECT",
+        payload: {
+          id: fixture.projectId,
+          fixtureId: fixture.fixtureId,
+          name: fixture.name,
+          repositoryPath: fixture.templatePath,
+        },
+      });
+    } finally {
+      seedState.close();
+    }
+
+    const token = bootstrapToken();
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      stateDatabasePath,
+      demoProjectsRoot,
+    });
+    const session = await authenticate(daemon, token);
+
+    const response = await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "register-stale-demo-again",
+        fixtureId: "web-app-a",
+      }),
+    });
+
+    // Not 409. The Project is moved onto the repository this call just materialised.
+    expect(response.status).toBe(200);
+    const repointed = stateCommandResultSchema.parse(await response.json());
+    if (repointed.type !== "PROJECT_REGISTERED") throw new Error("Expected the Project to be repointed");
+    const materialisedPath = await realpath(join(demoProjectsRoot, "web-app-a"));
+    expect(repointed.project.repositoryPath).toBe(materialisedPath);
+    expect(repointed.project.id).toBe(fixture.projectId);
+
+    // One Project, at the new path: the repoint moved the existing row rather than adding a second.
+    const projects = projectsResponseSchema.parse(
+      await (
+        await fetch(`${daemon.baseUrl}/api/v1/projects`, { headers: { cookie: session.cookie } })
+      ).json(),
+    );
+    expect(projects.projects.map(({ id, repositoryPath }) => ({ id, repositoryPath }))).toEqual([
+      { id: fixture.projectId, repositoryPath: materialisedPath },
+    ]);
+
+    // The repository the Project now names is a real one, outside this checkout, and the fresh copy
+    // is not an orphan nobody records.
+    expect(materialisedPath).not.toContain(join("fixtures", "projects"));
+    expect((await inspectRepository(materialisedPath))?.topLevel).toBe(materialisedPath);
+
+    // What the repair is actually for. The daemon is closed first so the stage runs against the same
+    // database through a single connection, exactly as the running daemon's own worker would.
+    await daemon.close();
+    daemon = undefined;
+    const runState = await openLocalState({ databasePath: stateDatabasePath });
+    try {
+      // Seeded after the daemon has gone: a StageAttempt left RUNNING across a daemon start is
+      // exactly what startup reconciliation marks INTERRUPTED, and this test is about the
+      // repository the stage is handed, not about recovery.
+      const seeded = seedImplementAttempt(runState, fixture.projectId);
+      await runStageAttempt({
+        state: runState,
+        adapter: completingAdapter(),
+        dispatch: seeded.dispatch,
+        template: implementOnlyTemplate,
+        workspacesRoot,
+        createCommandId: (() => {
+          let next = 0;
+          return () => `command-stale-demo-${(next += 1).toString()}`;
+        })(),
+        correlationId: "correlation-stale-demo-run",
+        logger: { info: () => undefined, warn: () => undefined },
+      });
+      const workspace = runState.query({
+        type: "GET_WORKSPACE_BY_WORK_ITEM",
+        workItemId: seeded.workItemId,
+      });
+      const cut = workspace.type === "WORKSPACE" ? workspace.workspace : null;
+      if (!cut) throw new Error("Expected the IMPLEMENT stage to cut a workspace");
+      expect(cut.status).toBe("READY");
+      // Cut from the materialised repository -- asked of that repository itself, so this cannot pass
+      // on a worktree that merely exists somewhere. At the stale path the provisioning guard refused
+      // every attempt, because a directory inside a repository is never its own top level.
+      const worktrees = await listWorktrees(materialisedPath);
+      expect(await Promise.all(worktrees.map(({ path }) => realpath(path)))).toContain(
+        await realpath(cut.worktreePath),
+      );
+      expect(worktrees.map(({ branch }) => branch)).toContain(cut.branch);
+      // And living outside that repository, under the data directory, so the owner's own checkout
+      // never shows Loomrail's directories.
+      expect(await realpath(cut.worktreePath)).toContain(await realpath(workspacesRoot));
+    } finally {
+      runState.close();
+    }
+  }, 30_000);
+
+  // The other half of the repair: it moves only a fixture-backed Project still pointing at the
+  // bundled template. A Project already registered at its materialised repository is a duplicate
+  // registration and still answers 409, unchanged.
+  it("still refuses a second registration of a demo Project that already names its repository", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail duplicate demo "));
+    temporaryDirectories.push(temporaryDirectory);
+    const demoProjectsRoot = join(temporaryDirectory, "demo-projects");
+    const token = bootstrapToken();
+    const started = await startDaemon({ bootstrapToken: token, logger: false, demoProjectsRoot });
+    daemon = started;
+    const session = await authenticate(started, token);
+
+    const register = async (commandId: string) =>
+      await fetch(`${started.baseUrl}/api/v1/projects/fixtures/register`, {
+        method: "POST",
+        headers: mutationHeaders(started, session),
+        body: JSON.stringify({ schemaVersion: 1, commandId, fixtureId: "web-app-a" }),
+      });
+
+    expect((await register("register-demo-first")).status).toBe(200);
+    const second = await register("register-demo-second");
+    expect(second.status).toBe(409);
+    expect(apiErrorResponseSchema.parse(await second.json()).error.code).toBe("PROJECT_ALREADY_REGISTERED");
+  }, 30_000);
+
+  // Typing `.` into the Settings field used to answer 200 and register the directory the daemon was
+  // started from -- a path the owner never chose, and not the same one on the next start.
+  it("refuses a relative repository path, saying that is what is wrong with it", async () => {
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, logger: false });
+    const session = await authenticate(daemon, token);
+
+    const response = await fetch(`${daemon.baseUrl}/api/v1/projects/register`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "register-relative-path",
+        repositoryPath: ".",
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    const failure = apiErrorResponseSchema.parse(await response.json());
+    expect(failure.error.code).toBe("REPOSITORY_PATH_NOT_ABSOLUTE");
+    // The owner has to be told which of the possible problems this is: `.` is a perfectly good
+    // directory, and a "this is not a Git repository" answer would send them after the wrong thing.
+    expect(failure.error.message).toContain("must be absolute");
+    // Nothing was registered on the way to the refusal.
+    const projects = await fetch(`${daemon.baseUrl}/api/v1/projects`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(projectsResponseSchema.parse(await projects.json()).projects).toEqual([]);
   });
 
   it("refuses to register a Project at a path that is not a Git repository, naming the path", async () => {
@@ -1243,7 +1524,13 @@ describe("local daemon session and state boundary", () => {
       headers: { cookie: session.cookie },
     });
     expect(present.status).toBe(200);
-    const body = workItemWorkspaceResponseSchema.parse(await present.json());
+    const raw: unknown = await present.json();
+    // Asserted on the wire, before the schema gets a chance to strip anything. The stored workspace
+    // carries `leaseHolder` -- it is how two StageAttempts are kept out of one worktree -- and this
+    // response deliberately does not: nothing reads it, and a field on a response with no consumer
+    // is a defect rather than a convenience.
+    expect((raw as { workspace: Record<string, unknown> }).workspace).not.toHaveProperty("leaseHolder");
+    const body = workItemWorkspaceResponseSchema.parse(raw);
     // Every field the card renders, named individually: a response that merely parsed would also
     // have passed with the branch or the path silently absent, and those are the two values the
     // owner acts on.

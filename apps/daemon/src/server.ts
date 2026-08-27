@@ -39,7 +39,9 @@ import {
   workItemWorkspaceResponseSchema,
   workflowSnapshotSchema,
   type ApiErrorResponse,
+  type PublishedWorkItemWorkspace,
   type WorkflowStage,
+  type WorkItemWorkspace,
 } from "@loomrail/contracts";
 import { WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
 import {
@@ -63,6 +65,7 @@ import {
 import {
   describeRegisteredRepository,
   FixtureResolutionError,
+  isSameExistingPath,
   materialiseFixtureRepository,
   ProjectRegistrationError,
   resolveBundledFixture,
@@ -218,6 +221,28 @@ const encodeSecret = (): string => randomBytes(32).toString("base64url");
 const secretsEqual = (left: Buffer, right: Buffer): boolean =>
   left.length === right.length && timingSafeEqual(left, right);
 
+/**
+ * The workspace as the HTTP contract publishes it: everything stored about it except the lease.
+ *
+ * Named field by field rather than spread-and-delete, so the compiler owns the correspondence. A
+ * field added to the stored workspace and meant to be published fails to compile here until it is
+ * named; one that is *not* meant to be published simply never appears, rather than leaking because
+ * a spread carried it. `leaseHolder` is the one omission, and see the contract for why.
+ */
+const withoutLeaseHolder = (workspace: WorkItemWorkspace): PublishedWorkItemWorkspace => ({
+  schemaVersion: workspace.schemaVersion,
+  id: workspace.id,
+  projectId: workspace.projectId,
+  workItemId: workspace.workItemId,
+  branch: workspace.branch,
+  worktreePath: workspace.worktreePath,
+  baseCommit: workspace.baseCommit,
+  snapshotCommit: workspace.snapshotCommit,
+  status: workspace.status,
+  createdAt: workspace.createdAt,
+  version: workspace.version,
+});
+
 const normalizePlatform = (): "darwin" | "win32" | "linux" | "other" => {
   const value = platform();
   return value === "darwin" || value === "win32" || value === "linux" ? value : "other";
@@ -284,7 +309,11 @@ const sendOperationError = (
     const status =
       error.code === "PROJECT_NOT_FOUND"
         ? 404
-        : error.code === "COMMAND_ID_REUSED" || error.code === "PROJECT_ALREADY_REGISTERED"
+        : error.code === "COMMAND_ID_REUSED" ||
+            error.code === "PROJECT_ALREADY_REGISTERED" ||
+            // A repoint whose preconditions no longer hold is a conflict with the state on disk,
+            // the same class of answer as a Project that is already registered.
+            error.code === "PROJECT_REPOINT_REFUSED"
           ? 409
           : error.code === "STATE_CLOSED"
             ? 503
@@ -650,10 +679,44 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         // every `git` invocation on this path costs a process the owner waits through. A directory
         // that was already there is a different claim -- nobody knows what it is -- so that one is
         // held to exactly the bar an owner's own repository would be.
+        //
+        // Read before materialising, because what this Project already records decides which of the
+        // two commands below applies. The two demo Projects on a database that predates this
+        // milestone record the bundled template itself -- migration 0012 carried their paths across
+        // verbatim, as it must, since a migration cannot know the data directory. Registering again
+        // used to materialise the repository and then answer PROJECT_ALREADY_REGISTERED, which left
+        // the new repository orphaned on disk, the Project pointing at the template forever, and
+        // every IMPLEMENT stage refused at a path no route could repair.
+        const existing = localState.query({ type: "GET_PROJECT", projectId: fixture.projectId });
+        const project = existing.type === "PROJECT" ? existing.project : null;
+        const staleTemplatePath =
+          project !== null &&
+          project.fixtureId === fixture.fixtureId &&
+          (await isSameExistingPath(project.repositoryPath, fixture.templatePath))
+            ? project.repositoryPath
+            : null;
         const materialised = await materialiseFixtureRepository(fixture, demoProjectsRoot);
         const repositoryPath = materialised.created
           ? materialised.repositoryPath
           : await resolveRegisteredRepository(materialised.repositoryPath);
+        if (staleTemplatePath !== null) {
+          // Only ever a fixture-backed Project still pointing at the bundled template: a Project the
+          // owner registered by path has a null `fixtureId` and a different id, and cannot reach
+          // here or past the persistence layer's own four checks.
+          return localState.execute({
+            schemaVersion: 1,
+            commandId: body.commandId,
+            correlationId,
+            actor: { type: "HUMAN", id: "local-owner" },
+            type: "REPOINT_FIXTURE_PROJECT",
+            payload: {
+              projectId: fixture.projectId,
+              fixtureId: fixture.fixtureId,
+              expectedRepositoryPath: staleTemplatePath,
+              repositoryPath,
+            },
+          });
+        }
         return localState.execute({
           schemaVersion: 1,
           commandId: body.commandId,
@@ -805,11 +868,16 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           type: "GET_WORKSPACE_BY_WORK_ITEM",
           workItemId: params.workItemId,
         });
+        const stored = result.type === "WORKSPACE" ? result.workspace : null;
         return workItemWorkspaceResponseSchema.parse({
           schemaVersion: 1,
           // A WorkItem with no workspace answers `null`, not 404: see the contract's note. The
           // WorkItem itself not existing is a genuine 404, and is raised above.
-          workspace: result.type === "WORKSPACE" ? result.workspace : null,
+          //
+          // `leaseHolder` is dropped rather than forwarded. It is how the daemon keeps two
+          // StageAttempts out of one worktree; no caller of this route reads it, and the response
+          // contract does not carry it.
+          workspace: stored === null ? null : withoutLeaseHolder(stored),
         });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
