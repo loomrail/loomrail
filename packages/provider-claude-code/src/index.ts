@@ -142,9 +142,13 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
     capabilities: () =>
       providerCapabilitiesSchema.parse({
         provider: "CLAUDE_CODE",
-        // Established by the same reasoning as provider-codex's `stages`: before E1 this adapter
-        // runs in an empty temporary directory with no repository, so IMPLEMENT and QA -- which
-        // need one -- are not offered. Declared the same whether or not the CLI is currently on
+        // Established by the same reasoning as provider-codex's `stages`: this adapter runs in an
+        // empty temporary directory with no repository, so IMPLEMENT and QA -- which need one --
+        // are not offered. E1 did not change that, and its fix round made the omission load-bearing
+        // in a second way: the daemon cuts no worktree at all for an adapter that declares no stage
+        // requiring one (`adapterWorksInWorkspace`, `@loomrail/domain`), so this adapter's sessions
+        // cost the owner's repository nothing rather than having a branch and a carry-in commit
+        // written for a workspace it would never read. Declared the same whether or not the CLI is currently on
         // this machine -- see provider-codex's identical comment: `stages` says what this
         // adapter would serve if it could run, `start` below is the separate claim that it
         // currently can, and task 9's gate (session-loop.ts's `decideDispatchStage`) reads
@@ -191,9 +195,11 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
       listener: ProviderSessionListener,
     ): Promise<ProviderOutcome> => {
       const sessionId = invocation.session.id;
-      // Per-session and removed in `finally`, including on failure -- before E1 this adapter has
-      // no repository access at all, and an empty directory plus `--permission-mode plan` is what
-      // enforces that. Leaking one would leak whatever the agent wrote into it.
+      // Per-session and removed in `finally`, including on failure -- this adapter has no
+      // repository access at all, E1 included, and an empty directory plus `--permission-mode plan`
+      // is what enforces that. `invocation.workspace` is read nowhere here, deliberately: the write
+      // path has never been run against this CLI on this machine. Leaking a directory would leak
+      // whatever the agent wrote into it.
       const workingDir = await mkdtemp(join(tmpdir(), "loomrail-claude-"));
       try {
         // Inline JSON text, not a path -- see the doc comment on `tryParseStructuredCheckpoint`

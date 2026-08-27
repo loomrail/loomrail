@@ -158,8 +158,8 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // This declaration is static, and deliberately says nothing about whether any particular
         // session will be handed a workspace. Whether one exists is the caller's business, and this
         // adapter has no way to check it: nothing in an invocation distinguishes "no workspace,
-        // because DISCOVERY produces prose" from "no workspace, because the caller forgot", and for
-        // a while the daemon did forget -- it provisioned the worktree, took its lease, and then
+        // because this project has no usable repository" from "no workspace, because the caller
+        // forgot", and for a while the daemon did forget -- it provisioned the worktree, took its lease, and then
         // built an invocation without it, so IMPLEMENT ran `-s read-only` in an empty temporary
         // directory and reported a stage it never touched. The gate that now prevents it lives
         // where the invocation is built (`decideSessionWorkspace`, `@loomrail/domain`, applied in
