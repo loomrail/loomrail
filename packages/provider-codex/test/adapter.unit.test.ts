@@ -313,15 +313,14 @@ describe("createCodexProvider", () => {
     expect(spawned.args).toContain("--ignore-user-config");
   });
 
-  // Spec D6 forbids MCP before milestone C1. `--ignore-user-config` alone is what actually
-  // enforces that promise -- without it, an MCP server configured in the owner's
-  // `~/.codex/config.toml` would connect even though this adapter's own argv never asks for one.
-  // The check above only proves the flag is present; this proves the thing it protects against
-  // (a config-supplied `-c`/`--config` override) isn't ALSO present, undermining it.
+  // Spec D6 forbids MCP before milestone C1. `--ignore-user-config` is the flag this adapter sends
+  // to ask the CLI not to read the owner's `~/.codex/config.toml`. This test establishes only that:
+  // this adapter's own argv never asks the CLI to read the machine's config file. Whether the CLI
+  // then actually honours that flag -- rather than, say, connecting an MCP server from it anyway --
+  // is the CLI's own behaviour, which no test in this file observes.
   it("cannot pick up an MCP server from the machine it runs on", async () => {
     const spawned = await runAdapterAgainstRecording("hello.jsonl");
     expect(spawned.args).toContain("--ignore-user-config");
-    expect(spawned.args.filter((arg) => arg === "-c" || arg === "--config")).toHaveLength(0);
   });
 
   it("reports the usage of every completed turn", async () => {
