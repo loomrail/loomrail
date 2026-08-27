@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2494,6 +2494,29 @@ describe("SQLite local state", () => {
     // -- which is exactly the state a daemon that died mid-session without killing its own child
     // leaves behind. Returns the pid and the session id, plus everything the orphan handling
     // reported while reconciling.
+    // Every pid any of these tests put into the world, so that a test which fails before its own
+    // cleanup line -- including one whose `execute` throws, which is exactly the defect the ESRCH
+    // test below exists to catch -- cannot leave a `node` process spinning on the owner's machine.
+    const orphanPids: number[] = [];
+
+    afterEach(() => {
+      for (const pid of orphanPids.splice(0)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already gone, which is the ordinary case: most of these tests kill their own probe.
+        }
+      }
+    });
+
+    const spawnProbeChild = (): number => {
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { detached: true });
+      const pid = child.pid;
+      if (pid === undefined) throw new Error("The probe child did not start");
+      child.unref();
+      return pid;
+    };
+
     const orphanAndReconcile = async (
       names: { session: string; item: string; reconcile: string },
       // A function of the ids the helper itself creates, so a test can write a probe that reads the
@@ -2502,6 +2525,10 @@ describe("SQLite local state", () => {
         sessionId: string;
         stageAttemptId: string;
       }) => Partial<OpenLocalStateOptions> = () => ({}),
+      // How the orphan itself is started. Only the ESRCH test overrides this, and only because
+      // whose child the process is decides whether its pid can disappear mid-`execute` at all --
+      // see `spawnReparentedProbeChild`.
+      spawnOrphan: () => number = spawnProbeChild,
     ): Promise<{ pid: number; sessionId: string; reported: OrphanProcessEvent[] }> => {
       const before = await open();
       const { stageAttemptId } = startWorkflow(before, names.session, names.item);
@@ -2510,10 +2537,8 @@ describe("SQLite local state", () => {
       );
       if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
 
-      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { detached: true });
-      const pid = child.pid;
-      if (pid === undefined) throw new Error("The probe child did not start");
-      child.unref();
+      const pid = spawnOrphan();
+      orphanPids.push(pid);
       setProviderSessionProcessPid(started.session.id, pid);
 
       before.close();
@@ -2636,6 +2661,113 @@ describe("SQLite local state", () => {
       } finally {
         process.kill(pid, "SIGKILL");
       }
+    });
+
+    // How long the reparented probe child may take to stop existing after its SIGKILL. Measured at
+    // about a millisecond -- init reaps it, and this process is not waiting on an event-loop turn
+    // to hear about it. Generous by three orders of magnitude, and a miss reads as a report of
+    // PROBE_FAILED rather than as a hang.
+    const ORPHAN_VANISH_TIMEOUT_MS = 2_000;
+
+    // A process this test process is NOT the parent of, and that distinction is the test.
+    // A direct child that is SIGKILLed becomes a zombie -- and a zombie still answers
+    // `process.kill(pid, 0)` -- until this process reaps it, which happens on an event-loop turn
+    // that a synchronous `execute` never yields. `/bin/sh` starts the child and exits, so the child
+    // is reparented to init, which reaps it at once; only then can a pid really stop existing in
+    // the middle of one synchronous `execute` call.
+    const spawnReparentedProbeChild = (): number => {
+      const printed = execFileSync(
+        "/bin/sh",
+        ["-c", `"${process.execPath}" -e 'setInterval(() => {}, 1000);' >/dev/null 2>&1 & echo $!`],
+        { encoding: "utf8" },
+      );
+      const pid = Number(printed.trim());
+      if (!Number.isInteger(pid) || pid <= 0) {
+        throw new Error("The reparented probe child did not start");
+      }
+      return pid;
+    };
+
+    // The liveness check and the signal are not one atomic act: the identity guard runs a real
+    // synchronous `ps` between them. An orphan that exits inside that window makes `process.kill`
+    // throw ESRCH -- which, unwrapped, escapes `killOrphanedSessionProcess`, is re-wrapped by
+    // `execute` as a PERSISTENCE_FAILURE, and propagates out of the daemon's own unwrapped
+    // RECONCILE_WORKFLOWS call, which runs before `app.listen`. The daemon then does not start at
+    // all: a strictly worse failure than the orphan the kill exists to prevent.
+    //
+    // The window is closed here for real rather than simulated -- the probe kills the child and
+    // waits for its pid to actually stop existing before returning a start time -- so the kill
+    // that follows signals a pid that is genuinely gone.
+    //
+    // Asserted through `resolves`, not a bare `await`: the defect is `execute` THROWING, and a bare
+    // await would surface that as the raw StateStoreError rather than as a failed assertion about
+    // what reconciliation did.
+    it("survives, and records it, when the orphan exits between the liveness check and the kill", async () => {
+      const reconciled = orphanAndReconcile(
+        {
+          session: "start-orphan-vanished-session",
+          item: "create-orphan-vanished-item",
+          reconcile: "reconcile-orphan-vanished-session",
+        },
+        () => ({
+          processStartedAt: (pid: number) => {
+            process.kill(pid, "SIGKILL");
+            const deadline = Date.now() + ORPHAN_VANISH_TIMEOUT_MS;
+            // A synchronous spin, not an `await`: `execute` is synchronous end to end, so there is
+            // no turn to yield to -- and needing one is precisely what a zombie would impose.
+            while (Date.now() < deadline) {
+              if (!isProcessAlive(pid)) {
+                // Believable identity: a second before the session that recorded it, so the guard
+                // passes and the kill below is actually attempted.
+                return new Date(Date.parse(timestamp) - 1_000);
+              }
+            }
+            throw new Error("The probe child was still alive when the identity probe gave up");
+          },
+        }),
+        spawnReparentedProbeChild,
+      );
+
+      await expect(reconciled).resolves.toMatchObject({
+        reported: [{ action: "FAILED", reason: "VANISHED_BEFORE_SIGNAL" }],
+      });
+      const { pid, sessionId, reported } = await reconciled;
+      // The miss is recorded with the pid and the session it belonged to, and NOT as a kill: the
+      // previous version reported KILLED before attempting the signal, so a kill that threw was
+      // written down as a kill that happened.
+      expect(reported).toEqual([{ pid, sessionId, action: "FAILED", reason: "VANISHED_BEFORE_SIGNAL" }]);
+      // And reconciliation still did its job, which is the point: the session is not left RUNNING
+      // for the next start to look for forever.
+      expect(readProviderSessionRow(sessionId).status).toBe("ENDED");
+    });
+
+    // The same guarantee, one layer out: no failure of this probe -- not the signal, not the
+    // identity check itself -- may ever escape into `execute`. The default start-time probe
+    // contains its own failures, so this can only be reached through an injected one, but "only
+    // reachable through" is not "cannot happen", and the cost of being wrong is a daemon that will
+    // not start.
+    it("survives, and records it, when the identity probe itself throws", async () => {
+      const reconciled = orphanAndReconcile(
+        {
+          session: "start-orphan-probe-failure-session",
+          item: "create-orphan-probe-failure-item",
+          reconcile: "reconcile-orphan-probe-failure-session",
+        },
+        () => ({
+          processStartedAt: () => {
+            throw new Error("ps is not available on this machine");
+          },
+        }),
+      );
+
+      await expect(reconciled).resolves.toMatchObject({
+        reported: [{ action: "FAILED", reason: "PROBE_FAILED" }],
+      });
+      const { pid, sessionId, reported } = await reconciled;
+      expect(reported).toEqual([{ pid, sessionId, action: "FAILED", reason: "PROBE_FAILED" }]);
+      // Fail safe in the direction that matters: nothing was signalled.
+      expect(isProcessAlive(pid)).toBe(true);
+      expect(readProviderSessionRow(sessionId).status).toBe("ENDED");
     });
 
     it("assembles the context sources snapshot from a published Checkpoint, Evidence, and a Decision", async () => {

@@ -159,7 +159,12 @@ export type LocalStateIdKind =
 export type OrphanProcessEvent = {
   pid: number;
   sessionId: string;
-  action: "KILLED" | "SKIPPED";
+  /**
+   * `KILLED` is reported only once the signal was actually delivered, never on the intention to
+   * send it: the identity probe between the liveness check and the signal is a real window, and a
+   * kill that threw inside it used to be logged as a kill that happened.
+   */
+  action: "KILLED" | "SKIPPED" | "FAILED";
   reason:
     /** The pid is not alive at all; there was nothing to signal. */
     | "ALREADY_GONE"
@@ -168,7 +173,16 @@ export type OrphanProcessEvent = {
     /** The probe could not say when the process started, so the kill was not attempted. */
     | "START_TIME_UNKNOWN"
     /** The process started after its session did: the pid was reused, and this is not our child. */
-    | "STARTED_AFTER_SESSION";
+    | "STARTED_AFTER_SESSION"
+    /** The process exited between the liveness check and the signal (ESRCH). Nothing was killed. */
+    | "VANISHED_BEFORE_SIGNAL"
+    /**
+     * The kernel refused the signal for some other reason -- EPERM above all, which means the pid
+     * now belongs to a process this daemon may not signal, i.e. the identity guard was wrong.
+     */
+    | "SIGNAL_REFUSED"
+    /** The probe itself threw. Nothing was killed, and the failure was contained here. */
+    | "PROBE_FAILED";
 };
 
 export type OpenLocalStateOptions = {

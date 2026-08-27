@@ -778,6 +778,14 @@ const isProcessAlive = (pid: number): boolean => {
   }
 };
 
+// The `errno` string Node hangs on the errors `process.kill` throws (ESRCH, EPERM, EINVAL). Read
+// through a guard rather than a cast: `unknown` from a `catch` is exactly the value that is not
+// guaranteed to be an Error at all.
+const errorCodeOf = (cause: unknown): string | undefined =>
+  typeof cause === "object" && cause !== null && "code" in cause && typeof cause.code === "string"
+    ? cause.code
+    : undefined;
+
 // How much later than its own ProviderSession a process may have started and still be believed to
 // be that session's child. `ps` reports elapsed time to the second, and the pid is recorded a beat
 // after the child is spawned, so a strict comparison would reject the very processes this guard
@@ -843,6 +851,15 @@ const readProcessStartTime = (pid: number, now: Date): Date | null => {
 //
 // Every decision -- kill or skip, and why -- goes to `report`. An unrecorded SIGKILL on the owner's
 // machine is the defect this signature exists to close.
+//
+// FAIL SAFE ALL THE WAY OUT, and this is the part that is easy to get wrong: this runs inside
+// `execute`, which the daemon calls -- unwrapped -- BEFORE `app.listen`. Anything thrown here is
+// re-wrapped as a `StateStoreError` and stops Loomrail from starting at all, which is a strictly
+// worse failure than the orphan the kill exists to prevent. The liveness check and the signal are
+// not one atomic act (the identity probe between them is a real `ps` fork, measured at ~2 ms), so
+// an orphan that exits inside that window makes `process.kill` throw ESRCH. Nothing in here may
+// escape -- and nothing in here may go quiet either: every ending, including the ones that failed,
+// is a line the owner can find.
 const killOrphanedSessionProcess = (context: {
   pid: number;
   sessionId: string;
@@ -852,25 +869,58 @@ const killOrphanedSessionProcess = (context: {
   report: (event: OrphanProcessEvent) => void;
 }): void => {
   const { pid, sessionId } = context;
-  if (!isProcessAlive(pid)) {
-    context.report({ pid, sessionId, action: "SKIPPED", reason: "ALREADY_GONE" });
-    return;
+  // Even the reporting is contained: a logger that throws must not be the thing that stops the
+  // daemon from starting, having been installed to make this very code observable.
+  const report = (event: OrphanProcessEvent): void => {
+    try {
+      context.report(event);
+    } catch {
+      // Nothing left to report it to.
+    }
+  };
+  try {
+    if (!isProcessAlive(pid)) {
+      report({ pid, sessionId, action: "SKIPPED", reason: "ALREADY_GONE" });
+      return;
+    }
+    const startedAt = context.processStartedAt(pid);
+    if (startedAt === null) {
+      report({ pid, sessionId, action: "SKIPPED", reason: "START_TIME_UNKNOWN" });
+      return;
+    }
+    const sessionStartedAtMs = Date.parse(context.sessionStartedAt);
+    if (
+      Number.isNaN(sessionStartedAtMs) ||
+      startedAt.getTime() > sessionStartedAtMs + PID_IDENTITY_TOLERANCE_MS
+    ) {
+      report({ pid, sessionId, action: "SKIPPED", reason: "STARTED_AFTER_SESSION" });
+      return;
+    }
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (cause) {
+      // ESRCH is the window this whole comment is about: the process was alive at the check and
+      // gone by the signal. Nothing went wrong -- but a kill that did not happen must not be
+      // recorded as one, and a pid that vanished mid-probe is worth the one line it costs.
+      // Anything else (EPERM above all) says the pid now belongs to a process this daemon may not
+      // signal, i.e. the identity guard was wrong, which is louder still.
+      report({
+        pid,
+        sessionId,
+        action: "FAILED",
+        reason: errorCodeOf(cause) === "ESRCH" ? "VANISHED_BEFORE_SIGNAL" : "SIGNAL_REFUSED",
+      });
+      return;
+    }
+    // Reported after the signal landed, never before it: the previous version announced the kill
+    // and then attempted it, so a kill that threw was logged as a kill that happened.
+    report({ pid, sessionId, action: "KILLED", reason: "IDENTITY_CONFIRMED" });
+  } catch {
+    // The liveness check and the default start-time probe both contain their own failures, so this
+    // is only reachable through an injected probe -- but "only reachable through" is not "cannot
+    // happen", and the cost of being wrong about that is a daemon that will not start.
+    report({ pid, sessionId, action: "FAILED", reason: "PROBE_FAILED" });
   }
-  const startedAt = context.processStartedAt(pid);
-  if (startedAt === null) {
-    context.report({ pid, sessionId, action: "SKIPPED", reason: "START_TIME_UNKNOWN" });
-    return;
-  }
-  const sessionStartedAtMs = Date.parse(context.sessionStartedAt);
-  if (
-    Number.isNaN(sessionStartedAtMs) ||
-    startedAt.getTime() > sessionStartedAtMs + PID_IDENTITY_TOLERANCE_MS
-  ) {
-    context.report({ pid, sessionId, action: "SKIPPED", reason: "STARTED_AFTER_SESSION" });
-    return;
-  }
-  context.report({ pid, sessionId, action: "KILLED", reason: "IDENTITY_CONFIRMED" });
-  process.kill(pid, "SIGKILL");
 };
 
 export const openLocalState = async (options: OpenLocalStateOptions): Promise<LocalState> => {

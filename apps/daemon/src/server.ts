@@ -39,7 +39,7 @@ import {
   type ApiErrorResponse,
 } from "@loomrail/contracts";
 import { WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
-import { openLocalState, StateStoreError } from "@loomrail/persistence-sqlite";
+import { openLocalState, StateStoreError, type OrphanProcessEvent } from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter, ProviderId } from "@loomrail/provider-core";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -91,6 +91,16 @@ export type StartDaemonOptions = {
   // seconds -- which is why the chain from the timer through `tick()` to the session recheck was
   // covered only in its middle link. Production always gets HEARTBEAT_INTERVAL_MS.
   heartbeatIntervalMs?: number;
+};
+
+// One message per ending, so a reader grepping the daemon log finds all three. `FAILED` is the
+// ending this milestone added: the process was alive at the liveness check and gone (or refusing
+// the signal) a couple of milliseconds later, at the signal itself. It is not a daemon failure --
+// startup carries on either way -- but it is not a kill either, and it used to be logged as one.
+const orphanProcessMessages: Record<OrphanProcessEvent["action"], string> = {
+  KILLED: "Killed the process an orphaned provider session left behind",
+  SKIPPED: "Left an orphaned provider session's process alone",
+  FAILED: "Could not signal the process an orphaned provider session left behind",
 };
 
 export type RunningDaemon = {
@@ -290,9 +300,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       onOrphanProcess: (event) => {
         app.log.warn(
           { pid: event.pid, providerSessionId: event.sessionId, reason: event.reason },
-          event.action === "KILLED"
-            ? "Killed the process an orphaned provider session left behind"
-            : "Left an orphaned provider session's process alone",
+          orphanProcessMessages[event.action],
         );
       },
     }),
