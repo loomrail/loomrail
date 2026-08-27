@@ -457,6 +457,23 @@ describe("createCodexProvider", () => {
     expect(request.context).toContain("exited with code 0");
   });
 
+  // R7, at the adapter rather than at the parser. The counter exists so an empty or unreadable
+  // stream is loud, and it can only stay loud if "understood, nothing to do with it" and "could not
+  // read this" are separate numbers -- a writing session emits six of the former in eleven lines. The
+  // stream here is deliberately hostile rather than a recording, per this file's rule for shapes no
+  // observed CLI emits: one line no parser could read, one `item.started` the adapter understands and
+  // takes nothing from, and no structured answer anywhere, so the diagnosis is reached at all.
+  it("counts a line it could not read apart from one it read and did not need", async () => {
+    const outcome = await runAgainstLines([
+      "Reading additional input from stdin…",
+      '{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"true","status":"in_progress"}}',
+    ]);
+    const request = expectNeedsHuman(outcome);
+    expect(request.context).toContain("Lines received from the CLI: 2");
+    expect(request.context).toContain("2 carried nothing this adapter could use");
+    expect(request.context).toContain("1 of them could not be read at all");
+  });
+
   // M1/R25: `turn.failed` is where a rate limit, an auth refusal or a model error arrives. The
   // parser used to drop it and the adapter used to absorb the session into CONTEXT_EXHAUSTED, so
   // the one text that says what went wrong never reached the owner. `turn-failed.jsonl` is a real

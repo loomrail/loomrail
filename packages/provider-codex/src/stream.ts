@@ -9,6 +9,21 @@ export type CodexEvent =
   | { type: "thread.started"; threadId: string }
   | { type: "turn.started" }
   | { type: "item.completed"; item: { id: string; type: "agent_message"; text: string } }
+  // A line this adapter UNDERSTANDS and deliberately takes nothing from -- as opposed to one it
+  // could not read, which `parseCodexEvent` still reports by returning null. A session with write
+  // access emits these constantly: an `item.started` announcing each item, and `command_execution`
+  // / `file_change` items for the work itself. Six of the eleven lines of a real, successful
+  // workspace-write run are this (see recordings/workspace-write.jsonl), so folding them in with
+  // the unreadable ones left the adapter's own diagnostic reporting that a healthy session had
+  // failed to understand most of its stream -- a counter that fires on every successful run is not
+  // a signal.
+  //
+  // Carries no payload on purpose. Loomrail's account of what a session changed comes from `git
+  // diff` against the worktree, which is ground truth; modelling `file_change.changes[]` here would
+  // stand up a second, weaker source for a fact that already has a strong one, and invite a
+  // consumer to trust the provider's report of itself over the disk. The one bit this event
+  // carries -- "understood" -- is the only bit anything needs.
+  | { type: "item.ignored" }
   // The CLI's own report that the turn it was running failed -- a rate limit, an auth refusal, a
   // model error. Captured from the real CLI (see recordings/turn-failed.jsonl): the diagnostic
   // arrives as `error.message`, and is untrusted process output like every other field here.
@@ -32,13 +47,30 @@ const rawTurnStartedSchema = z.object({
   type: z.literal("turn.started"),
 });
 
+// `item.started` is matched on its top-level type alone, with no claim about WHICH item it
+// announces: nothing is ever read out of a started event, so what it names cannot change how this
+// adapter behaves. `item.completed` is the opposite -- it is where the structured answer arrives --
+// so there the item type is enumerated, and a completed item of a kind never observed from the real
+// CLI stays unreadable rather than being waved through as understood.
+const rawItemStartedSchema = z.object({
+  type: z.literal("item.started"),
+  item: z.object({ id: z.string() }),
+});
+
 const rawItemCompletedSchema = z.object({
   type: z.literal("item.completed"),
-  item: z.object({
-    id: z.string(),
-    type: z.literal("agent_message"),
-    text: z.string(),
-  }),
+  item: z.discriminatedUnion("type", [
+    z.object({
+      id: z.string(),
+      type: z.literal("agent_message"),
+      text: z.string(),
+    }),
+    // Recorded from a real workspace-write run. Their contents are not modelled -- see the
+    // `item.ignored` comment on `CodexEvent` for why the disk, not the provider, is the source of
+    // truth about what changed.
+    z.object({ id: z.string(), type: z.literal("command_execution") }),
+    z.object({ id: z.string(), type: z.literal("file_change") }),
+  ]),
 });
 
 const rawTurnFailedSchema = z.object({
@@ -59,6 +91,7 @@ const rawTurnCompletedSchema = z.object({
 const rawCodexEventSchema = z.discriminatedUnion("type", [
   rawThreadStartedSchema,
   rawTurnStartedSchema,
+  rawItemStartedSchema,
   rawItemCompletedSchema,
   rawTurnFailedSchema,
   rawTurnCompletedSchema,
@@ -85,11 +118,15 @@ const toCodexEvent = (raw: z.infer<typeof rawCodexEventSchema>): CodexEvent => {
       return { type: "thread.started", threadId: raw.thread_id };
     case "turn.started":
       return { type: "turn.started" };
+    case "item.started":
+      return { type: "item.ignored" };
     case "item.completed":
-      return {
-        type: "item.completed",
-        item: { id: raw.item.id, type: raw.item.type, text: raw.item.text },
-      };
+      return raw.item.type === "agent_message"
+        ? {
+            type: "item.completed",
+            item: { id: raw.item.id, type: raw.item.type, text: raw.item.text },
+          }
+        : { type: "item.ignored" };
     case "turn.failed":
       return { type: "turn.failed", errorMessage: raw.error.message };
     case "turn.completed":

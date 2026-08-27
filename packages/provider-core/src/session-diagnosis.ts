@@ -41,6 +41,25 @@ export type UnproductiveSessionReport = {
   linesReceived: number;
   linesUnused: number;
   /**
+   * How many of `linesUnused` the adapter could not READ at all, as opposed to read and had no use
+   * for. A subset of `linesUnused`, never a separate total.
+   *
+   * The distinction decides where a reader looks next, and without it the number points the wrong
+   * way. A Codex session with write access emits an `item.started` for every item plus
+   * `command_execution` and `file_change` items for the work itself -- six of the eleven lines of a
+   * real successful run -- all of which the adapter understands perfectly well and takes nothing
+   * from. Reported as one figure, a failed session of that shape says "six lines carried nothing
+   * this adapter could use", which reads as a broken parser and sends the reader to the wrong
+   * place. With the split it also says "0 of them could not be read at all", and the parser is
+   * cleared.
+   *
+   * Optional because only an adapter whose parser separates the two can honestly report it:
+   * `provider-claude-code`'s parser returns null both for a line it cannot read and for the
+   * `system`/`assistant` events it drops by design, so it has no number to put here and omits the
+   * field rather than inventing one.
+   */
+  linesUnreadable?: number;
+  /**
    * The provider's own last diagnostic, verbatim. UNTRUSTED PROCESS OUTPUT: it is truncated to
    * `PROVIDER_TEXT_LIMIT` and placed only in the request's plain-text `context` field -- never
    * interpolated into a title, an option label, or anything a reader would take for Loomrail's own
@@ -74,6 +93,16 @@ const dropTrailingLoneSurrogate = (text: string): string => {
 
 const truncate = (text: string, limit: number): string =>
   text.length <= limit ? text : `${dropTrailingLoneSurrogate(text.slice(0, limit - 1))}…`;
+
+// The trailing clause appears only for an adapter that can tell the two apart -- see
+// `linesUnreadable` on the report. An adapter that cannot says nothing about it, rather than
+// reporting a zero it did not measure.
+const describeLines = (report: UnproductiveSessionReport): string => {
+  const counted = `Lines received from the CLI: ${String(report.linesReceived)}; of those, ${String(report.linesUnused)} carried nothing this adapter could use`;
+  return report.linesUnreadable === undefined
+    ? `${counted}.`
+    : `${counted}, and ${String(report.linesUnreadable)} of them could not be read at all.`;
+};
 
 const describeExit = (report: UnproductiveSessionReport): string => {
   if (report.reason === "SPAWN_FAILED") return `The process never started.`;
@@ -132,7 +161,7 @@ export const describeUnproductiveSession = (report: UnproductiveSessionReport): 
     [
       openingLine(report),
       describeExit(report),
-      `Lines received from the CLI: ${String(report.linesReceived)}; of those, ${String(report.linesUnused)} carried nothing this adapter could use.`,
+      describeLines(report),
       providerText,
       "No checkpoint was published, so nothing from this session is carried forward.",
     ].join(" "),

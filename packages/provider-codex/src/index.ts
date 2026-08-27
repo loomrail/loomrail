@@ -214,6 +214,13 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // exactly the fact that would have made this milestone's Critical loud instead of silent.
         let linesReceived = 0;
         let linesUnused = 0;
+        // A subset of `linesUnused`: the lines this adapter could not read AT ALL, as opposed to
+        // the ones it read and had no use for. Kept apart because a writing session makes the
+        // combined figure misleading -- six of the eleven lines of a real successful
+        // workspace-write run are `item.started`/`command_execution`/`file_change`, understood and
+        // deliberately unused. Reported as one number, a failed session of that shape accuses the
+        // parser; reported as two, it clears it (see `linesUnreadable` in provider-core).
+        let linesUnreadable = 0;
 
         const run = runProcess({
           command: resolved.command,
@@ -286,6 +293,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
               return;
             }
             linesUnused += 1;
+            linesUnreadable += 1;
           },
           // Codex's own diagnostics, not an event stream Loomrail parses. Untrusted process
           // output either way, so nothing here is fed to a structured logger unexamined.
@@ -318,6 +326,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
             signal: null,
             linesReceived,
             linesUnused,
+            linesUnreadable,
             providerText: err.message,
           });
         }
@@ -340,6 +349,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
           signal: exit.signal,
           linesReceived,
           linesUnused,
+          linesUnreadable,
           providerText: providerFailureText ?? null,
         });
       } finally {

@@ -40,6 +40,29 @@ describe("describeUnproductiveSession", () => {
     expect(request.context).toContain("400 carried nothing this adapter could use");
   });
 
+  // R7. A Codex session with write access emits an `item.started` for every item plus
+  // `command_execution` and `file_change` items for the work itself: six of the eleven lines of a
+  // real successful run, every one of them understood and deliberately unused. Stated as a single
+  // figure, a failed session of that shape reads as a broken parser and sends whoever is diagnosing
+  // it to the wrong place. The second number is what clears the parser.
+  it("separates the lines it could not read from the lines it read and did not need", () => {
+    const request = requestOf(
+      describeUnproductiveSession(report({ linesReceived: 11, linesUnused: 6, linesUnreadable: 0 })),
+    );
+    expect(request.context).toContain("6 carried nothing this adapter could use");
+    expect(request.context).toContain("0 of them could not be read at all");
+  });
+
+  // The other half of the same rule: an adapter whose parser cannot tell the two apart -- and
+  // `provider-claude-code`'s cannot, it returns null both for an unreadable line and for the events
+  // it drops by design -- omits the field, and the diagnosis then makes no claim about a number
+  // nobody measured rather than printing a zero that would clear a parser it never checked.
+  it("makes no claim about unreadable lines when the adapter cannot tell them apart", () => {
+    const request = requestOf(describeUnproductiveSession(report({ linesReceived: 11, linesUnused: 6 })));
+    expect(request.context).toContain("6 carried nothing this adapter could use.");
+    expect(request.context).not.toContain("could not be read at all");
+  });
+
   it("names the signal that ended the process rather than inventing an exit code", () => {
     const request = requestOf(describeUnproductiveSession(report({ exitCode: null, signal: "SIGKILL" })));
     expect(request.context).toContain("killed by SIGKILL");
