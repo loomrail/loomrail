@@ -184,6 +184,15 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         const args = [
           "exec",
           "--json",
+          // `codex exec` launched without this flag inherits the OWNER'S OWN entire
+          // `~/.codex/config.toml`, not just the harmless bits: `approval_policy`, `sandbox_mode`,
+          // hooks, plugins, model providers, and MCP servers all arrive from that file. `-s
+          // read-only` below does override `sandbox_mode` for the sandbox itself, so there is no
+          // "the agent could write to disk" hole even without this flag -- but hooks, plugins and
+          // MCP servers are not sandboxed at all, and spec D6 (this milestone's predecessor)
+          // forbids MCP outright. Authentication lives in `CODEX_HOME`, not `config.toml`, so this
+          // flag does not touch login.
+          "--ignore-user-config",
           "--skip-git-repo-check",
           "-C",
           workingDir,

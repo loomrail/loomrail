@@ -170,6 +170,29 @@ const runAgainstRecording = async (
   );
 };
 
+// Runs the adapter against a real recording while ALSO capturing the argv it was spawned with.
+// `runAgainstRecording` above only wires `FAKE_CODEX_OUTPUT_FILE`, and `startWith` only wires
+// `FAKE_CODEX_RECORD_PATH` -- `fake-codex.mjs` honours both at once (see its own header comment),
+// so this sets both and hands back the same `Spawned` shape `startWith` fills in, letting a test
+// assert on `spawned.args` while running a real captured session end to end.
+const runAdapterAgainstRecording = async (file: string): Promise<Spawned> => {
+  const spawned = recordSpawn();
+  const recordingPath = fileURLToPath(new URL(`./recordings/${file}`, import.meta.url));
+  const adapter = createCodexProvider({ command: fakeCodexPath });
+  await withEnv("FAKE_CODEX_RECORD_PATH", spawned.recordPath, () =>
+    withEnv("FAKE_CODEX_OUTPUT_FILE", recordingPath, () =>
+      adapter.start(fixtureInvocation(), noopListener()),
+    ),
+  );
+  const recorded = JSON.parse(readFileSync(spawned.recordPath, "utf8")) as {
+    args: string[];
+    stdinClosed: boolean;
+  };
+  spawned.args = recorded.args;
+  spawned.stdinClosed = recorded.stdinClosed;
+  return spawned;
+};
+
 // Runs the adapter against an ad-hoc stream written out as a temporary file. Used ONLY where the
 // point of the test is a wire shape no CLI observed here actually emits (a tolerated legacy shape,
 // a deliberately hostile stream); anything asserting what a CLI really does goes through
@@ -277,6 +300,28 @@ describe("createCodexProvider", () => {
     const spawned = recordSpawn();
     await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
     for (const forbidden of FORBIDDEN_MCP_FLAGS) expect(spawned.args).not.toContain(forbidden);
+  });
+
+  // `codex exec` launched without this flag inherits the OWNER'S OWN `~/.codex/config.toml` --
+  // approval_policy, sandbox_mode, hooks, plugins, model providers, and MCP servers, none of which
+  // this adapter's own argv controls. `-s`/`--skip-git-repo-check` etc. above cover what THIS
+  // adapter asks for; this is the flag that stops the machine's ambient config from silently
+  // adding to it. Authentication lives in `CODEX_HOME`, not `config.toml`, so this does not touch
+  // login.
+  it("does not let the owner's own codex config decide what the agent may do", async () => {
+    const spawned = await runAdapterAgainstRecording("hello.jsonl");
+    expect(spawned.args).toContain("--ignore-user-config");
+  });
+
+  // Spec D6 forbids MCP before milestone C1. `--ignore-user-config` alone is what actually
+  // enforces that promise -- without it, an MCP server configured in the owner's
+  // `~/.codex/config.toml` would connect even though this adapter's own argv never asks for one.
+  // The check above only proves the flag is present; this proves the thing it protects against
+  // (a config-supplied `-c`/`--config` override) isn't ALSO present, undermining it.
+  it("cannot pick up an MCP server from the machine it runs on", async () => {
+    const spawned = await runAdapterAgainstRecording("hello.jsonl");
+    expect(spawned.args).toContain("--ignore-user-config");
+    expect(spawned.args.filter((arg) => arg === "-c" || arg === "--config")).toHaveLength(0);
   });
 
   it("reports the usage of every completed turn", async () => {
