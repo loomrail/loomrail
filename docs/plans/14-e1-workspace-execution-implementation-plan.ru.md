@@ -74,7 +74,7 @@
 
 **Интерфейсы:** ничего не производит для следующих задач.
 
-- [ ] **Шаг 1: тест, который краснеет от отсутствия флага**
+- [x] **Шаг 1: тест, который краснеет от отсутствия флага**
 
 Тест поднимает адаптер на подставном CLI и утверждает над **массивом** аргументов, не над склеенной
 строкой (склеенная строка содержит текст промпта и даёт ложные совпадения):
@@ -86,18 +86,18 @@ it("does not let the owner's own codex config decide what the agent may do", asy
 });
 ```
 
-- [ ] **Шаг 2: прогнать, убедиться в красноте**
+- [x] **Шаг 2: прогнать, убедиться в красноте**
 
 `pnpm --filter @loomrail/provider-codex test` → FAIL с `expected [ 'exec', '--json', … ] to include
 '--ignore-user-config'`.
 
-- [ ] **Шаг 3: добавить флаг**
+- [x] **Шаг 3: добавить флаг**
 
 В массив `args` сразу после `"--json"`. Рядом — комментарий, объясняющий, что именно наследовалось
 без него: `approval_policy`, `sandbox_mode`, hooks, plugins, model providers и **MCP-серверы**, при
 том что решение D6 этапа A2 запрещает MCP. Аутентификация живёт в `CODEX_HOME` и флагом не задета.
 
-- [ ] **Шаг 4: тест на то, что запрет MCP теперь обеспечен**
+- [x] **Шаг 4: тест на то, что запрет MCP теперь обеспечен**
 
 ```ts
 it("cannot pick up an MCP server from the machine it runs on", async () => {
@@ -107,7 +107,7 @@ it("cannot pick up an MCP server from the machine it runs on", async () => {
 });
 ```
 
-- [ ] **Шаг 5: `pnpm verify` и `pnpm build` от корня, затем коммит**
+- [x] **Шаг 5: `pnpm verify` и `pnpm build` от корня, затем коммит**
 
 ```bash
 git add packages/provider-codex/src/index.ts packages/provider-codex/test/adapter.unit.test.ts
@@ -140,7 +140,7 @@ export class GitMissingError extends Error {}
 разбирают его сами (спека §2.11: разные коды означают разные причины). Бросает только
 `GitMissingError`, когда самого `git` нет.
 
-- [ ] **Шаг 1: тест на то, что код выхода возвращается, а не бросается**
+- [x] **Шаг 1: тест на то, что код выхода возвращается, а не бросается**
 
 ```ts
 it("hands a failing git command back as a result, not as a throw", async () => {
@@ -155,14 +155,14 @@ it("hands a failing git command back as a result, not as a throw", async () => {
 user.name=… commit --allow-empty`. Имя и почта задаются флагами `-c`, а не глобальной конфигурацией
 машины, иначе тест зависит от настроек того, кто его запускает.
 
-- [ ] **Шаг 2: прогнать, убедиться в красноте** — `Cannot find module './git.js'`. Это красное по
+- [x] **Шаг 2: прогнать, убедиться в красноте** — `Cannot find module './git.js'`. Это красное по
       импорту, а не по утверждению, и потому не считается доказанным; доказательство даёт Шаг 5.
 
-- [ ] **Шаг 3: реализовать через `spawn`**
+- [x] **Шаг 3: реализовать через `spawn`**
 
 Массив аргументов, `shell: false`, stdin закрыт. stdout и stderr собираются целиком.
 
-- [ ] **Шаг 4: тест на отсутствующий `git`**
+- [x] **Шаг 4: тест на отсутствующий `git`**
 
 ```ts
 it("says git is missing rather than failing as if the command did", async () => {
@@ -172,12 +172,12 @@ it("says git is missing rather than failing as if the command did", async () => 
 });
 ```
 
-- [ ] **Шаг 5: мутация**
+- [x] **Шаг 5: мутация**
 
 Заменить `exitCode` на константу `0` в реализации → тест Шага 1 краснеет утверждением
 `expected 0 to be 128`. Вернуть. Записать в отчёт.
 
-- [ ] **Шаг 6: `pnpm verify`, `pnpm build`, коммит**
+- [x] **Шаг 6: `pnpm verify`, `pnpm build`, коммит**
 
 ```bash
 git add packages/workspace/package.json packages/workspace/tsconfig.json packages/workspace/tsconfig.build.json packages/workspace/vitest.config.ts packages/workspace/src/git.ts packages/workspace/src/index.ts packages/workspace/test/git.integration.test.ts packages/workspace/test/helpers.ts pnpm-lock.yaml
@@ -210,7 +210,7 @@ export type RepositoryState = {
 export const inspectRepository = (path: string): Promise<RepositoryState | null>; // null — не репозиторий
 ```
 
-- [ ] **Шаг 1: тест на обычный репозиторий**
+- [x] **Шаг 1: тест на обычный репозиторий**
 
 ```ts
 it("reports the commit a fresh worktree would be cut from", async () => {
@@ -221,7 +221,7 @@ it("reports the commit a fresh worktree would be cut from", async () => {
 });
 ```
 
-- [ ] **Шаг 2: тест на пустой репозиторий**
+- [x] **Шаг 2: тест на пустой репозиторий**
 
 ```ts
 it("says a repository with no commits has no head, rather than failing", async () => {
@@ -233,7 +233,7 @@ it("says a repository with no commits has no head, rather than failing", async (
 });
 ```
 
-- [ ] **Шаг 3: тест на середину rebase — тот, ради которого задача существует**
+- [x] **Шаг 3: тест на середину rebase — тот, ради которого задача существует**
 
 Хелпер `makeRepoMidRebase` в `test/helpers.ts`: два коммита, расходящиеся правки одного файла,
 `git rebase` до конфликта (ожидается ненулевой код выхода — это часть подготовки, а не ошибка).
@@ -246,7 +246,7 @@ it("refuses to call a rebase's scratch commit a base", async () => {
 });
 ```
 
-- [ ] **Шаг 4: реализация**
+- [x] **Шаг 4: реализация**
 
 Не репозиторий → `null` (`rev-parse --show-toplevel` с ненулевым кодом). `headCommit` —
 `rev-parse HEAD`, ненулевой код в пустом репозитории даёт `null`. Незавершённая операция
@@ -255,11 +255,11 @@ it("refuses to call a rebase's scratch commit a base", async () => {
 из `rev-parse --git-dir`, а не склеивается как `<repo>/.git`: внутри linked worktree это другой
 каталог (спека §2.10).
 
-- [ ] **Шаг 5: мутация**
+- [x] **Шаг 5: мутация**
 
 Убрать ветку `rebase-merge` → тест Шага 3 краснеет `expected null to be 'REBASE'`. Вернуть.
 
-- [ ] **Шаг 6: `pnpm verify`, `pnpm build`, коммит**
+- [x] **Шаг 6: `pnpm verify`, `pnpm build`, коммит**
 
 ```bash
 git add packages/workspace/src/repository.ts packages/workspace/src/index.ts packages/workspace/test/repository.integration.test.ts packages/workspace/test/helpers.ts
@@ -291,7 +291,7 @@ export const createCarryInSnapshot = (context: {
 }): Promise<CarryInSnapshot | null>; // null — переносить нечего
 ```
 
-- [ ] **Шаг 1: тест на все четыре категории сразу**
+- [x] **Шаг 1: тест на все четыре категории сразу**
 
 Хелпер `makeRepoWithEveryKindOfChange`: изменённый отслеживаемый файл, файл добавленный в индекс,
 untracked-файл в корне, untracked-файл во вложенном каталоге, игнорируемый файл, и удалённый
@@ -317,7 +317,7 @@ it("carries the work the owner has not committed, and leaves the ignored files b
 });
 ```
 
-- [ ] **Шаг 2: тест на неприкосновенность рабочей копии владельца**
+- [x] **Шаг 2: тест на неприкосновенность рабочей копии владельца**
 
 Критерий приёмки 4 спеки. Утверждение над строкой целиком, не над «примерно тем же»:
 
@@ -333,7 +333,7 @@ it("leaves the owner's own working copy byte for byte as it was", async () => {
 });
 ```
 
-- [ ] **Шаг 3: тест на «переносить нечего»**
+- [x] **Шаг 3: тест на «переносить нечего»**
 
 ```ts
 it("says there was nothing to carry rather than making an empty commit", async () => {
@@ -343,7 +343,7 @@ it("says there was nothing to carry rather than making an empty commit", async (
 });
 ```
 
-- [ ] **Шаг 4: реализация**
+- [x] **Шаг 4: реализация**
 
 Последовательность из спеки §2.9. `GIT_INDEX_FILE` — во временном каталоге **вне** `.git`,
 удаляется в `finally`, включая путь отказа. Пустой репозиторий (`headCommit === null`) →
@@ -351,13 +351,13 @@ it("says there was nothing to carry rather than making an empty commit", async (
 разбор текста статуса. `carriedPaths` — из `diff --name-only HEAD <snapshot>` для непустого HEAD и
 из `ls-tree` для пустого.
 
-- [ ] **Шаг 5: мутация**
+- [x] **Шаг 5: мутация**
 
 Заменить `git add -A` на `git add -u` (переносит только отслеживаемые) → тест Шага 1 краснеет
 `expected [ … ] to contain 'untracked-new.txt'`. Вернуть. Это ровно тот дефект, который дал бы
 `git stash create`, и тест обязан его ловить.
 
-- [ ] **Шаг 6: `pnpm verify`, `pnpm build`, коммит**
+- [x] **Шаг 6: `pnpm verify`, `pnpm build`, коммит**
 
 ```bash
 git add packages/workspace/src/snapshot.ts packages/workspace/src/index.ts packages/workspace/test/snapshot.integration.test.ts packages/workspace/test/helpers.ts
@@ -397,7 +397,7 @@ export const removeWorktree = (context: { topLevel: string; path: string }): Pro
 `listWorktrees`, а не разбором текста ошибки. Разбор прозы — это то, что ломается при обновлении
 `git`.
 
-- [ ] **Шаг 1: тест на создание вне репозитория**
+- [x] **Шаг 1: тест на создание вне репозитория**
 
 ```ts
 it("puts the worktree where the owner's repository will not see it", async () => {
@@ -415,7 +415,7 @@ it("puts the worktree where the owner's repository will not see it", async () =>
 });
 ```
 
-- [ ] **Шаг 2: тест на занятую ветку**
+- [x] **Шаг 2: тест на занятую ветку**
 
 ```ts
 it("names the branch it will not take over", async () => {
@@ -431,7 +431,7 @@ it("names the branch it will not take over", async () => {
 });
 ```
 
-- [ ] **Шаг 3: тест на осиротевший worktree**
+- [x] **Шаг 3: тест на осиротевший worktree**
 
 ```ts
 it("marks a worktree whose directory was deleted from under git", async () => {
@@ -444,7 +444,7 @@ it("marks a worktree whose directory was deleted from under git", async () => {
 });
 ```
 
-- [ ] **Шаг 4: реализация**
+- [x] **Шаг 4: реализация**
 
 `listWorktrees` разбирает `worktree list --porcelain`: записи разделены пустой строкой, ключи —
 `worktree`, `branch`, `prunable`, `detached`. Ветка приводится из `refs/heads/<имя>` к `<имя>`.
@@ -452,13 +452,13 @@ it("marks a worktree whose directory was deleted from under git", async () => {
 `worktree add -b <ветка> <путь> <стартовая точка>`. `removeWorktree` — `worktree remove --force`,
 и код 0 на исчезнувшем каталоге считается успехом (спека §2.11).
 
-- [ ] **Шаг 5: мутация**
+- [x] **Шаг 5: мутация**
 
 Убрать проверку `BRANCH_EXISTS` до вызова → тест Шага 2 краснеет утверждением над формой результата
 (`expected { type: 'ADDED' } to deeply equal { type: 'REFUSED', … }`), а не падением процесса.
 Вернуть.
 
-- [ ] **Шаг 6: `pnpm verify`, `pnpm build`, коммит**
+- [x] **Шаг 6: `pnpm verify`, `pnpm build`, коммит**
 
 ```bash
 git add packages/workspace/src/worktree.ts packages/workspace/src/index.ts packages/workspace/test/worktree.integration.test.ts
@@ -510,7 +510,7 @@ export const workItemWorkspaceSchema = z
 `baseCommit` — nullable, потому что пустой репозиторий его не имеет (спека §2.12). Это не
 необязательность, а факт: `.nullable()`, не `.optional()`.
 
-- [ ] **Шаг 1: тест на то, что путь обязателен**
+- [x] **Шаг 1: тест на то, что путь обязателен**
 
 ```ts
 it("refuses a workspace that names no worktree", () => {
@@ -522,7 +522,7 @@ it("refuses a workspace that names no worktree", () => {
 полю вместо названного нарушения, проходит по неверной причине. Этап A2 нашёл ровно это в
 `session.unit.test.ts`.
 
-- [ ] **Шаг 2: тест на закрытость схемы**
+- [x] **Шаг 2: тест на закрытость схемы**
 
 ```ts
 it("does not silently accept a field nobody declared", () => {
@@ -530,12 +530,12 @@ it("does not silently accept a field nobody declared", () => {
 });
 ```
 
-- [ ] **Шаг 3: реализация схем и реэкспорт из `index.ts`.**
+- [x] **Шаг 3: реализация схем и реэкспорт из `index.ts`.**
 
-- [ ] **Шаг 4: мутация** — убрать `.strict()` → тест Шага 2 краснеет
+- [x] **Шаг 4: мутация** — убрать `.strict()` → тест Шага 2 краснеет
       `expected [Function] to throw an error`. Вернуть.
 
-- [ ] **Шаг 5: `pnpm verify`, `pnpm build`, коммит**
+- [x] **Шаг 5: `pnpm verify`, `pnpm build`, коммит**
 
 ```bash
 git add packages/contracts/src/workspace.ts packages/contracts/src/index.ts packages/contracts/test/workspace.unit.test.ts
@@ -555,7 +555,7 @@ git commit -m "feat(contracts): give a work item the workspace it is edited in"
 **Интерфейсы — потребляет:** контракт Задачи 6.
 **Производит:** обработчики четырёх команд и чтение рабочей области по `workItemId`.
 
-- [ ] **Шаг 1: миграция**
+- [x] **Шаг 1: миграция**
 
 ```sql
 CREATE TABLE work_item_workspaces (
@@ -577,7 +577,7 @@ CREATE TABLE work_item_workspaces (
 `work_item_id` — `UNIQUE`: рабочая область принадлежит WorkItem (D1), и вторая означала бы двух
 писателей мимо аренды. Инвариант принадлежит хранилищу, а не соглашению вызывающих.
 
-- [ ] **Шаг 2: тест на единственность**
+- [x] **Шаг 2: тест на единственность**
 
 ```ts
 it("refuses a second workspace for one work item", async () => {
@@ -586,7 +586,7 @@ it("refuses a second workspace for one work item", async () => {
 });
 ```
 
-- [ ] **Шаг 3: тест на аренду**
+- [x] **Шаг 3: тест на аренду**
 
 ```ts
 it("does not hand a second stage attempt the workspace a first one is writing in", async () => {
@@ -595,20 +595,20 @@ it("does not hand a second stage attempt the workspace a first one is writing in
 });
 ```
 
-- [ ] **Шаг 4: реализация обработчиков.** Аренда берётся сравнением с `null` в одном
+- [x] **Шаг 4: реализация обработчиков.** Аренда берётся сравнением с `null` в одном
       `UPDATE … WHERE lease_holder IS NULL`, а не чтением с последующей записью: проверка и захват
       обязаны быть одним действием.
 
-- [ ] **Шаг 5: мутация** — снять условие `lease_holder IS NULL` → тест Шага 3 краснеет
+- [x] **Шаг 5: мутация** — снять условие `lease_holder IS NULL` → тест Шага 3 краснеет
       `promise resolved instead of rejecting`. Вернуть.
 
-- [ ] **Шаг 6: тест на время миграции**
+- [x] **Шаг 6: тест на время миграции**
 
 Прогнать миграцию на копии базы владельца, снятой **через backup API**, а не `cp` (WAL). Записать
 измеренное время в отчёт. `ALTER`/`CREATE TABLE` здесь метаданные, так что ожидание — единицы
 миллисекунд; если больше, это находка.
 
-- [ ] **Шаг 7: `pnpm verify`, `pnpm build`, коммит**
+- [x] **Шаг 7: `pnpm verify`, `pnpm build`, коммит**
 
 ```bash
 git add packages/persistence-sqlite/migrations/0011_work_item_workspaces.sql packages/persistence-sqlite/src/index.ts packages/persistence-sqlite/test/local-state.integration.test.ts
@@ -638,7 +638,7 @@ export const decideProvisionWorkspace = (context: {
 Плюс третья ветка отказа диспетчеризации в `workflow.ts` — «рабочую область создать не удалось»,
 отдельная от двух существующих (спека §5).
 
-- [ ] **Шаг 1: тест на имя ветки**
+- [x] **Шаг 1: тест на имя ветки**
 
 ```ts
 it("builds a branch name a human can recognise and git will accept", () => {
@@ -656,7 +656,7 @@ Git запрещает в именах ссылок пробелы, `~^:?*[`, д
 slug строится из строчных латинских букв, цифр и дефиса, обрезается по 40 символам, и пустой slug
 даёт имя из одного идентификатора.
 
-- [ ] **Шаг 2: тест на отказ посреди rebase**
+- [x] **Шаг 2: тест на отказ посреди rebase**
 
 ```ts
 it("asks the owner rather than cutting a branch from a rebase in progress", () => {
@@ -669,14 +669,14 @@ it("asks the owner rather than cutting a branch from a rebase in progress", () =
 });
 ```
 
-- [ ] **Шаг 3: реализация.** Тексты отказов пишутся по образцу `decideDispatchStage`
+- [x] **Шаг 3: реализация.** Тексты отказов пишутся по образцу `decideDispatchStage`
       (`packages/domain/src/workflow.ts:297`): `kind: "FREE_TEXT"`, `allowOther: true`, пустой
       `options` — правильное действие тут вне Loomrail и перечислению не поддаётся.
 
-- [ ] **Шаг 4: мутация** — вернуть `PROVISION` при `inProgress !== null` → тест Шага 2 краснеет
+- [x] **Шаг 4: мутация** — вернуть `PROVISION` при `inProgress !== null` → тест Шага 2 краснеет
       `expected 'PROVISION' to be 'REFUSED'`. Вернуть.
 
-- [ ] **Шаг 5: `pnpm verify`, `pnpm build`, коммит**
+- [x] **Шаг 5: `pnpm verify`, `pnpm build`, коммит**
 
 ```bash
 git add packages/domain/src/workspace.ts packages/domain/src/index.ts packages/domain/src/workflow.ts packages/domain/test/workspace.unit.test.ts
@@ -698,12 +698,12 @@ git commit -m "feat(domain): decide when a workspace may be cut, and what to cal
 создания → аренда → диспетчеризация. Каждый шаг отказа заканчивается вопросом владельцу, а не
 исключением, вылетающим наверх.
 
-- [ ] **Шаг 1: тест на то, что рабочая область появляется до сессии**
+- [x] **Шаг 1: тест на то, что рабочая область появляется до сессии**
 
 Поднять демон на одноразовом репозитории с mock-адаптером, объявляющим IMPLEMENT, запустить стадию,
 утвердить, что worktree существует на диске и его `git status` чистый **до** старта сессии.
 
-- [ ] **Шаг 2: тест на отказ посреди rebase — сквозной**
+- [x] **Шаг 2: тест на отказ посреди rebase — сквозной**
 
 ```ts
 it("asks the owner instead of running an agent over a rebase's scratch commit", async () => {
@@ -715,13 +715,13 @@ it("asks the owner instead of running an agent over a rebase's scratch commit", 
 });
 ```
 
-- [ ] **Шаг 3: реализация.** Стадии, которым репозиторий не нужен, рабочую область не создают:
+- [x] **Шаг 3: реализация.** Стадии, которым репозиторий не нужен, рабочую область не создают:
       признак берётся из шаблона workflow, а не из имени стадии.
 
-- [ ] **Шаг 4: мутация** — убрать вызов решения домена → тест Шага 2 краснеет утверждением над
+- [x] **Шаг 4: мутация** — убрать вызов решения домена → тест Шага 2 краснеет утверждением над
       числом worktree. Вернуть.
 
-- [ ] **Шаг 5: `pnpm verify`, `pnpm build`, коммит**
+- [x] **Шаг 5: `pnpm verify`, `pnpm build`, коммит**
 
 ```bash
 git add apps/daemon/src/session-loop.ts apps/daemon/test/session-loop.integration.test.ts
@@ -741,14 +741,14 @@ git commit -m "feat(daemon): cut the workspace before dispatching work into it"
 воскрешается** (AD-008). Каталог, исчезнувший снаружи, переводит рабочую область в `ORPHANED`
 с записью в лог; ветка остаётся, потому что в ней единственный экземпляр работы (D12).
 
-- [ ] **Шаг 1: тест** — создать рабочую область, удалить каталог, перезапустить, утвердить статус
+- [x] **Шаг 1: тест** — создать рабочую область, удалить каталог, перезапустить, утвердить статус
       `ORPHANED` и наличие записи в логе, и что ветка **всё ещё существует**.
-- [ ] **Шаг 2: реализация.** Отказ `git` на этом пути не должен мешать демону стартовать: правило
+- [x] **Шаг 2: реализация.** Отказ `git` на этом пути не должен мешать демону стартовать: правило
       Задачи 1 этапа A2 (`killOrphanedSessionProcess`) действует и здесь — ничто отсюда не
       вылетает в `execute`.
-- [ ] **Шаг 3: мутация** — убрать проверку `prunable`; тест краснеет утверждением над статусом
+- [x] **Шаг 3: мутация** — убрать проверку `prunable`; тест краснеет утверждением над статусом
       (`READY` вместо `ORPHANED`). Вернуть.
-- [ ] **Шаг 4: `pnpm verify`, `pnpm build`, коммит**
+- [x] **Шаг 4: `pnpm verify`, `pnpm build`, коммит**
 
 ```bash
 git add packages/persistence-sqlite/src/index.ts packages/persistence-sqlite/test/local-state.integration.test.ts
@@ -774,8 +774,8 @@ git commit -m "feat(persistence): notice the workspace whose directory went away
 `--skip-git-repo-check` (§2.7) и **без** флага одобрения (§2.3 — его добавление ломает запуск).
 Объявляемые стадии Codex становятся шестью.
 
-- [ ] **Шаг 1: тест на аргументы** — утверждение над массивом, не над склейкой (§Задача 1).
-- [ ] **Шаг 2: тест на закрытый список `-c`**
+- [x] **Шаг 1: тест на аргументы** — утверждение над массивом, не над склейкой (§Задача 1).
+- [x] **Шаг 2: тест на закрытый список `-c`**
 
 ```ts
 it("opens exactly one config key and no others", () => {
@@ -784,7 +784,7 @@ it("opens exactly one config key and no others", () => {
 });
 ```
 
-- [ ] **Шаг 3: тест на «побеждает последний»** — спека D9, §2.6. Против записи, содержащей
+- [x] **Шаг 3: тест на «побеждает последний»** — спека D9, §2.6. Против записи, содержащей
       **плацехолдер до работы и настоящий ответ после**:
 
 ```ts
@@ -794,11 +794,11 @@ it("returns the answer the agent finished with, not the one it started with", as
 });
 ```
 
-- [ ] **Шаг 4: реализация.** Пустой временный каталог остаётся только на пути «рабочей области нет».
-- [ ] **Шаг 5: мутация** — сделать чекпоинт «первым победившим» → тест Шага 3 краснеет
+- [x] **Шаг 4: реализация.** Пустой временный каталог остаётся только на пути «рабочей области нет».
+- [x] **Шаг 5: мутация** — сделать чекпоинт «первым победившим» → тест Шага 3 краснеет
       `expected { summary: '' } to deeply equal { summary: '…' }`. Вернуть. **Это главная мутация
       задачи**: без неё стадия завершается успехом с пустым чекпоинтом.
-- [ ] **Шаг 6: `pnpm verify`, `pnpm build`, коммит**
+- [x] **Шаг 6: `pnpm verify`, `pnpm build`, коммит**
 
 ---
 
@@ -814,11 +814,11 @@ Bundled fixture **не может** храниться в репозитории
 каталог копируется в `<data>/demo-projects/<fixtureId>`, там выполняются `git init` и первый коммит.
 Обещание спеки («fixture становятся настоящими репозиториями с первым коммитом») этим выполняется.
 
-- [ ] **Шаг 1: тест на регистрацию своего репозитория** — путь, не являющийся репозиторием,
+- [x] **Шаг 1: тест на регистрацию своего репозитория** — путь, не являющийся репозиторием,
       отклоняется с называнием пути.
-- [ ] **Шаг 2: тест на материализацию fixture** — после инициализации демо `inspectRepository`
+- [x] **Шаг 2: тест на материализацию fixture** — после инициализации демо `inspectRepository`
       возвращает непустой `headCommit`.
-- [ ] **Шаг 3: реализация.** Материализация идемпотентна: повторная инициализация не пересоздаёт
+- [x] **Шаг 3: реализация.** Материализация идемпотентна: повторная инициализация не пересоздаёт
       репозиторий и не теряет работу.
 - [ ] **Шаг 4: мутация** — убрать первый коммит → тест Шага 2 краснеет `expected null to match /^[0-9a-f]{40}$/`.
 - [ ] **Шаг 5: `pnpm verify`, `pnpm build`, `pnpm test:e2e`, коммит**
