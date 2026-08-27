@@ -1,38 +1,13 @@
-import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  providerCapabilitiesResponseSchema,
-  sessionExchangeResponseSchema,
-  type ProviderCapabilitiesResponse,
-} from "@loomrail/contracts";
+import { providerCapabilitiesResponseSchema, type ProviderCapabilitiesResponse } from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { startDaemon, type RunningDaemon } from "../src/server.js";
 import { LOOMRAIL_PROVIDER_ENV_VAR } from "../src/provider-selection.js";
-
-// Deliberately not imported from `server.integration.test.ts`, even though it exports equivalents:
-// that file is itself matched by the `integration` project's test glob, and importing it re-runs
-// its own top-level `describe` blocks a second time in this file's module instance (already true,
-// pre-existing, of `event-stream.integration.test.ts`'s import of it -- see that file's own note).
-// Adding a third import site would triple-register the "stage capability gate" suite for no reason
-// this file needs. These two are short enough to duplicate instead.
-const bootstrapToken = (): string => randomBytes(32).toString("base64url");
-
-const sessionCookie = async (daemon: RunningDaemon, token: string): Promise<string> => {
-  const exchange = await fetch(`${daemon.baseUrl}/api/session/exchange`, {
-    method: "POST",
-    headers: { "content-type": "application/json", origin: daemon.baseUrl },
-    body: JSON.stringify({ bootstrapToken: token }),
-  });
-  sessionExchangeResponseSchema.parse(await exchange.json());
-  const setCookie = exchange.headers.get("set-cookie");
-  const cookie = setCookie?.split(";", 1)[0];
-  if (!cookie) throw new Error("Session exchange did not return a cookie");
-  return cookie;
-};
+import { authenticate, bootstrapToken } from "./daemon-fixtures.js";
 
 // The unit tests for `resolveDefaultProviderAdapter` (provider-selection.unit.test.ts) prove the
 // selection function itself is correct in isolation. They do not prove `startDaemon` actually
@@ -73,7 +48,7 @@ describe("provider selection at daemon startup", () => {
     daemon: RunningDaemon,
     token: string,
   ): Promise<ProviderCapabilitiesResponse> => {
-    const cookie = await sessionCookie(daemon, token);
+    const { cookie } = await authenticate(daemon, token);
     const response = await fetch(`${daemon.baseUrl}/api/v1/provider/capabilities`, {
       headers: { cookie },
     });

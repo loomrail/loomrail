@@ -1,6 +1,5 @@
-import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,108 +9,31 @@ import {
   apiErrorResponseSchema,
   correlationIdSchema,
   eventsResponseSchema,
-  sessionExchangeResponseSchema,
+  projectsResponseSchema,
   stateCommandResultSchema,
   workItemsResponseSchema,
   workflowSnapshotSchema,
   type ContextPackSpec,
   type ProviderSession,
-  type WorkflowSnapshot,
 } from "@loomrail/contracts";
 import { openLocalState } from "@loomrail/persistence-sqlite";
 import { createCodexProvider } from "@loomrail/provider-codex";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
+import { inspectRepository } from "@loomrail/workspace";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { startDaemon, type RunningDaemon } from "../src/server.js";
+import {
+  authenticate,
+  bootstrapToken,
+  createReadyWorkItem,
+  fetchWorkflowSnapshot,
+  mutationHeaders,
+  type AuthenticatedSession,
+} from "./daemon-fixtures.js";
 import { gatedAdapter } from "./gated-adapter.js";
 import { makeThrowawayRepo } from "./repo-fixtures.js";
 import { seedQueuedAttempt, type SeededAttempt } from "./state-fixtures.js";
-
-// Exported so `event-stream.integration.test.ts` (and future daemon integration suites) can reuse
-// the same session-bootstrap plumbing rather than pasting a second copy.
-export const bootstrapToken = (): string => randomBytes(32).toString("base64url");
-
-/**
- * A Project whose `repositoryPath` is a real, throwaway Git repository, seeded straight onto the
- * database file before the daemon under test opens it.
- *
- * Any run that reaches IMPLEMENT needs one: that stage needs a workspace (spec §5/D11), and the
- * daemon refuses to cut one from a path that is not a repository's own top level. The bundled
- * fixture cannot serve here -- it lives inside Loomrail's own checkout, so its top level is
- * Loomrail's repository, which is exactly the repository that must never be branched. Task 12 makes
- * fixture registration materialise a real repository of its own; until then, a test that runs the
- * pipeline that far builds one.
- */
-export const REPOSITORY_PROJECT_ID = "project-with-repository";
-
-export const registerRepositoryProject = async (
-  stateDatabasePath: string,
-  repositoryPath: string,
-): Promise<void> => {
-  const localState = await openLocalState({ databasePath: stateDatabasePath });
-  try {
-    localState.execute({
-      schemaVersion: 1,
-      commandId: "register-repository-project",
-      correlationId: "correlation-register-repository",
-      actor: { type: "HUMAN", id: "local-owner" },
-      type: "REGISTER_FIXTURE_PROJECT",
-      payload: {
-        id: REPOSITORY_PROJECT_ID,
-        fixtureId: "api-service-b",
-        name: "Repository fixture",
-        repositoryPath,
-      },
-    });
-  } finally {
-    localState.close();
-  }
-};
-
-export type AuthenticatedSession = {
-  cookie: string;
-  csrfToken: string;
-  setCookie: string;
-};
-
-export const authenticate = async (daemon: RunningDaemon, token: string): Promise<AuthenticatedSession> => {
-  const exchange = await fetch(`${daemon.baseUrl}/api/session/exchange`, {
-    method: "POST",
-    headers: { "content-type": "application/json", origin: daemon.baseUrl },
-    body: JSON.stringify({ bootstrapToken: token }),
-  });
-  const setCookie = exchange.headers.get("set-cookie");
-  const cookie = setCookie?.split(";", 1)[0];
-  if (!cookie || !setCookie) throw new Error("Session exchange did not return a cookie");
-  const session = sessionExchangeResponseSchema.parse(await exchange.json());
-  return { cookie, csrfToken: session.csrfToken, setCookie };
-};
-
-export const mutationHeaders = (
-  daemon: RunningDaemon,
-  session: AuthenticatedSession,
-): Record<string, string> => ({
-  "content-type": "application/json",
-  cookie: session.cookie,
-  origin: daemon.baseUrl,
-  "x-loomrail-csrf": session.csrfToken,
-});
-
-// A mutation handler now answers with the snapshot as of immediately after its own command, before
-// the background worker has necessarily run (spec D4/D6): a test that wants the state a stage
-// reaches once the worker drains it has to re-fetch, not read the mutation's own response body.
-// Pair with `daemon.whenIdle()` -- called first -- so the read lands after the drain settles.
-const fetchWorkflowSnapshot = async (
-  daemon: RunningDaemon,
-  cookie: string,
-  workItemId: string,
-): Promise<WorkflowSnapshot> => {
-  const response = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/workflow`, {
-    headers: { cookie },
-  });
-  return workflowSnapshotSchema.parse(await response.json());
-};
 
 // The context pack a legacy (pre-current) persisted template still carries: DISCOVERY and PLAN
 // never had an EVIDENCE section, since this legacy fixture only exercises those two stages.
@@ -391,6 +313,152 @@ describe("local daemon session and state boundary", () => {
     expect(await response.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
   });
 
+  it("registers the bundled fixture as a real repository outside Loomrail's own checkout", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail demo materialise "));
+    temporaryDirectories.push(temporaryDirectory);
+    const demoProjectsRoot = join(temporaryDirectory, "demo-projects");
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, logger: false, demoProjectsRoot });
+    const session = await authenticate(daemon, token);
+
+    const registration = await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({ schemaVersion: 1, commandId: "register-materialised", fixtureId: "web-app-a" }),
+    });
+    expect(registration.status).toBe(200);
+    const registered = stateCommandResultSchema.parse(await registration.json());
+    if (registered.type !== "PROJECT_REGISTERED") throw new Error("Expected the Project to register");
+
+    // The Project points at the materialised copy, not at the template inside this checkout -- the
+    // whole point of the copy is that `git worktree add` here can never reach Loomrail's own
+    // repository.
+    expect(registered.project.repositoryPath).not.toContain(join("fixtures", "projects"));
+    expect(await realpath(registered.project.repositoryPath)).toBe(
+      await realpath(join(demoProjectsRoot, "web-app-a")),
+    );
+    // The promise of the spec: a bundled fixture is a real repository with a first commit.
+    const repository = await inspectRepository(registered.project.repositoryPath);
+    expect(repository?.headCommit).toEqual(expect.stringMatching(/^[0-9a-f]{40}$/));
+    expect(await readFile(join(demoProjectsRoot, "web-app-a", "README.md"), "utf8")).toContain(
+      "Fixture web application",
+    );
+  });
+
+  it("refuses to register a Project at a path that is not a Git repository, naming the path", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail demo not a repo "));
+    temporaryDirectories.push(temporaryDirectory);
+    const demoProjectsRoot = join(temporaryDirectory, "demo-projects");
+    // A directory already sitting where the fixture materialises, holding something that is not a
+    // repository. Materialisation leaves it alone (that is what makes it idempotent), so this is
+    // the registration reaching a path that is not a Git repository -- the same answer an owner
+    // registering their own directory by path gets.
+    const occupied = join(demoProjectsRoot, "web-app-a");
+    await mkdir(occupied, { recursive: true });
+    await writeFile(join(occupied, "notes.txt"), "not a repository\n", "utf8");
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, logger: false, demoProjectsRoot });
+    const session = await authenticate(daemon, token);
+
+    const response = await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({ schemaVersion: 1, commandId: "register-not-a-repo", fixtureId: "web-app-a" }),
+    });
+
+    expect(response.status).toBe(400);
+    const failure = apiErrorResponseSchema.parse(await response.json());
+    expect(failure.error.code).toBe("REPOSITORY_PATH_NOT_A_REPOSITORY");
+    // Named as the owner would see it on disk: the message has to point at a path they can go look
+    // at, not at a canonicalised form of it they never typed.
+    expect(failure.error.message).toContain(occupied);
+    // Nothing was registered on the way to the refusal.
+    const projects = await fetch(`${daemon.baseUrl}/api/v1/projects`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(await projects.json()).toMatchObject({ projects: [] });
+  });
+
+  it("keeps a materialised fixture and the work already done in it when the demo is initialised again", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail demo twice "));
+    temporaryDirectories.push(temporaryDirectory);
+    const demoProjectsRoot = join(temporaryDirectory, "demo-projects");
+    const firstToken = bootstrapToken();
+    const first = await startDaemon({
+      bootstrapToken: firstToken,
+      logger: false,
+      demoProjectsRoot,
+      stateDatabasePath: join(temporaryDirectory, "first.sqlite"),
+    });
+    daemon = first;
+    const firstSession = await authenticate(first, firstToken);
+    const firstRegistration = await fetch(`${first.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers: mutationHeaders(first, firstSession),
+      body: JSON.stringify({ schemaVersion: 1, commandId: "register-first", fixtureId: "web-app-a" }),
+    });
+    expect(firstRegistration.status).toBe(200);
+    const materialised = join(demoProjectsRoot, "web-app-a");
+    const firstCommit = (await inspectRepository(materialised))?.headCommit;
+    // Work in the demo repository, of the kind that only ever exists there: uncommitted.
+    await writeFile(join(materialised, "owners-note.txt"), "work in progress\n", "utf8");
+    await daemon.close();
+    daemon = undefined;
+
+    // A second initialisation: a fresh database (so nothing is remembered) pointed at the same demo
+    // root, which is what "someone pressed the button again" looks like from the materialiser.
+    const secondToken = bootstrapToken();
+    const second = await startDaemon({
+      bootstrapToken: secondToken,
+      logger: false,
+      demoProjectsRoot,
+      stateDatabasePath: join(temporaryDirectory, "second.sqlite"),
+    });
+    daemon = second;
+    const secondSession = await authenticate(second, secondToken);
+    const secondRegistration = await fetch(`${second.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers: mutationHeaders(second, secondSession),
+      body: JSON.stringify({ schemaVersion: 1, commandId: "register-second", fixtureId: "web-app-a" }),
+    });
+
+    expect(secondRegistration.status).toBe(200);
+    expect((await inspectRepository(materialised))?.headCommit).toBe(firstCommit);
+    expect(await readFile(join(materialised, "owners-note.txt"), "utf8")).toBe("work in progress\n");
+  });
+
+  it("registers one Project when the same fixture is registered twice", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail demo double click "));
+    temporaryDirectories.push(temporaryDirectory);
+    const token = bootstrapToken();
+    const started = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      demoProjectsRoot: join(temporaryDirectory, "demo-projects"),
+    });
+    daemon = started;
+    const session = await authenticate(started, token);
+    const register = (commandId: string) =>
+      fetch(`${started.baseUrl}/api/v1/projects/fixtures/register`, {
+        method: "POST",
+        headers: mutationHeaders(started, session),
+        body: JSON.stringify({ schemaVersion: 1, commandId, fixtureId: "web-app-a" }),
+      });
+
+    expect((await register("register-click-one")).status).toBe(200);
+    // The same command id: the idempotency receipt has to replay it. It only can if the command
+    // this registration builds is byte-for-byte the one already recorded -- which it stops being
+    // the moment the materialised path is spelled one way when the repository is created and
+    // another way when it is adopted, and the owner gets a conflict for pressing the button twice.
+    expect((await register("register-click-one")).status).toBe(200);
+    // A different command id: not the receipt replaying, a genuine second registration.
+    expect((await register("register-click-two")).status).toBe(409);
+
+    const listed = await fetch(`${started.baseUrl}/api/v1/projects`, { headers: { cookie: session.cookie } });
+    const projects = projectsResponseSchema.parse(await listed.json());
+    expect(projects.projects).toHaveLength(1);
+  });
+
   it("persists Project, WorkItem, idempotency receipt and Events across daemon restart", async () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail daemon state "));
     temporaryDirectories.push(temporaryDirectory);
@@ -525,43 +593,17 @@ describe("local daemon session and state boundary", () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail workflow state "));
     temporaryDirectories.push(temporaryDirectory);
     const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
-    // This run goes all the way to IMPLEMENT's budget wall, so its Project has to be a real
-    // repository -- see `registerRepositoryProject`.
-    await registerRepositoryProject(
-      stateDatabasePath,
-      await makeThrowawayRepo(join(temporaryDirectory, "repo")),
-    );
     const firstToken = bootstrapToken();
     const firstDaemon = await startDaemon({ bootstrapToken: firstToken, logger: false, stateDatabasePath });
     daemon = firstDaemon;
     const firstSession = await authenticate(firstDaemon, firstToken);
     const headers = mutationHeaders(firstDaemon, firstSession);
-
-    const createResponse = await fetch(`${firstDaemon.baseUrl}/api/v1/work-items`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        schemaVersion: 1,
-        commandId: "create-workflow-item",
-        projectId: REPOSITORY_PROJECT_ID,
-        type: "TASK",
-        title: "Run the mock workflow",
-      }),
-    });
-    const created = stateCommandResultSchema.parse(await createResponse.json());
-    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
-    await fetch(`${firstDaemon.baseUrl}/api/v1/work-items/${created.workItem.id}/move`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        schemaVersion: 1,
-        commandId: "ready-workflow-item",
-        expectedVersion: 1,
-        targetState: "READY",
-      }),
-    });
+    // This run goes all the way to IMPLEMENT's budget wall, which cuts a worktree, so its Project
+    // has to name a real repository. Registration is what provides one: it materialises the bundled
+    // fixture outside this checkout and `createReadyWorkItem` asserts as much.
+    const workItemId = await createReadyWorkItem(firstDaemon, firstSession, "workflow-item");
     const startResponse = await fetch(
-      `${firstDaemon.baseUrl}/api/v1/work-items/${created.workItem.id}/pipeline/start`,
+      `${firstDaemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`,
       {
         method: "POST",
         headers,
@@ -576,7 +618,7 @@ describe("local daemon session and state boundary", () => {
     // The handler answers as of immediately after its own command now (spec D6), before the
     // background worker has necessarily run a single pass -- wait for it to drain, then re-read.
     await firstDaemon.whenIdle();
-    const waiting = await fetchWorkflowSnapshot(firstDaemon, firstSession.cookie, created.workItem.id);
+    const waiting = await fetchWorkflowSnapshot(firstDaemon, firstSession.cookie, workItemId);
     expect(waiting).toMatchObject({
       run: { status: "WAITING_HUMAN" },
       humanRequests: [{ status: "OPEN", kind: "SINGLE_CHOICE", blocking: true }],
@@ -589,10 +631,9 @@ describe("local daemon session and state boundary", () => {
     const secondToken = bootstrapToken();
     daemon = await startDaemon({ bootstrapToken: secondToken, logger: false, stateDatabasePath });
     const secondSession = await authenticate(daemon, secondToken);
-    const restoredResponse = await fetch(
-      `${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/workflow`,
-      { headers: { cookie: secondSession.cookie } },
-    );
+    const restoredResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/workflow`, {
+      headers: { cookie: secondSession.cookie },
+    });
     const restored = workflowSnapshotSchema.parse(await restoredResponse.json());
     expect(restored.humanRequests[0]).toMatchObject({ id: request.id, status: "OPEN", version: 1 });
 
@@ -609,7 +650,7 @@ describe("local daemon session and state boundary", () => {
     });
     expect(answerResponse.status).toBe(200);
     await daemon.whenIdle();
-    const hardPaused = await fetchWorkflowSnapshot(daemon, secondSession.cookie, created.workItem.id);
+    const hardPaused = await fetchWorkflowSnapshot(daemon, secondSession.cookie, workItemId);
     expect(hardPaused.run?.status).toBe("HARD_PAUSED");
     expect(hardPaused.stageAttempts.map(({ stage, status }) => ({ stage, status }))).toEqual([
       { stage: "DISCOVERY", status: "SUCCEEDED" },
@@ -621,7 +662,7 @@ describe("local daemon session and state boundary", () => {
     expect(hardPaused.decisions).toHaveLength(1);
 
     const overrideResponse = await fetch(
-      `${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/pipeline/budget-override`,
+      `${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/budget-override`,
       {
         method: "POST",
         headers: mutationHeaders(daemon, secondSession),
@@ -635,7 +676,7 @@ describe("local daemon session and state boundary", () => {
     );
     expect(overrideResponse.status).toBe(200);
     await daemon.whenIdle();
-    const awaitingAcceptance = await fetchWorkflowSnapshot(daemon, secondSession.cookie, created.workItem.id);
+    const awaitingAcceptance = await fetchWorkflowSnapshot(daemon, secondSession.cookie, workItemId);
     expect(awaitingAcceptance.run?.status).toBe("WAITING_HUMAN");
     expect(
       awaitingAcceptance.budgetPolicies.map(({ revision, maxEstimatedTokens }) => ({
@@ -663,7 +704,7 @@ describe("local daemon session and state boundary", () => {
       throw new Error("Expected a pending AcceptancePackage");
     }
     const acceptanceResponse = await fetch(
-      `${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/acceptance/${acceptancePackage.id}/resolve`,
+      `${daemon.baseUrl}/api/v1/work-items/${workItemId}/acceptance/${acceptancePackage.id}/resolve`,
       {
         method: "POST",
         headers: mutationHeaders(daemon, secondSession),
@@ -685,10 +726,9 @@ describe("local daemon session and state boundary", () => {
       stage: "ACCEPTANCE",
       status: "SUCCEEDED",
     });
-    const acceptedWorkItemResponse = await fetch(
-      `${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}`,
-      { headers: { cookie: secondSession.cookie } },
-    );
+    const acceptedWorkItemResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}`, {
+      headers: { cookie: secondSession.cookie },
+    });
     expect(await acceptedWorkItemResponse.json()).toMatchObject({ workItem: { state: "DONE" } });
 
     const repeated = await fetch(`${daemon.baseUrl}/api/v1/human-requests/${request.id}/answer`, {
@@ -1257,52 +1297,6 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
     }
   };
 
-  // Registers the bundled fixture, creates a WorkItem under it and moves it to READY -- none of
-  // which ever touches the ProviderAdapter, so this is safe to run live against a daemon whose
-  // adapter is gated shut for the rest of the test.
-  const createReadyWorkItem = async (
-    daemon: RunningDaemon,
-    session: AuthenticatedSession,
-    title: string,
-    projectId?: string,
-  ): Promise<string> => {
-    const headers = mutationHeaders(daemon, session);
-    // The bundled fixture is registered only when this work item is going under it. A caller that
-    // names a Project instead has already registered one (`registerRepositoryProject`), and
-    // registering the fixture as well would leave a second, unused Project behind.
-    if (projectId === undefined) {
-      await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ schemaVersion: 1, commandId: `register-${title}`, fixtureId: "web-app-a" }),
-      });
-    }
-    const createResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        schemaVersion: 1,
-        commandId: `create-${title}`,
-        projectId: projectId ?? "project-fixture-web-app-a",
-        type: "TASK",
-        title,
-      }),
-    });
-    const created = stateCommandResultSchema.parse(await createResponse.json());
-    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
-    await fetch(`${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/move`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        schemaVersion: 1,
-        commandId: `ready-${title}`,
-        expectedVersion: 1,
-        targetState: "READY",
-      }),
-    });
-    return created.workItem.id;
-  };
-
   it("listens while a resumed attempt is still running", async () => {
     // The point of the whole task, asserted by racing the boot pass against a generous budget
     // instead of a bare timer: under the regression this proves against (an `await` restored on the
@@ -1346,15 +1340,6 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
   // regression this proves against (an `await` restored in the handler after `worker.wake()`), the
   // response never arrives, and the race's own assertion has to be the one that reports that.
   it("answers a pipeline start before the stage has finished", async () => {
-    // Backed by a real repository: releasing the gate in this test's `finally` lets the drain carry
-    // the run on past DISCOVERY to IMPLEMENT, which cuts a worktree from whatever repository the
-    // work item's Project names. Under the bundled fixture that Project points inside Loomrail's own
-    // checkout, so this test would be cutting worktrees and branches in the developer's repository
-    // if the daemon's own guard ever stopped refusing it.
-    await registerRepositoryProject(
-      databasePath,
-      await makeThrowawayRepo(join(dirname(databasePath), "repo")),
-    );
     const adapter = gatedAdapter();
     const daemon = await startDaemon({
       bootstrapToken: token,
@@ -1364,12 +1349,11 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
     });
     try {
       const session = await authenticate(daemon, token);
-      const workItemId = await createReadyWorkItem(
-        daemon,
-        session,
-        "pipeline-start-under-test",
-        REPOSITORY_PROJECT_ID,
-      );
+      // Releasing the gate in this test's `finally` lets the drain carry the run on past DISCOVERY
+      // to IMPLEMENT, which cuts a worktree from whatever repository the WorkItem's Project names.
+      // `createReadyWorkItem` is what makes that a materialised fixture rather than this checkout,
+      // and asserts as much before handing the WorkItem back.
+      const workItemId = await createReadyWorkItem(daemon, session, "pipeline-start-under-test");
       const response = fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
         method: "POST",
         headers: mutationHeaders(daemon, session),
@@ -1402,8 +1386,6 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
     workItemId: string;
     humanRequestId?: string;
     humanRequestVersion?: number;
-    /** Set when the case's `act` creates its own WorkItem and needs one backed by a repository. */
-    projectId?: string;
   };
   type Prepare = (stateDatabasePath: string) => Promise<PreparedFixture>;
   type Act = (
@@ -1412,16 +1394,10 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
     fixture: PreparedFixture,
   ) => Promise<Response>;
 
-  // The two rows whose `act` creates its own WorkItem still need a Project backed by a real
-  // repository, for the same reason the single-start test above does: each row releases its gate in
-  // the `finally`, the drain carries the run on to IMPLEMENT, and IMPLEMENT cuts a worktree from
-  // whatever repository that Project names. The bundled fixture names a directory inside Loomrail's
-  // own checkout.
-  const repositoryProject: Prepare = async (stateDatabasePath) => {
-    const repositoryPath = await makeThrowawayRepo(join(dirname(stateDatabasePath), "repo"));
-    await registerRepositoryProject(stateDatabasePath, repositoryPath);
-    return { workItemId: "", projectId: REPOSITORY_PROJECT_ID };
-  };
+  // The two rows whose `act` creates its own WorkItem need nothing prepared: `createReadyWorkItem`
+  // registers the fixture against the daemon under test, and registration is what turns it into a
+  // repository those rows can safely reach IMPLEMENT in.
+  const noPreparation: Prepare = () => Promise.resolve({ workItemId: "" });
 
   // Drives a fresh WorkItem through a throwaway, unblocked daemon until the workflow's kickoff stage
   // raises its SINGLE_CHOICE HumanRequest -- reaching that needs a real (if fast) session, which the
@@ -1429,20 +1405,14 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
   // instance entirely. That daemon is fully closed before the one under test ever opens the same
   // database file; the two never touch it at once.
   const seedOpenHumanRequest: Prepare = async (stateDatabasePath) => {
-    // Backed by a real repository: `seedBudgetHardPause` below answers this request and lets the
-    // run reach IMPLEMENT, which needs a workspace cut from one.
-    const repositoryPath = await makeThrowawayRepo(join(dirname(stateDatabasePath), "repo"));
-    await registerRepositoryProject(stateDatabasePath, repositoryPath);
     const prelimToken = bootstrapToken();
     const prelim = await startDaemon({ bootstrapToken: prelimToken, logger: false, stateDatabasePath });
     try {
       const session = await authenticate(prelim, prelimToken);
-      const workItemId = await createReadyWorkItem(
-        prelim,
-        session,
-        "kickoff-request-fixture",
-        REPOSITORY_PROJECT_ID,
-      );
+      // The prelim daemon and the one under test open the same database file and default their
+      // demo root to the same directory beside it, so the Project this registers stays valid -- and
+      // stays a repository -- for the daemon that reads it back.
+      const workItemId = await createReadyWorkItem(prelim, session, "kickoff-request-fixture");
       await fetch(`${prelim.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
         method: "POST",
         headers: mutationHeaders(prelim, session),
@@ -1493,8 +1463,8 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
     }
   };
 
-  const startPipeline: Act = async (daemon, session, fixture) => {
-    const workItemId = await createReadyWorkItem(daemon, session, "pipeline-start-each", fixture.projectId);
+  const startPipeline: Act = async (daemon, session) => {
+    const workItemId = await createReadyWorkItem(daemon, session, "pipeline-start-each");
     return fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
       method: "POST",
       headers: mutationHeaders(daemon, session),
@@ -1507,8 +1477,8 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
   // already is the instant `START_MOCK_PIPELINE` returns. So this drives start-then-pause live
   // against the very daemon under test -- both are synchronous domain commands the gated adapter
   // never sees -- and only the final `resume` call is the one being tested.
-  const resumePipeline: Act = async (daemon, session, fixture) => {
-    const workItemId = await createReadyWorkItem(daemon, session, "pipeline-resume-each", fixture.projectId);
+  const resumePipeline: Act = async (daemon, session) => {
+    const workItemId = await createReadyWorkItem(daemon, session, "pipeline-resume-each");
     const startResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
       method: "POST",
       headers: mutationHeaders(daemon, session),
@@ -1576,8 +1546,8 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
   // same reason: a handler that regressed back to awaiting the drain must fail this by assertion,
   // not by vitest's blanket per-test timeout.
   it.each<[string, Prepare, Act]>([
-    ["pipeline start", repositoryProject, startPipeline],
-    ["pipeline resume", repositoryProject, resumePipeline],
+    ["pipeline start", noPreparation, startPipeline],
+    ["pipeline resume", noPreparation, resumePipeline],
     ["budget override", seedBudgetHardPause, approveBudgetOverride],
     ["human request answer", seedOpenHumanRequest, answerOpenRequest],
   ])(

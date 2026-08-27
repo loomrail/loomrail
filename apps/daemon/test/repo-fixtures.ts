@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -63,4 +64,39 @@ export const makeRepoMidRebase = async (): Promise<string> => {
     // mid-rebase state this helper exists to produce, not an error to surface.
   }
   return dir;
+};
+
+/**
+ * Refuses a repository path that lies inside Loomrail's own checkout.
+ *
+ * The hazard this exists for is specific and silent. A test that lets the dispatch drain reach
+ * IMPLEMENT provisions a workspace, and provisioning runs `git worktree add` in whatever repository
+ * the WorkItem's Project names. A Project pointing at anything inside this checkout means that
+ * command lands in the repository the developer is working in -- branches and worktrees in their
+ * own tree, with nothing in the test output saying so.
+ *
+ * Registration now materialises a bundled fixture as a repository of its own outside the checkout
+ * (`apps/daemon/src/fixtures.ts`), which is what makes the ordinary path safe. This is the assertion
+ * that keeps it safe: it turns a future change to registration, to the demo root, or to a test's own
+ * seeding into a named failure here rather than into damage discovered later by `git branch`.
+ */
+export const assertRepositoryOutsideThisCheckout = async (repositoryPath: string): Promise<void> => {
+  const checkout = await realpath(fileURLToPath(new URL("../../../", import.meta.url)));
+  // Canonicalised on both sides, because git and the daemon both deal in physical paths: on macOS
+  // a checkout reached through `/var` compares unequal to the same checkout as `/private/var`.
+  let candidate: string;
+  try {
+    candidate = await realpath(repositoryPath);
+  } catch {
+    candidate = resolve(repositoryPath);
+  }
+  const fromCheckout = relative(checkout, candidate);
+  const insideCheckout =
+    fromCheckout === "" ||
+    (fromCheckout !== ".." && !fromCheckout.startsWith(`..${sep}`) && !isAbsolute(fromCheckout));
+  if (insideCheckout) {
+    throw new Error(
+      `A test would have Loomrail cut a workspace from ${candidate}, which is inside this checkout (${checkout}). Point the Project at a repository of its own instead.`,
+    );
+  }
 };

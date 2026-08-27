@@ -22,7 +22,7 @@ import {
   bootstrapToken,
   mutationHeaders,
   type AuthenticatedSession,
-} from "./server.integration.test.js";
+} from "./daemon-fixtures.js";
 import { silentLogger } from "./silent-logger.js";
 import { FIXTURE_PROJECT_ID, seedQueuedAttempt } from "./state-fixtures.js";
 
