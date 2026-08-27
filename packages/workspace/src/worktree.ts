@@ -164,6 +164,49 @@ export const addWorktree = async (context: {
   return { type: "ADDED" };
 };
 
+/**
+ * What `deleteBranchIfUnmoved` did, and why.
+ *
+ * `MOVED` and `MISSING` are not failures: they are the two ways the branch turned out not to be the
+ * one the caller created, and both mean it was left alone. Only `DELETE_FAILED` says git refused a
+ * deletion that should have been possible.
+ */
+export type DeleteBranchOutcome = "DELETED" | "MOVED" | "MISSING" | "DELETE_FAILED";
+
+/**
+ * Deletes a branch, but only while it still points exactly where the caller says it was created.
+ *
+ * Deleting a branch is destructive and irreversible from Loomrail's side, so this is deliberately
+ * the narrowest possible version of it: `expectedCommit` is the caller's claim about what the
+ * branch was when it created it, and the deletion is a compare-and-delete against that claim
+ * (`update-ref -d <ref> <oldvalue>` is atomic -- git itself checks the value at the moment it
+ * deletes, so nothing can slip in between a read here and the write). A branch that has moved even
+ * by one commit is somebody's work: it is reported as `MOVED` and left where it is. So is a branch
+ * that is not there at all.
+ *
+ * `-D` semantics are what this needs and `-d` are not: a branch cut from a carry-in snapshot points
+ * at a commit no other ref reaches, so git's merged-ness check would refuse every single one of
+ * them. The safety `-d` offers is replaced here by something stricter than merged-ness -- the ref
+ * must still hold the exact commit the caller put there.
+ */
+export const deleteBranchIfUnmoved = async (context: {
+  topLevel: string;
+  branch: string;
+  expectedCommit: string;
+}): Promise<DeleteBranchOutcome> => {
+  const { topLevel, branch, expectedCommit } = context;
+  const ref = `${HEADS_PREFIX}${branch}`;
+
+  // Read first, only so the caller can be told *why* nothing was deleted. The deletion below does
+  // not trust this read: it carries the expected value itself.
+  const resolved = await runGit(["rev-parse", "--verify", "--quiet", ref], { cwd: topLevel });
+  if (resolved.exitCode !== 0) return "MISSING";
+  if (resolved.stdout.trim() !== expectedCommit) return "MOVED";
+
+  const deleted = await runGit(["update-ref", "-d", ref, expectedCommit], { cwd: topLevel });
+  return deleted.exitCode === 0 ? "DELETED" : "DELETE_FAILED";
+};
+
 // `git worktree remove` exits 0 even when the worktree's directory has already been deleted from
 // under git (spec §2.11) -- that is treated as success here too, not as a special case, since
 // there is nothing left to remove either way. The branch itself is left untouched: neither this

@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { addWorktree, listWorktrees, removeWorktree, runGit } from "../src/index.js";
+import { addWorktree, deleteBranchIfUnmoved, listWorktrees, removeWorktree, runGit } from "../src/index.js";
 
 import { makeThrowawayRepo } from "./helpers.js";
 
@@ -174,5 +174,78 @@ describe("removeWorktree", () => {
       cwd: repo,
     });
     expect(branch.exitCode).toBe(0);
+  });
+});
+
+describe("deleteBranchIfUnmoved", () => {
+  const headOf = async (repo: string, ref: string): Promise<string> => {
+    const resolved = await runGit(["rev-parse", ref], { cwd: repo });
+    return resolved.stdout.trim();
+  };
+
+  it("deletes the branch it was told it created, once its worktree is gone", async () => {
+    const repo = await makeThrowawayRepo();
+    const dir = await outsideDir("task-1");
+    const startPoint = await headOf(repo, "HEAD");
+    await addWorktree({ topLevel: repo, branch: "loomrail/task-1", path: dir, startPoint });
+    await removeWorktree({ topLevel: repo, path: dir });
+
+    const outcome = await deleteBranchIfUnmoved({
+      topLevel: repo,
+      branch: "loomrail/task-1",
+      expectedCommit: startPoint,
+    });
+
+    expect(outcome).toBe("DELETED");
+    const branch = await runGit(["show-ref", "--verify", "--quiet", "refs/heads/loomrail/task-1"], {
+      cwd: repo,
+    });
+    expect(branch.exitCode).not.toBe(0);
+  });
+
+  // The whole safety of this operation. A branch that has moved is somebody's work -- a commit made
+  // in the worktree, a manual reset, a branch that was never the one the caller created at all --
+  // and the caller's claim about where it created the branch is exactly what stops that being
+  // deleted on the strength of a name match.
+  it("leaves a branch that has moved since it was created", async () => {
+    const repo = await makeThrowawayRepo();
+    const dir = await outsideDir("task-1");
+    const startPoint = await headOf(repo, "HEAD");
+    await addWorktree({ topLevel: repo, branch: "loomrail/task-1", path: dir, startPoint });
+    await runGit(
+      [
+        "-c",
+        "user.email=loomrail-test@example.com",
+        "-c",
+        "user.name=Loomrail Test",
+        "commit",
+        "--allow-empty",
+        "--quiet",
+        "-m",
+        "work nobody else has",
+      ],
+      { cwd: dir },
+    );
+
+    const outcome = await deleteBranchIfUnmoved({
+      topLevel: repo,
+      branch: "loomrail/task-1",
+      expectedCommit: startPoint,
+    });
+
+    expect(outcome).toBe("MOVED");
+    expect(await headOf(repo, "refs/heads/loomrail/task-1")).not.toBe(startPoint);
+  });
+
+  it("reports a branch that is not there rather than treating it as deleted", async () => {
+    const repo = await makeThrowawayRepo();
+
+    const outcome = await deleteBranchIfUnmoved({
+      topLevel: repo,
+      branch: "loomrail/never-created",
+      expectedCommit: await headOf(repo, "HEAD"),
+    });
+
+    expect(outcome).toBe("MISSING");
   });
 });
