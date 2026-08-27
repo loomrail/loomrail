@@ -962,6 +962,96 @@ describe("local daemon session and state boundary", () => {
     expect(logs).toContain("MISSING_FROM_WORKTREE_LIST");
   });
 
+  // The other half of the same wiring, and the half nothing pinned: reconciliation reports a check
+  // it COULD NOT RUN as loudly as one that found something, and for a better reason -- a workspace
+  // that should have been orphaned and was not is invisible otherwise. FAIL SAFE is the behaviour
+  // under test as much as the log line is: an inconclusive check must never orphan a workspace that
+  // may be perfectly healthy, so the ORPHANED message must be absent here.
+  it("says in the log when startup reconciliation could not check a workspace at all", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail daemon skip log "));
+    temporaryDirectories.push(temporaryDirectory);
+    const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    const repositoryPath = await makeThrowawayRepo(join(temporaryDirectory, "repo"));
+    const worktreePath = join(temporaryDirectory, "workspaces", "unknown");
+    let workspaceId = "";
+    const localState = await openLocalState({ databasePath: stateDatabasePath });
+    try {
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "register-skip-log-project",
+        correlationId: "correlation-register-skip-log",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_FIXTURE_PROJECT",
+        payload: {
+          id: "project-skip-log",
+          fixtureId: "web-app-a",
+          name: "Skip log fixture",
+          repositoryPath,
+        },
+      });
+      const created = localState.execute({
+        schemaVersion: 1,
+        commandId: "create-skip-log-task",
+        correlationId: "correlation-create-skip-log",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "CREATE_WORK_ITEM",
+        payload: {
+          projectId: "project-skip-log",
+          parentId: null,
+          type: "TASK",
+          title: "A work item whose workspace cannot be checked",
+          description: "Synthetic unreachable-repository fixture",
+          priority: "MEDIUM",
+          risk: "LOW",
+          acceptanceCriteria: [],
+        },
+      });
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      const workspace = localState.execute({
+        schemaVersion: 1,
+        commandId: "record-skip-log-workspace",
+        correlationId: "correlation-record-skip-log",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "CREATE_WORK_ITEM_WORKSPACE",
+        payload: {
+          workItemId: created.workItem.id,
+          projectId: "project-skip-log",
+          branch: "loomrail/skip-log",
+          worktreePath,
+          baseCommit: null,
+          snapshotCommit: null,
+          carriedPaths: [],
+        },
+      });
+      if (workspace.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected a workspace");
+      workspaceId = workspace.workspace.id;
+    } finally {
+      localState.close();
+    }
+    // Removed only after the row is recorded, and before the daemon opens the database: with no
+    // repository to run `git worktree list` in, the check cannot reach an answer either way -- which
+    // is exactly the "a missing git, a repository path that no longer resolves" case the reconciler
+    // contains rather than throws.
+    await rm(repositoryPath, { recursive: true, force: true });
+
+    const logLines: string[] = [];
+    daemon = await startDaemon({
+      bootstrapToken: bootstrapToken(),
+      stateDatabasePath,
+      loggerStream: {
+        write: (line) => {
+          logLines.push(line);
+        },
+      },
+    });
+
+    const logs = logLines.join("");
+    expect(logs).toContain("Could not check a work item's workspace");
+    expect(logs).toContain(workspaceId);
+    expect(logs).toContain("WORKTREE_LIST_FAILED");
+    expect(logs).not.toContain("Marked a work item's workspace orphaned");
+  });
+
   it("marks an orphaned running attempt interrupted before serving startup traffic", async () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail daemon recovery "));
     temporaryDirectories.push(temporaryDirectory);
