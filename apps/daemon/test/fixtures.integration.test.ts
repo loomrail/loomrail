@@ -124,6 +124,22 @@ describe("fixture materialisation", () => {
     await expect(access(inFlight)).resolves.toBeUndefined();
   });
 
+  it("trims the trailing space macOS adds when a folder is dragged into a terminal", async () => {
+    const demoProjectsRoot = await scratch("materialise root trailing space ");
+    const templatePath = await scratch("materialise template trailing space ");
+    await writeFile(join(templatePath, "README.md"), "# Template\n", "utf8");
+    const { repositoryPath } = await materialiseFixtureRepository(
+      templateFixture(templatePath),
+      demoProjectsRoot,
+    );
+
+    // A real repository, answered for by the exact path it lives at plus one character no owner
+    // typed on purpose -- not REPOSITORY_PATH_NOT_A_REPOSITORY, which would send them looking for a
+    // problem with their repository instead of the stray space the terminal appended.
+    const resolved = await resolveRegisteredRepository(`${repositoryPath} `);
+    expect(resolved).toBe(await realpath(repositoryPath));
+  });
+
   it("refuses a path inside another repository with the reason that is actually true", async () => {
     const demoProjectsRoot = await scratch("materialise root inside ");
     const templatePath = await scratch("materialise template inside ");

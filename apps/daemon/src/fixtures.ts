@@ -186,19 +186,30 @@ export const isSameExistingPath = async (left: string, right: string): Promise<b
  * `docs/security/THREAT-MODEL.md`, E1 delta.
  */
 export const resolveRegisteredRepository = async (path: string): Promise<string> => {
+  // Trimmed before anything judges it, not at the contract: `registerRepositoryProjectRequestSchema`
+  // deliberately carries the path exactly as typed (see its comment on `repositoryPathTextSchema`),
+  // so a schema-level `.trim()` would also reach every other consumer of that text -- including
+  // paths this daemon derives itself, which never have the problem being fixed. macOS appends a
+  // trailing space when a folder is dragged into a terminal, and that stray character is invisible to
+  // the owner; without this, it used to earn the same REPOSITORY_PATH_NOT_A_REPOSITORY refusal as a
+  // path that genuinely is not a repository, sending the owner looking for a problem with their
+  // repository when the problem was one character the terminal added. This is where the daemon judges
+  // the path, so this is where the judgment normalizes it.
+  const trimmedPath = path.trim();
+
   // Absolute first, before anything touches the filesystem. A relative path resolves against
   // whatever directory this daemon was launched from -- typing `.` used to register the daemon's
   // own working directory with a 200 -- and the next daemon start resolves it somewhere else. The
   // owner-facing wording says which of the two problems it is: the path is fine as a directory and
   // wrong as a Project's path, and a "this is not a Git repository" answer would send them looking
   // for the wrong thing.
-  if (!isAbsolute(path)) {
+  if (!isAbsolute(trimmedPath)) {
     throw new ProjectRegistrationError(
       "REPOSITORY_PATH_NOT_ABSOLUTE",
-      `A Project's repository path must be absolute, and ${path} is relative. A relative path is resolved against whatever directory the Loomrail daemon was started from, which is not something you chose and not the same on the next start. Enter the repository's full path, starting from the root of the filesystem.`,
+      `A Project's repository path must be absolute, and ${trimmedPath} is relative. A relative path is resolved against whatever directory the Loomrail daemon was started from, which is not something you chose and not the same on the next start. Enter the repository's full path, starting from the root of the filesystem.`,
     );
   }
-  const canonical = await canonicalPathOf(path);
+  const canonical = await canonicalPathOf(trimmedPath);
   const inspected = canonical === null ? null : await inspectRepository(canonical);
   // git reports its top level as a physical path, so the comparison is against the canonical form
   // for the same reason the provisioning guard compares canonical forms (session-loop.ts).
@@ -207,7 +218,7 @@ export const resolveRegisteredRepository = async (path: string): Promise<string>
 
   const insideRepository = inspected?.topLevel ?? null;
   const decision = decideProvisionWorkspace({
-    repository: { isRepository: false, inProgress: null, path, insideRepository },
+    repository: { isRepository: false, inProgress: null, path: trimmedPath, insideRepository },
   });
   if (decision.type !== "REFUSED") {
     // Unreachable: `isRepository: false` is refused by every branch of the decision above. A throw
