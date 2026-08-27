@@ -8,9 +8,17 @@ import {
   utcTimestampSchema,
 } from "./shared.js";
 
-// A Git object id (spec §2.9). Not a general opaqueIdSchema: git's own hash format is fixed and
-// unrelated to Loomrail's own id shape, and validating it here catches a caller that passes a
-// truncated or garbled sha before it is ever handed to `git`.
+// A Git object id (spec §2.9). Not a general opaqueIdSchema: an object id has a shape of its own,
+// unrelated to Loomrail's id shape, and validating it here catches a caller that passes a truncated
+// or garbled sha before it is ever handed to `git`.
+//
+// Lowercase 40 hex is SHA-1, and that is a statement about THIS codebase rather than about git: git
+// also supports SHA-256 repositories, whose object ids are 64 hex characters, and a schema claiming
+// git's format is fixed would simply be wrong. Every sha reaching this contract comes from
+// `@loomrail/workspace` running plumbing against a repository Loomrail itself cut a worktree from,
+// and nothing in this project creates or accepts a SHA-256 repository. Widening this regex is
+// therefore part of adding that support, not a bug fix -- and until then the narrow bound is what
+// catches a caller passing something that is not an object id at all.
 const commitShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
 
 const branchSchema = z.string().trim().min(1).max(255);

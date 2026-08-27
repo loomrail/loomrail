@@ -69,6 +69,25 @@ describe("work item workspace contracts", () => {
     expect(() => workItemWorkspaceSchema.parse(validWorkspace({ branch: "" }))).toThrow();
   });
 
+  // Both sides of the bound in one test, each changing exactly one field of the complete fixture: a
+  // bound asserted only from above passes just as happily when someone moves it, and one asserted
+  // only from below never notices it being dropped. 255 is git's own limit on a single path
+  // component under `.git/refs`, which is what a branch name becomes.
+  it("accepts a branch name at 255 characters and refuses one past it", () => {
+    expect(workItemWorkspaceSchema.parse(validWorkspace({ branch: "b".repeat(255) }))).toBeTruthy();
+    expect(() => workItemWorkspaceSchema.parse(validWorkspace({ branch: "b".repeat(256) }))).toThrow();
+  });
+
+  // The same shape for the worktree path. Nothing in Loomrail generates a path anywhere near 4000
+  // -- the bound is there so a caller cannot hand the daemon an unbounded string to store, log and
+  // interpolate into an owner-facing question -- which is exactly why nothing would notice it going
+  // away without this.
+  it("accepts a worktree path at 4000 characters and refuses one past it", () => {
+    const at = `/var/loomrail/${"w".repeat(4_000 - "/var/loomrail/".length)}`;
+    expect(workItemWorkspaceSchema.parse(validWorkspace({ worktreePath: at }))).toBeTruthy();
+    expect(() => workItemWorkspaceSchema.parse(validWorkspace({ worktreePath: `${at}w` }))).toThrow();
+  });
+
   it("refuses a base commit that is not a 40-character hex sha", () => {
     expect(() => workItemWorkspaceSchema.parse(validWorkspace({ baseCommit: "not-a-sha" }))).toThrow();
   });
@@ -130,6 +149,17 @@ describe("work item workspace contracts", () => {
         validCreatedEvent({ data: { workspace: validWorkspace(), carriedPaths: tooMany } }),
       ),
     ).toThrow();
+  });
+
+  // The other bound on the carried-in list, and the one nothing reached: `maxCarriedPaths` caps how
+  // MANY paths may be listed, this caps how long any one of them may be. A list of 500 unbounded
+  // strings is not a bounded event, and this event is persisted and replayed.
+  it("accepts a carried path at 4096 characters and refuses one past it", () => {
+    const at = "p".repeat(4_096);
+    const eventWith = (path: string): Record<string, unknown> =>
+      validCreatedEvent({ data: { workspace: validWorkspace(), carriedPaths: [path] } });
+    expect(workItemWorkspaceCreatedEventSchema.parse(eventWith(at))).toBeTruthy();
+    expect(() => workItemWorkspaceCreatedEventSchema.parse(eventWith(`${at}p`))).toThrow();
   });
 
   it("does not silently accept a field the workspace-created event never declared", () => {
@@ -199,6 +229,18 @@ describe("work item workspace contracts", () => {
         }),
       ),
     ).toBeTruthy();
+  });
+
+  // The payload applies the same nullable-not-optional discipline as the entity -- an empty
+  // repository genuinely has no HEAD, and null RECORDS that where absent would read as "not
+  // recorded" -- but only the entity had the test. Written the same way, from the complete valid
+  // payload with exactly one key removed.
+  it("refuses baseCommit being omitted from the create-workspace payload rather than recorded as null", () => {
+    const { payload, ...rest } = validCreateCommand();
+    const payloadWithoutBaseCommit = omitField(payload, "baseCommit");
+    expect(() =>
+      createWorkItemWorkspaceCommandSchema.parse({ ...rest, payload: payloadWithoutBaseCommit }),
+    ).toThrow();
   });
 
   it("does not silently accept a field the create-workspace command never declared", () => {
