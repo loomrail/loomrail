@@ -38,7 +38,12 @@ for (const relativePath of candidateFiles) {
   }
 
   const absolutePath = resolve(repositoryRoot, relativePath);
-  if (statSync(absolutePath).size > 2 * 1024 * 1024) continue;
+  // `git ls-files --others` reports an untracked DIRECTORY as a single path -- a nested worktree
+  // or any other unignored directory -- and readFileSync throws EISDIR on it. Skip anything that
+  // is not a regular file rather than crashing the whole readiness check on it.
+  const stats = statSync(absolutePath);
+  if (!stats.isFile()) continue;
+  if (stats.size > 2 * 1024 * 1024) continue;
   const content = readFileSync(absolutePath);
   if (content.includes(0)) continue;
 

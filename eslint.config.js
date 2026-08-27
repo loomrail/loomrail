@@ -11,6 +11,8 @@ export default tseslint.config(
       "**/coverage/**",
       "**/node_modules/**",
       ".private/**",
+      ".claude/**",
+      ".superpowers/**",
       "playwright-report/**",
       "test-results/**",
     ],
