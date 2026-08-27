@@ -43,7 +43,7 @@ import {
   type WorkflowStage,
   type WorkItemWorkspace,
 } from "@loomrail/contracts";
-import { WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
+import { stageRequiresWorkspace, WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
 import {
   openLocalState,
   StateStoreError,
@@ -173,6 +173,13 @@ export type RunningDaemon = {
     cliAvailable: boolean;
     recognised: boolean;
     stages: readonly WorkflowStage[];
+    // Whether any stage this adapter declares is one that gets a Git worktree cut for it
+    // (`stageRequiresWorkspace`, @loomrail/domain). Computed here rather than in the launcher
+    // because the domain owns which stages those are, and the launcher restating the list would be
+    // a second copy free to drift from the one the dispatcher actually reads. Since E1 the answer
+    // differs per adapter -- Codex declares all six, Claude Code three -- so the launcher can no
+    // longer say one thing about "a live provider".
+    worksInRepository: boolean;
   };
   // Exposed for tests (spec D6): the alternative is a wait loop with a timeout in every test, and
   // on a loaded machine a timeout is indistinguishable from a defect. Resolves once the background
@@ -1407,6 +1414,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         cliAvailable: providerCapabilities.start,
         recognised: providerResolution.recognised,
         stages: providerCapabilities.stages,
+        worksInRepository: providerCapabilities.stages.some(stageRequiresWorkspace),
       },
       whenIdle: () => worker.whenIdle(),
       close: async () => {

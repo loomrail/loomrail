@@ -9,10 +9,17 @@ const mock = {
   cliAvailable: true,
   recognised: true,
   stages: ["DISCOVERY", "PLAN", "REVIEW", "IMPLEMENT", "VERIFY", "DELIVER"],
+  worksInRepository: false,
 } as const;
 
-// What `capabilities().stages` really says for both A2 live adapters.
+// What `capabilities().stages` really says for the Claude Code adapter, which spec D11 keeps off
+// the write path until the owner runs the reconnaissance against an authorised CLI.
 const liveStages = ["DISCOVERY", "PLAN", "REVIEW"] as const;
+
+// And for Codex since E1: all six stages, IMPLEMENT and QA among them, so `worksInRepository` is
+// the daemon's answer for it. The two adapters differ on exactly this, which is why the launcher
+// can no longer say one thing about "a live provider".
+const codexStages = ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"] as const;
 
 describe("startup report", () => {
   it("keeps the bootstrap URL out of the terminal when the launcher opens the browser", () => {
@@ -51,7 +58,13 @@ describe("startup report", () => {
       baseUrl,
       bootstrapUrl,
       browserOpened: true,
-      provider: { provider: "CODEX", cliAvailable: false, recognised: true, stages: liveStages },
+      provider: {
+        provider: "CODEX",
+        cliAvailable: false,
+        recognised: true,
+        stages: codexStages,
+        worksInRepository: true,
+      },
     }).join("\n");
 
     expect(report).toContain("CODEX");
@@ -67,31 +80,73 @@ describe("startup report", () => {
       baseUrl,
       bootstrapUrl,
       browserOpened: true,
-      provider: { provider: "CODEX", cliAvailable: true, recognised: true, stages: liveStages },
+      provider: {
+        provider: "CLAUDE_CODE",
+        cliAvailable: true,
+        recognised: true,
+        stages: liveStages,
+        worksInRepository: false,
+      },
     }).join("\n");
 
     expect(report).toContain("DISCOVERY, PLAN, REVIEW");
     expect(report).toContain("refused");
   });
 
-  // The other limit of an A2 live run, and the one an owner is most likely to assume away: the
-  // adapter is not looking at their repository at all. It works in an empty temporary directory
-  // until E1 wires a workspace up.
-  it("says plainly that a live adapter cannot see the repository yet", () => {
+  // The other limit an owner is most likely to assume away, for the adapter it still applies to:
+  // Claude Code is not looking at their repository at all (spec D11). This is the case E1 did NOT
+  // change, and it is asserted separately from the Codex case below precisely so that a future
+  // change collapsing the two back into one sentence fails here.
+  it("says plainly that an adapter without the write path cannot see the repository", () => {
     const report = formatStartupReport({
       baseUrl,
       bootstrapUrl,
       browserOpened: true,
-      provider: { provider: "CLAUDE_CODE", cliAvailable: true, recognised: true, stages: liveStages },
+      provider: {
+        provider: "CLAUDE_CODE",
+        cliAvailable: true,
+        recognised: true,
+        stages: liveStages,
+        worksInRepository: false,
+      },
     }).join("\n");
 
-    expect(report).toContain("no access to your repository");
-    expect(report).toContain("E1");
+    expect(report).toContain("does not see your repository");
+    expect(report).not.toContain("worktree");
   });
 
-  // The mock is the one provider these two lines would be wrong about: it serves every stage and
-  // touches nothing, so saying "no access to your repository until E1" about it would read as a
-  // limitation of the run rather than of the adapter.
+  // The defect this replaces was live on main and printed to every Codex owner: "no access to your
+  // repository until milestone E1", after E1 had shipped and while the adapter was cutting a
+  // worktree from that very repository and writing in it. A false reassurance about the one thing
+  // an owner most needs to know is worse than silence, so the launcher now says what is true --
+  // where the agent writes, and what it leaves alone.
+  it("tells a Codex owner where the agent writes, and never that it cannot reach their repository", () => {
+    const report = formatStartupReport({
+      baseUrl,
+      bootstrapUrl,
+      browserOpened: true,
+      provider: {
+        provider: "CODEX",
+        cliAvailable: true,
+        recognised: true,
+        stages: codexStages,
+        worksInRepository: true,
+      },
+    }).join("\n");
+
+    expect(report).toContain("worktree");
+    expect(report).toContain("outside your repository");
+    expect(report).toContain("pushes nothing");
+    expect(report).not.toContain("does not see your repository");
+    // The sentence that was false. Pinned by its own words so that restoring it -- or any
+    // paraphrase claiming the repository is out of reach -- fails here rather than reaching an
+    // owner's terminal again.
+    expect(report).not.toContain("no access to your repository");
+  });
+
+  // The mock is the one provider both of those lines would be wrong about: it serves every stage
+  // and touches nothing, so either sentence -- "it does not see your repository" or "it writes in a
+  // worktree" -- would read as a fact about the run rather than about the adapter.
   it("does not tell the mock's owner about a repository the mock never wanted", () => {
     const report = formatStartupReport({
       baseUrl,
@@ -100,7 +155,8 @@ describe("startup report", () => {
       provider: mock,
     }).join("\n");
 
-    expect(report).not.toContain("no access to your repository");
+    expect(report).not.toContain("does not see your repository");
+    expect(report).not.toContain("worktree");
   });
 
   // `LOOMRAIL_PROVIDER=codex` -- lowercase, the way the CLI itself is spelled -- used to start the
@@ -110,7 +166,13 @@ describe("startup report", () => {
       baseUrl,
       bootstrapUrl,
       browserOpened: true,
-      provider: { provider: "MOCK", cliAvailable: true, recognised: false, stages: mock.stages },
+      provider: {
+        provider: "MOCK",
+        cliAvailable: true,
+        recognised: false,
+        stages: mock.stages,
+        worksInRepository: false,
+      },
     }).join("\n");
 
     expect(report).toContain("LOOMRAIL_PROVIDER");

@@ -11,6 +11,13 @@ export type StartupProvider = {
    * delivery run has.
    */
   stages: readonly string[];
+  /**
+   * Whether any stage this adapter declares gets a Git worktree cut for it. Computed by the daemon
+   * from `stageRequiresWorkspace` (@loomrail/domain) rather than re-derived from `stages` here: the
+   * domain owns which stages need a repository, and a second copy of that list in the launcher
+   * would be free to drift from the one the dispatcher reads.
+   */
+  worksInRepository: boolean;
 };
 
 export type StartupReport = {
@@ -27,15 +34,24 @@ export type StartupReport = {
 // moment the owner is definitely reading.
 //
 // A live provider used to get LESS than the mock did -- one bare word, "Provider: CODEX.", while
-// MOCK got a whole explanatory sentence. The two limits that actually shape an A2 run were in the
-// JSON log and nowhere a human reads: the adapter serves three of the six stages, and it works in
-// an empty temporary directory rather than in the owner's repository. Both were learned from the
-// first refused dispatch, mid-run, with money already spent.
+// MOCK got a whole explanatory sentence. The two limits that actually shape a live run were in the
+// JSON log and nowhere a human reads: which of the six stages the adapter serves, and what it can
+// reach while it serves them. Both were learned from the first refused dispatch, mid-run, with
+// money already spent.
+//
+// The second line used to be one sentence for every live adapter -- "no access to your repository
+// until milestone E1". E1 has landed, and it landed for one adapter and not the other (spec D11:
+// Codex declares all six stages, Claude Code still three), so a single sentence about "a live
+// provider" is now false for whichever one it is not describing. Worse, it is false in the
+// dangerous direction for Codex: an owner told the agent cannot see their repository, while it is
+// cutting a worktree from it and writing there, is being reassured about the exact thing they most
+// need to know. The two cases are now stated apart, off a fact the daemon reads from the domain.
 const providerLines = ({
   provider,
   cliAvailable,
   recognised,
   stages,
+  worksInRepository,
 }: StartupProvider): readonly string[] => {
   const lines =
     provider === "MOCK"
@@ -43,7 +59,9 @@ const providerLines = ({
       : [
           `Provider: ${provider}${cliAvailable ? "" : " -- but its CLI was not found on this machine, so dispatches will be refused"}.`,
           `It serves ${stages.join(", ")}; any other stage is refused to you as a question rather than dispatched.`,
-          "It works in an empty temporary directory: no access to your repository until milestone E1.",
+          worksInRepository
+            ? "For a stage that changes files it works in a Git worktree cut for that task, outside your repository and on a branch of its own. Your working copy is untouched, and Loomrail pushes nothing."
+            : "It works in an empty temporary directory: it does not see your repository at all.",
         ];
   if (!recognised) {
     lines.push(
