@@ -337,7 +337,11 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // the last line of every successful run recorded in test/recordings/, and the only event
         // that carries the turn's real token usage -- a session that never emits it did not finish,
         // whatever else arrived before it. Read below as one half of "this session ended normally".
-        let turnCompleted = false;
+        //
+        // Holds the report rather than a flag, matching `finalCheckpoint` above: a `let` initialised
+        // to `false` and only ever assigned inside the stream callback reads as the constant `false`
+        // to the type checker, which would make the test below dead code by its own reckoning.
+        let completedTurn: ProviderUsage | undefined;
 
         const run = runProcess({
           command: resolved.command,
@@ -374,7 +378,6 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
                 }
               }
               if (event.type === "turn.completed") {
-                turnCompleted = true;
                 const usage: ProviderUsage = {
                   inputTokens: event.usage.inputTokens,
                   outputTokens: event.usage.outputTokens,
@@ -384,6 +387,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
                   // `turn.completed` carries real token usage from the provider itself.
                   quality: "ACTUAL",
                 };
+                completedTurn = usage;
                 listener.onUsage(usage);
                 // Clamped to the declared window, not reported raw. `contextWindowUsageSchema`
                 // REJECTS `usedTokens > windowTokens`, and the daemon `safeParse`s an occupancy
@@ -469,7 +473,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // opening sentence as the result of work that never happened.
         //
         // So "the session ended normally" is asked as well, and both halves of it are asked because
-        // they answer different failure modes. `turnCompleted` is the CLI's own account of the turn:
+        // they answer different failure modes. `completedTurn` is the CLI's own account of the turn:
         // it excludes a stream that stopped mid-work and a turn the CLI itself reported as failed
         // after an intention message. The process exit is the OS's account of the same session: it
         // excludes a kill (a signal -- shutdown, deadline, `abortSession`) and a CLI that gave up
@@ -481,7 +485,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // `provider-claude-code` needs none of this: its outcome comes from the CLI's own terminal
         // `result` event, so a killed session simply never produces one.
         const endedNormally = exit.signal === null && exit.code === 0;
-        if (finalCheckpoint !== undefined && turnCompleted && endedNormally) {
+        if (finalCheckpoint !== undefined && completedTurn !== undefined && endedNormally) {
           return { type: "COMPLETED", summary: finalCheckpoint.summary };
         }
         // A turn the CLI said failed is named as that even when a checkpoint arrived first: it is
