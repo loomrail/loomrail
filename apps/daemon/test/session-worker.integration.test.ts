@@ -244,6 +244,7 @@ describe("session worker", () => {
       state: localState,
       adapter,
       template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
     });
@@ -298,6 +299,7 @@ describe("session worker", () => {
       state: workerState,
       adapter,
       template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger,
     });
@@ -332,6 +334,7 @@ describe("session worker", () => {
       state: localState,
       adapter,
       template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
     });
@@ -364,6 +367,7 @@ describe("session worker", () => {
       state: localState,
       adapter: adapterThatDoesNothing(),
       template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger,
     });
@@ -386,6 +390,7 @@ describe("session worker", () => {
       state: localState,
       adapter: adapterThatThrows(),
       template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger,
     });
@@ -411,6 +416,7 @@ describe("session worker", () => {
       state: localState,
       adapter: createMockProvider(),
       template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
     });
@@ -426,6 +432,7 @@ describe("session worker", () => {
       state: localState,
       adapter,
       template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
     });
@@ -453,6 +460,7 @@ describe("session worker", () => {
       state: localState,
       adapter,
       template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
     });
@@ -477,6 +485,7 @@ describe("session worker", () => {
       state: localState,
       adapter,
       template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
     });

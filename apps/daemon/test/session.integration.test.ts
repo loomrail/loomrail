@@ -154,6 +154,7 @@ describe("stage attempt session loop", () => {
     adapter,
     dispatch: seeded.dispatch,
     template: mockDeliveryTemplate,
+    workspacesRoot: join(temporaryDirectory, "workspaces"),
     createCommandId,
     correlationId: "correlation-session-loop",
     logger: silentLogger,

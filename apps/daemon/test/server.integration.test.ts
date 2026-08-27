@@ -25,11 +25,49 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { startDaemon, type RunningDaemon } from "../src/server.js";
 import { gatedAdapter } from "./gated-adapter.js";
+import { makeThrowawayRepo } from "./repo-fixtures.js";
 import { seedQueuedAttempt, type SeededAttempt } from "./state-fixtures.js";
 
 // Exported so `event-stream.integration.test.ts` (and future daemon integration suites) can reuse
 // the same session-bootstrap plumbing rather than pasting a second copy.
 export const bootstrapToken = (): string => randomBytes(32).toString("base64url");
+
+/**
+ * A Project whose `repositoryPath` is a real, throwaway Git repository, seeded straight onto the
+ * database file before the daemon under test opens it.
+ *
+ * Any run that reaches IMPLEMENT needs one: that stage needs a workspace (spec §5/D11), and the
+ * daemon refuses to cut one from a path that is not a repository's own top level. The bundled
+ * fixture cannot serve here -- it lives inside Loomrail's own checkout, so its top level is
+ * Loomrail's repository, which is exactly the repository that must never be branched. Task 12 makes
+ * fixture registration materialise a real repository of its own; until then, a test that runs the
+ * pipeline that far builds one.
+ */
+export const REPOSITORY_PROJECT_ID = "project-with-repository";
+
+export const registerRepositoryProject = async (
+  stateDatabasePath: string,
+  repositoryPath: string,
+): Promise<void> => {
+  const localState = await openLocalState({ databasePath: stateDatabasePath });
+  try {
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "register-repository-project",
+      correlationId: "correlation-register-repository",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "REGISTER_FIXTURE_PROJECT",
+      payload: {
+        id: REPOSITORY_PROJECT_ID,
+        fixtureId: "api-service-b",
+        name: "Repository fixture",
+        repositoryPath,
+      },
+    });
+  } finally {
+    localState.close();
+  }
+};
 
 export type AuthenticatedSession = {
   cookie: string;
@@ -487,28 +525,25 @@ describe("local daemon session and state boundary", () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail workflow state "));
     temporaryDirectories.push(temporaryDirectory);
     const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    // This run goes all the way to IMPLEMENT's budget wall, so its Project has to be a real
+    // repository -- see `registerRepositoryProject`.
+    await registerRepositoryProject(
+      stateDatabasePath,
+      await makeThrowawayRepo(join(temporaryDirectory, "repo")),
+    );
     const firstToken = bootstrapToken();
     const firstDaemon = await startDaemon({ bootstrapToken: firstToken, logger: false, stateDatabasePath });
     daemon = firstDaemon;
     const firstSession = await authenticate(firstDaemon, firstToken);
     const headers = mutationHeaders(firstDaemon, firstSession);
 
-    await fetch(`${firstDaemon.baseUrl}/api/v1/projects/fixtures/register`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        schemaVersion: 1,
-        commandId: "register-workflow-fixture",
-        fixtureId: "web-app-a",
-      }),
-    });
     const createResponse = await fetch(`${firstDaemon.baseUrl}/api/v1/work-items`, {
       method: "POST",
       headers,
       body: JSON.stringify({
         schemaVersion: 1,
         commandId: "create-workflow-item",
-        projectId: "project-fixture-web-app-a",
+        projectId: REPOSITORY_PROJECT_ID,
         type: "TASK",
         title: "Run the mock workflow",
       }),
@@ -670,7 +705,9 @@ describe("local daemon session and state boundary", () => {
     expect(await repeated.json()).toMatchObject({
       error: { code: "HUMAN_REQUEST_ALREADY_RESOLVED" },
     });
-  });
+    // This run reaches IMPLEMENT, which cuts a real worktree: a couple of dozen `git` subprocesses
+    // on top of two daemons, which outlives vitest's 5s default under a loaded `pnpm test`.
+  }, 30_000);
 
   it("starts the current workflow after a legacy template version was persisted", async () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail legacy template "));
@@ -844,6 +881,7 @@ describe("local daemon session and state boundary", () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail daemon recovery "));
     temporaryDirectories.push(temporaryDirectory);
     const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    const recoveryRepositoryPath = await makeThrowawayRepo(join(temporaryDirectory, "repo"));
     const localState = await openLocalState({ databasePath: stateDatabasePath });
     try {
       localState.execute({
@@ -856,7 +894,9 @@ describe("local daemon session and state boundary", () => {
           id: "project-recovery",
           fixtureId: "web-app-a",
           name: "Recovery fixture",
-          repositoryPath: temporaryDirectory,
+          // A real repository, not the bare temporary directory: the resumed run reaches IMPLEMENT,
+          // and that stage's workspace can only be cut from a repository's own top level.
+          repositoryPath: recoveryRepositoryPath,
         },
       });
       const created = localState.execute({
@@ -969,7 +1009,8 @@ describe("local daemon session and state boundary", () => {
     const cancelled = workflowSnapshotSchema.parse(await cancelResponse.json());
     expect(cancelResponse.status).toBe(200);
     expect(cancelled.run?.status).toBe("CANCELLED");
-  });
+    // Same reason as the restart test above: the resumed run reaches IMPLEMENT and cuts a worktree.
+  }, 30_000);
 });
 
 // Bounds every "the answer must arrive before the gate opens" race below. This machine periodically
@@ -1048,20 +1089,26 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
     daemon: RunningDaemon,
     session: AuthenticatedSession,
     title: string,
+    projectId?: string,
   ): Promise<string> => {
     const headers = mutationHeaders(daemon, session);
-    await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ schemaVersion: 1, commandId: `register-${title}`, fixtureId: "web-app-a" }),
-    });
+    // The bundled fixture is registered only when this work item is going under it. A caller that
+    // names a Project instead has already registered one (`registerRepositoryProject`), and
+    // registering the fixture as well would leave a second, unused Project behind.
+    if (projectId === undefined) {
+      await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ schemaVersion: 1, commandId: `register-${title}`, fixtureId: "web-app-a" }),
+      });
+    }
     const createResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items`, {
       method: "POST",
       headers,
       body: JSON.stringify({
         schemaVersion: 1,
         commandId: `create-${title}`,
-        projectId: "project-fixture-web-app-a",
+        projectId: projectId ?? "project-fixture-web-app-a",
         type: "TASK",
         title,
       }),
@@ -1182,11 +1229,20 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
   // instance entirely. That daemon is fully closed before the one under test ever opens the same
   // database file; the two never touch it at once.
   const seedOpenHumanRequest: Prepare = async (stateDatabasePath) => {
+    // Backed by a real repository: `seedBudgetHardPause` below answers this request and lets the
+    // run reach IMPLEMENT, which needs a workspace cut from one.
+    const repositoryPath = await makeThrowawayRepo(join(dirname(stateDatabasePath), "repo"));
+    await registerRepositoryProject(stateDatabasePath, repositoryPath);
     const prelimToken = bootstrapToken();
     const prelim = await startDaemon({ bootstrapToken: prelimToken, logger: false, stateDatabasePath });
     try {
       const session = await authenticate(prelim, prelimToken);
-      const workItemId = await createReadyWorkItem(prelim, session, "kickoff-request-fixture");
+      const workItemId = await createReadyWorkItem(
+        prelim,
+        session,
+        "kickoff-request-fixture",
+        REPOSITORY_PROJECT_ID,
+      );
       await fetch(`${prelim.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
         method: "POST",
         headers: mutationHeaders(prelim, session),
@@ -1324,35 +1380,42 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
     ["pipeline resume", noPreparation, resumePipeline],
     ["budget override", seedBudgetHardPause, approveBudgetOverride],
     ["human request answer", seedOpenHumanRequest, answerOpenRequest],
-  ])("answers %s before the stage it triggers has finished", async (_name, prepare, act) => {
-    const fixture = await prepare(databasePath);
-    const adapter = gatedAdapter();
-    const daemon = await startDaemon({
-      bootstrapToken: token,
-      stateDatabasePath: databasePath,
-      logger: false,
-      providerAdapter: adapter,
-    });
-    try {
-      const session = await authenticate(daemon, token);
-      const response = act(daemon, session, fixture);
-      await adapter.started; // the handler's own wake() really opened a session
-      const outcome = await Promise.race([
-        response.then(() => "answered" as const),
-        delay(BOOT_ANSWER_BUDGET_MS).then(() => "held on the stage" as const),
-      ]);
-      expect(outcome).toBe("answered");
-      const settled = await response;
-      expect(settled.status).toBe(200);
-      // Proves a session was actually opened, not merely that the test hasn't released it yet
-      // (`releasedCount` only ever changes because the test itself calls `adapter.release()` below).
-      expect(adapter.startCallCount).toBe(1);
-    } finally {
-      adapter.release();
-      await daemon.whenIdle();
-      await daemon.close();
-    }
-  });
+  ])(
+    "answers %s before the stage it triggers has finished",
+    async (_name, prepare, act) => {
+      const fixture = await prepare(databasePath);
+      const adapter = gatedAdapter();
+      const daemon = await startDaemon({
+        bootstrapToken: token,
+        stateDatabasePath: databasePath,
+        logger: false,
+        providerAdapter: adapter,
+      });
+      try {
+        const session = await authenticate(daemon, token);
+        const response = act(daemon, session, fixture);
+        await adapter.started; // the handler's own wake() really opened a session
+        const outcome = await Promise.race([
+          response.then(() => "answered" as const),
+          delay(BOOT_ANSWER_BUDGET_MS).then(() => "held on the stage" as const),
+        ]);
+        expect(outcome).toBe("answered");
+        const settled = await response;
+        expect(settled.status).toBe(200);
+        // Proves a session was actually opened, not merely that the test hasn't released it yet
+        // (`releasedCount` only ever changes because the test itself calls `adapter.release()` below).
+        expect(adapter.startCallCount).toBe(1);
+      } finally {
+        adapter.release();
+        await daemon.whenIdle();
+        await daemon.close();
+      }
+      // The budget-override row's own preparation runs a pipeline as far as IMPLEMENT, which cuts a
+      // real worktree; that is `git` subprocesses on top of two daemons, and outlives vitest's 5s
+      // default under a loaded `pnpm test`. The race above still bounds the behaviour under test.
+    },
+    30_000,
+  );
 
   it("closes while an attempt is still in flight and asks it to abort", async () => {
     const adapter = gatedAdapter();

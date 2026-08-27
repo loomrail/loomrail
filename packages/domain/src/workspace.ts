@@ -61,17 +61,28 @@ export const workspaceBranchName = (context: { workItemId: string; title: string
 /**
  * The pieces of a refusal that are specific to *why* a workspace could not be cut. Kept separate
  * from the full `HumanRequestDraft` because every refusal this module produces shares the same
- * `kind`/`blocking`/`options`/`allowOther` -- see `toRefusalRequest` -- and repeating those four
- * fields at each call site would just be a chance for one branch to drift from the others.
+ * `kind`/`blocking`/`options`/`allowOther` -- see `provisionRefusalRequest` -- and repeating those
+ * four fields at each call site would just be a chance for one branch to drift from the others.
  */
 export type ProvisionRefusal = { title: string; context: string; recommendation: string };
 
-// Same convention as decideDispatchStage's two refusal branches (workflow.ts): FREE_TEXT with an
-// empty `options` array and `allowOther: true`, because the right fix here -- repair the
-// repository, or reassign the stage -- is out-of-band and cannot be enumerated as choices. Every
-// refusal in this module is `blocking: true`: none of these are worth starting a session over
-// while waiting for an answer.
-const toRefusalRequest = (refusal: ProvisionRefusal): HumanRequestDraft => ({
+/**
+ * Wraps a `ProvisionRefusal` in the owner-facing question every refusal on this path shares.
+ *
+ * Same convention as decideDispatchStage's two refusal branches (workflow.ts): FREE_TEXT with an
+ * empty `options` array and `allowOther: true`, because the right fix here -- repair the
+ * repository, or reassign the stage -- is out-of-band and cannot be enumerated as choices. Every
+ * refusal on this path is `blocking: true`: none of these are worth starting a session over while
+ * waiting for an answer.
+ *
+ * Exported because `decideProvisionWorkspace` is not the only place a workspace can be refused: the
+ * daemon's own provisioning steps (a branch that already exists, a worktree directory that is
+ * already occupied, `git worktree add` failing for a reason nobody modelled) produce refusals too,
+ * and they have to reach the owner as the same kind of question. Without this, the caller would
+ * have to restate `kind`/`blocking`/`options`/`allowOther` itself -- which is exactly the drift
+ * `ProvisionRefusal` exists to prevent.
+ */
+export const provisionRefusalRequest = (refusal: ProvisionRefusal): HumanRequestDraft => ({
   kind: "FREE_TEXT",
   blocking: true,
   title: refusal.title,
@@ -125,12 +136,12 @@ export const decideProvisionWorkspace = (context: {
 }): ProvisionWorkspaceDecision => {
   const { repository } = context;
   if (!repository.isRepository) {
-    return { type: "REFUSED", request: toRefusalRequest(notARepositoryRefusal(repository.path)) };
+    return { type: "REFUSED", request: provisionRefusalRequest(notARepositoryRefusal(repository.path)) };
   }
   if (repository.inProgress !== null) {
     return {
       type: "REFUSED",
-      request: toRefusalRequest(inProgressRefusal(repository.inProgress, repository.path)),
+      request: provisionRefusalRequest(inProgressRefusal(repository.inProgress, repository.path)),
     };
   }
   return { type: "PROVISION" };

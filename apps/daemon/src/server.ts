@@ -2,8 +2,8 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { access } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
-import { platform } from "node:os";
-import { resolve } from "node:path";
+import { platform, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
@@ -75,6 +75,16 @@ export type StartDaemonOptions = {
   bootstrapToken: string;
   webRoot?: string;
   stateDatabasePath?: string;
+  /**
+   * Where WorkItem worktrees are cut (spec D2): `<workspacesRoot>/<projectId>/<workItemId>`.
+   *
+   * Defaults to a `workspaces` directory beside the state database, which is what puts it in the
+   * Loomrail data directory the launcher chose (`<data>/state.sqlite` -> `<data>/workspaces`). An
+   * in-memory database has no directory to sit beside, and its state does not outlive the process,
+   * so its workspaces are rooted under the OS temp directory rather than in a data directory that
+   * would then hold worktrees nothing records.
+   */
+  workspacesRoot?: string;
   host?: "127.0.0.1" | "::1";
   port?: number;
   now?: Clock;
@@ -293,12 +303,22 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     ...(options.heartbeatIntervalMs === undefined ? {} : { intervalMs: options.heartbeatIntervalMs }),
   });
 
+  const databasePath = options.stateDatabasePath ?? ":memory:";
+  // Beside the state database, which is where the launcher's data directory is; see the option's
+  // own comment for what an in-memory database gets instead. Resolved once, at startup, so a later
+  // change of working directory cannot move where an already-recorded workspace is looked for.
+  const workspacesRoot =
+    options.workspacesRoot ??
+    (databasePath === ":memory:"
+      ? join(tmpdir(), "loomrail-workspaces")
+      : join(dirname(resolve(databasePath)), "workspaces"));
+
   // The single seam every writer -- request handlers and `runStageAttempt` alike -- publishes
   // through, because there is exactly one `localState` and it is already wrapped by the time any
   // of them see it. See broadcasting-state.ts.
   const localState = broadcastingState(
     await openLocalState({
-      databasePath: options.stateDatabasePath ?? ":memory:",
+      databasePath,
       now,
       // Startup reconciliation SIGKILLs the process an orphaned ProviderSession left behind, on the
       // owner's own machine. That used to leave no record anywhere. Routed into the daemon's own
@@ -350,6 +370,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     state: localState,
     adapter: providerAdapter,
     template: mockDeliveryTemplate,
+    workspacesRoot,
     createCommandId: () => `session-${randomUUID()}`,
     logger: app.log,
   });

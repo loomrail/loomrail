@@ -29,6 +29,7 @@
     "@loomrail/provider-core": "workspace:*",
     "@loomrail/provider-mock": "workspace:*",
     "@loomrail/workflow-engine": "workspace:*",
+    "@loomrail/workspace": "workspace:*",
     "fastify": "^5.10.0",
     "zod": "^4.0.0"
   }

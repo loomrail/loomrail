@@ -93,6 +93,9 @@ importers:
       '@loomrail/workflow-engine':
         specifier: workspace:*
         version: link:../../packages/workflow-engine
+      '@loomrail/workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace
       fastify:
         specifier: ^5.10.0
         version: 5.12.1

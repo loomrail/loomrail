@@ -1,27 +1,48 @@
+import { mkdir, realpath } from "node:fs/promises";
+import { dirname, join } from "node:path";
+
 import { assembleContextPack } from "@loomrail/context-assembly";
 import {
   checkpointDraftSchema,
   contextPackRecipeInputSchema,
   contextWindowUsageSchema,
+  maxCarriedPaths,
   providerSessionProcessPidSchema,
   providerUsageSchema,
   type CheckpointDraft,
   type ContextPackSpec,
   type EndProviderSessionCommand,
+  type HumanRequestDraft,
   type ProviderOutcome,
   type ProviderSessionEndReason,
   type StageAttempt,
   type WorkflowDispatch,
   type WorkflowTemplate,
+  type WorkItemWorkspace,
 } from "@loomrail/contracts";
-import { decideDispatchStage } from "@loomrail/domain";
-import type { LocalState } from "@loomrail/persistence-sqlite";
+import {
+  decideDispatchStage,
+  decideProvisionWorkspace,
+  provisionRefusalRequest,
+  stageRequiresWorkspace,
+  workspaceBranchName,
+  type DispatchStageDecision,
+  type ProvisionRefusal,
+} from "@loomrail/domain";
+import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
 import {
   ProviderPackTooLargeError,
   type ProviderAdapter,
   type ProviderSessionListener,
   type ProviderSessionRef,
 } from "@loomrail/provider-core";
+import {
+  addWorktree,
+  createCarryInSnapshot,
+  inspectRepository,
+  removeWorktree,
+  type AddWorktreeRefusal,
+} from "@loomrail/workspace";
 
 /**
  * The share of the provider's context window handed to the assembled pack. The rest is the agent's
@@ -88,6 +109,15 @@ export type RunStageAttemptDeps = {
   /** A dispatch already marked started, i.e. one whose StageAttempt is RUNNING. */
   dispatch: WorkflowDispatch;
   template: WorkflowTemplate;
+  /**
+   * Where a WorkItem's worktree is cut (spec D2): `<workspacesRoot>/<projectId>/<workItemId>`.
+   *
+   * Outside the owner's own repository on purpose -- their `git status` must not show Loomrail's
+   * directories and their `git clean -fdx` must not delete an agent's work. The price is that these
+   * paths are absolute and never move (spec §2.10), which is why the root is handed in rather than
+   * derived here from whatever the process happens to consider its home.
+   */
+  workspacesRoot: string;
   // No `now` here on purpose: every timestamp this loop writes is stamped inside the state store's
   // own transaction from its injected clock, so a second clock here could only disagree with it.
   createCommandId: () => string;
@@ -198,15 +228,366 @@ const providerSessionRef = (
   attempt: attempt.attempt,
 });
 
+const readWorkItemWorkspace = (deps: RunStageAttemptDeps): WorkItemWorkspace | null => {
+  const result = deps.state.query({
+    type: "GET_WORKSPACE_BY_WORK_ITEM",
+    workItemId: deps.dispatch.workItemId,
+  });
+  if (result.type !== "WORKSPACE") throw new Error("The work item's workspace could not be read");
+  return result.workspace;
+};
+
 /**
- * Runs one StageAttempt as a sequence of context-assembled provider sessions (spec §6).
+ * What preparing the workspace for one StageAttempt ended in.
  *
- * Every session -- the first and every later one alike -- is started the same way: read the context
- * sources as one snapshot, assemble a pack against a share of the adapter's declared window, and
- * write the session, its recipe and the event in one transaction. There is no separate "resume"
- * path, because a resume is just the next assembly from state Loomrail already owns (D1).
+ * `POSTPONED` is deliberately not a refusal: a lease held by another StageAttempt is spec §7's
+ * "dispatch is postponed, not carried out by a second writer" -- a transient fact about who is
+ * writing right now, which the owner cannot act on and must not be asked about. Every other way
+ * this can end is a `REFUSED` carrying the question the owner *can* act on.
  */
-export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> => {
+type WorkspacePreparation =
+  | { type: "PREPARED"; workspace: WorkItemWorkspace }
+  | { type: "REFUSED"; request: HumanRequestDraft }
+  | { type: "POSTPONED"; detail: string };
+
+// `git worktree add`'s four refusals (@loomrail/workspace), each named as the question the owner can
+// actually answer. Paths and git's own stderr stay out of `title` and go in `context`: a title is
+// capped at 200 characters by `humanRequestSchema`, and a long worktree path or a chatty git build
+// would push a refusal past that and turn an owner-facing question into a parse failure.
+const worktreeRefusal = (
+  refusal: AddWorktreeRefusal,
+  context: { branch: string; path: string },
+): ProvisionRefusal => {
+  switch (refusal.type) {
+    case "BRANCH_CHECKED_OUT":
+      return {
+        title: `The branch ${refusal.branch} is already checked out elsewhere`,
+        context: `Loomrail cuts this work item's workspace on ${refusal.branch}, but that branch is already checked out in ${refusal.occupiedBy}. Git allows one worktree per branch, and choosing another name automatically would split this work item's work across two branches without anyone deciding to.`,
+        recommendation: `Remove or release the worktree at ${refusal.occupiedBy}, or rename the work item so its branch name differs.`,
+      };
+    case "BRANCH_EXISTS":
+      return {
+        title: `The branch ${refusal.branch} already exists`,
+        context: `Loomrail cuts this work item's workspace on a new branch named ${refusal.branch}, and a branch with that name is already in the repository. Reusing it would put this work item's changes on top of whatever that branch already holds; picking a different name automatically would hide the collision.`,
+        recommendation: `Delete or rename the existing ${refusal.branch} branch if it is not needed, or rename the work item so its branch name differs.`,
+      };
+    case "PATH_EXISTS":
+      return {
+        title: "This work item's workspace directory is already occupied",
+        context: `Loomrail cuts this work item's worktree at ${context.path}, and something is already there. Workspace paths are fixed per work item (spec D2), so Loomrail will not pick another one: whatever is at that path may be an earlier workspace whose record was lost, and deleting it automatically could destroy work.`,
+        recommendation: `Inspect ${context.path}, move or delete it once you are sure nothing there is needed, then retry the stage.`,
+      };
+    case "WORKTREE_ADD_FAILED":
+      return {
+        title: "Git refused to create this work item's workspace",
+        context: `Loomrail ran \`git worktree add\` for the branch ${context.branch} at ${context.path} and git exited ${refusal.exitCode.toString()}. Git reported: ${refusal.stderr.trim().length === 0 ? "(nothing on stderr)" : refusal.stderr.trim()}`,
+        recommendation:
+          "Read git's message above and repair whatever it names -- disk space, permissions, or the repository itself -- then retry the stage.",
+      };
+  }
+};
+
+// `humanRequestSchema` (@loomrail/contracts) caps a title at 200 characters and a context or
+// recommendation at 4000. Refusals on this path are built from values Loomrail does not choose -- a
+// registered repository path is allowed 4096 characters on its own, and git's stderr is bounded but
+// not short -- so a perfectly ordinary deep path would push a title past its cap. Left unbounded,
+// the command carrying the question would be rejected by its own schema and the refusal would reach
+// the owner as nothing at all, which is the one outcome this whole path exists to prevent. Cut by
+// UTF-16 code unit, so a cut landing inside a surrogate pair is repaired rather than left as an
+// ill-formed string.
+const TITLE_LIMIT = 200;
+const DESCRIPTION_LIMIT = 4_000;
+
+const bounded = (text: string, limit: number): string => {
+  const trimmed = text.trim();
+  if (trimmed.length <= limit) return trimmed;
+  const cut = trimmed.slice(0, limit - 1);
+  const last = cut.charCodeAt(cut.length - 1);
+  return `${last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut}…`;
+};
+
+const boundedRequest = (request: HumanRequestDraft): HumanRequestDraft => ({
+  ...request,
+  title: bounded(request.title, TITLE_LIMIT),
+  context: bounded(request.context, DESCRIPTION_LIMIT),
+  recommendation: request.recommendation === null ? null : bounded(request.recommendation, DESCRIPTION_LIMIT),
+});
+
+const noBaseCommitRefusal = (path: string): ProvisionRefusal => ({
+  title: "The repository has no commit to cut a workspace from",
+  context: `The repository at ${path} has no commits yet, and nothing uncommitted to carry in either, so there is no commit a worktree could be based on. Git cannot create a worktree from an empty repository.`,
+  recommendation: "Make the repository's first commit, then retry the stage.",
+});
+
+const workspaceNotReadyRefusal = (workspace: WorkItemWorkspace): ProvisionRefusal => ({
+  title: `This work item's workspace is ${workspace.status.toLowerCase()}, not ready to be written in`,
+  context: `The workspace recorded for this work item is on branch ${workspace.branch} at ${workspace.worktreePath}, and its status is ${workspace.status}. Loomrail does not recreate a workspace by itself (AD-008): a directory that disappeared may still hold the only copy of earlier work, and re-cutting one silently would hide that.`,
+  recommendation: `Restore or remove ${workspace.worktreePath} yourself, then retry the stage. The branch ${workspace.branch} still holds whatever was committed to it.`,
+});
+
+const provisioningFailedRefusal = (error: unknown, path: string | null): ProvisionRefusal => ({
+  title: "This work item's workspace could not be prepared",
+  context: `Loomrail could not cut a workspace${path === null ? "" : ` from the repository at ${path}`}: ${errorName(error)}. No session was started, because an agent with no workspace would produce prose for a stage that is meant to change files.`,
+  recommendation:
+    "Check the repository and the Loomrail data directory for whatever the message above names, then retry the stage.",
+});
+
+const canonicalPathOf = async (path: string): Promise<string | null> => {
+  try {
+    return await realpath(path);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Cuts the workspace this StageAttempt will write in, in the order spec §6 fixes: inspect the
+ * repository, let the domain decide, snapshot what is uncommitted, `worktree add`, and only then
+ * record the entity. The order is the correctness: nothing reaches the database before the thing it
+ * describes exists on disk, because a row naming a worktree that was never created is worse than no
+ * row at all.
+ */
+const createWorkspace = async (
+  deps: RunStageAttemptDeps,
+): Promise<
+  { type: "PREPARED"; workspace: WorkItemWorkspace } | { type: "REFUSED"; request: HumanRequestDraft }
+> => {
+  const workItemResult = deps.state.query({ type: "GET_WORK_ITEM", workItemId: deps.dispatch.workItemId });
+  const workItem = workItemResult.type === "WORK_ITEM" ? workItemResult.workItem : null;
+  if (!workItem) throw new Error("The WorkItem backing this dispatch no longer exists");
+  const projectResult = deps.state.query({ type: "GET_PROJECT", projectId: workItem.projectId });
+  const project = projectResult.type === "PROJECT" ? projectResult.project : null;
+  if (!project) throw new Error("The Project backing this dispatch no longer exists");
+
+  // Canonicalised before anything is compared to it: git reports its top level as a physical path,
+  // so a repository reached through a symlink -- macOS's own `/var` -> `/private/var`, or a data
+  // directory the owner symlinked -- would never compare equal to the path as registered.
+  const canonicalPath = await canonicalPathOf(project.repositoryPath);
+  const inspected = canonicalPath === null ? null : await inspectRepository(canonicalPath);
+  // A Project registered at a *subdirectory* of a repository is not a repository Loomrail may cut
+  // from: `--show-toplevel` names the enclosing repository, and a worktree cut from that would
+  // branch the owner's outer repository and hand the agent everything inside it. That is the same
+  // answer, with the same fix, as a path that is not a repository at all.
+  const repository = inspected !== null && inspected.topLevel === canonicalPath ? inspected : null;
+
+  const decision = decideProvisionWorkspace({
+    repository: {
+      isRepository: repository !== null,
+      inProgress: repository?.inProgress ?? null,
+      path: project.repositoryPath,
+    },
+  });
+  if (decision.type === "REFUSED") return { type: "REFUSED", request: decision.request };
+  if (repository === null) {
+    // Unreachable today: `decideProvisionWorkspace` refuses every repository it was told is not
+    // one, and `repository === null` is exactly what produced `isRepository: false` above. A throw
+    // rather than a non-null assertion (AGENTS.md) so a future change that let PROVISION through
+    // without a repository fails loudly instead of dereferencing null.
+    throw new Error("A workspace was approved for a path that is not a repository");
+  }
+
+  const snapshot = await createCarryInSnapshot({
+    topLevel: repository.topLevel,
+    headCommit: repository.headCommit,
+    message: `Loomrail carry-in for ${workItem.id}`,
+  });
+  // The snapshot when there was something to carry, HEAD when there was not. Both null means an
+  // empty repository with nothing in it -- there is no commit to branch from, and git would refuse.
+  const startPoint = snapshot?.commit ?? repository.headCommit;
+  if (startPoint === null) {
+    return { type: "REFUSED", request: provisionRefusalRequest(noBaseCommitRefusal(project.repositoryPath)) };
+  }
+
+  const branch = workspaceBranchName({ workItemId: workItem.id, title: workItem.title });
+  const worktreePath = join(deps.workspacesRoot, workItem.projectId, workItem.id);
+  // Only the parent: `addWorktree` refuses a path that already exists (PATH_EXISTS), and git
+  // creates the worktree directory itself.
+  await mkdir(dirname(worktreePath), { recursive: true });
+
+  const added = await addWorktree({
+    topLevel: repository.topLevel,
+    branch,
+    path: worktreePath,
+    startPoint,
+  });
+  if (added.type === "REFUSED") {
+    return {
+      type: "REFUSED",
+      request: provisionRefusalRequest(worktreeRefusal(added.refusal, { branch, path: worktreePath })),
+    };
+  }
+
+  // `maxCarriedPaths` is the same bound the contract enforces, read from the contract rather than
+  // restated here (contracts/workspace.ts exports it for exactly this). A carry-in of more files
+  // than the event can list is still a legitimate carry-in -- the worktree already holds all of
+  // them -- so the list is cut to what the audit record can hold and the cut is logged, rather than
+  // letting `.parse` reject a workspace that exists on disk.
+  const carriedPaths = snapshot?.carriedPaths ?? [];
+  if (carriedPaths.length > maxCarriedPaths) {
+    deps.logger.warn(
+      { workItemId: workItem.id, carriedPaths: carriedPaths.length, recorded: maxCarriedPaths },
+      "More files were carried into the workspace than the event can list; the record names the first of them",
+    );
+  }
+
+  try {
+    const created = deps.state.execute({
+      schemaVersion: 1,
+      commandId: deps.createCommandId(),
+      correlationId: deps.correlationId,
+      actor,
+      type: "CREATE_WORK_ITEM_WORKSPACE",
+      payload: {
+        workItemId: workItem.id,
+        projectId: workItem.projectId,
+        branch,
+        worktreePath,
+        baseCommit: repository.headCommit,
+        snapshotCommit: snapshot?.commit ?? null,
+        carriedPaths: carriedPaths.slice(0, maxCarriedPaths),
+      },
+    });
+    if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("The workspace was not recorded");
+    return { type: "PREPARED", workspace: created.workspace };
+  } catch (error: unknown) {
+    // The worktree exists on disk and nothing records it. Left alone it would be a directory no row
+    // names, and the next attempt would meet it as PATH_EXISTS forever. Removing it is safe
+    // precisely because `addWorktree` refused a path that already existed: this directory is the one
+    // this call just created.
+    try {
+      await removeWorktree({ topLevel: repository.topLevel, path: worktreePath });
+    } catch (removalError: unknown) {
+      deps.logger.warn(
+        { worktreePath, error: errorName(removalError) },
+        "A workspace that could not be recorded could not be removed either; its directory is still on disk",
+      );
+    }
+    return {
+      type: "REFUSED",
+      request: provisionRefusalRequest(provisioningFailedRefusal(error, project.repositoryPath)),
+    };
+  }
+};
+
+/**
+ * Takes the workspace's lease for this StageAttempt (spec D6: one writer at a time).
+ *
+ * A lease this attempt already holds is not re-taken -- that is the ordinary state after a daemon
+ * restart picked the attempt back up, and the storage claim (`WHERE lease_holder IS NULL`) would
+ * read it as someone else's and refuse forever.
+ */
+const acquireWorkspaceLease = (
+  deps: RunStageAttemptDeps,
+  workspace: WorkItemWorkspace,
+): WorkspacePreparation => {
+  const stageAttemptId = deps.dispatch.stageAttemptId;
+  if (workspace.leaseHolder === stageAttemptId) return { type: "PREPARED", workspace };
+  if (workspace.leaseHolder !== null) {
+    return { type: "POSTPONED", detail: `held by ${workspace.leaseHolder}` };
+  }
+  try {
+    const acquired = deps.state.execute({
+      schemaVersion: 1,
+      commandId: deps.createCommandId(),
+      correlationId: deps.correlationId,
+      actor,
+      type: "ACQUIRE_WORKSPACE_LEASE",
+      payload: { workspaceId: workspace.id, stageAttemptId, expectedVersion: workspace.version },
+    });
+    if (acquired.type !== "WORKSPACE_LEASE_ACQUIRED") throw new Error("The workspace lease was not acquired");
+    return { type: "PREPARED", workspace: acquired.workspace };
+  } catch (error: unknown) {
+    // Both codes mean the same thing for a caller: someone else moved the workspace between the read
+    // above and this claim. Spec §7 postpones the dispatch rather than failing it -- the claim is a
+    // single `UPDATE ... WHERE lease_holder IS NULL`, so losing it is proof another writer won, not
+    // an error to retry blindly.
+    if (
+      error instanceof StateStoreError &&
+      (error.code === "WORKSPACE_LEASE_HELD" || error.code === "WORKSPACE_VERSION_CONFLICT")
+    ) {
+      return { type: "POSTPONED", detail: error.code };
+    }
+    throw error;
+  }
+};
+
+const prepareWorkspace = async (deps: RunStageAttemptDeps): Promise<WorkspacePreparation> => {
+  const existing = readWorkItemWorkspace(deps);
+  if (existing === null) {
+    const created = await createWorkspace(deps);
+    return created.type === "PREPARED" ? acquireWorkspaceLease(deps, created.workspace) : created;
+  }
+  if (existing.status !== "READY") {
+    return { type: "REFUSED", request: provisionRefusalRequest(workspaceNotReadyRefusal(existing)) };
+  }
+  return acquireWorkspaceLease(deps, existing);
+};
+
+/**
+ * `prepareWorkspace` with the guarantee spec §6 asks of this whole path: every way it can fail ends
+ * as a blocking question to the owner, not as an exception thrown into the session loop.
+ *
+ * The named refusals inside already cover every failure anyone modelled -- a repository mid-rebase,
+ * an occupied branch, a directory in the way, git exiting non-zero. This catch is for the rest: a
+ * `git` binary that is not on PATH at all, a plumbing command that fails mid-snapshot, a full disk
+ * under `mkdir`. Left to propagate, those would surface as the background worker's "could not
+ * finish a pass" and the dispatch would sit PENDING with nobody told why.
+ */
+const prepareWorkspaceSafely = async (deps: RunStageAttemptDeps): Promise<WorkspacePreparation> => {
+  try {
+    return await prepareWorkspace(deps);
+  } catch (error: unknown) {
+    const workItem = deps.state.query({ type: "GET_WORK_ITEM", workItemId: deps.dispatch.workItemId });
+    const project =
+      workItem.type === "WORK_ITEM" && workItem.workItem !== null
+        ? deps.state.query({ type: "GET_PROJECT", projectId: workItem.workItem.projectId })
+        : null;
+    const path = project?.type === "PROJECT" ? (project.project?.repositoryPath ?? null) : null;
+    deps.logger.warn(
+      { stageAttemptId: deps.dispatch.stageAttemptId, error: errorName(error) },
+      "The work item's workspace could not be prepared; the owner was asked",
+    );
+    return { type: "REFUSED", request: provisionRefusalRequest(provisioningFailedRefusal(error, path)) };
+  }
+};
+
+/**
+ * Gives the workspace back once the StageAttempt is done with it (spec §6: the lease is held for
+ * the attempt's duration, and released when it ends -- including when it ends badly).
+ *
+ * Nothing here escapes: this runs in the `finally` of an attempt that may already be unwinding, and
+ * a throw would replace whatever really went wrong with a lease-release error. A lease left behind
+ * is visible as the next attempt's postponed dispatch, and is what startup reconciliation exists to
+ * clear.
+ */
+const releaseWorkspaceLease = (deps: RunStageAttemptDeps, workspaceId: string): void => {
+  const stageAttemptId = deps.dispatch.stageAttemptId;
+  try {
+    const workspace = readWorkItemWorkspace(deps);
+    // Only this attempt's own lease on this very workspace is given back: anything else means the
+    // workspace moved on (a release that already happened, a row this attempt never held) and
+    // releasing it would take a lease away from whoever holds it now.
+    if (workspace?.id !== workspaceId || workspace.leaseHolder !== stageAttemptId) return;
+    deps.state.execute({
+      schemaVersion: 1,
+      commandId: deps.createCommandId(),
+      correlationId: deps.correlationId,
+      actor,
+      type: "RELEASE_WORKSPACE_LEASE",
+      payload: { workspaceId, stageAttemptId, expectedVersion: workspace.version },
+    });
+  } catch (error: unknown) {
+    deps.logger.warn(
+      { workspaceId, stageAttemptId, error: errorName(error) },
+      "The workspace lease could not be released; the next stage attempt will find it held",
+    );
+  }
+};
+
+/** The workspace whose lease this attempt took, so the `finally` below knows whether to give it back. */
+type WorkspaceLeaseSlot = { workspaceId: string | null };
+
+const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLeaseSlot): Promise<void> => {
   const scheduleDeadline = deps.scheduleHandoffDeadline ?? defaultScheduleHandoffDeadline;
   const capabilities = deps.adapter.capabilities();
   const stageAttemptId = deps.dispatch.stageAttemptId;
@@ -241,7 +622,12 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
       declaredStages: capabilities.stages,
       canStart: capabilities.start,
     });
-    if (dispatchDecision.type === "STAGE_NOT_SERVED") {
+    // Both refusals are completed the same way -- through the same APPLY_PROVIDER_OUTCOME command a
+    // provider's own NEEDS_HUMAN outcome uses -- because from the dispatcher's side they are the
+    // same outcome: a stage that did not start, and a question explaining why. They stay separate
+    // variants of `DispatchStageDecision` because their fixes differ, and the log line names which
+    // one happened.
+    const refuseDispatch = (decision: Exclude<DispatchStageDecision, { type: "DISPATCH" }>): void => {
       deps.state.execute({
         schemaVersion: 1,
         commandId: deps.createCommandId(),
@@ -250,7 +636,7 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
         type: "APPLY_PROVIDER_OUTCOME",
         payload: {
           dispatchId: deps.dispatch.id,
-          outcome: { type: "NEEDS_HUMAN", request: dispatchDecision.request },
+          outcome: { type: "NEEDS_HUMAN", request: boundedRequest(decision.request) },
           template: deps.template,
         },
       });
@@ -260,10 +646,51 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
           stage: attempt.stage,
           provider: capabilities.provider,
           canStart: String(capabilities.start),
+          reason: decision.type,
         },
-        "The adapter refused this dispatch; the owner was asked",
+        decision.type === "STAGE_NOT_SERVED"
+          ? "The adapter refused this dispatch; the owner was asked"
+          : "This stage needs a workspace and none could be cut; the owner was asked",
       );
+    };
+
+    if (dispatchDecision.type === "STAGE_NOT_SERVED") {
+      refuseDispatch(dispatchDecision);
       return;
+    }
+
+    // Spec §6: the workspace is cut before the first session opens, never alongside it. Which stages
+    // need one is a property of the stage (`stagesRequiringWorkspace` in `@loomrail/domain`), read
+    // from there rather than compared against stage names here -- DISCOVERY, PLAN, REVIEW and
+    // ACCEPTANCE produce prose and must not have a worktree cut for them at all. Done once per
+    // attempt: `lease.workspaceId` is set as soon as this attempt holds the lease, and every later
+    // session in the same attempt writes in the same worktree (spec D1).
+    if (lease.workspaceId === null && stageRequiresWorkspace(attempt.stage)) {
+      const prepared = await prepareWorkspaceSafely(deps);
+      if (prepared.type === "REFUSED") {
+        refuseDispatch({ type: "WORKSPACE_NOT_PROVISIONED", request: prepared.request });
+        return;
+      }
+      if (prepared.type === "POSTPONED") {
+        // Spec §7: a lease another StageAttempt holds postpones this dispatch rather than failing
+        // it. The dispatch stays PENDING -- exactly like the "another caller is already running a
+        // session" branch below -- so the next drain picks it back up once the lease is given back.
+        deps.logger.info(
+          { stageAttemptId, workItemId: deps.dispatch.workItemId, detail: prepared.detail },
+          "Another stage attempt is writing in this work item's workspace; this dispatch waits",
+        );
+        return;
+      }
+      lease.workspaceId = prepared.workspace.id;
+      deps.logger.info(
+        {
+          stageAttemptId,
+          workspaceId: prepared.workspace.id,
+          branch: prepared.workspace.branch,
+          worktreePath: prepared.workspace.worktreePath,
+        },
+        "The work item's workspace is ready and leased to this stage attempt",
+      );
     }
 
     const sessions = readAttemptSessions(deps);
@@ -736,4 +1163,26 @@ export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> 
     { stageAttemptId, maxSessions: MAX_SESSIONS_PER_ATTEMPT },
     "The stage attempt reached the session backstop without finishing; the attempt is hard-paused",
   );
+};
+
+/**
+ * Runs one StageAttempt as a sequence of context-assembled provider sessions (spec §6).
+ *
+ * Every session -- the first and every later one alike -- is started the same way: read the context
+ * sources as one snapshot, assemble a pack against a share of the adapter's declared window, and
+ * write the session, its recipe and the event in one transaction. There is no separate "resume"
+ * path, because a resume is just the next assembly from state Loomrail already owns (D1).
+ *
+ * When the stage needs a repository, the workspace is cut and leased before the first session opens
+ * (spec §6). The lease is given back here, once, however the attempt ends -- including when it ends
+ * badly, which is why the release lives in a `finally` rather than at each of the loop's exits: a
+ * lease left behind is a workspace the *next* stage of this work item can never write in.
+ */
+export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> => {
+  const lease: WorkspaceLeaseSlot = { workspaceId: null };
+  try {
+    await runProviderSessions(deps, lease);
+  } finally {
+    if (lease.workspaceId !== null) releaseWorkspaceLease(deps, lease.workspaceId);
+  }
 };

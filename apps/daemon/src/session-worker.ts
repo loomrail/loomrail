@@ -21,6 +21,8 @@ export type SessionWorkerDeps = {
   state: LocalState;
   adapter: ProviderAdapter;
   template: WorkflowTemplate;
+  /** Where a WorkItem's worktree is cut; handed straight to `runStageAttempt` (spec D2). */
+  workspacesRoot: string;
   createCommandId: () => string;
   logger: FastifyBaseLogger;
 };
@@ -112,6 +114,7 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         adapter: deps.adapter,
         dispatch,
         template: deps.template,
+        workspacesRoot: deps.workspacesRoot,
         createCommandId: deps.createCommandId,
         correlationId: `dispatch-${dispatch.id}`,
         logger: deps.logger,
