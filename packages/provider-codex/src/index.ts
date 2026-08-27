@@ -133,17 +133,33 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
     capabilities: () =>
       providerCapabilitiesSchema.parse({
         provider: "CODEX",
-        // Established by probing the real CLI, not by policy: before E1 this adapter runs in an
-        // empty temporary directory with no repository, so IMPLEMENT and QA -- which need one --
-        // are not offered. Declared the same whether or not the CLI is currently on this machine
-        // -- `stages` says what this adapter would serve if it could run, `start` below is the
-        // separate claim that it currently can. Overloading `stages` to also mean "unavailable"
-        // (an earlier version of this adapter emptied it) collided with
-        // `providerCapabilitiesSchema`'s own `stages.min(1)`, which exists to guarantee a
-        // *working* adapter always declares somewhere to dispatch -- a guarantee that has nothing
-        // to say about an adapter that cannot start at all. Task 9's gate
-        // (session-loop.ts's `decideDispatchStage`) reads `start` directly for that case now.
-        stages: ["DISCOVERY", "PLAN", "REVIEW"],
+        // All six, as of E1. IMPLEMENT and QA were withheld for one reason only -- this adapter
+        // ran its CLI in an empty temporary directory and so had nothing to change -- and that
+        // reason is gone: given a workspace it runs `codex exec` inside the work item's own
+        // worktree under `-s workspace-write` (see `start` below).
+        //
+        // This declaration is static, and deliberately says nothing about whether any particular
+        // session will be handed a workspace. Whether one exists is the daemon's business: a stage
+        // in `stagesRequiringWorkspace` (`@loomrail/domain`) is provisioned before dispatch and
+        // refused if provisioning fails, so an IMPLEMENT session that reaches this adapter has a
+        // worktree by construction. Making `stages` depend on a per-session fact would be a
+        // capability that changes under the caller between the moment it is read and the moment it
+        // is acted on.
+        //
+        // Declared the same whether or not the CLI is currently on this machine -- `stages` says
+        // what this adapter would serve if it could run, `start` below is the separate claim that
+        // it currently can. Overloading `stages` to also mean "unavailable" (an earlier version of
+        // this adapter emptied it) collided with `providerCapabilitiesSchema`'s own
+        // `stages.min(1)`, which exists to guarantee a *working* adapter always declares somewhere
+        // to dispatch -- a guarantee that has nothing to say about an adapter that cannot start at
+        // all. Task 9's gate (session-loop.ts's `decideDispatchStage`) reads `start` directly for
+        // that case now.
+        //
+        // The sibling adapter is NOT changed to match. provider-claude-code's write path has never
+        // been run against its real CLI here (that CLI is unauthenticated on this machine), and
+        // asserting symmetry between two adapters on evidence gathered from only one of them is
+        // exactly what produced two Criticals in the previous milestone.
+        stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         // Spec §9, first line: false when the executable this adapter would spawn is not on this
         // machine, checked once above at construction. `providerCapabilitiesSchema.parse()` runs
         // unconditionally on this object either way -- there is no branch that skips validation.
@@ -168,36 +184,72 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
       listener: ProviderSessionListener,
     ): Promise<ProviderOutcome> => {
       const sessionId = invocation.session.id;
-      // Per-session and removed in `finally`, including on failure (point 7): before E1 this
-      // adapter has no repository access at all, and an empty directory plus `-s read-only` is
-      // what enforces that. Leaking one would leak whatever the agent wrote into it.
-      const workingDir = await mkdtemp(join(tmpdir(), "loomrail-codex-"));
+      const workspace = invocation.workspace;
+      // Created for every session and removed in `finally`, including on failure (point 7). It
+      // holds the generated output schema, which must not be written into a worktree: what a
+      // session changed is read back from git against that directory, and a file Loomrail itself
+      // dropped there would show up as the agent's own work.
+      const scratchDir = await mkdtemp(join(tmpdir(), "loomrail-codex-"));
       try {
-        const outputSchemaPath = join(workingDir, "checkpoint-output-schema.json");
+        const outputSchemaPath = join(scratchDir, "checkpoint-output-schema.json");
         await writeFile(outputSchemaPath, JSON.stringify(z.toJSONSchema(checkpointDraftSchema)), "utf8");
 
-        // Verbatim, including the flags established by probing the real CLI (not documentation):
-        // `--skip-git-repo-check` because `codex exec` refuses to start outside a trusted
-        // directory, and this adapter always runs in a fresh empty one. Never
+        // With no workspace the scratch directory doubles as the working directory, and an EMPTY
+        // directory plus `-s read-only` is the whole containment story (spec D1): the agent has
+        // nothing to reach. Given a workspace, the CLI runs in the work item's own worktree
+        // instead, which is the point of this milestone.
+        const workingDir = workspace?.path ?? scratchDir;
+
+        // Every flag below was established by probing the real CLI, not by reading its help. Never
         // `--dangerously-bypass-approvals-and-sandbox` or any other permission-bypass flag --
         // SD-001 forbids Loomrail from enabling one automatically, on any code path.
+        const sandboxArgs =
+          workspace === undefined
+            ? [
+                // `codex exec` refuses to start outside a trusted directory, and a fresh temporary
+                // directory is not one. Needed only here: a worktree IS a repository, so the
+                // workspace path below can leave the check in place and get a free assertion that
+                // the directory it was handed really is one.
+                "--skip-git-repo-check",
+                "-s",
+                "read-only",
+              ]
+            : [
+                // The sandbox mode that lets the agent write, and only where it is pointed: the
+                // worktree named by `-C` below. Spec D8.
+                "-s",
+                "workspace-write",
+                // The ONE config key this adapter ever opens, and the single exception to the
+                // threat model's closed list of forbidden `-c` overrides (T16) -- which otherwise
+                // stands, `-c` being an arbitrary config override and `-c
+                // 'sandbox_permissions=["disk-full-read-access"]'` a documented sandbox escape.
+                // `workspace-write` denies network access by default, and an IMPLEMENT or QA
+                // session that cannot reach the network cannot install a dependency or run a suite
+                // that fetches one. The key widens exactly that and nothing else; it is asserted as
+                // a closed list over the argv array in this package's tests.
+                "-c",
+                "sandbox_workspace_write.network_access=true",
+                // NOT an approval flag. `codex exec` has no `--ask-for-approval`, and passing one
+                // is a hard argument error that fails the launch outright (spec §2.3) -- the
+                // sandbox mode above is the whole of what this adapter gets to say about what the
+                // agent may do.
+              ];
+
         const args = [
           "exec",
           "--json",
           // `codex exec` launched without this flag inherits the OWNER'S OWN entire
           // `~/.codex/config.toml`, not just the harmless bits: `approval_policy`, `sandbox_mode`,
-          // hooks, plugins, model providers, and MCP servers all arrive from that file. `-s
-          // read-only` below does override `sandbox_mode` for the sandbox itself, so there is no
-          // "the agent could write to disk" hole even without this flag -- but hooks, plugins and
+          // hooks, plugins, model providers, and MCP servers all arrive from that file. `-s` below
+          // does override `sandbox_mode` for the sandbox itself, so there is no "the agent could
+          // write somewhere it should not" hole even without this flag -- but hooks, plugins and
           // MCP servers are not sandboxed at all, and spec D6 (this milestone's predecessor)
           // forbids MCP outright. Authentication lives in `CODEX_HOME`, not `config.toml`, so this
           // flag does not touch login.
           "--ignore-user-config",
-          "--skip-git-repo-check",
+          ...sandboxArgs,
           "-C",
           workingDir,
-          "-s",
-          "read-only",
           "--output-schema",
           outputSchemaPath,
           invocation.contextPack.text,
@@ -354,7 +406,10 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         });
       } finally {
         runningSessions.delete(sessionId);
-        await rm(workingDir, { recursive: true, force: true });
+        // The scratch directory, never the worktree: the worktree outlives this session (it belongs
+        // to the WorkItem, and the next attempt is meant to find the work still there), and its
+        // removal is the daemon's, on its own schedule.
+        await rm(scratchDir, { recursive: true, force: true });
       }
     },
 

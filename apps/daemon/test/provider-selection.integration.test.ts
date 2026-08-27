@@ -166,9 +166,9 @@ describe("provider selection at daemon startup", () => {
     const { daemon, token } = await bootWithEnv("CODEX");
     try {
       const capabilities = await readCapabilities(daemon, token);
-      // Before E1 a live adapter runs in an empty temporary directory, so it cannot serve IMPLEMENT.
-      expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "REVIEW"]);
-      expect(capabilities.stages).not.toContain("IMPLEMENT");
+      // As of E1 the Codex adapter runs its CLI in the work item's own worktree, so it serves every
+      // stage -- IMPLEMENT included, which is the one the cockpit could never dispatch before.
+      expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
       // Whether `codex` happens to be installed on the machine running this test is not the point;
       // that the endpoint carries the claim at all is.
       expect(typeof capabilities.start).toBe("boolean");
@@ -194,9 +194,13 @@ describe("provider selection at daemon startup", () => {
     try {
       const capabilities = await readCapabilities(daemon, token);
       expect(capabilities.provider).toBe("CLAUDE_CODE");
-      // Same pre-E1 reason as Codex above: a live adapter runs in an empty temporary directory, so
-      // it cannot serve IMPLEMENT.
+      // Unchanged by E1, and deliberately not made symmetric with Codex above: this adapter still
+      // runs in an empty temporary directory, because its write path has never been run against the
+      // real CLI here (that CLI is unauthenticated on this machine). Asserting symmetry between two
+      // adapters on evidence gathered from only one of them is what produced two Criticals in the
+      // previous milestone.
       expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "REVIEW"]);
+      expect(capabilities.stages).not.toContain("IMPLEMENT");
       // The one capability that genuinely differs between the two live adapters, and the reason
       // the cockpit can explain a missing spend figure for one and not the other: Claude Code
       // reports cost in its own result event; Codex reports none anywhere.

@@ -88,6 +88,29 @@ export type ProviderInvocation = {
   dispatch: WorkflowDispatch;
   session: ProviderSessionRef;
   contextPack: ContextPack;
+  // The Git worktree this session may write in (spec E1 D8), or absent when there is none.
+  //
+  // Absent is not "unknown": it is the read-only path every session took before this milestone,
+  // where the adapter runs its CLI in an empty temporary directory with nothing to change. A stage
+  // that needs a repository (`stagesRequiringWorkspace` in `@loomrail/domain`) is not dispatched
+  // without one -- the daemon provisions the workspace and refuses the dispatch if it cannot -- so
+  // an adapter that finds this absent is entitled to treat it as "this session was never meant to
+  // change anything", not as a missing argument to guess at.
+  workspace?: ProviderWorkspace;
+};
+
+// `path` is the only field an adapter needs to launch: it is the directory the CLI is pointed at
+// and the only place the session may write. `branch` and `baseCommit` are carried alongside it
+// because they identify WHICH work this worktree holds -- the base a later step diffs against to
+// find what the session actually changed, and the branch that change lives on. They are recorded on
+// the workspace entity too; passing them structurally is what keeps a consumer from re-deriving
+// them by shelling out to git against a directory that may since have moved on.
+export type ProviderWorkspace = {
+  path: string;
+  branch: string;
+  // Null for a repository with no commits yet -- an empty repository genuinely has no HEAD, and
+  // absent would read as "not recorded" (mirrors `workItemWorkspaceSchema.baseCommit`).
+  baseCommit: string | null;
 };
 
 // Neither method is speculative. Without a stream of window occupancy, Loomrail only learns how
