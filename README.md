@@ -42,7 +42,7 @@ decisions instead of disconnected chat sessions.
 | Local runtime | Loopback daemon, CLI launcher, one-time browser session, installable tarball                             | Published package and desktop installer        |
 | State         | Tasks, runs, budgets, recovery, typed evidence, acceptance packages, Decisions, append-only Events       | Retention and restore hardening                |
 | Workbench     | Persisted board, workflow cockpit, command summary, evidence matrix, owner acceptance, EN/RU, light/dark | Full Attention Inbox and richer workflow views |
-| Agents        | Capability-checked provider contract and deterministic full-delivery mock adapter                        | Supervised Codex/Claude adapters               |
+| Agents        | Capability-checked provider contract, deterministic mock, and live Codex/Claude CLI adapters             | IMPLEMENT and QA on a real repository          |
 | Platforms     | macOS and Windows CI are green                                                                           | Clean-machine acceptance and hardening         |
 
 ## How it is intended to work
@@ -157,10 +157,39 @@ talk directly to future agent, shell, or Git adapters.
 - [ ] **M7 — Public checkpoint:** packaged launcher and clean-install gate are in place; remaining work is hardening
       and the first published release
 
-Real Codex/Claude execution, shell/Git access, worktrees, plugins, remote mode, and desktop packaging remain outside the
-current checkpoint. What comes after it — session handoff, live provider adapters, repository access, project
-guardrails and extensibility — is decomposed in the
+Real Codex and Claude Code execution has landed, deliberately narrow: each adapter spawns its CLI in a fresh, empty
+temporary directory under the CLI's own sandbox (`codex -s read-only`, `claude --permission-mode plan`), so it can serve
+the DISCOVERY, PLAN and REVIEW stages and nothing else. **The adapters have no repository or filesystem access at all**,
+and a stage an adapter does not declare — IMPLEMENT above all — is refused to you as a blocking question rather than
+dispatched. Loomrail never enables a permission-bypass flag on any code path. Repository access arrives with milestone
+E1.
+
+Shell/Git mutations, worktrees, plugins, remote mode, and desktop packaging remain outside the current checkpoint. What
+comes after it — session handoff, repository access, project guardrails and extensibility — is decomposed in the
 [post-Phase-0 plan](docs/plans/06-post-phase-0-decomposition.ru.md).
+
+### Choosing a provider
+
+One adapter serves every stage a daemon dispatches, for the life of the process. It is chosen by a single environment
+variable, read once at startup:
+
+| `LOOMRAIL_PROVIDER` | What runs                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------- |
+| unset, or `MOCK`    | The deterministic mock adapter. No real agent runs; every stage completes on its own. |
+| `CODEX`             | The real `codex` CLI, as a child process.                                             |
+| `CLAUDE_CODE`       | The real `claude` CLI, as a child process.                                            |
+
+The values are case-sensitive. A value Loomrail cannot read falls back to `MOCK` — a typo must not stop the daemon from
+starting — but it is never silent: the launcher and the daemon log both name the value and the accepted spellings,
+because the mock completes stages successfully and you would otherwise watch a whole delivery run believing a live agent
+did it. The launcher also says when a selected adapter's CLI is not installed on this machine.
+
+The CLIs authenticate themselves: Loomrail adds nothing to the child's environment and never handles your provider
+credentials.
+
+```bash
+LOOMRAIL_PROVIDER=CODEX loomrail
+```
 
 ## Development
 

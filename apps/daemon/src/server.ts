@@ -40,14 +40,18 @@ import {
 } from "@loomrail/contracts";
 import { WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
 import { openLocalState, StateStoreError } from "@loomrail/persistence-sqlite";
-import type { ProviderAdapter } from "@loomrail/provider-core";
+import type { ProviderAdapter, ProviderId } from "@loomrail/provider-core";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
 
 import { broadcastingState } from "./broadcasting-state.js";
 import { createEventStreamRegistry } from "./event-stream.js";
-import { resolveDefaultProviderAdapter } from "./provider-selection.js";
+import {
+  LOOMRAIL_PROVIDER_ENV_VAR,
+  LOOMRAIL_PROVIDER_VALUES,
+  resolveDefaultProviderAdapter,
+} from "./provider-selection.js";
 import { FixtureResolutionError, resolveBundledFixture } from "./fixtures.js";
 import { createSessionWorker } from "./session-worker.js";
 
@@ -93,6 +97,10 @@ export type RunningDaemon = {
   app: FastifyInstance;
   baseUrl: string;
   bootstrapUrl: string;
+  // What the launcher prints, and the answer to "did a live agent do this run?". `cliAvailable` is
+  // `capabilities().start`: an adapter can be selected and still be unable to run, and the owner
+  // should learn that at startup rather than from the first refused dispatch.
+  provider: { provider: ProviderId; cliAvailable: boolean; recognised: boolean };
   // Exposed for tests (spec D6): the alternative is a wait loop with a timeout in every test, and
   // on a loaded machine a timeout is indistinguishable from a defect. Resolves once the background
   // session worker has no pass running and none scheduled.
@@ -229,8 +237,13 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     used: false,
   };
   const sessions = new Map<string, Session>();
-  const providerAdapter = options.providerAdapter ?? resolveDefaultProviderAdapter();
-  providerAdapter.capabilities();
+  // Resolved as a value, not only as a constructed adapter: which provider a daemon is running --
+  // and whether the environment asked for one this daemon does not know -- is something the owner
+  // has to be able to see, in the log and in the launcher's startup report, before watching a
+  // delivery run and drawing conclusions about who did the work.
+  const providerResolution = resolveDefaultProviderAdapter();
+  const providerAdapter = options.providerAdapter ?? providerResolution.adapter;
+  const providerCapabilities = providerAdapter.capabilities();
 
   let allowedOrigin = "";
   let closing = false;
@@ -1079,6 +1092,27 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       });
     }
 
+    // Said out loud at startup, both of them. An unrecognised value falls back to the mock rather
+    // than stopping the daemon (a typo must not), but the mock then completes stages successfully:
+    // without this warning the owner watches a full run and believes a live agent did it.
+    if (!providerResolution.recognised) {
+      app.log.warn(
+        {
+          [LOOMRAIL_PROVIDER_ENV_VAR]: providerResolution.requested,
+          accepted: LOOMRAIL_PROVIDER_VALUES.join(", "),
+        },
+        `${LOOMRAIL_PROVIDER_ENV_VAR} names a provider this daemon does not know; it fell back to the mock adapter`,
+      );
+    }
+    app.log.info(
+      {
+        provider: providerCapabilities.provider,
+        cliAvailable: providerCapabilities.start,
+        stages: providerCapabilities.stages.join(", "),
+      },
+      "The provider adapter this daemon will dispatch to",
+    );
+
     const address = await app.listen({ host, port: options.port ?? 0 });
     const baseUrl = address.replace("[::1]", "127.0.0.1");
     allowedOrigin = baseUrl;
@@ -1088,6 +1122,11 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       app,
       baseUrl,
       bootstrapUrl,
+      provider: {
+        provider: providerCapabilities.provider,
+        cliAvailable: providerCapabilities.start,
+        recognised: providerResolution.recognised,
+      },
       whenIdle: () => worker.whenIdle(),
       close: async () => {
         if (closing) return;

@@ -49,6 +49,7 @@ const run = async (): Promise<void> => {
     baseUrl: daemon.baseUrl,
     bootstrapUrl: daemon.bootstrapUrl,
     browserOpened,
+    provider: daemon.provider,
   })) {
     writeLine(line);
   }

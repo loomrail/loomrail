@@ -73,6 +73,63 @@ describe("provider selection at daemon startup", () => {
     return providerCapabilitiesResponseSchema.parse(await response.json()).provider;
   };
 
+  // The other half of R28: the daemon must SAY which adapter it resolved, and must not fall back
+  // silently on a value it could not read. The mock completes stages successfully, so an owner who
+  // mistyped the variable can otherwise watch a whole delivery run believing a live agent did it.
+  // Driven through the daemon's real logger stream rather than a spy on the resolver, because the
+  // defect is the absence of the log line, not the resolver's return value.
+  const bootCapturingLog = async (
+    value: string | undefined,
+  ): Promise<{ daemon: RunningDaemon; log: () => string }> => {
+    if (value === undefined) Reflect.deleteProperty(process.env, LOOMRAIL_PROVIDER_ENV_VAR);
+    else process.env[LOOMRAIL_PROVIDER_ENV_VAR] = value;
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail provider log "));
+    temporaryDirectories.push(temporaryDirectory);
+    let written = "";
+    const daemon = await startDaemon({
+      bootstrapToken: bootstrapToken(),
+      stateDatabasePath: join(temporaryDirectory, "state.sqlite"),
+      loggerStream: {
+        write: (message: string) => {
+          written += message;
+        },
+      },
+    });
+    return { daemon, log: () => written };
+  };
+
+  it("says at startup which adapter it will dispatch to, and whether its CLI is here", async () => {
+    const { daemon, log } = await bootCapturingLog("CODEX");
+    try {
+      expect(log()).toContain("The provider adapter this daemon will dispatch to");
+      expect(log()).toContain('"provider":"CODEX"');
+      expect(log()).toContain('"cliAvailable"');
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it("warns, naming the value and the accepted spellings, when the variable is not readable", async () => {
+    const { daemon, log } = await bootCapturingLog("codex");
+    try {
+      const written = log();
+      expect(written).toContain("does not know");
+      expect(written).toContain('"codex"');
+      expect(written).toContain("MOCK, CODEX, CLAUDE_CODE");
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it("does not warn about a provider the owner never asked for", async () => {
+    const { daemon, log } = await bootCapturingLog(undefined);
+    try {
+      expect(log()).not.toContain("does not know");
+    } finally {
+      await daemon.close();
+    }
+  });
+
   it("boots with the mock provider when the environment variable is not set", async () => {
     const { daemon, token } = await bootWithEnv(undefined);
     try {
