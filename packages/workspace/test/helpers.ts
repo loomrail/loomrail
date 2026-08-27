@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -56,5 +56,58 @@ export const makeRepoMidRebase = async (): Promise<string> => {
     // mid-rebase state this helper exists to produce, not an error to surface.
   }
 
+  return dir;
+};
+
+// Creates a throwaway git repository with one committed file, then puts every category of
+// uncommitted work in front of it at once: an edit to that tracked file, a brand-new file already
+// staged, an untracked file at the root, an untracked file inside a subdirectory, an ignored file
+// that must never be carried, and a tracked file deleted from the working copy without staging the
+// deletion. Exists so a single test can assert that a carry-in snapshot picks up all of the former
+// and none of the latter.
+export const makeRepoWithEveryKindOfChange = async (): Promise<string> => {
+  const dir = await mkdtemp(join(tmpdir(), "loomrail-workspace-carry-in-"));
+  const commit = (message: string) =>
+    execFileAsync("git", [...testCommitterArgs, "commit", "--quiet", "-m", message], { cwd: dir });
+
+  await execFileAsync("git", ["init", "--quiet", "-b", "main"], { cwd: dir });
+
+  await writeFile(join(dir, ".gitignore"), "build/\n");
+  await writeFile(join(dir, "tracked-modified.txt"), "original\n");
+  await writeFile(join(dir, "deleted.txt"), "will be removed\n");
+  await execFileAsync("git", ["add", ".gitignore", "tracked-modified.txt", "deleted.txt"], { cwd: dir });
+  await commit("base");
+
+  // Tracked file edited but not staged.
+  await writeFile(join(dir, "tracked-modified.txt"), "changed\n");
+
+  // New file staged but not committed.
+  await writeFile(join(dir, "staged.txt"), "staged\n");
+  await execFileAsync("git", ["add", "staged.txt"], { cwd: dir });
+
+  // Untracked file at the repository root.
+  await writeFile(join(dir, "untracked-new.txt"), "new\n");
+
+  // Untracked file inside a subdirectory.
+  await mkdir(join(dir, "subdir"), { recursive: true });
+  await writeFile(join(dir, "subdir", "untracked-nested.txt"), "nested\n");
+
+  // Ignored file that must be left behind.
+  await mkdir(join(dir, "build"), { recursive: true });
+  await writeFile(join(dir, "build", "artifact.txt"), "artifact\n");
+
+  // Tracked file deleted from the working copy, deletion not staged.
+  await rm(join(dir, "deleted.txt"));
+
+  return dir;
+};
+
+// Creates a throwaway git repository that has never been committed to (headCommit is null) with a
+// single untracked file sitting in it -- the case a carry-in snapshot has to handle with a
+// parentless `commit-tree`, since there is no HEAD to be a parent.
+export const makeEmptyRepoWithUntrackedFile = async (): Promise<string> => {
+  const dir = await mkdtemp(join(tmpdir(), "loomrail-workspace-carry-in-empty-"));
+  await execFileAsync("git", ["init", "--quiet", "-b", "main"], { cwd: dir });
+  await writeFile(join(dir, "untracked-new.txt"), "new\n");
   return dir;
 };

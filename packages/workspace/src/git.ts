@@ -8,6 +8,10 @@ export type GitResult = {
 
 export type GitOptions = {
   cwd: string;
+  // Passed straight to `child_process.spawn` -- this REPLACES the child's environment rather than
+  // merging with `process.env`. A caller that needs one extra variable (e.g. GIT_INDEX_FILE) and
+  // passes only that loses PATH, and `spawn` resolves "git" through PATH, so git will not run at
+  // all. Spread `process.env` yourself: `{ ...process.env, GIT_INDEX_FILE: path }`.
   env?: Readonly<Record<string, string>>;
 };
 
