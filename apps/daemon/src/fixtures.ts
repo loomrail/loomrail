@@ -1,5 +1,5 @@
-import { readFile, realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -8,6 +8,8 @@ import {
   schemaVersionSchema,
   type FixtureProjectId,
 } from "@loomrail/contracts";
+import { decideProvisionWorkspace } from "@loomrail/domain";
+import { inspectRepository, runGit } from "@loomrail/workspace";
 import { z } from "zod";
 
 const fixtureManifestSchema = z
@@ -23,7 +25,15 @@ export type ResolvedFixtureProject = {
   fixtureId: FixtureProjectId;
   projectId: string;
   name: string;
-  repositoryPath: string;
+  /**
+   * The directory the fixture is *stored* as, inside Loomrail's own checkout.
+   *
+   * Named a template rather than a repository because that is what it is: a nested `.git` cannot be
+   * committed to this repository, so a bundled fixture cannot ship as one. It becomes a repository
+   * only when `materialiseFixtureRepository` copies it out of the checkout and initialises it
+   * there, and it is that copy -- never this path -- that a Project records.
+   */
+  templatePath: string;
 };
 
 export class FixtureResolutionError extends Error {
@@ -84,7 +94,7 @@ export const resolveBundledFixture = async (
       fixtureId,
       projectId: manifest.projectId,
       name: manifest.name,
-      repositoryPath: canonicalProject,
+      templatePath: canonicalProject,
     };
   } catch (error: unknown) {
     if (error instanceof FixtureResolutionError) throw error;
@@ -94,4 +104,202 @@ export const resolveBundledFixture = async (
       { cause: error },
     );
   }
+};
+
+export type ProjectRegistrationErrorCode =
+  | "REPOSITORY_PATH_NOT_A_REPOSITORY"
+  | "REPOSITORY_PATH_INSIDE_REPOSITORY"
+  | "FIXTURE_TEMPLATE_UNSUPPORTED_ENTRY"
+  | "FIXTURE_MATERIALISATION_FAILED";
+
+/**
+ * A Project could not be registered at a path -- either the owner's own repository or the copy a
+ * bundled fixture was just materialised into.
+ *
+ * Separate from `FixtureResolutionError`, which is about the bundled *template* being unreadable or
+ * escaping its catalog. This one is about the repository a Project would actually point at.
+ */
+export class ProjectRegistrationError extends Error {
+  readonly code: ProjectRegistrationErrorCode;
+
+  constructor(code: ProjectRegistrationErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ProjectRegistrationError";
+    this.code = code;
+  }
+}
+
+const canonicalPathOf = async (path: string): Promise<string | null> => {
+  try {
+    return await realpath(path);
+  } catch {
+    return null;
+  }
+};
+
+const pathExists = async (path: string): Promise<boolean> => (await canonicalPathOf(path)) !== null;
+
+/**
+ * Settles whether a path may be registered as a Project's repository, and refuses in the owner's
+ * words when it may not.
+ *
+ * The refusal wording is not written here: it comes from `decideProvisionWorkspace`, the same
+ * domain decision that guards provisioning. That is deliberate. "This path is not a repository" and
+ * "this path is a directory *inside* a repository" have different fixes, and the second one already
+ * has an honest, specific explanation in the domain -- restating either here would be one more
+ * place for the two to drift, and the drifted copy is always the generic one.
+ *
+ * `inProgress` is passed as `null` rather than inspected, because registration asks a narrower
+ * question than provisioning does: an owner whose repository is mid a rebase should still be able
+ * to register it. The rebase is transient; whether the path is a repository at all is not. The
+ * mid-operation refusal stays where it belongs, at the moment a workspace is actually cut.
+ */
+export const resolveRegisteredRepository = async (path: string): Promise<string> => {
+  const canonical = await canonicalPathOf(path);
+  const inspected = canonical === null ? null : await inspectRepository(canonical);
+  // git reports its top level as a physical path, so the comparison is against the canonical form
+  // for the same reason the provisioning guard compares canonical forms (session-loop.ts).
+  const isOwnTopLevel = canonical !== null && inspected !== null && inspected.topLevel === canonical;
+  if (isOwnTopLevel) return canonical;
+
+  const insideRepository = inspected?.topLevel ?? null;
+  const decision = decideProvisionWorkspace({
+    repository: { isRepository: false, inProgress: null, path, insideRepository },
+  });
+  if (decision.type !== "REFUSED") {
+    // Unreachable: `isRepository: false` is refused by every branch of the decision above. A throw
+    // rather than a silent fall-through so a future change to the domain fails loudly here instead
+    // of registering a Project at a path nothing ever verified.
+    throw new Error("A path that is not a repository was approved for registration");
+  }
+  // Both halves of the owner-facing wording: the context says what is true about the path, the
+  // recommendation says what to do about it, and the two fixes differ between the branches. The
+  // recommendation is nullable on the draft even though every refusal on this path carries one.
+  const { context, recommendation } = decision.request;
+  throw new ProjectRegistrationError(
+    insideRepository === null ? "REPOSITORY_PATH_NOT_A_REPOSITORY" : "REPOSITORY_PATH_INSIDE_REPOSITORY",
+    recommendation === null ? context : `${context} ${recommendation}`,
+  );
+};
+
+// Identity and configuration for the fixture's own first commit. Set with `-c` flags rather than
+// read from the machine: an owner with no `user.email` configured would otherwise get a daemon that
+// cannot initialise the demo at all, and one with a signing key or a `core.hooksPath` would get a
+// passphrase prompt or a hook run inside a repository Loomrail created on their behalf. The empty
+// `init.templateDir` keeps the owner's own git template -- hooks included -- out of it too.
+const demoRepositoryArgs = [
+  "-c",
+  "user.name=Loomrail",
+  "-c",
+  "user.email=demo@loomrail.invalid",
+  "-c",
+  "commit.gpgsign=false",
+  "-c",
+  "init.templateDir=",
+] as const;
+
+const GIT_STDERR_LIMIT = 500;
+
+const runGitOrThrow = async (args: readonly string[], cwd: string, step: string): Promise<void> => {
+  const result = await runGit([...demoRepositoryArgs, ...args], { cwd });
+  if (result.exitCode === 0) return;
+  // git's stderr is process output: bounded before it is placed into an error a caller may log or
+  // show, the same way `addWorktree` bounds it (packages/workspace/src/worktree.ts).
+  const stderr = result.stderr.trim().slice(0, GIT_STDERR_LIMIT);
+  throw new ProjectRegistrationError(
+    "FIXTURE_MATERIALISATION_FAILED",
+    `Loomrail could not turn the bundled fixture into a Git repository at ${cwd}: git ${step} exited ${result.exitCode.toString()}. ${stderr}`,
+  );
+};
+
+/**
+ * Copies a fixture template's contents, and only those.
+ *
+ * Two things it deliberately will not do. It never copies a `.git` directory, from the template or
+ * from anywhere nested inside it: the copy is about to be given a repository of its own, and a
+ * carried-in `.git` would silently make it something else. And it refuses a symbolic link outright
+ * rather than copying or following it -- a link in a bundled template is not a fixture we ship, and
+ * copying one would put a pointer out of the materialised repository into the owner's filesystem,
+ * where an agent working in a worktree could write through it.
+ */
+const copyTemplateInto = async (from: string, to: string): Promise<void> => {
+  const entries = await readdir(from, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === ".git") continue;
+    const source = join(from, entry.name);
+    const destination = join(to, entry.name);
+    if (entry.isSymbolicLink() || !(entry.isDirectory() || entry.isFile())) {
+      throw new ProjectRegistrationError(
+        "FIXTURE_TEMPLATE_UNSUPPORTED_ENTRY",
+        `The bundled fixture template holds ${source}, which is neither a regular file nor a directory, so it cannot be copied into a demo repository`,
+      );
+    }
+    if (entry.isDirectory()) {
+      await mkdir(destination);
+      await copyTemplateInto(source, destination);
+      continue;
+    }
+    await copyFile(source, destination);
+  }
+};
+
+/**
+ * The outcome of materialising a fixture: where its repository is, and whether this call is the one
+ * that built it. `created: false` means a directory was already sitting there and was adopted --
+ * which is a different claim entirely, because nothing here knows what that directory is.
+ */
+export type MaterialisedFixture = { repositoryPath: string; created: boolean };
+
+/**
+ * Turns a bundled fixture template into a real Git repository under `demoProjectsRoot`, and answers
+ * with the path a Project should record.
+ *
+ * Idempotent, because the owner will press the button twice. A materialised fixture that already
+ * exists is handed back untouched -- not re-copied, not re-initialised, not reset -- so whatever
+ * work has since happened in it survives. That is the whole reason the copy is built in a staging
+ * directory and moved into place with a single rename: the destination either does not exist or is
+ * a finished repository, never a half-populated one, and two registrations racing each other end up
+ * sharing the first one's repository rather than clobbering it.
+ */
+export const materialiseFixtureRepository = async (
+  fixture: ResolvedFixtureProject,
+  demoProjectsRoot: string,
+): Promise<MaterialisedFixture> => {
+  const root = resolve(demoProjectsRoot);
+  // Safe to join: `fixtureId` is an enum in the contract, so it can only ever be one of two literal
+  // directory names.
+  const target = join(root, fixture.fixtureId);
+  // Canonicalised on the way out, on both branches. A Project's `repositoryPath` is compared
+  // against git's own idea of a top level, which is always physical, and -- more immediately -- the
+  // two branches would otherwise disagree about the same directory (`/var/...` from `join`,
+  // `/private/var/...` from an inspection), which is a different payload under the same command id.
+  const canonical = async (): Promise<string> => (await canonicalPathOf(target)) ?? target;
+  if (await pathExists(target)) return { repositoryPath: await canonical(), created: false };
+
+  await mkdir(root, { recursive: true });
+  const staging = await mkdtemp(join(root, `.materialising-${fixture.fixtureId}-`));
+  try {
+    await copyTemplateInto(fixture.templatePath, staging);
+    await runGitOrThrow(["init", "--quiet", "-b", "main"], staging, "init");
+    await runGitOrThrow(["add", "--all", "--force", "."], staging, "add");
+    await runGitOrThrow(
+      ["commit", "--quiet", "--no-verify", "-m", `Loomrail demo fixture ${fixture.fixtureId}`],
+      staging,
+      "commit",
+    );
+    await rename(staging, target);
+  } catch (error: unknown) {
+    await rm(staging, { recursive: true, force: true });
+    // A rename that failed because someone else got there first is not a failure: their repository
+    // is finished (nothing is ever renamed into place before its first commit), so this
+    // registration adopts it. Any other reason, and there is nothing at `target` to adopt.
+    if (await pathExists(target)) return { repositoryPath: await canonical(), created: false };
+    if (error instanceof ProjectRegistrationError) throw error;
+    throw new ProjectRegistrationError(
+      "FIXTURE_MATERIALISATION_FAILED",
+      `Loomrail could not materialise the bundled fixture ${fixture.fixtureId} at ${target}`,
+      { cause: error },
+    );
+  }
+  return { repositoryPath: await canonical(), created: true };
 };

@@ -58,7 +58,13 @@ import {
   LOOMRAIL_PROVIDER_VALUES,
   resolveDefaultProviderAdapter,
 } from "./provider-selection.js";
-import { FixtureResolutionError, resolveBundledFixture } from "./fixtures.js";
+import {
+  FixtureResolutionError,
+  materialiseFixtureRepository,
+  ProjectRegistrationError,
+  resolveBundledFixture,
+  resolveRegisteredRepository,
+} from "./fixtures.js";
 import { createSessionWorker } from "./session-worker.js";
 
 const API_VERSION = "v1" as const;
@@ -90,6 +96,24 @@ export type StartDaemonOptions = {
    * would then hold worktrees nothing records.
    */
   workspacesRoot?: string;
+  /**
+   * Where a bundled fixture becomes a real repository: `<demoProjectsRoot>/<fixtureId>`.
+   *
+   * Defaulted like `workspacesRoot` above and for the same reason -- beside the state database is
+   * the Loomrail data directory the launcher chose (`<data>/state.sqlite` -> `<data>/demo-projects`),
+   * and an in-memory database has no data directory to sit beside. A fixture ships as a template
+   * rather than a repository, because a nested `.git` cannot be committed to Loomrail's own
+   * repository; this is where the template stops being one.
+   *
+   * The in-memory fallback carries a per-process segment, which is the one place this differs from
+   * `workspacesRoot`'s. An in-memory daemon keeps no data directory and no Project past its own
+   * lifetime, so there is nothing for two of them to share a demo repository *for* -- while sharing
+   * one would mean unrelated processes cutting worktrees and writing objects in a single repository
+   * at once, and every worktree any of them ever cut staying registered in it forever. That is
+   * contention plus unbounded growth, not reuse. A real data directory gets exactly one demo
+   * repository, which is the point.
+   */
+  demoProjectsRoot?: string;
   host?: "127.0.0.1" | "::1";
   port?: number;
   now?: Clock;
@@ -231,6 +255,14 @@ const sendOperationError = (
   if (error instanceof FixtureResolutionError) {
     return reply.code(400).send(createError(error.code, error.message, correlationId));
   }
+  if (error instanceof ProjectRegistrationError) {
+    // A path the owner named is a bad request; a fixture Loomrail could not materialise on its
+    // behalf is not -- that one is this machine failing to do what it was asked, and saying 400
+    // would send the owner looking for a mistake they did not make. Both carry their own code and
+    // message rather than the generic 500 text, because both name the path the owner has to look at.
+    const status = error.code === "FIXTURE_MATERIALISATION_FAILED" ? 500 : 400;
+    return reply.code(status).send(createError(error.code, error.message, correlationId));
+  }
   if (error instanceof WorkItemDomainError) {
     const status = error.code === "WORK_ITEM_NOT_FOUND" || error.code === "PARENT_NOT_FOUND" ? 404 : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
@@ -327,6 +359,12 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     (databasePath === ":memory:"
       ? join(tmpdir(), "loomrail-workspaces")
       : join(dirname(resolve(databasePath)), "workspaces"));
+  // The same rule, resolved at the same moment, for the same reason: see the option's own comment.
+  const demoProjectsRoot =
+    options.demoProjectsRoot ??
+    (databasePath === ":memory:"
+      ? join(tmpdir(), "loomrail-demo-projects", randomUUID())
+      : join(dirname(resolve(databasePath)), "demo-projects"));
 
   // The single seam every writer -- request handlers and `runStageAttempt` alike -- publishes
   // through, because there is exactly one `localState` and it is already wrapped by the time any
@@ -599,6 +637,20 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       try {
         const body = registerFixtureProjectRequestSchema.parse(request.body);
         const fixture = await resolveBundledFixture(body.fixtureId);
+        // A bundled fixture is a template in Loomrail's own checkout, never a repository. It
+        // becomes one here, outside the checkout, so the Project records a repository Loomrail may
+        // actually branch -- and so the provisioning guard passes it because it is genuinely
+        // separate, not because anything was relaxed.
+        //
+        // A repository this call just built is not inspected again: `git init` and the first commit
+        // both reported success, which is the same evidence an inspection would go looking for, and
+        // every `git` invocation on this path costs a process the owner waits through. A directory
+        // that was already there is a different claim -- nobody knows what it is -- so that one is
+        // held to exactly the bar an owner's own repository would be.
+        const materialised = await materialiseFixtureRepository(fixture, demoProjectsRoot);
+        const repositoryPath = materialised.created
+          ? materialised.repositoryPath
+          : await resolveRegisteredRepository(materialised.repositoryPath);
         return localState.execute({
           schemaVersion: 1,
           commandId: body.commandId,
@@ -609,7 +661,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             id: fixture.projectId,
             fixtureId: fixture.fixtureId,
             name: fixture.name,
-            repositoryPath: fixture.repositoryPath,
+            repositoryPath,
           },
         });
       } catch (error: unknown) {
