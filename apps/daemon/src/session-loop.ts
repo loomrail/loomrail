@@ -329,7 +329,13 @@ const workspaceNotReadyRefusal = (workspace: WorkItemWorkspace): ProvisionRefusa
 const workspaceGoneRefusal = (workspace: WorkItemWorkspace): ProvisionRefusal => ({
   title: "This work item's workspace is no longer on disk",
   context: `Loomrail records this work item's workspace as ready on branch ${workspace.branch} at ${workspace.worktreePath}, but there is no worktree there now -- the directory was removed, or git no longer recognises it as one. Dispatching the stage anyway would start an agent in a directory that does not exist. Loomrail does not re-cut a workspace by itself (AD-008): the branch may still hold work nobody has merged, and quietly starting a second workspace would hide that.`,
-  recommendation: `Restore the worktree at ${workspace.worktreePath} from the project's repository (\`git worktree add ${workspace.worktreePath} ${workspace.branch}\`), or, once you are sure nothing on ${workspace.branch} is needed, remove the workspace and let the next attempt cut a fresh one. Then retry the stage.`,
+  // Restoring the worktree is the WHOLE recommendation, and deliberately so. This used to offer a
+  // second option -- remove the workspace and let the next attempt cut a fresh one -- that Loomrail
+  // has no affordance for: the workspace commands are CREATE/ACQUIRE/RELEASE/MARK_ORPHANED, nothing
+  // produces REMOVED, and CREATE_WORK_ITEM_WORKSPACE refuses while the row exists. An owner who took
+  // that option found nothing to click, and the next dispatch re-read the same READY row, failed the
+  // same disk check, and asked the same question again. `git worktree add` is correct on its own.
+  recommendation: `Restore the worktree at ${workspace.worktreePath} from the project's repository (\`git worktree add ${workspace.worktreePath} ${workspace.branch}\`), then retry the stage.`,
 });
 
 const provisioningFailedRefusal = (error: unknown, path: string | null): ProvisionRefusal => ({
@@ -575,6 +581,11 @@ const prepareWorkspace = async (deps: RunStageAttemptDeps): Promise<WorkspacePre
   // that is not there would hand this attempt a writer's claim over nothing, and the next attempt
   // would meet it as postponed rather than as the question the owner can answer.
   if (!(await worktreeStillUsable(existing.worktreePath))) {
+    // The row is left READY on purpose: this refuses the dispatch, it does not orphan the workspace.
+    // ORPHANED is terminal -- nothing returns a workspace to READY, and CREATE_WORK_ITEM_WORKSPACE
+    // refuses while the row exists -- so recording it here would dead-end every later IMPLEMENT and
+    // QA for this work item, the owner's own `git worktree add` restore included. A refusal the
+    // owner can answer is worth more than a status that closes the only door out.
     return { type: "REFUSED", request: provisionRefusalRequest(workspaceGoneRefusal(existing)) };
   }
   return acquireWorkspaceLease(deps, existing);

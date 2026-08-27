@@ -498,8 +498,55 @@ describe("session loop workspace provisioning", () => {
       expect(requests[0]?.title).toContain("no longer on disk");
       expect(requests[0]?.context).toContain(worktreePath);
       expect(requests[0]?.blocking).toBe(true);
+      // Every option the recommendation offers must be one Loomrail can actually perform. It used to
+      // offer a second -- remove the workspace and let the next attempt cut a fresh one -- that no
+      // command in this codebase does, so an owner who took it found nothing to click and met the
+      // same question on the next dispatch, forever.
+      expect(requests[0]?.recommendation).toContain("git worktree add");
+      expect(requests[0]?.recommendation).not.toContain("remove the workspace");
       // Nothing is repaired behind the owner's back (AD-008): the record is left exactly as it was,
       // and the lease was never taken on a workspace that is not there.
+      expect(workspaceOf(localState, seeded.workItemId)).toMatchObject({
+        status: "READY",
+        leaseHolder: null,
+      });
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "asks the owner when the recorded path is an ordinary directory git no longer calls this workspace",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      const branch = "loomrail/pruned-under-us";
+      // The other half of the disk check, and the only test that reaches it: every case above
+      // removes the directory outright, so `realpath` fails and the check answers before it ever
+      // asks git anything. A pruned worktree leaves an ORDINARY DIRECTORY behind -- it exists, it
+      // just is not a worktree any more -- and when that directory sits inside some repository (an
+      // owner whose Loomrail data directory lives in a checkout, which is all it takes)
+      // `rev-parse --show-toplevel` answers with the ENCLOSING repository instead of failing. Only
+      // comparing that answer to the path itself separates "a directory is there" from "git still
+      // calls it this workspace"; without it an agent is dispatched into someone else's checkout.
+      const enclosing = await throwawayRepository(makeThrowawayRepo);
+      const worktreePath = join(enclosing, "workspaces", PROJECT_ID, seeded.workItemId);
+      await mkdir(worktreePath, { recursive: true });
+      recordWorkspace(localState, seeded, worktreePath, branch);
+
+      let sessionStarted = false;
+      const adapter = completingAdapter(() => {
+        sessionStarted = true;
+      });
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      expect(sessionStarted).toBe(false);
+      const requests = snapshotOf(localState, seeded.workItemId).humanRequests;
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.title).toContain("no longer on disk");
+      expect(requests[0]?.context).toContain(worktreePath);
+      expect(requests[0]?.blocking).toBe(true);
       expect(workspaceOf(localState, seeded.workItemId)).toMatchObject({
         status: "READY",
         leaseHolder: null,
