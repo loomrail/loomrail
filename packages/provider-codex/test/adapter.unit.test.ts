@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type {
+  CheckpointDraft,
   ContextWindowUsage,
   HumanRequestDraft,
   ProviderOutcome,
@@ -407,6 +408,32 @@ describe("createCodexProvider", () => {
       '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\\"summary\\":\\"Last.\\",\\"completed\\":[],\\"remaining\\":[],\\"deadEnds\\":[],\\"openQuestions\\":[]}"}}',
     ]);
     expect(outcome).toEqual({ type: "COMPLETED", summary: "Last." });
+  });
+
+  // The same rule, on a real capture rather than two hand-written lines -- and the reason it
+  // matters. `workspace-write.jsonl` was recorded from the authenticated CLI on a run that really
+  // edited a file and really ran a verification command. It carries TWO schema-valid agent
+  // messages: line 3, emitted before any tool work, whose summary states an INTENTION ("I'll
+  // inspect greet.js, add the export, then run...") with `completed: []`; and line 10, the answer
+  // the turn finished with. Nothing but position separates them -- same `item.type`, same shape,
+  // both valid against `checkpointDraftSchema`. A first-wins parser therefore closes the stage as
+  // COMPLETED carrying a summary that reports intention as completion, and the pipeline moves on
+  // from work that was only ever announced.
+  it("returns the answer the agent finished with, not the one it started with", async () => {
+    const checkpoints: CheckpointDraft[] = [];
+    const outcome = await runAgainstRecording("workspace-write.jsonl", {
+      onCheckpoint: (checkpoint) => checkpoints.push(checkpoint),
+    });
+    expect(outcome).toEqual({ type: "COMPLETED", summary: "Added and verified `farewell(name)`." });
+    // Both are still PUBLISHED as they arrive -- streaming a checkpoint mid-session is what keeps a
+    // crashed process from losing everything but its tail, and the intention is a real checkpoint of
+    // its own. What must not happen is the OUTCOME being decided by the first of them.
+    expect(checkpoints).toHaveLength(2);
+    expect(checkpoints[0]?.completed).toEqual([]);
+    expect(checkpoints[1]?.completed).toEqual([
+      "Export added to `greet.js`.",
+      "Command output: `Goodbye, world`.",
+    ]);
   });
 
   // `hello.jsonl` ends on a plain `turn.completed` whose agent message is prose, not a checkpoint.
