@@ -17,7 +17,8 @@ decisions instead of disconnected chat sessions.
 > Loomrail is an early pre-alpha. The local kernel, authenticated browser session, SQLite state, audit log, and
 > cross-platform CI are real. The Workbench now runs a restart-safe synthetic Discovery → Plan → Implement → Review
 > → QA → Acceptance workflow with durable budgets, evidence, Human Requests, and owner Decisions in English and
-> Russian. Real agent execution is not available yet.
+> Russian. A live Codex session now runs inside a Git worktree cut for the task it works on, so all six stages can
+> reach a real repository; the Claude Code adapter still serves DISCOVERY, PLAN and REVIEW only.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/workbench-dark.png" />
@@ -37,13 +38,13 @@ decisions instead of disconnected chat sessions.
 
 ## Current checkpoint
 
-| Area          | Today                                                                                                    | Next                                           |
-| ------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| Local runtime | Loopback daemon, CLI launcher, one-time browser session, installable tarball                             | Published package and desktop installer        |
-| State         | Tasks, runs, budgets, recovery, typed evidence, acceptance packages, Decisions, append-only Events       | Retention and restore hardening                |
-| Workbench     | Persisted board, workflow cockpit, command summary, evidence matrix, owner acceptance, EN/RU, light/dark | Full Attention Inbox and richer workflow views |
-| Agents        | Capability-checked provider contract, deterministic mock, and live Codex/Claude CLI adapters             | IMPLEMENT and QA on a real repository          |
-| Platforms     | macOS and Windows CI are green                                                                           | Clean-machine acceptance and hardening         |
+| Area          | Today                                                                                                                 | Next                                                                                  |
+| ------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Local runtime | Loopback daemon, CLI launcher, one-time browser session, installable tarball                                          | Published package and desktop installer                                               |
+| State         | Tasks, runs, budgets, recovery, typed evidence, acceptance packages, Decisions, append-only Events                    | Retention and restore hardening                                                       |
+| Workbench     | Persisted board, workflow cockpit, command summary, evidence matrix, owner acceptance, EN/RU, light/dark              | Full Attention Inbox and richer workflow views                                        |
+| Agents        | Capability-checked provider contract, deterministic mock, live Codex/Claude CLI adapters, and a per-task Git worktree | The workspace visible in the task card, and the Claude Code adapter on the write path |
+| Platforms     | macOS and Windows CI are green                                                                                        | Clean-machine acceptance and hardening                                                |
 
 ## How it is intended to work
 
@@ -130,18 +131,22 @@ apps/
   daemon/    # loopback API, commands, events, and SQLite lifecycle
   web/       # React Workbench
 packages/
-  contracts/          # shared schemas and transport contracts
-  domain/             # deterministic WorkItem and workflow decisions
-  persistence-sqlite/ # SQLite repositories, queue, and migrations
-  provider-core/      # provider lifecycle and capability boundary
-  provider-mock/      # deterministic synthetic provider scenarios
-  workflow-engine/    # versioned workflow template validation
-  ui/                 # shared product primitives and patterns
+  contracts/             # shared schemas and transport contracts
+  domain/                # deterministic WorkItem and workflow decisions
+  persistence-sqlite/    # SQLite repositories, queue, and migrations
+  context-assembly/      # what a provider session is told, and in what order
+  workspace/             # Git process boundary, repository inspection, worktrees
+  provider-core/         # provider lifecycle and capability boundary
+  provider-mock/         # deterministic synthetic provider scenarios
+  provider-codex/        # the real `codex` CLI as a child process
+  provider-claude-code/  # the real `claude` CLI as a child process
+  workflow-engine/       # versioned workflow template validation
+  ui/                    # shared product primitives and patterns
 docs/        # product, architecture, security, design, plans, and evidence
 ```
 
-The daemon owns state and capability boundaries. The web app never receives raw provider credentials and does not
-talk directly to future agent, shell, or Git adapters.
+The daemon owns state and capability boundaries. The web app never receives raw provider credentials and never talks
+to an agent, a shell or Git directly: every one of those crossings goes through the daemon.
 
 ## Roadmap
 
@@ -157,16 +162,22 @@ talk directly to future agent, shell, or Git adapters.
 - [ ] **M7 — Public checkpoint:** packaged launcher and clean-install gate are in place; remaining work is hardening
       and the first published release
 
-Real Codex and Claude Code execution has landed, deliberately narrow: each adapter spawns its CLI in a fresh, empty
-temporary directory under the CLI's own sandbox (`codex -s read-only`, `claude --permission-mode plan`), so it can serve
-the DISCOVERY, PLAN and REVIEW stages and nothing else. **The adapters have no repository or filesystem access at all**,
-and a stage an adapter does not declare — IMPLEMENT above all — is refused to you as a blocking question rather than
-dispatched. Loomrail never enables a permission-bypass flag on any code path. Repository access arrives with milestone
-E1.
+Real Codex and Claude Code execution has landed, and milestone E1 has since given it somewhere to write. Before
+dispatching a stage that edits code, Loomrail cuts a Git worktree for that work item on a branch of its own and runs the
+CLI there, so **the Codex adapter now serves all six stages** under `codex exec -s workspace-write`. The Claude Code
+adapter still declares DISCOVERY, PLAN and REVIEW only: its write path has never been exercised against the real CLI
+here, and one adapter's evidence is not taken as proof about the other. A stage an adapter does not declare is refused
+to you as a blocking question rather than dispatched, and Loomrail never enables a permission-bypass flag on any code
+path.
 
-Shell/Git mutations, worktrees, plugins, remote mode, and desktop packaging remain outside the current checkpoint. What
-comes after it — session handoff, repository access, project guardrails and extensibility — is decomposed in the
-[post-Phase-0 plan](docs/plans/06-post-phase-0-decomposition.ru.md).
+Your own checkout is never the working directory. Worktrees are cut under the Loomrail data directory
+(`<data>/workspaces/<project>/<work item>`), the branch is deleted only while it still is the one Loomrail cut, and a
+workspace whose directory has disappeared is reconciled at startup instead of being quietly reused.
+
+Everything downstream of the edit itself remains outside the current checkpoint: Loomrail commits nothing, pushes
+nothing and merges nothing, so a stage's work stays on its worktree's branch for you to inspect and dispose of. Plugins,
+remote mode and desktop packaging are outside it too. What comes next — project guardrails and extensibility — is
+decomposed in the [post-Phase-0 plan](docs/plans/06-post-phase-0-decomposition.ru.md).
 
 ### Choosing a provider
 
