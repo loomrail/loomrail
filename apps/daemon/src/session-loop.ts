@@ -21,11 +21,13 @@ import {
   type WorkItemWorkspace,
 } from "@loomrail/contracts";
 import {
+  adapterWorksInWorkspace,
   decideDispatchStage,
   decideProvisionWorkspace,
   decideSessionWorkspace,
   provisionRefusalRequest,
   stageRequiresWorkspace,
+  stageRunsInWorkspace,
   workspaceBranchName,
   type DispatchStageDecision,
   type ProvisionRefusal,
@@ -751,18 +753,48 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     }
 
     // Spec §6: the workspace is cut before the first session opens, never alongside it. Which stages
-    // need one is a property of the stage (`stagesRequiringWorkspace` in `@loomrail/domain`), read
-    // from there rather than compared against stage names here -- DISCOVERY, PLAN, REVIEW and
-    // ACCEPTANCE produce prose and must not have a worktree cut for them at all. Done once per
+    // run in one is a property of the stage (`stagesRunningInWorkspace` in `@loomrail/domain`), read
+    // from there rather than compared against stage names here -- every stage an agent runs except
+    // ACCEPTANCE, which is the owner's decision rather than a reading of the tree. Done once per
     // attempt: `lease.workspace` is set as soon as this attempt holds the lease, and every later
     // session in the same attempt writes in the same worktree (spec D1).
-    if (lease.workspace === null && stageRequiresWorkspace(attempt.stage)) {
+    //
+    // That list used to be IMPLEMENT and QA alone, so this is now reached at a work item's FIRST
+    // agent stage rather than at IMPLEMENT: the worktree and its carry-in commit are created
+    // earlier in the run than they were. Everything downstream already handled that, because
+    // nothing downstream knew which stage cut the workspace -- `prepareWorkspace` reads the
+    // recorded row first and reuses it, `acquireWorkspaceLease` takes the lease per StageAttempt
+    // and `releaseWorkspaceLease` gives it back in the attempt's `finally`, and startup
+    // reconciliation judges rows and worktrees, never the stage that produced them. What changes is
+    // only that the reuse path, rather than the create path, is the one IMPLEMENT now takes.
+    //
+    // `adapterWorksInWorkspace` is the other half, and it is about the owner's repository rather
+    // than about this stage: cutting a worktree writes a ref, a commit and a `.git/worktrees` entry
+    // into it, and an adapter that reads `invocation.workspace` nowhere would have all of that done
+    // on its behalf and then discard it. Today that is `provider-claude-code`, which serves
+    // DISCOVERY, PLAN and REVIEW out of its own temporary directory.
+    if (
+      lease.workspace === null &&
+      stageRunsInWorkspace(attempt.stage) &&
+      adapterWorksInWorkspace(capabilities.stages)
+    ) {
       const prepared = await prepareWorkspaceSafely(deps);
       if (prepared.type === "REFUSED") {
-        refuseDispatch({ type: "WORKSPACE_NOT_PROVISIONED", request: prepared.request });
-        return;
-      }
-      if (prepared.type === "POSTPONED") {
+        // A stage that cannot run without a worktree ends here as a blocking question. One that
+        // merely reads better with it does not: before this stage list widened, DISCOVERY, PLAN and
+        // REVIEW were dispatched with no workspace against any project at all, and a project whose
+        // path is not a repository -- a legacy fixture Project, a path that moved -- must not start
+        // being refused stages it used to run. It runs them the way it always did, and the reason
+        // the better path was unavailable is logged rather than swallowed.
+        if (stageRequiresWorkspace(attempt.stage)) {
+          refuseDispatch({ type: "WORKSPACE_NOT_PROVISIONED", request: prepared.request });
+          return;
+        }
+        deps.logger.warn(
+          { stageAttemptId, stage: attempt.stage, reason: prepared.request.title },
+          "No workspace could be cut for this stage; it runs without one, reading only its context pack",
+        );
+      } else if (prepared.type === "POSTPONED") {
         // Spec §7: a lease another StageAttempt holds postpones this dispatch rather than failing
         // it. The dispatch stays PENDING -- exactly like the "another caller is already running a
         // session" branch below -- so the next drain picks it back up once the lease is given back.
@@ -771,17 +803,19 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           "Another stage attempt is writing in this work item's workspace; this dispatch waits",
         );
         return;
+      } else {
+        lease.workspace = prepared.workspace;
+        deps.logger.info(
+          {
+            stageAttemptId,
+            stage: attempt.stage,
+            workspaceId: prepared.workspace.id,
+            branch: prepared.workspace.branch,
+            worktreePath: prepared.workspace.worktreePath,
+          },
+          "The work item's workspace is ready and leased to this stage attempt",
+        );
       }
-      lease.workspace = prepared.workspace;
-      deps.logger.info(
-        {
-          stageAttemptId,
-          workspaceId: prepared.workspace.id,
-          branch: prepared.workspace.branch,
-          worktreePath: prepared.workspace.worktreePath,
-        },
-        "The work item's workspace is ready and leased to this stage attempt",
-      );
     }
 
     // The workspace fields of the invocation built below, in the shape an adapter reads them

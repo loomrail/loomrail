@@ -841,6 +841,13 @@ describe("stage attempt session loop", () => {
       stateDatabasePath: databasePath,
       logger: false,
     });
+    // The startup drain is asynchronous from this work item's very first stage now: DISCOVERY runs
+    // in the work item's worktree since R11, so the pass awaits the provisioning path before it
+    // opens the resumed session. `whenIdle` is the daemon's own signal that the pass is over (spec
+    // D6, and the reason that hook exists); without it `close()` shuts the state module under the
+    // pass, which the worker survives as a logged, reconcilable failure but which leaves nothing
+    // here to assert about.
+    await restartedDaemon.whenIdle();
     await restartedDaemon.close();
 
     const restarted = await open();

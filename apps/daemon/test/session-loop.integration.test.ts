@@ -78,12 +78,56 @@ const completingAdapter = (
     start: async (invocation: ProviderInvocation): Promise<ProviderOutcome> => {
       started += 1;
       await onStart(started, invocation);
-      return { type: "COMPLETED", summary: "The mock session finished the stage." };
+      // REVIEW and QA are the two stages the domain refuses to complete without their typed
+      // evidence artifact (`decideApplyProviderOutcome`, @loomrail/domain). Produced here so a test
+      // driving one of them asserts what this suite is about -- the workspace the adapter was
+      // handed -- instead of dying on an unrelated stage rule.
+      return {
+        type: "COMPLETED",
+        summary: "The mock session finished the stage.",
+        ...(invocation.session.stage === "REVIEW"
+          ? {
+              artifacts: [
+                {
+                  kind: "REVIEW_REPORT" as const,
+                  title: "Mock review",
+                  summary: "The synthetic reviewer found nothing blocking.",
+                  checks: ["Requirements traced"],
+                },
+              ],
+            }
+          : {}),
+      };
     },
     requestHandoff: () => Promise.resolve(),
     abortSession: () => Promise.resolve(),
   };
 };
+
+// The shape `provider-claude-code` has: three prose stages, no stage that requires a workspace, and
+// a `start` that never looks at `invocation.workspace`. Declared here rather than imported so this
+// suite pins the daemon's rule about such an adapter, not that package's current stage list.
+const proseOnlyAdapter = (onStart: (invocation: ProviderInvocation) => void): ProviderAdapter => ({
+  capabilities: () =>
+    providerCapabilitiesSchema.parse({
+      provider: "CLAUDE_CODE",
+      start: true,
+      interrupt: true,
+      eventStream: false,
+      usageReporting: false,
+      contextWindowReporting: false,
+      checkpointOnRequest: false,
+      contextWindowTokens: 128_000,
+      stages: ["DISCOVERY", "PLAN", "REVIEW"],
+      costReporting: false,
+    }),
+  start: (invocation: ProviderInvocation): Promise<ProviderOutcome> => {
+    onStart(invocation);
+    return Promise.resolve({ type: "COMPLETED", summary: "The prose session finished the stage." });
+  },
+  requestHandoff: () => Promise.resolve(),
+  abortSession: () => Promise.resolve(),
+});
 
 const pathExists = async (path: string): Promise<boolean> => {
   try {
@@ -373,35 +417,94 @@ describe("session loop workspace provisioning", () => {
     GIT_TIMEOUT_MS,
   );
 
-  // The other side of the same rule: DISCOVERY, PLAN, REVIEW and ACCEPTANCE produce prose, no
-  // worktree is cut for them, and the invocation must therefore OMIT the field rather than carry an
-  // empty one -- `exactOptionalPropertyTypes` makes absent and `undefined` different things, and
-  // absent is what the contract defines and what the adapter's read-only branch keys on.
+  // The test that would have caught R11, at the level where it is an assertion about behaviour and
+  // not a restatement of a constant: REVIEW is neither IMPLEMENT nor QA, the Project is backed by a
+  // real repository, and what is asserted is the invocation the adapter was actually handed.
+  //
+  // The defect was found by running a real session against the live Codex CLI. DISCOVERY, PLAN and
+  // IMPLEMENT ran, the agent really did edit a file in the work item's worktree, and REVIEW then
+  // reported -- correctly -- that the workspace contained no repository and no implementation to
+  // assess, because it had been handed the adapter's empty scratch directory. Every test and every
+  // review round had agreed with the constant instead of with the run.
+  //
+  // Asserted against the workspace ROW rather than against literals, for the same reason the
+  // IMPLEMENT test above is: the row is what the daemon was supposed to pass on, so a test agreeing
+  // with a hand-written path would still pass if the two drifted.
   it(
-    "leaves the workspace out entirely for a stage that only produces prose",
+    "hands a REVIEW stage the same worktree, because a review reads the change it is judging",
     async () => {
       repositoryPath = await throwawayRepository(makeThrowawayRepo);
       const localState = openState();
-      const planStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "PLAN");
-      if (!planStage) throw new Error("The mock delivery template no longer declares PLAN");
-      const planOnlyTemplate: WorkflowTemplate = {
+      const reviewStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "REVIEW");
+      if (!reviewStage) throw new Error("The mock delivery template no longer declares REVIEW");
+      const reviewOnlyTemplate: WorkflowTemplate = {
         ...implementOnlyTemplate,
-        id: "workspace-plan-v1",
-        name: "Workspace plan",
-        stages: [{ ...planStage, ordinal: 0 }],
+        id: "workspace-review-v1",
+        name: "Workspace review",
+        stages: [{ ...reviewStage, ordinal: 0 }],
       };
-      const seeded = seedAttempt(localState, { template: planOnlyTemplate });
+      const seeded = seedAttempt(localState, { template: reviewOnlyTemplate });
 
       let received: ProviderInvocation | undefined;
       const adapter = completingAdapter((_count, invocation) => {
         received = invocation;
       });
 
-      await runStageAttempt({ ...depsFor(localState, seeded, adapter), template: planOnlyTemplate });
+      await runStageAttempt({ ...depsFor(localState, seeded, adapter), template: reviewOnlyTemplate });
+
+      // Asserted before the row, because the invocation is the subject: a REVIEW that reached the
+      // adapter with this field absent is the live defect, whatever the database says.
+      expect(received?.workspace).toBeDefined();
+      const workspace = workspaceOf(localState, seeded.workItemId);
+      expect(workspace).not.toBeNull();
+      expect(received?.workspace).toEqual({
+        path: workspace?.worktreePath,
+        branch: workspace?.branch,
+        baseCommit: workspace?.baseCommit,
+      });
+      // A row is not evidence about a disk: this is the directory the adapter would launch its CLI
+      // in, so it has to be the real worktree and not merely a string that matches the row.
+      expect(await pathExists(join(received?.workspace?.path ?? "", ".git"))).toBe(true);
+      expect(snapshotOf(localState, seeded.workItemId).humanRequests).toHaveLength(0);
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  // ACCEPTANCE is the one stage left out, and not on the reasoning R11 removed: it is the owner's
+  // decision about whether the work is done, not an agent's reading of the tree. The field must be
+  // OMITTED rather than carry an empty value -- `exactOptionalPropertyTypes` makes absent and
+  // `undefined` different things, and absent is what the contract defines and what an adapter's
+  // read-only branch keys on.
+  it(
+    "leaves the workspace out entirely for the owner's own acceptance decision",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const acceptanceStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "ACCEPTANCE");
+      if (!acceptanceStage) throw new Error("The mock delivery template no longer declares ACCEPTANCE");
+      const acceptanceOnlyTemplate: WorkflowTemplate = {
+        ...implementOnlyTemplate,
+        id: "workspace-acceptance-v1",
+        name: "Workspace acceptance",
+        stages: [{ ...acceptanceStage, ordinal: 0 }],
+      };
+      const seeded = seedAttempt(localState, { template: acceptanceOnlyTemplate });
+
+      let received: ProviderInvocation | undefined;
+      const adapter = completingAdapter((_count, invocation) => {
+        received = invocation;
+      });
+
+      await runStageAttempt({
+        ...depsFor(localState, seeded, adapter),
+        template: acceptanceOnlyTemplate,
+      });
 
       expect(received).toBeDefined();
       expect(received === undefined ? true : "workspace" in received).toBe(false);
       expect(workspaceOf(localState, seeded.workItemId)).toBeNull();
+      // Nothing was cut from the owner's repository for a decision that reads nothing off disk.
+      expect(await listWorktrees(repositoryPath)).toHaveLength(1);
     },
     GIT_TIMEOUT_MS,
   );
@@ -474,12 +577,16 @@ describe("session loop workspace provisioning", () => {
     GIT_TIMEOUT_MS,
   );
 
+  // R11 moved WHEN the worktree and its carry-in commit are first created: a work item's FIRST
+  // agent stage cuts them now, not IMPLEMENT. That is the visible consequence of the wider list, and
+  // it is asserted on the owner's own repository -- the second worktree in it is the one DISCOVERY
+  // caused -- rather than only on the invocation.
   it(
-    "does not cut a workspace for a stage that only produces prose",
+    "cuts the work item's workspace at its first agent stage, not at IMPLEMENT",
     async () => {
       repositoryPath = await throwawayRepository(makeThrowawayRepo);
       const localState = openState();
-      // The delivery template's own first stage is DISCOVERY, which needs no repository at all.
+      // The delivery template's own first stage, and the one a run reaches before any other.
       const discoveryTemplate: WorkflowTemplate = {
         ...mockDeliveryTemplate,
         id: "workspace-discovery-v1",
@@ -488,16 +595,92 @@ describe("session loop workspace provisioning", () => {
         stages: mockDeliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
       };
       const seeded = seedAttempt(localState, { template: discoveryTemplate });
-      let sessionStarted = false;
-      const adapter = completingAdapter(() => {
-        sessionStarted = true;
+      let received: ProviderInvocation | undefined;
+      const adapter = completingAdapter((_count, invocation) => {
+        received = invocation;
       });
 
       await runStageAttempt({ ...depsFor(localState, seeded, adapter), template: discoveryTemplate });
 
-      expect(sessionStarted).toBe(true);
+      const workspace = workspaceOf(localState, seeded.workItemId);
+      expect(workspace).toMatchObject({ status: "READY", projectId: PROJECT_ID });
+      expect(received?.workspace?.path).toBe(workspace?.worktreePath);
+      // Two: the repository itself, and the worktree this DISCOVERY caused to be cut from it.
+      expect(await listWorktrees(repositoryPath)).toHaveLength(2);
+      // And the lease is handed back, so the IMPLEMENT that follows takes the reuse path rather
+      // than meeting its own DISCOVERY as another writer.
+      expect(workspace?.leaseHolder).toBeNull();
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  // The constraint that keeps the wider list from breaking projects that never had a repository: a
+  // Project whose path is not one -- a fixture Project still recorded at a bundled template, a path
+  // the owner moved -- ran its prose stages before E1 and must go on running them. What used to be
+  // no decision at all is now a refusal from `prepareWorkspace` that this stage steps past, so the
+  // failure mode being guarded is a DISCOVERY that suddenly asks the owner a blocking question.
+  it(
+    "still dispatches a prose stage with no workspace when the project has no repository",
+    async () => {
+      repositoryPath = join(temporaryDirectory, "not a repository");
+      await mkdir(repositoryPath, { recursive: true });
+      const localState = openState();
+      const discoveryTemplate: WorkflowTemplate = {
+        ...mockDeliveryTemplate,
+        id: "workspace-discovery-bare-v1",
+        version: 1,
+        name: "Workspace discovery without a repository",
+        stages: mockDeliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
+      };
+      const seeded = seedAttempt(localState, { template: discoveryTemplate });
+      let received: ProviderInvocation | undefined;
+      const adapter = completingAdapter((_count, invocation) => {
+        received = invocation;
+      });
+
+      await runStageAttempt({ ...depsFor(localState, seeded, adapter), template: discoveryTemplate });
+
+      expect(received).toBeDefined();
+      expect(received === undefined ? true : "workspace" in received).toBe(false);
+      expect(workspaceOf(localState, seeded.workItemId)).toBeNull();
+      // The whole point: the owner is asked nothing. An IMPLEMENT on this same project is still
+      // refused -- that is the test two above -- because it could only report work it never did.
+      expect(snapshotOf(localState, seeded.workItemId).humanRequests).toHaveLength(0);
+      expect(snapshotOf(localState, seeded.workItemId).stageAttempts[0]?.status).toBe("SUCCEEDED");
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  // An adapter that reads `invocation.workspace` nowhere gets no worktree cut on its behalf: doing
+  // so would write a ref, a carry-in commit and a `.git/worktrees` entry into the owner's own
+  // repository for a session that runs in a temporary directory of its own. `provider-claude-code`
+  // is that adapter today, and it is recognised by the stages it declares -- it serves no stage that
+  // requires a workspace, which is the same fact the launcher's "worksInRepository" line reads.
+  it(
+    "cuts nothing for an adapter that declares no stage needing a workspace",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const discoveryTemplate: WorkflowTemplate = {
+        ...mockDeliveryTemplate,
+        id: "workspace-discovery-prose-adapter-v1",
+        version: 1,
+        name: "Workspace discovery on a prose-only adapter",
+        stages: mockDeliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
+      };
+      const seeded = seedAttempt(localState, { template: discoveryTemplate });
+      let received: ProviderInvocation | undefined;
+      const adapter = proseOnlyAdapter((invocation) => {
+        received = invocation;
+      });
+
+      await runStageAttempt({ ...depsFor(localState, seeded, adapter), template: discoveryTemplate });
+
+      expect(received).toBeDefined();
+      expect(received === undefined ? true : "workspace" in received).toBe(false);
       expect(workspaceOf(localState, seeded.workItemId)).toBeNull();
       expect(await listWorktrees(repositoryPath)).toHaveLength(1);
+      expect(snapshotOf(localState, seeded.workItemId).humanRequests).toHaveLength(0);
     },
     GIT_TIMEOUT_MS,
   );

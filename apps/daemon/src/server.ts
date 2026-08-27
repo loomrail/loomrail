@@ -43,7 +43,7 @@ import {
   type WorkflowStage,
   type WorkItemWorkspace,
 } from "@loomrail/contracts";
-import { stageRequiresWorkspace, WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
+import { adapterWorksInWorkspace, WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
 import {
   openLocalState,
   StateStoreError,
@@ -173,12 +173,13 @@ export type RunningDaemon = {
     cliAvailable: boolean;
     recognised: boolean;
     stages: readonly WorkflowStage[];
-    // Whether any stage this adapter declares is one that gets a Git worktree cut for it
-    // (`stageRequiresWorkspace`, @loomrail/domain). Computed here rather than in the launcher
-    // because the domain owns which stages those are, and the launcher restating the list would be
-    // a second copy free to drift from the one the dispatcher actually reads. Since E1 the answer
-    // differs per adapter -- Codex declares all six, Claude Code three -- so the launcher can no
-    // longer say one thing about "a live provider".
+    // Whether this adapter works in the owner's repository at all (`adapterWorksInWorkspace`,
+    // @loomrail/domain). Computed here rather than in the launcher because the domain owns the
+    // answer, and the launcher restating it would be a second copy free to drift from the one the
+    // dispatcher actually reads -- the session loop gates provisioning on the very same call, so an
+    // owner told "it works in a worktree" is told it by the fact that decides it. Since E1 the
+    // answer differs per adapter -- Codex declares all six stages, Claude Code three and no writing
+    // one -- so the launcher can no longer say one thing about "a live provider".
     worksInRepository: boolean;
   };
   // Exposed for tests (spec D6): the alternative is a wait loop with a timeout in every test, and
@@ -1439,7 +1440,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         cliAvailable: providerCapabilities.start,
         recognised: providerResolution.recognised,
         stages: providerCapabilities.stages,
-        worksInRepository: providerCapabilities.stages.some(stageRequiresWorkspace),
+        worksInRepository: adapterWorksInWorkspace(providerCapabilities.stages),
       },
       whenIdle: () => worker.whenIdle(),
       close: async () => {
