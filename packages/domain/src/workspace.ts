@@ -1,20 +1,87 @@
 import type { HumanRequestDraft, WorkflowStage } from "@loomrail/contracts";
 
 /**
- * Stages that need a real repository to run in (spec §5, D11).
+ * Stages that run inside the work item's own Git worktree (spec §5, D11).
  *
  * The plan's Task 9 wants this list "from the workflow template", but the template has no such
  * field, and adding one is scope this milestone does not ask for -- a workflow template describes
  * an ordering of stages, not what a stage needs to execute. What a stage needs is a property of the
- * stage itself: IMPLEMENT changes files, QA runs the result, and every other stage (DISCOVERY,
- * PLAN, REVIEW, ACCEPTANCE) only ever produces prose. That is fixed by what the stage *is*, not by
- * which project it happens to run against, so it belongs here as a constant next to the rest of
- * this package's decisions, not as per-template data nobody would ever vary.
+ * stage itself, fixed by what the stage *is* rather than by which project it happens to run
+ * against, so it belongs here as a constant next to the rest of this package's decisions.
+ *
+ * WHAT that property is was got wrong once, and the correction is why this list is five stages and
+ * not two. The first version read a stage's OUTPUT: IMPLEMENT and QA change files, "every other
+ * stage only ever produces prose", so those four were given nothing. Producing prose is not the
+ * same as needing no input. A REVIEW session run that way was handed the adapter's empty scratch
+ * directory and reported -- correctly, and uselessly -- that it could find no repository and no
+ * implementation to assess, on a work item whose IMPLEMENT stage had just edited a real file in a
+ * real worktree minutes earlier. Nothing caught it, because the comment that stood here explained
+ * the choice rather than tested it.
+ *
+ * The rule that replaces it: what a stage needs is what it READS OR WRITES, not what it emits.
+ * REVIEW and QA read the change, IMPLEMENT writes it, and DISCOVERY and PLAN on a real codebase are
+ * worth having only when they can read the code they are reasoning about instead of paraphrasing
+ * the brief. All five are dispatched into the same worktree, cut once for the work item.
+ *
+ * ACCEPTANCE is the single exception, and not on the old grounds: it is the owner's decision about
+ * whether the work is done, not an agent's reading of the tree. Nothing it decides comes off disk.
+ *
+ * This is what a stage is GIVEN when there is a worktree to give it. What happens when there is not
+ * -- a Project whose path is no longer a repository, one mid-rebase, a worktree that vanished -- is
+ * the separate question `stagesRequiringWorkspace` below answers, and the two lists differ on
+ * purpose.
+ */
+export const stagesRunningInWorkspace = [
+  "DISCOVERY",
+  "PLAN",
+  "IMPLEMENT",
+  "REVIEW",
+  "QA",
+] as const satisfies readonly WorkflowStage[];
+
+export const stageRunsInWorkspace = (stage: WorkflowStage): boolean =>
+  (stagesRunningInWorkspace as readonly WorkflowStage[]).includes(stage);
+
+/**
+ * The narrower list: stages that cannot honestly run at all without a worktree.
+ *
+ * `stagesRunningInWorkspace` decides who is handed the worktree; this decides who is REFUSED when
+ * there is none to hand over. They are different questions and they have different answers, which
+ * is why a stage appearing in the wider list does not put it here.
+ *
+ * A Project's repository can fail to be one at the moment a stage is dispatched -- a path that
+ * stopped being a repository, a repository parked mid-rebase, a legacy fixture Project still
+ * recorded at a bundled template. Before this list widened, none of that touched DISCOVERY, PLAN or
+ * REVIEW: they were dispatched with no workspace and answered from the brief. Refusing them now
+ * would take a project that ran yesterday and stop it, to no one's benefit -- a DISCOVERY with no
+ * worktree is the poorer session this milestone exists to stop shipping, but it is still a session
+ * that can answer honestly from what it was given. An IMPLEMENT or QA session with no worktree
+ * cannot: it can only report work it had nowhere to do. So those two, and only those two, are
+ * refused rather than degraded.
  */
 export const stagesRequiringWorkspace = ["IMPLEMENT", "QA"] as const satisfies readonly WorkflowStage[];
 
 export const stageRequiresWorkspace = (stage: WorkflowStage): boolean =>
   (stagesRequiringWorkspace as readonly WorkflowStage[]).includes(stage);
+
+/**
+ * Whether an adapter uses a workspace at all, read off the stages it declares.
+ *
+ * Cutting a worktree is not free and not invisible: it writes a `loomrail/…` ref, a carry-in commit
+ * and a `.git/worktrees/<name>/` entry into the owner's own repository (THREAT-MODEL.md, E1 delta).
+ * Doing that for an adapter that will not look at the result is litter charged to the owner, and
+ * `provider-claude-code` is exactly that adapter today: it always runs its CLI in a fresh temporary
+ * directory and reads `ProviderInvocation.workspace` nowhere.
+ *
+ * Declaring a stage that *requires* a workspace is the only signal an adapter gives about this --
+ * `ProviderCapabilities` has no field for "I use the worktree", and inventing one is a contract
+ * change this fix does not need. An adapter that never serves IMPLEMENT or QA has no write path,
+ * which is precisely why its sibling was never taught to use the worktree at all. The same
+ * expression backs the launcher's `worksInRepository` line, so the sentence an owner reads at
+ * startup and the decision the dispatcher makes cannot drift apart.
+ */
+export const adapterWorksInWorkspace = (declaredStages: readonly WorkflowStage[]): boolean =>
+  declaredStages.some(stageRequiresWorkspace);
 
 const MAX_BRANCH_SLUG_LENGTH = 40;
 const SHORT_ID_LENGTH = 8;
@@ -210,6 +277,12 @@ export type SessionWorkspaceDecision = { type: "PROCEED" } | { type: "REFUSED"; 
  * layer that answers whether the invocation it is about to send carries one. The caller must read
  * that answer off the invocation itself and not off whatever it *meant* to put there: reading it
  * anywhere else re-opens exactly the gap this closes.
+ *
+ * Reads `stagesRequiringWorkspace` and deliberately NOT `stagesRunningInWorkspace`, which is now
+ * the wider of the two. This gate ends a dispatch with a blocking question, and the only sessions
+ * worth ending that way are the ones that would otherwise report work they had nowhere to do. A
+ * DISCOVERY or REVIEW whose project has no usable repository is a worse session than it could be,
+ * not a dishonest one, and it is dispatched exactly as it was before that list widened.
  */
 export const decideSessionWorkspace = (context: {
   stage: WorkflowStage;

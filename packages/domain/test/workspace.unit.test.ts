@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  adapterWorksInWorkspace,
   decideProvisionWorkspace,
   decideSessionWorkspace,
   stagesRequiringWorkspace,
   stageRequiresWorkspace,
+  stagesRunningInWorkspace,
+  stageRunsInWorkspace,
   workspaceBranchName,
 } from "../src/index.js";
 
@@ -138,8 +141,34 @@ describe("decideProvisionWorkspace", () => {
 
 // Controller ruling R1: Task 9 reads this constant instead of a workflow-template field, because
 // the template has no such field and adding one is out of this milestone's scope.
+//
+// R11 corrected WHAT the constant says. It was IMPLEMENT and QA, on the reasoning that every other
+// stage "only ever produces prose" -- and a real REVIEW session, on a real repository, reported that
+// it could find no repository and no implementation to assess. Producing prose is not needing no
+// input: a review reads the change it is reviewing. The list is now every stage an agent runs, and
+// the assertion below is spelled out stage by stage so that narrowing it back fails here rather
+// than passing as a silently smaller set.
+describe("stagesRunningInWorkspace", () => {
+  it("runs every agent stage in the work item's worktree, ACCEPTANCE alone excepted", () => {
+    expect(stagesRunningInWorkspace).toEqual(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA"]);
+    expect(stageRunsInWorkspace("DISCOVERY")).toBe(true);
+    expect(stageRunsInWorkspace("PLAN")).toBe(true);
+    expect(stageRunsInWorkspace("IMPLEMENT")).toBe(true);
+    // The stage the defect was found on: REVIEW reads the implementation it is judging.
+    expect(stageRunsInWorkspace("REVIEW")).toBe(true);
+    expect(stageRunsInWorkspace("QA")).toBe(true);
+    // Not an omission, and not "it produces prose": acceptance is the owner's decision, not an
+    // agent's reading of the tree.
+    expect(stageRunsInWorkspace("ACCEPTANCE")).toBe(false);
+  });
+});
+
+// The narrower list, and the reason there are two: being handed a worktree and being refused
+// without one are different questions. A Project whose path is not a repository -- a legacy fixture
+// Project, a path that moved -- ran DISCOVERY, PLAN and REVIEW before this milestone and has to go
+// on running them, so widening the list above must not widen this one with it.
 describe("stagesRequiringWorkspace", () => {
-  it("requires a workspace for IMPLEMENT and QA, and no other stage", () => {
+  it("refuses only the stages that cannot honestly run without a worktree", () => {
     expect(stagesRequiringWorkspace).toEqual(["IMPLEMENT", "QA"]);
     expect(stageRequiresWorkspace("IMPLEMENT")).toBe(true);
     expect(stageRequiresWorkspace("QA")).toBe(true);
@@ -147,6 +176,21 @@ describe("stagesRequiringWorkspace", () => {
     expect(stageRequiresWorkspace("PLAN")).toBe(false);
     expect(stageRequiresWorkspace("REVIEW")).toBe(false);
     expect(stageRequiresWorkspace("ACCEPTANCE")).toBe(false);
+  });
+});
+
+// Cutting a worktree writes a ref, a carry-in commit and a `.git/worktrees` entry into the owner's
+// own repository, so it is not done on behalf of an adapter that will discard it. Declaring a stage
+// that requires one is the only signal an adapter gives, and today it separates the two live
+// adapters exactly: Codex declares all six stages and reads `invocation.workspace`; Claude Code
+// declares three prose stages and always runs in a temporary directory of its own.
+describe("adapterWorksInWorkspace", () => {
+  it("answers for the stages an adapter declares, not for the stage being dispatched", () => {
+    expect(adapterWorksInWorkspace(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"])).toBe(
+      true,
+    );
+    expect(adapterWorksInWorkspace(["DISCOVERY", "PLAN", "REVIEW"])).toBe(false);
+    expect(adapterWorksInWorkspace(["QA"])).toBe(true);
   });
 });
 
@@ -178,9 +222,11 @@ describe("decideSessionWorkspace", () => {
   });
 
   // The other half, and the reason this is not simply "always require a workspace": DISCOVERY,
-  // PLAN, REVIEW and ACCEPTANCE produce prose, and a worktree is deliberately never cut for them
-  // (spec §6). A gate that refused them would refuse four of the six stages of every pipeline.
-  it("proceeds for a stage that produces prose, with or without a workspace", () => {
+  // PLAN and REVIEW are dispatched into the worktree when there is one (`stagesRunningInWorkspace`)
+  // and dispatched without one when there is not -- a project whose path is not a repository still
+  // runs them, exactly as it did before E1. ACCEPTANCE never gets one at all. A gate that refused
+  // any of the four would refuse four of the six stages of every pipeline on such a project.
+  it("proceeds for a stage that can answer without a worktree, with or without one", () => {
     for (const stage of ["DISCOVERY", "PLAN", "REVIEW", "ACCEPTANCE"] as const) {
       expect(decideSessionWorkspace({ stage, hasWorkspace: false })).toEqual({ type: "PROCEED" });
       expect(decideSessionWorkspace({ stage, hasWorkspace: true })).toEqual({ type: "PROCEED" });
