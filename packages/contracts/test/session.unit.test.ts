@@ -20,6 +20,10 @@ describe("session handoff contracts", () => {
     startedAt: "2026-08-25T18:00:00.000Z",
     endedAt: null,
     version: 1,
+    // Neither test using this fixture is about a session that actually spawned a process -- both
+    // are generic well-formed-shape checks (one RUNNING, one ENDED) -- so null is the honest value:
+    // a running session that never started one.
+    pid: null,
     ...overrides,
   });
 
