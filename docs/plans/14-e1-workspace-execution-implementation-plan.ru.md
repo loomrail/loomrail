@@ -43,16 +43,16 @@
 
 **Создаётся:**
 
-| файл                                                                   | ответственность                                                                         |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `packages/workspace/src/git.ts`                                        | запуск `git` как процесса: аргументы массивом, без оболочки; код выхода, stdout, stderr |
-| `packages/workspace/src/repository.ts`                                 | осмотр репозитория: это ли репозиторий, HEAD, незавершённая операция, корень            |
-| `packages/workspace/src/snapshot.ts`                                   | снимок незакоммиченного через временный индекс                                          |
-| `packages/workspace/src/worktree.ts`                                   | создание, перечисление, удаление worktree; занятость ветки                              |
-| `packages/workspace/src/index.ts`                                      | публичный API пакета                                                                    |
-| `packages/contracts/src/workspace.ts`                                  | `workItemWorkspaceSchema`, события, команды                                             |
-| `packages/domain/src/workspace.ts`                                     | чистые решения: имя ветки, отказы                                                       |
-| `packages/persistence-sqlite/migrations/0011_work_item_workspaces.sql` | таблица рабочих областей                                                                |
+- `packages/workspace/src/git.ts` — запуск `git` как процесса: аргументы массивом, без оболочки;
+  код выхода, stdout, stderr.
+- `packages/workspace/src/repository.ts` — осмотр репозитория: это ли репозиторий, HEAD,
+  незавершённая операция, корень.
+- `packages/workspace/src/snapshot.ts` — снимок незакоммиченного через временный индекс.
+- `packages/workspace/src/worktree.ts` — создание, перечисление, удаление worktree; занятость ветки.
+- `packages/workspace/src/index.ts` — публичный API пакета.
+- `packages/contracts/src/workspace.ts` — `workItemWorkspaceSchema`, события, команды.
+- `packages/domain/src/workspace.ts` — чистые решения: имя ветки, отказы.
+- `packages/persistence-sqlite/migrations/0011_work_item_workspaces.sql` — таблица рабочих областей.
 
 **Изменяется:** `packages/provider-codex/src/index.ts`, `packages/provider-core/src/index.ts`,
 `packages/persistence-sqlite/src/index.ts`, `packages/domain/src/workflow.ts`,
@@ -746,8 +746,8 @@ git commit -m "feat(daemon): cut the workspace before dispatching work into it"
 - [ ] **Шаг 2: реализация.** Отказ `git` на этом пути не должен мешать демону стартовать: правило
       Задачи 1 этапа A2 (`killOrphanedSessionProcess`) действует и здесь — ничто отсюда не
       вылетает в `execute`.
-- [ ] **Шаг 3: мутация** — убрать проверку `prunable` → тест краснеет `expected 'READY' to be
-    'ORPHANED'`. Вернуть.
+- [ ] **Шаг 3: мутация** — убрать проверку `prunable`; тест краснеет утверждением над статусом
+      (`READY` вместо `ORPHANED`). Вернуть.
 - [ ] **Шаг 4: `pnpm verify`, `pnpm build`, коммит**
 
 ```bash
