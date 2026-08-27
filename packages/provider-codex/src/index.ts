@@ -216,10 +216,11 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // nothing to reach. Given a workspace, the CLI runs in the work item's own worktree
         // instead, which is the point of this milestone.
         const workingDir = workspace?.path ?? scratchDir;
-        // The scratch directory was created two lines up and is always there, so this only ever
-        // asks about a workspace: the daemon checks the worktree before it dispatches, and this is
-        // the window between that check and this launch. Reported as its own reason rather than
-        // allowed to surface as a spawn failure -- see `isUsableWorkingDirectory` above.
+        // Only ever a question about a workspace: the other branch of `workingDir` is this
+        // function's own `mkdtemp` at the top of the try, which exists by construction. The daemon
+        // checks the worktree before it dispatches, so what this covers is the window between that
+        // check and this launch. Reported as its own reason rather than left to surface as a spawn
+        // failure -- see `isUsableWorkingDirectory` above.
         if (!(await isUsableWorkingDirectory(workingDir))) {
           return describeUnproductiveSession({
             provider: "CODEX",
