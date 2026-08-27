@@ -1171,6 +1171,15 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
   // regression this proves against (an `await` restored in the handler after `worker.wake()`), the
   // response never arrives, and the race's own assertion has to be the one that reports that.
   it("answers a pipeline start before the stage has finished", async () => {
+    // Backed by a real repository: releasing the gate in this test's `finally` lets the drain carry
+    // the run on past DISCOVERY to IMPLEMENT, which cuts a worktree from whatever repository the
+    // work item's Project names. Under the bundled fixture that Project points inside Loomrail's own
+    // checkout, so this test would be cutting worktrees and branches in the developer's repository
+    // if the daemon's own guard ever stopped refusing it.
+    await registerRepositoryProject(
+      databasePath,
+      await makeThrowawayRepo(join(dirname(databasePath), "repo")),
+    );
     const adapter = gatedAdapter();
     const daemon = await startDaemon({
       bootstrapToken: token,
@@ -1180,7 +1189,12 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
     });
     try {
       const session = await authenticate(daemon, token);
-      const workItemId = await createReadyWorkItem(daemon, session, "pipeline-start-under-test");
+      const workItemId = await createReadyWorkItem(
+        daemon,
+        session,
+        "pipeline-start-under-test",
+        REPOSITORY_PROJECT_ID,
+      );
       const response = fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
         method: "POST",
         headers: mutationHeaders(daemon, session),
@@ -1213,6 +1227,8 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
     workItemId: string;
     humanRequestId?: string;
     humanRequestVersion?: number;
+    /** Set when the case's `act` creates its own WorkItem and needs one backed by a repository. */
+    projectId?: string;
   };
   type Prepare = (stateDatabasePath: string) => Promise<PreparedFixture>;
   type Act = (
@@ -1221,7 +1237,16 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
     fixture: PreparedFixture,
   ) => Promise<Response>;
 
-  const noPreparation: Prepare = () => Promise.resolve({ workItemId: "" });
+  // The two rows whose `act` creates its own WorkItem still need a Project backed by a real
+  // repository, for the same reason the single-start test above does: each row releases its gate in
+  // the `finally`, the drain carries the run on to IMPLEMENT, and IMPLEMENT cuts a worktree from
+  // whatever repository that Project names. The bundled fixture names a directory inside Loomrail's
+  // own checkout.
+  const repositoryProject: Prepare = async (stateDatabasePath) => {
+    const repositoryPath = await makeThrowawayRepo(join(dirname(stateDatabasePath), "repo"));
+    await registerRepositoryProject(stateDatabasePath, repositoryPath);
+    return { workItemId: "", projectId: REPOSITORY_PROJECT_ID };
+  };
 
   // Drives a fresh WorkItem through a throwaway, unblocked daemon until the workflow's kickoff stage
   // raises its SINGLE_CHOICE HumanRequest -- reaching that needs a real (if fast) session, which the
@@ -1293,8 +1318,8 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
     }
   };
 
-  const startPipeline: Act = async (daemon, session) => {
-    const workItemId = await createReadyWorkItem(daemon, session, "pipeline-start-each");
+  const startPipeline: Act = async (daemon, session, fixture) => {
+    const workItemId = await createReadyWorkItem(daemon, session, "pipeline-start-each", fixture.projectId);
     return fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
       method: "POST",
       headers: mutationHeaders(daemon, session),
@@ -1307,8 +1332,8 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
   // already is the instant `START_MOCK_PIPELINE` returns. So this drives start-then-pause live
   // against the very daemon under test -- both are synchronous domain commands the gated adapter
   // never sees -- and only the final `resume` call is the one being tested.
-  const resumePipeline: Act = async (daemon, session) => {
-    const workItemId = await createReadyWorkItem(daemon, session, "pipeline-resume-each");
+  const resumePipeline: Act = async (daemon, session, fixture) => {
+    const workItemId = await createReadyWorkItem(daemon, session, "pipeline-resume-each", fixture.projectId);
     const startResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
       method: "POST",
       headers: mutationHeaders(daemon, session),
@@ -1376,8 +1401,8 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
   // same reason: a handler that regressed back to awaiting the drain must fail this by assertion,
   // not by vitest's blanket per-test timeout.
   it.each<[string, Prepare, Act]>([
-    ["pipeline start", noPreparation, startPipeline],
-    ["pipeline resume", noPreparation, resumePipeline],
+    ["pipeline start", repositoryProject, startPipeline],
+    ["pipeline resume", repositoryProject, resumePipeline],
     ["budget override", seedBudgetHardPause, approveBudgetOverride],
     ["human request answer", seedOpenHumanRequest, answerOpenRequest],
   ])(
