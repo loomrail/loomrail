@@ -802,6 +802,33 @@ test.describe("authenticated walking skeleton", () => {
     await expect(page.getByRole("button", { name: "Quick filter task" })).toBeVisible();
   });
 
+  test("searches values of every property from the main filter search", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Main search task");
+
+    await page.getByRole("button", { name: "Filter tasks" }).first().click();
+    const filterPopover = page.locator(".lr-filter-popover");
+    await filterPopover.getByRole("menuitem", { name: "Priority" }).hover();
+    await expect(page.getByRole("menu", { name: "Priority options" })).toBeVisible();
+
+    // The submenu hangs off a property row, so a search that hides the row has to take the
+    // submenu with it instead of leaving it floating next to nothing.
+    await filterPopover.getByRole("searchbox", { name: "Search Filters" }).fill("urgent");
+    await expect(page.getByRole("menu", { name: "Priority options" })).toBeHidden();
+
+    // The main search reaches the values inside every property, not just the property names.
+    await filterPopover.getByRole("menuitemcheckbox", { name: "Priority: Urgent" }).click();
+    await expect(page).toHaveURL(/filters=priority-urgent/);
+    await expect(page.getByRole("button", { name: "Main search task" })).toHaveCount(0);
+  });
+
   test("filters the board by risk", async ({ page }) => {
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),

@@ -2,19 +2,16 @@ import { cloneElement, Fragment, useEffect, useRef, useState, useSyncExternalSto
 import type { KeyboardEvent, ReactElement, ReactNode, Ref, RefObject } from "react";
 import { Dialog as DialogPrimitive, Popover as PopoverPrimitive } from "radix-ui";
 
+import {
+  filterColumnKey,
+  normalizeFilterQuery,
+  pruneFilterPath,
+  searchFilterNodes,
+  type FilterNode,
+} from "./filter-search.js";
 import { Button, cn, IconButton } from "./foundation.js";
 import { Icon, type IconName } from "./icons.js";
 import { Tooltip } from "./overlays.js";
-
-export type FilterNode = {
-  children?: readonly FilterNode[];
-  count?: number;
-  description?: string;
-  dividerBefore?: boolean;
-  icon?: IconName;
-  id: string;
-  label: string;
-};
 
 export type FilterMessages = {
   add: string;
@@ -120,8 +117,6 @@ const getMobileFilterSnapshot = (): boolean =>
 
 const getMobileFilterServerSnapshot = (): boolean => false;
 
-const pathKey = (path: readonly string[]): string => (path.length === 0 ? "root" : path.join("/"));
-
 const getColumns = (
   options: readonly FilterNode[],
   path: readonly string[],
@@ -138,7 +133,7 @@ const getColumns = (
 
     const nextPath = path.slice(0, index + 1);
     columns.push({
-      key: pathKey(nextPath),
+      key: filterColumnKey(nextPath),
       nodes: node.children,
       path: nextPath,
       title: node.label,
@@ -263,10 +258,9 @@ const FilterLevel = ({
   searchRef,
   selected,
 }: FilterLevelProps): React.JSX.Element => {
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  const visibleNodes = column.nodes.filter((node) =>
-    `${node.label} ${node.description ?? ""}`.toLocaleLowerCase().includes(normalizedQuery),
-  );
+  const isRoot = column.path.length === 0;
+  const searching = normalizeFilterQuery(query) !== "";
+  const results = searchFilterNodes(column.nodes, query, isRoot);
 
   return (
     <section
@@ -304,21 +298,24 @@ const FilterLevel = ({
         />
       </label>
       <div aria-label={`${column.title} ${messages.options}`} className="lr-filter-list" role="menu">
-        {visibleNodes.map((node) => {
-          const hasChildren = Boolean(node.children && node.children.length > 0);
-          const isActive = hasChildren && activeChildId === node.id;
-          const isSelected = !hasChildren && selected.includes(node.id);
-          const divider = node.dividerBefore ? (
-            <div className="lr-filter-separator" role="separator" />
-          ) : null;
+        {results.map(({ node, parent }) => {
+          const branch = Boolean(node.children && node.children.length > 0);
+          const isActive = branch && activeChildId === node.id;
+          const isSelected = !branch && selected.includes(node.id);
+          const key = parent ? `${parent.id}/${node.id}` : node.id;
+          const fullLabel = parent ? `${parent.label}: ${node.label}` : node.label;
+          const divider =
+            node.dividerBefore && !searching ? (
+              <div className="lr-filter-separator" role="separator" />
+            ) : null;
 
-          if (!hasChildren) {
+          if (!branch) {
             return (
-              <Fragment key={node.id}>
+              <Fragment key={key}>
                 {divider}
                 <div className="lr-filter-choice" role="none">
                   <button
-                    aria-label={`${isSelected ? messages.remove : messages.add} ${node.label}`}
+                    aria-label={`${isSelected ? messages.remove : messages.add} ${fullLabel}`}
                     aria-pressed={isSelected}
                     className="lr-filter-choice__checkbox"
                     onClick={() => {
@@ -330,6 +327,7 @@ const FilterLevel = ({
                   </button>
                   <button
                     aria-checked={isSelected}
+                    aria-label={parent ? fullLabel : undefined}
                     className="lr-filter-item lr-filter-item--choice"
                     data-filter-item
                     data-filter-node={node.id}
@@ -358,12 +356,21 @@ const FilterLevel = ({
                     type="button"
                   >
                     <span className="lr-filter-item__copy">
-                      <span>{node.label}</span>
+                      <span>
+                        {parent ? (
+                          <span aria-hidden="true" className="lr-filter-item__context">
+                            {parent.label}
+                          </span>
+                        ) : null}
+                        {node.label}
+                      </span>
                       {node.description ? <small>{node.description}</small> : null}
                     </span>
-                    <span className="lr-filter-item__meta">
-                      {node.count !== undefined ? <small>{node.count}</small> : null}
-                    </span>
+                    {node.count !== undefined && !parent ? (
+                      <span className="lr-filter-item__meta">
+                        <small>{node.count}</small>
+                      </span>
+                    ) : null}
                   </button>
                 </div>
               </Fragment>
@@ -371,7 +378,7 @@ const FilterLevel = ({
           }
 
           return (
-            <Fragment key={node.id}>
+            <Fragment key={key}>
               {divider}
               <button
                 aria-expanded={isActive}
@@ -426,8 +433,10 @@ const FilterLevel = ({
             </Fragment>
           );
         })}
-        {visibleNodes.length === 0 ? (
-          <p className="lr-filter-empty">{messages.noMatchingProperties}</p>
+        {results.length === 0 ? (
+          <p className="lr-filter-empty">
+            {isRoot ? messages.noMatchingProperties : messages.noMatchingValues}
+          </p>
         ) : null}
       </div>
     </section>
@@ -528,7 +537,7 @@ export const CascadingFilter = ({
     const openBranch = (): void => {
       hoverIntentTimeoutRef.current = undefined;
       const nextPath = [...column.path, node.id];
-      const nextColumnKey = pathKey(nextPath);
+      const nextColumnKey = filterColumnKey(nextPath);
 
       if (!isMobile && anchor) {
         const popover = anchor.closest<HTMLElement>(".lr-filter-popover");
@@ -583,7 +592,10 @@ export const CascadingFilter = ({
   };
 
   const handleQueryChange = (key: string, nextQuery: string): void => {
-    setQueries((current) => ({ ...current, [key]: nextQuery }));
+    clearScheduledBranch();
+    const nextQueries = { ...queries, [key]: nextQuery };
+    setQueries(nextQueries);
+    setPath((current) => pruneFilterPath(options, current, nextQueries));
   };
 
   if (isMobile) {

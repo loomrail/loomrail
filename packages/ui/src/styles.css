@@ -1295,6 +1295,14 @@
   white-space: nowrap;
 }
 
+.lr-filter-item__context {
+  color: var(--lr-text-faint);
+}
+
+.lr-filter-item__context::after {
+  content: "\2009\203A\2009";
+}
+
 .lr-filter-item__copy small,
 .lr-filter-item__meta small {
   color: var(--lr-text-faint);
