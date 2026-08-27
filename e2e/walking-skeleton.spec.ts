@@ -9,6 +9,7 @@ import { materialiseFixtureRepository, resolveBundledFixture } from "../apps/dae
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
 import { openLocalState, type LocalState } from "../packages/persistence-sqlite/dist/index.js";
 import { mockDeliveryTemplate } from "../packages/workflow-engine/dist/index.js";
+import { addWorktree, inspectRepository } from "../packages/workspace/dist/index.js";
 
 /**
  * The repository a seeded Project points at, materialised the way registration would.
@@ -474,6 +475,135 @@ const seedNoProgressHardPause = async (databasePath: string, title: string): Pro
   } finally {
     localState.close();
   }
+};
+
+type SeededWorkspaces = {
+  baseCommit: string;
+  branch: string;
+  goneTitle: string;
+  liveTitle: string;
+  noWorkspaceTitle: string;
+  repositoryPath: string;
+  worktreePath: string;
+};
+
+/**
+ * Three work items covering the three things the card has to say about a workspace: one with a real
+ * worktree on disk, one whose worktree is gone, and one that never needed a repository at all.
+ *
+ * The live worktree is genuinely cut with `git worktree add` (through the product's own
+ * `addWorktree`) against the materialised fixture repository, never against this checkout. That is
+ * not ceremony: startup reconciliation orphans any READY workspace `git worktree list` does not
+ * report, so a synthetic path would arrive at the browser already ORPHANED and the READY branch of
+ * the panel would never be rendered. The same mechanism is what makes the second item ORPHANED --
+ * its path is simply never created, and the daemon reaches that conclusion itself rather than the
+ * seed asserting it.
+ *
+ * The worktree path carries a space and non-ASCII characters (AGENTS.md), which is also the case
+ * the panel's wrapping has to survive: this is the value the owner came to copy.
+ */
+const seedWorkspaces = async (databasePath: string): Promise<SeededWorkspaces> => {
+  const repositoryPath = await seedRepositoryPath(databasePath);
+  const inspected = await inspectRepository(repositoryPath);
+  const baseCommit = inspected?.headCommit ?? null;
+  if (inspected === null || baseCommit === null) {
+    throw new Error("The seeded fixture repository has no commit to branch from");
+  }
+  const branch = "loomrail/seeded-live-workspace";
+  const worktreePath = join(dirname(databasePath), "workspaces", "project web", "задача с пробелом");
+  await mkdir(dirname(worktreePath), { recursive: true });
+  const added = await addWorktree({
+    topLevel: inspected.topLevel,
+    branch,
+    path: worktreePath,
+    startPoint: baseCommit,
+  });
+  if (added.type !== "ADDED") throw new Error(`The seeded worktree was refused: ${added.refusal.type}`);
+
+  const titles = {
+    goneTitle: "Task whose worktree went away",
+    liveTitle: "Task with a live workspace",
+    noWorkspaceTitle: "Task that never needed a repository",
+  };
+
+  let nextId = 0;
+  const localState = await openLocalState({
+    databasePath,
+    now: () => new Date("2026-08-26T09:00:00.000Z"),
+    createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+  });
+  try {
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "seed-workspace-register-project",
+      correlationId: "correlation-seed-workspace-register-project",
+      actor: humanActor,
+      type: "REGISTER_PROJECT",
+      payload: {
+        id: "project-web",
+        fixtureId: "web-app-a",
+        name: "Fixture web application",
+        repositoryPath,
+      },
+    });
+
+    const createSeededTask = (slug: string, title: string): string => {
+      const created = localState.execute({
+        schemaVersion: 1,
+        commandId: `seed-workspace-create-${slug}`,
+        correlationId: `correlation-seed-workspace-create-${slug}`,
+        actor: humanActor,
+        type: "CREATE_WORK_ITEM",
+        payload: {
+          projectId: "project-web",
+          parentId: null,
+          type: "TASK",
+          title,
+          description: "Seeded to exercise what the card says about a workspace.",
+          priority: "MEDIUM",
+          risk: "LOW",
+          acceptanceCriteria: [],
+        },
+      });
+      if (created.type !== "WORK_ITEM_CREATED")
+        throw new Error(`The seeded WorkItem "${title}" was not created`);
+      return created.workItem.id;
+    };
+
+    const recordWorkspace = (workItemId: string, workspaceBranch: string, path: string): void => {
+      const workspace = localState.execute({
+        schemaVersion: 1,
+        commandId: `seed-workspace-record-${workItemId}`,
+        correlationId: `correlation-seed-workspace-record-${workItemId}`,
+        actor: sessionLoopActor,
+        type: "CREATE_WORK_ITEM_WORKSPACE",
+        payload: {
+          workItemId,
+          projectId: "project-web",
+          branch: workspaceBranch,
+          worktreePath: path,
+          baseCommit,
+          snapshotCommit: null,
+          carriedPaths: [],
+        },
+      });
+      if (workspace.type !== "WORK_ITEM_WORKSPACE_CREATED") {
+        throw new Error("The seeded workspace was not recorded");
+      }
+    };
+
+    recordWorkspace(createSeededTask("live", titles.liveTitle), branch, worktreePath);
+    recordWorkspace(
+      createSeededTask("gone", titles.goneTitle),
+      "loomrail/seeded-vanished-workspace",
+      join(dirname(databasePath), "workspaces", "project web", "never created"),
+    );
+    createSeededTask("bare", titles.noWorkspaceTitle);
+  } finally {
+    localState.close();
+  }
+
+  return { ...titles, baseCommit, branch, repositoryPath, worktreePath };
 };
 
 /**
@@ -1210,6 +1340,90 @@ test.describe("authenticated walking skeleton", () => {
           { exact: true },
         ),
       ).toBeVisible();
+    } finally {
+      await daemon?.close();
+      daemon = undefined;
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  // E1 gave the agent a real worktree; until now nothing in the product said where it is. The
+  // owner's next move after a stage is to open that directory or run `git diff` in it, and every
+  // assertion below is about a value they have to be able to read and copy in full.
+  test("names the repository, branch, base commit and worktree a task's agent writes in", async ({
+    page,
+  }) => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail workspaces "));
+    try {
+      const databasePath = join(temporaryDirectory, "local-state.sqlite");
+      const seeded = await seedWorkspaces(databasePath);
+
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        stateDatabasePath: databasePath,
+        webRoot: resolve("apps/web/dist"),
+      });
+
+      await page.goto(daemon.bootstrapUrl);
+      await page.getByRole("button", { name: "All issues", exact: true }).click();
+      await page.getByRole("button", { name: seeded.liveTitle }).click();
+
+      const inspector = page.getByRole("complementary", { name: seeded.liveTitle });
+      const workspaceSection = inspector
+        .locator(".lr-inspector-section")
+        .filter({ has: page.getByText("Workspace", { exact: true }) });
+      await expect(workspaceSection).toBeVisible();
+      await expect(workspaceSection.getByText("Ready", { exact: true })).toBeVisible();
+      await expect(workspaceSection.getByText(seeded.repositoryPath, { exact: true })).toBeVisible();
+      await expect(workspaceSection.getByText(seeded.branch, { exact: true })).toBeVisible();
+
+      // The whole path, character for character -- not a prefix, not an ellipsis. A worktree path
+      // the owner cannot copy in one piece is the same as no path at all, which is why this is an
+      // exact match against the seeded value rather than a substring.
+      const worktreePath = workspaceSection.getByText(seeded.worktreePath, { exact: true });
+      await expect(worktreePath).toBeVisible();
+      await expect(worktreePath).toHaveText(seeded.worktreePath);
+
+      // Abbreviated to what `git show` resolves, with the full object id still on the element for
+      // anyone who wants it. Both halves are asserted: a card that printed a truncated sha and
+      // dropped the original would be showing a value it could not stand behind.
+      const baseCommit = workspaceSection.locator(".workspace-identity__sha");
+      await expect(baseCommit).toHaveText(seeded.baseCommit.slice(0, 12));
+      await expect(baseCommit).toHaveAttribute("title", seeded.baseCommit);
+
+      // The boundary the README states, said where the owner is looking at the work.
+      await expect(
+        workspaceSection.getByText(
+          "Loomrail has committed nothing. The work sits in this worktree, on this branch, until you keep it or discard it.",
+          { exact: true },
+        ),
+      ).toBeVisible();
+
+      // Startup reconciliation found this one's worktree gone and marked it ORPHANED, which is
+      // terminal: the card says so and offers no action, because Loomrail has none to offer.
+      await page.getByRole("button", { name: seeded.goneTitle }).click();
+      const goneInspector = page.getByRole("complementary", { name: seeded.goneTitle });
+      const goneSection = goneInspector
+        .locator(".lr-inspector-section")
+        .filter({ has: page.getByText("Workspace", { exact: true }) });
+      await expect(goneSection.getByText("Worktree gone", { exact: true })).toBeVisible();
+      await expect(
+        goneSection.getByText(
+          "The worktree for this task is no longer on disk. Loomrail does not cut a second one, and nothing returns this workspace to service — the branch still holds whatever was committed to it.",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(goneSection.getByRole("button")).toHaveCount(0);
+
+      // A task that never needed a repository shows no section at all -- headings over blanks read
+      // as a panel that failed to load.
+      await page.getByRole("button", { name: seeded.noWorkspaceTitle }).click();
+      const bareInspector = page.getByRole("complementary", { name: seeded.noWorkspaceTitle });
+      await expect(
+        bareInspector.getByRole("heading", { level: 2, name: seeded.noWorkspaceTitle }),
+      ).toBeVisible();
+      await expect(bareInspector.getByText("Workspace", { exact: true })).toHaveCount(0);
     } finally {
       await daemon?.close();
       daemon = undefined;

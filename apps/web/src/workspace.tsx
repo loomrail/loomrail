@@ -20,6 +20,7 @@ import {
   createWorkItem,
   getProviderCapabilities,
   getWorkItemWorkflow,
+  getWorkItemWorkspace,
   listOpenHumanRequests,
   listProjects,
   listProjectWorkItems,
@@ -43,6 +44,10 @@ const projectWorkItemsKey = (projectId: string) => ["projects", projectId, "work
 const workItemEventsKey = (projectId: string, workItemId: string) =>
   ["projects", projectId, "work-items", workItemId, "events"] as const;
 const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "workflow"] as const;
+// Nested under the same `["work-items", <id>]` prefix the event channel invalidates for a WORK_ITEM
+// signal (eventStream.ts, scopesForSignal), so a stage that cuts a workspace refreshes the card
+// without a reload and without a second entry in that mapping.
+const workItemWorkspaceKey = (workItemId: string) => ["work-items", workItemId, "workspace"] as const;
 const projectHumanRequestsKey = (projectId: string) =>
   ["projects", projectId, "human-requests", "OPEN"] as const;
 const stageAttemptSessionsKey = (stageAttemptId: string) =>
@@ -159,6 +164,23 @@ export const useWorkItemWorkflow = (workItemId: string | undefined) =>
     queryFn: () => {
       if (!workItemId) throw new Error("A work item is required to load its workflow");
       return getWorkItemWorkflow(workItemId);
+    },
+    enabled: workItemId !== undefined,
+  });
+
+/**
+ * Where this work item's agent writes, or `null` when it has never needed a repository.
+ *
+ * Separate from `useWorkItemWorkflow` because a workspace outlives the run that cut it: the
+ * workflow snapshot is empty once no PipelineRun is current, and folding the workspace into it
+ * would make the worktree path disappear from the card exactly when the owner goes looking for it.
+ */
+export const useWorkItemWorkspace = (workItemId: string | undefined) =>
+  useQuery({
+    queryKey: workItemId ? workItemWorkspaceKey(workItemId) : ["work-items", "none", "workspace"],
+    queryFn: () => {
+      if (!workItemId) throw new Error("A work item is required to load its workspace");
+      return getWorkItemWorkspace(workItemId);
     },
     enabled: workItemId !== undefined,
   });

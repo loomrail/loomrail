@@ -7,6 +7,7 @@ import {
   providerSessionsResponseSchema,
   stateCommandResultSchema,
   workItemsResponseSchema,
+  workItemWorkspaceResponseSchema,
   workflowSnapshotSchema,
   type FixtureProjectId,
   type AcceptanceAction,
@@ -156,6 +157,13 @@ export const listWorkItemEvents = async (projectId: string, workItemId: string, 
 
 export const getWorkItemWorkflow = async (workItemId: string) =>
   requestLocalApi(`/api/v1/work-items/${encodeURIComponent(workItemId)}/workflow`, workflowSnapshotSchema);
+
+/** Where this work item's agent writes (spec §4): repository branch, base commit and worktree path. */
+export const getWorkItemWorkspace = async (workItemId: string) =>
+  requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(workItemId)}/workspace`,
+    workItemWorkspaceResponseSchema,
+  );
 
 export const listProviderSessions = async (stageAttemptId: string) =>
   requestLocalApi(

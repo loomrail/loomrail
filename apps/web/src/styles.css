@@ -1269,6 +1269,59 @@ body.is-resizing {
   color: var(--lr-text-muted);
 }
 
+.workspace-identity {
+  display: grid;
+  gap: var(--lr-space-3);
+}
+
+.workspace-identity__sha {
+  font-family: var(--lr-font-mono);
+  font-size: var(--lr-font-xs);
+}
+
+/*
+ * One row per location, full width, wrapping rather than clipping.
+ *
+ * `overflow-wrap: anywhere` is the whole point of this block: a worktree path is what the owner
+ * came here to copy into a terminal or an editor, and a path truncated with an ellipsis is not a
+ * path. Wrapping keeps every character on screen and inside one selection, at the cost of a taller
+ * row -- which is the right trade for a value whose usefulness is all-or-nothing.
+ */
+.workspace-identity__locations {
+  display: grid;
+  gap: var(--lr-space-2);
+  margin: 0;
+}
+
+.workspace-identity__locations div {
+  display: grid;
+  gap: 4px;
+}
+
+.workspace-identity__locations dt {
+  color: var(--lr-text-faint);
+  font-size: var(--lr-font-xs);
+}
+
+.workspace-identity__locations dd {
+  color: var(--lr-text-secondary);
+  font-family: var(--lr-font-mono);
+  font-size: var(--lr-font-xs);
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.workspace-identity__note {
+  background: var(--lr-warning-soft);
+  border: 1px solid color-mix(in srgb, var(--lr-warning) 28%, var(--lr-border));
+  border-radius: var(--lr-radius-control);
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-xs);
+  line-height: 1.45;
+  padding: var(--lr-space-2-5);
+}
+
 .acceptance-package {
   border: 1px solid var(--lr-border-subtle);
   border-radius: var(--lr-radius-panel);

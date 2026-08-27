@@ -20,6 +20,8 @@ import {
   type WorkItem,
   type WorkItemChangedField,
   type WorkItemState,
+  type WorkItemWorkspace,
+  type WorkItemWorkspaceStatus,
 } from "@loomrail/contracts";
 import {
   ActionMenu,
@@ -89,6 +91,7 @@ import {
   useWorkspace,
   useWorkItemEvents,
   useWorkItemWorkflow,
+  useWorkItemWorkspace,
 } from "../workspace";
 
 const viewOrderingOptions = (t: Translator): readonly { label: string; value: BoardOrdering }[] => [
@@ -1347,6 +1350,117 @@ const AttemptSessionsPanel = ({ attempt }: { attempt: StageAttempt }): React.JSX
   );
 };
 
+const workspaceStatusLabelKeys: Record<WorkItemWorkspaceStatus, TranslationKey> = {
+  READY: "workspace.status.READY",
+  ORPHANED: "workspace.status.ORPHANED",
+  REMOVED: "workspace.status.REMOVED",
+};
+
+const workspaceStatusTones: Record<WorkItemWorkspaceStatus, StatusTone> = {
+  READY: "ready",
+  ORPHANED: "paused",
+  REMOVED: "queued",
+};
+
+/**
+ * How much of the base commit the card prints.
+ *
+ * Twelve hex characters, not forty and not seven. The owner's use for this value is pasting it into
+ * `git show`, and git resolves any unambiguous prefix, so the question is only how long a prefix
+ * stays unambiguous. Seven -- git's own `--oneline` default -- collides in large repositories;
+ * twelve is what `core.abbrev=auto` grows towards well past a million objects. The full forty
+ * characters would wrap to a second line in a 320px inspector column and buy nothing, since a
+ * prefix and the full id resolve identically.
+ *
+ * The complete sha is still on the element's `title`, so nothing is hidden -- only unprinted.
+ */
+const baseCommitDisplayLength = 12;
+
+/**
+ * Where this work item's agent writes: the repository, the branch, the base commit it was cut from,
+ * and the worktree path.
+ *
+ * Returns null rather than an empty panel when the item has no workspace. A prose-only stage and an
+ * item before its first code stage both genuinely have none, and headings standing over blanks read
+ * as a load that failed rather than as an absence -- so the section itself lives in here, not
+ * around the call site.
+ *
+ * The paths are deliberately not in the `RunSummary` grid the overview above uses. That grid gives
+ * a value roughly half the inspector's width and clips what does not fit, which for the one field
+ * the owner is here to copy -- the worktree path -- would mean an ellipsis where an actionable
+ * directory should be. They get full-width rows that wrap instead, so the whole path is on screen
+ * and selectable in one drag.
+ */
+const WorkspacePanel = ({ item }: { item: WorkItem }): React.JSX.Element | null => {
+  const { t } = useI18n();
+  const { projects } = useWorkspace();
+  const workspace: WorkItemWorkspace | null = useWorkItemWorkspace(item.id).data?.workspace ?? null;
+
+  if (!workspace) return null;
+
+  // The Project names the repository the branch actually lives in -- the worktree is a checkout of
+  // it, not a repository of its own -- which is where an owner goes to delete the branch or merge
+  // it. Read from the Project list the app already holds rather than added to the workspace
+  // response, since the workspace row records no repository path of its own.
+  const project = projects.find((candidate) => candidate.id === item.projectId) ?? null;
+
+  return (
+    <InspectorSection title={t("workspace.title")}>
+      <div className="workspace-identity">
+        <RunSummary
+          properties={[
+            {
+              label: t("workspace.state"),
+              value: (
+                <Status
+                  label={t(workspaceStatusLabelKeys[workspace.status])}
+                  tone={workspaceStatusTones[workspace.status]}
+                />
+              ),
+            },
+            {
+              label: t("workspace.baseCommit"),
+              value:
+                workspace.baseCommit === null ? (
+                  t("workspace.baseCommit.none")
+                ) : (
+                  <code className="workspace-identity__sha" title={workspace.baseCommit}>
+                    {workspace.baseCommit.slice(0, baseCommitDisplayLength)}
+                  </code>
+                ),
+            },
+          ]}
+        />
+        <dl className="workspace-identity__locations">
+          {project ? (
+            <div>
+              <dt>{t("workspace.repository")}</dt>
+              <dd>{project.repositoryPath}</dd>
+            </div>
+          ) : null}
+          <div>
+            <dt>{t("workspace.branch")}</dt>
+            <dd>{workspace.branch}</dd>
+          </div>
+          <div>
+            <dt>{t("workspace.worktree")}</dt>
+            <dd>{workspace.worktreePath}</dd>
+          </div>
+        </dl>
+        {workspace.status === "READY" ? null : (
+          // No action offered, because there is none: ORPHANED is terminal -- nothing in Loomrail
+          // returns a workspace to READY (session-loop.ts, workspaceNotReadyRefusal) -- and a
+          // button that cannot work is worse than the plain fact.
+          <p className="workspace-identity__note" role="status">
+            {t("workspace.notReady")}
+          </p>
+        )}
+        <p className="inspector-copy">{t("workspace.uncommitted")}</p>
+      </div>
+    </InspectorSection>
+  );
+};
+
 const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const { t } = useI18n();
   const workflowQuery = useWorkItemWorkflow(item.id);
@@ -1776,6 +1890,8 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
       >
         <WorkflowPanel item={item} />
       </InspectorSection>
+
+      <WorkspacePanel item={item} />
 
       <InspectorSection title={t("task.acceptanceCriteria")}>
         {item.acceptanceCriteria.length > 0 ? (
