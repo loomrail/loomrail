@@ -100,7 +100,12 @@ export const projectSchema = z
     schemaVersion: schemaVersionSchema,
     id: opaqueIdSchema,
     workspaceId: opaqueIdSchema,
-    fixtureId: fixtureProjectIdSchema,
+    // Nullable, not optional: a Project registered by path is a local Git repository the owner
+    // named, and it genuinely has no bundled fixture behind it (spec
+    // docs/plans/13-e1-workspace-execution-spec.ru.md §4). Absent would read as "not recorded";
+    // null records the fact that there is nothing to record -- the same discipline
+    // workItemWorkspaceSchema's baseCommit and snapshotCommit follow in workspace.ts.
+    fixtureId: fixtureProjectIdSchema.nullable(),
     name: titleSchema,
     repositoryPath: repositoryPathSchema,
     status: projectStatusSchema,
@@ -223,12 +228,22 @@ const commandBaseSchema = z
   })
   .strict();
 
+/**
+ * Registers a Project at a local Git repository.
+ *
+ * One command for both ways in, because there is only one thing being recorded: a repository
+ * Loomrail may branch. Where the repository came from is data, not a second operation -- a bundled
+ * fixture names itself in `fixtureId`, a repository the owner registered by path leaves it null,
+ * and everything downstream (the dedupe on id/fixture/path, the PROJECT_REGISTERED event, the row)
+ * is identical either way. It was called REGISTER_FIXTURE_PROJECT while a fixture was the only way
+ * in; keeping that name over a null `fixtureId` would be a command lying about what it registers.
+ */
 export const registerProjectCommandSchema = commandBaseSchema.extend({
-  type: z.literal("REGISTER_FIXTURE_PROJECT"),
+  type: z.literal("REGISTER_PROJECT"),
   payload: z
     .object({
       id: opaqueIdSchema,
-      fixtureId: fixtureProjectIdSchema,
+      fixtureId: fixtureProjectIdSchema.nullable(),
       name: titleSchema,
       repositoryPath: repositoryPathSchema,
     })
@@ -375,6 +390,27 @@ export const registerFixtureProjectRequestSchema = z
     schemaVersion: schemaVersionSchema,
     commandId: opaqueIdSchema,
     fixtureId: fixtureProjectIdSchema,
+  })
+  .strict();
+
+/**
+ * Registering the owner's own repository by path.
+ *
+ * A separate request from the fixture one rather than a widening of it, because the two share no
+ * input: a fixture registration names one of two catalog entries and Loomrail derives the path, the
+ * id and the name from the bundled manifest; this one names a path on the owner's disk and derives
+ * everything from that. Folding them together would mean a schema with two optional fields and a
+ * refinement saying exactly one must be present -- a union at the boundary, standing in for two
+ * endpoints, so that the handler could immediately branch back apart.
+ *
+ * The path is the only field. There is deliberately no `name`: see the daemon's
+ * `registerRepositoryProject`, which takes the repository directory's own name.
+ */
+export const registerRepositoryProjectRequestSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    commandId: opaqueIdSchema,
+    repositoryPath: repositoryPathSchema,
   })
   .strict();
 

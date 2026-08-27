@@ -49,7 +49,7 @@ const registerProject = (state: LocalState): { id: string } => {
     commandId,
     correlationId: `correlation-${commandId}`,
     actor: { type: "HUMAN", id: "local-owner" },
-    type: "REGISTER_FIXTURE_PROJECT",
+    type: "REGISTER_PROJECT",
     payload: {
       id: `project-${randomUUID()}`,
       fixtureId: "web-app-a",

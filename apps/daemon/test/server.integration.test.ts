@@ -379,6 +379,77 @@ describe("local daemon session and state boundary", () => {
     expect(await projects.json()).toMatchObject({ projects: [] });
   });
 
+  it("registers the owner's own repository by path, under its directory's name and with no fixture", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail own repo "));
+    temporaryDirectories.push(temporaryDirectory);
+    // The directory name is the Project's name, so it is chosen here to be one no other part of
+    // this suite could have produced.
+    const repositoryPath = await makeThrowawayRepo(join(temporaryDirectory, "acme-invoicing"));
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, logger: false });
+    const session = await authenticate(daemon, token);
+
+    const response = await fetch(`${daemon.baseUrl}/api/v1/projects/register`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "register-own-repository",
+        repositoryPath,
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const registered = stateCommandResultSchema.parse(await response.json());
+    if (registered.type !== "PROJECT_REGISTERED") throw new Error("Expected the Project to register");
+    // Null rather than absent: this Project has no bundled fixture behind it, and the schema records
+    // that instead of leaving the field out (migration 0012, projectSchema.fixtureId).
+    expect(registered.project.fixtureId).toBeNull();
+    expect(registered.project.name).toBe("acme-invoicing");
+    expect(await realpath(registered.project.repositoryPath)).toBe(await realpath(repositoryPath));
+
+    // And it is a Project like any other from the list the workbench reads.
+    const listed = await fetch(`${daemon.baseUrl}/api/v1/projects`, {
+      headers: { cookie: session.cookie },
+    });
+    const projects = projectsResponseSchema.parse(await listed.json());
+    expect(projects.projects).toMatchObject([{ fixtureId: null, name: "acme-invoicing" }]);
+  });
+
+  it("refuses to register a Project at a directory inside another repository", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail nested path "));
+    temporaryDirectories.push(temporaryDirectory);
+    const repositoryPath = await makeThrowawayRepo(join(temporaryDirectory, "enclosing"));
+    // The shape of the mistake this guard exists for: the owner points Loomrail at a subdirectory of
+    // a repository -- a package, a module, the `src` they happen to be looking at. Cutting a
+    // workspace there would branch the enclosing repository, which for a Loomrail developer is
+    // Loomrail's own checkout. Registering by path must not be the way around that.
+    const inside = join(repositoryPath, "packages", "billing");
+    await mkdir(inside, { recursive: true });
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, logger: false });
+    const session = await authenticate(daemon, token);
+
+    const response = await fetch(`${daemon.baseUrl}/api/v1/projects/register`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({ schemaVersion: 1, commandId: "register-inside-repo", repositoryPath: inside }),
+    });
+
+    expect(response.status).toBe(400);
+    const failure = apiErrorResponseSchema.parse(await response.json());
+    expect(failure.error.code).toBe("REPOSITORY_PATH_INSIDE_REPOSITORY");
+    // The honest message, not the generic one: it names which repository the path is inside, which
+    // is the only thing that tells the owner what to register instead.
+    expect(failure.error.message).toContain(await realpath(repositoryPath));
+
+    // Nothing was registered on the way to the refusal.
+    const listed = await fetch(`${daemon.baseUrl}/api/v1/projects`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(await listed.json()).toMatchObject({ projects: [] });
+  });
+
   it("keeps a materialised fixture and the work already done in it when the demo is initialised again", async () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail demo twice "));
     temporaryDirectories.push(temporaryDirectory);
@@ -760,7 +831,7 @@ describe("local daemon session and state boundary", () => {
         commandId: "register-legacy-template-project",
         correlationId: "correlation-register-legacy-template-project",
         actor: { type: "HUMAN", id: "local-owner" },
-        type: "REGISTER_FIXTURE_PROJECT",
+        type: "REGISTER_PROJECT",
         payload: {
           id: "project-legacy-template",
           fixtureId: "web-app-a",
@@ -935,7 +1006,7 @@ describe("local daemon session and state boundary", () => {
         commandId: "register-orphan-log-project",
         correlationId: "correlation-register-orphan-log",
         actor: { type: "HUMAN", id: "local-owner" },
-        type: "REGISTER_FIXTURE_PROJECT",
+        type: "REGISTER_PROJECT",
         payload: {
           id: "project-orphan-log",
           fixtureId: "web-app-a",
@@ -1021,7 +1092,7 @@ describe("local daemon session and state boundary", () => {
         commandId: "register-skip-log-project",
         correlationId: "correlation-register-skip-log",
         actor: { type: "HUMAN", id: "local-owner" },
-        type: "REGISTER_FIXTURE_PROJECT",
+        type: "REGISTER_PROJECT",
         payload: {
           id: "project-skip-log",
           fixtureId: "web-app-a",
@@ -1104,7 +1175,7 @@ describe("local daemon session and state boundary", () => {
         commandId: "register-recovery-project",
         correlationId: "correlation-register-recovery",
         actor: { type: "HUMAN", id: "local-owner" },
-        type: "REGISTER_FIXTURE_PROJECT",
+        type: "REGISTER_PROJECT",
         payload: {
           id: "project-recovery",
           fixtureId: "web-app-a",

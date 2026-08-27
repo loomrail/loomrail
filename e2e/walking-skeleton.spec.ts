@@ -46,7 +46,7 @@ const seedLongActivity = async (databasePath: string, title: string): Promise<nu
       commandId: "seed-register-project",
       correlationId: "correlation-seed-register-project",
       actor: { type: "HUMAN", id: "local-owner" },
-      type: "REGISTER_FIXTURE_PROJECT",
+      type: "REGISTER_PROJECT",
       payload: {
         id: "project-web",
         fixtureId: "web-app-a",
@@ -232,7 +232,7 @@ const seedHandoffAndExhaustedSessions = async (databasePath: string, title: stri
       commandId: "seed-register-project",
       correlationId: "correlation-seed-register-project",
       actor: humanActor,
-      type: "REGISTER_FIXTURE_PROJECT",
+      type: "REGISTER_PROJECT",
       payload: {
         id: "project-web",
         fixtureId: "web-app-a",
@@ -434,7 +434,7 @@ const seedNoProgressHardPause = async (databasePath: string, title: string): Pro
       commandId: "seed-pause-register-project",
       correlationId: "correlation-seed-pause-register-project",
       actor: humanActor,
-      type: "REGISTER_FIXTURE_PROJECT",
+      type: "REGISTER_PROJECT",
       payload: {
         id: "project-web",
         fixtureId: "web-app-a",

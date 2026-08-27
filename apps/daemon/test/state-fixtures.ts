@@ -19,7 +19,7 @@ export const FIXTURE_PROJECT_ID = "project-web";
 /**
  * Registers the shared fixture project, once per `LocalState`. Idempotent: a worker test seeds more
  * than one queued attempt against the same open database in a single test, and the persistence layer
- * treats a second `REGISTER_FIXTURE_PROJECT` for the same id as `PROJECT_ALREADY_REGISTERED`, not as
+ * treats a second `REGISTER_PROJECT` for the same id as `PROJECT_ALREADY_REGISTERED`, not as
  * a no-op.
  */
 const registerFixtureProject = (
@@ -36,7 +36,7 @@ const registerFixtureProject = (
     commandId: createCommandId(),
     correlationId: "correlation-seed-project",
     actor: { type: "HUMAN", id: "local-owner" },
-    type: "REGISTER_FIXTURE_PROJECT",
+    type: "REGISTER_PROJECT",
     payload: {
       id: FIXTURE_PROJECT_ID,
       fixtureId: "web-app-a",

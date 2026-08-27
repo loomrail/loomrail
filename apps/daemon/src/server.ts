@@ -27,6 +27,7 @@ import {
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
   registerFixtureProjectRequestSchema,
+  registerRepositoryProjectRequestSchema,
   resolveAcceptanceRequestSchema,
   sessionExchangeRequestSchema,
   sessionExchangeResponseSchema,
@@ -59,6 +60,7 @@ import {
   resolveDefaultProviderAdapter,
 } from "./provider-selection.js";
 import {
+  describeRegisteredRepository,
   FixtureResolutionError,
   materialiseFixtureRepository,
   ProjectRegistrationError,
@@ -656,12 +658,51 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           commandId: body.commandId,
           correlationId,
           actor: { type: "HUMAN", id: "local-owner" },
-          type: "REGISTER_FIXTURE_PROJECT",
+          type: "REGISTER_PROJECT",
           payload: {
             id: fixture.projectId,
             fixtureId: fixture.fixtureId,
             name: fixture.name,
             repositoryPath,
+          },
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    // Registering the owner's own repository (spec §4, acceptance criterion 1).
+    //
+    // Its own route rather than a widening of the fixture one above: the two share no input and no
+    // work. That one names a catalog entry and turns a bundled template into a repository; this one
+    // names a path that is already a repository and only has to settle whether it may back a
+    // Project. Folding them together would mean one body schema with two mutually exclusive fields
+    // and a handler whose first act is to branch back apart.
+    //
+    // Nothing is relaxed for this path. `describeRegisteredRepository` refuses through
+    // `resolveRegisteredRepository`, so a path that is not a repository is refused naming the path,
+    // and a directory *inside* a repository gets the domain's honest "this is inside the repository
+    // at X" -- which is what keeps an owner from handing an agent Loomrail's own source by
+    // registering a subdirectory of this checkout. Both arrive as 400 with their own code.
+    app.post("/api/v1/projects/register", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const body = registerRepositoryProjectRequestSchema.parse(request.body);
+        const repository = await describeRegisteredRepository(body.repositoryPath);
+        return localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "REGISTER_PROJECT",
+          payload: {
+            id: repository.id,
+            // Null, not omitted: this Project has no bundled fixture behind it, and that is a fact
+            // about it rather than a field nobody filled in.
+            fixtureId: null,
+            name: repository.name,
+            repositoryPath: repository.repositoryPath,
           },
         });
       } catch (error: unknown) {

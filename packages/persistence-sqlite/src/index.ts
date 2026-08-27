@@ -112,7 +112,8 @@ const DEFAULT_WORKSPACE_NAME = "Local workspace";
 const projectRowSchema = z.object({
   id: z.string(),
   workspace_id: z.string(),
-  fixture_id: z.string(),
+  // Nullable since migration 0012: a Project registered by path has no bundled fixture behind it.
+  fixture_id: z.string().nullable(),
   name: z.string(),
   repository_path: z.string(),
   status: z.string(),
@@ -2289,7 +2290,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     };
 
     const executeFresh = (command: StateCommand, occurredAt: string): StateCommandResult => {
-      if (command.type === "REGISTER_FIXTURE_PROJECT") {
+      if (command.type === "REGISTER_PROJECT") {
+        // `fixture_id = ?` with a null `fixtureId` is never true -- SQL's three-valued logic -- so a
+        // Project registered by path is deduplicated on its id and its repository path alone, which
+        // is the whole of what makes it a duplicate. Two path-registered Projects both carrying a
+        // null fixture are not duplicates of each other, and the UNIQUE index agrees: in SQLite
+        // every NULL is distinct.
         const existing = database
           .prepare(
             `SELECT id FROM projects
@@ -2299,7 +2305,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (existing !== undefined) {
           throw new StateStoreError(
             "PROJECT_ALREADY_REGISTERED",
-            "The fixture Project is already registered",
+            "A Project is already registered with this id, fixture or repository path",
           );
         }
         const project = projectSchema.parse({
@@ -3504,7 +3510,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         }
         // Pre-check, not the sole guard: migration 0011's UNIQUE on work_item_id is the storage-
         // level backstop (spec D1) that makes a second workspace for this WorkItem impossible even
-        // if two callers race past this read, the same relationship REGISTER_FIXTURE_PROJECT's own
+        // if two callers race past this read, the same relationship REGISTER_PROJECT's own
         // pre-check has with the projects table's own UNIQUE columns above.
         if (selectWorkItemWorkspaceByWorkItemId.get(command.payload.workItemId) !== undefined) {
           throw new StateStoreError("WORKSPACE_ALREADY_EXISTS", "The WorkItem already has a workspace");

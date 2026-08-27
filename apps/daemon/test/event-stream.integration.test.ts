@@ -108,7 +108,7 @@ const streamOutcome = async (
 };
 
 // Registers the bundled "web-app-a" fixture on its own, ahead of opening a stream a test wants to
-// observe. REGISTER_FIXTURE_PROJECT commits its own PROJECT_REGISTERED event and is now published
+// observe. REGISTER_PROJECT commits its own PROJECT_REGISTERED event and is now published
 // like any other command -- a test that opens the stream first and calls `createWorkItem` alone
 // would see that PROJECT signal arrive before the WORK_ITEM one it is asserting on. Registering
 // here, before the stream opens, and letting `createWorkItem`'s internal registration replay the

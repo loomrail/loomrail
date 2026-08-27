@@ -130,7 +130,7 @@ const seedMeasuredAndHandedOffSessions = async (databasePath: string, title: str
       commandId: "seed-register-project",
       correlationId: "correlation-seed-register-project",
       actor: humanActor,
-      type: "REGISTER_FIXTURE_PROJECT",
+      type: "REGISTER_PROJECT",
       payload: {
         id: "project-web",
         fixtureId: "web-app-a",

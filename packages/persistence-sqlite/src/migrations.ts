@@ -12,6 +12,26 @@ type Migration = {
   version: number;
   name: string;
   filename: string;
+  /**
+   * This migration rebuilds a table other tables hold foreign keys into, so it runs with
+   * `PRAGMA foreign_keys` off -- SQLite's own documented procedure for the change, and the only one
+   * available to it.
+   *
+   * Two SQLite behaviours force it, both of them about the *old* table rather than the new one.
+   * With foreign keys enabled, `ALTER TABLE ... RENAME` rewrites every `REFERENCES` clause that
+   * names the renamed table, so renaming the old one aside silently redirects the whole database at
+   * a table the migration is about to drop. And `DROP TABLE` performs an implicit DELETE of every
+   * row, which `ON DELETE RESTRICT` refuses immediately -- RESTRICT being the one action
+   * `defer_foreign_keys` cannot defer. Neither can be worked around from inside the transaction,
+   * because `PRAGMA foreign_keys` is a no-op there.
+   *
+   * The relaxation is bounded and verified, not taken on trust: the pragma is switched off for the
+   * length of this one migration and restored whether it succeeds or fails, and before the
+   * transaction commits `PRAGMA foreign_key_check` must come back empty. A rebuild that left a row
+   * pointing at nothing therefore rolls back rather than committing a database whose foreign keys
+   * were never checked.
+   */
+  rebuildsAReferencedTable?: true;
 };
 
 const migrations: readonly Migration[] = [
@@ -38,7 +58,16 @@ const migrations: readonly Migration[] = [
     name: "work_item_workspaces",
     filename: "0011_work_item_workspaces.sql",
   },
+  {
+    version: 12,
+    name: "registered_repository_projects",
+    filename: "0012_registered_repository_projects.sql",
+    rebuildsAReferencedTable: true,
+  },
 ];
+
+// `PRAGMA foreign_key_check` names the child table of each violation in its first column.
+const foreignKeyViolationSchema = z.object({ table: z.string() });
 
 const migrationRowSchema = z.object({
   version: z.number().int().positive(),
@@ -74,6 +103,24 @@ const existingDatabaseIsNonEmpty = async (databasePath: string): Promise<boolean
 
 const backupFilename = (now: Date): string =>
   `state-before-migration-${now.toISOString().replaceAll(":", "-")}.sqlite`;
+
+/**
+ * SQLite's step 12: after a table rebuild performed with foreign keys off, prove that no row is
+ * left pointing at nothing -- while the transaction can still be rolled back.
+ *
+ * `PRAGMA foreign_key_check` answers with one row per violation and nothing at all when the
+ * database is sound, so the assertion is on emptiness. The first violation is named in the message
+ * because a rebuild that dropped rows names exactly which table stopped resolving.
+ */
+const assertForeignKeysIntact = (database: DatabaseSync, version: number): void => {
+  const violations = database.prepare("PRAGMA foreign_key_check").all();
+  if (violations.length === 0) return;
+  const first = foreignKeyViolationSchema.parse(violations[0]);
+  throw new StateStoreError(
+    "MIGRATION_FAILED",
+    `Migration ${version.toString()} left ${violations.length.toString()} foreign key violation(s), the first in ${first.table}`,
+  );
+};
 
 export const applyMigrations = async (
   database: DatabaseSync,
@@ -128,19 +175,36 @@ export const applyMigrations = async (
   );
 
   for (const migration of pending) {
-    database.exec("BEGIN IMMEDIATE");
+    const rebuild = migration.rebuildsAReferencedTable === true;
+    // Outside the transaction on purpose: `PRAGMA foreign_keys` is a no-op inside one.
+    if (rebuild) database.exec("PRAGMA foreign_keys = OFF");
     try {
-      database.exec(migration.sql);
-      insertMigration.run(migration.version, migration.name, migration.checksum, options.now().toISOString());
-      database.exec("COMMIT");
-    } catch (error: unknown) {
-      database.exec("ROLLBACK");
-      throw new StateStoreError(
-        "MIGRATION_FAILED",
-        `Migration ${migration.version.toString()} failed`,
-        {},
-        { cause: error },
-      );
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        database.exec(migration.sql);
+        if (rebuild) assertForeignKeysIntact(database, migration.version);
+        insertMigration.run(
+          migration.version,
+          migration.name,
+          migration.checksum,
+          options.now().toISOString(),
+        );
+        database.exec("COMMIT");
+      } catch (error: unknown) {
+        database.exec("ROLLBACK");
+        throw error instanceof StateStoreError
+          ? error
+          : new StateStoreError(
+              "MIGRATION_FAILED",
+              `Migration ${migration.version.toString()} failed`,
+              {},
+              { cause: error },
+            );
+      }
+    } finally {
+      // Restored on both paths. A migration that threw still leaves this connection to whoever
+      // catches, and a connection with foreign keys quietly off is worse than the failure.
+      if (rebuild) database.exec("PRAGMA foreign_keys = ON");
     }
   }
 

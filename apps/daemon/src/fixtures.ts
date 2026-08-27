@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -180,6 +181,46 @@ export const resolveRegisteredRepository = async (path: string): Promise<string>
     insideRepository === null ? "REPOSITORY_PATH_NOT_A_REPOSITORY" : "REPOSITORY_PATH_INSIDE_REPOSITORY",
     recommendation === null ? context : `${context} ${recommendation}`,
   );
+};
+
+/**
+ * What a Project registered at `path` records: where it is, what it is called, and its id.
+ *
+ * The path is settled first, by `resolveRegisteredRepository` above -- so a path that is not a
+ * repository, or one inside another repository, is refused here in the owner's words before
+ * anything derives a name from it.
+ *
+ * **The name is the repository directory's own name.** Nothing asks the owner for one, and no
+ * field carries one. That directory name is what the owner already calls this repository
+ * everywhere else -- their shell prompt, their editor's window title, the path they would type --
+ * so it is the answer they would give if asked, and taking it costs them a step. It is also the
+ * one name that cannot disagree with the path it describes: a name typed once and stored would
+ * still be there, unchanged and now wrong, after the directory was renamed. Two repositories may
+ * share a directory name and that is allowed -- `name` carries no UNIQUE constraint, only
+ * `repository_path` does, and the path is what tells them apart.
+ *
+ * **The id is derived from the canonical path**, not minted at random, so registering the same
+ * repository twice reaches the same Project rather than two. The refusal is then
+ * PROJECT_ALREADY_REGISTERED from the id and the path at once, agreeing with each other, instead of
+ * a second id colliding on the path alone.
+ */
+export const describeRegisteredRepository = async (
+  path: string,
+): Promise<{ id: string; name: string; repositoryPath: string }> => {
+  const repositoryPath = await resolveRegisteredRepository(path);
+  const directoryName = basename(repositoryPath);
+  return {
+    // Hex, so it always satisfies opaqueIdSchema whatever the path holds. Truncated because the id
+    // is a handle, not a proof: 64 bits of sha256 over a canonical filesystem path on one machine
+    // will not collide, and the repository path's own UNIQUE constraint is what actually enforces
+    // one Project per repository.
+    id: `project-repository-${createHash("sha256").update(repositoryPath).digest("hex").slice(0, 16)}`,
+    // A filesystem root has no basename, and a directory name longer than the contract's 200
+    // characters would be rejected as an invalid *request*, which would send the owner looking for
+    // a mistake in a path that is fine. Both fall back rather than fail.
+    name: (directoryName === "" ? repositoryPath : directoryName).slice(0, 200),
+    repositoryPath,
+  };
 };
 
 // Identity and configuration for the fixture's own first commit. Set with `-c` flags rather than

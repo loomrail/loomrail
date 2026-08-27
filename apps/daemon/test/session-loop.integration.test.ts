@@ -146,7 +146,7 @@ describe("session loop workspace provisioning", () => {
     options: { template?: WorkflowTemplate; registerProject?: boolean } = {},
   ): SeededAttempt => {
     const template = options.template ?? implementOnlyTemplate;
-    // A second attempt under the same Project registers nothing: REGISTER_FIXTURE_PROJECT refuses a
+    // A second attempt under the same Project registers nothing: REGISTER_PROJECT refuses a
     // Project whose id, fixture or repository path is already taken, which is the right refusal --
     // it just means the caller that wants a second work item says so.
     if (options.registerProject !== false) {
@@ -155,7 +155,7 @@ describe("session loop workspace provisioning", () => {
         commandId: createCommandId(),
         correlationId: "correlation-seed-project",
         actor: { type: "HUMAN", id: "local-owner" },
-        type: "REGISTER_FIXTURE_PROJECT",
+        type: "REGISTER_PROJECT",
         payload: {
           id: PROJECT_ID,
           fixtureId: "web-app-a",

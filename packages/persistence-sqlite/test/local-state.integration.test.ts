@@ -151,7 +151,7 @@ describe("SQLite local state", () => {
     commandId,
     correlationId: `correlation-${commandId}`,
     actor: { type: "HUMAN", id: "local-owner" },
-    type: "REGISTER_FIXTURE_PROJECT",
+    type: "REGISTER_PROJECT",
     payload: {
       id,
       fixtureId: id === "project-api" ? "api-service-b" : "web-app-a",
@@ -528,7 +528,7 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);
@@ -1143,6 +1143,96 @@ describe("SQLite local state", () => {
     // A malformed *request* is still the caller's fault and still a ZodError, so the daemon keeps
     // answering that one with 400.
     expect(() => reopened.query({ type: "LIST_EVENTS", limit: -1 } as never)).toThrow(ZodError);
+  });
+
+  // Migration 0012. Before it, `projects.fixture_id` was `NOT NULL UNIQUE CHECK (fixture_id IN
+  // ('web-app-a', 'api-service-b'))`, so the table could hold nothing but the two bundled demos and
+  // the owner's own repository had nowhere to be recorded (spec §4). Relaxing a CHECK means
+  // rebuilding the table, and thirteen tables hold foreign keys into this one -- so what this test
+  // is really about is that the rebuild neither loses a Project nor leaves one of those thirteen
+  // pointing at the table it replaced.
+  it("relaxes the fixture constraint without losing a Project or a foreign key", async () => {
+    const localState = await open();
+    localState.execute(registerProject("project-web", "register-web-before-0012"));
+    localState.execute(registerProject("project-api", "register-api-before-0012"));
+    // Children on both sides of the rebuild: a WorkItem, and the PROJECT_REGISTERED events the two
+    // registrations already wrote. Without them the rebuild has no foreign key to get wrong.
+    localState.execute(createWorkItem("work-before-0012", "project-web"));
+    const before = localState.query({ type: "LIST_PROJECTS" });
+    if (before.type !== "PROJECTS") throw new Error("Expected the registered Projects");
+    localState.close();
+    state = undefined;
+
+    // Revert exactly what 0012 does: rebuild `projects` with the constraint it removed. Foreign keys
+    // are switched off first, which is what lets the old table be dropped at all -- the same reason
+    // the migration itself runs with them off (`rebuildsAReferencedTable` in src/migrations.ts).
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("PRAGMA foreign_keys = OFF");
+    raw.exec(`
+      CREATE TABLE projects_v11 (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+        fixture_id TEXT NOT NULL UNIQUE CHECK (fixture_id IN ('web-app-a', 'api-service-b')),
+        name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
+        repository_path TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'ARCHIVED')),
+        version INTEGER NOT NULL CHECK (version > 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+    `);
+    raw.exec("INSERT INTO projects_v11 SELECT * FROM projects");
+    raw.exec("DROP TABLE projects");
+    raw.exec("ALTER TABLE projects_v11 RENAME TO projects");
+    raw.prepare("DELETE FROM schema_migrations WHERE version = 12").run();
+    // Asserted before the migration runs, so this test cannot pass by starting from a database that
+    // never carried the constraint: the reconstructed schema really does refuse a Project with no
+    // fixture, which is the whole thing 0012 exists to change.
+    expect(() => {
+      raw.exec(
+        `INSERT INTO projects (id, workspace_id, fixture_id, name, repository_path, status, version, created_at, updated_at)
+         VALUES ('project-own', 'workspace-local', NULL, 'own', '/tmp/own-repository', 'ACTIVE', 1, '${timestamp}', '${timestamp}')`,
+      );
+    }).toThrow(/NOT NULL/);
+    raw.close();
+
+    const migrated = await open();
+    expect(migrated.startup.appliedMigrations).toEqual([12]);
+
+    // Every row carried across, byte for byte. The owner's real database has Projects in it.
+    const after = migrated.query({ type: "LIST_PROJECTS" });
+    if (after.type !== "PROJECTS") throw new Error("Expected the migrated Projects");
+    expect(after.projects).toEqual(before.projects);
+
+    // And no child left pointing at the table the rebuild replaced.
+    const check = new DatabaseSync(databasePath);
+    expect(check.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    check.close();
+
+    // What the migration was for: a Project with no fixture at all, and a second one beside it --
+    // UNIQUE constrains only non-NULL values, so two Projects registered by path are not duplicates
+    // of each other.
+    const own = migrated.execute({
+      ...registerProject("project-own-repository", "register-own-after-0012"),
+      payload: {
+        id: "project-own-repository",
+        fixtureId: null,
+        name: "own-repository",
+        repositoryPath: join(temporaryDirectory, "own-repository"),
+      },
+    });
+    if (own.type !== "PROJECT_REGISTERED") throw new Error("Expected the path Project to register");
+    expect(own.project.fixtureId).toBeNull();
+    const second = migrated.execute({
+      ...registerProject("project-second-repository", "register-second-after-0012"),
+      payload: {
+        id: "project-second-repository",
+        fixtureId: null,
+        name: "second-repository",
+        repositoryPath: join(temporaryDirectory, "second-repository"),
+      },
+    });
+    expect(second.type).toBe("PROJECT_REGISTERED");
   });
 
   it("fails closed when an applied migration checksum drifts", async () => {
