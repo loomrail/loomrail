@@ -6,12 +6,12 @@ an assumption tests the assumption instead of the CLI. This file is the inventor
 where its file came from; an entry that cannot say "captured from the real CLI" has to say what it
 is instead.
 
-| file                    | provenance                                                                                                                                                                                                                                                                                    |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hello.jsonl`           | Captured from the real `codex` CLI (authenticated, empty temporary directory) on a trivial prompt, without `--output-schema`. Verbatim except for redaction; no line was written by hand.                                                                                                     |
-| `completed.jsonl`       | Captured from the real `codex` CLI v0.144.1 (authenticated, empty temporary directory) driven with **this adapter's exact argv**, `--output-schema` included. Verbatim; no line was written by hand.                                                                                          |
-| `turn-failed.jsonl`     | Captured from the real `codex` CLI v0.144.1 (authenticated, empty temporary directory) by adding `-m definitely-not-a-real-model-xyz`, which makes the model endpoint refuse the turn. Verbatim stdout; no line was written by hand.                                                          |
-| `workspace-write.jsonl` | Captured from the real `codex` CLI v0.144.1 (authenticated, macOS arm64) driven with **this adapter's E1 worktree argv** inside a real linked worktree, on a run that genuinely edited a file and ran a verification command. Verbatim except for one redaction; no line was written by hand. |
+| file                    | provenance                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hello.jsonl`           | Captured from the real `codex` CLI (authenticated, empty temporary directory) on a trivial prompt, without `--output-schema`. Verbatim except for redaction; no line was written by hand.                                                                                                                                                                                                                                                                                                                                                            |
+| `completed.jsonl`       | Captured from the real `codex` CLI v0.144.1 (authenticated, empty temporary directory) driven with **this adapter's exact argv**, `--output-schema` included. Verbatim; no line was written by hand.                                                                                                                                                                                                                                                                                                                                                 |
+| `turn-failed.jsonl`     | Captured from the real `codex` CLI v0.144.1 (authenticated, empty temporary directory) by adding `-m definitely-not-a-real-model-xyz`, which makes the model endpoint refuse the turn. Verbatim stdout; no line was written by hand.                                                                                                                                                                                                                                                                                                                 |
+| `workspace-write.jsonl` | Captured from the real `codex` CLI v0.144.1 (authenticated, macOS arm64) driven with **this adapter's E1 worktree argv** inside a real linked worktree, on a run that genuinely edited a file and ran a verification command. No line was written by hand, but unlike the three above this file is **not** the CLI's own bytes: redacting the worktree path re-serialized every line through a JSON round-trip, so all 11 lines are spaced JSON where the CLI emits compact. See "The redaction" below for what that preserves and what it does not. |
 
 `completed.jsonl` replaced an earlier file of the same name that was **not** a recording: its final
 line was an invented, un-enveloped checkpoint object, which is where the adapter wrongly expected
@@ -51,12 +51,31 @@ observed on a run that actually edited a file rather than on a trivial prompt.
 It also carries what the A2 parser did not model: `item.started` events, and the item types
 `command_execution` and `file_change`. Commands are executed through `/bin/zsh -lc`.
 
-**The one redaction:** one substitution, applied to the whole stream — the absolute worktree path became
+**The redaction.** One substitution, in content: the absolute worktree path became
 `/tmp/loomrail-worktree`, where it appeared in `file_change.changes[].path`. Checked afterwards for
 the owner's username, the macOS home-directory prefix, the session temp root and
 `Application Support`: none occur. (`pnpm test:public-readiness` refuses that prefix in any tracked
 file, this inventory included, which is why it is described here rather than written out.)
 `thread_id` is left as recorded, matching the other entries above.
+
+**But the substitution was not applied to the bytes.** It was applied to parsed objects, and the
+stream was written back out by re-serializing each line — so this file is the CLI's _values_, not
+the CLI's bytes. Every one of its 11 lines is spaced JSON (`{"type": "turn.started"}`); the three
+captures above are the compact JSON the CLI actually writes (`{"type":"turn.started"}`). An earlier
+version of this row claimed "one substitution, applied to the whole stream", which described a
+`sed`-shaped edit this capture never had.
+
+What the round-trip preserves: every key, in the order the CLI emitted it; every value, including
+the non-ASCII characters this stream contains, which survived as themselves rather than as `\uXXXX`
+escapes; the line count and the one-object-per-line framing the adapter's parser reads. What it does
+not preserve: inter-token whitespace, and therefore the exact byte sequence — so this file cannot
+answer a question about the CLI's own serialization (whether it escapes non-ASCII, how it spaces
+separators, whether a line arrives split). Those questions belong to `hello.jsonl`,
+`completed.jsonl` and `turn-failed.jsonl`, which are byte-exact. Nothing this file is used for
+depends on them: the adapter parses each line with `JSON.parse`, which is indifferent to spacing.
+
+A future capture should be redacted on the bytes (a literal substitution over the text) so it stays
+byte-exact like the others.
 
 ## Redaction
 
@@ -66,6 +85,8 @@ capture is checked for absolute personal paths and secrets before it lands here,
 
 ## Adding a recording
 
-Run the adapter's argv against the real CLI, redact, commit the bytes unchanged, and add a row
-above. Do not hand-edit a captured line: an edited capture is a fixture wearing a recording's name,
-and the row here must then say so.
+Run the adapter's argv against the real CLI, redact **by substituting over the text**, commit the
+bytes unchanged, and add a row above. Do not hand-edit a captured line: an edited capture is a
+fixture wearing a recording's name, and the row here must then say so. Reformatting is an edit too,
+even when no value changes — if a redaction step parses and re-writes the stream, the row above has
+to say that, as `workspace-write.jsonl`'s now does.
