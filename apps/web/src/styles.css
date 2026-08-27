@@ -486,6 +486,18 @@ body.is-resizing {
   margin: 0;
 }
 
+/* The path field and its button. The button is on its own row rather than beside the field: a
+   filesystem path is long, and squeezing it to leave room for a button is the wrong trade. */
+.settings__register {
+  display: grid;
+  gap: var(--lr-space-2);
+  justify-items: start;
+}
+
+.settings__register .lr-field {
+  width: 100%;
+}
+
 .app-content {
   flex: 1;
   min-height: 0;

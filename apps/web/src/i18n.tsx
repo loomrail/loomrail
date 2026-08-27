@@ -19,7 +19,11 @@ const en = {
   "settings.layout.description": "Drag a panel edge to resize it, or nudge it with the arrow keys.",
   "settings.layout.reset": "Reset panel widths",
   "settings.projects": "Projects",
-  "settings.projects.note": "Registering another repository arrives with real project scanning.",
+  "settings.projects.register.label": "Register a local repository",
+  "settings.projects.register.description":
+    "The absolute path to a Git repository on this machine. Its directory name becomes the project name.",
+  "settings.projects.register.placeholder": "/absolute/path/to/your-repository",
+  "settings.projects.register.action": "Register repository",
   "language.change": "Change language",
   "language.english": "English",
   "language.russian": "Русский",
@@ -331,8 +335,11 @@ const ru = {
   "settings.layout.description": "Потяните край панели или подвиньте его стрелками на клавиатуре.",
   "settings.layout.reset": "Сбросить ширину панелей",
   "settings.projects": "Проекты",
-  "settings.projects.note":
-    "Подключение другого репозитория появится вместе с реальным сканированием проектов.",
+  "settings.projects.register.label": "Подключить локальный репозиторий",
+  "settings.projects.register.description":
+    "Абсолютный путь к Git-репозиторию на этой машине. Имя каталога станет именем проекта.",
+  "settings.projects.register.placeholder": "/absolute/path/to/your-repository",
+  "settings.projects.register.action": "Подключить репозиторий",
   "language.change": "Сменить язык",
   "language.english": "English",
   "language.russian": "Русский",

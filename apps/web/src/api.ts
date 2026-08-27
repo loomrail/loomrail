@@ -178,6 +178,22 @@ export const registerFixtureProject = async (fixtureId: FixtureProjectId): Promi
   });
 };
 
+/**
+ * Registers a local Git repository the owner named as a Project (spec §4).
+ *
+ * Answers nothing on success for the same reason `registerFixtureProject` does not: the caller
+ * refetches the Project list, which is where the new Project has to appear anyway. A refusal --
+ * the path is not a repository, or it is a directory inside one -- arrives as an Error carrying the
+ * daemon's own wording, which names the path and says what to do about it, and the caller shows
+ * that rather than a sentence of its own.
+ */
+export const registerRepositoryProject = async (repositoryPath: string): Promise<void> => {
+  await requestLocalApi("/api/v1/projects/register", stateCommandResultSchema, {
+    method: "POST",
+    body: JSON.stringify({ schemaVersion: 1, commandId: crypto.randomUUID(), repositoryPath }),
+  });
+};
+
 export type CreateWorkItemInput = {
   description: string;
   priority: WorkItem["priority"];

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -793,6 +793,60 @@ test.describe("authenticated walking skeleton", () => {
         .locator(".lr-select-item__copy > span")
         .evaluate((element) => element.scrollWidth <= element.clientWidth),
     ).toBe(true);
+  });
+
+  test("registers a local Git repository from settings, and refuses a directory inside one", async ({
+    page,
+  }) => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail own repository "));
+    try {
+      // A repository of its own, built the way registration builds the demo one -- so this test
+      // needs no git of its own, and the repository it registers is as real as the owner's would be.
+      const { repositoryPath } = await materialiseFixtureRepository(
+        await resolveBundledFixture("web-app-a"),
+        temporaryDirectory,
+      );
+      const inside = join(repositoryPath, "packages");
+      await mkdir(inside, { recursive: true });
+
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        stateDatabasePath: join(temporaryDirectory, "local-state.sqlite"),
+        webRoot: resolve("apps/web/dist"),
+      });
+
+      await page.goto(daemon.bootstrapUrl);
+      await expect(page.getByText("No local projects yet", { exact: true })).toBeVisible();
+
+      const settings = page.locator(".lr-dialog");
+      await page.getByRole("button", { name: "Open settings" }).click();
+      const path = settings.getByLabel("Register a local repository");
+      const register = settings.getByRole("button", { name: "Register repository" });
+
+      // The guard first: a directory inside a repository is refused, and the refusal names the
+      // repository it is inside -- which is what tells the owner what to register instead.
+      await path.fill(inside);
+      await register.click();
+      await expect(settings.getByRole("alert")).toContainText(repositoryPath);
+      await expect(page.getByRole("button", { name: "Switch project" })).toHaveCount(0);
+
+      // Then the repository itself. Its directory name is the Project's name.
+      await path.fill(repositoryPath);
+      await register.click();
+      await settings.locator(".lr-dialog__header button").click();
+      await expect(settings).toHaveCount(0);
+
+      const project = page.getByRole("button", { name: "Switch project" });
+      await expect(project).toBeVisible({ timeout: DEMO_INITIALISATION_MS });
+      await expect(project).toContainText("web-app-a");
+      // A Project like any other: the board is live and a task can be filed against it.
+      await createTask(page, "Task in my own repository");
+    } finally {
+      await daemon?.close();
+      daemon = undefined;
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
   });
 
   test("offers both languages in settings and marks the active one", async ({ page }) => {

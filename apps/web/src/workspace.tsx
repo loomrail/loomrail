@@ -27,6 +27,7 @@ import {
   listWorkItemEvents,
   moveWorkItem,
   registerFixtureProject,
+  registerRepositoryProject,
   resolveAcceptance,
   startMockPipeline,
   updateWorkItem,
@@ -201,6 +202,17 @@ export const useInitializeFixtureWorkspace = () => {
       if (!registered.has("web-app-a")) await registerFixtureProject("web-app-a");
       if (!registered.has("api-service-b")) await registerFixtureProject("api-service-b");
     },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: projectsKey });
+    },
+  });
+};
+
+/** Spec §4: the owner registers a local Git repository by path, alongside the bundled demo. */
+export const useRegisterRepositoryProject = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (repositoryPath: string) => registerRepositoryProject(repositoryPath),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: projectsKey });
     },

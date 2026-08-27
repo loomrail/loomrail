@@ -25,7 +25,12 @@ import type { WorkbenchSearch } from "../router";
 import { hasCustomPanelWidths, resetPanelWidths } from "../layout";
 import { applyDensityPreference, readDensityPreference, type DensityPreference } from "../density";
 import { applyThemePreference, readThemePreference, type ThemePreference } from "../theme";
-import { useCreateWorkItem, useProjectHumanRequests, useWorkspace } from "../workspace";
+import {
+  useCreateWorkItem,
+  useProjectHumanRequests,
+  useRegisterRepositoryProject,
+  useWorkspace,
+} from "../workspace";
 
 const NewTaskDialog = (): React.JSX.Element => {
   const { t } = useI18n();
@@ -230,11 +235,71 @@ const SettingChoice = <TValue extends string>({
 };
 
 /**
+ * Where the owner registers a local Git repository of their own as a Project (spec §4).
+ *
+ * It sits beside the project list rather than in the empty state, because the empty state is gone
+ * the moment the demo is initialised, and registering your own repository is exactly the thing you
+ * do *after* looking at the demo. The one field is the path: the daemon takes the repository
+ * directory's own name, so there is nothing else to ask for.
+ *
+ * The refusal shown under the field is the daemon's, word for word. It names the path and, when the
+ * path is a directory inside another repository, says which repository that is -- a message the
+ * domain already writes, and one this form would only make vaguer by paraphrasing.
+ */
+const RegisterRepositoryField = (): React.JSX.Element => {
+  const { t } = useI18n();
+  const inputId = useId();
+  const [path, setPath] = useState("");
+  const registerMutation = useRegisterRepositoryProject();
+  const error = registerMutation.error instanceof Error ? registerMutation.error.message : null;
+  const trimmed = path.trim();
+
+  return (
+    <form
+      className="settings__register"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (trimmed === "") return;
+        registerMutation.mutate(trimmed, {
+          onSuccess: () => {
+            setPath("");
+          },
+        });
+      }}
+    >
+      <Field
+        description={t("settings.projects.register.description")}
+        htmlFor={inputId}
+        label={t("settings.projects.register.label")}
+        {...(error === null ? {} : { error })}
+      >
+        <TextField
+          autoComplete="off"
+          id={inputId}
+          invalid={error !== null}
+          onChange={(event) => {
+            setPath(event.target.value);
+          }}
+          placeholder={t("settings.projects.register.placeholder")}
+          size="md"
+          spellCheck={false}
+          value={path}
+        />
+      </Field>
+      <Button disabled={trimmed === ""} loading={registerMutation.isPending} type="submit">
+        {t("settings.projects.register.action")}
+      </Button>
+    </form>
+  );
+};
+
+/**
  * Gathers the preferences that belong to this browser.
  *
  * Theme, language and density are stored locally and affect nothing the daemon owns, which is why
- * they live together here. Project-level settings are deliberately absent: those are domain state
- * and need commands, migrations and events rather than a local toggle.
+ * they live together here. Registering a repository is the one thing in this dialog that is not a
+ * local preference: it is a command against domain state, and it lives here because this is where
+ * the project list already is -- not because it belongs with the toggles above it.
  */
 const SettingsDialog = ({ onOpenChange, open }: SettingsDialogProps): React.JSX.Element => {
   const { locale, setLocale, t } = useI18n();
@@ -332,8 +397,7 @@ const SettingsDialog = ({ onOpenChange, open }: SettingsDialogProps): React.JSX.
           ) : (
             <p className="settings__note">{t("project.none")}</p>
           )}
-          {/* Registering a project means reading a real repository, which this phase does not do. */}
-          <p className="settings__note">{t("settings.projects.note")}</p>
+          <RegisterRepositoryField />
         </section>
       </div>
     </DialogSurface>
