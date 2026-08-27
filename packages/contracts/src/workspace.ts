@@ -229,7 +229,27 @@ export const workItemWorkspaceOrphanedResultSchema = z
   })
   .strict();
 
+// What `GET /api/v1/work-items/:workItemId/workspace` answers: the workspace a WorkItem has, or the
+// recorded fact that it has none.
+//
+// `null` rather than a 404, because "this WorkItem has no workspace" is the ordinary state of every
+// prose-only stage and of every work item before its first code stage -- not a missing resource. A
+// 404 would make the caller distinguish "no workspace" from "no such WorkItem" by inspecting an
+// error code, and the cockpit asks this question for whichever item the owner selected, most of
+// which have never cut one.
+//
+// A response object rather than the bare workspace for the same reason every other listing here
+// wraps its payload (projectsResponseSchema, workItemsResponseSchema): a top-level `null` body
+// carries no schemaVersion, so a later field could not be added without breaking every reader.
+export const workItemWorkspaceResponseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    workspace: workItemWorkspaceSchema.nullable(),
+  })
+  .strict();
+
 export type WorkItemWorkspaceStatus = z.infer<typeof workItemWorkspaceStatusSchema>;
+export type WorkItemWorkspaceResponse = z.infer<typeof workItemWorkspaceResponseSchema>;
 export type WorkItemWorkspace = z.infer<typeof workItemWorkspaceSchema>;
 export type WorkItemWorkspaceCreatedEvent = z.infer<typeof workItemWorkspaceCreatedEventSchema>;
 export type WorkItemWorkspaceOrphanedEvent = z.infer<typeof workItemWorkspaceOrphanedEventSchema>;

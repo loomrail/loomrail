@@ -36,6 +36,7 @@ import {
   workItemResponseSchema,
   workItemsResponseSchema,
   workItemStateSchema,
+  workItemWorkspaceResponseSchema,
   workflowSnapshotSchema,
   type ApiErrorResponse,
   type WorkflowStage,
@@ -778,6 +779,38 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
                 acceptancePackage: null,
               },
         );
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    // Where this work item's agent writes: the repository branch and the worktree directory the
+    // owner opens in their own editor (spec §4, "Что видно владельцу").
+    //
+    // Its own route rather than a field on GET_WORKFLOW_SNAPSHOT, because a workspace is a fact
+    // about the WorkItem and not about its run: the snapshot answers with every list empty when
+    // there is no PipelineRun, and a workspace cut by an earlier run would vanish from the card the
+    // moment a run ended. Reading it here also costs one indexed row against `work_item_workspaces`
+    // rather than joining it onto the query the board re-fetches on every event.
+    app.get("/api/v1/work-items/:workItemId/workspace", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const workItem = localState.query({ type: "GET_WORK_ITEM", workItemId: params.workItemId });
+        if (workItem.type !== "WORK_ITEM" || !workItem.workItem) {
+          throw new WorkItemDomainError("WORK_ITEM_NOT_FOUND", "The WorkItem does not exist");
+        }
+        const result = localState.query({
+          type: "GET_WORKSPACE_BY_WORK_ITEM",
+          workItemId: params.workItemId,
+        });
+        return workItemWorkspaceResponseSchema.parse({
+          schemaVersion: 1,
+          // A WorkItem with no workspace answers `null`, not 404: see the contract's note. The
+          // WorkItem itself not existing is a genuine 404, and is raised above.
+          workspace: result.type === "WORKSPACE" ? result.workspace : null,
+        });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }

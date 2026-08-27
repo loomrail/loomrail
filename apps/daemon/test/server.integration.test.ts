@@ -12,6 +12,7 @@ import {
   projectsResponseSchema,
   stateCommandResultSchema,
   workItemsResponseSchema,
+  workItemWorkspaceResponseSchema,
   workflowSnapshotSchema,
   type ContextPackSpec,
   type ProviderSession,
@@ -1161,6 +1162,116 @@ describe("local daemon session and state boundary", () => {
     expect(logs).toContain(workspaceId);
     expect(logs).toContain("WORKTREE_LIST_FAILED");
     expect(logs).not.toContain("Marked a work item's workspace orphaned");
+  });
+
+  // Task 11 passed a workspace's branch and baseCommit into the provider adapter and nothing ever
+  // read them back out; the owner could not see where their agent had written at all. This route is
+  // what makes those fields reachable, and the card that reads it is the reason it exists.
+  it("answers with the workspace a work item writes in, and with null for one that has none", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail daemon workspace route "));
+    temporaryDirectories.push(temporaryDirectory);
+    const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    const repositoryPath = await makeThrowawayRepo(join(temporaryDirectory, "repo"));
+    const worktreePath = join(temporaryDirectory, "workspaces", "задача с пробелом");
+    const baseCommit = "a".repeat(40);
+    let withWorkspaceId = "";
+    let withoutWorkspaceId = "";
+    const localState = await openLocalState({ databasePath: stateDatabasePath });
+    try {
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "register-workspace-route-project",
+        correlationId: "correlation-register-workspace-route",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_PROJECT",
+        payload: {
+          id: "project-workspace-route",
+          fixtureId: "web-app-a",
+          name: "Workspace route fixture",
+          repositoryPath,
+        },
+      });
+      const createTask = (slug: string, title: string): string => {
+        const created = localState.execute({
+          schemaVersion: 1,
+          commandId: `create-${slug}`,
+          correlationId: `correlation-create-${slug}`,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "CREATE_WORK_ITEM",
+          payload: {
+            projectId: "project-workspace-route",
+            parentId: null,
+            type: "TASK",
+            title,
+            description: "Synthetic workspace-route fixture",
+            priority: "MEDIUM",
+            risk: "LOW",
+            acceptanceCriteria: [],
+          },
+        });
+        if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+        return created.workItem.id;
+      };
+      withWorkspaceId = createTask("with-workspace", "A work item with a workspace");
+      withoutWorkspaceId = createTask("without-workspace", "A work item with no workspace");
+      const workspace = localState.execute({
+        schemaVersion: 1,
+        commandId: "record-workspace-route-workspace",
+        correlationId: "correlation-record-workspace-route",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "CREATE_WORK_ITEM_WORKSPACE",
+        payload: {
+          workItemId: withWorkspaceId,
+          projectId: "project-workspace-route",
+          branch: "loomrail/route-fixture",
+          worktreePath,
+          baseCommit,
+          snapshotCommit: null,
+          carriedPaths: [],
+        },
+      });
+      if (workspace.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected a workspace");
+    } finally {
+      localState.close();
+    }
+
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, stateDatabasePath, logger: false });
+    const session = await authenticate(daemon, token);
+
+    const present = await fetch(`${daemon.baseUrl}/api/v1/work-items/${withWorkspaceId}/workspace`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(present.status).toBe(200);
+    const body = workItemWorkspaceResponseSchema.parse(await present.json());
+    // Every field the card renders, named individually: a response that merely parsed would also
+    // have passed with the branch or the path silently absent, and those are the two values the
+    // owner acts on.
+    expect(body.workspace?.branch).toBe("loomrail/route-fixture");
+    expect(body.workspace?.worktreePath).toBe(worktreePath);
+    expect(body.workspace?.baseCommit).toBe(baseCommit);
+    // Reconciliation ran at startup and found no worktree at that path, so this is the state the
+    // owner is genuinely in -- reported as it is, not smoothed over.
+    expect(body.workspace?.status).toBe("ORPHANED");
+
+    // A work item that has never needed a repository is not an error and not a 404: it is the
+    // ordinary state of every prose-only stage, and the card has to be able to tell the two apart.
+    const absent = await fetch(`${daemon.baseUrl}/api/v1/work-items/${withoutWorkspaceId}/workspace`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(absent.status).toBe(200);
+    expect(workItemWorkspaceResponseSchema.parse(await absent.json()).workspace).toBeNull();
+
+    const unknown = await fetch(`${daemon.baseUrl}/api/v1/work-items/work-item-nowhere/workspace`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(unknown.status).toBe(404);
+    expect(apiErrorResponseSchema.parse(await unknown.json()).error.code).toBe("WORK_ITEM_NOT_FOUND");
+
+    // The same session boundary as the rest of /api/v1: an unauthenticated read of where an agent
+    // is writing on this machine is exactly what the session exists to refuse.
+    const anonymous = await fetch(`${daemon.baseUrl}/api/v1/work-items/${withWorkspaceId}/workspace`);
+    expect(anonymous.status).toBe(401);
   });
 
   it("marks an orphaned running attempt interrupted before serving startup traffic", async () => {
