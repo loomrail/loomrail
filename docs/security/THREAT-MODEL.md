@@ -7,8 +7,14 @@
 ## 1. Scope
 
 Phase 0 includes a local loopback daemon, browser UI, SQLite state, local artifacts and a deterministic mock provider.
-It does not execute shell/Git/provider/browser actions. Later surfaces are listed so current contracts do not make them
-impossible to secure, but their detailed controls require Phase-specific threat deltas.
+Later surfaces are listed so current contracts do not make them impossible to secure, but their detailed controls
+require Phase-specific threat deltas.
+
+The sentence "it does not execute shell/Git/provider/browser actions" stood here through Phase 0 and is **no longer
+true of two of the four**. A2 made Loomrail spawn real provider CLIs as child processes of the daemon, and E1 made it
+run `git` and hand one of those CLIs a writable worktree. Both are covered by their deltas in §6 rather than by this
+paragraph. Browser actions are still not executed, and the mock provider still runs by default (`LOOMRAIL_PROVIDER`
+unset).
 
 ## 2. Security objectives
 
@@ -213,12 +219,19 @@ Mitigations, verified in code:
   | `--settings`                                 | Claude | arbitrary settings file or inline JSON                                                      |
   | `--tools`                                    | Claude | widens the tool set the child may use                                                       |
 
+  **E1 amends the `-c` / `--config` row.** In `packages/provider-codex` the Codex adapter now sends exactly one
+  `-c` key of its own, so a ban on the spelling would ban the launch this milestone exists for. `-c` left the
+  spelling list there and became a closed list of permitted _values_ instead; `--config` stayed on the spelling
+  list. In `packages/provider-claude-code` both spellings remain banned outright, because that adapter sends no
+  config override at all. See T19 below for the exception and the guard that replaced the ban.
+
 - **neither adapter connects an MCP server.** Spec D6 forbids MCP before milestone C1, and nothing enforced
   that: it was a property of the argv nobody asserted. `--mcp-config` and `--strict-mcp-config` are now checked
   for their absence by name, by both adapters' "never connects an MCP server (D6)" test;
 - before E1 there is nothing on disk for a bypassed permission to reach anyway: both adapters run their CLI in
   a fresh, empty temporary directory (spec §6/§7, D1), bounding the blast radius independently of the flag
-  check above.
+  check above. **E1 ends this for Codex** — it runs in a real Git worktree with write access, which is what
+  moves the flag list from a defence in depth to the defence. See T19.
 
 **T17 — a process orphaned by a dead daemon outlives it.** Rated Medium: bounded to the one process a single
 `start()` call spawned, and self-healing at the next daemon start, but real while it lasts — an unwatched
@@ -278,12 +291,82 @@ against a budget threshold. This is a budget-enforcement gap (BD-001), not a new
 threat — spend already visible to the owner in the CLI's own output is merely not yet durable inside
 Loomrail — and is tracked as follow-up work, not part of A2 (spec §3 D4).
 
-### E1 workspace-execution delta (registering a repository)
+### E1 workspace-execution delta (T19, T20, and two registration decisions)
 
 E1 (`docs/plans/13-e1-workspace-execution-spec.ru.md`) is where a Project stops being one of two bundled
 fixtures and becomes any local Git repository the owner names by path, and where a stage that changes files
-runs in a Git worktree cut from it. Two registration decisions belong on the record here, because both are
-things Loomrail deliberately does not refuse.
+runs in a Git worktree cut from it. The A2 bound that made the flag list a defence in depth — "there is
+nothing on disk for a bypassed permission to reach anyway" — ends here for the Codex adapter: it now declares
+all six stages and runs `codex exec -s workspace-write` in a real worktree.
+
+**T19 — a write-enabled, network-enabled agent runs in a tree carrying the owner's uncommitted work.** Rated
+High, and accepted by the owner in that knowledge (spec D3 and D8). The three parts of it, each verified in
+code:
+
+- **everything uncommitted is carried in, without asking.** `createCarryInSnapshot`
+  (`packages/workspace/src/snapshot.ts`) builds the worktree's starting commit from a temporary index —
+  `read-tree HEAD`, then `git add -A` — so edits to tracked files, whatever is already staged, deletions, and
+  **untracked files that the repository does not ignore** all arrive in the worktree. `.gitignore` is the only
+  boundary, and it is the repository's own, not Loomrail's: an unignored `.env.local`, a scratch key, a
+  downloaded dump next to the source all travel. No prompt stands in front of this, by owner decision (D3);
+- **the agent has network access in that same tree.** `workspace-write` denies network by default, and the
+  adapter re-opens it with one config key (T20 below) because a stage that cannot fetch cannot install a
+  dependency or run a suite that does. So a secret carried in by the first property is reachable by a process
+  that can also reach the network, in one directory, at the same time. This is the accepted risk, written here
+  as accepted rather than as a gap someone forgot;
+- **what is recorded, and what is not yet shown.** D3's compensating control is that the carry-in is written
+  down: `WORK_ITEM_WORKSPACE_CREATED` carries `carriedPaths` (`packages/contracts/src/workspace.ts`,
+  `apps/daemon/src/session-loop.ts`), capped at `maxCarriedPaths` = 500 with the cut logged rather than the
+  event rejected. The record is durable and reaches the browser. **It is not rendered**: the Workbench
+  timeline entry for that event shows the branch name only (`apps/web/src/views/WorkbenchPage.tsx`,
+  `event.workspaceCreatedDetail`). So the fact is auditable after the run, and not yet legible in the cockpit
+  during it — the mitigation is half-delivered, and is recorded that way here rather than claimed whole.
+
+Bounding the blast radius, and the reason this is High rather than Critical: the write is confined to the
+worktree named by `-C`, which lives outside the repository (D2), on its own `loomrail/…` branch. Exactly what
+that does and does not touch inside the owner's `.git` is stated under the registration decisions below —
+the agent's own writes never leave the worktree, but the worktree and its ref are repository-level objects.
+
+**A note on the child's environment, from reconnaissance rather than from our code.** Commands the agent runs
+are executed by the Codex CLI through `/bin/zsh -lc` — a _login_ shell, which reads the owner's profile — so
+the child's `PATH` and environment are the owner's, not the daemon's (spec §2.13). Loomrail adds nothing of
+its own to that environment and scrubs nothing from it: SD-002 (an injected environment profile) is not in
+this milestone. This is a property of the CLI observed by probe, not something Loomrail asserts or enforces,
+and it is written here so that the `.env` control listed under §7 "Secrets" is not read as already true.
+
+**T20 — the machine's own Codex config decides what the agent may do.** Rated High, and this weakening existed
+_before_ E1: `codex exec` launched without `--ignore-user-config` inherits the owner's entire
+`~/.codex/config.toml` — `approval_policy`, `sandbox_mode`, hooks, plugins, model providers **and MCP
+servers** — while A2's D6 forbids MCP outright and nothing enforced it. `-s` overrides `sandbox_mode` for the
+sandbox itself, but hooks, plugins and MCP servers are not sandboxed at all. Mitigations, verified in code:
+
+- **`--ignore-user-config` is sent on every launch**, read-only and workspace-write alike
+  (`packages/provider-codex/src/index.ts`), and pinned by `packages/provider-codex/test/adapter.unit.test.ts`'s
+  "does not let the owner's own codex config decide what the agent may do". Authentication is unaffected: it
+  lives in `CODEX_HOME`, not in `config.toml`. What the CLI does with a flag it documents is the CLI's
+  behaviour, not something this repository can prove — the assertion here is over the argv Loomrail builds;
+- **the `-c` exception is exactly one key, and it is guarded by value rather than by spelling.** Given a
+  workspace the adapter sends `-c sandbox_workspace_write.network_access=true` and nothing else. Banning the
+  spelling would ban this launch; permitting the spelling would permit `sandbox_permissions` with it. So `-c`
+  left the forbidden-spelling list in that package and the test now enumerates the permitted _assignments_
+  (`ALLOWED_CONFIG_ASSIGNMENTS`), asserting that **every** `-c` in the argv carries one of them. Adding a
+  second key is then a decision someone makes in that list;
+- **the guard matches by prefix as well as by exact token.** A clap-based CLI accepts `-cKEY=VALUE` and
+  `--config=KEY=VALUE` as single argv tokens, and the first version of this guard — `not.toContain("-c")`,
+  plus a reader that only inspected the token _after_ an exact `-c` — let both through untouched. That is the
+  documented sandbox escape written as one word. `flagSpelling` now recognises the bare token, the long
+  attached `--flag=value` form, and, for a one-character short flag, the attached `-cvalue` form with no
+  separator; a trailing `-c` with nothing after it yields an empty assignment, which is not on the allow-list
+  either. The guard is itself tested against smuggled spellings rather than only used
+  (`packages/provider-codex/test/adapter.unit.test.ts`, "catches a forbidden config key smuggled into a single
+  argv token"), and it reads the argv **array**, never a joined command line — the context pack is a
+  positional argument, so a joined-line check would fire on prompt text containing `-c`;
+- **`--dangerously-*` remains absent on every path**, workspace or none, and `--skip-git-repo-check` is sent
+  only in the no-workspace case: inside a worktree the check passes on its own and its absence is a free
+  assertion that the directory really is a repository (spec §2.7, D8).
+
+Two registration decisions belong on the record here too, because both are things Loomrail deliberately does
+not refuse.
 
 **A repository's own top level is always accepted — including Loomrail's own checkout.** `resolveRegisteredRepository`
 (`apps/daemon/src/fixtures.ts`) refuses a path that is not a Git repository, and refuses a directory _inside_
@@ -294,18 +377,31 @@ hand a live agent Loomrail's own code, which is why it is written down rather th
 
 What protects the owner in that case is the shape of the work rather than a refusal:
 
-- **the agent never writes in the repository.** A workspace is a Git worktree cut _outside_ it, under
-  Loomrail's own data directory (`<data>/workspaces/<projectId>/<workItemId>`, spec D2), on its own
-  `loomrail/…` branch. The owner's working copy, index and checked-out branch are untouched;
-- **Loomrail commits nothing to the repository's own branches and pushes nothing, anywhere.** The single
-  commit it creates is the carry-in snapshot on the workspace's own branch (spec §2.9). No remote is
-  contacted at any point in this milestone;
+- **the agent never writes in the owner's working copy.** A workspace is a Git worktree cut _outside_ the
+  repository, under Loomrail's own data directory (`<data>/workspaces/<projectId>/<workItemId>`, spec D2), on
+  its own `loomrail/…` branch. The owner's working copy, index and checked-out branch are untouched — the
+  carry-in snapshot is built through a temporary index under the system temp directory, never the repository's
+  own (`packages/workspace/src/snapshot.ts`), which is why `git status --porcelain` before and after is
+  byte-identical (spec §2.9, acceptance criterion 4);
+- **it does write bookkeeping inside the owner's `.git`, and saying otherwise would overstate this.** A
+  worktree is a repository-level object: `git worktree add -b` creates `.git/worktrees/<name>/` and the
+  `loomrail/<id>-<slug>` ref in the owner's own ref store, and `commit-tree` writes the snapshot commit into
+  the owner's object store. The bound is which of those it may touch: Loomrail creates its own ref and never
+  moves, rewrites or deletes a pre-existing one. The single deletion it performs is a compare-and-delete of
+  the ref it created itself, and only while that ref still points at the commit Loomrail put there
+  (`deleteBranchIfUnmoved`, `packages/workspace/src/worktree.ts`) — an owner who committed onto that branch
+  keeps it;
+- **exactly one commit, on that branch, and nothing pushed anywhere.** The only commit Loomrail creates is the
+  carry-in snapshot (`packages/workspace/src/snapshot.ts`); nothing commits on the owner's behalf afterwards,
+  because agent Git authority is GD-001 and out of scope here (spec §11). No code path in
+  `packages/workspace/src` or `apps/daemon/src` invokes `push`, `fetch`, `clone`, `pull` or `remote`: no
+  remote is contacted at any point in this milestone;
 - **the refusal that remains is the one that matters.** A _subdirectory_ of a repository is still refused
   (`REPOSITORY_PATH_INSIDE_REPOSITORY`), because registering one would silently branch the enclosing
   repository and hand the agent everything in it — which the owner did not choose and would not see.
 
 No confirmation dialog stands in front of this, by decision: a prompt that appears whenever a path resembles
-Loomrail's own would train the owner to dismiss it, and it protects nothing the three properties above do not.
+Loomrail's own would train the owner to dismiss it, and it protects nothing the properties above do not.
 
 **A Project's repository path must be absolute.** A relative path resolves against whatever directory the
 daemon was launched from — a shell, a launcher, a login item — so a stored relative path names a different
@@ -316,7 +412,15 @@ naming the path, rather than letting the owner discover it as a Project pointing
 
 ## 7. Future execution threats
 
-The following controls are required before their corresponding feature can ship:
+The following controls are required before their corresponding feature can ship.
+
+**E1 shipped part of one of these features ahead of its controls, by owner decision.** "Filesystem, shell and
+Git" and "Secrets" below both describe the surface E1 opened, and E1 delivered only some of what they ask:
+the task worktree, the one-writer lease and the no-push rule are real (see the E1 delta above), while the
+command allow-list, the network-host list, the scrubbed child environment and keeping `.env` out of the task
+worktree are not — D3 carries every unignored file in deliberately, and SD-002 is explicitly out of scope
+(spec §11). The remaining items stay required for the milestone that completes SD-001, and are listed here as
+outstanding rather than quietly re-scoped.
 
 ### M2 local-state delta
 
