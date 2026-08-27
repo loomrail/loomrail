@@ -149,6 +149,39 @@ describe("runProcess", () => {
     await expect(run.stop()).resolves.toBeUndefined();
   });
 
+  // A CLI that ends its output without a trailing newline used to have its last line held in the
+  // splitter's buffer forever. For an adapter that reads its whole result off the final line, that
+  // is "the parser saw nothing" -- the exact failure shape of both of this milestone's Criticals.
+  it("delivers a final line the child never terminated with a newline", async () => {
+    const lines: string[] = [];
+    const run = runProcess({
+      command: node,
+      args: ["-e", `process.stdout.write("{\\"a\\":1}\\n{\\"b\\":2}");`],
+      cwd: process.cwd(),
+      onLine: (line) => lines.push(line),
+      onStderr: () => undefined,
+      deadlineMs: 10_000,
+    });
+    await run.exited;
+    expect(lines).toEqual(['{"a":1}', '{"b":2}']);
+  });
+
+  // The flush must not become a way around the cap: a child could otherwise send a gigabyte with
+  // no newline at all and have it delivered whole at stream end.
+  it("does not deliver an overlong final line through the end-of-stream flush", async () => {
+    const lines: string[] = [];
+    const run = runProcess({
+      command: node,
+      args: ["-e", `process.stdout.write("kept\\n" + "x".repeat(1_100_000));`],
+      cwd: process.cwd(),
+      onLine: (line) => lines.push(line),
+      onStderr: () => undefined,
+      deadlineMs: 20_000,
+    });
+    await run.exited;
+    expect(lines).toEqual(["kept"]);
+  });
+
   it("drops a line longer than the cap instead of buffering it forever", async () => {
     const lines: string[] = [];
     const run = runProcess({

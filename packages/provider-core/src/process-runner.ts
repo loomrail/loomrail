@@ -68,42 +68,73 @@ const delay = (ms: number): Promise<void> =>
     timer.unref();
   });
 
+type LineSplitter = {
+  push: (chunk: Buffer) => void;
+  /** Emits whatever is left in the buffer as a final, newline-less line. See `flush` below. */
+  flush: () => void;
+};
+
 // Splits a raw byte stream into whole lines, dropping (rather than buffering forever) any line
 // that exceeds `maxBytes`. Kept as a byte-oriented accumulator, not a per-chunk string decode, so
 // a multi-byte UTF-8 character split across two chunks is never mangled: only a complete line is
 // ever decoded.
-const createLineSplitter = (maxBytes: number, onLine: (line: string) => void) => {
+const createLineSplitter = (maxBytes: number, onLine: (line: string) => void): LineSplitter => {
   let buffer: Buffer = Buffer.alloc(0);
   let discardingOverlongLine = false;
 
-  return (chunk: Buffer): void => {
-    buffer = buffer.length === 0 ? chunk : Buffer.concat([buffer, chunk]);
+  const emit = (rawLine: Buffer): void => {
+    const endsWithCr = rawLine.length > 0 && rawLine[rawLine.length - 1] === 0x0d;
+    const text = endsWithCr ? rawLine.subarray(0, rawLine.length - 1) : rawLine;
+    onLine(text.toString("utf8"));
+  };
 
-    let newlineIndex = buffer.indexOf(0x0a);
-    while (newlineIndex !== -1) {
-      const rawLine = buffer.subarray(0, newlineIndex);
-      buffer = buffer.subarray(newlineIndex + 1);
+  return {
+    push: (chunk: Buffer): void => {
+      buffer = buffer.length === 0 ? chunk : Buffer.concat([buffer, chunk]);
 
-      if (discardingOverlongLine) {
-        // This is the tail of the overlong line already discarded below; drop it too.
-        discardingOverlongLine = false;
-      } else if (rawLine.length <= maxBytes) {
-        const endsWithCr = rawLine.length > 0 && rawLine[rawLine.length - 1] === 0x0d;
-        const text = endsWithCr ? rawLine.subarray(0, rawLine.length - 1) : rawLine;
-        onLine(text.toString("utf8"));
+      let newlineIndex = buffer.indexOf(0x0a);
+      while (newlineIndex !== -1) {
+        const rawLine = buffer.subarray(0, newlineIndex);
+        buffer = buffer.subarray(newlineIndex + 1);
+
+        if (discardingOverlongLine) {
+          // This is the tail of the overlong line already discarded below; drop it too.
+          discardingOverlongLine = false;
+        } else if (rawLine.length <= maxBytes) {
+          emit(rawLine);
+        }
+        // else: the whole line arrived before a newline was found and is still over the cap --
+        // drop it.
+
+        newlineIndex = buffer.indexOf(0x0a);
       }
-      // else: the whole line arrived before a newline was found and is still over the cap --
-      // drop it.
 
-      newlineIndex = buffer.indexOf(0x0a);
-    }
+      if (!discardingOverlongLine && buffer.length > maxBytes) {
+        // No newline yet and the buffer alone already exceeds the cap: stop accumulating this line
+        // and discard everything up to (and including) its eventual newline.
+        discardingOverlongLine = true;
+        buffer = Buffer.alloc(0);
+      }
+    },
 
-    if (!discardingOverlongLine && buffer.length > maxBytes) {
-      // No newline yet and the buffer alone already exceeds the cap: stop accumulating this line
-      // and discard everything up to (and including) its eventual newline.
-      discardingOverlongLine = true;
+    // A child that writes its last line without a trailing newline used to have that line silently
+    // dropped -- the buffer simply held it until the splitter was garbage-collected. Neither CLI
+    // does that today, but the failure mode ("the parser sees nothing, and the adapter reports a
+    // business result it invented") is the shape of both of this milestone's Criticals, so the
+    // residue is emitted when the stream ends instead. `discardingOverlongLine` is honoured here
+    // too: a residue that is the tail of a line already dropped for exceeding the cap must stay
+    // dropped, or the cap would be defeated by simply never sending the closing newline. Idempotent
+    // -- the buffer is cleared, so a second call emits nothing.
+    flush: (): void => {
+      const residue = buffer;
       buffer = Buffer.alloc(0);
-    }
+      if (discardingOverlongLine) {
+        discardingOverlongLine = false;
+        return;
+      }
+      if (residue.length === 0 || residue.length > maxBytes) return;
+      emit(residue);
+    },
   };
 };
 
@@ -123,10 +154,15 @@ export const runProcess = (options: RunProcessOptions): ProcessRun => {
   // -- so stdin is simply closed right away.
   child.stdin.end();
 
-  const onStdoutChunk = createLineSplitter(MAX_STREAM_LINE_BYTES, options.onLine);
-  const onStderrChunk = createLineSplitter(MAX_STREAM_LINE_BYTES, options.onStderr);
-  child.stdout.on("data", onStdoutChunk);
-  child.stderr.on("data", onStderrChunk);
+  const stdoutSplitter = createLineSplitter(MAX_STREAM_LINE_BYTES, options.onLine);
+  const stderrSplitter = createLineSplitter(MAX_STREAM_LINE_BYTES, options.onStderr);
+  child.stdout.on("data", stdoutSplitter.push);
+  child.stderr.on("data", stderrSplitter.push);
+  // `end` (the readable stream saw EOF), not the child's own `exit`: a piped, actively-consumed
+  // stdout reaches EOF before the child process is reaped, so the residual line is delivered
+  // before `exited` resolves and a caller that only awaits `exited` still sees it.
+  child.stdout.on("end", stdoutSplitter.flush);
+  child.stderr.on("end", stderrSplitter.flush);
 
   let exitedFlag = false;
   // A function, not a bare boolean read: TS narrows a captured `let` to a literal after a check
