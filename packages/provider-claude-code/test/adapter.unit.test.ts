@@ -19,10 +19,15 @@ const fakeClaudePath = fileURLToPath(new URL("./fixtures/fake-claude.mjs", impor
 
 // SD-001 forbids Loomrail from ever enabling a provider's permission-bypass mode automatically. This
 // is the named, closed list: adding a spelling later is then a decision someone makes here, not
-// something that quietly never happens. Shared verbatim with provider-claude-code's own copy (no
-// test-only module is common to both packages yet, so -- per this task's convention for helpers
+// something that quietly never happens. Duplicated from provider-codex's copy rather than shared
+// (no test-only module is common to both packages yet, so -- per this task's convention for helpers
 // needed by two packages -- duplicating a constant is preferable to creating one for this alone), so
 // it carries both CLIs' flags regardless of which one this file tests.
+//
+// The two copies are no longer identical, and deliberately so: E1 made the Codex adapter send one
+// `-c` key of its own, so `-c` left the spelling list THERE and became a closed list of permitted
+// values instead. This adapter sends no config override on any path, so both spellings stay banned
+// outright here. See `docs/security/THREAT-MODEL.md` T16 and T19.
 //
 // The list is NOT every route out of the sandbox, and `docs/security/THREAT-MODEL.md` T16 no longer
 // claims it is. It covers flags whose NAME carries a danger warning, plus the specific
@@ -66,11 +71,42 @@ const FORBIDDEN_FLAG_VALUES: readonly (readonly [string, string])[] = [
 // argv nobody asserted. Named separately from the bypass list because it is a different rule.
 const FORBIDDEN_MCP_FLAGS: readonly string[] = ["--mcp-config", "--strict-mcp-config"];
 
+// Whether one argv token carries `flag`, in every spelling a clap-based CLI (both of these are)
+// accepts for it: the bare token, the long attached form `--flag=value`, and -- for a one-letter
+// short flag -- the attached form `-cvalue` with no separator at all. Mirrors provider-codex's
+// helper of the same name, where the exact-token version of this guard was found open: matching
+// only `args.indexOf(flag)` and `not.toContain(flag)` let `--mcp-config=<path>` and
+// `--add-dir=<path>` through as single tokens, because an exact element match never sees them.
+//
+// There is no allow-list hole to close on this side -- this adapter builds no config override and
+// no MCP flag on any path -- so this is a negative assertion tightened, not a defect fixed. It is
+// tightened anyway because the value of these guards is entirely in what they would catch in a
+// future argv, and one that a single `=` slips past catches nothing.
+//
+// Still read off the argv ARRAY, never `args.join(" ")`: the context pack is a positional
+// argument, so a joined-line check would pass or fail on prompt text containing a flag.
+const flagSpelling = (arg: string, flag: string): "EXACT" | "ATTACHED" | null => {
+  if (arg === flag) return "EXACT";
+  if (arg.startsWith(`${flag}=`)) return "ATTACHED";
+  // A short flag is `-x`: two characters, one dash. A long flag never matches this branch, so
+  // `--config` is not mistaken for `-c` carrying the attached value "-onfig".
+  const isShort = flag.length === 2 && flag.startsWith("-") && !flag.startsWith("--");
+  return isShort && arg.length > flag.length && arg.startsWith(flag) ? "ATTACHED" : null;
+};
+
+const attachedValue = (arg: string, flag: string): string =>
+  arg.startsWith(`${flag}=`) ? arg.slice(flag.length + 1) : arg.slice(flag.length);
+
 const expectNoForbiddenArguments = (args: readonly string[]): void => {
-  for (const flag of FORBIDDEN_PERMISSION_BYPASS_FLAGS) expect(args).not.toContain(flag);
+  for (const flag of [...FORBIDDEN_PERMISSION_BYPASS_FLAGS, ...FORBIDDEN_MCP_FLAGS]) {
+    expect(args.filter((arg) => flagSpelling(arg, flag) !== null)).toEqual([]);
+  }
   for (const [flag, value] of FORBIDDEN_FLAG_VALUES) {
-    const at = args.indexOf(flag);
-    if (at >= 0) expect(args[at + 1]).not.toBe(value);
+    for (const [index, arg] of args.entries()) {
+      const spelling = flagSpelling(arg, flag);
+      if (spelling === null) continue;
+      expect(spelling === "EXACT" ? args[index + 1] : attachedValue(arg, flag)).not.toBe(value);
+    }
   }
 };
 
@@ -257,7 +293,49 @@ describe("createClaudeCodeProvider", () => {
   it("never connects an MCP server (D6)", async () => {
     const spawned = recordSpawn();
     await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
-    for (const forbidden of FORBIDDEN_MCP_FLAGS) expect(spawned.args).not.toContain(forbidden);
+    // Matched by spelling rather than by exact token, for the same reason the bypass guard is:
+    // `--mcp-config=<path>` is one argv token, and `not.toContain` would never see it.
+    for (const forbidden of FORBIDDEN_MCP_FLAGS) {
+      expect(spawned.args.filter((arg) => flagSpelling(arg, forbidden) !== null)).toEqual([]);
+    }
+  });
+
+  // `expectNoForbiddenArguments` is now logic with a failure mode of its own, so it is tested
+  // rather than only used. The argv here is synthetic on purpose: the point is what the guard
+  // would CATCH, and this adapter is never going to build a smuggled flag for it to catch. Every
+  // spelling below is one a clap-based CLI accepts and the previous exact-token guard missed
+  // entirely -- the key attached to a long flag with `=`, and, for a short flag, attached with no
+  // separator at all.
+  it("catches a forbidden flag smuggled into a single argv token", () => {
+    // The shape this adapter really builds, minus the parts that do not concern the guard. The
+    // last element stands in for the context pack: a positional argument whose text happens to
+    // mention a flag, which is why the guard reads the array and not a joined command line.
+    const base = [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--permission-mode",
+      "plan",
+      "--no-session-persistence",
+      "Add the retry policy; do not pass --add-dir or -c to anything.",
+    ];
+    expect(() => {
+      expectNoForbiddenArguments(base);
+    }).not.toThrow();
+
+    for (const smuggled of [
+      "--mcp-config=/tmp/servers.json",
+      "--add-dir=/tmp/somewhere-else",
+      "--settings=/tmp/settings.json",
+      '--config=sandbox_permissions=["disk-full-read-access"]',
+      "-csandbox_permissions=x",
+      "--permission-mode=bypassPermissions",
+    ]) {
+      expect(() => {
+        expectNoForbiddenArguments([...base, smuggled]);
+      }).toThrow();
+    }
   });
 
   // The other half of the controller ruling above: not only must `checkpointOnRequest` read
