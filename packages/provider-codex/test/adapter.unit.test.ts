@@ -375,8 +375,14 @@ describe("createCodexProvider", () => {
     const request = expectNeedsHuman(outcome);
     expect(request.blocking).toBe(true);
     expect(request.title).toContain("CODEX");
-    // Four lines arrive; the one the adapter could not use is the prose agent message.
+    // Four lines arrive and every one of them PARSES: `thread.started`, `turn.started`, an
+    // `item.completed` whose agent message is prose rather than a checkpoint, and `turn.completed`.
+    // Only the last carries anything this session used (the usage figures), so three are unused --
+    // which is the number that says something. Counting only unparseable lines reported "0 carried
+    // nothing this adapter could use" here, word for word what a healthy session reports, and left
+    // the counter unable to describe the very failure it was built for.
     expect(request.context).toContain("Lines received from the CLI: 4");
+    expect(request.context).toContain("3 carried nothing this adapter could use");
     expect(request.context).toContain("exited with code 0");
   });
 

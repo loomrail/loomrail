@@ -214,8 +214,19 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
             linesReceived += 1;
             const event = parseCodexEvent(line);
             if (event !== null) {
+              // "Unused" means this session got nothing out of the line -- no checkpoint, no usage,
+              // no failure text -- NOT merely that the parser could not read it. The distinction is
+              // the whole point of the counter: in the shape that produced this milestone's
+              // Critical every line parses fine (the checkpoint was simply somewhere this adapter
+              // never looked), so counting only parse failures made a real `hello.jsonl` run report
+              // "4 lines received; 0 carried nothing this adapter could use" -- word for word what a
+              // healthy session reports. It now reads "4 received, 3 unused", which says something.
+              // This is also the reading provider-claude-code has always had, where the only event
+              // the parser surfaces at all is the one the adapter consumes.
+              let consumed = false;
               if (event.type === "turn.failed") {
                 providerFailureText = event.errorMessage;
+                consumed = true;
               }
               if (event.type === "item.completed") {
                 // The documented path for `--output-schema`'s answer (see
@@ -226,6 +237,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
                 if (checkpoint !== null) {
                   finalCheckpoint = checkpoint;
                   listener.onCheckpoint(checkpoint);
+                  consumed = true;
                 }
               }
               if (event.type === "turn.completed") {
@@ -253,7 +265,9 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
                   windowTokens: resolved.contextWindowTokens,
                   quality: "ACTUAL",
                 });
+                consumed = true;
               }
+              if (!consumed) linesUnused += 1;
               return;
             }
             const checkpoint = tryParseStructuredCheckpoint(line);
