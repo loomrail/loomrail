@@ -180,6 +180,29 @@ describe("provider selection at daemon startup", () => {
     }
   });
 
+  // The third accepted value, and the one this file used to leave entirely unpinned: booting
+  // `CLAUDE_CODE` spends the owner's money through a different CLI than `CODEX` does, so "the
+  // daemon reads this spelling and hands the whole run to the Claude adapter" is not a claim to
+  // leave to the unit test of the resolver -- which is injected everywhere else and so proves
+  // nothing about what a real launch does.
+  it("boots with the real Claude Code adapter when the environment variable names it", async () => {
+    const { daemon, token } = await bootWithEnv("CLAUDE_CODE");
+    try {
+      const capabilities = await readCapabilities(daemon, token);
+      expect(capabilities.provider).toBe("CLAUDE_CODE");
+      // Same pre-E1 reason as Codex above: a live adapter runs in an empty temporary directory, so
+      // it cannot serve IMPLEMENT.
+      expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "REVIEW"]);
+      // The one capability that genuinely differs between the two live adapters, and the reason
+      // the cockpit can explain a missing spend figure for one and not the other: Claude Code
+      // reports cost in its own result event; Codex reports none anywhere.
+      expect(capabilities.costReporting).toBe(true);
+      expect(typeof capabilities.start).toBe("boolean");
+    } finally {
+      await daemon.close();
+    }
+  });
+
   // The property that matters most: a typo must not stop the daemon from starting at all. Booting
   // successfully and reporting mock, rather than throwing during `startDaemon`, is the assertion.
   it("boots with the mock provider, not a startup failure, on an unrecognised value", async () => {
