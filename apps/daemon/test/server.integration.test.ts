@@ -19,6 +19,7 @@ import {
   type WorkflowSnapshot,
 } from "@loomrail/contracts";
 import { openLocalState } from "@loomrail/persistence-sqlite";
+import { createCodexProvider } from "@loomrail/provider-codex";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -1629,6 +1630,87 @@ describe("stage capability gate", () => {
       // branch's wording here would point the owner at the wrong fix (reassign the stage, when the
       // actual fix is installing the CLI).
       expect(wording).not.toContain("cannot serve");
+    } finally {
+      await daemon.whenIdle();
+      await daemon.close();
+    }
+  });
+
+  // The sibling test above proves the gate reads `start`, but it proves it against `gatedAdapter`,
+  // a test double that has `start: false` hardcoded -- it never exercises the real adapter's own
+  // missing-executable check. This is the other half: `createCodexProvider` from the actual
+  // production package, pointed at a command that does not exist, so its own `isExecutableOnDisk`
+  // (packages/provider-codex/src/index.ts) is what decides `capabilities().start`, not a test
+  // fixture pretending to. This is the path an owner actually takes: set `LOOMRAIL_PROVIDER=CODEX`
+  // (see `resolveDefaultProviderAdapter`, apps/daemon/src/provider-selection.ts) without having
+  // installed the CLI, and confirm the daemon produces the same clean refusal `decideDispatchStage`
+  // always has, rather than something worse -- a hang, a crash, or a session that starts anyway and
+  // fails mid-flight.
+  it("refuses to dispatch to a real adapter whose CLI genuinely is not on this machine", async () => {
+    const adapter = createCodexProvider({ command: "/nonexistent/loomrail-test-fixture/codex" });
+    const daemon = await startDaemon({
+      bootstrapToken: token,
+      stateDatabasePath: databasePath,
+      logger: false,
+      providerAdapter: adapter,
+    });
+    try {
+      const session = await authenticate(daemon, token);
+      const headers = mutationHeaders(daemon, session);
+      await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "register-real-start-gate-fixture",
+          fixtureId: "web-app-a",
+        }),
+      });
+      const createResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "create-real-start-gate-item",
+          projectId: "project-fixture-web-app-a",
+          type: "TASK",
+          title: "Real adapter start-capability gate under test",
+        }),
+      });
+      const created = stateCommandResultSchema.parse(await createResponse.json());
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      await fetch(`${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/move`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "ready-real-start-gate-item",
+          expectedVersion: 1,
+          targetState: "READY",
+        }),
+      });
+      await fetch(`${daemon.baseUrl}/api/v1/work-items/${created.workItem.id}/pipeline/start`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "start-real-start-gate-item",
+          expectedVersion: 2,
+        }),
+      });
+      await daemon.whenIdle();
+
+      const snapshot = await fetchWorkflowSnapshot(daemon, session.cookie, created.workItem.id);
+      expect(snapshot.run?.status).toBe("WAITING_HUMAN");
+      expect(snapshot.stageAttempts.map(({ stage, status }) => ({ stage, status }))).toEqual([
+        { stage: "DISCOVERY", status: "WAITING_HUMAN" },
+      ]);
+      expect(snapshot.humanRequests).toHaveLength(1);
+      const request = snapshot.humanRequests[0];
+      expect(request).toMatchObject({ status: "OPEN", kind: "FREE_TEXT", blocking: true });
+      const wording = `${request?.title ?? ""} ${request?.context ?? ""}`;
+      expect(wording).toContain("CODEX");
+      expect(wording).toContain("not installed");
     } finally {
       await daemon.whenIdle();
       await daemon.close();

@@ -78,6 +78,12 @@ importers:
       '@loomrail/persistence-sqlite':
         specifier: workspace:*
         version: link:../../packages/persistence-sqlite
+      '@loomrail/provider-claude-code':
+        specifier: workspace:*
+        version: link:../../packages/provider-claude-code
+      '@loomrail/provider-codex':
+        specifier: workspace:*
+        version: link:../../packages/provider-codex
       '@loomrail/provider-core':
         specifier: workspace:*
         version: link:../../packages/provider-core

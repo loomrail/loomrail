@@ -17,10 +17,16 @@ const fakeClaudePath = fileURLToPath(new URL("./fixtures/fake-claude.mjs", impor
 // never happens. Shared verbatim with provider-codex's own copy of this list (no test-only module
 // is common to both packages yet, so -- per this task's own convention for helpers needed by two
 // packages -- duplicating a four-line constant is preferable to creating one for this alone).
+//
+// `--dangerously-bypass-hook-trust` (post-review addition, see provider-codex's own copy of this
+// comment): a `codex exec --help` flag, not a `claude --help` one -- kept in this file's copy of
+// the list anyway, verbatim with provider-codex's, per the same "shared verbatim" convention that
+// already put Codex's `--dangerously-bypass-approvals-and-sandbox` here.
 const FORBIDDEN_PERMISSION_BYPASS_FLAGS: readonly string[] = [
   "--dangerously-skip-permissions",
   "--allow-dangerously-skip-permissions",
   "--dangerously-bypass-approvals-and-sandbox",
+  "--dangerously-bypass-hook-trust",
   "--permission-mode bypassPermissions",
 ];
 

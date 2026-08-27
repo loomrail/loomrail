@@ -18,10 +18,23 @@ const fakeCodexPath = fileURLToPath(new URL("./fixtures/fake-codex.mjs", import.
 // module is common to both packages yet, so -- per this task's own convention for helpers needed
 // by two packages -- duplicating a four-line constant is preferable to creating one for this
 // alone).
+//
+// `--dangerously-bypass-hook-trust` (post-review addition): `codex exec --help` documents it
+// alongside `--dangerously-bypass-approvals-and-sandbox`, same "DANGEROUS" wording, a different
+// mechanism (hook trust, not approvals) but the same class of escape hatch SD-001 exists to keep
+// out. This adapter never configures a hook today, so there is nothing this flag would currently
+// change -- named here anyway, because the list's job is to make adding it later a decision, not
+// an oversight, and a list that already missed one spelling the CLI ships was not doing that job.
+//
+// Not every dangerous escape hatch is a *spelling* this substring check can catch, though: `-s`
+// also accepts the value `danger-full-access`, a value-shaped equivalent of the same risk. That
+// one is guarded separately below, by asserting the sandbox value this adapter actually sends is
+// the safe one, not by adding a string here that this check would never usefully match against.
 const FORBIDDEN_PERMISSION_BYPASS_FLAGS: readonly string[] = [
   "--dangerously-skip-permissions",
   "--allow-dangerously-skip-permissions",
   "--dangerously-bypass-approvals-and-sandbox",
+  "--dangerously-bypass-hook-trust",
   "--permission-mode bypassPermissions",
 ];
 
@@ -168,6 +181,21 @@ describe("createCodexProvider", () => {
     await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
     expect(spawned.args).toContain("--skip-git-repo-check");
     expect(spawned.stdinClosed).toBe(true);
+  });
+
+  // The value-shaped half of SD-001, alongside the spelling-shaped check below: `-s` takes a
+  // sandbox mode, and `danger-full-access` is exactly as dangerous as any flag in
+  // FORBIDDEN_PERMISSION_BYPASS_FLAGS, but it is a value, not a spelling, so a substring check
+  // over the command line would never usefully name it (nothing stops a legitimate arg from
+  // containing the same characters). Asserted positively -- the value actually sent is
+  // "read-only" -- rather than negatively, so a future change to a different unsafe value still
+  // fails this test even if nobody thought to add its exact spelling to a list first.
+  it("always runs the sandbox read-only, never a more permissive mode", async () => {
+    const spawned = recordSpawn();
+    await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
+    const sandboxFlagIndex = spawned.args.indexOf("-s");
+    expect(sandboxFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(spawned.args[sandboxFlagIndex + 1]).toBe("read-only");
   });
 
   // SD-001 forbids enabling a permission bypass automatically; this is the test, not the

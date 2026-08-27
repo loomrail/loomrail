@@ -41,13 +41,13 @@ import {
 import { WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
 import { openLocalState, StateStoreError } from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter } from "@loomrail/provider-core";
-import { createMockProvider } from "@loomrail/provider-mock";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
 
 import { broadcastingState } from "./broadcasting-state.js";
 import { createEventStreamRegistry } from "./event-stream.js";
+import { resolveDefaultProviderAdapter } from "./provider-selection.js";
 import { FixtureResolutionError, resolveBundledFixture } from "./fixtures.js";
 import { createSessionWorker } from "./session-worker.js";
 
@@ -78,7 +78,8 @@ export type StartDaemonOptions = {
   // Injected so a test can drive the daemon's own dispatch drain with an adapter that hands off,
   // stalls, or runs into a wall. Without it the session-handoff paths are only ever reachable by
   // calling `runStageAttempt` directly, which is how a jam in the drain around those paths stayed
-  // invisible. Production always gets the default mock provider.
+  // invisible. Production leaves this unset and gets whatever `resolveDefaultProviderAdapter`
+  // resolves from `LOOMRAIL_PROVIDER` -- mock unless the owner opted into a live adapter.
   providerAdapter?: ProviderAdapter;
   // Injected for the same reason as `providerAdapter` above, and only for it: the heartbeat is the
   // one mechanism here that is driven by wall-clock time rather than by a request, so without a
@@ -228,7 +229,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     used: false,
   };
   const sessions = new Map<string, Session>();
-  const providerAdapter = options.providerAdapter ?? createMockProvider();
+  const providerAdapter = options.providerAdapter ?? resolveDefaultProviderAdapter();
   providerAdapter.capabilities();
 
   let allowedOrigin = "";
