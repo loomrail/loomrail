@@ -40,7 +40,12 @@ import {
   type WorkflowStage,
 } from "@loomrail/contracts";
 import { WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
-import { openLocalState, StateStoreError, type OrphanProcessEvent } from "@loomrail/persistence-sqlite";
+import {
+  openLocalState,
+  StateStoreError,
+  type OrphanProcessEvent,
+  type OrphanWorkspaceEvent,
+} from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter, ProviderId } from "@loomrail/provider-core";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -112,6 +117,16 @@ const orphanProcessMessages: Record<OrphanProcessEvent["action"], string> = {
   KILLED: "Killed the process an orphaned provider session left behind",
   SKIPPED: "Left an orphaned provider session's process alone",
   FAILED: "Could not signal the process an orphaned provider session left behind",
+};
+
+// Same reasoning as the orphan-process messages above, for the other thing startup reconciliation
+// decides on its own: a workspace it found gone, and a workspace it could not check at all. Both are
+// worth a line -- a READY workspace moved to ORPHANED is the reason the owner's next stage will stop
+// and ask them something, and a check that could not run is the reason one that *should* have been
+// orphaned was not.
+const orphanWorkspaceMessages: Record<OrphanWorkspaceEvent["action"], string> = {
+  ORPHANED: "Marked a work item's workspace orphaned; its worktree is gone",
+  SKIPPED: "Could not check a work item's workspace; it was left as it is",
 };
 
 export type RunningDaemon = {
@@ -329,6 +344,21 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         app.log.warn(
           { pid: event.pid, providerSessionId: event.sessionId, reason: event.reason },
           orphanProcessMessages[event.action],
+        );
+      },
+      // The other half of the same gap: Task 10 gave reconciliation the ability to move a workspace
+      // to ORPHANED, and nothing anywhere said so. Routed into the daemon's own structured logger
+      // for the same reason the kill above is -- a decision Loomrail makes about the owner's disk,
+      // on their machine, with no request behind it, has to leave a record they can find.
+      onOrphanWorkspace: (event) => {
+        app.log.warn(
+          {
+            workspaceId: event.workspaceId,
+            workItemId: event.workItemId,
+            worktreePath: event.worktreePath,
+            reason: event.reason,
+          },
+          orphanWorkspaceMessages[event.action],
         );
       },
     }),

@@ -877,6 +877,91 @@ describe("local daemon session and state boundary", () => {
     });
   });
 
+  // Task 10 gave startup reconciliation the ability to move a READY workspace to ORPHANED when its
+  // worktree is gone. Nothing said so anywhere: the daemon threw the reconciliation result away and
+  // never wired the callback, so the one decision Loomrail makes about the owner's disk without
+  // being asked was invisible -- and it is the reason their next stage stops with a question.
+  it("says in the log when startup reconciliation orphans a workspace", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail daemon orphan log "));
+    temporaryDirectories.push(temporaryDirectory);
+    const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    const repositoryPath = await makeThrowawayRepo(join(temporaryDirectory, "repo"));
+    const worktreePath = join(temporaryDirectory, "workspaces", "gone");
+    let workspaceId = "";
+    const localState = await openLocalState({ databasePath: stateDatabasePath });
+    try {
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "register-orphan-log-project",
+        correlationId: "correlation-register-orphan-log",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_FIXTURE_PROJECT",
+        payload: {
+          id: "project-orphan-log",
+          fixtureId: "web-app-a",
+          name: "Orphan log fixture",
+          repositoryPath,
+        },
+      });
+      const created = localState.execute({
+        schemaVersion: 1,
+        commandId: "create-orphan-log-task",
+        correlationId: "correlation-create-orphan-log",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "CREATE_WORK_ITEM",
+        payload: {
+          projectId: "project-orphan-log",
+          parentId: null,
+          type: "TASK",
+          title: "A work item whose workspace went away",
+          description: "Synthetic orphaned-workspace fixture",
+          priority: "MEDIUM",
+          risk: "LOW",
+          acceptanceCriteria: [],
+        },
+      });
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      // Recorded as READY at a path that was never cut -- which is what the owner's disk looks like
+      // after a worktree is deleted while Loomrail is not running.
+      const workspace = localState.execute({
+        schemaVersion: 1,
+        commandId: "record-orphan-log-workspace",
+        correlationId: "correlation-record-orphan-log",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "CREATE_WORK_ITEM_WORKSPACE",
+        payload: {
+          workItemId: created.workItem.id,
+          projectId: "project-orphan-log",
+          branch: "loomrail/orphan-log",
+          worktreePath,
+          baseCommit: null,
+          snapshotCommit: null,
+          carriedPaths: [],
+        },
+      });
+      if (workspace.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected a workspace");
+      workspaceId = workspace.workspace.id;
+    } finally {
+      localState.close();
+    }
+
+    const logLines: string[] = [];
+    daemon = await startDaemon({
+      bootstrapToken: bootstrapToken(),
+      stateDatabasePath,
+      loggerStream: {
+        write: (line) => {
+          logLines.push(line);
+        },
+      },
+    });
+
+    const logs = logLines.join("");
+    expect(logs).toContain("Marked a work item's workspace orphaned");
+    expect(logs).toContain(workspaceId);
+    expect(logs).toContain("MISSING_FROM_WORKTREE_LIST");
+  });
+
   it("marks an orphaned running attempt interrupted before serving startup traffic", async () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail daemon recovery "));
     temporaryDirectories.push(temporaryDirectory);
