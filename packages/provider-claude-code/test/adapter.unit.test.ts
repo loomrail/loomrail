@@ -108,9 +108,12 @@ const startWith = async (spawned: Spawned, adapter: ProviderAdapter): Promise<Pr
   return outcome;
 };
 
-// Runs the adapter against a JSONL stream recorded from the real `claude -p --output-format
-// stream-json` CLI (see recordings/ -- never a made-up fixture), by pointing `fakeClaudePath` at
-// it instead of spawning the live CLI.
+// Runs the adapter against a stream from recordings/, by pointing `fakeClaudePath` at it instead of
+// spawning the live CLI. READ recordings/README.md before trusting one of these as evidence: it
+// says, per file, what was captured and what was not. In particular `hello.jsonl` is DERIVED from
+// `not-logged-in.jsonl` -- its terminal `result` line was written by hand -- so the claim it
+// encodes, that a successful `--json-schema` run puts checkpoint JSON in `result`, is unverified
+// against any real CLI. `not-logged-in.jsonl` is a genuine capture.
 const runAgainstRecording = async (
   file: string,
   listener: Partial<ProviderSessionListener> = {},
@@ -347,9 +350,17 @@ describe("createClaudeCodeProvider", () => {
     expect(() => contextWindowUsageSchema.parse(seen.at(-1))).not.toThrow();
   });
 
-  // `hello.jsonl`'s terminal result is JSON conforming to checkpointDraftSchema (what
-  // `--json-schema` is supposed to produce on success) -- the adapter must both publish it via
-  // `onCheckpoint` and use its `summary` field as the outcome's, not the raw wire text.
+  // `hello.jsonl`'s terminal result is JSON conforming to checkpointDraftSchema -- the adapter must
+  // both publish it via `onCheckpoint` and use its `summary` field as the outcome's, not the raw
+  // wire text.
+  //
+  // HONESTY NOTE (see recordings/README.md): that line was WRITTEN BY HAND, not recorded. What this
+  // test pins is the shape the adapter assumes, which is worth pinning; it is NOT evidence that a
+  // successful `--json-schema` run really puts checkpoint JSON in `result`. Nothing in this
+  // repository has observed that, because the `claude` CLI here is unauthenticated and only the
+  // owner can authenticate one. The milestone's Critical was an assumption of exactly this shape,
+  // in the sibling adapter, confirmed by a fixture that encoded it -- so this one is named rather
+  // than assumed away, and the owner probe that settles it is listed in the spec's §11.
   it("completes the stage from the structured checkpoint the CLI returns", async () => {
     const checkpoints: unknown[] = [];
     const outcome = await runAgainstRecording("hello.jsonl", {
