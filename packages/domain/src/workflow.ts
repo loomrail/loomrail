@@ -260,8 +260,25 @@ const createDispatch = (
   completedAt: null,
 });
 
+/**
+ * `WORKSPACE_NOT_PROVISIONED` is never produced by `decideDispatchStage` itself -- the gate below
+ * is unchanged by milestone E1 (spec D11): it still only ever refuses on `canStart` and
+ * `declaredStages`, both properties of the provider. Whether a workspace can be cut is a property
+ * of the *repository* instead (mid-rebase, not a repository at all -- spec D5), decided separately
+ * by `decideProvisionWorkspace` in `./workspace.js`, on data `decideDispatchStage` is never given.
+ *
+ * The variant lives here anyway so a caller that runs both checks (Task 9's session loop: inspect
+ * the repository, then gate, then dispatch) can hold either refusal as the same
+ * `DispatchStageDecision` shape instead of inventing a second, parallel type for what is, from the
+ * dispatcher's point of view, the same kind of outcome: a stage that did not start, and a
+ * `HumanRequestDraft` explaining why. Keeping it a separate variant from `STAGE_NOT_SERVED` -- not
+ * folded into it -- matters because the fix differs: "install the CLI" or "reassign the stage" for
+ * `STAGE_NOT_SERVED`, versus "repair the repository" here.
+ */
 export type DispatchStageDecision =
-  { type: "DISPATCH" } | { type: "STAGE_NOT_SERVED"; request: HumanRequestDraft };
+  | { type: "DISPATCH" }
+  | { type: "STAGE_NOT_SERVED"; request: HumanRequestDraft }
+  | { type: "WORKSPACE_NOT_PROVISIONED"; request: HumanRequestDraft };
 
 /**
  * Gates a stage against the adapter about to run it (milestone A2).
