@@ -67,6 +67,9 @@ button {
   color: var(--lr-text-secondary);
   font-size: var(--lr-font-sm);
   font-weight: var(--lr-weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-project-label > span,
@@ -160,7 +163,7 @@ button {
   display: grid;
   font: inherit;
   gap: var(--lr-space-2);
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   margin-top: var(--lr-space-2);
   min-height: 28px;
   padding: 0 var(--lr-space-2);

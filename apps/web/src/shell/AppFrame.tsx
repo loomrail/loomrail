@@ -360,6 +360,34 @@ const SidebarLink = ({
   </Link>
 );
 
+/**
+ * Reports whether a single-line label is clipped by the width it was given.
+ *
+ * The sidebar is resizable and collapses to an icon rail, so the project name only earns a tooltip
+ * once it stops fitting; a label the rail hides entirely counts as clipped as well.
+ */
+const useClippedLabel = (label: string): { clipped: boolean; ref: (node: HTMLElement | null) => void } => {
+  const [node, setNode] = useState<HTMLElement | null>(null);
+  const [clipped, setClipped] = useState(false);
+
+  useEffect(() => {
+    if (node === null) return undefined;
+
+    const measure = (): void => {
+      setClipped(node.scrollWidth > node.clientWidth || node.clientWidth === 0);
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+    };
+  }, [label, node]);
+
+  return { clipped, ref: setNode };
+};
+
 const WorkspaceNavigation = ({
   onNavigate,
   onOpenSettings,
@@ -373,6 +401,8 @@ const WorkspaceNavigation = ({
   const search = useLocation({ select: (location) => location.search });
   const connected = connection?.status === "connected";
   const projectInitial = selectedProject?.name.slice(0, 1).toUpperCase() ?? "–";
+  const projectName = selectedProject?.name ?? "";
+  const { clipped: projectNameClipped, ref: projectNameRef } = useClippedLabel(projectName);
   const blockingCount = humanRequestsQuery.data?.humanRequests.filter(({ blocking }) => blocking).length ?? 0;
   const onNeedsYou = search.summary === "needsYou";
 
@@ -400,10 +430,11 @@ const WorkspaceNavigation = ({
             trigger={
               <button aria-label={t("project.switch")} className="app-project-label" type="button">
                 <span>{projectInitial}</span>
-                <strong>{selectedProject?.name}</strong>
+                <strong ref={projectNameRef}>{projectName}</strong>
                 <Icon name="chevronDown" size={12} />
               </button>
             }
+            {...(projectNameClipped ? { triggerTooltip: projectName } : {})}
           />
         ) : (
           <div className="app-project-label is-empty">
