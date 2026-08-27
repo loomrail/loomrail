@@ -1,12 +1,17 @@
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-import type { ProviderOutcome, WorkflowDispatch, WorkflowTemplate } from "@loomrail/contracts";
+import type {
+  ProviderOutcome,
+  WorkflowDispatch,
+  WorkflowTemplate,
+  WorkItemWorkspace,
+} from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import { providerCapabilitiesSchema, type ProviderAdapter } from "@loomrail/provider-core";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
-import { listWorktrees, runGit } from "@loomrail/workspace";
+import { addWorktree, listWorktrees, runGit } from "@loomrail/workspace";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runStageAttempt, type RunStageAttemptDeps, type SessionLoopLogger } from "../src/session-loop.js";
@@ -128,20 +133,29 @@ describe("session loop workspace provisioning", () => {
   // A project pointed at a real repository, a READY work item under it, and a pipeline whose first
   // (and only) stage is IMPLEMENT, with its dispatch already marked started -- which is the shape
   // `runStageAttempt` expects to be handed.
-  const seedAttempt = (localState: LocalState, template = implementOnlyTemplate): SeededAttempt => {
-    localState.execute({
-      schemaVersion: 1,
-      commandId: createCommandId(),
-      correlationId: "correlation-seed-project",
-      actor: { type: "HUMAN", id: "local-owner" },
-      type: "REGISTER_FIXTURE_PROJECT",
-      payload: {
-        id: PROJECT_ID,
-        fixtureId: "web-app-a",
-        name: "Workspace fixture",
-        repositoryPath,
-      },
-    });
+  const seedAttempt = (
+    localState: LocalState,
+    options: { template?: WorkflowTemplate; registerProject?: boolean } = {},
+  ): SeededAttempt => {
+    const template = options.template ?? implementOnlyTemplate;
+    // A second attempt under the same Project registers nothing: REGISTER_FIXTURE_PROJECT refuses a
+    // Project whose id, fixture or repository path is already taken, which is the right refusal --
+    // it just means the caller that wants a second work item says so.
+    if (options.registerProject !== false) {
+      localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-seed-project",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_FIXTURE_PROJECT",
+        payload: {
+          id: PROJECT_ID,
+          fixtureId: "web-app-a",
+          name: "Workspace fixture",
+          repositoryPath,
+        },
+      });
+    }
     const created = localState.execute({
       schemaVersion: 1,
       commandId: createCommandId(),
@@ -212,6 +226,47 @@ describe("session loop workspace provisioning", () => {
     correlationId: "correlation-session-loop",
     logger: silentLogger,
   });
+
+  // The workspace an earlier StageAttempt would have left behind: a real worktree at the path this
+  // work item's workspace always occupies (spec D2), plus the row recording it.
+  const cutWorktree = async (seeded: SeededAttempt, branch: string): Promise<string> => {
+    const worktreePath = join(workspacesRoot, PROJECT_ID, seeded.workItemId);
+    await mkdir(dirname(worktreePath), { recursive: true });
+    const added = await addWorktree({
+      topLevel: repositoryPath,
+      branch,
+      path: worktreePath,
+      startPoint: "HEAD",
+    });
+    if (added.type !== "ADDED") throw new Error(`Expected a worktree, got ${added.refusal.type}`);
+    return worktreePath;
+  };
+
+  const recordWorkspace = (
+    localState: LocalState,
+    seeded: SeededAttempt,
+    worktreePath: string,
+    branch: string,
+  ): WorkItemWorkspace => {
+    const created = localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-seed-workspace",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "CREATE_WORK_ITEM_WORKSPACE",
+      payload: {
+        workItemId: seeded.workItemId,
+        projectId: PROJECT_ID,
+        branch,
+        worktreePath,
+        baseCommit: null,
+        snapshotCommit: null,
+        carriedPaths: [],
+      },
+    });
+    if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected a recorded workspace");
+    return created.workspace;
+  };
 
   const workspaceOf = (localState: LocalState, workItemId: string) => {
     const result = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
@@ -295,6 +350,47 @@ describe("session loop workspace provisioning", () => {
   );
 
   it(
+    "refuses to branch the repository a project's path merely sits inside",
+    async () => {
+      // The shape the bundled fixture has today: a directory that lives *inside* a repository
+      // rather than being one. `git status` works there, `git rev-parse --show-toplevel` names the
+      // enclosing repository, and a worktree cut from it would branch the owner's own checkout and
+      // hand the agent everything in it.
+      const enclosing = await realpath(await throwawayRepository(makeThrowawayRepo));
+      repositoryPath = join(enclosing, "packages", "inner");
+      await mkdir(repositoryPath, { recursive: true });
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      let sessionStarted = false;
+      const adapter = completingAdapter(() => {
+        sessionStarted = true;
+      });
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      // Asserted first, and asserted about the enclosing repository rather than about the question:
+      // without the guard the whole attempt succeeds, so every assertion about the owner being
+      // asked would merely report a missing HumanRequest, while these two report the worktree and
+      // the branch that appeared in a repository nobody offered Loomrail.
+      expect(await listWorktrees(enclosing)).toHaveLength(1);
+      const branches = await runGit(["branch", "--list", "loomrail/*"], { cwd: enclosing });
+      expect(branches.stdout).toBe("");
+      expect(sessionStarted).toBe(false);
+      expect(workspaceOf(localState, seeded.workItemId)).toBeNull();
+
+      const requests = snapshotOf(localState, seeded.workItemId).humanRequests;
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.blocking).toBe(true);
+      // Names what is actually true. The refusal for a path with no repository near it would tell
+      // the owner to check that the path still points at a repository -- advice that would send
+      // them looking for a problem this repository does not have.
+      expect(requests[0]?.context).toContain(`inside the repository at ${enclosing}`);
+      expect(requests[0]?.recommendation).toContain(`Register the project at ${enclosing}`);
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
     "does not cut a workspace for a stage that only produces prose",
     async () => {
       repositoryPath = await throwawayRepository(makeThrowawayRepo);
@@ -307,7 +403,7 @@ describe("session loop workspace provisioning", () => {
         name: "Workspace discovery",
         stages: mockDeliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
       };
-      const seeded = seedAttempt(localState, discoveryTemplate);
+      const seeded = seedAttempt(localState, { template: discoveryTemplate });
       let sessionStarted = false;
       const adapter = completingAdapter(() => {
         sessionStarted = true;
@@ -338,6 +434,249 @@ describe("session loop workspace provisioning", () => {
       );
 
       expect(workspaceOf(localState, seeded.workItemId)?.leaseHolder).toBeNull();
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  // The reuse path: QA after IMPLEMENT, or any attempt that picks up a work item whose workspace
+  // already exists. Four tests, because the branch has four outcomes and each one is a different
+  // promise to the owner.
+  it(
+    "writes in the workspace an earlier attempt left, rather than cutting a second one",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      const branch = "loomrail/earlier-attempt";
+      const worktreePath = await cutWorktree(seeded, branch);
+      const recorded = recordWorkspace(localState, seeded, worktreePath, branch);
+
+      let observedBranch = "";
+      const adapter = completingAdapter(async () => {
+        const head = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], { cwd: worktreePath });
+        observedBranch = head.stdout.trim();
+      });
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      expect(observedBranch).toBe(branch);
+      // Two: the repository itself and the workspace that was already there. A third would mean the
+      // reuse path cut a second workspace for a work item that already had one.
+      expect(await listWorktrees(repositoryPath)).toHaveLength(2);
+      const after = workspaceOf(localState, seeded.workItemId);
+      expect(after?.id).toBe(recorded.id);
+      expect(after?.leaseHolder).toBeNull();
+      expect(snapshotOf(localState, seeded.workItemId).humanRequests).toEqual([]);
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "asks the owner instead of dispatching into a workspace whose directory went away",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      const branch = "loomrail/removed-under-us";
+      const worktreePath = await cutWorktree(seeded, branch);
+      recordWorkspace(localState, seeded, worktreePath, branch);
+      // Removed while the daemon is running, which is the whole point: startup reconciliation checks
+      // the disk once, at startup, and never looks again. Between two restarts the row is the only
+      // thing saying this workspace exists.
+      await rm(worktreePath, { recursive: true, force: true });
+
+      let sessionStarted = false;
+      const adapter = completingAdapter(() => {
+        sessionStarted = true;
+      });
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      expect(sessionStarted).toBe(false);
+      const requests = snapshotOf(localState, seeded.workItemId).humanRequests;
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.title).toContain("no longer on disk");
+      expect(requests[0]?.context).toContain(worktreePath);
+      expect(requests[0]?.blocking).toBe(true);
+      // Nothing is repaired behind the owner's back (AD-008): the record is left exactly as it was,
+      // and the lease was never taken on a workspace that is not there.
+      expect(workspaceOf(localState, seeded.workItemId)).toMatchObject({
+        status: "READY",
+        leaseHolder: null,
+      });
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "names the orphaning when the workspace was already marked orphaned",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      const branch = "loomrail/orphaned-earlier";
+      const worktreePath = await cutWorktree(seeded, branch);
+      const recorded = recordWorkspace(localState, seeded, worktreePath, branch);
+      // What startup reconciliation does when it finds the worktree gone (Task 10). The directory is
+      // deliberately left in place here, so what this test pins is the *status* being refused and
+      // not the disk check above it -- the two refusals tell the owner different things.
+      localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-orphan",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "MARK_WORKSPACE_ORPHANED",
+        payload: { workspaceId: recorded.id, expectedVersion: recorded.version },
+      });
+
+      let sessionStarted = false;
+      const adapter = completingAdapter(() => {
+        sessionStarted = true;
+      });
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      expect(sessionStarted).toBe(false);
+      const requests = snapshotOf(localState, seeded.workItemId).humanRequests;
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.title).toContain("orphaned");
+      expect(requests[0]?.context).toContain(branch);
+      expect(requests[0]?.blocking).toBe(true);
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "waits, without asking the owner, while another attempt holds the workspace lease",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      const branch = "loomrail/leased-elsewhere";
+      const worktreePath = await cutWorktree(seeded, branch);
+      const recorded = recordWorkspace(localState, seeded, worktreePath, branch);
+      // A second work item under the same Project, only so its StageAttempt is a real id the lease
+      // can name -- a lease is a claim by an attempt, and the storage layer refuses one that names
+      // an attempt that does not exist.
+      const otherAttempt = seedAttempt(localState, { registerProject: false });
+      localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-other-lease",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "ACQUIRE_WORKSPACE_LEASE",
+        payload: {
+          workspaceId: recorded.id,
+          stageAttemptId: otherAttempt.stageAttemptId,
+          expectedVersion: recorded.version,
+        },
+      });
+
+      let sessionStarted = false;
+      const adapter = completingAdapter(() => {
+        sessionStarted = true;
+      });
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      expect(sessionStarted).toBe(false);
+      // Not a refusal: the owner cannot act on "someone else is writing right now", and a question
+      // they cannot answer is worse than silence. The dispatch simply waits for the next drain.
+      expect(snapshotOf(localState, seeded.workItemId).humanRequests).toEqual([]);
+      expect(workspaceOf(localState, seeded.workItemId)?.leaseHolder).toBe(otherAttempt.stageAttemptId);
+      const attempt = snapshotOf(localState, seeded.workItemId).stageAttempts.find(
+        ({ id }) => id === seeded.stageAttemptId,
+      );
+      expect(attempt?.status).toBe("RUNNING");
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "picks its own attempt back up when the workspace is already leased to it",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      const branch = "loomrail/leased-to-us";
+      const worktreePath = await cutWorktree(seeded, branch);
+      const recorded = recordWorkspace(localState, seeded, worktreePath, branch);
+      // The ordinary state after a daemon restart picked this attempt back up: the lease is already
+      // this attempt's. Claiming it again would be refused by the storage claim's own
+      // `WHERE lease_holder IS NULL`, and reading that as "someone else is writing" would postpone
+      // this dispatch for good -- the attempt would wait for a lease it is already holding.
+      localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-own-lease",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "ACQUIRE_WORKSPACE_LEASE",
+        payload: {
+          workspaceId: recorded.id,
+          stageAttemptId: seeded.stageAttemptId,
+          expectedVersion: recorded.version,
+        },
+      });
+
+      let sessionStarted = false;
+      const adapter = completingAdapter(() => {
+        sessionStarted = true;
+      });
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      expect(sessionStarted).toBe(true);
+      expect(snapshotOf(localState, seeded.workItemId).humanRequests).toEqual([]);
+      expect(workspaceOf(localState, seeded.workItemId)?.leaseHolder).toBeNull();
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "leaves neither a worktree nor a branch behind when the workspace it cut cannot be recorded",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      // Uncommitted work, so the branch is cut on the carry-in snapshot commit -- a commit no other
+      // ref reaches. That is the ordinary case, and the one where a merged-ness check would refuse
+      // to clean up after a rollback.
+      await writeFile(join(repositoryPath, "committed.txt"), "edited but never committed\n");
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      let sessionStarted = false;
+      const adapter = completingAdapter(() => {
+        sessionStarted = true;
+      });
+      // The one failure this rollback exists for: the worktree is already on disk and the row that
+      // would name it cannot be written.
+      const failingState: LocalState = {
+        ...localState,
+        execute: (command) => {
+          if (command.type === "CREATE_WORK_ITEM_WORKSPACE") {
+            throw new Error("the workspace row could not be written");
+          }
+          return localState.execute(command);
+        },
+      };
+
+      await runStageAttempt({ ...depsFor(localState, seeded, adapter), state: failingState });
+
+      expect(sessionStarted).toBe(false);
+      // Disk and database agree that nothing was cut, and so does the branch namespace. A surviving
+      // `loomrail/*` branch would meet the next attempt as BRANCH_EXISTS -- a refusal that asks the
+      // owner to delete or rename a branch Loomrail itself created and abandoned seconds earlier.
+      expect(await listWorktrees(repositoryPath)).toHaveLength(1);
+      const branches = await runGit(["branch", "--list", "loomrail/*"], { cwd: repositoryPath });
+      expect(branches.stdout).toBe("");
+      expect(workspaceOf(localState, seeded.workItemId)).toBeNull();
+      // The owner's own working copy is untouched by any of it: the carry-in only ever copied it.
+      expect(await readFile(join(repositoryPath, "committed.txt"), "utf8")).toBe(
+        "edited but never committed\n",
+      );
+
+      const requests = snapshotOf(localState, seeded.workItemId).humanRequests;
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.blocking).toBe(true);
+      expect(requests[0]?.title).toContain("could not be prepared");
     },
     GIT_TIMEOUT_MS,
   );

@@ -106,6 +106,23 @@ const notARepositoryRefusal = (path: string): ProvisionRefusal => ({
     "Check that the project's configured path still points at a Git repository, and repair or re-register it.",
 });
 
+/**
+ * A path that *is* inside a Git repository, just not at its top level.
+ *
+ * Deliberately not the "not a Git repository" refusal above: `git status` works perfectly well in
+ * such a directory, so telling the owner their path no longer points at a repository sends them
+ * hunting a problem that does not exist. What is actually true is narrower and immediately
+ * actionable -- this directory belongs to a larger repository, and cutting a workspace here would
+ * branch *that* repository and hand the agent everything inside it. Both fixes are named because
+ * either is legitimate: register the repository Loomrail would otherwise branch by accident, or
+ * make this directory a repository in its own right.
+ */
+const insideRepositoryRefusal = (path: string, topLevel: string): ProvisionRefusal => ({
+  title: "This project's path is inside a Git repository rather than being one",
+  context: `Loomrail cuts a workspace from a repository's own top level, and ${path} is not one: it is a directory inside the repository at ${topLevel}. Cutting a workspace here would create a branch in ${topLevel} and give the agent everything that repository contains, not just this project.`,
+  recommendation: `Register the project at ${topLevel} itself if that whole repository is what this work belongs to, or make ${path} a repository of its own (\`git init\` there and commit), then retry the stage.`,
+});
+
 const inProgressRefusal = (inProgress: string, path: string): ProvisionRefusal => {
   const wording = inProgressWording[inProgress] ?? inProgress.toLowerCase();
   return {
@@ -126,17 +143,38 @@ export type ProvisionWorkspaceDecision =
  * mid-operation states and lands the workspace on the operation's intermediate commit, so this
  * check has to happen before `worktree add` is ever attempted, not be inferred from its result.
  *
- * Takes the repository's state as plain data (`isRepository`, `inProgress`, `path`) rather than the
- * `RepositoryState | null` that `@loomrail/workspace`'s `inspectRepository` returns, so this
- * package never has to depend on `@loomrail/workspace` -- the daemon, which already calls
- * `inspectRepository`, is the layer that owns turning its `null` result into `isRepository: false`.
+ * Takes the repository's state as plain data (`isRepository`, `inProgress`, `path`,
+ * `insideRepository`) rather than the `RepositoryState | null` that `@loomrail/workspace`'s
+ * `inspectRepository` returns, so this package never has to depend on `@loomrail/workspace` -- the
+ * daemon, which already calls `inspectRepository`, is the layer that owns turning its `null` result
+ * into `isRepository: false`.
+ *
+ * `insideRepository` splits the first question in two, because "there is no repository here" and
+ * "there is a repository here, but this is not its top level" have different fixes and only one of
+ * them is true at a time. It is required rather than optional so a caller has to answer it: the
+ * daemon already knows (it compares the reported top level against the registered path), and a
+ * caller that silently omitted it would send every project registered inside a repository the
+ * refusal that tells it to go looking for a repository it already has.
  */
 export const decideProvisionWorkspace = (context: {
-  repository: { isRepository: boolean; inProgress: string | null; path: string };
+  repository: {
+    isRepository: boolean;
+    inProgress: string | null;
+    path: string;
+    /** The top level of the repository `path` sits inside, when `path` is not that top level itself. */
+    insideRepository: string | null;
+  };
 }): ProvisionWorkspaceDecision => {
   const { repository } = context;
   if (!repository.isRepository) {
-    return { type: "REFUSED", request: provisionRefusalRequest(notARepositoryRefusal(repository.path)) };
+    return {
+      type: "REFUSED",
+      request: provisionRefusalRequest(
+        repository.insideRepository === null
+          ? notARepositoryRefusal(repository.path)
+          : insideRepositoryRefusal(repository.path, repository.insideRepository),
+      ),
+    };
   }
   if (repository.inProgress !== null) {
     return {

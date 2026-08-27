@@ -55,7 +55,7 @@ describe("workspaceBranchName", () => {
 describe("decideProvisionWorkspace", () => {
   it("asks the owner rather than cutting a branch from a rebase in progress", () => {
     const decision = decideProvisionWorkspace({
-      repository: { isRepository: true, inProgress: "REBASE", path: "/x" },
+      repository: { isRepository: true, inProgress: "REBASE", path: "/x", insideRepository: null },
     });
     expect(decision.type).toBe("REFUSED");
     if (decision.type !== "REFUSED") throw new Error("unreachable");
@@ -65,7 +65,7 @@ describe("decideProvisionWorkspace", () => {
 
   it("asks the owner when the path is not a Git repository at all", () => {
     const decision = decideProvisionWorkspace({
-      repository: { isRepository: false, inProgress: null, path: "/not-a-repo" },
+      repository: { isRepository: false, inProgress: null, path: "/not-a-repo", insideRepository: null },
     });
     expect(decision.type).toBe("REFUSED");
     if (decision.type !== "REFUSED") throw new Error("unreachable");
@@ -73,15 +73,43 @@ describe("decideProvisionWorkspace", () => {
     expect(decision.request.blocking).toBe(true);
   });
 
+  // A path *inside* a repository is refused for a different reason than a path with no repository
+  // anywhere near it, and the owner has to be told which. `git status` works in such a directory,
+  // so "check that the path still points at a Git repository" -- the other refusal's advice -- is
+  // an instruction to go looking for a problem that is not there.
+  it("tells an owner registered inside a repository which repository it is inside", () => {
+    const decision = decideProvisionWorkspace({
+      repository: {
+        isRepository: false,
+        inProgress: null,
+        path: "/repo/packages/inner",
+        insideRepository: "/repo",
+      },
+    });
+    expect(decision.type).toBe("REFUSED");
+    if (decision.type !== "REFUSED") throw new Error("unreachable");
+    expect(decision.request.title).not.toContain("not a Git repository");
+    expect(decision.request.context).toContain("/repo/packages/inner");
+    expect(decision.request.context).toContain("inside the repository at /repo");
+    // Both fixes, because either is legitimate; neither is "repair the repository", which is what
+    // the not-a-repository refusal would have recommended for a repository that is perfectly fine.
+    expect(decision.request.recommendation).toContain("Register the project at /repo");
+    expect(decision.request.recommendation).toContain("repository of its own");
+    expect(decision.request.blocking).toBe(true);
+    expect(decision.request.kind).toBe("FREE_TEXT");
+    expect(decision.request.options).toEqual([]);
+    expect(decision.request.allowOther).toBe(true);
+  });
+
   // The rebase and "not a repository" refusals name different fixes; a caller reading only
   // `decision.type === "REFUSED"` cannot tell the owner which one applies. Distinguishing the
   // wording, not just the outcome, is the whole point of naming the state instead of just refusing.
   it("gives the rebase and not-a-repository refusals different wording", () => {
     const rebase = decideProvisionWorkspace({
-      repository: { isRepository: true, inProgress: "REBASE", path: "/x" },
+      repository: { isRepository: true, inProgress: "REBASE", path: "/x", insideRepository: null },
     });
     const notARepo = decideProvisionWorkspace({
-      repository: { isRepository: false, inProgress: null, path: "/x" },
+      repository: { isRepository: false, inProgress: null, path: "/x", insideRepository: null },
     });
     if (rebase.type !== "REFUSED" || notARepo.type !== "REFUSED") throw new Error("unreachable");
     expect(rebase.request.title).not.toBe(notARepo.request.title);
@@ -91,7 +119,7 @@ describe("decideProvisionWorkspace", () => {
   // fix is out-of-band and cannot be enumerated, so it is FREE_TEXT with no options and allowOther.
   it("builds every refusal as a blocking, unstructured question", () => {
     const decision = decideProvisionWorkspace({
-      repository: { isRepository: true, inProgress: "MERGE", path: "/x" },
+      repository: { isRepository: true, inProgress: "MERGE", path: "/x", insideRepository: null },
     });
     if (decision.type !== "REFUSED") throw new Error("unreachable");
     expect(decision.request.kind).toBe("FREE_TEXT");
@@ -101,7 +129,7 @@ describe("decideProvisionWorkspace", () => {
 
   it("allows provisioning a clean repository with nothing in progress", () => {
     const decision = decideProvisionWorkspace({
-      repository: { isRepository: true, inProgress: null, path: "/x" },
+      repository: { isRepository: true, inProgress: null, path: "/x", insideRepository: null },
     });
     expect(decision).toEqual({ type: "PROVISION" });
   });

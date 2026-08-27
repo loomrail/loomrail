@@ -39,6 +39,7 @@ import {
 import {
   addWorktree,
   createCarryInSnapshot,
+  deleteBranchIfUnmoved,
   inspectRepository,
   removeWorktree,
   type AddWorktreeRefusal,
@@ -325,6 +326,12 @@ const workspaceNotReadyRefusal = (workspace: WorkItemWorkspace): ProvisionRefusa
   recommendation: `Restore or remove ${workspace.worktreePath} yourself, then retry the stage. The branch ${workspace.branch} still holds whatever was committed to it.`,
 });
 
+const workspaceGoneRefusal = (workspace: WorkItemWorkspace): ProvisionRefusal => ({
+  title: "This work item's workspace is no longer on disk",
+  context: `Loomrail records this work item's workspace as ready on branch ${workspace.branch} at ${workspace.worktreePath}, but there is no worktree there now -- the directory was removed, or git no longer recognises it as one. Dispatching the stage anyway would start an agent in a directory that does not exist. Loomrail does not re-cut a workspace by itself (AD-008): the branch may still hold work nobody has merged, and quietly starting a second workspace would hide that.`,
+  recommendation: `Restore the worktree at ${workspace.worktreePath} from the project's repository (\`git worktree add ${workspace.worktreePath} ${workspace.branch}\`), or, once you are sure nothing on ${workspace.branch} is needed, remove the workspace and let the next attempt cut a fresh one. Then retry the stage.`,
+});
+
 const provisioningFailedRefusal = (error: unknown, path: string | null): ProvisionRefusal => ({
   title: "This work item's workspace could not be prepared",
   context: `Loomrail could not cut a workspace${path === null ? "" : ` from the repository at ${path}`}: ${errorName(error)}. No session was started, because an agent with no workspace would produce prose for a stage that is meant to change files.`,
@@ -366,15 +373,18 @@ const createWorkspace = async (
   const inspected = canonicalPath === null ? null : await inspectRepository(canonicalPath);
   // A Project registered at a *subdirectory* of a repository is not a repository Loomrail may cut
   // from: `--show-toplevel` names the enclosing repository, and a worktree cut from that would
-  // branch the owner's outer repository and hand the agent everything inside it. That is the same
-  // answer, with the same fix, as a path that is not a repository at all.
-  const repository = inspected !== null && inspected.topLevel === canonicalPath ? inspected : null;
+  // branch the owner's outer repository and hand the agent everything inside it. The same refusal
+  // as a path that is not a repository at all, but not the same *reason*: which of the two it is
+  // travels to the domain as `insideRepository`, because the fix an owner is given differs.
+  const isOwnTopLevel = inspected !== null && inspected.topLevel === canonicalPath;
+  const repository = isOwnTopLevel ? inspected : null;
 
   const decision = decideProvisionWorkspace({
     repository: {
       isRepository: repository !== null,
       inProgress: repository?.inProgress ?? null,
       path: project.repositoryPath,
+      insideRepository: isOwnTopLevel ? null : (inspected?.topLevel ?? null),
     },
   });
   if (decision.type === "REFUSED") return { type: "REFUSED", request: decision.request };
@@ -456,6 +466,28 @@ const createWorkspace = async (
     // this call just created.
     try {
       await removeWorktree({ topLevel: repository.topLevel, path: worktreePath });
+      // And the branch with it. `git worktree remove` deliberately leaves the branch behind, which
+      // for a rollback is litter that blames the owner: the next attempt meets its own abandoned
+      // branch as BRANCH_EXISTS, and that refusal asks the owner to delete or rename a branch
+      // Loomrail created seconds earlier and never used. Deleting it is safe here for two reasons
+      // that both have to hold: `addWorktree` refused both BRANCH_CHECKED_OUT and BRANCH_EXISTS, so
+      // this branch did not exist before this call created it; and the deletion is conditional on
+      // the ref still pointing at the very commit it was created at, so a branch that somehow
+      // acquired a commit is left alone. No session ever opened, so there is nothing on it to lose.
+      // Removing it also unreferences the carry-in snapshot commit, which is the only other thing
+      // this failed attempt left in the owner's repository -- the work it holds is still sitting in
+      // their working copy, where it never stopped being.
+      const branchRemoval = await deleteBranchIfUnmoved({
+        topLevel: repository.topLevel,
+        branch,
+        expectedCommit: startPoint,
+      });
+      if (branchRemoval !== "DELETED") {
+        deps.logger.warn(
+          { branch, outcome: branchRemoval },
+          "The branch of a workspace that could not be recorded was left in the repository",
+        );
+      }
     } catch (removalError: unknown) {
       deps.logger.warn(
         { worktreePath, error: errorName(removalError) },
@@ -511,6 +543,24 @@ const acquireWorkspaceLease = (
   }
 };
 
+/**
+ * Whether the worktree a recorded workspace names is still a worktree at that path.
+ *
+ * The row alone is not evidence. Startup reconciliation checks the disk once, at startup; a
+ * directory removed while the daemon runs -- by the owner, by a cleanup script, by an agent -- is
+ * seen by nothing until the next restart, and every stage in between would be dispatched into a
+ * path with nothing at it. Checked the same way `createWorkspace` checks a repository: `realpath`
+ * first, because a missing directory has no real path at all, and then git's own answer, because a
+ * directory that exists is not the same as a worktree git still recognises (a pruned worktree
+ * leaves an ordinary directory behind, and a re-created one is not this workspace).
+ */
+const worktreeStillUsable = async (worktreePath: string): Promise<boolean> => {
+  const canonical = await canonicalPathOf(worktreePath);
+  if (canonical === null) return false;
+  const inspected = await inspectRepository(canonical);
+  return inspected !== null && inspected.topLevel === canonical;
+};
+
 const prepareWorkspace = async (deps: RunStageAttemptDeps): Promise<WorkspacePreparation> => {
   const existing = readWorkItemWorkspace(deps);
   if (existing === null) {
@@ -519,6 +569,13 @@ const prepareWorkspace = async (deps: RunStageAttemptDeps): Promise<WorkspacePre
   }
   if (existing.status !== "READY") {
     return { type: "REFUSED", request: provisionRefusalRequest(workspaceNotReadyRefusal(existing)) };
+  }
+  // A READY row is a claim about the disk, and this is the one place that verifies it before the
+  // claim is acted on. Checked before the lease rather than after: taking a lease on a workspace
+  // that is not there would hand this attempt a writer's claim over nothing, and the next attempt
+  // would meet it as postponed rather than as the question the owner can answer.
+  if (!(await worktreeStillUsable(existing.worktreePath))) {
+    return { type: "REFUSED", request: provisionRefusalRequest(workspaceGoneRefusal(existing)) };
   }
   return acquireWorkspaceLease(deps, existing);
 };
