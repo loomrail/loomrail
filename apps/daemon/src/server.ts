@@ -37,6 +37,7 @@ import {
   workItemStateSchema,
   workflowSnapshotSchema,
   type ApiErrorResponse,
+  type WorkflowStage,
 } from "@loomrail/contracts";
 import { WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
 import { openLocalState, StateStoreError, type OrphanProcessEvent } from "@loomrail/persistence-sqlite";
@@ -109,8 +110,15 @@ export type RunningDaemon = {
   bootstrapUrl: string;
   // What the launcher prints, and the answer to "did a live agent do this run?". `cliAvailable` is
   // `capabilities().start`: an adapter can be selected and still be unable to run, and the owner
-  // should learn that at startup rather than from the first refused dispatch.
-  provider: { provider: ProviderId; cliAvailable: boolean; recognised: boolean };
+  // should learn that at startup rather than from the first refused dispatch. `stages` is here for
+  // the same reason -- an A2 adapter serves three of a run's six stages, and the launcher is the
+  // one moment the owner is definitely reading.
+  provider: {
+    provider: ProviderId;
+    cliAvailable: boolean;
+    recognised: boolean;
+    stages: readonly WorkflowStage[];
+  };
   // Exposed for tests (spec D6): the alternative is a wait loop with a timeout in every test, and
   // on a loaded machine a timeout is indistinguishable from a defect. Resolves once the background
   // session worker has no pass running and none scheduled.
@@ -1153,6 +1161,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         provider: providerCapabilities.provider,
         cliAvailable: providerCapabilities.start,
         recognised: providerResolution.recognised,
+        stages: providerCapabilities.stages,
       },
       whenIdle: () => worker.whenIdle(),
       close: async () => {

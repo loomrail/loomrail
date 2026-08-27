@@ -175,6 +175,10 @@ describe("provider selection at daemon startup", () => {
       // Codex reports no cost figure anywhere in its stream; Claude Code does. The cockpit cannot
       // explain a missing spend figure without being told which it is talking to.
       expect(capabilities.costReporting).toBe(false);
+      // The same stage list the launcher prints. `formatStartupReport` is tested on hand-built
+      // input, so this is the half that proves what a real boot actually hands it: the adapter's
+      // own declaration, not an empty list that would print "It serves ." at startup.
+      expect(daemon.provider.stages).toEqual(capabilities.stages);
     } finally {
       await daemon.close();
     }

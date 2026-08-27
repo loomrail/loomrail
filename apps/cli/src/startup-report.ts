@@ -5,6 +5,12 @@ export type StartupProvider = {
   cliAvailable: boolean;
   /** `false` when LOOMRAIL_PROVIDER named something this daemon could not read. */
   recognised: boolean;
+  /**
+   * `capabilities().stages` -- the WorkflowStages this adapter serves. Never empty
+   * (`providerCapabilitiesSchema` requires at least one), and in A2 always fewer than the six a
+   * delivery run has.
+   */
+  stages: readonly string[];
 };
 
 export type StartupReport = {
@@ -19,12 +25,26 @@ export type StartupReport = {
 // an adapter whose CLI is missing is selected but cannot start -- something the owner would
 // otherwise learn only from the first refused dispatch. Both facts are stated here, at the one
 // moment the owner is definitely reading.
-const providerLines = ({ provider, cliAvailable, recognised }: StartupProvider): readonly string[] => {
-  const lines = [
+//
+// A live provider used to get LESS than the mock did -- one bare word, "Provider: CODEX.", while
+// MOCK got a whole explanatory sentence. The two limits that actually shape an A2 run were in the
+// JSON log and nowhere a human reads: the adapter serves three of the six stages, and it works in
+// an empty temporary directory rather than in the owner's repository. Both were learned from the
+// first refused dispatch, mid-run, with money already spent.
+const providerLines = ({
+  provider,
+  cliAvailable,
+  recognised,
+  stages,
+}: StartupProvider): readonly string[] => {
+  const lines =
     provider === "MOCK"
-      ? "Provider: MOCK (the deterministic test double -- no real agent runs)."
-      : `Provider: ${provider}${cliAvailable ? "" : " -- but its CLI was not found on this machine, so dispatches will be refused"}.`,
-  ];
+      ? ["Provider: MOCK (the deterministic test double -- no real agent runs)."]
+      : [
+          `Provider: ${provider}${cliAvailable ? "" : " -- but its CLI was not found on this machine, so dispatches will be refused"}.`,
+          `It serves ${stages.join(", ")}; any other stage is refused to you as a question rather than dispatched.`,
+          "It works in an empty temporary directory: no access to your repository until milestone E1.",
+        ];
   if (!recognised) {
     lines.push(
       "LOOMRAIL_PROVIDER named a provider Loomrail does not know; it fell back to MOCK. Accepted values: MOCK, CODEX, CLAUDE_CODE.",
