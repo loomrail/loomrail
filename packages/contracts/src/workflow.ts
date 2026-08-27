@@ -1402,17 +1402,24 @@ export const providerSessionsResponseSchema = z
   })
   .strict();
 
-// The daemon runs a single provider adapter for its whole lifetime (A2 has not landed live
-// adapters yet), so this describes "the provider a session would run on right now" rather than a
-// per-session fact. Trimmed to what the cockpit needs to explain a lost checkpoint tail (spec §7):
-// not the full ProviderCapabilities shape provider-core owns, which apps/web has no reason to
-// depend on.
+// The daemon runs a single provider adapter for its whole lifetime, so this describes "the provider
+// a session would run on right now" rather than a per-session fact. Still a trimmed projection of
+// the full ProviderCapabilities shape provider-core owns -- apps/web has no reason to depend on
+// that package -- but it now carries the three fields milestone A2 added and never propagated:
+// without them the owner cannot see which stages the selected adapter serves, or that its CLI is
+// missing from this machine, until a dispatch is refused.
 export const providerCapabilitiesResponseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
     provider: z.string().trim().min(1).max(50),
+    // `capabilities().start`: whether the adapter's CLI was found on this machine at all. A
+    // separate claim from `stages` -- an adapter declares what it would serve if it could run, and
+    // this says whether it currently can.
+    start: z.boolean(),
+    stages: z.array(workflowStageSchema).min(1).max(20),
     checkpointOnRequest: z.boolean(),
     contextWindowReporting: z.boolean(),
+    costReporting: z.boolean(),
   })
   .strict();
 

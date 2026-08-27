@@ -3,7 +3,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { providerCapabilitiesResponseSchema, sessionExchangeResponseSchema } from "@loomrail/contracts";
+import {
+  providerCapabilitiesResponseSchema,
+  sessionExchangeResponseSchema,
+  type ProviderCapabilitiesResponse,
+} from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { startDaemon, type RunningDaemon } from "../src/server.js";
@@ -65,13 +69,19 @@ describe("provider selection at daemon startup", () => {
     return { daemon, token };
   };
 
-  const readReportedProvider = async (daemon: RunningDaemon, token: string): Promise<string> => {
+  const readCapabilities = async (
+    daemon: RunningDaemon,
+    token: string,
+  ): Promise<ProviderCapabilitiesResponse> => {
     const cookie = await sessionCookie(daemon, token);
     const response = await fetch(`${daemon.baseUrl}/api/v1/provider/capabilities`, {
       headers: { cookie },
     });
-    return providerCapabilitiesResponseSchema.parse(await response.json()).provider;
+    return providerCapabilitiesResponseSchema.parse(await response.json());
   };
+
+  const readReportedProvider = async (daemon: RunningDaemon, token: string): Promise<string> =>
+    (await readCapabilities(daemon, token)).provider;
 
   // The other half of R28: the daemon must SAY which adapter it resolved, and must not fall back
   // silently on a value it could not read. The mock completes stages successfully, so an owner who
@@ -143,6 +153,28 @@ describe("provider selection at daemon startup", () => {
     const { daemon, token } = await bootWithEnv("CODEX");
     try {
       expect(await readReportedProvider(daemon, token)).toBe("CODEX");
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  // Milestone A2 added `start`, `stages` and `costReporting` to `ProviderCapabilities` and nothing
+  // propagated them to this endpoint -- the one thing the cockpit reads. Without them the owner
+  // cannot see which stages the selected adapter serves, or that its CLI is missing from this
+  // machine, until a dispatch is refused mid-run.
+  it("reports the stages the selected adapter serves, and whether it can start at all", async () => {
+    const { daemon, token } = await bootWithEnv("CODEX");
+    try {
+      const capabilities = await readCapabilities(daemon, token);
+      // Before E1 a live adapter runs in an empty temporary directory, so it cannot serve IMPLEMENT.
+      expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "REVIEW"]);
+      expect(capabilities.stages).not.toContain("IMPLEMENT");
+      // Whether `codex` happens to be installed on the machine running this test is not the point;
+      // that the endpoint carries the claim at all is.
+      expect(typeof capabilities.start).toBe("boolean");
+      // Codex reports no cost figure anywhere in its stream; Claude Code does. The cockpit cannot
+      // explain a missing spend figure without being told which it is talking to.
+      expect(capabilities.costReporting).toBe(false);
     } finally {
       await daemon.close();
     }

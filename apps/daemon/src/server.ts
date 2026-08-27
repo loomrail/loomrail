@@ -656,8 +656,11 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         return providerCapabilitiesResponseSchema.parse({
           schemaVersion: 1,
           provider: capabilities.provider,
+          start: capabilities.start,
+          stages: capabilities.stages,
           checkpointOnRequest: capabilities.checkpointOnRequest,
           contextWindowReporting: capabilities.contextWindowReporting,
+          costReporting: capabilities.costReporting,
         });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
