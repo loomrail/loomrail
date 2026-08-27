@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { access, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,6 +16,15 @@ import { makeThrowawayRepo } from "./helpers.js";
 const outsideDir = async (name: string): Promise<string> => {
   const parent = await realpath(await mkdtemp(join(tmpdir(), "loomrail-wt-")));
   return join(parent, name);
+};
+
+const pathExists = async (path: string): Promise<boolean> => {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 describe("addWorktree", () => {
@@ -89,6 +98,31 @@ describe("addWorktree", () => {
     });
 
     expect(added).toEqual({ type: "REFUSED", refusal: { type: "PATH_EXISTS", path: preexisting } });
+  });
+
+  it("reports the real git failure when the pre-flight checks all pass but the add itself fails", async () => {
+    const repo = await makeThrowawayRepo();
+    const outside = await outsideDir("task-1");
+
+    // A startpoint that cannot resolve to any commit. It passes all three pre-flight checks --
+    // the branch is not checked out anywhere, the branch does not already exist, and the target
+    // path is free -- so this exercises the real `git worktree add` call itself failing, not
+    // stubbed git.
+    const added = await addWorktree({
+      topLevel: repo,
+      branch: "loomrail/task-1",
+      path: outside,
+      startPoint: "not-a-real-startpoint",
+    });
+
+    expect(added).toMatchObject({ type: "REFUSED", refusal: { type: "WORKTREE_ADD_FAILED" } });
+    if (added.type !== "REFUSED" || added.refusal.type !== "WORKTREE_ADD_FAILED") {
+      throw new Error("expected a WORKTREE_ADD_FAILED refusal, assertion above should already have failed");
+    }
+    expect(added.refusal.exitCode).not.toBe(0);
+    expect(added.refusal.stderr).toContain("not-a-real-startpoint");
+
+    expect(await pathExists(outside)).toBe(false);
   });
 });
 

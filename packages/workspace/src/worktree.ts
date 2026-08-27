@@ -11,7 +11,14 @@ export type WorktreeEntry = {
 export type AddWorktreeRefusal =
   | { type: "BRANCH_EXISTS"; branch: string }
   | { type: "BRANCH_CHECKED_OUT"; branch: string; occupiedBy: string }
-  | { type: "PATH_EXISTS"; path: string };
+  | { type: "PATH_EXISTS"; path: string }
+  // The mutating `git worktree add` itself failed for a reason none of the three pre-flight
+  // checks models -- a full disk, a permissions problem, a startpoint that does not resolve, a git
+  // version quirk. Unlike the three refusals above, this one is not a named, anticipated state;
+  // it is "git said no and we do not know why" (spec §2.11 enumerates only the three checked
+  // reasons). Distinguish it by shape so a caller cannot mistake "git told us why, and the owner
+  // can act on it" for this catch-all.
+  | { type: "WORKTREE_ADD_FAILED"; exitCode: number; stderr: string };
 
 const HEADS_PREFIX = "refs/heads/";
 
@@ -20,6 +27,23 @@ const HEADS_PREFIX = "refs/heads/";
 // one place that translation happens.
 const branchNameFromRef = (ref: string): string =>
   ref.startsWith(HEADS_PREFIX) ? ref.slice(HEADS_PREFIX.length) : ref;
+
+// `git worktree add`'s stderr, on the failure path this function does not otherwise model, is
+// untrusted process output -- bounded the same way this repo bounds any other process/provider
+// text placed into a typed result (see `PROVIDER_TEXT_LIMIT` in
+// `packages/provider-core/src/session-diagnosis.ts`), so a pathological or chatty git build cannot
+// inflate a refusal into something a caller cannot log or display. `slice` cuts by UTF-16 code
+// unit, so a cut that lands inside a surrogate pair is repaired rather than left as an ill-formed
+// string that would render as a replacement character.
+const STDERR_LIMIT = 1_000;
+
+const dropTrailingLoneSurrogate = (text: string): string => {
+  const last = text.charCodeAt(text.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? text.slice(0, -1) : text;
+};
+
+const truncateStderr = (stderr: string): string =>
+  stderr.length <= STDERR_LIMIT ? stderr : `${dropTrailingLoneSurrogate(stderr.slice(0, STDERR_LIMIT - 1))}…`;
 
 const pathExists = async (path: string): Promise<boolean> => {
   try {
@@ -83,10 +107,14 @@ export const listWorktrees = async (topLevel: string): Promise<readonly Worktree
 // is checked before `BRANCH_EXISTS` -- checking `show-ref` first would report every occupied
 // branch as merely "exists" and the more specific, more actionable refusal would never surface.
 //
-// Once all three checks pass, the actual `git worktree add` is trusted to succeed: its exit code
-// is not inspected. The three refusal reasons above are the only ways this repository is allowed
-// to say no, and they have already been ruled out; re-deriving a fourth outcome from the mutating
-// command's exit code would be exactly the error-text parsing this function exists to avoid.
+// Once all three checks pass, `git worktree add` is run for real, and its exit code is the ground
+// truth about whether a worktree now exists -- not `ADDED` reported unconditionally. The three
+// checks above exist to give the owner a named, actionable reason without parsing git's own error
+// text; they do not, and cannot, enumerate every way the mutating command itself can fail (a full
+// disk, a permissions problem, a startpoint that does not resolve, a git version quirk). A
+// non-zero exit from that command is reported as `WORKTREE_ADD_FAILED`, carrying the exit code and
+// a bounded copy of stderr, so a failure the pre-flight checks did not anticipate reaches the
+// caller as a refusal rather than as a lie that says `ADDED`.
 export const addWorktree = async (context: {
   topLevel: string;
   branch: string;
@@ -113,7 +141,17 @@ export const addWorktree = async (context: {
     return { type: "REFUSED", refusal: { type: "PATH_EXISTS", path } };
   }
 
-  await runGit(["worktree", "add", "-b", branch, path, startPoint], { cwd: topLevel });
+  const added = await runGit(["worktree", "add", "-b", branch, path, startPoint], { cwd: topLevel });
+  if (added.exitCode !== 0) {
+    return {
+      type: "REFUSED",
+      refusal: {
+        type: "WORKTREE_ADD_FAILED",
+        exitCode: added.exitCode,
+        stderr: truncateStderr(added.stderr),
+      },
+    };
+  }
 
   return { type: "ADDED" };
 };
