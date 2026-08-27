@@ -10,6 +10,13 @@ const MAX_STREAM_LINE_BYTES = 1_000_000;
 // will not.
 const DEFAULT_GRACE_MS = 5_000;
 
+// How long `exited` waits, AFTER the child has really gone, for its stdout and stderr to reach EOF.
+// In the ordinary case nothing waits at all -- `close` follows `exit` immediately once the pipes
+// are drained. This bound exists for the one case where they never drain: a grandchild that
+// inherited the pipe and outlives the child holding it open. Without it `exited` would simply never
+// resolve there, and the deadline below would stop being a guarantee that a session ends.
+const STDIO_DRAIN_GRACE_MS = 2_000;
+
 export type ProcessExitOutcome = { code: number | null; signal: NodeJS.Signals | null };
 
 // Rejects `exited` when the child could never be started at all -- e.g. its executable does not
@@ -158,9 +165,6 @@ export const runProcess = (options: RunProcessOptions): ProcessRun => {
   const stderrSplitter = createLineSplitter(MAX_STREAM_LINE_BYTES, options.onStderr);
   child.stdout.on("data", stdoutSplitter.push);
   child.stderr.on("data", stderrSplitter.push);
-  // `end` (the readable stream saw EOF), not the child's own `exit`: a piped, actively-consumed
-  // stdout reaches EOF before the child process is reaped, so the residual line is delivered
-  // before `exited` resolves and a caller that only awaits `exited` still sees it.
   child.stdout.on("end", stdoutSplitter.flush);
   child.stderr.on("end", stderrSplitter.flush);
 
@@ -179,10 +183,47 @@ export const runProcess = (options: RunProcessOptions): ProcessRun => {
   // does that (it is never unref'd) for as long as it is actually running.
   deadlineTimer.unref();
 
+  // Delivering the residual line is part of resolving `exited`, not something that races it. The
+  // adapters read `finalCheckpoint` the instant `exited` resolves, so a residue that arrives after
+  // that is a residue nobody reads -- "the parser saw nothing", the shape that produced both of
+  // this milestone's Criticals.
+  //
+  // Hence `close` rather than `exit`: `exit` fires when the child is reaped, which Node documents
+  // may happen BEFORE its stdio closes -- that is exactly why `close` exists. In practice `end` was
+  // observed first every time, but an ordering that holds by measurement is not a guarantee, and
+  // this one is load-bearing. `close` fires only once the child has gone AND its pipes have reached
+  // EOF, so it keeps the promise `exited` has always made and adds the one it only appeared to.
+  //
+  // The flush here as well as on `end` is belt and braces, and cheap: it is idempotent (the buffer
+  // is cleared), and it covers the two endings where `end` never arrives at all -- a stream
+  // destroyed rather than ended, and the drain bound below.
+  const settleExit = (outcome: ProcessExitOutcome): void => {
+    stdoutSplitter.flush();
+    stderrSplitter.flush();
+    deferredExit.resolve(outcome);
+  };
+
+  let exitOutcome: ProcessExitOutcome | undefined;
+  let drainTimer: NodeJS.Timeout | undefined;
+
   child.once("exit", (code, signal) => {
+    const outcome: ProcessExitOutcome = { code, signal };
     exitedFlag = true;
+    exitOutcome = outcome;
     clearTimeout(deadlineTimer);
-    deferredExit.resolve({ code, signal });
+    // Deliberately not resolved here -- see `settleExit` above. The bound is what keeps "the child
+    // is gone" from becoming "and therefore this promise may never settle".
+    drainTimer = setTimeout(() => {
+      settleExit(outcome);
+    }, STDIO_DRAIN_GRACE_MS);
+    drainTimer.unref();
+  });
+
+  child.once("close", (code, signal) => {
+    clearTimeout(drainTimer);
+    // `exitOutcome` is set unless the child never ran at all, in which case `error` below has
+    // already rejected and this resolve is a no-op.
+    settleExit(exitOutcome ?? { code, signal });
   });
 
   // With no listener here, a spawn failure (e.g. ENOENT -- the executable does not exist) is an
