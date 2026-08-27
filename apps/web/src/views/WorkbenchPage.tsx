@@ -447,14 +447,10 @@ const changedFieldLabelKeys: Record<WorkItemChangedField, TranslationKey> = {
   acceptanceCriteria: "field.acceptanceCriteria",
 };
 
-// `isSessionPauseFailureCode` and its five codes come from @loomrail/contracts (imported above),
-// not from a local copy: apps/web depends on @loomrail/contracts and @loomrail/ui only, never on
-// @loomrail/domain, and a hand-duplicated list here is exactly what let this file disagree with
-// packages/domain/src/session-pause.ts once already -- every HARD_PAUSED attempt read as a budget
-// pause regardless of the real failureCode. Reading the same exported list both sides use keeps a
-// sixth code added there from silently going stale here.
 // A total Record over the contract's own union, so a new quality cannot arrive without this file
-// failing to compile -- the same discipline `hardPauseLabelKeys` below is written under.
+// failing to compile -- the same discipline `hardPauseLabelKeys` below is written under. Its codes
+// come from @loomrail/contracts rather than a local copy, so the cockpit's reading of "is this a
+// session pause" cannot drift from the domain's.
 const usageQualityLabelKeys: Record<ContextWindowUsage["quality"], TranslationKey> = {
   ACTUAL: "workflow.sessions.usageQuality.ACTUAL",
   PROVIDER_ESTIMATE: "workflow.sessions.usageQuality.PROVIDER_ESTIMATE",
@@ -469,12 +465,11 @@ const hardPauseLabelKeys: Record<SessionPauseFailureCode, TranslationKey> = {
   SESSION_LIMIT_REACHED: "workflow.hardPause.sessionLimit",
 };
 
-// A HARD_PAUSED attempt used to read "Budget paused" unconditionally, even though the session loop
-// hard-pauses for reasons that have nothing to do with budget -- and offered an "approve budget
-// override" action that throws for those (decideApproveBudgetOverride refuses a session pause).
+// A HARD_PAUSED attempt is not necessarily budget-paused: the session loop hard-pauses for reasons
+// that have nothing to do with tokens, and decideApproveBudgetOverride refuses a session pause.
 // `failureCode` is what tells the two apart; `budgetFallbackKey` lets both call sites below (the
-// pipeline-level Status badge and the per-stage list label) keep their own existing English text
-// for the genuinely-budget case.
+// pipeline-level Status badge and the per-stage list label) keep their own text for the
+// genuinely-budget case.
 const hardPauseLabel = (
   failureCode: string | null,
   budgetFallbackKey: TranslationKey,

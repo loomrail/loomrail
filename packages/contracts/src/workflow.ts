@@ -350,10 +350,9 @@ export const stageAttemptSchema = z
 // because it has two consumers on either side of the apps/web boundary: `decideAnswerHumanRequest`
 // and `decideApproveBudgetOverride` (packages/domain) decide behaviour from it, and the Task
 // Cockpit (apps/web) decides display from it -- apps/web depends on @loomrail/contracts and
-// @loomrail/ui only, never on @loomrail/domain, so a single shared list here is what keeps the two
-// readings of "is this a session pause" from drifting apart. That drift is exactly what shipped as
-// a defect once already: the cockpit read every HARD_PAUSED attempt as a budget pause and offered
-// an "approve budget override" action that decideApproveBudgetOverride throws on for these codes.
+// @loomrail/ui only, never on @loomrail/domain. Should the two readings of "is this a session
+// pause" drift apart, the cockpit reads every HARD_PAUSED attempt as a budget pause and offers an
+// "approve budget override" action that decideApproveBudgetOverride throws on for these codes.
 export const sessionPauseFailureCodes = [
   "NO_PROGRESS",
   "CONTEXT_FLOOR_EXCEEDED",

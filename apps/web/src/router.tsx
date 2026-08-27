@@ -14,8 +14,7 @@ import { WorkbenchPage } from "./views/WorkbenchPage";
 
 const rootRoute = createRootRoute({ component: AppFrame });
 
-// The board heading no longer carries metric chips; the only quick filter left is the workspace
-// navigation's Human requests destination.
+// The only quick filter on the board is the workspace navigation's Human requests destination.
 const summaryFilters = new Set(["needsYou"]);
 const workItemFilters = new Set([
   "priority-high",
