@@ -7,6 +7,7 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
+import { workItemWorkspaceOrphanedEventSchema, workItemWorkspaceSchema } from "./workspace.js";
 
 export const workflowStageSchema = z.enum(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
 export const pipelineRunStatusSchema = z.enum([
@@ -1182,8 +1183,16 @@ export const workflowsReconciledResultSchema = z
     // Spec §6.4 makes a daemon restart the ordinary end of a ProviderSession, so reconciliation
     // now closes orphaned sessions as well as orphaned dispatches and reports both kinds of event.
     interruptedSessions: z.array(providerSessionSchema),
+    // Task 10 (spec §6, "Восстановление"): every READY workspace whose worktree directory was
+    // found gone or prunable at this startup, now moved to ORPHANED. Never a resurrection (AD-008)
+    // -- nothing here recreates a workspace or touches the branch it leaves behind (D12).
+    orphanedWorkspaces: z.array(workItemWorkspaceSchema),
     events: z.array(
-      z.discriminatedUnion("type", [recoveryReportCreatedEventSchema, providerSessionEndedEventSchema]),
+      z.discriminatedUnion("type", [
+        recoveryReportCreatedEventSchema,
+        providerSessionEndedEventSchema,
+        workItemWorkspaceOrphanedEventSchema,
+      ]),
     ),
   })
   .strict();

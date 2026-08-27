@@ -17,6 +17,7 @@ import type {
   WorkflowSnapshot,
   WorkItemWorkspace,
 } from "@loomrail/contracts";
+import type { WorktreeEntry } from "@loomrail/workspace";
 
 export type StateStoreErrorCode =
   | "COMMAND_ID_REUSED"
@@ -207,6 +208,37 @@ export type OrphanProcessEvent = {
     | "PROBE_FAILED";
 };
 
+/**
+ * What startup reconciliation did about a READY WorkItemWorkspace whose worktree directory it
+ * checked (spec §6, "Восстановление").
+ *
+ * Only the two outcomes worth an owner's attention are reported: the workspace was found gone and
+ * moved to ORPHANED, or the check itself could not be completed at all. A workspace found present
+ * and not `prunable` -- the ordinary case for the large majority of workspaces at any given restart
+ * -- is not reported; that silence is the point of `killOrphanedSessionProcess`'s "every ending is a
+ * line the owner can find" only for endings that actually happened, not for a health check that
+ * found nothing wrong.
+ */
+export type OrphanWorkspaceEvent = {
+  workspaceId: string;
+  workItemId: string;
+  worktreePath: string;
+  action: "ORPHANED" | "SKIPPED";
+  reason:
+    /** `git worktree list --porcelain` reported this path prunable: its gitdir points nowhere. */
+    | "PRUNABLE"
+    /** No entry for this path at all -- the administrative record itself is gone, not just the
+     * directory. Treated the same as PRUNABLE (spec §6: "prunable, or gone outside Loomrail's
+     * control"), because both mean the worktree cannot be written to any more. */
+    | "MISSING_FROM_WORKTREE_LIST"
+    /** The workspace's own Project row is gone, so there is no repository to ask `git` about. */
+    | "PROJECT_NOT_FOUND"
+    /** `git worktree list` itself could not be run or its output could not be read -- a missing
+     * `git`, a repository path that no longer resolves, a permissions problem. FAIL SAFE: an
+     * inconclusive check never orphans a workspace that might still be perfectly healthy. */
+    | "WORKTREE_LIST_FAILED";
+};
+
 export type OpenLocalStateOptions = {
   databasePath: string;
   backupsDirectory?: string;
@@ -235,4 +267,22 @@ export type OpenLocalStateOptions = {
    * default synchronous `ps` probe.
    */
   processStartedAt?: (pid: number) => Date | null;
+  /**
+   * Called synchronously, once per READY WorkItemWorkspace found gone or found un-checkable, at
+   * the moment startup reconciliation decides what to do about it. Injected the way `onOrphanProcess`
+   * is, so the daemon can route it into its own structured logger; the default writes one line to
+   * stderr.
+   */
+  onOrphanWorkspace?: (event: OrphanWorkspaceEvent) => void;
+  /**
+   * Lists a repository's worktrees the way `@loomrail/workspace`'s `listWorktrees` does -- same
+   * entries, same `prunable` signal -- but synchronously, and returning `null` (never throwing)
+   * when the listing could not be produced at all. Synchronous because `execute` runs its whole
+   * transaction, RECONCILE_WORKFLOWS included, without ever awaiting anything; `null` rather than a
+   * thrown error because the caller's only correct response to "the check failed" and "the
+   * repository looks empty" must never be the same code path as a genuine empty answer. Injected
+   * only so a test can drive the probe deterministically; production runs `git worktree list
+   * --porcelain` with `execFileSync` and parses it with the same parser `listWorktrees` uses.
+   */
+  listProjectWorktrees?: (topLevel: string) => readonly WorktreeEntry[] | null;
 };

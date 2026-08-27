@@ -60,9 +60,12 @@ const pathExists = async (path: string): Promise<boolean> => {
 // carries no `branch` line at all, and one whose directory was deleted from under git carries a
 // `prunable` line whose trailing message is prose that changes across git versions -- only the key
 // is read, never the text after it.
-export const listWorktrees = async (topLevel: string): Promise<readonly WorktreeEntry[]> => {
-  const result = await runGit(["worktree", "list", "--porcelain"], { cwd: topLevel });
-
+//
+// A pure function, deliberately separate from `listWorktrees` below: packages/persistence-sqlite's
+// startup reconciliation runs inside a synchronous SQLite transaction and cannot await `runGit`'s
+// spawned child, so it reads `git worktree list --porcelain`'s stdout with its own synchronous
+// `execFileSync` call and hands the same text here rather than duplicating this parse.
+export const parseWorktreeListPorcelain = (stdout: string): readonly WorktreeEntry[] => {
   const entries: WorktreeEntry[] = [];
   let path: string | null = null;
   let branch: string | null = null;
@@ -77,7 +80,7 @@ export const listWorktrees = async (topLevel: string): Promise<readonly Worktree
     prunable = false;
   };
 
-  for (const line of result.stdout.split("\n")) {
+  for (const line of stdout.split("\n")) {
     if (line.length === 0) {
       flush();
       continue;
@@ -93,6 +96,11 @@ export const listWorktrees = async (topLevel: string): Promise<readonly Worktree
   flush();
 
   return entries;
+};
+
+export const listWorktrees = async (topLevel: string): Promise<readonly WorktreeEntry[]> => {
+  const result = await runGit(["worktree", "list", "--porcelain"], { cwd: topLevel });
+  return parseWorktreeListPorcelain(result.stdout);
 };
 
 // Creates a branch and a worktree for it in one step, but only after confirming -- via

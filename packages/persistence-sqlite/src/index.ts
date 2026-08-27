@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { ContextSources } from "@loomrail/context-assembly";
@@ -88,6 +89,7 @@ import {
   type WorkItemDecision,
   type WorkItemEventIntent,
 } from "@loomrail/domain";
+import { parseWorktreeListPorcelain, type WorktreeEntry } from "@loomrail/workspace";
 import { z } from "zod";
 
 import { canonicalJson } from "./canonical-json.js";
@@ -97,6 +99,7 @@ import {
   type LocalState,
   type OpenLocalStateOptions,
   type OrphanProcessEvent,
+  type OrphanWorkspaceEvent,
   type StateQuery,
   type StateQueryResult,
 } from "./types.js";
@@ -961,6 +964,58 @@ const killOrphanedSessionProcess = (context: {
   }
 };
 
+// The default `listProjectWorktrees`: runs `git worktree list --porcelain` synchronously (`execute`
+// runs its whole transaction without ever awaiting anything, so `@loomrail/workspace`'s own async
+// `listWorktrees` cannot be called from here) and hands its stdout to the same parser that function
+// uses, so this reads the identical `prunable` signal rather than inventing a second interpretation
+// of git's porcelain format. FAIL SAFE: `execFileSync` throws on a missing `git`, a non-zero exit,
+// a repository path that does not resolve, or a permissions problem -- every one of those becomes
+// `null` here, never a thrown error, because the caller's only correct response to "the check
+// failed" must never be reachable through the same code path as "the repository has no worktrees".
+const listProjectWorktreesWithGit = (topLevel: string): readonly WorktreeEntry[] | null => {
+  try {
+    const stdout = execFileSync("git", ["worktree", "list", "--porcelain"], {
+      cwd: topLevel,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return parseWorktreeListPorcelain(stdout);
+  } catch {
+    return null;
+  }
+};
+
+// Best-effort realpath of a WorkItemWorkspace's own `worktreePath`, which -- unlike the entries
+// `git worktree list --porcelain` reports -- was never itself resolved through the filesystem's
+// symlinks (session-loop.ts's `createWorkspace` joins it from `workspacesRoot` directly). On macOS
+// the OS temp directory is `/var/...`, a symlink to `/private/var/...`, so comparing the stored path
+// against git's own (always-canonical) output by string equality alone would report a perfectly
+// healthy workspace as gone every time a symlinked prefix is in play.
+//
+// `realpathSync` cannot resolve a path whose own leaf no longer exists -- which is exactly the
+// case this check exists to find -- so this walks up to the nearest existing ancestor, resolves
+// that, and reattaches whatever tail could not be resolved literally (the tail is exact filesystem
+// path segments this process itself created, not attacker-controlled input, so a literal rejoin is
+// safe). Returns the original, uncanonicalised path if even the filesystem root cannot be
+// resolved: a degraded comparison that simply will not match any entry, rather than a thrown error
+// on this fail-safe path.
+const canonicalizeWorktreePath = (path: string): string => {
+  const tail: string[] = [];
+  let current = path;
+  for (;;) {
+    try {
+      const resolved = realpathSync(current);
+      return tail.length === 0 ? resolved : join(resolved, ...tail.reverse());
+    } catch (cause) {
+      if (errorCodeOf(cause) !== "ENOENT") return path;
+      const parent = dirname(current);
+      if (parent === current) return path;
+      tail.push(basename(current));
+      current = parent;
+    }
+  }
+};
+
 export const openLocalState = async (options: OpenLocalStateOptions): Promise<LocalState> => {
   const now = options.now ?? (() => new Date());
   const createId = options.createId ?? ((kind) => `${kind}-${randomUUID()}`);
@@ -972,6 +1027,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     options.onOrphanProcess ??
     ((event: OrphanProcessEvent) => {
       process.stderr.write(`${JSON.stringify({ event: "orphanProcess", ...event })}\n`);
+    });
+  const listProjectWorktrees = options.listProjectWorktrees ?? listProjectWorktreesWithGit;
+  // Same default-of-last-resort reasoning as `reportOrphanProcess` above: a workspace quietly
+  // orphaned, or a worktree check that quietly failed, is exactly the defect this closes.
+  const reportOrphanWorkspace =
+    options.onOrphanWorkspace ??
+    ((event: OrphanWorkspaceEvent) => {
+      process.stderr.write(`${JSON.stringify({ event: "orphanWorkspace", ...event })}\n`);
     });
   const wasNonEmpty = await databaseWasNonEmpty(options.databasePath);
   if (options.databasePath !== ":memory:") {
@@ -1039,10 +1102,20 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        SET lease_holder = NULL, version = version + 1
        WHERE id = ? AND version = ? AND lease_holder = ?`,
     );
+    // Clears `lease_holder` in the same statement, not a separate one: an ORPHANED workspace's
+    // worktree is gone, so whatever StageAttempt held the lease can no longer write to it either,
+    // and the 0011 migration's UNIQUE on work_item_id means this WorkItem will never get a second
+    // workspace to hand a fresh lease acquire to -- a lease left dangling here would sit forever.
     const markWorkItemWorkspaceOrphaned = database.prepare(
       `UPDATE work_item_workspaces
-       SET status = 'ORPHANED', version = version + 1
+       SET status = 'ORPHANED', lease_holder = NULL, version = version + 1
        WHERE id = ? AND version = ? AND status = 'READY'`,
+    );
+    // Startup reconciliation's own read (Task 10, spec §6 "Восстановление"): every workspace whose
+    // worktree might have gone missing while nothing was watching it. ORPHANED and REMOVED rows are
+    // already-settled facts this check has nothing left to say about.
+    const selectReadyWorkItemWorkspaces = database.prepare(
+      "SELECT * FROM work_item_workspaces WHERE status = 'READY' ORDER BY created_at, id",
     );
     const selectCriteria = database.prepare(
       `SELECT criterion FROM work_item_acceptance_criteria
@@ -2727,6 +2800,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           );
         }
 
+        // A StageAttempt this loop recovers to INTERRUPTED is never coming back to reclaim a
+        // workspace lease itself (AD-008: nothing here restarts it): decideRecoverInterruptedWorkflow
+        // is the daemon-restart path where no session ever started at all, unlike the loop above,
+        // whose attempts stay RUNNING precisely because a resumed session is expected to use the
+        // workspace again. Collected here, not derived from a later status re-read, because it is
+        // this transaction's own decision that makes an attempt "dead" for lease purposes -- a
+        // StageAttempt already WAITING_HUMAN or *_PAUSED before this reconciliation even ran still
+        // legitimately owns its lease, and nothing below may release that.
+        const attemptsRecoveredToInterrupted = new Set<string>();
+
         for (const dispatch of orphanedDispatches) {
           if (attemptsWithInterruptedSession.has(dispatch.stageAttemptId)) continue;
           const run = readPipelineRun(dispatch.pipelineRunId);
@@ -2749,6 +2832,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           updateWorkflowWorkItem(decision.workItem);
           insertRecoveryReport(decision.report);
           recoveryReports.push(decision.report);
+          attemptsRecoveredToInterrupted.add(decision.stageAttempt.id);
           events.push(
             ...appendWorkflowEvents(decision.events, {
               workItemId: workItem.id,
@@ -2759,12 +2843,135 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             }),
           );
         }
+
+        // Task 10 (spec §6, "Восстановление"): every READY workspace's worktree directory might
+        // have gone missing while nothing was watching it -- deleted by hand, by a tool that does
+        // not know about Loomrail, or by anything else outside its control. Nothing here recreates
+        // one: AD-008 forbids resurrecting an interrupted run, and the branch a gone worktree leaves
+        // behind is left exactly alone (D12) because it may hold the only copy of whatever the
+        // agent did.
+        const orphanedWorkspaces: WorkItemWorkspace[] = [];
+        for (const initialWorkspace of selectReadyWorkItemWorkspaces.all().map(workItemWorkspaceFromRow)) {
+          let workspace = initialWorkspace;
+
+          // A lease this reconciliation itself just orphaned the holder of (see
+          // attemptsRecoveredToInterrupted above): released here, or it sits on this workspace
+          // forever -- the StageAttempt that held it is never coming back to release it itself, and
+          // migration 0011's UNIQUE on work_item_id means this WorkItem can never get a second
+          // workspace for the next attempt to lease instead (C9-d).
+          if (workspace.leaseHolder !== null && attemptsRecoveredToInterrupted.has(workspace.leaseHolder)) {
+            const releasedLease = releaseWorkItemWorkspaceLease.run(
+              workspace.id,
+              workspace.version,
+              workspace.leaseHolder,
+            );
+            if (releasedLease.changes === 1) {
+              const afterRelease = readWorkItemWorkspace(workspace.id);
+              if (!afterRelease) {
+                throw new StateStoreError(
+                  "PERSISTENCE_FAILURE",
+                  "The workspace disappeared after its dead lease was released",
+                );
+              }
+              workspace = afterRelease;
+            }
+            // `changes !== 1` is unreachable in the single synchronous transaction RECONCILE_WORKFLOWS
+            // runs in -- there is no concurrent writer between the read above and this UPDATE -- so
+            // it is left as a silent no-op rather than grown a second, untestable error path for a
+            // race this code cannot actually be raced into.
+          }
+
+          // FAIL SAFE ALL THE WAY OUT, exactly as killOrphanedSessionProcess is: this runs inside
+          // `execute`, which the daemon calls -- unwrapped -- BEFORE `app.listen`. A vanished
+          // repository, a `git` that will not run, a path that is no longer readable: none of these
+          // may stop Loomrail from starting, so every failure here is caught, reported, and stepped
+          // over rather than thrown.
+          try {
+            const project = readProject(workspace.projectId);
+            if (!project) {
+              reportOrphanWorkspace({
+                workspaceId: workspace.id,
+                workItemId: workspace.workItemId,
+                worktreePath: workspace.worktreePath,
+                action: "SKIPPED",
+                reason: "PROJECT_NOT_FOUND",
+              });
+              continue;
+            }
+            const entries = listProjectWorktrees(project.repositoryPath);
+            if (entries === null) {
+              reportOrphanWorkspace({
+                workspaceId: workspace.id,
+                workItemId: workspace.workItemId,
+                worktreePath: workspace.worktreePath,
+                action: "SKIPPED",
+                reason: "WORKTREE_LIST_FAILED",
+              });
+              continue;
+            }
+            // `git worktree list --porcelain` always reports a canonical (symlink-resolved) path
+            // (spec: verified against a real `/var` -> `/private/var` macOS repo); the stored
+            // `worktreePath` was never itself resolved that way, so it is canonicalised here, on
+            // this side of the comparison, rather than trusting a string a healthy workspace would
+            // otherwise fail to match by pure accident of where the OS temp directory lives.
+            const canonicalWorktreePath = canonicalizeWorktreePath(workspace.worktreePath);
+            const entry = entries.find((candidate) => candidate.path === canonicalWorktreePath);
+            const isGone = entry === undefined || entry.prunable;
+            if (!isGone) continue;
+
+            const mark = markWorkItemWorkspaceOrphaned.run(workspace.id, workspace.version);
+            if (mark.changes !== 1) {
+              throw new StateStoreError(
+                "PERSISTENCE_FAILURE",
+                "The READY workspace changed while startup reconciliation was orphaning it",
+              );
+            }
+            const after = readWorkItemWorkspace(workspace.id);
+            if (!after) {
+              throw new StateStoreError(
+                "PERSISTENCE_FAILURE",
+                "The workspace disappeared after it was marked orphaned",
+              );
+            }
+            orphanedWorkspaces.push(after);
+            reportOrphanWorkspace({
+              workspaceId: after.id,
+              workItemId: after.workItemId,
+              worktreePath: after.worktreePath,
+              action: "ORPHANED",
+              reason: entry === undefined ? "MISSING_FROM_WORKTREE_LIST" : "PRUNABLE",
+            });
+            events.push(
+              appendWorkspaceEvent(
+                { type: "WORK_ITEM_WORKSPACE_ORPHANED", data: { workspace: after, previousStatus: "READY" } },
+                {
+                  workItemId: after.workItemId,
+                  projectId: after.projectId,
+                  actor: command.actor,
+                  occurredAt,
+                  correlationId: command.correlationId,
+                },
+              ),
+            );
+          } catch (error: unknown) {
+            if (error instanceof StateStoreError) throw error;
+            reportOrphanWorkspace({
+              workspaceId: workspace.id,
+              workItemId: workspace.workItemId,
+              worktreePath: workspace.worktreePath,
+              action: "SKIPPED",
+              reason: "WORKTREE_LIST_FAILED",
+            });
+          }
+        }
+
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "WORKFLOWS_RECONCILED",
           replayed: false,
           recoveryReports,
           interruptedSessions,
+          orphanedWorkspaces,
           events,
         });
       }

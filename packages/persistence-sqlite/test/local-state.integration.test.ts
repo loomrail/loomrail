@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -34,6 +34,7 @@ import {
   type LocalState,
   type OpenLocalStateOptions,
   type OrphanProcessEvent,
+  type OrphanWorkspaceEvent,
 } from "../src/index.js";
 
 const timestamp = "2026-08-22T18:00:00.000Z";
@@ -3111,6 +3112,38 @@ describe("SQLite local state", () => {
     const countWorkItemWorkspaces = (raw: DatabaseSync): number =>
       (raw.prepare("SELECT COUNT(*) AS count FROM work_item_workspaces").get() as { count: number }).count;
 
+    // Task 10 (spec §6, "Восстановление"): a real repository and a real `git worktree`, built the
+    // same way packages/workspace/test/helpers.ts's makeThrowawayRepo does, so RECONCILE_WORKFLOWS's
+    // default `listProjectWorktrees` runs actual `git worktree list --porcelain` against it rather
+    // than a stub -- these tests exercise the production subprocess call end to end, the parser it
+    // shares with @loomrail/workspace, and the path canonicalisation the comparison needs (the OS
+    // temp directory itself is a macOS symlink target, so this is not a contrived case).
+    const testCommitterArgs = ["-c", "user.email=loomrail-test@example.com", "-c", "user.name=Loomrail Test"];
+
+    const makeThrowawayRepo = (dir: string): void => {
+      execFileSync("git", ["init", "--quiet"], { cwd: dir });
+      execFileSync("git", [...testCommitterArgs, "commit", "--allow-empty", "--quiet", "-m", "initial"], {
+        cwd: dir,
+      });
+    };
+
+    const addRealWorktree = (repositoryPath: string, branch: string, worktreePath: string): void => {
+      execFileSync("git", ["worktree", "add", "-b", branch, worktreePath, "HEAD"], { cwd: repositoryPath });
+    };
+
+    const branchStillExists = (repositoryPath: string, branch: string): boolean =>
+      execFileSync("git", ["branch", "--list", branch], { cwd: repositoryPath, encoding: "utf8" }).trim()
+        .length > 0;
+
+    const reconcileWorkflowsCommand = (commandId: string): ReconcileWorkflowsCommand => ({
+      schemaVersion: 1,
+      commandId,
+      correlationId: `correlation-${commandId}`,
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "RECONCILE_WORKFLOWS",
+      payload: {},
+    });
+
     it("creates a workspace and reads it back by WorkItem id", async () => {
       const localState = await open();
       localState.execute(registerProject());
@@ -3311,6 +3344,154 @@ describe("SQLite local state", () => {
       expect(() => localState.execute(markOrphanedCommand("mark-orphaned-again", workspaceId, 2))).toThrow(
         /ready/i,
       );
+    });
+
+    // Task 10 (spec §6, "Восстановление"): the reconciliation counterpart to MARK_WORKSPACE_ORPHANED
+    // above -- this is what actually notices a worktree is gone at startup, rather than a caller
+    // saying so directly. A real `git worktree`, deleted the way an owner's own cleanup or a crashed
+    // tool would delete it, so the administrative record git keeps under `.git/worktrees/` survives
+    // (git only drops that on an explicit `prune`/`remove`) and is reported `prunable` -- the
+    // "gone outside Loomrail's control" case spec §6 and workItemWorkspaceOrphanedEventSchema's own
+    // comment describe.
+    it("notices the workspace whose worktree directory went away, and leaves the branch alone", async () => {
+      const localState = await open();
+      const repositoryPath = join(temporaryDirectory, "project-web");
+      await mkdir(repositoryPath, { recursive: true });
+      makeThrowawayRepo(repositoryPath);
+      localState.execute(registerProject());
+      const { workItemId, projectId } = startWorkflow(
+        localState,
+        "start-worktree-gone",
+        "create-work-item-worktree-gone",
+      );
+
+      const branch = `loomrail/${workItemId}`;
+      const worktreePath = join(temporaryDirectory, "worktrees", workItemId);
+      await mkdir(join(temporaryDirectory, "worktrees"), { recursive: true });
+      addRealWorktree(repositoryPath, branch, worktreePath);
+
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-worktree-gone", workItemId, projectId),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+
+      // What an owner's own cleanup, or a crashed tool, leaves behind: the directory is gone, but
+      // nothing told git about it, so `.git/worktrees/<name>` is still there.
+      await rm(worktreePath, { recursive: true, force: true });
+
+      const reconciled = localState.execute(reconcileWorkflowsCommand("reconcile-worktree-gone"));
+      if (reconciled.type !== "WORKFLOWS_RECONCILED") throw new Error("Expected reconciliation");
+      expect(reconciled.orphanedWorkspaces).toEqual([
+        expect.objectContaining({ id: created.workspace.id, status: "ORPHANED" }),
+      ]);
+      expect(reconciled.events).toHaveLength(1);
+      expect(reconciled.events[0]).toMatchObject({
+        type: "WORK_ITEM_WORKSPACE_ORPHANED",
+        data: { previousStatus: "READY" },
+      });
+
+      const after = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(after.type === "WORKSPACE" ? after.workspace?.status : null).toBe("ORPHANED");
+
+      // AD-008 / D12: nothing is resurrected, and the branch is the only copy of whatever the agent
+      // committed to it -- it must survive even though the directory that held it did not.
+      expect(branchStillExists(repositoryPath, branch)).toBe(true);
+    });
+
+    // C9-d (Task 9): a lease a daemon crash leaves behind on an otherwise-healthy workspace must not
+    // sit there forever. The StageAttempt holding it here never started a ProviderSession at all --
+    // exactly what "reconciles an orphaned running attempt once and persists its RecoveryReport"
+    // above reconciles into INTERRUPTED via decideRecoverInterruptedWorkflow -- so it is never coming
+    // back to release the lease itself.
+    it("releases a workspace lease left by a StageAttempt reconciliation just gave up on", async () => {
+      const localState = await open();
+      const repositoryPath = join(temporaryDirectory, "project-web");
+      await mkdir(repositoryPath, { recursive: true });
+      makeThrowawayRepo(repositoryPath);
+      localState.execute(registerProject());
+      const { workItemId, stageAttemptId, projectId } = startWorkflow(
+        localState,
+        "start-dead-lease",
+        "create-work-item-dead-lease",
+      );
+
+      const worktreePath = join(temporaryDirectory, "worktrees", workItemId);
+      await mkdir(join(temporaryDirectory, "worktrees"), { recursive: true });
+      addRealWorktree(repositoryPath, `loomrail/${workItemId}`, worktreePath);
+
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-dead-lease", workItemId, projectId),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+      const acquired = localState.execute(
+        acquireLeaseCommand("acquire-dead-lease", created.workspace.id, stageAttemptId, 1),
+      );
+      if (acquired.type !== "WORKSPACE_LEASE_ACQUIRED") throw new Error("Expected the lease to be acquired");
+
+      // Marked started, but no ProviderSession is ever started for it -- what a daemon that died
+      // before dispatching leaves behind (mirrors "reconciles an orphaned running attempt" above).
+      const queued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (queued.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected the dispatch queue");
+      const dispatch = queued.dispatches.find((candidate) => candidate.stageAttemptId === stageAttemptId);
+      if (!dispatch) throw new Error("Expected a pending dispatch for this StageAttempt");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "mark-dead-lease-dispatch-started",
+        correlationId: "correlation-mark-dead-lease-dispatch-started",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: dispatch.id },
+      });
+
+      const reconciled = localState.execute(reconcileWorkflowsCommand("reconcile-dead-lease"));
+      if (reconciled.type !== "WORKFLOWS_RECONCILED") throw new Error("Expected reconciliation");
+      expect(reconciled.recoveryReports).toEqual([
+        expect.objectContaining({ reason: "DAEMON_RESTART", recoveredStatus: "INTERRUPTED", stageAttemptId }),
+      ]);
+      // The worktree itself is healthy, so nothing here is ORPHANED -- only the dead lease is cleared.
+      expect(reconciled.orphanedWorkspaces).toEqual([]);
+
+      const after = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(after.type === "WORKSPACE" ? after.workspace : null).toMatchObject({
+        status: "READY",
+        leaseHolder: null,
+      });
+    });
+
+    // Companion to "survives... when the identity probe itself throws" (orphaned-process
+    // reconciliation, above): the same fail-safe guarantee, for the worktree check. `git` missing,
+    // a repository path that no longer resolves, a permissions problem -- none of it may reach
+    // `execute`, because `execute` runs unwrapped before `app.listen` (see killOrphanedSessionProcess's
+    // own comment). An inconclusive check must never orphan a workspace that might still be healthy.
+    it("does not fail reconciliation, and leaves the workspace READY, when the worktree check itself cannot run", async () => {
+      const reported: OrphanWorkspaceEvent[] = [];
+      const localState = await open({
+        listProjectWorktrees: () => null,
+        onOrphanWorkspace: (event) => reported.push(event),
+      });
+      localState.execute(registerProject());
+      const { workItemId, projectId } = startWorkflow(
+        localState,
+        "start-probe-failure",
+        "create-work-item-probe-failure",
+      );
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-probe-failure", workItemId, projectId),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+
+      const reconciled = localState.execute(reconcileWorkflowsCommand("reconcile-probe-failure"));
+      expect(reconciled).toMatchObject({ type: "WORKFLOWS_RECONCILED", orphanedWorkspaces: [] });
+      expect(reported).toEqual([
+        expect.objectContaining({
+          workspaceId: created.workspace.id,
+          action: "SKIPPED",
+          reason: "WORKTREE_LIST_FAILED",
+        }),
+      ]);
+
+      const after = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(after.type === "WORKSPACE" ? after.workspace?.status : null).toBe("READY");
     });
   });
 });
