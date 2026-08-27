@@ -190,13 +190,32 @@ Mitigations, verified in code:
 - every invocation is built as an argv array passed directly to `child_process.spawn`
   (`packages/provider-core/src/process-runner.ts`'s `runProcess`), never through a shell, so appending
   contextPack text or any other value to the command line has no interpolation hazard;
-- neither adapter ever builds a command carrying a permission-bypass flag. A single named, closed list of
-  every spelling either CLI accepts — `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`,
-  `--dangerously-bypass-approvals-and-sandbox`, `--permission-mode bypassPermissions` — is checked by one test
-  per adapter, so a future CLI version adding another spelling is a decision made to that list, not a silent
-  gap: `packages/provider-codex/test/adapter.unit.test.ts`'s "never builds a command carrying a
+- neither adapter ever builds a command carrying a permission-bypass flag. A named, closed list is checked
+  against the argv array (never a joined command line, which would also match the prompt) by one test per
+  adapter, so a future CLI version adding another spelling is a decision made to that list, not a silent gap: `packages/provider-codex/test/adapter.unit.test.ts`'s "never builds a command carrying a
   permission-bypass flag (SD-001)" and `packages/provider-claude-code/test/adapter.unit.test.ts`'s test of the
-  same name;
+  same name. **The list is not — and cannot be — every route out of the sandbox.** It covers flags whose _name_
+  carries a danger warning, plus the specific non-danger-named flags below that are known to widen what the
+  child can reach. It does not cover value-shaped relaxations, where a legitimate flag takes a dangerous value;
+  those are guarded separately, by asserting the value each adapter actually sends (`-s read-only` for Codex,
+  `--permission-mode plan` for Claude Code) rather than by enumerating spellings a substring check could never
+  usefully match. The list, as the tests enforce it — no count is stated here, because a count in prose is precisely what drifted from the list in code last time:
+
+  | flag                                         | CLI    | why it is on the list                                                                       |
+  | -------------------------------------------- | ------ | ------------------------------------------------------------------------------------------- |
+  | `--dangerously-skip-permissions`             | Claude | danger-named permission bypass                                                              |
+  | `--allow-dangerously-skip-permissions`       | Claude | danger-named permission bypass                                                              |
+  | `--dangerously-bypass-approvals-and-sandbox` | Codex  | danger-named approvals/sandbox bypass                                                       |
+  | `--dangerously-bypass-hook-trust`            | Codex  | danger-named hook-trust bypass                                                              |
+  | `--permission-mode bypassPermissions`        | Claude | the bypass expressed as a value                                                             |
+  | `--add-dir`                                  | both   | grants tool access outside the empty temporary directory — the one that actually defeats D1 |
+  | `-c` / `--config`                            | Codex  | arbitrary config override; `codex exec --help` documents `-c 'sandbox_permissions=[…]'`     |
+  | `--settings`                                 | Claude | arbitrary settings file or inline JSON                                                      |
+  | `--tools`                                    | Claude | widens the tool set the child may use                                                       |
+
+- **neither adapter connects an MCP server.** Spec D6 forbids MCP before milestone C1, and nothing enforced
+  that: it was a property of the argv nobody asserted. `--mcp-config` and `--strict-mcp-config` are now checked
+  for their absence by name, by both adapters' "never connects an MCP server (D6)" test;
 - before E1 there is nothing on disk for a bypassed permission to reach anyway: both adapters run their CLI in
   a fresh, empty temporary directory (spec §6/§7, D1), bounding the blast radius independently of the flag
   check above.

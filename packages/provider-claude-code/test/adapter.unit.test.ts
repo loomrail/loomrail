@@ -17,24 +17,62 @@ import { createClaudeCodeProvider } from "../src/index.js";
 
 const fakeClaudePath = fileURLToPath(new URL("./fixtures/fake-claude.mjs", import.meta.url));
 
-// SD-001 forbids Loomrail from ever enabling a provider's permission-bypass mode automatically --
-// every spelling either CLI accepts for that bypass is named here once, so that a future CLI
-// version adding another one is a decision someone makes to this list, not something that quietly
-// never happens. Shared verbatim with provider-codex's own copy of this list (no test-only module
-// is common to both packages yet, so -- per this task's own convention for helpers needed by two
-// packages -- duplicating a four-line constant is preferable to creating one for this alone).
+// SD-001 forbids Loomrail from ever enabling a provider's permission-bypass mode automatically. This
+// is the named, closed list: adding a spelling later is then a decision someone makes here, not
+// something that quietly never happens. Shared verbatim with provider-claude-code's own copy (no
+// test-only module is common to both packages yet, so -- per this task's convention for helpers
+// needed by two packages -- duplicating a constant is preferable to creating one for this alone), so
+// it carries both CLIs' flags regardless of which one this file tests.
 //
-// `--dangerously-bypass-hook-trust` (post-review addition, see provider-codex's own copy of this
-// comment): a `codex exec --help` flag, not a `claude --help` one -- kept in this file's copy of
-// the list anyway, verbatim with provider-codex's, per the same "shared verbatim" convention that
-// already put Codex's `--dangerously-bypass-approvals-and-sandbox` here.
+// The list is NOT every route out of the sandbox, and `docs/security/THREAT-MODEL.md` T16 no longer
+// claims it is. It covers flags whose NAME carries a danger warning, plus the specific
+// non-danger-named flags known to widen what the child can reach:
+//
+//   `--add-dir` (both CLIs) grants tool access outside the empty temporary directory -- the one that
+//   actually defeats D1's containment, and the one the original list missed entirely;
+//   `-c` / `--config` (Codex) is an arbitrary config override -- `codex exec --help` documents
+//   `-c 'sandbox_permissions=["disk-full-read-access"]'`, a sandbox escape with no dangerous word in
+//   it anywhere;
+//   `--settings` and `--tools` (Claude) are the equivalent widening levers on that side.
+//
+// What a name list can never cover is a VALUE-shaped relaxation: `-s danger-full-access` and
+// `--permission-mode dontAsk` are legitimate flags carrying dangerous values, and a name check would
+// never usefully match them. Those are guarded positively instead, by asserting the value each
+// adapter actually sends -- see "always runs the sandbox read-only" below, and provider-claude-code's
+// "runs in plan mode".
+//
+// Checked against the argv ARRAY, never a joined command line: the context pack is a positional
+// argument, so a substring check over the whole line passes or fails for reasons that have nothing to
+// do with the flags -- prompt text containing "-c" would fail it, and that failure would say nothing
+// true.
 const FORBIDDEN_PERMISSION_BYPASS_FLAGS: readonly string[] = [
   "--dangerously-skip-permissions",
   "--allow-dangerously-skip-permissions",
   "--dangerously-bypass-approvals-and-sandbox",
   "--dangerously-bypass-hook-trust",
-  "--permission-mode bypassPermissions",
+  "--add-dir",
+  "-c",
+  "--config",
+  "--settings",
+  "--tools",
 ];
+
+// The bypass expressed as a value rather than a spelling, checked as an adjacent argv pair.
+const FORBIDDEN_FLAG_VALUES: readonly (readonly [string, string])[] = [
+  ["--permission-mode", "bypassPermissions"],
+];
+
+// Spec D6: no MCP connection before milestone C1. Nothing enforced that -- it was a property of the
+// argv nobody asserted. Named separately from the bypass list because it is a different rule.
+const FORBIDDEN_MCP_FLAGS: readonly string[] = ["--mcp-config", "--strict-mcp-config"];
+
+const expectNoForbiddenArguments = (args: readonly string[]): void => {
+  for (const flag of FORBIDDEN_PERMISSION_BYPASS_FLAGS) expect(args).not.toContain(flag);
+  for (const [flag, value] of FORBIDDEN_FLAG_VALUES) {
+    const at = args.indexOf(flag);
+    if (at >= 0) expect(args[at + 1]).not.toBe(value);
+  }
+};
 
 // --- Test scaffolding -------------------------------------------------------------------------
 //
@@ -210,10 +248,16 @@ describe("createClaudeCodeProvider", () => {
   it("never builds a command carrying a permission-bypass flag (SD-001)", async () => {
     const spawned = recordSpawn();
     await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
-    const commandLine = spawned.args.join(" ");
-    for (const forbidden of FORBIDDEN_PERMISSION_BYPASS_FLAGS) {
-      expect(commandLine).not.toContain(forbidden);
-    }
+    expectNoForbiddenArguments(spawned.args);
+  });
+
+  // Spec D6 forbids MCP before milestone C1, and nothing enforced it -- an adapter that connected a
+  // server would have broken the rule silently. `--mcp-config` also reaches straight past the empty
+  // temporary directory that is this milestone's whole containment story.
+  it("never connects an MCP server (D6)", async () => {
+    const spawned = recordSpawn();
+    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
+    for (const forbidden of FORBIDDEN_MCP_FLAGS) expect(spawned.args).not.toContain(forbidden);
   });
 
   // The other half of the controller ruling above: not only must `checkpointOnRequest` read
