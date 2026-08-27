@@ -38,13 +38,14 @@ decisions instead of disconnected chat sessions.
 
 ## Current checkpoint
 
-| Area          | Today                                                                                                                 | Next                                                                                  |
-| ------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Local runtime | Loopback daemon, CLI launcher, one-time browser session, installable tarball                                          | Published package and desktop installer                                               |
-| State         | Tasks, runs, budgets, recovery, typed evidence, acceptance packages, Decisions, append-only Events                    | Retention and restore hardening                                                       |
-| Workbench     | Persisted board, workflow cockpit, command summary, evidence matrix, owner acceptance, EN/RU, light/dark              | Full Attention Inbox and richer workflow views                                        |
-| Agents        | Capability-checked provider contract, deterministic mock, live Codex/Claude CLI adapters, and a per-task Git worktree | The workspace visible in the task card, and the Claude Code adapter on the write path |
-| Platforms     | macOS and Windows CI are green                                                                                        | Clean-machine acceptance and hardening                                                |
+| Area          | Today                                                                                                                 | Next                                                                                                   |
+| ------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Local runtime | Loopback daemon, CLI launcher, one-time browser session, installable tarball                                          | Published package and desktop installer                                                                |
+| State         | Tasks, runs, budgets, recovery, typed evidence, acceptance packages, Decisions, append-only Events                    | Retention and restore hardening                                                                        |
+| Workbench     | Persisted board, workflow cockpit, command summary, evidence matrix, owner acceptance, EN/RU, light/dark              | Full Attention Inbox and richer workflow views                                                         |
+| Agents        | Capability-checked provider contract, deterministic mock, live Codex/Claude CLI adapters, and a per-task Git worktree | The changed files of a task shown next to its workspace, and the Claude Code adapter on the write path |
+| Projects      | Bundled demo repositories, plus any local Git repository registered by absolute path                                  | Per-project guardrails and permissions                                                                 |
+| Platforms     | macOS and Windows CI are green                                                                                        | Clean-machine acceptance and hardening                                                                 |
 
 ## How it is intended to work
 
@@ -178,6 +179,25 @@ Everything downstream of the edit itself remains outside the current checkpoint:
 nothing and merges nothing, so a stage's work stays on its worktree's branch for you to inspect and dispose of. Plugins,
 remote mode and desktop packaging are outside it too. What comes next — project guardrails and extensibility — is
 decomposed in the [post-Phase-0 plan](docs/plans/06-post-phase-0-decomposition.ru.md).
+
+### Pointing Loomrail at a repository
+
+A Project no longer has to be one of the two bundled demos. Open **Settings → Projects**, give it the absolute path
+of a Git repository on this machine, and that repository becomes a Project you can create tasks against; the
+directory's own name becomes the project name. The path has to be absolute — a relative one would resolve against
+whatever directory the daemon happened to start in — and it has to be a repository's top level, because registering a
+subdirectory would branch the repository enclosing it without you having chosen that.
+
+Nothing stops you pointing it at this checkout, and that is deliberate. What keeps it safe is the shape of the work
+rather than a refusal: the agent writes only inside a worktree cut outside the repository, your working copy, index
+and checked-out branch are untouched, and nothing is ever pushed. Loomrail does add the worktree's bookkeeping and
+its own `loomrail/…` ref to your `.git`, and creates one commit — the carry-in snapshot that branch starts from —
+but it never moves or deletes a ref you made. Be aware of what travels with it, though — everything you have not committed is carried
+into the worktree, including untracked files the repository does not ignore, and the agent has network access in that
+same tree. The [threat model](docs/security/THREAT-MODEL.md) records this as an accepted risk rather than a solved one.
+
+Once a stage has cut one, the task card shows the workspace itself: which repository it came from, the branch, the
+base commit and the worktree path, so you can open the tree in your editor or run `git diff` against it yourself.
 
 ### Choosing a provider
 
