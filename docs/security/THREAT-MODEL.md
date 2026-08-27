@@ -1,7 +1,7 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-08-27
+**Updated:** 2026-08-28
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
@@ -12,7 +12,8 @@ require Phase-specific threat deltas.
 
 The sentence "it does not execute shell/Git/provider/browser actions" stood here through Phase 0 and is **no longer
 true of two of the four**. A2 made Loomrail spawn real provider CLIs as child processes of the daemon, and E1 made it
-run `git` and hand one of those CLIs a writable worktree. Both are covered by their deltas in §6 rather than by this
+run `git` and hand one of those CLIs a writable worktree for every stage it serves but the owner's own
+acceptance decision. Both are covered by their deltas in §6 rather than by this
 paragraph. Browser actions are still not executed, and the mock provider still runs by default (`LOOMRAIL_PROVIDER`
 unset).
 
@@ -230,8 +231,10 @@ Mitigations, verified in code:
   for their absence by name, by both adapters' "never connects an MCP server (D6)" test;
 - before E1 there is nothing on disk for a bypassed permission to reach anyway: both adapters run their CLI in
   a fresh, empty temporary directory (spec §6/§7, D1), bounding the blast radius independently of the flag
-  check above. **E1 ends this for Codex** — it runs in a real Git worktree with write access, which is what
-  moves the flag list from a defence in depth to the defence. See T19.
+  check above. **E1 ends this for Codex** — it runs in a real Git worktree with write access, for every stage
+  it serves but ACCEPTANCE, which is what moves the flag list from a defence in depth to the defence. See T19.
+  It does **not** end for Claude Code: that adapter serves no stage requiring a workspace, is given none, and
+  still runs `--permission-mode plan` in an empty temporary directory.
 
 **T17 — a process orphaned by a dead daemon outlives it.** Rated Medium: bounded to the one process a single
 `start()` call spawned, and self-healing at the next daemon start, but real while it lasts — an unwatched
@@ -294,13 +297,37 @@ Loomrail — and is tracked as follow-up work, not part of A2 (spec §3 D4).
 ### E1 workspace-execution delta (T19, T20, and two registration decisions)
 
 E1 (`docs/plans/13-e1-workspace-execution-spec.ru.md`) is where a Project stops being one of two bundled
-fixtures and becomes any local Git repository the owner names by path, and where a stage that changes files
-runs in a Git worktree cut from it. The A2 bound that made the flag list a defence in depth — "there is
+fixtures and becomes any local Git repository the owner names by path, and where the stages an agent runs
+run in a Git worktree cut from it. The A2 bound that made the flag list a defence in depth — "there is
 nothing on disk for a bypassed permission to reach anyway" — ends here for the Codex adapter: it now declares
 all six stages and runs `codex exec -s workspace-write` in a real worktree.
 
+**How many stages that is was corrected after the milestone shipped, and it widened.** The list was IMPLEMENT
+and QA, on the reasoning that every other stage "only ever produces prose" — until a live Codex run reported
+that its REVIEW could find no repository and no implementation to assess, on a work item whose IMPLEMENT stage
+had just edited a file in the worktree. Producing prose is not needing no input: a review reads the change it
+is judging, and a discovery or a plan on a real codebase is worth having only when it can read that codebase.
+`stagesRunningInWorkspace` (`packages/domain/src/workspace.ts`) is now DISCOVERY, PLAN, IMPLEMENT, REVIEW and
+QA — every stage dispatched to an agent except ACCEPTANCE, which is the owner's decision rather than a reading
+of the tree. **Everything T19 and T20 describe below therefore applies to five stages of a run, not two**: the
+worktree carrying the owner's uncommitted work is cut at a work item's FIRST agent stage rather than at
+IMPLEMENT, and every session from that point on runs under `-s workspace-write` with network access in it.
+Nothing about the containment itself changed — same worktree, same branch, same `-c` key, same flag guards —
+only how much of a run happens inside it.
+
+Two bounds on that widening, both enforced in `apps/daemon/src/session-loop.ts`. A Project whose path is not a
+usable repository still dispatches its prose stages with no workspace, exactly as it did before E1, rather
+than being refused (only IMPLEMENT and QA are refused — `stagesRequiringWorkspace`). And no worktree is cut
+for an adapter that declares no stage requiring one (`adapterWorksInWorkspace`): `provider-claude-code` always
+runs its CLI in a fresh temporary directory and reads `ProviderInvocation.workspace` nowhere, so nothing is
+written into the owner's repository on its behalf. **The read-only-in-an-empty-directory bound of §6 therefore
+still holds for that adapter in full**, and the sentence below about "both adapters" is unchanged by this
+correction.
+
 **T19 — a write-enabled, network-enabled agent runs in a tree carrying the owner's uncommitted work.** Rated
-High, and accepted by the owner in that knowledge (spec D3 and D8). The three parts of it, each verified in
+High, and accepted by the owner in that knowledge (spec D3 and D8). Since the stage-list correction above,
+this describes five of a run's six stages rather than two — the rating is unchanged, because the carried-in
+content, the sandbox mode and the network key are the same for all of them. The three parts of it, each verified in
 code:
 
 - **everything uncommitted is carried in, without asking.** `createCarryInSnapshot`

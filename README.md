@@ -163,9 +163,11 @@ to an agent, a shell or Git directly: every one of those crossings goes through 
 - [ ] **M7 — Public checkpoint:** packaged launcher and clean-install gate are in place; remaining work is hardening
       and the first published release
 
-Real Codex and Claude Code execution has landed, and milestone E1 has since given it somewhere to write. Before
-dispatching a stage that edits code, Loomrail cuts a Git worktree for that work item on a branch of its own and runs the
-CLI there, so **the Codex adapter now serves all six stages** under `codex exec -s workspace-write`. The Claude Code
+Real Codex and Claude Code execution has landed, and milestone E1 has since given it somewhere to work. Before
+dispatching a work item's first agent stage, Loomrail cuts a Git worktree for that work item on a branch of its own and
+runs the CLI there — for every stage but your own acceptance decision, because a review reads the change it judges and a
+plan is worth more when it can read the code it plans against — so **the Codex adapter now serves all six stages** under
+`codex exec -s workspace-write`. The Claude Code
 adapter still declares DISCOVERY, PLAN and REVIEW only: its write path has never been exercised against the real CLI
 here, and one adapter's evidence is not taken as proof about the other. A stage an adapter does not declare is refused
 to you as a blocking question rather than dispatched, and Loomrail never enables a permission-bypass flag on any code
