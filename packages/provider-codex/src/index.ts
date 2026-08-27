@@ -82,11 +82,17 @@ const isExecutableOnDisk = (command: string): boolean => {
   });
 };
 
-// `codex exec --output-schema <file>` makes the CLI print one line, distinct from the `--json`
-// event stream, that is the final turn's answer constrained to the given JSON Schema -- not
-// wrapped in a `{"type": ...}` envelope, so `parseCodexEvent` (which only knows the four wire
-// event shapes) never matches it and correctly drops it. This is the second thing every line is
-// tried against once it fails as a known event.
+// `codex exec --output-schema <file>` makes the CLI constrain the final turn's answer to the given
+// JSON Schema. WHERE that answer comes back was the milestone's Critical: this adapter originally
+// assumed a bare, un-enveloped JSON line on stdout, and therefore only tried this parser on lines
+// that had already *failed* to parse as a known event -- so it never saw the answer at all, every
+// real session ended with no checkpoint, and two in a row HARD-paused the attempt.
+//
+// Established by running this adapter's exact argv against the real CLI (codex v0.144.1): the
+// structured answer arrives as the `text` of an `item.completed` / `agent_message` event, which
+// `parseCodexEvent` matches. That enveloped path is the documented one and is tried first in
+// `onLine` below. The bare-line attempt is kept as well -- it costs nothing, and a CLI version that
+// prints the answer unenveloped would otherwise silently reopen the same Critical.
 const tryParseStructuredCheckpoint = (line: string): CheckpointDraft | null => {
   let candidate: unknown;
   try {
@@ -194,6 +200,17 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
           onLine: (line) => {
             const event = parseCodexEvent(line);
             if (event !== null) {
+              if (event.type === "item.completed") {
+                // The documented path for `--output-schema`'s answer (see
+                // `tryParseStructuredCheckpoint` above). The LAST match in the stream wins: a turn
+                // can emit several `agent_message` items, and the final one is the answer the
+                // schema constrained.
+                const checkpoint = tryParseStructuredCheckpoint(event.item.text);
+                if (checkpoint !== null) {
+                  finalCheckpoint = checkpoint;
+                  listener.onCheckpoint(checkpoint);
+                }
+              }
               if (event.type === "turn.completed") {
                 const usage: ProviderUsage = {
                   inputTokens: event.usage.inputTokens,

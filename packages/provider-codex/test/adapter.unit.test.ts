@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -134,6 +134,23 @@ const runAgainstRecording = async (
   );
 };
 
+// Runs the adapter against an ad-hoc stream written out as a temporary file. Used ONLY where the
+// point of the test is a wire shape no CLI observed here actually emits (a tolerated legacy shape,
+// a deliberately hostile stream); anything asserting what a CLI really does goes through
+// `runAgainstRecording` and a file in recordings/, per spec §11.
+const runAgainstLines = async (
+  lines: readonly string[],
+  listener: Partial<ProviderSessionListener> = {},
+): Promise<ProviderOutcome> => {
+  const dir = mkdtempSync(join(tmpdir(), "loomrail-codex-stream-"));
+  const streamPath = join(dir, "stream.jsonl");
+  writeFileSync(streamPath, lines.map((line) => `${line}\n`).join(""), "utf8");
+  const adapter = createCodexProvider({ command: fakeCodexPath });
+  return withEnv("FAKE_CODEX_OUTPUT_FILE", streamPath, () =>
+    adapter.start(fixtureInvocation(), { ...noopListener(), ...listener }),
+  );
+};
+
 // Polls a file the fake process writes on its own, synchronously, as soon as it starts hanging
 // (see FAKE_CODEX_HANG_MARKER_PATH in the fixture) -- there is no other signal available for
 // "the child is now running and its pid is known".
@@ -243,17 +260,42 @@ describe("createCodexProvider", () => {
   });
 
   // `--output-schema` is what lets a one-shot `codex exec` deliver a structured answer instead of
-  // free prose. `completed.jsonl` reuses `hello.jsonl`'s real recorded lines and appends one
-  // final line shaped by `checkpointDraftSchema` itself (no repository recording of a real
-  // `--output-schema` run exists in this environment to capture one from) -- not wrapped in the
-  // `--json` stream's own event envelope, exactly as the CLI's structured-output behaviour is
-  // documented to produce.
-  it("completes the stage from the structured final answer, when one arrives", async () => {
-    const outcome = await runAgainstRecording("completed.jsonl");
-    expect(outcome).toEqual({
-      type: "COMPLETED",
-      summary: "Reviewed the proposed diff and found no blocking issues.",
+  // free prose, and WHERE that answer comes back was this milestone's Critical. `completed.jsonl`
+  // is a real capture of this adapter's exact argv against codex v0.144.1 (see recordings/
+  // README.md): the answer is the `text` of an `item.completed` / `agent_message` event, a line
+  // `parseCodexEvent` parses successfully. The adapter used to try the checkpoint parser only on
+  // lines that FAILED to parse as an event, so it never saw this one -- every real session
+  // reported CONTEXT_EXHAUSTED. This test runs against the capture, so it fails under that defect
+  // rather than confirming it.
+  it("completes the stage from the structured answer inside the final agent message", async () => {
+    const checkpoints: unknown[] = [];
+    const outcome = await runAgainstRecording("completed.jsonl", {
+      onCheckpoint: (checkpoint) => checkpoints.push(checkpoint),
     });
+    expect(outcome).toEqual({ type: "COMPLETED", summary: "I reviewed nothing." });
+    expect(checkpoints).toHaveLength(1);
+  });
+
+  // The bare, un-enveloped shape the adapter originally assumed is still accepted -- kept so a CLI
+  // version that stops wrapping the answer does not silently reopen the Critical above. Asserted
+  // against a synthetic line, not a recording, because no CLI observed here emits this shape: it is
+  // a deliberate tolerance, and the test says so rather than pretending to be evidence.
+  it("also completes from a bare structured line, should a CLI version print one", async () => {
+    const outcome = await runAgainstLines([
+      '{"type":"turn.started"}',
+      '{"summary":"Bare-line answer.","completed":[],"remaining":[],"deadEnds":[],"openQuestions":[]}',
+    ]);
+    expect(outcome).toEqual({ type: "COMPLETED", summary: "Bare-line answer." });
+  });
+
+  // "The last such match wins": a turn that emits several agent messages ends on the one the
+  // schema constrained, not the first thing that happened to parse.
+  it("takes the last structured answer in the stream, not the first", async () => {
+    const outcome = await runAgainstLines([
+      '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\\"summary\\":\\"First.\\",\\"completed\\":[],\\"remaining\\":[],\\"deadEnds\\":[],\\"openQuestions\\":[]}"}}',
+      '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\\"summary\\":\\"Last.\\",\\"completed\\":[],\\"remaining\\":[],\\"deadEnds\\":[],\\"openQuestions\\":[]}"}}',
+    ]);
+    expect(outcome).toEqual({ type: "COMPLETED", summary: "Last." });
   });
 
   // `hello.jsonl` ends on a plain `turn.completed`, with no structured final line -- the honest
@@ -291,13 +333,19 @@ describe("createCodexProvider", () => {
   // A1's D1 removed the second execution path deliberately (a session is always rebuilt from
   // durable state, never continued as a conversation): reinstating it through a CLI flag would
   // undo that decision without anyone deciding to.
+  //
+  // Checked against the flag array, not `args.join(" ")`: the context pack is a positional
+  // argument, so a substring check over the joined command line passes or fails for reasons that
+  // have nothing to do with the flags -- realistic prompt text containing the word "resume" would
+  // fail it, and that failure would say nothing true.
   it("never resumes a provider-side session", async () => {
     const spawned = recordSpawn();
     await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
-    const line = spawned.args.join(" ");
-    expect(line).not.toContain("resume");
-    expect(line).not.toContain("--continue");
-    expect(line).not.toContain("--fork-session");
+    const flags = spawned.args.filter((arg) => arg.startsWith("-"));
+    expect(flags).not.toContain("--continue");
+    expect(flags).not.toContain("--fork-session");
+    expect(spawned.args).not.toContain("resume");
+    expect(flags.some((flag) => flag.includes("resume"))).toBe(false);
   });
 
   // The only reliable protection against ever recording a raw wire line is not to keep one at
