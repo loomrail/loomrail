@@ -192,6 +192,32 @@ const activeRunStatuses = new Set<PipelineRun["status"]>([
   "INTERRUPTED",
 ]);
 
+/**
+ * StageAttempt statuses nothing in Loomrail ever moves out of.
+ *
+ * The distinction this draws is "will this attempt ever run again", and it is asked of a resource
+ * an attempt HOLDS -- today the workspace lease (spec D6: one writer at a time). A lease is given
+ * back by the attempt that took it, in the `finally` of its own session loop, so an attempt that
+ * has already reached its end and still holds one will never give it back: no command moves a
+ * SUCCEEDED, FAILED, CANCELLED, INTERRUPTED or STALE attempt anywhere, and nothing resumes one.
+ *
+ * The statuses left OUT are as deliberate as the ones in. WAITING_HUMAN, SOFT_PAUSED and
+ * HARD_PAUSED are attempts that have stopped but are expected back -- an owner answers the
+ * question, or approves the budget, and the same attempt continues in the same worktree.
+ * PENDING/QUEUED/RUNNING/RECOVERING have obviously not finished. Treating any of those as dead
+ * would take the workspace away from an attempt still entitled to write in it.
+ */
+const terminalStageAttemptStatuses = new Set<StageAttempt["status"]>([
+  "SUCCEEDED",
+  "FAILED",
+  "CANCELLED",
+  "INTERRUPTED",
+  "STALE",
+]);
+
+export const stageAttemptIsTerminal = (status: StageAttempt["status"]): boolean =>
+  terminalStageAttemptStatuses.has(status);
+
 const verifyWorkItemVersion = (workItem: WorkItem, expectedVersion: number): void => {
   if (workItem.version !== expectedVersion) {
     throw new WorkflowDomainError(

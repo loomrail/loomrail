@@ -75,6 +75,7 @@ import {
   decideStageAttemptHardPause,
   decideStartMockPipeline,
   decideWorkItemCommand,
+  stageAttemptIsTerminal,
   WorkflowDomainError,
   WorkItemDomainError,
   type BudgetOverrideDecision,
@@ -2953,16 +2954,37 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         for (const initialWorkspace of selectReadyWorkItemWorkspaces.all().map(workItemWorkspaceFromRow)) {
           let workspace = initialWorkspace;
 
-          // A lease this reconciliation itself just orphaned the holder of (see
-          // attemptsRecoveredToInterrupted above): released here, or it sits on this workspace
-          // forever -- the StageAttempt that held it is never coming back to release it itself, and
-          // migration 0011's UNIQUE on work_item_id means this WorkItem can never get a second
-          // workspace for the next attempt to lease instead (C9-d).
-          if (workspace.leaseHolder !== null && attemptsRecoveredToInterrupted.has(workspace.leaseHolder)) {
+          // A lease whose holder is never coming back to release it: released here, or it sits on
+          // this workspace forever -- migration 0011's UNIQUE on work_item_id means this WorkItem
+          // can never get a second workspace for the next attempt to lease instead (C9-d).
+          //
+          // Two ways an attempt is dead, and the second one is why this is not the set alone.
+          // `attemptsRecoveredToInterrupted` is this transaction's own decision, taken moments ago
+          // (see above). The other is an attempt that was ALREADY finished when this reconciliation
+          // started, and it is the one the product actually hits: the session loop applies the
+          // provider's outcome and then releases the lease as two separate commands, so a SIGKILL
+          // between them leaves a lease held by a StageAttempt that is already SUCCEEDED. Nothing
+          // touched that. The dispatch-level recovery above never sees it -- it looks only at
+          // PENDING dispatches whose attempt is still RUNNING -- so the lease survived every
+          // restart, `acquireWorkspaceLease` answered POSTPONED forever (logged at info, no
+          // question to the owner), and because the pending-dispatch queue is strict FIFO and the
+          // worker reads only `dispatches[0]`, every newer dispatch in the whole product waited
+          // behind that one work item.
+          //
+          // `stageAttemptIsTerminal` (@loomrail/domain) is what "dead" means, and its own comment
+          // says why WAITING_HUMAN and the two paused statuses are NOT on that list: those attempts
+          // are expected back, in this same worktree.
+          const leaseHolder = workspace.leaseHolder;
+          const leaseHolderAttempt = leaseHolder === null ? null : readStageAttempt(leaseHolder);
+          const leaseHolderIsDead =
+            leaseHolder !== null &&
+            (attemptsRecoveredToInterrupted.has(leaseHolder) ||
+              (leaseHolderAttempt !== null && stageAttemptIsTerminal(leaseHolderAttempt.status)));
+          if (leaseHolder !== null && leaseHolderIsDead) {
             const releasedLease = releaseWorkItemWorkspaceLease.run(
               workspace.id,
               workspace.version,
-              workspace.leaseHolder,
+              leaseHolder,
             );
             if (releasedLease.changes === 1) {
               const afterRelease = readWorkItemWorkspace(workspace.id);

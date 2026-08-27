@@ -3765,6 +3765,113 @@ describe("SQLite local state", () => {
       });
     });
 
+    // The lease the test above does NOT cover, and the one the product actually loses. The session
+    // loop applies the provider's outcome and releases the lease as two separate commands, so a
+    // SIGKILL between them leaves the lease held by a StageAttempt that is already SUCCEEDED.
+    // Reconciliation only ever released leases held by attempts it had ITSELF just moved to
+    // INTERRUPTED (a PENDING dispatch on a RUNNING attempt), and a finished attempt is neither --
+    // so nothing cleared it, `acquireWorkspaceLease` answered POSTPONED on every later dispatch,
+    // and because the pending-dispatch queue is strict FIFO and the worker reads only
+    // `dispatches[0]`, every newer work item in the product waited behind this one, with nothing
+    // logged above `info` and no question to the owner.
+    //
+    // The state is left behind exactly as a kill would leave it -- the outcome applied, the release
+    // never sent -- and then the daemon restarts.
+    it("releases a workspace lease left behind by a StageAttempt that already finished", async () => {
+      const localState = await open();
+      const repositoryPath = join(temporaryDirectory, "project-web");
+      await mkdir(repositoryPath, { recursive: true });
+      makeThrowawayRepo(repositoryPath);
+      localState.execute(registerProject());
+      const { workItemId, stageAttemptId, projectId } = startWorkflow(
+        localState,
+        "start-finished-lease",
+        "create-work-item-finished-lease",
+      );
+
+      const worktreePath = join(temporaryDirectory, "worktrees", workItemId);
+      await mkdir(join(temporaryDirectory, "worktrees"), { recursive: true });
+      addRealWorktree(repositoryPath, `loomrail/${workItemId}`, worktreePath);
+
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-finished-lease", workItemId, projectId),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+      const acquired = localState.execute(
+        acquireLeaseCommand("acquire-finished-lease", created.workspace.id, stageAttemptId, 1),
+      );
+      if (acquired.type !== "WORKSPACE_LEASE_ACQUIRED") throw new Error("Expected the lease to be acquired");
+
+      const queued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (queued.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected the dispatch queue");
+      const dispatch = queued.dispatches.find((candidate) => candidate.stageAttemptId === stageAttemptId);
+      if (!dispatch) throw new Error("Expected a pending dispatch for this StageAttempt");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "mark-finished-lease-dispatch-started",
+        correlationId: "correlation-mark-finished-lease-dispatch-started",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: dispatch.id },
+      });
+      // The session finished and its stage closed. The RELEASE_WORKSPACE_LEASE that would have
+      // followed in the session loop's `finally` is deliberately never sent: that is the kill.
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-finished-lease-outcome",
+        correlationId: "correlation-apply-finished-lease-outcome",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: dispatch.id,
+          template: mockTemplate,
+          outcome: { type: "COMPLETED", summary: "Discovery finished." },
+        },
+      });
+
+      // The premise, asserted rather than assumed: the attempt is finished and still holds the
+      // lease. Without this a reconciliation that released nothing would be indistinguishable from
+      // one that released the right thing.
+      const beforeRestart = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+      expect(
+        beforeRestart.type === "WORKFLOW_SNAPSHOT"
+          ? beforeRestart.snapshot.stageAttempts.find(({ id }) => id === stageAttemptId)?.status
+          : null,
+      ).toBe("SUCCEEDED");
+      const held = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(held.type === "WORKSPACE" ? held.workspace?.leaseHolder : null).toBe(stageAttemptId);
+
+      const reconciled = localState.execute(reconcileWorkflowsCommand("reconcile-finished-lease"));
+      if (reconciled.type !== "WORKFLOWS_RECONCILED") throw new Error("Expected reconciliation");
+      // The worktree is healthy: only the dead lease is cleared, nothing is orphaned.
+      expect(reconciled.orphanedWorkspaces).toEqual([]);
+      const after = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(after.type === "WORKSPACE" ? after.workspace : null).toMatchObject({
+        status: "READY",
+        leaseHolder: null,
+      });
+
+      // And the consequence that matters: the next attempt can actually take it. A row reading
+      // `leaseHolder: null` is the claim; an ACQUIRE that succeeds is the fact.
+      const nextAttempt = startWorkflow(
+        localState,
+        "start-finished-lease-next",
+        "create-work-item-finished-lease-next",
+      );
+      const reacquired = localState.execute(
+        acquireLeaseCommand(
+          "acquire-after-finished-lease",
+          created.workspace.id,
+          nextAttempt.stageAttemptId,
+          after.type === "WORKSPACE" ? (after.workspace?.version ?? 0) : 0,
+        ),
+      );
+      expect(reacquired).toMatchObject({
+        type: "WORKSPACE_LEASE_ACQUIRED",
+        workspace: { leaseHolder: nextAttempt.stageAttemptId },
+      });
+    });
+
     // Companion to "survives... when the identity probe itself throws" (orphaned-process
     // reconciliation, above): the same fail-safe guarantee, for the worktree check. `git` missing,
     // a repository path that no longer resolves, a permissions problem -- none of it may reach
