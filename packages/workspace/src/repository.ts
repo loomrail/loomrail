@@ -44,6 +44,14 @@ const detectInProgressOperation = async (gitDir: string): Promise<InProgressOper
 // three questions a caller must have settled first: is this even a git repository, what commit
 // would a fresh worktree be based on (or is there none yet), and is the repository mid an
 // operation whose scratch state must never be mistaken for the owner's branch (spec D5 / §2.12).
+//
+// Fails closed: any question this function cannot actually settle -- including the in-progress
+// check partway through, after the repository itself was already confirmed to exist -- resolves
+// the whole call to null, the same "not a usable repository" answer given for a path that is not
+// a git repository at all. It never reports a partial result with `inProgress` defaulted to
+// clear, because a false "nothing in progress" is the one wrong answer worth refusing to give:
+// it would let a caller base a workspace on a rebase's scratch commit without anyone deciding
+// that on purpose.
 export const inspectRepository = async (path: string): Promise<RepositoryState | null> => {
   const topLevelResult = await runGit(["rev-parse", "--show-toplevel"], { cwd: path });
   if (topLevelResult.exitCode !== 0) {
@@ -56,10 +64,15 @@ export const inspectRepository = async (path: string): Promise<RepositoryState |
 
   const gitDirResult = await runGit(["rev-parse", "--git-dir"], { cwd: path });
   if (gitDirResult.exitCode !== 0) {
-    // --show-toplevel already succeeded above, so git-dir resolution failing here would be an
-    // unexpected environment change mid-inspection. Report what we already know rather than
-    // failing the whole inspection over a marker-file check we can no longer make.
-    return { topLevel, headCommit, inProgress: null };
+    // --show-toplevel already succeeded above, so git-dir resolution failing here is an
+    // unexpected environment change mid-inspection (e.g. the repository vanishing or losing
+    // permissions between the two calls), not proof there is nothing in progress. Fail closed:
+    // `inProgress` exists to keep a caller off a rebase/merge/cherry-pick/bisect's scratch state,
+    // so an inspection that could not check for one must never report "clear" -- that is the one
+    // wrong answer this function must never give. Returning null here is the same answer already
+    // given for a path that is not a repository at all: "not a usable repository", so the caller
+    // refuses to provision a workspace from it rather than proceeding on a base it never verified.
+    return null;
   }
   const rawGitDir = gitDirResult.stdout.trim();
   const gitDir = isAbsolute(rawGitDir) ? rawGitDir : join(path, rawGitDir);
