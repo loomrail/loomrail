@@ -1526,10 +1526,15 @@ describe("local daemon session and state boundary", () => {
     expect(present.status).toBe(200);
     const raw: unknown = await present.json();
     // Asserted on the wire, before the schema gets a chance to strip anything. The stored workspace
-    // carries `leaseHolder` -- it is how two StageAttempts are kept out of one worktree -- and this
-    // response deliberately does not: nothing reads it, and a field on a response with no consumer
-    // is a defect rather than a convenience.
-    expect((raw as { workspace: Record<string, unknown> }).workspace).not.toHaveProperty("leaseHolder");
+    // carries all six of these -- `leaseHolder` is how two StageAttempts are kept out of one
+    // worktree, `id`/`projectId`/`workItemId` are identity the caller already holds, `createdAt` and
+    // `version` back commands only the session loop issues -- and this response deliberately carries
+    // none of them: nothing here reads them, and a field on a response with no consumer is a defect
+    // rather than a convenience (workspace.ts, `publishedWorkItemWorkspaceSchema`).
+    const wireWorkspace = (raw as { workspace: Record<string, unknown> }).workspace;
+    for (const field of ["leaseHolder", "id", "projectId", "workItemId", "createdAt", "version"]) {
+      expect(wireWorkspace).not.toHaveProperty(field);
+    }
     const body = workItemWorkspaceResponseSchema.parse(raw);
     // Every field the card renders, named individually: a response that merely parsed would also
     // have passed with the branch or the path silently absent, and those are the two values the

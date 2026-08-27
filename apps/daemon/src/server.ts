@@ -229,25 +229,22 @@ const secretsEqual = (left: Buffer, right: Buffer): boolean =>
   left.length === right.length && timingSafeEqual(left, right);
 
 /**
- * The workspace as the HTTP contract publishes it: everything stored about it except the lease.
+ * The workspace as the HTTP contract publishes it: only what `publishedWorkItemWorkspaceSchema`
+ * (workspace.ts) keeps.
  *
  * Named field by field rather than spread-and-delete, so the compiler owns the correspondence. A
  * field added to the stored workspace and meant to be published fails to compile here until it is
  * named; one that is *not* meant to be published simply never appears, rather than leaking because
- * a spread carried it. `leaseHolder` is the one omission, and see the contract for why.
+ * a spread carried it. `leaseHolder`, `id`, `projectId`, `workItemId`, `createdAt` and `version` are
+ * the omissions -- see the contract for why each has no consumer.
  */
-const withoutLeaseHolder = (workspace: WorkItemWorkspace): PublishedWorkItemWorkspace => ({
+const publishedWorkspace = (workspace: WorkItemWorkspace): PublishedWorkItemWorkspace => ({
   schemaVersion: workspace.schemaVersion,
-  id: workspace.id,
-  projectId: workspace.projectId,
-  workItemId: workspace.workItemId,
   branch: workspace.branch,
   worktreePath: workspace.worktreePath,
   baseCommit: workspace.baseCommit,
   snapshotCommit: workspace.snapshotCommit,
   status: workspace.status,
-  createdAt: workspace.createdAt,
-  version: workspace.version,
 });
 
 const normalizePlatform = (): "darwin" | "win32" | "linux" | "other" => {
@@ -881,10 +878,10 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           // A WorkItem with no workspace answers `null`, not 404: see the contract's note. The
           // WorkItem itself not existing is a genuine 404, and is raised above.
           //
-          // `leaseHolder` is dropped rather than forwarded. It is how the daemon keeps two
-          // StageAttempts out of one worktree; no caller of this route reads it, and the response
-          // contract does not carry it.
-          workspace: stored === null ? null : withoutLeaseHolder(stored),
+          // Projected, not forwarded whole: `publishedWorkItemWorkspaceSchema` (workspace.ts) drops
+          // `leaseHolder` plus every other field this route's one consumer never reads, and
+          // `publishedWorkspace` below is what keeps that projection matching what the schema allows.
+          workspace: stored === null ? null : publishedWorkspace(stored),
         });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);

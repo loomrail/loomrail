@@ -332,14 +332,31 @@ describe("work item workspace contracts", () => {
   // The lease is how the daemon keeps two StageAttempts out of one worktree. It is stored, and it
   // is deliberately not published: no caller of the workspace route reads it, and a field on a
   // response with no consumer is a defect rather than a convenience.
-  it("refuses a workspace response that carries the lease holder", () => {
+  it("refuses a workspace response that carries the lease holder, or any other field its one reader never uses", () => {
     expect(() =>
       workItemWorkspaceResponseSchema.parse({ schemaVersion: 1, workspace: validWorkspace() }),
     ).toThrow();
+    // `leaseHolder` alone gone is not enough: `publishedWorkItemWorkspaceSchema` (workspace.ts) also
+    // drops `id`, `projectId`, `workItemId`, `createdAt` and `version` -- every field WorkspacePanel
+    // (WorkbenchPage.tsx) does not read -- so a fixture that still carries any of those is refused the
+    // same way a fixture carrying `leaseHolder` is.
+    const publishedShape = ["id", "projectId", "workItemId", "createdAt", "version"].reduce(
+      (workspace, field) => omitField(workspace, field),
+      omitField(validWorkspace(), "leaseHolder"),
+    );
+    const fullWorkspace = validWorkspace();
+    for (const field of ["id", "projectId", "workItemId", "createdAt", "version"]) {
+      expect(() =>
+        workItemWorkspaceResponseSchema.parse({
+          schemaVersion: 1,
+          workspace: { ...publishedShape, [field]: fullWorkspace[field as keyof typeof fullWorkspace] },
+        }),
+      ).toThrow();
+    }
     expect(
       workItemWorkspaceResponseSchema.parse({
         schemaVersion: 1,
-        workspace: omitField(validWorkspace(), "leaseHolder"),
+        workspace: publishedShape,
       }).workspace?.worktreePath,
     ).toBe("/var/loomrail/worktrees/workspace-1");
     // And "no workspace at all" is still the ordinary answer, not an error.

@@ -242,12 +242,35 @@ export const workItemWorkspaceOrphanedResultSchema = z
 // wraps its payload (projectsResponseSchema, workItemsResponseSchema): a top-level `null` body
 // carries no schemaVersion, so a later field could not be added without breaking every reader.
 //
-// `leaseHolder` is deliberately not on it. The lease is how the daemon keeps two StageAttempts from
-// writing the same worktree at once (spec D6); no caller of this route reads it, and none is
-// planned to -- the cockpit shows where the agent writes, not which attempt currently holds the
-// pen. A field on a response nobody reads is a declaration without a consumer, so the response
-// projects the stored workspace rather than forwarding it whole.
-export const publishedWorkItemWorkspaceSchema = workItemWorkspaceSchema.omit({ leaseHolder: true });
+// A field on a response nobody reads is a declaration without a consumer, so this projects the
+// stored workspace rather than forwarding it whole -- and the rule is applied to every field it
+// leaves off, not to `leaseHolder` alone:
+//
+// - `leaseHolder`. The lease is how the daemon keeps two StageAttempts from writing the same
+//   worktree at once (spec D6); no caller of this route reads it, and none is planned to -- the
+//   cockpit shows where the agent writes, not which attempt currently holds the pen.
+// - `id`, `projectId`, `workItemId`. Identity the caller already holds: this route is reached at
+//   `/work-items/:workItemId/workspace`, so the id in the URL the caller just used is the same
+//   `workItemId` this field would repeat, `projectId` is already on the WorkItem the cockpit holds
+//   (WorkbenchPage.tsx's WorkspacePanel reads `item.projectId`, never the workspace's own copy), and
+//   nothing reads the workspace's own `id` -- the lease commands that take a `workspaceId` are
+//   system-driven (session-loop.ts), never issued from the web client this route serves.
+// - `createdAt`, `version`. Neither is rendered, and `version` exists for the optimistic-concurrency
+//   commands (ACQUIRE_WORKSPACE_LEASE, RELEASE_WORKSPACE_LEASE, MARK_WORKSPACE_ORPHANED) that only
+//   the session loop issues -- the same system-only path as `id` above.
+//
+// `snapshotCommit` stays, and that is also a decision rather than an oversight: it is unread today,
+// but docs/plans/15-e1-5-change-visibility-spec.ru.md §D1 already names it half of the diff base
+// (`snapshotCommit ?? baseCommit`) that milestone reads back through this same response. A field
+// with a cited future consumer is not the defect this rule is about.
+export const publishedWorkItemWorkspaceSchema = workItemWorkspaceSchema.omit({
+  leaseHolder: true,
+  id: true,
+  projectId: true,
+  workItemId: true,
+  createdAt: true,
+  version: true,
+});
 
 export const workItemWorkspaceResponseSchema = z
   .object({
