@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -595,6 +595,64 @@ describe("local daemon session and state boundary", () => {
     const second = await register("register-demo-second");
     expect(second.status).toBe(409);
     expect(apiErrorResponseSchema.parse(await second.json()).error.code).toBe("PROJECT_ALREADY_REGISTERED");
+  }, 30_000);
+
+  // A second daemon process, its own data directory, pointed at the same state database -- what two
+  // daemons on one machine's shared state look like, and the shape the refused registration used to
+  // get wrong: it does not share the first daemon's demo root, so nothing there names the same
+  // fixture already registered, and the fixture used to be materialised under the second daemon's own
+  // data directory before the id collision was even checked. That repository was never recorded --
+  // the Project row still names the first daemon's path -- so it sat on disk as a fully built,
+  // completely orphaned repository forever. The repoint repair (commit 8a76b4b) removed this same
+  // symptom from the other branch of this route by reading before writing; this proves the fresh-
+  // registration branch now does the same.
+  it("does not materialise a repository for a fixture registration a second daemon cannot land", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail demo second daemon "));
+    temporaryDirectories.push(temporaryDirectory);
+    const stateDatabasePath = join(temporaryDirectory, "shared.sqlite");
+    const firstDemoRoot = join(temporaryDirectory, "first-demo-projects");
+    const firstToken = bootstrapToken();
+    const first = await startDaemon({
+      bootstrapToken: firstToken,
+      logger: false,
+      stateDatabasePath,
+      demoProjectsRoot: firstDemoRoot,
+    });
+    daemon = first;
+    const firstSession = await authenticate(first, firstToken);
+    const firstRegistration = await fetch(`${first.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers: mutationHeaders(first, firstSession),
+      body: JSON.stringify({ schemaVersion: 1, commandId: "register-first-daemon", fixtureId: "web-app-a" }),
+    });
+    expect(firstRegistration.status).toBe(200);
+    // Closed before the second daemon opens the same database file, as every other pairing in this
+    // suite does: the two never touch it at once.
+    await daemon.close();
+    daemon = undefined;
+
+    const secondDemoRoot = join(temporaryDirectory, "second-demo-projects");
+    const secondToken = bootstrapToken();
+    const second = await startDaemon({
+      bootstrapToken: secondToken,
+      logger: false,
+      stateDatabasePath,
+      demoProjectsRoot: secondDemoRoot,
+    });
+    daemon = second;
+    const secondSession = await authenticate(second, secondToken);
+    const secondRegistration = await fetch(`${second.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers: mutationHeaders(second, secondSession),
+      body: JSON.stringify({ schemaVersion: 1, commandId: "register-second-daemon", fixtureId: "web-app-a" }),
+    });
+
+    expect(secondRegistration.status).toBe(409);
+    expect(apiErrorResponseSchema.parse(await secondRegistration.json()).error.code).toBe(
+      "PROJECT_ALREADY_REGISTERED",
+    );
+    // Nothing was built under the second daemon's own data directory on the way to that refusal.
+    await expect(access(join(secondDemoRoot, "web-app-a"))).rejects.toThrow();
   }, 30_000);
 
   // Typing `.` into the Settings field used to answer 200 and register the directory the daemon was

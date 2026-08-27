@@ -699,6 +699,34 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           (await isSameExistingPath(project.repositoryPath, fixture.templatePath))
             ? project.repositoryPath
             : null;
+        if (project !== null && staleTemplatePath === null) {
+          // A Project already recorded at this fixture's id, and not stuck at the bundled template --
+          // most often a second daemon sharing this database with a data directory of its own, asking
+          // to register the same demo fixture the first daemon already materialised and recorded.
+          // `id = fixture.projectId` alone is enough for `executeFresh` (persistence-sqlite) to refuse
+          // REGISTER_PROJECT with PROJECT_ALREADY_REGISTERED, before it ever reads `repositoryPath` --
+          // so nothing is materialised for a registration that cannot land. Materialising ahead of
+          // that refusal used to build a fresh repository under *this* daemon's own data directory and
+          // then discard it on the 409, recorded by nothing: exactly the symptom the repoint path
+          // fixed by reading before writing (see the comment above), reappearing here because this
+          // branch reads the same `project` but still wrote before asking whether the write could
+          // land. `project.repositoryPath` stands in for the payload's `repositoryPath` -- a real,
+          // already-valid absolute path, never actually used, since the row lookup refuses on `id`
+          // first.
+          return localState.execute({
+            schemaVersion: 1,
+            commandId: body.commandId,
+            correlationId,
+            actor: { type: "HUMAN", id: "local-owner" },
+            type: "REGISTER_PROJECT",
+            payload: {
+              id: fixture.projectId,
+              fixtureId: fixture.fixtureId,
+              name: fixture.name,
+              repositoryPath: project.repositoryPath,
+            },
+          });
+        }
         const materialised = await materialiseFixtureRepository(fixture, demoProjectsRoot);
         const repositoryPath = materialised.created
           ? materialised.repositoryPath
