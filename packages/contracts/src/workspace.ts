@@ -1,0 +1,178 @@
+import { z } from "zod";
+
+import {
+  actorSchema,
+  correlationIdSchema,
+  opaqueIdSchema,
+  schemaVersionSchema,
+  utcTimestampSchema,
+} from "./shared.js";
+
+// A Git object id (spec §2.9). Not a general opaqueIdSchema: git's own hash format is fixed and
+// unrelated to Loomrail's own id shape, and validating it here catches a caller that passes a
+// truncated or garbled sha before it is ever handed to `git`.
+const commitShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
+
+const branchSchema = z.string().trim().min(1).max(255);
+const worktreePathSchema = z.string().trim().min(1).max(4_000);
+
+// The cap on how many paths one WORK_ITEM_WORKSPACE_CREATED event may list. Exported alongside the
+// schema that uses it (like maxContextPackRecipeSources in workflow.ts) so a caller building the
+// carry-in list can check it against the same bound the schema will enforce, rather than
+// discovering the limit only when `.parse` rejects it.
+export const maxCarriedPaths = 500;
+
+// Relative repository paths, one per file the carry-in snapshot (packages/workspace's
+// createCarryInSnapshot) actually moved -- see docs/plans/14-e1-workspace-execution-implementation-
+// plan.ru.md Задача 4. Not opaqueIdSchema: these are filesystem paths, not Loomrail ids, and can
+// contain characters (slashes, dots) opaqueIdSchema's pattern forbids.
+const carriedPathsSchema = z.array(z.string().trim().min(1).max(4_096)).max(maxCarriedPaths);
+
+export const workItemWorkspaceStatusSchema = z.enum(["READY", "ORPHANED", "REMOVED"]);
+
+export const workItemWorkspaceSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    workItemId: opaqueIdSchema,
+    branch: branchSchema,
+    worktreePath: worktreePathSchema,
+    // Nullable, not optional: an empty repository genuinely has no HEAD (spec §2.12). Absent would
+    // read as "not recorded"; null records the fact that there was nothing to record.
+    baseCommit: commitShaSchema.nullable(),
+    // Nullable, not optional: a workspace cut from a clean working copy genuinely carried nothing
+    // forward, so there is no snapshot commit to name (spec §2.9's "переносить нечего" path).
+    snapshotCommit: commitShaSchema.nullable(),
+    status: workItemWorkspaceStatusSchema,
+    // Nullable: names the StageAttempt currently allowed to write, or no one (spec D6). The
+    // workspace belongs to the WorkItem and outlives any single attempt, so this is a lease held
+    // for the attempt's duration, not an owner.
+    leaseHolder: opaqueIdSchema.nullable(),
+    createdAt: utcTimestampSchema,
+    version: z.number().int().positive(),
+  })
+  .strict();
+
+const eventBaseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    sequence: z.number().int().positive(),
+    id: opaqueIdSchema,
+    aggregateId: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    actor: actorSchema,
+    occurredAt: utcTimestampSchema,
+    correlationId: correlationIdSchema,
+  })
+  .strict();
+
+// Carries the workspace plus the files the carry-in snapshot moved into it (spec §4): the
+// workspace's own worktreePath/branch/baseCommit/snapshotCommit tell a reader *that* something was
+// carried in, but not *what* -- and that is exactly what an owner reviewing the work item's history
+// needs to see without re-deriving a `git diff` against a commit that may since have moved on.
+export const workItemWorkspaceCreatedEventSchema = eventBaseSchema.extend({
+  type: z.literal("WORK_ITEM_WORKSPACE_CREATED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z
+    .object({
+      workspace: workItemWorkspaceSchema,
+      carriedPaths: carriedPathsSchema,
+    })
+    .strict(),
+});
+
+// Recorded when a workspace is found orphaned -- its worktree directory prunable, or gone outside
+// Loomrail's control -- at daemon startup (spec §6, "Восстановление"). previousStatus is carried
+// because the only status this transition is ever taken from is READY, and recording that fact
+// (rather than assuming it) keeps the audit trail honest if that ever stops being true.
+export const workItemWorkspaceOrphanedEventSchema = eventBaseSchema.extend({
+  type: z.literal("WORK_ITEM_WORKSPACE_ORPHANED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z
+    .object({
+      workspace: workItemWorkspaceSchema,
+      previousStatus: workItemWorkspaceStatusSchema,
+    })
+    .strict(),
+});
+
+const commandBaseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    commandId: opaqueIdSchema,
+    correlationId: correlationIdSchema,
+    actor: actorSchema,
+  })
+  .strict();
+
+// The workspace's own `id` is not part of the payload -- it is assigned by the persistence layer
+// that writes it, the same way CREATE_WORK_ITEM never takes the WorkItem's own id (work-
+// management.ts). `workItemId` is enough to identify which entity this workspace belongs to, and
+// the 0011 migration's UNIQUE constraint on work_item_id (spec Задача 7) makes a second one for the
+// same WorkItem a storage-level refusal, not something this contract has to guard against.
+export const createWorkItemWorkspaceCommandSchema = commandBaseSchema.extend({
+  type: z.literal("CREATE_WORK_ITEM_WORKSPACE"),
+  payload: z
+    .object({
+      workItemId: opaqueIdSchema,
+      projectId: opaqueIdSchema,
+      branch: branchSchema,
+      worktreePath: worktreePathSchema,
+      baseCommit: commitShaSchema.nullable(),
+      snapshotCommit: commitShaSchema.nullable(),
+      carriedPaths: carriedPathsSchema,
+    })
+    .strict(),
+});
+
+// expectedVersion follows the same optimistic-concurrency convention as every other mutation of an
+// existing entity in this package (UPDATE_WORK_ITEM, PAUSE_PIPELINE, RESOLVE_ACCEPTANCE, …): the
+// caller names the version it read, so a lease raced against a concurrent writer is rejected rather
+// than silently overwritten.
+export const acquireWorkspaceLeaseCommandSchema = commandBaseSchema.extend({
+  type: z.literal("ACQUIRE_WORKSPACE_LEASE"),
+  payload: z
+    .object({
+      workspaceId: opaqueIdSchema,
+      stageAttemptId: opaqueIdSchema,
+      expectedVersion: z.number().int().positive(),
+    })
+    .strict(),
+});
+
+// Names the releasing StageAttempt, not just the workspace: a release is only ever valid from the
+// attempt that currently holds the lease (spec D6), and carrying that id lets the handler refuse a
+// release from anyone else instead of trusting the caller's say-so.
+export const releaseWorkspaceLeaseCommandSchema = commandBaseSchema.extend({
+  type: z.literal("RELEASE_WORKSPACE_LEASE"),
+  payload: z
+    .object({
+      workspaceId: opaqueIdSchema,
+      stageAttemptId: opaqueIdSchema,
+      expectedVersion: z.number().int().positive(),
+    })
+    .strict(),
+});
+
+// System-driven, not a StageAttempt action: this is the reconciliation path (spec §6,
+// "Восстановление") that notices a worktree directory is gone or prunable and records the fact.
+// Nothing is resurrected (AD-008) -- this command only ever moves a workspace toward ORPHANED.
+export const markWorkspaceOrphanedCommandSchema = commandBaseSchema.extend({
+  type: z.literal("MARK_WORKSPACE_ORPHANED"),
+  payload: z
+    .object({
+      workspaceId: opaqueIdSchema,
+      expectedVersion: z.number().int().positive(),
+    })
+    .strict(),
+});
+
+export type WorkItemWorkspaceStatus = z.infer<typeof workItemWorkspaceStatusSchema>;
+export type WorkItemWorkspace = z.infer<typeof workItemWorkspaceSchema>;
+export type WorkItemWorkspaceCreatedEvent = z.infer<typeof workItemWorkspaceCreatedEventSchema>;
+export type WorkItemWorkspaceOrphanedEvent = z.infer<typeof workItemWorkspaceOrphanedEventSchema>;
+export type CreateWorkItemWorkspaceCommand = z.infer<typeof createWorkItemWorkspaceCommandSchema>;
+export type AcquireWorkspaceLeaseCommand = z.infer<typeof acquireWorkspaceLeaseCommandSchema>;
+export type ReleaseWorkspaceLeaseCommand = z.infer<typeof releaseWorkspaceLeaseCommandSchema>;
+export type MarkWorkspaceOrphanedCommand = z.infer<typeof markWorkspaceOrphanedCommandSchema>;
