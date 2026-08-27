@@ -197,10 +197,16 @@ export const runProcess = (options: RunProcessOptions): ProcessRun => {
   // The flush here as well as on `end` is belt and braces, and cheap: it is idempotent (the buffer
   // is cleared), and it covers the two endings where `end` never arrives at all -- a stream
   // destroyed rather than ended, and the drain bound below.
+  // `finally`, so that an `onLine` callback which throws on the residual line cannot leave `exited`
+  // unsettled forever -- a hang is the one failure worse than the crash this used to be, because it
+  // is silent. The throw is not swallowed: it still leaves this handler the way it always did.
   const settleExit = (outcome: ProcessExitOutcome): void => {
-    stdoutSplitter.flush();
-    stderrSplitter.flush();
-    deferredExit.resolve(outcome);
+    try {
+      stdoutSplitter.flush();
+      stderrSplitter.flush();
+    } finally {
+      deferredExit.resolve(outcome);
+    }
   };
 
   let exitOutcome: ProcessExitOutcome | undefined;

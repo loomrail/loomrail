@@ -32,6 +32,22 @@ const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve)
 
 const HUNG = "hung" as const;
 
+// Bounds a wait on `exited` against a generous, explicit deadline, so that a regression which
+// leaves it unsettled forever reads as a failed assertion naming the hang rather than as an opaque
+// harness timeout, which is indistinguishable from this machine merely being slow. Same reasoning
+// (and name) as `raceAgainstHang` in process-runner.unit.test.ts. The timer is unref'd and never
+// waited on when `exited` settles first.
+const raceAgainstHang = <T>(promise: Promise<T>, boundMs: number): Promise<T | typeof HUNG> =>
+  Promise.race([
+    promise,
+    new Promise<typeof HUNG>((resolve) => {
+      const timer = setTimeout(() => {
+        resolve(HUNG);
+      }, boundMs);
+      timer.unref();
+    }),
+  ]);
+
 const startFakeRun = (
   onLine: (line: string) => void,
 ): { child: FakeChild; run: ReturnType<typeof runProcess> } => {
@@ -73,6 +89,26 @@ describe("runProcess exit ordering", () => {
     expect(observed).toEqual(['line:{"summary":"the last line"}', "exited"]);
   });
 
+  // Delivering the residue is now part of settling `exited`, which puts an adapter's own callback on
+  // the path to that settlement -- and both live adapters do real work in `onLine` (a checkpoint
+  // listener reaches the state store). A callback that throws there used to be a crash; it must not
+  // become a promise that never settles, which is the same failure with nobody to notice it.
+  it("settles `exited` even when a line callback throws on the residue", async () => {
+    const { child, run } = startFakeRun(() => {
+      throw new Error("the adapter's own listener failed");
+    });
+
+    child.stdout.write("residue with no newline");
+    await tick();
+    child.emit("exit", 0, null);
+    await tick();
+
+    // The throw is not swallowed -- it still leaves the handler the way it always did, which is
+    // what this test observes by catching it at the emit.
+    expect(() => child.emit("close", 0, null)).toThrow("the adapter's own listener failed");
+    await expect(raceAgainstHang(run.exited, 1_000)).resolves.toEqual({ code: 0, signal: null });
+  });
+
   // The other half of the same change, and the reason `exited` is not simply chained to stdout's
   // EOF: a grandchild that inherited the pipe can hold it open after the child itself is gone, and
   // a promise that never settles there would quietly undo the deadline's whole purpose. `exited`
@@ -91,14 +127,7 @@ describe("runProcess exit ordering", () => {
       // leaves `exited` unsettled forever must read as a failed assertion naming the hang, not as
       // an opaque harness timeout indistinguishable from a slow machine. (Same reasoning as
       // `raceAgainstHang` in process-runner.unit.test.ts.)
-      const settled = Promise.race([
-        run.exited,
-        new Promise((resolve) => {
-          setTimeout(() => {
-            resolve(HUNG);
-          }, 10_000);
-        }),
-      ]);
+      const settled = raceAgainstHang(run.exited, 10_000);
       await vi.advanceTimersByTimeAsync(10_000);
 
       await expect(settled).resolves.toEqual({ code: 0, signal: null });
