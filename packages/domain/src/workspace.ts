@@ -52,12 +52,20 @@ export const stageRunsInWorkspace = (stage: WorkflowStage): boolean =>
  * A Project's repository can fail to be one at the moment a stage is dispatched -- a path that
  * stopped being a repository, a repository parked mid-rebase, a legacy fixture Project still
  * recorded at a bundled template. Before this list widened, none of that touched DISCOVERY, PLAN or
- * REVIEW: they were dispatched with no workspace and answered from the brief. Refusing them now
- * would take a project that ran yesterday and stop it, to no one's benefit -- a DISCOVERY with no
- * worktree is the poorer session this milestone exists to stop shipping, but it is still a session
- * that can answer honestly from what it was given. An IMPLEMENT or QA session with no worktree
- * cannot: it can only report work it had nowhere to do. So those two, and only those two, are
- * refused rather than degraded.
+ * REVIEW: they were dispatched with no workspace and answered from the brief. Refusing them for a
+ * Project that never had a repository would take a project that ran yesterday and stop it, to no
+ * one's benefit -- a DISCOVERY with no worktree is the poorer session this milestone exists to stop
+ * shipping, but it is still a session that can answer honestly from what it was given. An IMPLEMENT
+ * or QA session with no worktree cannot: it can only report work it had nowhere to do. So those
+ * two, and only those two, are refused for the LACK of a repository.
+ *
+ * A repository that exists and is momentarily unusable is not that case, and the daemon does not
+ * treat it as one: see `ProvisionRefusalCause` below. A prose stage dispatched with no worktree
+ * against a repository-backed Project answers "there is no implementation to assess" about work
+ * that is sitting right there -- the exact sentence this milestone exists to eliminate -- so that
+ * refusal reaches the owner rather than a warning in a log they never see. This list stays as it
+ * is: it answers "which stages cannot run at all without a worktree", not "when is a degraded
+ * session acceptable".
  */
 export const stagesRequiringWorkspace = ["IMPLEMENT", "QA"] as const satisfies readonly WorkflowStage[];
 
@@ -221,8 +229,27 @@ const inProgressRefusal = (inProgress: string, path: string): ProvisionRefusal =
   };
 };
 
+/**
+ * WHY a workspace was refused, at the only granularity a caller has to act on: is this Project
+ * backed by a repository at all, or is it backed by one that cannot be used right now?
+ *
+ * The two are stable and transient facts respectively, and they earn different treatment for a
+ * stage that merely reads better with a worktree. A Project whose path is not a repository -- a
+ * fixture Project still recorded at a bundled template, a path the owner moved -- has run its prose
+ * stages that way since before E1 and must go on doing so; nothing about it is going to change, and
+ * refusing it would stop a project that worked yesterday. A Project that HAS a repository, which is
+ * merely parked mid-rebase this minute, is a different situation: it is repairable, the owner is
+ * the one who can repair it, and a DISCOVERY or REVIEW run without the worktree in the meantime
+ * answers "there is no implementation to assess" about a work item whose implementation is right
+ * there.
+ *
+ * Carried as a field rather than inferred by the caller from the request's wording: the refusal
+ * text is prose written for an owner, and a dispatcher branching on it would be reading English.
+ */
+export type ProvisionRefusalCause = "NOT_REPOSITORY_BACKED" | "REPOSITORY_UNUSABLE";
+
 export type ProvisionWorkspaceDecision =
-  { type: "PROVISION" } | { type: "REFUSED"; request: HumanRequestDraft };
+  { type: "PROVISION" } | { type: "REFUSED"; cause: ProvisionRefusalCause; request: HumanRequestDraft };
 
 /**
  * Gates a repository against having a workspace cut from it (spec D5). Two questions, checked in
@@ -258,6 +285,12 @@ export const decideProvisionWorkspace = (context: {
   if (!repository.isRepository) {
     return {
       type: "REFUSED",
+      // Both branches below say the same thing about this Project: there is no repository here that
+      // Loomrail may cut a workspace from, and there will not be one until the owner registers a
+      // different path. A path INSIDE a repository is included deliberately -- Loomrail has decided
+      // it will never branch the enclosing repository (that is the refusal's whole point), so from a
+      // dispatcher's side it is as settled as a path with no repository near it.
+      cause: "NOT_REPOSITORY_BACKED",
       request: provisionRefusalRequest(
         repository.insideRepository === null
           ? notARepositoryRefusal(repository.path)
@@ -268,6 +301,9 @@ export const decideProvisionWorkspace = (context: {
   if (repository.inProgress !== null) {
     return {
       type: "REFUSED",
+      // A real repository, unusable for as long as the operation is unfinished -- and finishing it
+      // is something the owner does, today.
+      cause: "REPOSITORY_UNUSABLE",
       request: provisionRefusalRequest(inProgressRefusal(repository.inProgress, repository.path)),
     };
   }
@@ -302,9 +338,12 @@ export type SessionWorkspaceDecision = { type: "PROCEED" } | { type: "REFUSED"; 
  *
  * Reads `stagesRequiringWorkspace` and deliberately NOT `stagesRunningInWorkspace`, which is now
  * the wider of the two. This gate ends a dispatch with a blocking question, and the only sessions
- * worth ending that way are the ones that would otherwise report work they had nowhere to do. A
- * DISCOVERY or REVIEW whose project has no usable repository is a worse session than it could be,
- * not a dishonest one, and it is dispatched exactly as it was before that list widened.
+ * worth ending that way *for having no workspace at all* are the ones that would otherwise report
+ * work they had nowhere to do. A DISCOVERY or REVIEW on a Project with no repository behind it is a
+ * worse session than it could be, not a dishonest one, and it is dispatched exactly as it was
+ * before that list widened. Whether a repository-backed Project whose workspace could not be
+ * prepared should degrade the same way is a different question, asked earlier and elsewhere (the
+ * daemon's session loop, on `ProvisionRefusalCause`), and answered no.
  */
 export const decideSessionWorkspace = (context: {
   stage: WorkflowStage;

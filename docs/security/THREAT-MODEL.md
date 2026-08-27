@@ -322,9 +322,15 @@ Codex adapter picked its sandbox mode from the mere PRESENCE of a worktree, thos
 write-enabled and network-enabled — a review able to rewrite the code it was judging. Nothing else about the
 containment changed — same worktree, same branch, same `-c` key where it is still sent, same flag guards.
 
-Two bounds on that widening, both enforced in `apps/daemon/src/session-loop.ts`. A Project whose path is not a
-usable repository still dispatches its prose stages with no workspace, exactly as it did before E1, rather
-than being refused (only IMPLEMENT and QA are refused — `stagesRequiringWorkspace`). And no worktree is cut
+Two bounds on that widening, both enforced in `apps/daemon/src/session-loop.ts`. A Project with no repository
+behind it — a fixture Project still recorded at a bundled template, a path the owner moved — still dispatches
+its prose stages with no workspace, exactly as it did before E1, rather than being refused (only IMPLEMENT and
+QA are refused for the lack of one — `stagesRequiringWorkspace`). A Project that HAS a repository which could
+not be used this minute is not that case and is not degraded silently: mid-rebase, an occupied branch, a
+worktree that vanished, a `git` that would not run all reach the owner as the same blocking question IMPLEMENT
+would have got, because a prose stage run blind there answers "there is no implementation to assess" about
+work sitting in the repository the Project names. The two are told apart by `ProvisionRefusalCause`
+(`packages/domain/src/workspace.ts`), not by reading the refusal's prose. And no worktree is cut
 for an adapter that declares no stage requiring one (`adapterWorksInWorkspace`): `provider-claude-code` always
 runs its CLI in a fresh temporary directory and reads `ProviderInvocation.workspace` nowhere, so nothing is
 written into the owner's repository on its behalf. **The read-only-in-an-empty-directory bound of §6 therefore

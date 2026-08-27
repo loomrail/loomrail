@@ -32,6 +32,7 @@ import {
   workspaceBranchName,
   type DispatchStageDecision,
   type ProvisionRefusal,
+  type ProvisionRefusalCause,
 } from "@loomrail/domain";
 import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
 import {
@@ -253,7 +254,12 @@ const readWorkItemWorkspace = (deps: RunStageAttemptDeps): WorkItemWorkspace | n
  */
 type WorkspacePreparation =
   | { type: "PREPARED"; workspace: WorkItemWorkspace }
-  | { type: "REFUSED"; request: HumanRequestDraft }
+  // `cause` is what lets a stage that merely READS better with a worktree tell two situations
+  // apart: a Project with no repository behind it (which has always run its prose stages this way
+  // and must go on doing so) and a repository-backed Project whose workspace could not be prepared
+  // right now (which must not answer "there is no implementation to assess" about work sitting in
+  // the repository it names). See `ProvisionRefusalCause` (@loomrail/domain).
+  | { type: "REFUSED"; cause: ProvisionRefusalCause; request: HumanRequestDraft }
   | { type: "POSTPONED"; detail: string };
 
 // `git worktree add`'s four refusals (@loomrail/workspace), each named as the question the owner can
@@ -382,7 +388,8 @@ const canonicalPathOf = async (path: string): Promise<string | null> => {
 const createWorkspace = async (
   deps: RunStageAttemptDeps,
 ): Promise<
-  { type: "PREPARED"; workspace: WorkItemWorkspace } | { type: "REFUSED"; request: HumanRequestDraft }
+  | { type: "PREPARED"; workspace: WorkItemWorkspace }
+  | { type: "REFUSED"; cause: ProvisionRefusalCause; request: HumanRequestDraft }
 > => {
   const workItemResult = deps.state.query({ type: "GET_WORK_ITEM", workItemId: deps.dispatch.workItemId });
   const workItem = workItemResult.type === "WORK_ITEM" ? workItemResult.workItem : null;
@@ -412,7 +419,11 @@ const createWorkspace = async (
       insideRepository: isOwnTopLevel ? null : (inspected?.topLevel ?? null),
     },
   });
-  if (decision.type === "REFUSED") return { type: "REFUSED", request: decision.request };
+  // The cause travels with the request: the domain is the only layer that knows whether this
+  // Project has a repository at all, and the dispatcher below is the only one that acts on it.
+  if (decision.type === "REFUSED") {
+    return { type: "REFUSED", cause: decision.cause, request: decision.request };
+  }
   if (repository === null) {
     // Unreachable today: `decideProvisionWorkspace` refuses every repository it was told is not
     // one, and `repository === null` is exactly what produced `isRepository: false` above. A throw
@@ -430,7 +441,13 @@ const createWorkspace = async (
   // empty repository with nothing in it -- there is no commit to branch from, and git would refuse.
   const startPoint = snapshot?.commit ?? repository.headCommit;
   if (startPoint === null) {
-    return { type: "REFUSED", request: provisionRefusalRequest(noBaseCommitRefusal(project.repositoryPath)) };
+    // A repository with no commit yet IS a repository: the owner makes one commit and this stage
+    // runs. REPOSITORY_UNUSABLE, like every refusal below it.
+    return {
+      type: "REFUSED",
+      cause: "REPOSITORY_UNUSABLE",
+      request: provisionRefusalRequest(noBaseCommitRefusal(project.repositoryPath)),
+    };
   }
 
   const branch = workspaceBranchName({ workItemId: workItem.id, title: workItem.title });
@@ -448,6 +465,7 @@ const createWorkspace = async (
   if (added.type === "REFUSED") {
     return {
       type: "REFUSED",
+      cause: "REPOSITORY_UNUSABLE",
       request: provisionRefusalRequest(worktreeRefusal(added.refusal, { branch, path: worktreePath })),
     };
   }
@@ -521,6 +539,7 @@ const createWorkspace = async (
     }
     return {
       type: "REFUSED",
+      cause: "REPOSITORY_UNUSABLE",
       request: provisionRefusalRequest(provisioningFailedRefusal(error, project.repositoryPath)),
     };
   }
@@ -593,7 +612,11 @@ const prepareWorkspace = async (deps: RunStageAttemptDeps): Promise<WorkspacePre
     return created.type === "PREPARED" ? acquireWorkspaceLease(deps, created.workspace) : created;
   }
   if (existing.status !== "READY") {
-    return { type: "REFUSED", request: provisionRefusalRequest(workspaceNotReadyRefusal(existing)) };
+    return {
+      type: "REFUSED",
+      cause: "REPOSITORY_UNUSABLE",
+      request: provisionRefusalRequest(workspaceNotReadyRefusal(existing)),
+    };
   }
   // A READY row is a claim about the disk, and this is the one place that verifies it before the
   // claim is acted on. Checked before the lease rather than after: taking a lease on a workspace
@@ -605,7 +628,11 @@ const prepareWorkspace = async (deps: RunStageAttemptDeps): Promise<WorkspacePre
     // refuses while the row exists -- so recording it here would dead-end every later IMPLEMENT and
     // QA for this work item, the owner's own `git worktree add` restore included. A refusal the
     // owner can answer is worth more than a status that closes the only door out.
-    return { type: "REFUSED", request: provisionRefusalRequest(workspaceGoneRefusal(existing)) };
+    return {
+      type: "REFUSED",
+      cause: "REPOSITORY_UNUSABLE",
+      request: provisionRefusalRequest(workspaceGoneRefusal(existing)),
+    };
   }
   return acquireWorkspaceLease(deps, existing);
 };
@@ -634,7 +661,14 @@ const prepareWorkspaceSafely = async (deps: RunStageAttemptDeps): Promise<Worksp
       { stageAttemptId: deps.dispatch.stageAttemptId, error: errorName(error) },
       "The work item's workspace could not be prepared; the owner was asked",
     );
-    return { type: "REFUSED", request: provisionRefusalRequest(provisioningFailedRefusal(error, path)) };
+    // Whatever this was -- no `git` on PATH, a plumbing command that failed mid-snapshot, a full
+    // disk -- it is not "this Project has no repository", which is the only thing that earns a
+    // degraded prose session. An unknown failure is reported, not stepped over.
+    return {
+      type: "REFUSED",
+      cause: "REPOSITORY_UNUSABLE",
+      request: provisionRefusalRequest(provisioningFailedRefusal(error, path)),
+    };
   }
 };
 
@@ -744,7 +778,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         },
         decision.type === "STAGE_NOT_SERVED"
           ? "The adapter refused this dispatch; the owner was asked"
-          : "This stage needs a workspace and none could be cut; the owner was asked",
+          : "No workspace could be prepared for this stage; the owner was asked",
       );
     };
 
@@ -781,19 +815,32 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     ) {
       const prepared = await prepareWorkspaceSafely(deps);
       if (prepared.type === "REFUSED") {
-        // A stage that cannot run without a worktree ends here as a blocking question. One that
-        // merely reads better with it does not: before this stage list widened, DISCOVERY, PLAN and
-        // REVIEW were dispatched with no workspace against any project at all, and a project whose
-        // path is not a repository -- a legacy fixture Project, a path that moved -- must not start
-        // being refused stages it used to run. It runs them the way it always did, and the reason
-        // the better path was unavailable is logged rather than swallowed.
-        if (stageRequiresWorkspace(attempt.stage)) {
+        // Two reasons to end here as a blocking question, and they are different reasons.
+        //
+        // A stage that cannot run without a worktree (IMPLEMENT, QA) is refused whatever the cause:
+        // it could only report work it had nowhere to do.
+        //
+        // A stage that merely reads better with one is refused when the Project HAS a repository and
+        // the workspace could not be prepared from it -- mid-rebase, an occupied branch, a worktree
+        // that vanished, a `git` that would not run. This is the degrade that used to be silent: the
+        // session ran with no worktree and answered "there is no implementation to assess" about a
+        // work item whose implementation was sitting in the repository the Project names, while the
+        // only record of why was a warning in a log the owner never sees. Those causes are all
+        // repairable, and the owner is the one who repairs them, so they get the same question
+        // IMPLEMENT would have got.
+        //
+        // What must NOT start being refused is the case the previous implementer was protecting:
+        // a Project with no repository behind it at all -- a fixture Project still recorded at a
+        // bundled template, a path the owner moved. It has run its prose stages with no workspace
+        // since before E1, nothing about it is going to change, and a question about it would be one
+        // the owner cannot act on and did not ask for. That one still degrades, and says so.
+        if (stageRequiresWorkspace(attempt.stage) || prepared.cause === "REPOSITORY_UNUSABLE") {
           refuseDispatch({ type: "WORKSPACE_NOT_PROVISIONED", request: prepared.request });
           return;
         }
-        deps.logger.warn(
+        deps.logger.info(
           { stageAttemptId, stage: attempt.stage, reason: prepared.request.title },
-          "No workspace could be cut for this stage; it runs without one, reading only its context pack",
+          "This project has no repository to cut a workspace from; the stage runs on its context pack alone",
         );
       } else if (prepared.type === "POSTPONED") {
         // Spec §7: a lease another StageAttempt holds postpones this dispatch rather than failing

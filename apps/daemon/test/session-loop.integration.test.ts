@@ -661,6 +661,53 @@ describe("session loop workspace provisioning", () => {
     GIT_TIMEOUT_MS,
   );
 
+  // The other side of that constraint, and the degrade that used to be silent. This Project HAS a
+  // repository -- it is merely parked mid-rebase this minute -- so a DISCOVERY dispatched with no
+  // worktree would answer from the brief alone about a codebase that is sitting right there, and
+  // the only record of why would be a warning in a log the owner never sees. That is the sentence
+  // this milestone exists to eliminate ("there is no implementation to assess"), arrived at by a
+  // different route.
+  //
+  // The refusal is the same question IMPLEMENT gets, because the repair is the same and the owner
+  // is the one who makes it. What separates this test from the one above it is one fact about the
+  // Project -- whether there is a repository at all -- and nothing about the stage.
+  it(
+    "asks the owner instead of running a prose stage blind against a repository it could not use",
+    async () => {
+      repositoryPath = await throwawayRepository(makeRepoMidRebase);
+      const localState = openState();
+      const discoveryTemplate: WorkflowTemplate = {
+        ...mockDeliveryTemplate,
+        id: "workspace-discovery-unusable-v1",
+        version: 1,
+        name: "Workspace discovery against an unusable repository",
+        stages: mockDeliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
+      };
+      const seeded = seedAttempt(localState, { template: discoveryTemplate });
+      let sessionStarted = false;
+      const adapter = completingAdapter(() => {
+        sessionStarted = true;
+      });
+
+      await runStageAttempt({ ...depsFor(localState, seeded, adapter), template: discoveryTemplate });
+
+      // Asserted first: a session that ran at all is the defect, whatever the owner was or was not
+      // told afterwards -- it is the one that produces the plausible answer about nothing.
+      expect(sessionStarted).toBe(false);
+      const snapshot = snapshotOf(localState, seeded.workItemId);
+      expect(snapshot.humanRequests).toHaveLength(1);
+      expect(snapshot.humanRequests[0]?.blocking).toBe(true);
+      // The question names the repository's real state, not a generic "no workspace": the owner has
+      // to finish or abort the rebase, and nothing else will do.
+      expect(snapshot.humanRequests[0]?.title).toContain("rebase");
+      // And the stage did not close. A DISCOVERY that reports SUCCEEDED here is exactly the outcome
+      // the log-only degrade produced.
+      expect(snapshot.stageAttempts[0]?.status).toBe("WAITING_HUMAN");
+      expect(workspaceOf(localState, seeded.workItemId)).toBeNull();
+    },
+    GIT_TIMEOUT_MS,
+  );
+
   // An adapter that reads `invocation.workspace` nowhere gets no worktree cut on its behalf: doing
   // so would write a ref, a carry-in commit and a `.git/worktrees` entry into the owner's own
   // repository for a session that runs in a temporary directory of its own. `provider-claude-code`
