@@ -24,7 +24,13 @@ import { contextPackRecipeSectionSchema, maxContextPackRecipeSources } from "@lo
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 
-import { openLocalState, StateStoreError, type LocalState } from "../src/index.js";
+import {
+  openLocalState,
+  StateStoreError,
+  type LocalState,
+  type OpenLocalStateOptions,
+  type OrphanProcessEvent,
+} from "../src/index.js";
 
 const timestamp = "2026-08-22T18:00:00.000Z";
 
@@ -125,11 +131,12 @@ describe("SQLite local state", () => {
     await rm(temporaryDirectory, { recursive: true, force: true });
   });
 
-  const open = async (): Promise<LocalState> => {
+  const open = async (overrides: Partial<OpenLocalStateOptions> = {}): Promise<LocalState> => {
     state = await openLocalState({
       databasePath,
       now: () => new Date(timestamp),
       createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+      ...overrides,
     });
     return state;
   };
@@ -2483,14 +2490,23 @@ describe("SQLite local state", () => {
       expect(listed.sessions.find(({ id }) => id === started.session.id)?.pid).toBeNull();
     });
 
-    // The claim reconciliation makes is "killed first, marked second". Proven with a REAL detached
-    // child, spawned outside anything this state store manages, because the whole point is that the
-    // process outlives the daemon that spawned it.
-    it("kills a process orphaned by a daemon restart before ending its session", async () => {
+    // Spawns a real detached child, leaves a RUNNING session pointing at it, and reopens the store
+    // -- which is exactly the state a daemon that died mid-session without killing its own child
+    // leaves behind. Returns the pid and the session id, plus everything the orphan handling
+    // reported while reconciling.
+    const orphanAndReconcile = async (
+      names: { session: string; item: string; reconcile: string },
+      // A function of the ids the helper itself creates, so a test can write a probe that reads the
+      // very session being reconciled.
+      overrides: (context: {
+        sessionId: string;
+        stageAttemptId: string;
+      }) => Partial<OpenLocalStateOptions> = () => ({}),
+    ): Promise<{ pid: number; sessionId: string; reported: OrphanProcessEvent[] }> => {
       const before = await open();
-      const { stageAttemptId } = startWorkflow(before, "start-orphan-pid-session", "create-orphan-pid-item");
+      const { stageAttemptId } = startWorkflow(before, names.session, names.item);
       const started = before.execute(
-        startProviderSessionCommand("start-orphan-pid-provider-session", stageAttemptId),
+        startProviderSessionCommand(`${names.session}-provider`, stageAttemptId),
       );
       if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
 
@@ -2500,14 +2516,34 @@ describe("SQLite local state", () => {
       child.unref();
       setProviderSessionProcessPid(started.session.id, pid);
 
-      // No END_PROVIDER_SESSION: the row stays RUNNING with its pid recorded, which is what a
-      // daemon that died mid-session -- without killing its own child -- leaves behind.
       before.close();
       state = undefined;
 
-      const after = await open();
-      const reconciled = after.execute(reconcileWorkflowsCommand("reconcile-orphan-pid-session"));
+      const reported: OrphanProcessEvent[] = [];
+      const after = await open({
+        onOrphanProcess: (event) => reported.push(event),
+        ...overrides({ sessionId: started.session.id, stageAttemptId }),
+      });
+      const reconciled = after.execute(reconcileWorkflowsCommand(names.reconcile));
       if (reconciled.type !== "WORKFLOWS_RECONCILED") throw new Error("Expected reconciliation");
+      return { pid, sessionId: started.session.id, reported };
+    };
+
+    // The claim reconciliation makes is "killed first, marked second". Proven with a REAL detached
+    // child, spawned outside anything this state store manages, because the whole point is that the
+    // process outlives the daemon that spawned it.
+    //
+    // This also exercises the DEFAULT start-time probe -- the real synchronous `ps` call, on this
+    // machine, against a real pid. `IDENTITY_CONFIRMED` below is only reachable when that probe
+    // actually answered: a probe that cannot read a start time fails safe and skips the kill, so a
+    // broken `ps` invocation reads here as a live process and a `START_TIME_UNKNOWN` report rather
+    // than as a silent pass.
+    it("kills a process orphaned by a daemon restart before ending its session", async () => {
+      const { pid, sessionId, reported } = await orphanAndReconcile({
+        session: "start-orphan-pid-session",
+        item: "create-orphan-pid-item",
+        reconcile: "reconcile-orphan-pid-session",
+      });
 
       // `execute` sends SIGKILL synchronously and returns without waiting for it to land -- and in
       // production that is the whole story, because the orphan is never this process's own child.
@@ -2518,10 +2554,88 @@ describe("SQLite local state", () => {
       // sent the kill before this line ever runs.
       await waitUntilProcessExits(pid, PROCESS_EXIT_CONFIRMATION_TIMEOUT_MS);
       expect(isProcessAlive(pid)).toBe(false);
-      expect(reconciled.interruptedSessions.find(({ id }) => id === started.session.id)?.status).toBe(
-        "ENDED",
+      expect(readProviderSessionRow(sessionId).status).toBe("ENDED");
+      // The kill is recorded -- with the pid and the session it belonged to. A SIGKILL on the
+      // owner's machine that nothing anywhere wrote down is the defect this assertion closes.
+      expect(reported).toEqual([{ pid, sessionId, action: "KILLED", reason: "IDENTITY_CONFIRMED" }]);
+    });
+
+    // The ordering the test above NAMES could not previously be proven: swapping the two statements
+    // into mark-then-kill left it green, because a dead process and an ENDED row hold either way.
+    // The report callback fires at the moment of the kill decision, so reading the row from inside
+    // it is the observable intermediate state -- and it must still say RUNNING.
+    it("still has the session marked RUNNING at the moment it kills the process", async () => {
+      const statusAtKill: string[] = [];
+      const { pid, sessionId } = await orphanAndReconcile(
+        {
+          session: "start-orphan-order-session",
+          item: "create-orphan-order-item",
+          reconcile: "reconcile-orphan-order-session",
+        },
+        ({ stageAttemptId }) => ({
+          // Read through the store's OWN connection (`state.query`), not a second `DatabaseSync` on
+          // the same file: `execute` runs inside `BEGIN IMMEDIATE`, so a separate connection cannot
+          // see the uncommitted mark and would report RUNNING whichever order the two statements are
+          // in -- which is exactly why the previous version of this test could not fail.
+          onOrphanProcess: (event) => {
+            const sessions = state?.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId });
+            if (sessions?.type !== "PROVIDER_SESSIONS") throw new Error("Expected the attempt's sessions");
+            const session = sessions.sessions.find(({ id }) => id === event.sessionId);
+            if (session === undefined) throw new Error("Expected the orphaned session");
+            statusAtKill.push(session.status);
+          },
+        }),
       );
-      expect(readProviderSessionRow(started.session.id).status).toBe("ENDED");
+
+      expect(statusAtKill).toEqual(["RUNNING"]);
+      // And the mark did happen, so this is an ordering assertion rather than a "never marked" one.
+      expect(readProviderSessionRow(sessionId).status).toBe("ENDED");
+      await waitUntilProcessExits(pid, PROCESS_EXIT_CONFIRMATION_TIMEOUT_MS);
+    });
+
+    // The only way an orphan exists is a crash or a power-off, which usually means a reboot -- and
+    // after a reboot pid allocation restarts and walks back up through the recorded range. A reused
+    // pid necessarily started LATER than the session that recorded the original, and that is the one
+    // fact separating our dead child from the owner's editor or build.
+    it("leaves a reused pid alone, because it started after the session that recorded it", async () => {
+      const { pid, sessionId, reported } = await orphanAndReconcile(
+        {
+          session: "start-orphan-reuse-session",
+          item: "create-orphan-reuse-item",
+          reconcile: "reconcile-orphan-reuse-session",
+        },
+        // An hour after the session started: this process cannot be the one the session recorded.
+        () => ({ processStartedAt: () => new Date(Date.parse(timestamp) + 3_600_000) }),
+      );
+      try {
+        expect(isProcessAlive(pid)).toBe(true);
+        expect(reported).toEqual([{ pid, sessionId, action: "SKIPPED", reason: "STARTED_AFTER_SESSION" }]);
+        // The session is still reconciled -- the row must not stay RUNNING just because the process
+        // was spared, or the next start would look for it forever.
+        expect(readProviderSessionRow(sessionId).status).toBe("ENDED");
+      } finally {
+        process.kill(pid, "SIGKILL");
+      }
+    });
+
+    // Fail safe. `ps` can be absent (Windows), refuse, or print something unparseable. An orphan
+    // that survives is self-healing at the next daemon start; a SIGKILL to the wrong process is not.
+    it("leaves the orphan alone, and says so, when it cannot tell when the process started", async () => {
+      const { pid, sessionId, reported } = await orphanAndReconcile(
+        {
+          session: "start-orphan-unknown-session",
+          item: "create-orphan-unknown-item",
+          reconcile: "reconcile-orphan-unknown-session",
+        },
+        () => ({ processStartedAt: () => null }),
+      );
+      try {
+        expect(isProcessAlive(pid)).toBe(true);
+        expect(reported).toEqual([{ pid, sessionId, action: "SKIPPED", reason: "START_TIME_UNKNOWN" }]);
+        expect(readProviderSessionRow(sessionId).status).toBe("ENDED");
+      } finally {
+        process.kill(pid, "SIGKILL");
+      }
     });
 
     it("assembles the context sources snapshot from a published Checkpoint, Evidence, and a Decision", async () => {

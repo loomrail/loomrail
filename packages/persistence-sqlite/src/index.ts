@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -93,6 +94,7 @@ import {
   StateStoreError,
   type LocalState,
   type OpenLocalStateOptions,
+  type OrphanProcessEvent,
   type StateQuery,
   type StateQueryResult,
 } from "./types.js";
@@ -776,6 +778,44 @@ const isProcessAlive = (pid: number): boolean => {
   }
 };
 
+// How much later than its own ProviderSession a process may have started and still be believed to
+// be that session's child. `ps` reports elapsed time to the second, and the pid is recorded a beat
+// after the child is spawned, so a strict comparison would reject the very processes this guard
+// exists to let through. Two seconds is far shorter than the interval that makes a reused pid
+// plausible (a crash, a reboot, and enough new processes to walk the pid space back around).
+const PID_IDENTITY_TOLERANCE_MS = 2_000;
+
+// Reads when the process with this pid started, synchronously -- `execute` is synchronous end to
+// end, so there is no room here for an async probe.
+//
+// `etime` (elapsed time), not `etimes`: BSD `ps` on macOS has no `etimes` keyword at all ("ps:
+// etimes: keyword not found"), and `lstart`'s absolute timestamp is formatted with locale-dependent
+// month names. `etime` is `[[dd-]hh:]mm:ss`, numeric and locale-free, and subtracting it from now
+// gives the start time. Returns `null` -- never a guess -- when the probe cannot answer: `ps` is
+// absent (Windows), it exits non-zero, or its output does not parse. The caller treats `null` as
+// "do not kill".
+const readProcessStartTime = (pid: number, now: Date): Date | null => {
+  if (process.platform === "win32") return null;
+  let output: string;
+  try {
+    output = execFileSync("ps", ["-o", "etime=", "-p", String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return null;
+  }
+  const match = /^\s*(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)\s*$/.exec(output);
+  if (match === null) return null;
+  const [, days, hours, minutes, seconds] = match;
+  const elapsedSeconds =
+    Number(days ?? 0) * 86_400 +
+    Number(hours ?? 0) * 3_600 +
+    Number(minutes ?? 0) * 60 +
+    Number(seconds ?? 0);
+  return new Date(now.getTime() - elapsedSeconds * 1_000);
+};
+
 // Spec §8: kills the process an orphaned ProviderSession was driving, if it is still alive. Called
 // before that session is marked ENDED (see the RECONCILE_WORKFLOWS handler below) -- the reverse
 // order would let a crash between the two steps commit a session that reads as "ended" while its
@@ -786,17 +826,65 @@ const isProcessAlive = (pid: number): boolean => {
 // SIGKILL, not the graceful terminate-then-wait `runProcess`'s `stop()` uses: `execute` is
 // synchronous end to end, so there is no way to await a termination grace period here, and an
 // orphan with no daemon left watching it has no stdout listener or checkpoint write to let finish
-// anyway. Checked for liveness with `isProcessAlive` first, not signalled unconditionally, so a
-// retry after a crash -- the pid already dead, the ENDED write never having committed -- never
-// risks signalling whatever unrelated process the OS has since reused that pid for.
-const killOrphanedSessionProcess = (pid: number): void => {
-  if (!isProcessAlive(pid)) return;
+// anyway.
+//
+// TWO guards, not one, and both matter:
+//
+//   liveness -- `process.kill(pid, 0)` first, so a retry after a crash (the pid already dead, the
+//   ENDED write never having committed) does not signal anything;
+//
+//   identity -- the process must have started no later than the session that recorded it. The only
+//   way an orphan exists at all is a crash or a power-off, which usually means a reboot, and after
+//   a reboot pid allocation restarts and walks back up through the recorded range. A reused pid
+//   necessarily started LATER than the session that recorded the original, so this is the fact that
+//   separates our dead child from the owner's editor. FAIL SAFE: if the start time cannot be
+//   determined for any reason, the kill is skipped. An orphan that survives is self-healing at the
+//   next start; a SIGKILL to the wrong process is not.
+//
+// Every decision -- kill or skip, and why -- goes to `report`. An unrecorded SIGKILL on the owner's
+// machine is the defect this signature exists to close.
+const killOrphanedSessionProcess = (context: {
+  pid: number;
+  sessionId: string;
+  sessionStartedAt: string;
+  now: Date;
+  processStartedAt: (pid: number) => Date | null;
+  report: (event: OrphanProcessEvent) => void;
+}): void => {
+  const { pid, sessionId } = context;
+  if (!isProcessAlive(pid)) {
+    context.report({ pid, sessionId, action: "SKIPPED", reason: "ALREADY_GONE" });
+    return;
+  }
+  const startedAt = context.processStartedAt(pid);
+  if (startedAt === null) {
+    context.report({ pid, sessionId, action: "SKIPPED", reason: "START_TIME_UNKNOWN" });
+    return;
+  }
+  const sessionStartedAtMs = Date.parse(context.sessionStartedAt);
+  if (
+    Number.isNaN(sessionStartedAtMs) ||
+    startedAt.getTime() > sessionStartedAtMs + PID_IDENTITY_TOLERANCE_MS
+  ) {
+    context.report({ pid, sessionId, action: "SKIPPED", reason: "STARTED_AFTER_SESSION" });
+    return;
+  }
+  context.report({ pid, sessionId, action: "KILLED", reason: "IDENTITY_CONFIRMED" });
   process.kill(pid, "SIGKILL");
 };
 
 export const openLocalState = async (options: OpenLocalStateOptions): Promise<LocalState> => {
   const now = options.now ?? (() => new Date());
   const createId = options.createId ?? ((kind) => `${kind}-${randomUUID()}`);
+  const processStartedAt = options.processStartedAt ?? ((pid: number) => readProcessStartTime(pid, now()));
+  // The default of last resort. A SIGKILL to a process on the owner's machine that nothing recorded
+  // is exactly the defect this callback closes, so an uninjected caller still gets a durable line
+  // rather than silence. `apps/daemon` injects its own structured logger over this.
+  const reportOrphanProcess =
+    options.onOrphanProcess ??
+    ((event: OrphanProcessEvent) => {
+      process.stderr.write(`${JSON.stringify({ event: "orphanProcess", ...event })}\n`);
+    });
   const wasNonEmpty = await databaseWasNonEmpty(options.databasePath);
   if (options.databasePath !== ":memory:") {
     await mkdir(dirname(options.databasePath), { recursive: true });
@@ -2410,7 +2498,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           }
           // Kill first, mark second (see killOrphanedSessionProcess): a session with no recorded
           // pid never reached the point of having a process to kill, and is simply marked ENDED.
-          if (current.pid !== null) killOrphanedSessionProcess(current.pid);
+          if (current.pid !== null) {
+            killOrphanedSessionProcess({
+              pid: current.pid,
+              sessionId: current.id,
+              sessionStartedAt: current.startedAt,
+              now: new Date(occurredAt),
+              processStartedAt,
+              report: reportOrphanProcess,
+            });
+          }
           const session = providerSessionSchema.parse({
             ...current,
             status: "ENDED",

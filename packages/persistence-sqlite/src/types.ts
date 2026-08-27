@@ -149,6 +149,28 @@ export type LocalStateIdKind =
   | "contextPackRecipe"
   | "checkpoint";
 
+/**
+ * What startup reconciliation did about the process an orphaned ProviderSession left behind.
+ *
+ * A SIGKILL to a process on the owner's machine used to leave no record anywhere that it happened.
+ * This is that record. `action: "SKIPPED"` is reported just as loudly as a kill, because "an orphan
+ * is still running and Loomrail chose not to signal it" is a fact the owner has to be able to find.
+ */
+export type OrphanProcessEvent = {
+  pid: number;
+  sessionId: string;
+  action: "KILLED" | "SKIPPED";
+  reason:
+    /** The pid is not alive at all; there was nothing to signal. */
+    | "ALREADY_GONE"
+    /** The process started no later than its session did, so it is plausibly the one we recorded. */
+    | "IDENTITY_CONFIRMED"
+    /** The probe could not say when the process started, so the kill was not attempted. */
+    | "START_TIME_UNKNOWN"
+    /** The process started after its session did: the pid was reused, and this is not our child. */
+    | "STARTED_AFTER_SESSION";
+};
+
 export type OpenLocalStateOptions = {
   databasePath: string;
   backupsDirectory?: string;
@@ -163,4 +185,18 @@ export type OpenLocalStateOptions = {
   // observable difference between "wrapped in one transaction" and "read as independent
   // statements". Never set outside tests; a no-op when absent.
   onContextSourcesSnapshotStarted?: () => void;
+  /**
+   * Called synchronously, once per orphaned ProviderSession that carries a pid, at the moment
+   * reconciliation decides what to do about that process -- BEFORE the session row is marked ENDED.
+   * Injected the way `now` and `createId` are, so the daemon can route it into its own structured
+   * logger; the default writes one line to stderr, because a kill that nothing recorded is the
+   * defect this exists to close and an uninjected caller must not silently reopen it.
+   */
+  onOrphanProcess?: (event: OrphanProcessEvent) => void;
+  /**
+   * When the process with this pid started, or `null` if that cannot be determined. Injected only
+   * so a test can drive both sides of the pid-reuse guard deterministically; production uses the
+   * default synchronous `ps` probe.
+   */
+  processStartedAt?: (pid: number) => Date | null;
 };

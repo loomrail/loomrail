@@ -213,7 +213,25 @@ its session. Mitigation, verified in code:
   can never commit a session that reads as over while its process is still running. Verified against a real
   detached child process, not a mock, by
   `packages/persistence-sqlite/test/local-state.integration.test.ts`'s "kills a process orphaned by a daemon
-  restart before ending its session".
+  restart before ending its session", and the ordering itself by that file's "still has the session marked
+  RUNNING at the moment it kills the process", which reads the row through the store's own connection from
+  inside the kill and therefore fails if the two statements are swapped;
+- **the kill is guarded on process identity, and fails safe.** SIGKILL is only sent when the process started no
+  later than the session that recorded its pid (plus a two-second tolerance). The only way an orphan exists is
+  a crash or a power-off, which usually means a reboot — and after a reboot pid allocation restarts and walks
+  back up through the recorded range, so a reused pid is a live risk, bounded to the same OS user (`process.kill(pid, 0)`
+  throws `EPERM` for another user's process, and the liveness check already reads that as "not alive"). Start
+  time is read with a synchronous `ps -o etime=` probe; when it cannot be determined for any reason — `ps`
+  absent, non-zero exit, unparseable output, or Windows, where the probe does not run at all — **the kill is
+  skipped**. An orphan that survives is self-healing at the next daemon start; a `SIGKILL` to the owner's
+  editor or build is not. Both directions are pinned by
+  `packages/persistence-sqlite/test/local-state.integration.test.ts`'s "leaves a reused pid alone…" and
+  "leaves the orphan alone, and says so, when it cannot tell when the process started";
+- **every decision is recorded**, kill or skip, with the pid and the session id, through an `onOrphanProcess`
+  callback that `apps/daemon` routes into its structured logger. A `SIGKILL` on the owner's machine that
+  nothing anywhere wrote down was itself the finding this closes; a skipped kill is logged just as loudly,
+  because "an orphan is still running and Loomrail chose not to signal it" is a fact the owner has to be able
+  to find.
 
 **T18 — the untrusted provider stream carries the owner's own hook output.** Rated High: reconnaissance found
 Claude Code's event stream carries `hook_started`/`hook_response` events with the owner's own hook `stdout`

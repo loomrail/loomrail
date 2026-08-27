@@ -279,7 +279,23 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   // through, because there is exactly one `localState` and it is already wrapped by the time any
   // of them see it. See broadcasting-state.ts.
   const localState = broadcastingState(
-    await openLocalState({ databasePath: options.stateDatabasePath ?? ":memory:", now }),
+    await openLocalState({
+      databasePath: options.stateDatabasePath ?? ":memory:",
+      now,
+      // Startup reconciliation SIGKILLs the process an orphaned ProviderSession left behind, on the
+      // owner's own machine. That used to leave no record anywhere. Routed into the daemon's own
+      // structured logger here rather than the store's stderr default -- and a skipped kill is
+      // logged as loudly as a performed one, because "an orphan is still running and Loomrail chose
+      // not to signal it" is the fact an owner would otherwise have no way to find.
+      onOrphanProcess: (event) => {
+        app.log.warn(
+          { pid: event.pid, providerSessionId: event.sessionId, reason: event.reason },
+          event.action === "KILLED"
+            ? "Killed the process an orphaned provider session left behind"
+            : "Left an orphaned provider session's process alone",
+        );
+      },
+    }),
     eventStreams.publish,
     app.log,
   );
