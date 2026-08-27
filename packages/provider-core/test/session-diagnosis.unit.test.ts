@@ -70,6 +70,28 @@ describe("describeUnproductiveSession", () => {
     expect(() => humanRequestDraftSchema.parse(request)).not.toThrow();
   });
 
+  // The truncation cuts by UTF-16 code unit, and an emoji in a provider's own error message is not
+  // exotic. Cutting between the halves of one leaves an ill-formed string: the owner sees a
+  // replacement character sitting in the middle of the one diagnostic that was supposed to explain
+  // what went wrong. The text below is built so the cut lands exactly on the pair -- 998 characters,
+  // then the emoji, with the limit at 1000 and the slice at 999.
+  it("does not cut a provider's text in the middle of an astral character", () => {
+    const request = requestOf(
+      describeUnproductiveSession(
+        report({
+          reason: "PROVIDER_REPORTED_FAILURE",
+          providerText: `${"a".repeat(998)}\u{1F600}${"a".repeat(100)}`,
+        }),
+      ),
+    );
+    expect(request.context.isWellFormed()).toBe(true);
+    expect(request.context).not.toContain("\uFFFD");
+    // Still truncated, and still the same character budget: the guard drops the orphaned half, it
+    // does not stop the truncation from happening.
+    expect(request.context).toContain("…");
+    expect(request.context).toContain("a".repeat(998));
+  });
+
   // Every field the builder fills is bounded, not just the one carrying provider text: a request it
   // cannot validate is a failed session failing a second time, inside the diagnosis of the first.
   it("stays within the contract even when the executable path is absurdly long", () => {

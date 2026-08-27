@@ -61,8 +61,19 @@ const PROVIDER_TEXT_LIMIT = 1_000;
 // its diagnosis was too long to state.
 const CONTEXT_LIMIT = 4_000;
 
+// `slice` cuts by UTF-16 code unit, so a cut that lands between the two halves of an astral
+// character (an emoji in a provider's own error text is not exotic) leaves a lone high surrogate at
+// the end -- an ill-formed string that renders as a replacement character. Nothing crashes; the
+// owner just sees "\uFFFD" in the middle of the one diagnostic that was supposed to explain the
+// failure. Only a HIGH surrogate can be orphaned this way: a slice can strip the tail of a pair,
+// never its head.
+const dropTrailingLoneSurrogate = (text: string): string => {
+  const last = text.charCodeAt(text.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? text.slice(0, -1) : text;
+};
+
 const truncate = (text: string, limit: number): string =>
-  text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
+  text.length <= limit ? text : `${dropTrailingLoneSurrogate(text.slice(0, limit - 1))}…`;
 
 const describeExit = (report: UnproductiveSessionReport): string => {
   if (report.reason === "SPAWN_FAILED") return `The process never started.`;
