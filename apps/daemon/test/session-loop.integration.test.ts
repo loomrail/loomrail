@@ -673,6 +673,15 @@ describe("session loop workspace provisioning", () => {
       expect(requests[0]?.title).toContain("orphaned");
       expect(requests[0]?.context).toContain(branch);
       expect(requests[0]?.blocking).toBe(true);
+      // ORPHANED is terminal, so the question must not end in an instruction that leads nowhere.
+      // It used to say "Restore or remove <path> yourself, then retry the stage": restoring changes
+      // nothing (the status, not the disk, is what refuses), removal is not a command Loomrail has,
+      // and the retry re-reads the same row and asks the same question -- a loop the owner cannot
+      // leave. Pinned as three separate claims because they fail for three different reasons.
+      expect(requests[0]?.recommendation).not.toContain("retry");
+      expect(requests[0]?.recommendation).toContain("nothing to do at");
+      expect(requests[0]?.recommendation).toContain(branch);
+      expect(requests[0]?.context).toContain("Every later stage");
     },
     GIT_TIMEOUT_MS,
   );

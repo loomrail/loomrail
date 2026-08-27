@@ -322,10 +322,24 @@ const noBaseCommitRefusal = (path: string): ProvisionRefusal => ({
   recommendation: "Make the repository's first commit, then retry the stage.",
 });
 
+// The recommendation names no action on the workspace, and that is the whole point of its wording.
+// It used to say "Restore or remove <path> yourself, then retry" -- the same false advice already
+// deleted from `workspaceGoneRefusal` below, and worse here, because there the restore genuinely
+// works. Once reconciliation has marked a workspace ORPHANED the status is terminal: no command
+// returns it to READY, nothing produces REMOVED, and CREATE_WORK_ITEM_WORKSPACE refuses while the
+// row exists. Restoring the directory changes nothing, removal does not exist, and the next
+// dispatch reads the same row and refuses identically -- an owner who followed that advice was in
+// a loop with no exit in it.
+//
+// What is true is that this work item cannot run again in this workspace, and that Loomrail has no
+// affordance -- yet -- for the intervention that would free it. Saying so plainly is worth more
+// than an instruction that does nothing, and the branch really is still there, which is the one
+// thing an owner can still act on. Building a removal command is a decision for a later milestone,
+// not something to smuggle in behind this sentence.
 const workspaceNotReadyRefusal = (workspace: WorkItemWorkspace): ProvisionRefusal => ({
-  title: `This work item's workspace is ${workspace.status.toLowerCase()}, not ready to be written in`,
-  context: `The workspace recorded for this work item is on branch ${workspace.branch} at ${workspace.worktreePath}, and its status is ${workspace.status}. Loomrail does not recreate a workspace by itself (AD-008): a directory that disappeared may still hold the only copy of earlier work, and re-cutting one silently would hide that.`,
-  recommendation: `Restore or remove ${workspace.worktreePath} yourself, then retry the stage. The branch ${workspace.branch} still holds whatever was committed to it.`,
+  title: `This work item's workspace is ${workspace.status.toLowerCase()}, and cannot be returned to service`,
+  context: `The workspace recorded for this work item is on branch ${workspace.branch} at ${workspace.worktreePath}, and its status is ${workspace.status} rather than READY. That status is the end of the line for this workspace: nothing in Loomrail moves a workspace back to READY, and no second workspace can be cut for this work item while this record exists. Every later stage of this work item that needs a repository will be refused exactly like this one. Loomrail does not recreate a workspace by itself (AD-008): a directory that disappeared may still hold the only copy of earlier work, and re-cutting one silently would hide that.`,
+  recommendation: `There is nothing to do at ${workspace.worktreePath}: restoring the directory will not change this answer, and Loomrail has no command that clears a workspace record. This work item is stuck until it does, which is not something you can do from the cockpit today. What survives is the branch ${workspace.branch} -- it still holds whatever was committed to it, so read it with git and carry the work forward under a new work item, which gets a workspace of its own.`,
 });
 
 const workspaceGoneRefusal = (workspace: WorkItemWorkspace): ProvisionRefusal => ({
