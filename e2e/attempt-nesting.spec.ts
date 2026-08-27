@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { materialiseFixtureRepository, resolveBundledFixture } from "../apps/daemon/dist/fixtures.js";
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
 import { openLocalState, type LocalState } from "../packages/persistence-sqlite/dist/index.js";
 import { mockDeliveryTemplate } from "../packages/workflow-engine/dist/index.js";
@@ -20,12 +21,44 @@ import { mockDeliveryTemplate } from "../packages/workflow-engine/dist/index.js"
  * session's in-flight edits.
  */
 
+/**
+ * The repository a seeded Project points at, materialised the way registration would.
+ *
+ * A bundled fixture is a template inside this checkout, never a repository -- a nested `.git` cannot
+ * be committed here. A Project seeded at the template is therefore a Project whose path is a
+ * directory inside Loomrail's own repository, and the daemon refuses to cut a workspace from one of
+ * those (it would branch the developer's own tree), answering with a blocking question instead of
+ * running the stage. So the seed calls the daemon's own materialiser, rooted where a daemon opening
+ * this database file defaults its demo root: beside the database, at `<data>/demo-projects`.
+ */
+const seedRepositoryPath = async (databasePath: string): Promise<string> =>
+  (
+    await materialiseFixtureRepository(
+      await resolveBundledFixture("web-app-a"),
+      join(dirname(databasePath), "demo-projects"),
+    )
+  ).repositoryPath;
+
+/**
+ * Presses "Initialize demo workspace" and waits for it to finish.
+ *
+ * The wait is given more than Playwright's default because the button now does real work: each
+ * bundled fixture is copied out of this checkout and given a repository of its own with a first
+ * commit, which is what makes a later IMPLEMENT stage able to cut a worktree at all. On a cold
+ * machine that is two `git init` plus two first commits before the projects list can render.
+ */
+const DEMO_INITIALISATION_MS = 20_000;
+
 const initializeWorkspace = async (page: Page): Promise<void> => {
   const initialize = page.getByRole("button", { name: "Initialize demo workspace" });
   await expect(initialize).toBeVisible();
   await initialize.click();
-  await expect(page.getByRole("button", { name: "Switch project" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "New task" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Switch project" })).toBeVisible({
+    timeout: DEMO_INITIALISATION_MS,
+  });
+  await expect(page.getByRole("button", { name: "New task" })).toBeEnabled({
+    timeout: DEMO_INITIALISATION_MS,
+  });
 };
 
 const createTask = async (page: Page, title: string): Promise<void> => {
@@ -102,7 +135,7 @@ const seedMeasuredAndHandedOffSessions = async (databasePath: string, title: str
         id: "project-web",
         fixtureId: "web-app-a",
         name: "Fixture web application",
-        repositoryPath: resolve("fixtures/projects/web-app-a"),
+        repositoryPath: await seedRepositoryPath(databasePath),
       },
     });
     const created = localState.execute({

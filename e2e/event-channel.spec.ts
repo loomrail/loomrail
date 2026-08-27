@@ -38,12 +38,26 @@ test.afterEach(async () => {
   daemon = undefined;
 });
 
+/**
+ * Presses "Initialize demo workspace" and waits for it to finish.
+ *
+ * The wait is given more than Playwright's default because the button now does real work: each
+ * bundled fixture is copied out of this checkout and given a repository of its own with a first
+ * commit, which is what makes a later IMPLEMENT stage able to cut a worktree at all. On a cold
+ * machine that is two `git init` plus two first commits before the projects list can render.
+ */
+const DEMO_INITIALISATION_MS = 20_000;
+
 const initializeWorkspace = async (page: Page): Promise<void> => {
   const initialize = page.getByRole("button", { name: "Initialize demo workspace" });
   await expect(initialize).toBeVisible();
   await initialize.click();
-  await expect(page.getByRole("button", { name: "Switch project" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "New task" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Switch project" })).toBeVisible({
+    timeout: DEMO_INITIALISATION_MS,
+  });
+  await expect(page.getByRole("button", { name: "New task" })).toBeEnabled({
+    timeout: DEMO_INITIALISATION_MS,
+  });
 };
 
 const createTask = async (page: Page, title: string): Promise<void> => {
@@ -94,6 +108,16 @@ const openObserver = async (page: Page, title: string): Promise<Locator> => {
 };
 
 /**
+ * How long a run may take to reach IMPLEMENT's budget wall.
+ *
+ * More than Playwright's default because IMPLEMENT is now a stage that cuts a Git worktree before
+ * its first session opens -- snapshot, `worktree add`, and the repository inspection ahead of both.
+ * The assertion is unchanged: the wall still has to be reached, and a run that never gets there
+ * still fails here. Only the patience is different, and it is different because the work is real.
+ */
+const BUDGET_WALL_MS = 20_000;
+
+/**
  * Drives the actor through every human decision the mock delivery needs before its remaining
  * stages (IMPLEMENT's retry, REVIEW, QA, ACCEPTANCE) can run unattended: Ready, start, and the
  * discovery choice. Stops with the attempt sitting at "Budget paused" so a caller can open an
@@ -108,7 +132,9 @@ const readyForBudgetApproval = async (page: Page, inspector: Locator): Promise<L
   await inspector.getByRole("button", { name: "Answer & resume" }).click();
 
   const workflowSection = workflowSectionOf(page, inspector);
-  await expect(workflowSection.getByText("Budget paused", { exact: true }).first()).toBeVisible();
+  await expect(workflowSection.getByText("Budget paused", { exact: true }).first()).toBeVisible({
+    timeout: BUDGET_WALL_MS,
+  });
   await expect(workflowSection.getByText("100 of 100", { exact: true })).toBeVisible();
   return workflowSection;
 };
