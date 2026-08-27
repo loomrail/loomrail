@@ -53,7 +53,9 @@ It also carries what the A2 parser did not model: `item.started` events, and the
 
 **The one redaction:** one substitution, applied to the whole stream — the absolute worktree path became
 `/tmp/loomrail-worktree`, where it appeared in `file_change.changes[].path`. Checked afterwards for
-the owner's username, `/Users/`, the session temp root and `Application Support`: none occur.
+the owner's username, the macOS home-directory prefix, the session temp root and
+`Application Support`: none occur. (`pnpm test:public-readiness` refuses that prefix in any tracked
+file, this inventory included, which is why it is described here rather than written out.)
 `thread_id` is left as recorded, matching the other entries above.
 
 ## Redaction
