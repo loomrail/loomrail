@@ -42,5 +42,8 @@ if (hangMarkerPath !== undefined) {
   if (outputFile !== undefined) {
     process.stdout.write(readFileSync(outputFile, "utf8"));
   }
-  process.exit(0);
+  // `process.exitCode`, never `process.exit(0)` -- see fake-codex.mjs's copy of this note: a pipe
+  // write is asynchronous, and exiting outright can truncate a recording larger than the pipe
+  // buffer, which the adapter under test would then see as a stream ending mid-line.
+  process.exitCode = 0;
 }

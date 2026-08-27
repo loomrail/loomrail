@@ -10,6 +10,7 @@ import type {
   ProviderUsage,
 } from "@loomrail/contracts";
 import type { ProviderAdapter, ProviderInvocation, ProviderSessionListener } from "@loomrail/provider-core";
+import { contextWindowUsageSchema } from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createCodexProvider } from "../src/index.js";
@@ -264,6 +265,22 @@ describe("createCodexProvider", () => {
       { contextWindowTokens: 200_000 },
     );
     expect(seen.at(-1)).toEqual({ usedTokens: 17854, windowTokens: 200_000, quality: "ACTUAL" });
+  });
+
+  // M7: `contextWindowUsageSchema` rejects `usedTokens > windowTokens`, and the daemon `safeParse`s
+  // an occupancy report and drops what fails -- so an understated declared window disables
+  // occupancy reporting entirely rather than merely skewing it. `hello.jsonl` really did measure
+  // 17 854 input tokens; a declared window below that must still produce a usable report.
+  it("clamps occupancy to the declared window instead of reporting past it", async () => {
+    const seen: ContextWindowUsage[] = [];
+    await runAgainstRecording(
+      "hello.jsonl",
+      { onContextWindow: (usage) => seen.push(usage) },
+      { contextWindowTokens: 1_000 },
+    );
+    expect(seen.at(-1)).toEqual({ usedTokens: 1_000, windowTokens: 1_000, quality: "ACTUAL" });
+    // The point of the clamp: what it produces is a report the contract accepts.
+    expect(() => contextWindowUsageSchema.parse(seen.at(-1))).not.toThrow();
   });
 
   // requestHandoff is declared unsupported; it must be a no-op rather than an error, because the

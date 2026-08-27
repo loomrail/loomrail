@@ -239,8 +239,17 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
                   quality: "ACTUAL",
                 };
                 listener.onUsage(usage);
+                // Clamped to the declared window, not reported raw. `contextWindowUsageSchema`
+                // REJECTS `usedTokens > windowTokens`, and the daemon `safeParse`s an occupancy
+                // report and silently drops what fails -- so an understated window does not merely
+                // misreport occupancy, it disables occupancy reporting entirely, and with it the
+                // handoff threshold that depends on it. Codex declares 128 000 while a trivial
+                // prompt already measured 17 838 input tokens against a larger real window; the
+                // clamp is what keeps a conservative declaration from silently costing the owner
+                // the whole signal. It reads as "full", which is the safe direction: it triggers a
+                // handoff early rather than never.
                 listener.onContextWindow({
-                  usedTokens: event.usage.inputTokens,
+                  usedTokens: Math.min(event.usage.inputTokens, resolved.contextWindowTokens),
                   windowTokens: resolved.contextWindowTokens,
                   quality: "ACTUAL",
                 });

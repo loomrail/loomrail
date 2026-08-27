@@ -292,8 +292,13 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
             // Loomrail made about it (spec §5.2's LOOMRAIL_ESTIMATE is for adapters with nothing
             // better). Mirrors provider-codex's identical `turn.completed` -> `onContextWindow`
             // call.
+            // Clamped, for the reason spelled out in provider-codex's identical call: the contract
+            // rejects `usedTokens > windowTokens` and the daemon silently drops what it cannot
+            // parse, so an understated declared window would disable occupancy reporting outright
+            // rather than merely skew it. Reporting "full" is the safe direction -- it hands off
+            // early instead of never.
             listener.onContextWindow({
-              usedTokens: event.inputTokens,
+              usedTokens: Math.min(event.inputTokens, resolved.contextWindowTokens),
               windowTokens: resolved.contextWindowTokens,
               quality: "ACTUAL",
             });

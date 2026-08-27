@@ -10,6 +10,7 @@ import type {
   ProviderUsage,
 } from "@loomrail/contracts";
 import type { ProviderAdapter, ProviderInvocation, ProviderSessionListener } from "@loomrail/provider-core";
+import { contextWindowUsageSchema } from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createClaudeCodeProvider } from "../src/index.js";
@@ -330,6 +331,20 @@ describe("createClaudeCodeProvider", () => {
       { contextWindowTokens: 200_000 },
     );
     expect(seen.at(-1)).toEqual({ usedTokens: 4, windowTokens: 200_000, quality: "ACTUAL" });
+  });
+
+  // M7, mirroring provider-codex's test of the same name: an understated declared window must not
+  // produce a report the contract rejects -- the daemon `safeParse`s occupancy and silently drops
+  // what fails, so that would disable occupancy reporting outright.
+  it("clamps occupancy to the declared window instead of reporting past it", async () => {
+    const seen: ContextWindowUsage[] = [];
+    await runAgainstRecording(
+      "hello.jsonl",
+      { onContextWindow: (usage) => seen.push(usage) },
+      { contextWindowTokens: 2 },
+    );
+    expect(seen.at(-1)).toEqual({ usedTokens: 2, windowTokens: 2, quality: "ACTUAL" });
+    expect(() => contextWindowUsageSchema.parse(seen.at(-1))).not.toThrow();
   });
 
   // `hello.jsonl`'s terminal result is JSON conforming to checkpointDraftSchema (what

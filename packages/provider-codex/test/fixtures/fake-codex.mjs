@@ -37,13 +37,24 @@ if (hangMarkerPath !== undefined) {
   const finish = () => {
     if (finished) return;
     finished = true;
+    // Releases the event-loop reference `process.stdin.resume()` below takes. Without it, exiting
+    // via `process.exitCode` (rather than `process.exit`, which would truncate the pipe write
+    // beneath) would never happen on the path where the parent leaves stdin open -- and that path
+    // is a regression one of the adapter tests exists to catch, so it has to fail by assertion, not
+    // by hanging until the runner gives up.
+    process.stdin.pause();
     if (recordPath !== undefined) {
       writeFileSync(recordPath, JSON.stringify({ args: process.argv.slice(2), stdinClosed }));
     }
     if (outputFile !== undefined) {
       process.stdout.write(readFileSync(outputFile, "utf8"));
     }
-    process.exit(0);
+    // `process.exitCode`, never `process.exit(0)`: a pipe write is asynchronous on POSIX, and
+    // `process.exit` tears the process down without waiting for the pipe to drain -- a recording
+    // larger than the pipe buffer would be truncated, and the adapter under test would see a
+    // stream ending mid-line for reasons that have nothing to do with the adapter. Setting the
+    // code lets the event loop empty naturally and exit on its own.
+    process.exitCode = 0;
   };
 
   process.stdin.on("end", () => {
