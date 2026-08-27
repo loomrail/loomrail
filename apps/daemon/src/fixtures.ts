@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -291,6 +291,51 @@ const copyTemplateInto = async (from: string, to: string): Promise<void> => {
  */
 export type MaterialisedFixture = { repositoryPath: string; created: boolean };
 
+const STAGING_PREFIX = ".materialising-";
+
+/**
+ * How old a staging directory has to be before it is treated as abandoned rather than in flight.
+ *
+ * An hour, not a minute: the only cost of waiting is a directory sitting in the data folder, while
+ * deleting one a live registration is still copying into would fail that registration. A single
+ * materialisation is a template copy and three `git` invocations -- seconds, not minutes -- so an
+ * hour is far past anything a running copy could still be doing, on any machine.
+ */
+const STALE_STAGING_AGE_MS = 60 * 60 * 1_000;
+
+/**
+ * Removes staging directories a previous materialisation left behind.
+ *
+ * The copy is built under `.materialising-<fixtureId>-XXXX` and moved into place with one rename,
+ * which is what makes a half-populated repository impossible to observe -- but it also means a
+ * process killed mid-copy leaves that directory in the owner's data folder with nothing to sweep
+ * it. This is that sweep, at the only moment anything looks at the folder anyway.
+ *
+ * Best effort throughout, and deliberately so: an unreadable data folder or an undeletable leftover
+ * is a reason to leave the mess and get on with the registration the owner asked for, not a reason
+ * to fail it. Failing here would turn a wasted directory into a demo workspace that cannot be
+ * initialised at all.
+ */
+const sweepStaleStaging = async (root: string, olderThan: number): Promise<void> => {
+  let entries: string[] = [];
+  try {
+    entries = await readdir(root);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (!name.startsWith(STAGING_PREFIX)) continue;
+    const candidate = join(root, name);
+    try {
+      const stats = await stat(candidate);
+      if (!stats.isDirectory() || stats.mtimeMs > olderThan) continue;
+      await rm(candidate, { recursive: true, force: true });
+    } catch {
+      // Gone already, or not ours to remove. Either way the next materialisation will look again.
+    }
+  }
+};
+
 /**
  * Turns a bundled fixture template into a real Git repository under `demoProjectsRoot`, and answers
  * with the path a Project should record.
@@ -318,7 +363,8 @@ export const materialiseFixtureRepository = async (
   if (await pathExists(target)) return { repositoryPath: await canonical(), created: false };
 
   await mkdir(root, { recursive: true });
-  const staging = await mkdtemp(join(root, `.materialising-${fixture.fixtureId}-`));
+  await sweepStaleStaging(root, Date.now() - STALE_STAGING_AGE_MS);
+  const staging = await mkdtemp(join(root, `${STAGING_PREFIX}${fixture.fixtureId}-`));
   try {
     await copyTemplateInto(fixture.templatePath, staging);
     await runGitOrThrow(["init", "--quiet", "-b", "main"], staging, "init");

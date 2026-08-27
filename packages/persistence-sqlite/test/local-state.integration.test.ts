@@ -28,6 +28,7 @@ import { contextPackRecipeSectionSchema, maxContextPackRecipeSources } from "@lo
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 
+import { applyMigrations } from "../src/migrations.js";
 import {
   openLocalState,
   StateStoreError,
@@ -1233,6 +1234,41 @@ describe("SQLite local state", () => {
       },
     });
     expect(second.type).toBe("PROJECT_REGISTERED");
+  });
+
+  // Migration 0012 runs with `PRAGMA foreign_keys` off -- SQLite's own procedure for rebuilding a
+  // table thirteen others reference -- which makes this the one place in the codebase that turns
+  // the check off. It used to turn it back ON unconditionally, which is right only for as long as
+  // every caller happens to open with it on.
+  it("restores the foreign-key setting a rebuilding migration found rather than assuming it was on", async () => {
+    const localState = await open();
+    localState.execute(registerProject("project-web", "register-web-before-pragma-check"));
+    localState.close();
+    state = undefined;
+
+    // Migration 12 made pending again, the same way the rebuild test above does it, so a rebuilding
+    // migration really runs here. Without this the test would pass with no migration applied at all.
+    const revert = new DatabaseSync(databasePath);
+    revert.exec("PRAGMA foreign_keys = OFF");
+    revert.exec("CREATE TABLE projects_v11 AS SELECT * FROM projects");
+    revert.exec("DROP TABLE projects");
+    revert.exec("ALTER TABLE projects_v11 RENAME TO projects");
+    revert.prepare("DELETE FROM schema_migrations WHERE version = 12").run();
+    revert.close();
+
+    const database = new DatabaseSync(databasePath);
+    database.exec("PRAGMA foreign_keys = OFF");
+    const startup = await applyMigrations(database, {
+      databasePath,
+      now: () => new Date(timestamp),
+      databaseWasNonEmpty: false,
+    });
+    expect(startup.appliedMigrations).toEqual([12]);
+    // Restored to what this connection had, not to ON. `openLocalState` always opens with the check
+    // on, so today both answers look the same from the outside -- which is exactly why the wrong
+    // one could sit here unnoticed.
+    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
+    database.close();
   });
 
   it("fails closed when an applied migration checksum drifts", async () => {

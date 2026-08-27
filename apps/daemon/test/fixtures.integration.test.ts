@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -95,6 +95,33 @@ describe("fixture materialisation", () => {
     expect(second).toEqual({ repositoryPath: first.repositoryPath, created: false });
     expect((await inspectRepository(second.repositoryPath))?.headCommit).toBe(firstCommit);
     expect(await readFile(join(second.repositoryPath, "owners-note.txt"), "utf8")).toBe("work in progress\n");
+  });
+
+  // The copy is built in a staging directory and moved into place with a single rename, which is
+  // what makes a half-populated repository impossible to observe. The price is that a process killed
+  // mid-copy leaves that directory behind, in the owner's data folder, with nothing to remove it.
+  it("sweeps a staging directory an earlier materialisation abandoned, and leaves a live one alone", async () => {
+    const demoProjectsRoot = await scratch("materialise sweep root ");
+    const templatePath = await scratch("materialise sweep template ");
+    await writeFile(join(templatePath, "README.md"), "# Template\n", "utf8");
+
+    const abandoned = join(demoProjectsRoot, ".materialising-web-app-a-abandoned");
+    await mkdir(abandoned, { recursive: true });
+    await writeFile(join(abandoned, "half-copied.txt"), "interrupted\n", "utf8");
+    // Old enough that no live copy could still be working in it: a materialisation is a directory
+    // copy and three `git` invocations, seconds at most.
+    const longAgo = new Date(Date.now() - 6 * 60 * 60 * 1_000);
+    await utimes(abandoned, longAgo, longAgo);
+
+    // A staging directory another registration is using right now, distinguished only by its age.
+    const inFlight = join(demoProjectsRoot, ".materialising-api-service-b-in-flight");
+    await mkdir(inFlight, { recursive: true });
+
+    const materialised = await materialiseFixtureRepository(templateFixture(templatePath), demoProjectsRoot);
+    expect(materialised.created).toBe(true);
+
+    await expect(access(abandoned)).rejects.toThrow();
+    await expect(access(inFlight)).resolves.toBeUndefined();
   });
 
   it("refuses a path inside another repository with the reason that is actually true", async () => {

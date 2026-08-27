@@ -112,6 +112,28 @@ const backupFilename = (now: Date): string =>
  * database is sound, so the assertion is on emptiness. The first violation is named in the message
  * because a rebuild that dropped rows names exactly which table stopped resolving.
  */
+// `PRAGMA foreign_keys` answers as a one-row result whose single column is named after the pragma.
+const foreignKeysRowSchema = z.object({ foreign_keys: z.number().int() });
+
+/**
+ * Whether this connection currently enforces foreign keys.
+ *
+ * Read rather than assumed. `openLocalState` turns the check on before any migration runs, so the
+ * value here is on today -- but a rebuilding migration is the one place in the codebase that turns
+ * it *off*, and restoring an assumption instead of the value found is exactly how such a place
+ * silently starts lying when the assumption changes. A connection whose pragma cannot be read is
+ * treated as enforcing, because that is the safe direction: the cost of turning it on when it was
+ * off is a check that was not asked for, and the cost of the reverse is a database that stops
+ * enforcing its own references with nothing saying so.
+ */
+const foreignKeysAreOn = (database: DatabaseSync): boolean => {
+  try {
+    return foreignKeysRowSchema.parse(database.prepare("PRAGMA foreign_keys").get()).foreign_keys !== 0;
+  } catch {
+    return true;
+  }
+};
+
 const assertForeignKeysIntact = (database: DatabaseSync, version: number): void => {
   const violations = database.prepare("PRAGMA foreign_key_check").all();
   if (violations.length === 0) return;
@@ -177,6 +199,7 @@ export const applyMigrations = async (
   for (const migration of pending) {
     const rebuild = migration.rebuildsAReferencedTable === true;
     // Outside the transaction on purpose: `PRAGMA foreign_keys` is a no-op inside one.
+    const foreignKeysWereOn = rebuild && foreignKeysAreOn(database);
     if (rebuild) database.exec("PRAGMA foreign_keys = OFF");
     try {
       database.exec("BEGIN IMMEDIATE");
@@ -202,9 +225,12 @@ export const applyMigrations = async (
             );
       }
     } finally {
-      // Restored on both paths. A migration that threw still leaves this connection to whoever
-      // catches, and a connection with foreign keys quietly off is worse than the failure.
-      if (rebuild) database.exec("PRAGMA foreign_keys = ON");
+      // Restored to the value this connection had, on both paths. A migration that threw still
+      // leaves this connection to whoever catches, and a connection with foreign keys quietly off
+      // is worse than the failure -- but "restored" has to mean the value found, not a hardcoded
+      // ON: this is the one place that turns the check off, so it is the one place an unstated
+      // assumption about the caller's setting would go unnoticed.
+      if (rebuild) database.exec(`PRAGMA foreign_keys = ${foreignKeysWereOn ? "ON" : "OFF"}`);
     }
   }
 
