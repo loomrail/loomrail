@@ -63,6 +63,18 @@ import {
   workflowStageSchema,
   workflowsReconciledResultSchema,
 } from "./workflow.js";
+import {
+  acquireWorkspaceLeaseCommandSchema,
+  createWorkItemWorkspaceCommandSchema,
+  markWorkspaceOrphanedCommandSchema,
+  releaseWorkspaceLeaseCommandSchema,
+  workItemWorkspaceCreatedEventSchema,
+  workItemWorkspaceCreatedResultSchema,
+  workItemWorkspaceOrphanedEventSchema,
+  workItemWorkspaceOrphanedResultSchema,
+  workspaceLeaseAcquiredResultSchema,
+  workspaceLeaseReleasedResultSchema,
+} from "./workspace.js";
 
 export const fixtureProjectIdSchema = z.enum(["web-app-a", "api-service-b"]);
 export const projectStatusSchema = z.enum(["ACTIVE", "ARCHIVED"]);
@@ -198,6 +210,8 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   contextHandoffRequestedEventSchema,
   providerSessionEndedEventSchema,
   contextFloorExceededEventSchema,
+  workItemWorkspaceCreatedEventSchema,
+  workItemWorkspaceOrphanedEventSchema,
 ]);
 
 const commandBaseSchema = z
@@ -293,6 +307,10 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   requestContextHandoffCommandSchema,
   hardPauseStageAttemptCommandSchema,
   reduceContextPackShareCommandSchema,
+  createWorkItemWorkspaceCommandSchema,
+  acquireWorkspaceLeaseCommandSchema,
+  releaseWorkspaceLeaseCommandSchema,
+  markWorkspaceOrphanedCommandSchema,
 ]);
 
 const commandResultBaseSchema = z
@@ -346,6 +364,10 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   contextHandoffRequestedResultSchema,
   stageAttemptHardPausedResultSchema,
   contextPackShareReducedResultSchema,
+  workItemWorkspaceCreatedResultSchema,
+  workspaceLeaseAcquiredResultSchema,
+  workspaceLeaseReleasedResultSchema,
+  workItemWorkspaceOrphanedResultSchema,
 ]);
 
 export const registerFixtureProjectRequestSchema = z

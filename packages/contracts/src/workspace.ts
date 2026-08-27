@@ -168,6 +168,59 @@ export const markWorkspaceOrphanedCommandSchema = commandBaseSchema.extend({
     .strict(),
 });
 
+// Command results, in the shape stateCommandResultSchema (work-management.ts) expects of every
+// member: schemaVersion/type/replayed plus whatever the caller needs back. `workItemId` is carried
+// even though every payload already lets a caller re-derive it, the same convenience
+// providerSessionStartedResultSchema (workflow.ts) offers -- a caller acting on the result should
+// not have to also hold the command payload just to route the outcome to the right WorkItem.
+export const workItemWorkspaceCreatedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("WORK_ITEM_WORKSPACE_CREATED"),
+    replayed: z.boolean(),
+    workItemId: opaqueIdSchema,
+    workspace: workItemWorkspaceSchema,
+    event: workItemWorkspaceCreatedEventSchema,
+  })
+  .strict();
+
+// No event: a lease is current state for a StageAttempt to act on, not something the audit log or
+// the owner needs to see -- the same reasoning providerSessionProcessRecordedResultSchema
+// (workflow.ts) gives for a pid. `events` stays in the shape for uniformity across every command
+// result, typed so only `[]` can satisfy it.
+export const workspaceLeaseAcquiredResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("WORKSPACE_LEASE_ACQUIRED"),
+    replayed: z.boolean(),
+    workItemId: opaqueIdSchema,
+    workspace: workItemWorkspaceSchema,
+    events: z.array(z.never()),
+  })
+  .strict();
+
+export const workspaceLeaseReleasedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("WORKSPACE_LEASE_RELEASED"),
+    replayed: z.boolean(),
+    workItemId: opaqueIdSchema,
+    workspace: workItemWorkspaceSchema,
+    events: z.array(z.never()),
+  })
+  .strict();
+
+export const workItemWorkspaceOrphanedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("WORK_ITEM_WORKSPACE_ORPHANED"),
+    replayed: z.boolean(),
+    workItemId: opaqueIdSchema,
+    workspace: workItemWorkspaceSchema,
+    event: workItemWorkspaceOrphanedEventSchema,
+  })
+  .strict();
+
 export type WorkItemWorkspaceStatus = z.infer<typeof workItemWorkspaceStatusSchema>;
 export type WorkItemWorkspace = z.infer<typeof workItemWorkspaceSchema>;
 export type WorkItemWorkspaceCreatedEvent = z.infer<typeof workItemWorkspaceCreatedEventSchema>;
@@ -176,3 +229,7 @@ export type CreateWorkItemWorkspaceCommand = z.infer<typeof createWorkItemWorksp
 export type AcquireWorkspaceLeaseCommand = z.infer<typeof acquireWorkspaceLeaseCommandSchema>;
 export type ReleaseWorkspaceLeaseCommand = z.infer<typeof releaseWorkspaceLeaseCommandSchema>;
 export type MarkWorkspaceOrphanedCommand = z.infer<typeof markWorkspaceOrphanedCommandSchema>;
+export type WorkItemWorkspaceCreatedResult = z.infer<typeof workItemWorkspaceCreatedResultSchema>;
+export type WorkspaceLeaseAcquiredResult = z.infer<typeof workspaceLeaseAcquiredResultSchema>;
+export type WorkspaceLeaseReleasedResult = z.infer<typeof workspaceLeaseReleasedResultSchema>;
+export type WorkItemWorkspaceOrphanedResult = z.infer<typeof workItemWorkspaceOrphanedResultSchema>;

@@ -15,6 +15,7 @@ import type {
   WorkItemState,
   WorkflowDispatch,
   WorkflowSnapshot,
+  WorkItemWorkspace,
 } from "@loomrail/contracts";
 
 export type StateStoreErrorCode =
@@ -30,7 +31,20 @@ export type StateStoreErrorCode =
   // agents working the same StageAttempt's workspace concurrently.
   | "PROVIDER_SESSION_ALREADY_RUNNING"
   // Guards PUBLISH_CHECKPOINT/END_PROVIDER_SESSION against acting on a session that already ended.
-  | "PROVIDER_SESSION_NOT_RUNNING";
+  | "PROVIDER_SESSION_NOT_RUNNING"
+  | "WORKSPACE_NOT_FOUND"
+  // Storage invariant (migration 0011's UNIQUE on work_item_id, spec D1): the workspace belongs to
+  // the WorkItem, and a second row for the same WorkItem would mean two writers past the lease.
+  | "WORKSPACE_ALREADY_EXISTS"
+  | "WORKSPACE_VERSION_CONFLICT"
+  // ACQUIRE_WORKSPACE_LEASE refuses to hand a workspace another StageAttempt is already writing in.
+  | "WORKSPACE_LEASE_HELD"
+  // RELEASE_WORKSPACE_LEASE is only ever valid from the attempt currently holding the lease (spec
+  // D6); anyone else is refused rather than trusted.
+  | "WORKSPACE_LEASE_NOT_OWNED"
+  // MARK_WORKSPACE_ORPHANED is only ever taken from READY (spec §6, "Восстановление") -- an
+  // ORPHANED or REMOVED workspace has already left the state this transition assumes.
+  | "WORKSPACE_NOT_READY";
 
 export class StateStoreError extends Error {
   readonly code: StateStoreErrorCode;
@@ -87,6 +101,12 @@ export type StateQuery =
       // within a single attempt and the snapshot is read on every board render.
       type: "LIST_PROVIDER_SESSIONS";
       stageAttemptId: string;
+    }
+  | {
+      // The workspace belongs to the WorkItem (migration 0011's UNIQUE on work_item_id), so this is
+      // the one read a caller needs to find the worktree a WorkItem is being edited in.
+      type: "GET_WORKSPACE_BY_WORK_ITEM";
+      workItemId: string;
     };
 
 export type StateQueryResult =
@@ -118,7 +138,8 @@ export type StateQueryResult =
       // session "N% of the window at handoff" and never the peak wording -- but a reader reaching
       // for a true high-water mark should know this is where it stops being one.
       peakContextWindowUsage: Record<string, ContextWindowUsage>;
-    };
+    }
+  | { type: "WORKSPACE"; workspace: WorkItemWorkspace | null };
 
 export type StateStoreStartup = {
   appliedMigrations: number[];
@@ -147,7 +168,8 @@ export type LocalStateIdKind =
   | "acceptancePackage"
   | "providerSession"
   | "contextPackRecipe"
-  | "checkpoint";
+  | "checkpoint"
+  | "workItemWorkspace";
 
 /**
  * What startup reconciliation did about the process an orphaned ProviderSession left behind.

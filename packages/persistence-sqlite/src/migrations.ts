@@ -33,6 +33,11 @@ const migrations: readonly Migration[] = [
   },
   { version: 9, name: "session_window_occupancy", filename: "0009_session_window_occupancy.sql" },
   { version: 10, name: "provider_session_pid", filename: "0010_provider_session_pid.sql" },
+  {
+    version: 11,
+    name: "work_item_workspaces",
+    filename: "0011_work_item_workspaces.sql",
+  },
 ];
 
 const migrationRowSchema = z.object({

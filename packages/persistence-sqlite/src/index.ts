@@ -32,6 +32,7 @@ import {
   workflowTemplateSchema,
   workItemSchema,
   workItemStateSchema,
+  workItemWorkspaceSchema,
   type BudgetPolicy,
   type Actor,
   type AcceptancePackage,
@@ -55,6 +56,7 @@ import {
   type WorkItem,
   type WorkflowDispatch,
   type WorkflowSnapshot,
+  type WorkItemWorkspace,
 } from "@loomrail/contracts";
 import {
   decideApproveBudgetOverride,
@@ -133,6 +135,24 @@ const workItemRowSchema = z.object({
 });
 
 const criterionRowSchema = z.object({ criterion: z.string() });
+
+// Migration 0011. `lease_holder` stays a bare nullable string here (not opaqueIdSchema) the same
+// way every other _row schema in this file leaves ids untyped -- workItemWorkspaceSchema.parse
+// below is what actually validates the shape a reader gets back.
+const workItemWorkspaceRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  branch: z.string(),
+  worktree_path: z.string(),
+  base_commit: z.string().nullable(),
+  snapshot_commit: z.string().nullable(),
+  status: z.string(),
+  lease_holder: z.string().nullable(),
+  created_at: z.string(),
+  version: z.number().int(),
+});
 
 const eventRowSchema = z.object({
   sequence: z.number().int(),
@@ -411,6 +431,7 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("LIST_PROVIDER_SESSIONS"), stageAttemptId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_WORKSPACE_BY_WORK_ITEM"), workItemId: opaqueIdSchema }).strict(),
 ]);
 
 // `ORDER BY` direction is structure rather than a value, so it cannot be bound. The two statements are
@@ -445,6 +466,24 @@ const projectFromRow = (value: unknown): Project => {
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  });
+};
+
+const workItemWorkspaceFromRow = (value: unknown): WorkItemWorkspace => {
+  const row = workItemWorkspaceRowSchema.parse(value);
+  return workItemWorkspaceSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    branch: row.branch,
+    worktreePath: row.worktree_path,
+    baseCommit: row.base_commit,
+    snapshotCommit: row.snapshot_commit,
+    status: row.status,
+    leaseHolder: row.lease_holder,
+    createdAt: row.created_at,
+    version: row.version,
   });
 };
 
@@ -970,6 +1009,41 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
     const selectProjectById = database.prepare("SELECT * FROM projects WHERE id = ?");
     const selectWorkItemById = database.prepare("SELECT * FROM work_items WHERE id = ?");
+    // Migration 0011. Named `WorkItemWorkspace`, not `Workspace`, throughout this file to keep it
+    // apart from the pre-existing `workspaces` table (DEFAULT_WORKSPACE_ID above) -- an unrelated,
+    // older multi-tenant concept that a Project points at, not the Git worktree a WorkItem is
+    // edited in.
+    const selectWorkItemWorkspaceById = database.prepare("SELECT * FROM work_item_workspaces WHERE id = ?");
+    const selectWorkItemWorkspaceByWorkItemId = database.prepare(
+      "SELECT * FROM work_item_workspaces WHERE work_item_id = ?",
+    );
+    const insertWorkItemWorkspace = database.prepare(
+      `INSERT INTO work_item_workspaces (
+        id, schema_version, project_id, work_item_id, branch, worktree_path, base_commit,
+        snapshot_commit, status, lease_holder, created_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    // The lease is taken by a single comparison-and-claim UPDATE, not a read followed by a write:
+    // `lease_holder IS NULL` in the WHERE clause is what decides success, so the decision is one
+    // atomic statement rather than something this code recomputes in JS after an earlier read.
+    const acquireWorkItemWorkspaceLease = database.prepare(
+      `UPDATE work_item_workspaces
+       SET lease_holder = ?, version = version + 1
+       WHERE id = ? AND version = ? AND lease_holder IS NULL`,
+    );
+    // Symmetric with the acquire above: `lease_holder = ?` in the WHERE clause is what makes a
+    // release from anyone but the current holder a no-op the caller sees as a refusal, not
+    // something trusted from the payload alone (spec D6).
+    const releaseWorkItemWorkspaceLease = database.prepare(
+      `UPDATE work_item_workspaces
+       SET lease_holder = NULL, version = version + 1
+       WHERE id = ? AND version = ? AND lease_holder = ?`,
+    );
+    const markWorkItemWorkspaceOrphaned = database.prepare(
+      `UPDATE work_item_workspaces
+       SET status = 'ORPHANED', version = version + 1
+       WHERE id = ? AND version = ? AND status = 'READY'`,
+    );
     const selectCriteria = database.prepare(
       `SELECT criterion FROM work_item_acceptance_criteria
        WHERE work_item_id = ? ORDER BY ordinal`,
@@ -1118,6 +1192,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const readProject = (projectId: string): Project | null => {
       const row = selectProjectById.get(projectId);
       return row === undefined ? null : projectFromRow(row);
+    };
+
+    const readWorkItemWorkspace = (id: string): WorkItemWorkspace | null => {
+      const row = selectWorkItemWorkspaceById.get(id);
+      return row === undefined ? null : workItemWorkspaceFromRow(row);
+    };
+
+    const readWorkItemWorkspaceByWorkItemId = (workItemId: string): WorkItemWorkspace | null => {
+      const row = selectWorkItemWorkspaceByWorkItemId.get(workItemId);
+      return row === undefined ? null : workItemWorkspaceFromRow(row);
     };
 
     const readWorkItem = (workItemId: string): WorkItem | null => {
@@ -1572,6 +1656,55 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
     const appendSessionEvent = (
       intent: SessionEventIntent,
+      metadata: {
+        workItemId: string;
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "WORK_ITEM",
+        metadata.workItemId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "WORK_ITEM",
+        aggregateId: metadata.workItemId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
+    type WorkspaceEventIntent =
+      | {
+          type: "WORK_ITEM_WORKSPACE_CREATED";
+          data: { workspace: WorkItemWorkspace; carriedPaths: string[] };
+        }
+      | {
+          type: "WORK_ITEM_WORKSPACE_ORPHANED";
+          data: { workspace: WorkItemWorkspace; previousStatus: WorkItemWorkspace["status"] };
+        };
+
+    const appendWorkspaceEvent = (
+      intent: WorkspaceEventIntent,
       metadata: {
         workItemId: string;
         projectId: string;
@@ -3151,6 +3284,226 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "CREATE_WORK_ITEM_WORKSPACE") {
+        const workItem = readWorkItem(command.payload.workItemId);
+        if (!workItem) {
+          throw new WorkItemDomainError("WORK_ITEM_NOT_FOUND", "The WorkItem does not exist");
+        }
+        // Validated against the WorkItem's own projectId, not merely inserted as given: a payload
+        // naming the wrong Project would otherwise write a workspace whose FK is internally
+        // consistent but points a different Project at this WorkItem's worktree.
+        if (workItem.projectId !== command.payload.projectId || !readProject(command.payload.projectId)) {
+          throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist for this WorkItem");
+        }
+        // Pre-check, not the sole guard: migration 0011's UNIQUE on work_item_id is the storage-
+        // level backstop (spec D1) that makes a second workspace for this WorkItem impossible even
+        // if two callers race past this read, the same relationship REGISTER_FIXTURE_PROJECT's own
+        // pre-check has with the projects table's own UNIQUE columns above.
+        if (selectWorkItemWorkspaceByWorkItemId.get(command.payload.workItemId) !== undefined) {
+          throw new StateStoreError("WORKSPACE_ALREADY_EXISTS", "The WorkItem already has a workspace");
+        }
+        const workspace = workItemWorkspaceSchema.parse({
+          schemaVersion: 1,
+          id: createId("workItemWorkspace"),
+          projectId: workItem.projectId,
+          workItemId: workItem.id,
+          branch: command.payload.branch,
+          worktreePath: command.payload.worktreePath,
+          baseCommit: command.payload.baseCommit,
+          snapshotCommit: command.payload.snapshotCommit,
+          status: "READY",
+          leaseHolder: null,
+          createdAt: occurredAt,
+          version: 1,
+        });
+        insertWorkItemWorkspace.run(
+          workspace.id,
+          workspace.schemaVersion,
+          workspace.projectId,
+          workspace.workItemId,
+          workspace.branch,
+          workspace.worktreePath,
+          workspace.baseCommit,
+          workspace.snapshotCommit,
+          workspace.status,
+          workspace.leaseHolder,
+          workspace.createdAt,
+          workspace.version,
+        );
+        const event = appendWorkspaceEvent(
+          {
+            type: "WORK_ITEM_WORKSPACE_CREATED",
+            data: { workspace, carriedPaths: command.payload.carriedPaths },
+          },
+          {
+            workItemId: workItem.id,
+            projectId: workItem.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "WORK_ITEM_WORKSPACE_CREATED",
+          replayed: false,
+          workItemId: workItem.id,
+          workspace,
+          event,
+        });
+      }
+
+      if (command.type === "ACQUIRE_WORKSPACE_LEASE") {
+        if (!readWorkItemWorkspace(command.payload.workspaceId)) {
+          throw new StateStoreError("WORKSPACE_NOT_FOUND", "The workspace does not exist");
+        }
+        if (!readStageAttempt(command.payload.stageAttemptId)) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The StageAttempt does not exist");
+        }
+        // The lease is taken by this single UPDATE's WHERE clause -- `lease_holder IS NULL` is the
+        // check, and the same statement is the claim, so there is no read-then-write window for a
+        // second acquire to land in between (spec D6). The re-reads below only pick which error to
+        // report when this update claims 0 rows; they never decide whether it succeeded.
+        const claim = acquireWorkItemWorkspaceLease.run(
+          command.payload.stageAttemptId,
+          command.payload.workspaceId,
+          command.payload.expectedVersion,
+        );
+        if (claim.changes !== 1) {
+          const after = readWorkItemWorkspace(command.payload.workspaceId);
+          if (!after) {
+            throw new StateStoreError("WORKSPACE_NOT_FOUND", "The workspace does not exist");
+          }
+          // Checked before the version: a lease already held is the actionable fact for the caller,
+          // even when the caller's expectedVersion is also stale as a symptom of the same race.
+          if (after.leaseHolder !== null) {
+            throw new StateStoreError(
+              "WORKSPACE_LEASE_HELD",
+              "The workspace lease is already held by another StageAttempt",
+            );
+          }
+          throw new StateStoreError(
+            "WORKSPACE_VERSION_CONFLICT",
+            "The workspace changed while the lease was being acquired",
+          );
+        }
+        const workspace = readWorkItemWorkspace(command.payload.workspaceId);
+        if (!workspace) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The workspace disappeared after its lease was acquired",
+          );
+        }
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "WORKSPACE_LEASE_ACQUIRED",
+          replayed: false,
+          workItemId: workspace.workItemId,
+          workspace,
+          events: [],
+        });
+      }
+
+      if (command.type === "RELEASE_WORKSPACE_LEASE") {
+        if (!readWorkItemWorkspace(command.payload.workspaceId)) {
+          throw new StateStoreError("WORKSPACE_NOT_FOUND", "The workspace does not exist");
+        }
+        // `lease_holder = ?` in the WHERE clause is the authoritative check (spec D6): a release
+        // from anyone but the current holder claims 0 rows here rather than being trusted from the
+        // payload alone.
+        const release = releaseWorkItemWorkspaceLease.run(
+          command.payload.workspaceId,
+          command.payload.expectedVersion,
+          command.payload.stageAttemptId,
+        );
+        if (release.changes !== 1) {
+          const after = readWorkItemWorkspace(command.payload.workspaceId);
+          if (!after) {
+            throw new StateStoreError("WORKSPACE_NOT_FOUND", "The workspace does not exist");
+          }
+          if (after.leaseHolder !== command.payload.stageAttemptId) {
+            throw new StateStoreError(
+              "WORKSPACE_LEASE_NOT_OWNED",
+              "Only the StageAttempt holding the workspace lease may release it",
+            );
+          }
+          throw new StateStoreError(
+            "WORKSPACE_VERSION_CONFLICT",
+            "The workspace changed while the lease was being released",
+          );
+        }
+        const workspace = readWorkItemWorkspace(command.payload.workspaceId);
+        if (!workspace) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The workspace disappeared after its lease was released",
+          );
+        }
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "WORKSPACE_LEASE_RELEASED",
+          replayed: false,
+          workItemId: workspace.workItemId,
+          workspace,
+          events: [],
+        });
+      }
+
+      if (command.type === "MARK_WORKSPACE_ORPHANED") {
+        const before = readWorkItemWorkspace(command.payload.workspaceId);
+        if (!before) {
+          throw new StateStoreError("WORKSPACE_NOT_FOUND", "The workspace does not exist");
+        }
+        // Restricted to the READY -> ORPHANED transition in the WHERE clause itself (spec §6): the
+        // only status this transition is ever taken from is READY, so `status = 'READY'` here is
+        // what makes that a storage-enforced fact rather than an assumption this code trusts.
+        const mark = markWorkItemWorkspaceOrphaned.run(
+          command.payload.workspaceId,
+          command.payload.expectedVersion,
+        );
+        if (mark.changes !== 1) {
+          const after = readWorkItemWorkspace(command.payload.workspaceId);
+          if (!after) {
+            throw new StateStoreError("WORKSPACE_NOT_FOUND", "The workspace does not exist");
+          }
+          if (after.status !== "READY") {
+            throw new StateStoreError("WORKSPACE_NOT_READY", "Only a READY workspace can be marked orphaned");
+          }
+          throw new StateStoreError(
+            "WORKSPACE_VERSION_CONFLICT",
+            "The workspace changed while it was being marked orphaned",
+          );
+        }
+        const workspace = readWorkItemWorkspace(command.payload.workspaceId);
+        if (!workspace) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The workspace disappeared after it was marked orphaned",
+          );
+        }
+        const event = appendWorkspaceEvent(
+          {
+            type: "WORK_ITEM_WORKSPACE_ORPHANED",
+            data: { workspace, previousStatus: before.status },
+          },
+          {
+            workItemId: workspace.workItemId,
+            projectId: workspace.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "WORK_ITEM_WORKSPACE_ORPHANED",
+          replayed: false,
+          workItemId: workspace.workItemId,
+          workspace,
+          event,
+        });
+      }
+
       const projectId =
         command.type === "CREATE_WORK_ITEM"
           ? command.payload.projectId
@@ -3414,6 +3767,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             peakContextWindowUsage,
           };
         }
+        case "GET_WORKSPACE_BY_WORK_ITEM":
+          return {
+            type: "WORKSPACE",
+            workspace: readWorkItemWorkspaceByWorkItemId(queryValue.workItemId),
+          };
         default:
           return assertNever(queryValue);
       }

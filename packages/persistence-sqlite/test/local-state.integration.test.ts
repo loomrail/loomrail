@@ -5,16 +5,20 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type {
+  AcquireWorkspaceLeaseCommand,
   AnswerHumanRequestCommand,
   ApplyProviderOutcomeCommand,
   ContextPackRecipeInput,
   CreateWorkItemCommand,
+  CreateWorkItemWorkspaceCommand,
   EndProviderSessionCommand,
   LegacyApplyMockProviderOutcomeCommand,
+  MarkWorkspaceOrphanedCommand,
   MoveWorkItemCommand,
   PublishCheckpointCommand,
   ReconcileWorkflowsCommand,
   RegisterProjectCommand,
+  ReleaseWorkspaceLeaseCommand,
   RequestContextHandoffCommand,
   StartMockPipelineCommand,
   StartProviderSessionCommand,
@@ -523,7 +527,7 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);
@@ -3002,6 +3006,311 @@ describe("SQLite local state", () => {
       const after = localState.query({ type: "GET_WORK_ITEM", workItemId });
       expect(after.type === "WORK_ITEM" ? after.workItem?.title : null).toBe("Retitled mid-read");
       expect(after.type === "WORK_ITEM" ? after.workItem?.version : null).toBe(baselineVersion + 1);
+    });
+  });
+
+  describe("workspace storage (migration 0011)", () => {
+    // Independent of "provider session lifecycle (Task 7)"'s own startWorkflow: this one only
+    // needs a real StageAttempt id to satisfy work_item_workspaces.lease_holder's FK, not the
+    // workspace-under-test's own WorkItem -- a lease is a valid StageAttempt id, not necessarily
+    // one working the same WorkItem the workspace belongs to (that pairing is a daemon-level
+    // concern this migration does not enforce).
+    const startWorkflow = (
+      localState: LocalState,
+      commandId: string,
+      workItemCommandId: string,
+    ): { workItemId: string; stageAttemptId: string; projectId: string } => {
+      const created = localState.execute(createWorkItem(workItemCommandId));
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      localState.execute(moveWorkItem(`ready-${commandId}`, created.workItem.id, 1, "READY"));
+      const started = localState.execute({
+        schemaVersion: 1,
+        commandId,
+        correlationId: `correlation-${commandId}`,
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_MOCK_PIPELINE",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedVersion: 2,
+          template: mockTemplate,
+          budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+        },
+      });
+      if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+      return {
+        workItemId: created.workItem.id,
+        stageAttemptId: started.stageAttempt.id,
+        projectId: created.workItem.projectId,
+      };
+    };
+
+    const createWorkspaceCommand = (
+      commandId: string,
+      workItemId: string,
+      projectId: string,
+      overrides: Partial<CreateWorkItemWorkspaceCommand["payload"]> = {},
+    ): CreateWorkItemWorkspaceCommand => ({
+      schemaVersion: 1,
+      commandId,
+      correlationId: `correlation-${commandId}`,
+      actor: { type: "SYSTEM", id: "workspace-manager" },
+      type: "CREATE_WORK_ITEM_WORKSPACE",
+      payload: {
+        workItemId,
+        projectId,
+        branch: `loomrail/${workItemId}`,
+        worktreePath: join(temporaryDirectory, "worktrees", workItemId),
+        baseCommit: null,
+        snapshotCommit: null,
+        carriedPaths: [],
+        ...overrides,
+      },
+    });
+
+    const acquireLeaseCommand = (
+      commandId: string,
+      workspaceId: string,
+      stageAttemptId: string,
+      expectedVersion: number,
+    ): AcquireWorkspaceLeaseCommand => ({
+      schemaVersion: 1,
+      commandId,
+      correlationId: `correlation-${commandId}`,
+      actor: { type: "SYSTEM", id: "workspace-manager" },
+      type: "ACQUIRE_WORKSPACE_LEASE",
+      payload: { workspaceId, stageAttemptId, expectedVersion },
+    });
+
+    const releaseLeaseCommand = (
+      commandId: string,
+      workspaceId: string,
+      stageAttemptId: string,
+      expectedVersion: number,
+    ): ReleaseWorkspaceLeaseCommand => ({
+      schemaVersion: 1,
+      commandId,
+      correlationId: `correlation-${commandId}`,
+      actor: { type: "SYSTEM", id: "workspace-manager" },
+      type: "RELEASE_WORKSPACE_LEASE",
+      payload: { workspaceId, stageAttemptId, expectedVersion },
+    });
+
+    const markOrphanedCommand = (
+      commandId: string,
+      workspaceId: string,
+      expectedVersion: number,
+    ): MarkWorkspaceOrphanedCommand => ({
+      schemaVersion: 1,
+      commandId,
+      correlationId: `correlation-${commandId}`,
+      actor: { type: "SYSTEM", id: "workspace-reconciler" },
+      type: "MARK_WORKSPACE_ORPHANED",
+      payload: { workspaceId, expectedVersion },
+    });
+
+    const countWorkItemWorkspaces = (raw: DatabaseSync): number =>
+      (raw.prepare("SELECT COUNT(*) AS count FROM work_item_workspaces").get() as { count: number }).count;
+
+    it("creates a workspace and reads it back by WorkItem id", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { workItemId, projectId } = startWorkflow(localState, "start-create", "create-work-item-create");
+
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace", workItemId, projectId, {
+          carriedPaths: ["src/index.ts"],
+        }),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+      expect(created.workspace).toMatchObject({
+        workItemId,
+        projectId,
+        status: "READY",
+        leaseHolder: null,
+        version: 1,
+      });
+      expect(created.event).toMatchObject({
+        type: "WORK_ITEM_WORKSPACE_CREATED",
+        data: { carriedPaths: ["src/index.ts"] },
+      });
+
+      const read = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(read).toMatchObject({ type: "WORKSPACE", workspace: { id: created.workspace.id } });
+    });
+
+    it("refuses a second workspace for one work item", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { workItemId, projectId } = startWorkflow(localState, "start-unique", "create-work-item-unique");
+      const raw = new DatabaseSync(databasePath);
+
+      try {
+        localState.execute(createWorkspaceCommand("create-workspace-first", workItemId, projectId));
+        expect(countWorkItemWorkspaces(raw)).toBe(1);
+
+        expect(() =>
+          localState.execute(
+            createWorkspaceCommand("create-workspace-second", workItemId, projectId, {
+              branch: "loomrail/a-different-branch",
+            }),
+          ),
+        ).toThrow(expect.objectContaining({ code: "WORKSPACE_ALREADY_EXISTS" }));
+
+        expect(countWorkItemWorkspaces(raw)).toBe(1);
+      } finally {
+        raw.close();
+      }
+    });
+
+    it("does not hand a second stage attempt the workspace a first one is writing in", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { workItemId, projectId } = startWorkflow(
+        localState,
+        "start-lease-a",
+        "create-work-item-lease-a",
+      );
+      const { stageAttemptId: attemptA } = startWorkflow(
+        localState,
+        "start-lease-b",
+        "create-work-item-lease-b",
+      );
+      const { stageAttemptId: attemptB } = startWorkflow(
+        localState,
+        "start-lease-c",
+        "create-work-item-lease-c",
+      );
+
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-lease", workItemId, projectId),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+      const workspaceId = created.workspace.id;
+
+      const acquiredA = localState.execute(acquireLeaseCommand("acquire-a", workspaceId, attemptA, 1));
+      if (acquiredA.type !== "WORKSPACE_LEASE_ACQUIRED") throw new Error("Expected the lease to be acquired");
+      expect(acquiredA.workspace.leaseHolder).toBe(attemptA);
+
+      // attemptB reads the workspace's real, current version -- 2, after attemptA's acquire bumped
+      // it -- so only the `lease_holder IS NULL` clause is what can still block this UPDATE. That is
+      // what makes this test able to fail under Step 5's mutation: if that clause is removed, an
+      // UPDATE with a matching version has nothing left to stop it from succeeding.
+      expect(() =>
+        localState.execute(
+          acquireLeaseCommand("acquire-b", workspaceId, attemptB, acquiredA.workspace.version),
+        ),
+      ).toThrow(/lease/i);
+
+      const stillA = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(stillA.type === "WORKSPACE" ? stillA.workspace?.leaseHolder : null).toBe(attemptA);
+      expect(stillA.type === "WORKSPACE" ? stillA.workspace?.version : null).toBe(
+        acquiredA.workspace.version,
+      );
+    });
+
+    it("releases a lease and lets a different stage attempt reacquire it", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { workItemId, projectId } = startWorkflow(
+        localState,
+        "start-release-a",
+        "create-work-item-release-a",
+      );
+      const { stageAttemptId: attemptA } = startWorkflow(
+        localState,
+        "start-release-b",
+        "create-work-item-release-b",
+      );
+      const { stageAttemptId: attemptB } = startWorkflow(
+        localState,
+        "start-release-c",
+        "create-work-item-release-c",
+      );
+
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-release", workItemId, projectId),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+      const workspaceId = created.workspace.id;
+
+      const acquired = localState.execute(acquireLeaseCommand("acquire-release-a", workspaceId, attemptA, 1));
+      if (acquired.type !== "WORKSPACE_LEASE_ACQUIRED") throw new Error("Expected the lease to be acquired");
+
+      const released = localState.execute(
+        releaseLeaseCommand("release-a", workspaceId, attemptA, acquired.workspace.version),
+      );
+      if (released.type !== "WORKSPACE_LEASE_RELEASED") throw new Error("Expected the lease to be released");
+      expect(released.workspace.leaseHolder).toBeNull();
+
+      const acquiredB = localState.execute(
+        acquireLeaseCommand("acquire-release-b", workspaceId, attemptB, released.workspace.version),
+      );
+      if (acquiredB.type !== "WORKSPACE_LEASE_ACQUIRED")
+        throw new Error("Expected the second acquire to succeed");
+      expect(acquiredB.workspace.leaseHolder).toBe(attemptB);
+    });
+
+    it("refuses to release a lease held by a different stage attempt", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { workItemId, projectId } = startWorkflow(
+        localState,
+        "start-refuse-a",
+        "create-work-item-refuse-a",
+      );
+      const { stageAttemptId: attemptA } = startWorkflow(
+        localState,
+        "start-refuse-b",
+        "create-work-item-refuse-b",
+      );
+      const { stageAttemptId: attemptB } = startWorkflow(
+        localState,
+        "start-refuse-c",
+        "create-work-item-refuse-c",
+      );
+
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-refuse", workItemId, projectId),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+      const workspaceId = created.workspace.id;
+
+      const acquired = localState.execute(acquireLeaseCommand("acquire-refuse-a", workspaceId, attemptA, 1));
+      if (acquired.type !== "WORKSPACE_LEASE_ACQUIRED") throw new Error("Expected the lease to be acquired");
+
+      expect(() =>
+        localState.execute(
+          releaseLeaseCommand("release-refuse-b", workspaceId, attemptB, acquired.workspace.version),
+        ),
+      ).toThrow(/lease/i);
+
+      const stillHeld = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(stillHeld.type === "WORKSPACE" ? stillHeld.workspace?.leaseHolder : null).toBe(attemptA);
+    });
+
+    it("marks a READY workspace orphaned and records the previous status", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { workItemId, projectId } = startWorkflow(localState, "start-orphan", "create-work-item-orphan");
+
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-orphan", workItemId, projectId),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+      const workspaceId = created.workspace.id;
+
+      const orphaned = localState.execute(markOrphanedCommand("mark-orphaned", workspaceId, 1));
+      if (orphaned.type !== "WORK_ITEM_WORKSPACE_ORPHANED")
+        throw new Error("Expected the workspace to be orphaned");
+      expect(orphaned.workspace.status).toBe("ORPHANED");
+      expect(orphaned.event).toMatchObject({
+        type: "WORK_ITEM_WORKSPACE_ORPHANED",
+        data: { previousStatus: "READY" },
+      });
+
+      expect(() => localState.execute(markOrphanedCommand("mark-orphaned-again", workspaceId, 2))).toThrow(
+        /ready/i,
+      );
     });
   });
 });

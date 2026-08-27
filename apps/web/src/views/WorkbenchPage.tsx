@@ -741,6 +741,20 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.contextFloorExceeded"),
         tone: "warning",
       };
+    case "WORK_ITEM_WORKSPACE_CREATED":
+      return {
+        detail: t("event.workspaceCreatedDetail", { branch: event.data.workspace.branch }),
+        icon: "branch",
+        label: t("event.workspaceCreated"),
+        tone: "success",
+      };
+    case "WORK_ITEM_WORKSPACE_ORPHANED":
+      return {
+        detail: t("event.workspaceOrphanedDetail"),
+        icon: "warning",
+        label: t("event.workspaceOrphaned"),
+        tone: "warning",
+      };
   }
 };
 
