@@ -309,11 +309,18 @@ had just edited a file in the worktree. Producing prose is not needing no input:
 is judging, and a discovery or a plan on a real codebase is worth having only when it can read that codebase.
 `stagesRunningInWorkspace` (`packages/domain/src/workspace.ts`) is now DISCOVERY, PLAN, IMPLEMENT, REVIEW and
 QA — every stage dispatched to an agent except ACCEPTANCE, which is the owner's decision rather than a reading
-of the tree. **Everything T19 and T20 describe below therefore applies to five stages of a run, not two**: the
-worktree carrying the owner's uncommitted work is cut at a work item's FIRST agent stage rather than at
-IMPLEMENT, and every session from that point on runs under `-s workspace-write` with network access in it.
-Nothing about the containment itself changed — same worktree, same branch, same `-c` key, same flag guards —
-only how much of a run happens inside it.
+of the tree. **The worktree therefore exists for five stages of a run, not two**: it is cut, carrying the owner's
+uncommitted work, at a work item's FIRST agent stage rather than at IMPLEMENT.
+
+**Write access did not widen with it, and that was a second correction.** Which stages are GIVEN the worktree
+and which may WRITE in it are separate questions with separate answers — `stageRunsInWorkspace` and
+`stageWritesInWorkspace` (`packages/domain/src/workspace.ts`) — and only IMPLEMENT and QA answer yes to the
+second. A DISCOVERY, PLAN or REVIEW session is launched in the same worktree under `-s read-only` and with no
+`-c` key at all; the answer travels to the adapter as `ProviderWorkspace.access`
+(`packages/provider-core/src/index.ts`), so no adapter carries a list of stages of its own. For as long as the
+Codex adapter picked its sandbox mode from the mere PRESENCE of a worktree, those three read-only stages ran
+write-enabled and network-enabled — a review able to rewrite the code it was judging. Nothing else about the
+containment changed — same worktree, same branch, same `-c` key where it is still sent, same flag guards.
 
 Two bounds on that widening, both enforced in `apps/daemon/src/session-loop.ts`. A Project whose path is not a
 usable repository still dispatches its prose stages with no workspace, exactly as it did before E1, rather
@@ -325,9 +332,11 @@ still holds for that adapter in full**, and the sentence below about "both adapt
 correction.
 
 **T19 — a write-enabled, network-enabled agent runs in a tree carrying the owner's uncommitted work.** Rated
-High, and accepted by the owner in that knowledge (spec D3 and D8). Since the stage-list correction above,
-this describes five of a run's six stages rather than two — the rating is unchanged, because the carried-in
-content, the sandbox mode and the network key are the same for all of them. The three parts of it, each verified in
+High, and accepted by the owner in that knowledge (spec D3 and D8). Since the stage-list correction above, the
+carried-in content is present for five of a run's six stages rather than two, while the write access and the
+network key of this threat's own title remain IMPLEMENT's and QA's alone. The rating is unchanged: the tree,
+and every secret the carry-in put in it, is the same for all five, and a read-only session can read every byte
+of it. The three parts of it, each verified in
 code:
 
 - **everything uncommitted is carried in, without asking.** `createCarryInSnapshot`

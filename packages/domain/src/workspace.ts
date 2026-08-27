@@ -65,6 +65,28 @@ export const stageRequiresWorkspace = (stage: WorkflowStage): boolean =>
   (stagesRequiringWorkspace as readonly WorkflowStage[]).includes(stage);
 
 /**
+ * Whether a stage may CHANGE the worktree it is given, as opposed to only reading it.
+ *
+ * The third question about a worktree, and the one that decides what an adapter asks its CLI's
+ * sandbox for. It exists because giving every agent stage the worktree (R11) silently gave every
+ * agent stage WRITE access with it: the Codex adapter picked its sandbox mode from the mere
+ * presence of a workspace, so DISCOVERY, PLAN and REVIEW -- stages that read the repository to
+ * reason about it -- began launching under `-s workspace-write` with network access opened. A
+ * review that can rewrite the code it is judging is not a review, and none of the three needs to
+ * write anything to do its job.
+ *
+ * Answered off `stagesRequiringWorkspace` rather than from a second list, here or in an adapter,
+ * because writing is exactly WHY those two are refused when there is no worktree: an IMPLEMENT or
+ * QA with nowhere to write can only report work it never did, while a DISCOVERY with nothing to
+ * read is merely a poorer session. One list, two questions it genuinely answers. If a stage ever
+ * needs write access without being refused for the lack of it (or the reverse), this function is
+ * the seam where the two part company -- and the adapter, which has no notion of a stage, still
+ * does not grow one.
+ */
+export const stageWritesInWorkspace = (stage: WorkflowStage): boolean =>
+  (stagesRequiringWorkspace as readonly WorkflowStage[]).includes(stage);
+
+/**
  * Whether an adapter uses a workspace at all, read off the stages it declares.
  *
  * Cutting a worktree is not free and not invisible: it writes a `loomrail/…` ref, a carry-in commit

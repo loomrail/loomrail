@@ -404,6 +404,9 @@ describe("session loop workspace provisioning", () => {
         path: workspace?.worktreePath,
         branch: workspace?.branch,
         baseCommit: workspace?.baseCommit,
+        // IMPLEMENT is one of the two stages that change the worktree, so this is the invocation
+        // that asks its adapter's CLI for write access. The REVIEW test below is the other half.
+        access: "READ_WRITE",
       });
       // The path is the load-bearing field, and a row is not evidence about a disk: this is the
       // directory the adapter would launch its CLI in, so it has to be the real worktree and not
@@ -461,6 +464,13 @@ describe("session loop workspace provisioning", () => {
         path: workspace?.worktreePath,
         branch: workspace?.branch,
         baseCommit: workspace?.baseCommit,
+        // The same worktree as IMPLEMENT's, and NOT the same access to it. R11 gave every agent
+        // stage the workspace, which was right; what it also did, silently, was give them all write
+        // access, because the Codex adapter read the mere presence of a worktree as permission to
+        // write in it -- so REVIEW ran under `-s workspace-write` with the network opened. A review
+        // reads the change it is judging. The daemon states which it is (`stageWritesInWorkspace`,
+        // @loomrail/domain), and this is where that statement is pinned.
+        access: "READ_ONLY",
       });
       // A row is not evidence about a disk: this is the directory the adapter would launch its CLI
       // in, so it has to be the real worktree and not merely a string that matches the row.

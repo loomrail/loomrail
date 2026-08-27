@@ -243,6 +243,17 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // Every flag below was established by probing the real CLI, not by reading its help. Never
         // `--dangerously-bypass-approvals-and-sandbox` or any other permission-bypass flag --
         // SD-001 forbids Loomrail from enabling one automatically, on any code path.
+        // Three shapes, not two, and the middle one is the fix for a Critical this milestone
+        // introduced. Giving every agent stage the worktree (R11) was right; deciding the sandbox
+        // mode from the mere PRESENCE of a worktree was not, because it silently handed DISCOVERY,
+        // PLAN and REVIEW `-s workspace-write` plus an opened network. Those stages read the
+        // repository to reason about it -- a REVIEW that can rewrite the code it is judging is not
+        // a review -- so they now get the same worktree under `-s read-only`, with no `-c` at all.
+        //
+        // WHICH stages those are is not decided here: `invocation.workspace.access` carries the
+        // answer, and the daemon reads it from `stageWritesInWorkspace` (`@loomrail/domain`). An
+        // adapter that kept its own list of stages would be a second place for that rule to live,
+        // and the two would drift.
         const sandboxArgs =
           workspace === undefined
             ? [
@@ -254,26 +265,35 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
                 "-s",
                 "read-only",
               ]
-            : [
-                // The sandbox mode that lets the agent write, and only where it is pointed: the
-                // worktree named by `-C` below. Spec D8.
-                "-s",
-                "workspace-write",
-                // The ONE config key this adapter ever opens, and the single exception to the
-                // threat model's closed list of forbidden `-c` overrides (T16) -- which otherwise
-                // stands, `-c` being an arbitrary config override and `-c
-                // 'sandbox_permissions=["disk-full-read-access"]'` a documented sandbox escape.
-                // `workspace-write` denies network access by default, and an IMPLEMENT or QA
-                // session that cannot reach the network cannot install a dependency or run a suite
-                // that fetches one. The key widens exactly that and nothing else; it is asserted as
-                // a closed list over the argv array in this package's tests.
-                "-c",
-                "sandbox_workspace_write.network_access=true",
-                // NOT an approval flag. `codex exec` has no `--ask-for-approval`, and passing one
-                // is a hard argument error that fails the launch outright (spec §2.3) -- the
-                // sandbox mode above is the whole of what this adapter gets to say about what the
-                // agent may do.
-              ];
+            : workspace.access === "READ_ONLY"
+              ? [
+                  // The reading stages: the work item's real worktree, on its own branch, with the
+                  // change an earlier stage made -- and no way to alter it. No network key either:
+                  // that key exists to let an IMPLEMENT or QA install what it needs to run the
+                  // suite, and a stage that may not write has nothing to install into.
+                  "-s",
+                  "read-only",
+                ]
+              : [
+                  // The sandbox mode that lets the agent write, and only where it is pointed: the
+                  // worktree named by `-C` below. Spec D8.
+                  "-s",
+                  "workspace-write",
+                  // The ONE config key this adapter ever opens, and the single exception to the
+                  // threat model's closed list of forbidden `-c` overrides (T16) -- which otherwise
+                  // stands, `-c` being an arbitrary config override and `-c
+                  // 'sandbox_permissions=["disk-full-read-access"]'` a documented sandbox escape.
+                  // `workspace-write` denies network access by default, and an IMPLEMENT or QA
+                  // session that cannot reach the network cannot install a dependency or run a suite
+                  // that fetches one. The key widens exactly that and nothing else; it is asserted as
+                  // a closed list over the argv array in this package's tests.
+                  "-c",
+                  "sandbox_workspace_write.network_access=true",
+                  // NOT an approval flag. `codex exec` has no `--ask-for-approval`, and passing one
+                  // is a hard argument error that fails the launch outright (spec §2.3) -- the
+                  // sandbox mode above is the whole of what this adapter gets to say about what the
+                  // agent may do.
+                ];
 
         const args = [
           "exec",

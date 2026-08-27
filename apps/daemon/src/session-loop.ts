@@ -28,6 +28,7 @@ import {
   provisionRefusalRequest,
   stageRequiresWorkspace,
   stageRunsInWorkspace,
+  stageWritesInWorkspace,
   workspaceBranchName,
   type DispatchStageDecision,
   type ProvisionRefusal,
@@ -838,6 +839,13 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
               path: lease.workspace.worktreePath,
               branch: lease.workspace.branch,
               baseCommit: lease.workspace.baseCommit,
+              // What this stage may DO in that worktree, which is not the same question as whether
+              // it gets one. Every agent stage runs in the work item's worktree (R11), and exactly
+              // two of them change it. Read from the domain rather than decided by the adapter,
+              // which has no stage to decide from: keying the sandbox mode off the mere presence of
+              // a workspace is what put DISCOVERY, PLAN and REVIEW under `-s workspace-write` with
+              // the network opened.
+              access: stageWritesInWorkspace(attempt.stage) ? "READ_WRITE" : "READ_ONLY",
             },
           };
 

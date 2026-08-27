@@ -169,10 +169,15 @@ const withEnv = async <T>(name: string, value: string, run: () => Promise<T>): P
 // milestone's git behaviour is covered in packages/workspace against real repositories.
 const workspaceDirectory = (): string => mkdtempSync(join(tmpdir(), "loomrail-codex-worktree-"));
 
-const fixtureWorkspace = (path: string): ProviderWorkspace => ({
+// `access` is passed at every call site rather than defaulted: what a session may do in the
+// worktree is the thing several tests below are about, and a default would let a test assert
+// "workspace-write" while silently saying nothing about which stages get it -- which is how the
+// reading stages came to run with write access in the first place.
+const fixtureWorkspace = (path: string, access: ProviderWorkspace["access"]): ProviderWorkspace => ({
   path,
   branch: "loomrail/work-item-1-payments-retry-policy",
   baseCommit: "b".repeat(40),
+  access,
 });
 
 const fixtureInvocation = (sessionId = "session-1", workspace?: ProviderWorkspace): ProviderInvocation => ({
@@ -416,20 +421,55 @@ describe("createCodexProvider", () => {
   // containing the same characters). Asserted positively -- the value actually sent is
   // "read-only" -- rather than negatively, so a future change to a different unsafe value still
   // fails this test even if nobody thought to add its exact spelling to a list first.
-  it("runs read-only without a workspace and workspace-write with one, never a wider mode", async () => {
+  it("runs read-only without a workspace and workspace-write with a writable one, never a wider mode", async () => {
     const withoutWorkspace = recordSpawn();
     await startWith(withoutWorkspace, createCodexProvider({ command: fakeCodexPath }));
     const withWorkspace = recordSpawn();
     await startWith(
       withWorkspace,
       createCodexProvider({ command: fakeCodexPath }),
-      fixtureWorkspace(workspaceDirectory()),
+      fixtureWorkspace(workspaceDirectory(), "READ_WRITE"),
     );
     for (const spawned of [withoutWorkspace, withWorkspace]) {
       expect(spawned.args.indexOf("-s")).toBeGreaterThanOrEqual(0);
     }
     expect(withoutWorkspace.args[withoutWorkspace.args.indexOf("-s") + 1]).toBe("read-only");
     expect(withWorkspace.args[withWorkspace.args.indexOf("-s") + 1]).toBe("workspace-write");
+  });
+
+  // The shape R11 created and nothing asserted: a worktree handed to a stage that only READS it.
+  // Giving every agent stage the workspace was right, but this adapter chose its sandbox mode from
+  // the mere presence of one, so DISCOVERY, PLAN and REVIEW launched under `-s workspace-write`
+  // with `sandbox_workspace_write.network_access=true` -- a review able to rewrite the code it is
+  // judging, and a discovery able to reach the network, neither of which those stages need or were
+  // ever meant to have.
+  //
+  // Asserted over the argv ARRAY and as adjacent pairs, never over `args.join(" ")`: the context
+  // pack is a positional argument, so a joined-line check passes or fails on prompt text. Both
+  // halves are pinned -- the mode that IS sent, and the config key that is not -- because a
+  // read-only sandbox that still opened the network would satisfy only one of them.
+  it("gives a reading stage the same worktree without write access or an opened network", async () => {
+    const worktree = workspaceDirectory();
+    const spawned = recordSpawn();
+    await startWith(
+      spawned,
+      createCodexProvider({ command: fakeCodexPath }),
+      fixtureWorkspace(worktree, "READ_ONLY"),
+    );
+
+    // The worktree itself is unchanged by the access mode: this stage reads the work item's own
+    // branch, with whatever an earlier stage changed on it.
+    expect(spawned.args[spawned.args.indexOf("-C") + 1]).toBe(worktree);
+    expect(spawned.args[spawned.args.indexOf("-s") + 1]).toBe("read-only");
+    // Not one `-c`, in any spelling: the one key this adapter may open exists so an IMPLEMENT or QA
+    // can install what it needs to run a suite, and a stage that may not write has nothing to
+    // install into.
+    expect(configAssignments(spawned.args)).toEqual([]);
+    expect(spawned.args.filter((arg) => flagSpelling(arg, "-c") !== null)).toEqual([]);
+    // And the rest of the launch is unchanged -- still the worktree's own repository check, still
+    // no bypass flag anywhere.
+    expect(spawned.args).not.toContain("--skip-git-repo-check");
+    expectNoForbiddenArguments(spawned.args);
   });
 
   // SD-001 forbids enabling a permission bypass automatically; this is the test, not the
@@ -444,7 +484,7 @@ describe("createCodexProvider", () => {
     await startWith(
       withWorkspace,
       createCodexProvider({ command: fakeCodexPath }),
-      fixtureWorkspace(workspaceDirectory()),
+      fixtureWorkspace(workspaceDirectory(), "READ_WRITE"),
     );
     expectNoForbiddenArguments(withWorkspace.args);
   });
@@ -807,7 +847,7 @@ describe("createCodexProvider", () => {
     const worktree = workspaceDirectory();
     rmSync(worktree, { recursive: true, force: true });
     const started = createCodexProvider({ command: fakeCodexPath }).start(
-      fixtureInvocation("session-1", fixtureWorkspace(worktree)),
+      fixtureInvocation("session-1", fixtureWorkspace(worktree, "READ_WRITE")),
       noopListener(),
     );
     // Through `resolves`, like the spawn-failure case below it: the failure mode being guarded
@@ -830,7 +870,11 @@ describe("createCodexProvider", () => {
   it("runs the CLI inside the worktree it was given, with write access to that directory", async () => {
     const worktree = workspaceDirectory();
     const spawned = recordSpawn();
-    await startWith(spawned, createCodexProvider({ command: fakeCodexPath }), fixtureWorkspace(worktree));
+    await startWith(
+      spawned,
+      createCodexProvider({ command: fakeCodexPath }),
+      fixtureWorkspace(worktree, "READ_WRITE"),
+    );
     expect(spawned.args[spawned.args.indexOf("-C") + 1]).toBe(worktree);
     expect(spawned.args[spawned.args.indexOf("-s") + 1]).toBe("workspace-write");
     expect(spawned.args).toContain("--ignore-user-config");
@@ -850,7 +894,7 @@ describe("createCodexProvider", () => {
     await startWith(
       spawned,
       createCodexProvider({ command: fakeCodexPath }),
-      fixtureWorkspace(workspaceDirectory()),
+      fixtureWorkspace(workspaceDirectory(), "READ_WRITE"),
     );
     const configValues = spawned.args.filter((arg, index) => spawned.args[index - 1] === "-c");
     expect(configValues).toEqual(["sandbox_workspace_write.network_access=true"]);
@@ -873,7 +917,7 @@ describe("createCodexProvider", () => {
     await startWith(
       spawned,
       createCodexProvider({ command: fakeCodexPath }),
-      fixtureWorkspace(workspaceDirectory()),
+      fixtureWorkspace(workspaceDirectory(), "READ_WRITE"),
     );
     expect(spawned.args).not.toContain("--skip-git-repo-check");
   });
@@ -887,7 +931,7 @@ describe("createCodexProvider", () => {
     await startWith(
       spawned,
       createCodexProvider({ command: fakeCodexPath }),
-      fixtureWorkspace(workspaceDirectory()),
+      fixtureWorkspace(workspaceDirectory(), "READ_WRITE"),
     );
     const flags = spawned.args.filter((arg) => arg.startsWith("-"));
     expect(flags.filter((flag) => flag.includes("approval"))).toEqual([]);
@@ -902,7 +946,11 @@ describe("createCodexProvider", () => {
   it("leaves the worktree exactly as it found it and writes its own schema elsewhere", async () => {
     const worktree = workspaceDirectory();
     const spawned = recordSpawn();
-    await startWith(spawned, createCodexProvider({ command: fakeCodexPath }), fixtureWorkspace(worktree));
+    await startWith(
+      spawned,
+      createCodexProvider({ command: fakeCodexPath }),
+      fixtureWorkspace(worktree, "READ_WRITE"),
+    );
     expect(existsSync(worktree)).toBe(true);
     expect(readdirSync(worktree)).toEqual([]);
     const schemaPath = spawned.args[spawned.args.indexOf("--output-schema") + 1];

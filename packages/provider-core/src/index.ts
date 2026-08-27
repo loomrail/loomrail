@@ -118,6 +118,21 @@ export type ProviderWorkspace = {
   // Null for a repository with no commits yet -- an empty repository genuinely has no HEAD, and
   // absent would read as "not recorded" (mirrors `workItemWorkspaceSchema.baseCommit`).
   baseCommit: string | null;
+  /**
+   * What this session may DO in the worktree, which is a separate question from having one.
+   *
+   * Required, and required for a reason: an adapter that inferred write access from the mere
+   * presence of a workspace is how DISCOVERY, PLAN and REVIEW came to launch under
+   * `-s workspace-write` with network access opened. Giving every agent stage the worktree (R11)
+   * was right -- a review that cannot read the change is useless -- but only IMPLEMENT and QA
+   * change it, and a field with a default would have let the wider access go on being the silent
+   * fallback. The caller states it; `stageWritesInWorkspace` (`@loomrail/domain`) is what the
+   * daemon reads to answer it, so no adapter carries a list of stages of its own.
+   *
+   * An adapter maps this onto whatever its CLI understands. READ_ONLY still means the real
+   * worktree at `path`: the session reads the work item's own branch, it just may not write to it.
+   */
+  access: "READ_ONLY" | "READ_WRITE";
 };
 
 // Neither method is speculative. Without a stream of window occupancy, Loomrail only learns how
