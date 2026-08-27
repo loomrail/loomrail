@@ -83,23 +83,55 @@ const FORBIDDEN_MCP_FLAGS: readonly string[] = ["--mcp-config", "--strict-mcp-co
 // a second key is then a decision someone makes here rather than something that quietly happens.
 const ALLOWED_CONFIG_ASSIGNMENTS: readonly string[] = ["sandbox_workspace_write.network_access=true"];
 
-// Read off the argv ARRAY as adjacent pairs, never `args.join(" ")`: the context pack is a
-// positional argument, and prompt text containing "-c" would make a joined-line check pass or fail
-// for reasons that have nothing to do with the flags.
+// Whether one argv token carries `flag`, in every spelling a clap-based CLI (both of these are)
+// accepts for it: the bare token, the long attached form `--flag=value`, and -- for a one-letter
+// short flag -- the attached form `-cvalue` with no separator at all.
+//
+// This exists because matching only the exact token left the guard below open on the one flag it
+// was written to guard. `configAssignments` read a token only when its predecessor was exactly
+// `-c`, the completeness count filtered for exactly `-c`, and `--config` was checked with
+// `not.toContain`, which is an exact element match -- so `-csandbox_permissions=["disk-full-read-
+// access"]` and `--config=sandbox_permissions=...`, the documented sandbox escape written as ONE
+// token, passed all three assertions untouched. That is the whole hole the value allow-list was
+// introduced to close.
+//
+// Still read off the argv ARRAY, never `args.join(" ")`: the context pack is a positional
+// argument, so a joined-line check would pass or fail on prompt text containing "-c".
+const flagSpelling = (arg: string, flag: string): "EXACT" | "ATTACHED" | null => {
+  if (arg === flag) return "EXACT";
+  if (arg.startsWith(`${flag}=`)) return "ATTACHED";
+  // A short flag is `-x`: two characters, one dash. A long flag never matches this branch, so
+  // `--config` is not mistaken for `-c` carrying the attached value "-onfig".
+  const isShort = flag.length === 2 && flag.startsWith("-") && !flag.startsWith("--");
+  return isShort && arg.length > flag.length && arg.startsWith(flag) ? "ATTACHED" : null;
+};
+
+const attachedValue = (arg: string, flag: string): string =>
+  arg.startsWith(`${flag}=`) ? arg.slice(flag.length + 1) : arg.slice(flag.length);
+
+// Every config key this argv sets, however it is spelled. A trailing `-c` with nothing after it
+// yields the empty string rather than nothing at all, so it fails the allow-list below instead of
+// slipping past a reader that only inspects what follows a flag.
 const configAssignments = (args: readonly string[]): string[] =>
-  args.filter((arg, index) => args[index - 1] === "-c");
+  args.flatMap((arg, index) => {
+    const spelling = flagSpelling(arg, "-c");
+    if (spelling === null) return [];
+    return [spelling === "EXACT" ? (args[index + 1] ?? "") : attachedValue(arg, "-c")];
+  });
 
 const expectNoForbiddenArguments = (args: readonly string[]): void => {
-  for (const flag of FORBIDDEN_PERMISSION_BYPASS_FLAGS) expect(args).not.toContain(flag);
-  // Every `-c` present is one whose value was read: a trailing `-c` with nothing after it would
-  // otherwise slip past a check that only inspects what follows one.
-  expect(configAssignments(args).length).toBe(args.filter((arg) => arg === "-c").length);
+  for (const flag of [...FORBIDDEN_PERMISSION_BYPASS_FLAGS, ...FORBIDDEN_MCP_FLAGS]) {
+    expect(args.filter((arg) => flagSpelling(arg, flag) !== null)).toEqual([]);
+  }
   for (const assignment of configAssignments(args)) {
     expect(ALLOWED_CONFIG_ASSIGNMENTS).toContain(assignment);
   }
   for (const [flag, value] of FORBIDDEN_FLAG_VALUES) {
-    const at = args.indexOf(flag);
-    if (at >= 0) expect(args[at + 1]).not.toBe(value);
+    for (const [index, arg] of args.entries()) {
+      const spelling = flagSpelling(arg, flag);
+      if (spelling === null) continue;
+      expect(spelling === "EXACT" ? args[index + 1] : attachedValue(arg, flag)).not.toBe(value);
+    }
   }
 };
 
@@ -361,13 +393,66 @@ describe("createCodexProvider", () => {
     expectNoForbiddenArguments(withWorkspace.args);
   });
 
+  // `expectNoForbiddenArguments` is the guard that replaced a blanket ban on `-c`, so it is now a
+  // piece of logic with a failure mode of its own and is tested rather than only used. The argv it
+  // is handed here is synthetic on purpose: the point is what the guard would CATCH, and this
+  // adapter is never going to build a smuggled flag for it to catch.
+  //
+  // Every spelling below is one a clap-based CLI accepts and the previous guard missed entirely:
+  // the key attached to a short flag with no separator, and the key attached to the long flag with
+  // `=`. Both were exactly the sandbox escape `codex exec --help` documents.
+  it("catches a forbidden config key smuggled into a single argv token", () => {
+    // The shape this adapter really builds, minus the parts that do not concern the guard. The last
+    // element stands in for the context pack: a positional argument whose text happens to mention a
+    // flag, which is why the guard reads the array and not a joined command line. (A prompt that
+    // BEGAN with "-c" would be a false positive here; a guard on a sandbox escape is allowed to err
+    // that way, and nothing assembles a pack that starts with a flag.)
+    const base = [
+      "exec",
+      "--json",
+      "--ignore-user-config",
+      "-s",
+      "workspace-write",
+      "-c",
+      "sandbox_workspace_write.network_access=true",
+      "-C",
+      "/tmp/loomrail-worktree",
+      "Implement the retry policy; do not pass -c to anything.",
+    ];
+    expect(() => {
+      expectNoForbiddenArguments(base);
+    }).not.toThrow();
+
+    for (const smuggled of [
+      '-csandbox_permissions=["disk-full-read-access"]',
+      '--config=sandbox_permissions=["disk-full-read-access"]',
+      "-csandbox_workspace_write.network_access=false",
+      "--permission-mode=bypassPermissions",
+      "--mcp-config=/tmp/servers.json",
+    ]) {
+      expect(() => {
+        expectNoForbiddenArguments([...base, smuggled]);
+      }).toThrow();
+    }
+
+    // A trailing `-c` with nothing after it is not a way past the allow list either: it is recorded
+    // as an empty assignment, which is not on it.
+    expect(() => {
+      expectNoForbiddenArguments([...base, "-c"]);
+    }).toThrow();
+  });
+
   // Spec D6 forbids MCP before milestone C1, and nothing enforced it -- an adapter that connected a
   // server would have broken the rule silently. `--mcp-config` also reaches straight past the empty
   // temporary directory that is this milestone's whole containment story.
   it("never connects an MCP server (D6)", async () => {
     const spawned = recordSpawn();
     await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
-    for (const forbidden of FORBIDDEN_MCP_FLAGS) expect(spawned.args).not.toContain(forbidden);
+    // Matched by spelling rather than by exact token, for the same reason the config guard is:
+    // `--mcp-config=<path>` is one token, and `not.toContain` would never see it.
+    for (const forbidden of FORBIDDEN_MCP_FLAGS) {
+      expect(spawned.args.filter((arg) => flagSpelling(arg, forbidden) !== null)).toEqual([]);
+    }
   });
 
   // `codex exec` launched without this flag inherits the OWNER'S OWN `~/.codex/config.toml` --
