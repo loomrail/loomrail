@@ -23,6 +23,7 @@ import {
 import {
   decideDispatchStage,
   decideProvisionWorkspace,
+  decideSessionWorkspace,
   provisionRefusalRequest,
   stageRequiresWorkspace,
   workspaceBranchName,
@@ -35,6 +36,7 @@ import {
   type ProviderAdapter,
   type ProviderSessionListener,
   type ProviderSessionRef,
+  type ProviderWorkspace,
 } from "@loomrail/provider-core";
 import {
   addWorktree,
@@ -652,8 +654,15 @@ const releaseWorkspaceLease = (deps: RunStageAttemptDeps, workspaceId: string): 
   }
 };
 
-/** The workspace whose lease this attempt took, so the `finally` below knows whether to give it back. */
-type WorkspaceLeaseSlot = { workspaceId: string | null };
+/**
+ * The workspace this attempt leased, so the `finally` below knows whether to give it back -- and so
+ * every session in the attempt can be handed the worktree it is meant to write in.
+ *
+ * The whole entity, not just its id: `worktreePath`, `branch` and `baseCommit` are what an
+ * invocation carries (`ProviderWorkspace` in `@loomrail/provider-core`), and re-reading the row for
+ * them at each session would re-read a row this attempt already holds the lease on.
+ */
+type WorkspaceLeaseSlot = { workspace: WorkItemWorkspace | null };
 
 const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLeaseSlot): Promise<void> => {
   const scheduleDeadline = deps.scheduleHandoffDeadline ?? defaultScheduleHandoffDeadline;
@@ -731,9 +740,9 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     // need one is a property of the stage (`stagesRequiringWorkspace` in `@loomrail/domain`), read
     // from there rather than compared against stage names here -- DISCOVERY, PLAN, REVIEW and
     // ACCEPTANCE produce prose and must not have a worktree cut for them at all. Done once per
-    // attempt: `lease.workspaceId` is set as soon as this attempt holds the lease, and every later
+    // attempt: `lease.workspace` is set as soon as this attempt holds the lease, and every later
     // session in the same attempt writes in the same worktree (spec D1).
-    if (lease.workspaceId === null && stageRequiresWorkspace(attempt.stage)) {
+    if (lease.workspace === null && stageRequiresWorkspace(attempt.stage)) {
       const prepared = await prepareWorkspaceSafely(deps);
       if (prepared.type === "REFUSED") {
         refuseDispatch({ type: "WORKSPACE_NOT_PROVISIONED", request: prepared.request });
@@ -749,7 +758,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         );
         return;
       }
-      lease.workspaceId = prepared.workspace.id;
+      lease.workspace = prepared.workspace;
       deps.logger.info(
         {
           stageAttemptId,
@@ -759,6 +768,50 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         },
         "The work item's workspace is ready and leased to this stage attempt",
       );
+    }
+
+    // The workspace fields of the invocation built below, in the shape an adapter reads them
+    // (`ProviderWorkspace`, @loomrail/provider-core). Assembled HERE, once, and spread into the
+    // invocation verbatim, rather than composed at the `start()` call site: the gate immediately
+    // underneath asks its question of this very object, so a change that stops populating it is
+    // refused instead of quietly reaching an adapter.
+    //
+    // Spread rather than assigned, because `exactOptionalPropertyTypes` makes an absent `workspace`
+    // and one set to `undefined` different things, and absent is the one the contract defines.
+    // `worktreePath` is renamed to `path` because that is what the adapter's own type calls it;
+    // `branch` and `baseCommit` travel with it because they say WHICH work this worktree holds --
+    // the base a later step diffs against, and the branch the change lives on -- and a consumer
+    // that had to re-derive them would shell out to git against a directory that may have moved on.
+    const invocationWorkspace: { workspace?: ProviderWorkspace } =
+      lease.workspace === null
+        ? {}
+        : {
+            workspace: {
+              path: lease.workspace.worktreePath,
+              branch: lease.workspace.branch,
+              baseCommit: lease.workspace.baseCommit,
+            },
+          };
+
+    // The invariant `stagesRequiringWorkspace` only ever implied, now checked (@loomrail/domain's
+    // `decideSessionWorkspace`). Before E1 nothing needed it: the live adapters declared three
+    // stages, so `decideDispatchStage` refused IMPLEMENT and QA on the declaration alone and no
+    // writing stage could reach an adapter at all. Task 11 widened the declaration to six, and the
+    // gap it left was live: an IMPLEMENT invocation with no workspace made the Codex adapter run
+    // `-s read-only` in an empty temporary directory, the agent answered from nothing, and the
+    // stage closed COMPLETED reporting work that never happened.
+    //
+    // Asked of `invocationWorkspace` and not of `lease.workspace`, which is the point: the two can
+    // only disagree through a bug in the four lines above, and that disagreement is precisely the
+    // defect being closed. Refused, not thrown: the owner meets it as the same blocking question
+    // every other provisioning failure produces, and no ProviderSession is opened for it.
+    const sessionWorkspaceDecision = decideSessionWorkspace({
+      stage: attempt.stage,
+      hasWorkspace: invocationWorkspace.workspace !== undefined,
+    });
+    if (sessionWorkspaceDecision.type === "REFUSED") {
+      refuseDispatch({ type: "WORKSPACE_NOT_PROVISIONED", request: sessionWorkspaceDecision.request });
+      return;
     }
 
     const sessions = readAttemptSessions(deps);
@@ -1070,6 +1123,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             dispatch: deps.dispatch,
             session: providerSessionRef(providerSession, attempt),
             contextPack: assembled.pack,
+            ...invocationWorkspace,
           },
           listener,
         );
@@ -1247,10 +1301,10 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
  * lease left behind is a workspace the *next* stage of this work item can never write in.
  */
 export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> => {
-  const lease: WorkspaceLeaseSlot = { workspaceId: null };
+  const lease: WorkspaceLeaseSlot = { workspace: null };
   try {
     await runProviderSessions(deps, lease);
   } finally {
-    if (lease.workspaceId !== null) releaseWorkspaceLease(deps, lease.workspaceId);
+    if (lease.workspace !== null) releaseWorkspaceLease(deps, lease.workspace.id);
   }
 };

@@ -156,12 +156,16 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // worktree under `-s workspace-write` (see `start` below).
         //
         // This declaration is static, and deliberately says nothing about whether any particular
-        // session will be handed a workspace. Whether one exists is the daemon's business: a stage
-        // in `stagesRequiringWorkspace` (`@loomrail/domain`) is provisioned before dispatch and
-        // refused if provisioning fails, so an IMPLEMENT session that reaches this adapter has a
-        // worktree by construction. Making `stages` depend on a per-session fact would be a
-        // capability that changes under the caller between the moment it is read and the moment it
-        // is acted on.
+        // session will be handed a workspace. Whether one exists is the caller's business, and this
+        // adapter has no way to check it: nothing in an invocation distinguishes "no workspace,
+        // because DISCOVERY produces prose" from "no workspace, because the caller forgot", and for
+        // a while the daemon did forget -- it provisioned the worktree, took its lease, and then
+        // built an invocation without it, so IMPLEMENT ran `-s read-only` in an empty temporary
+        // directory and reported a stage it never touched. The gate that now prevents it lives
+        // where the invocation is built (`decideSessionWorkspace`, `@loomrail/domain`, applied in
+        // the daemon's session loop), not here. Making `stages` depend on a per-session fact would
+        // be a capability that changes under the caller between the moment it is read and the
+        // moment it is acted on.
         //
         // Declared the same whether or not the CLI is currently on this machine -- `stages` says
         // what this adapter would serve if it could run, `start` below is the separate claim that

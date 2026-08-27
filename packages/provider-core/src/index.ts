@@ -90,12 +90,19 @@ export type ProviderInvocation = {
   contextPack: ContextPack;
   // The Git worktree this session may write in (spec E1 D8), or absent when there is none.
   //
-  // Absent is not "unknown": it is the read-only path every session took before this milestone,
-  // where the adapter runs its CLI in an empty temporary directory with nothing to change. A stage
-  // that needs a repository (`stagesRequiringWorkspace` in `@loomrail/domain`) is not dispatched
-  // without one -- the daemon provisions the workspace and refuses the dispatch if it cannot -- so
-  // an adapter that finds this absent is entitled to treat it as "this session was never meant to
-  // change anything", not as a missing argument to guess at.
+  // Absent means the read-only path every session took before this milestone: the adapter runs its
+  // CLI in an empty temporary directory with nothing to change. It is a real instruction, but it is
+  // not a SAFE default, and an adapter must not read it as one. A stage in `stagesRequiringWorkspace`
+  // (`@loomrail/domain`) that arrives here with this field absent is a caller bug, and treating it as
+  // "this session was never meant to change anything" is how a stage closes COMPLETED carrying an
+  // agent's plausible answer about work it had nowhere to do -- which is exactly what happened
+  // between the Codex adapter declaring IMPLEMENT and the daemon being taught to pass this field.
+  //
+  // The daemon is what keeps that from recurring: it builds the only production invocation in this
+  // repository, and `decideSessionWorkspace` (`@loomrail/domain`) refuses the dispatch -- as a
+  // blocking question to the owner, before any session opens -- when a writing stage's invocation
+  // would carry no workspace. What an adapter is entitled to assume is therefore exactly what that
+  // gate guarantees, and no more.
   workspace?: ProviderWorkspace;
 };
 

@@ -9,7 +9,11 @@ import type {
   WorkItemWorkspace,
 } from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
-import { providerCapabilitiesSchema, type ProviderAdapter } from "@loomrail/provider-core";
+import {
+  providerCapabilitiesSchema,
+  type ProviderAdapter,
+  type ProviderInvocation,
+} from "@loomrail/provider-core";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import { addWorktree, listWorktrees, runGit } from "@loomrail/workspace";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -51,7 +55,11 @@ const implementOnlyTemplate: WorkflowTemplate = {
 
 type SeededAttempt = { workItemId: string; stageAttemptId: string; dispatch: WorkflowDispatch };
 
-const completingAdapter = (onStart: (invocationCount: number) => Promise<void> | void): ProviderAdapter => {
+// `onStart` is handed the invocation as well as the count, because part of what this suite pins is
+// what the adapter is GIVEN, not only what it can see on disk from inside its own call.
+const completingAdapter = (
+  onStart: (invocationCount: number, invocation: ProviderInvocation) => Promise<void> | void,
+): ProviderAdapter => {
   let started = 0;
   return {
     capabilities: () =>
@@ -67,9 +75,9 @@ const completingAdapter = (onStart: (invocationCount: number) => Promise<void> |
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
       }),
-    start: async (): Promise<ProviderOutcome> => {
+    start: async (invocation: ProviderInvocation): Promise<ProviderOutcome> => {
       started += 1;
-      await onStart(started);
+      await onStart(started, invocation);
       return { type: "COMPLETED", summary: "The mock session finished the stage." };
     },
     requestHandoff: () => Promise.resolve(),
@@ -318,6 +326,82 @@ describe("session loop workspace provisioning", () => {
       expect(workspace).toMatchObject({ status: "READY", worktreePath, projectId: PROJECT_ID });
       expect(workspace?.snapshotCommit).toMatch(/^[0-9a-f]{40}$/);
       expect(workspace?.baseCommit).toMatch(/^[0-9a-f]{40}$/);
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  // The defect this test exists for shipped and was live on `main`: the daemon cut the worktree,
+  // took its lease, and then built the invocation from `dispatch`/`session`/`contextPack` alone.
+  // `ProviderInvocation.workspace` was set by nothing outside tests, so the Codex adapter -- which
+  // had just started declaring IMPLEMENT -- read the field as absent, ran `codex exec -s read-only
+  // --skip-git-repo-check` in an empty temporary directory, and the stage closed COMPLETED carrying
+  // a schema-valid answer about work nothing had a repository to do.
+  //
+  // Asserted against the workspace ROW rather than against literals: the row is what the daemon was
+  // supposed to pass on, so a test that agreed with a hand-written path would still pass if the two
+  // drifted. `path` carries the row's `worktreePath` under the adapter's own name for it.
+  it(
+    "hands the adapter the worktree it just cut and leased, with the branch and base commit",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+
+      let received: ProviderInvocation | undefined;
+      const adapter = completingAdapter((_count, invocation) => {
+        received = invocation;
+      });
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      const workspace = workspaceOf(localState, seeded.workItemId);
+      expect(workspace).not.toBeNull();
+      expect(received?.workspace).toEqual({
+        path: workspace?.worktreePath,
+        branch: workspace?.branch,
+        baseCommit: workspace?.baseCommit,
+      });
+      // The path is the load-bearing field, and a row is not evidence about a disk: this is the
+      // directory the adapter would launch its CLI in, so it has to be the real worktree and not
+      // merely a string that matches the row.
+      expect(await pathExists(join(received?.workspace?.path ?? "", ".git"))).toBe(true);
+      // And the gate above it did not fire: an IMPLEMENT dispatch that reaches an adapter with no
+      // workspace is refused to the owner instead, so a run that asked no question is what tells
+      // these two assertions apart from a passing test that never dispatched at all.
+      expect(snapshotOf(localState, seeded.workItemId).humanRequests).toHaveLength(0);
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  // The other side of the same rule: DISCOVERY, PLAN, REVIEW and ACCEPTANCE produce prose, no
+  // worktree is cut for them, and the invocation must therefore OMIT the field rather than carry an
+  // empty one -- `exactOptionalPropertyTypes` makes absent and `undefined` different things, and
+  // absent is what the contract defines and what the adapter's read-only branch keys on.
+  it(
+    "leaves the workspace out entirely for a stage that only produces prose",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const planStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "PLAN");
+      if (!planStage) throw new Error("The mock delivery template no longer declares PLAN");
+      const planOnlyTemplate: WorkflowTemplate = {
+        ...implementOnlyTemplate,
+        id: "workspace-plan-v1",
+        name: "Workspace plan",
+        stages: [{ ...planStage, ordinal: 0 }],
+      };
+      const seeded = seedAttempt(localState, { template: planOnlyTemplate });
+
+      let received: ProviderInvocation | undefined;
+      const adapter = completingAdapter((_count, invocation) => {
+        received = invocation;
+      });
+
+      await runStageAttempt({ ...depsFor(localState, seeded, adapter), template: planOnlyTemplate });
+
+      expect(received).toBeDefined();
+      expect(received === undefined ? true : "workspace" in received).toBe(false);
+      expect(workspaceOf(localState, seeded.workItemId)).toBeNull();
     },
     GIT_TIMEOUT_MS,
   );

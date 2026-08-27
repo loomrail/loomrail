@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   decideProvisionWorkspace,
+  decideSessionWorkspace,
   stagesRequiringWorkspace,
   stageRequiresWorkspace,
   workspaceBranchName,
@@ -146,5 +147,51 @@ describe("stagesRequiringWorkspace", () => {
     expect(stageRequiresWorkspace("PLAN")).toBe(false);
     expect(stageRequiresWorkspace("REVIEW")).toBe(false);
     expect(stageRequiresWorkspace("ACCEPTANCE")).toBe(false);
+  });
+});
+
+// The gate that closes E1's live defect: the Codex adapter began declaring IMPLEMENT and QA, and
+// `decideDispatchStage` answers DISPATCH from the declared list alone, so nothing between that
+// decision and the adapter checked that the writing stage actually had somewhere to write. It did
+// not: the daemon built its invocation without the workspace it had just cut and leased, the
+// adapter took its read-only branch in an empty temporary directory, and the stage closed
+// COMPLETED on an answer the agent had no repository to produce.
+describe("decideSessionWorkspace", () => {
+  it("refuses a stage that changes files when the invocation carries no workspace", () => {
+    for (const stage of stagesRequiringWorkspace) {
+      const decision = decideSessionWorkspace({ stage, hasWorkspace: false });
+      expect(decision.type).toBe("REFUSED");
+      if (decision.type !== "REFUSED") throw new Error("unreachable: asserted immediately above");
+      expect(decision.request.title).toContain(stage);
+      expect(decision.request.blocking).toBe(true);
+      // The refusal has to say what went wrong in terms the owner can act on -- and here what they
+      // can act on is nothing in their repository, so it must not send them looking.
+      expect(decision.request.context).toContain("read-only");
+      expect(decision.request.recommendation).toContain("Nothing in the project or its repository");
+    }
+  });
+
+  it("proceeds once the invocation carries the workspace", () => {
+    for (const stage of stagesRequiringWorkspace) {
+      expect(decideSessionWorkspace({ stage, hasWorkspace: true })).toEqual({ type: "PROCEED" });
+    }
+  });
+
+  // The other half, and the reason this is not simply "always require a workspace": DISCOVERY,
+  // PLAN, REVIEW and ACCEPTANCE produce prose, and a worktree is deliberately never cut for them
+  // (spec §6). A gate that refused them would refuse four of the six stages of every pipeline.
+  it("proceeds for a stage that produces prose, with or without a workspace", () => {
+    for (const stage of ["DISCOVERY", "PLAN", "REVIEW", "ACCEPTANCE"] as const) {
+      expect(decideSessionWorkspace({ stage, hasWorkspace: false })).toEqual({ type: "PROCEED" });
+      expect(decideSessionWorkspace({ stage, hasWorkspace: true })).toEqual({ type: "PROCEED" });
+    }
+  });
+
+  it("builds its refusal as the same blocking, unstructured question every other one on this path is", () => {
+    const decision = decideSessionWorkspace({ stage: "IMPLEMENT", hasWorkspace: false });
+    if (decision.type !== "REFUSED") throw new Error("unreachable");
+    expect(decision.request.kind).toBe("FREE_TEXT");
+    expect(decision.request.options).toEqual([]);
+    expect(decision.request.allowOther).toBe(true);
   });
 });

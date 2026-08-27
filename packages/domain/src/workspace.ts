@@ -184,3 +184,37 @@ export const decideProvisionWorkspace = (context: {
   }
   return { type: "PROVISION" };
 };
+
+const noSessionWorkspaceRefusal = (stage: WorkflowStage): ProvisionRefusal => ({
+  title: `A ${stage} session was about to start with no workspace`,
+  context: `${stage} is one of the stages that changes files (${stagesRequiringWorkspace.join(" and ")}), so it runs in the work item's own Git worktree. This session was about to be handed no workspace at all, which is not a smaller version of the same thing: the adapter would have run its CLI read-only in an empty temporary directory, the agent would have written a plausible answer about work it never did, and the stage would have closed as done with nothing changed on disk. The dispatch was refused instead.`,
+  recommendation:
+    "Nothing in the project or its repository caused this, and nothing done there will change it: the worktree was prepared and only Loomrail's own dispatch failed to pass it on. Report this message with the work item's id -- every retry will be refused the same way until Loomrail is fixed.",
+});
+
+export type SessionWorkspaceDecision = { type: "PROCEED" } | { type: "REFUSED"; request: HumanRequestDraft };
+
+/**
+ * The last gate between `stagesRequiringWorkspace` and a provider session: a stage that changes
+ * files must never reach an adapter without the worktree it is meant to change.
+ *
+ * This exists because the two facts were connected by nothing. `decideDispatchStage` answers
+ * DISPATCH from an adapter's DECLARED stages alone, and once the Codex adapter declared IMPLEMENT
+ * and QA, an invocation that carried no workspace was indistinguishable -- to the adapter -- from a
+ * DISCOVERY session that was never meant to write. The adapter took its read-only branch, the agent
+ * answered from an empty directory, and the stage closed COMPLETED. A session reporting work it
+ * never did is the worst outcome this project has, so the invariant is checked rather than assumed.
+ *
+ * Takes `hasWorkspace` rather than a workspace, so this package states the rule without knowing
+ * `ProviderWorkspace` (`@loomrail/provider-core`) -- the daemon, which builds the invocation, is the
+ * layer that answers whether the invocation it is about to send carries one. The caller must read
+ * that answer off the invocation itself and not off whatever it *meant* to put there: reading it
+ * anywhere else re-opens exactly the gap this closes.
+ */
+export const decideSessionWorkspace = (context: {
+  stage: WorkflowStage;
+  hasWorkspace: boolean;
+}): SessionWorkspaceDecision => {
+  if (!stageRequiresWorkspace(context.stage) || context.hasWorkspace) return { type: "PROCEED" };
+  return { type: "REFUSED", request: provisionRefusalRequest(noSessionWorkspaceRefusal(context.stage)) };
+};
