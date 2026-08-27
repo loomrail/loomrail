@@ -864,7 +864,6 @@ const killOrphanedSessionProcess = (context: {
   pid: number;
   sessionId: string;
   sessionStartedAt: string;
-  now: Date;
   processStartedAt: (pid: number) => Date | null;
   report: (event: OrphanProcessEvent) => void;
 }): void => {
@@ -2553,7 +2552,6 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               pid: current.pid,
               sessionId: current.id,
               sessionStartedAt: current.startedAt,
-              now: new Date(occurredAt),
               processStartedAt,
               report: reportOrphanProcess,
             });
