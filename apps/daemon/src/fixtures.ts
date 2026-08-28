@@ -160,6 +160,96 @@ export const isSameExistingPath = async (left: string, right: string): Promise<b
 };
 
 /**
+ * What `path` is, as far as registering or keeping a Project at it is concerned: its canonical
+ * form, git's view of it, and whether it is a repository's own top level.
+ *
+ * One function so the judgment has one definition. `resolveRegisteredRepository` below refuses a
+ * path on it, and `isRegisteredRepositoryUsable` reports on it for a Project already recorded at
+ * one -- and those two answering differently is exactly how a UI ends up offering to repair a
+ * healthy Project, or hiding a broken one.
+ */
+const inspectRegisteredPath = async (
+  path: string,
+): Promise<{ canonical: string | null; insideRepository: string | null; isOwnTopLevel: boolean }> => {
+  const canonical = await canonicalPathOf(path);
+  const inspected = canonical === null ? null : await inspectRepository(canonical);
+  // git reports its top level as a physical path, so the comparison is against the canonical form
+  // for the same reason the provisioning guard compares canonical forms (session-loop.ts).
+  const isOwnTopLevel = canonical !== null && inspected !== null && inspected.topLevel === canonical;
+  return { canonical, insideRepository: isOwnTopLevel ? null : (inspected?.topLevel ?? null), isOwnTopLevel };
+};
+
+/**
+ * How long the probe below waits for the filesystem and `git` before it stops waiting and answers
+ * "not usable".
+ *
+ * Two seconds, because this bounds a *probe*, not a piece of work: nothing is lost by giving up on
+ * it, and the owner is looking at a list that will not render until it answers. A healthy local
+ * repository is inspected in single-digit milliseconds -- three `git rev-parse` runs and a
+ * `realpath` -- so two seconds is three orders of magnitude of headroom for a loaded machine, and
+ * still far below the point where an owner decides the app is hung. The cost of the timeout firing
+ * on a repository that is merely slow is one Project shown as UNUSABLE until the next fetch, which
+ * is recoverable; the cost of not having it is the whole screen never arriving.
+ */
+export const REGISTERED_REPOSITORY_PROBE_TIMEOUT_MS = 2_000;
+
+/**
+ * Whether a Project recorded at `path` could have a workspace cut from it right now.
+ *
+ * The same question `resolveRegisteredRepository` refuses on, asked without the refusal: this one
+ * answers about a Project that is already registered, so there is nothing to reject and nobody to
+ * word a message for. A path that no longer resolves, one that stopped being a repository, and one
+ * that is a directory *inside* a repository are all equally unusable here -- the fixes differ, and
+ * the fix is the repair route's business, not the list's.
+ *
+ * **It answers, always, and within `timeoutMs`.** This is a probe on the route that renders the
+ * app's main screen (`GET /api/v1/projects`), so every way the inspection can fail to produce a
+ * boolean has to become one here rather than reaching the caller:
+ *
+ * - `runGit` REJECTS with `GitMissingError` when `git` cannot be spawned at all, and
+ *   `inspectRepository` does not catch it. Unhandled, one Project on a machine without `git` on
+ *   PATH turned the entire project list into a generic 500 -- an owner who could not list their
+ *   Projects, over a question about one of them.
+ * - Neither `runGit` nor `realpath` has a timeout of its own, and a Project registered on a
+ *   sleeping external disk or an unreachable network mount blocks in both. Unbounded, one such
+ *   Project wedged the request until the mount answered, which can be never.
+ *
+ * The rejection handler is attached to the inspection itself rather than wrapped around the race,
+ * so that an inspection which rejects *after* the timeout already answered is still handled: a
+ * `Promise.race` loser keeps running, and an unhandled rejection from it would take the daemon down
+ * on a route that had already replied.
+ *
+ * A timed-out probe reports UNUSABLE, the same as a path that stopped being a repository, because
+ * that is the honest answer to the question actually asked -- "could a workspace be cut from this
+ * right now" -- and right now it could not. It is deliberately not a third status: the list's job
+ * is to stop a broken Project from looking healthy, not to diagnose which kind of broken it is.
+ */
+export const isRegisteredRepositoryUsable = async (
+  path: string,
+  timeoutMs: number = REGISTERED_REPOSITORY_PROBE_TIMEOUT_MS,
+): Promise<boolean> => {
+  const inspected = inspectRegisteredPath(path.trim()).then(
+    ({ isOwnTopLevel }) => isOwnTopLevel,
+    () => false,
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      inspected,
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => {
+          resolve(false);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    // Cleared on both outcomes, so a probe the inspection won does not hold a timer -- and, with it,
+    // the event loop -- open for the rest of the timeout.
+    clearTimeout(timer);
+  }
+};
+
+/**
  * Settles whether a path may be registered as a Project's repository, and refuses in the owner's
  * words when it may not.
  *
@@ -185,38 +275,6 @@ export const isSameExistingPath = async (left: string, right: string): Promise<b
  * *subdirectory* of a repository, which would branch the enclosing repository by surprise. See
  * `docs/security/THREAT-MODEL.md`, E1 delta.
  */
-/**
- * What `path` is, as far as registering or keeping a Project at it is concerned: its canonical
- * form, git's view of it, and whether it is a repository's own top level.
- *
- * One function so the judgment has one definition. `resolveRegisteredRepository` below refuses a
- * path on it, and `isRegisteredRepositoryUsable` reports on it for a Project already recorded at
- * one -- and those two answering differently is exactly how a UI ends up offering to repair a
- * healthy Project, or hiding a broken one.
- */
-const inspectRegisteredPath = async (
-  path: string,
-): Promise<{ canonical: string | null; insideRepository: string | null; isOwnTopLevel: boolean }> => {
-  const canonical = await canonicalPathOf(path);
-  const inspected = canonical === null ? null : await inspectRepository(canonical);
-  // git reports its top level as a physical path, so the comparison is against the canonical form
-  // for the same reason the provisioning guard compares canonical forms (session-loop.ts).
-  const isOwnTopLevel = canonical !== null && inspected !== null && inspected.topLevel === canonical;
-  return { canonical, insideRepository: isOwnTopLevel ? null : (inspected?.topLevel ?? null), isOwnTopLevel };
-};
-
-/**
- * Whether a Project recorded at `path` could have a workspace cut from it right now.
- *
- * The same question `resolveRegisteredRepository` refuses on, asked without the refusal: this one
- * answers about a Project that is already registered, so there is nothing to reject and nobody to
- * word a message for. A path that no longer resolves, one that stopped being a repository, and one
- * that is a directory *inside* a repository are all equally unusable here -- the fixes differ, and
- * the fix is the repair route's business, not the list's.
- */
-export const isRegisteredRepositoryUsable = async (path: string): Promise<boolean> =>
-  (await inspectRegisteredPath(path.trim())).isOwnTopLevel;
-
 export const resolveRegisteredRepository = async (path: string): Promise<string> => {
   // Trimmed before anything judges it, not at the contract: `registerRepositoryProjectRequestSchema`
   // deliberately carries the path exactly as typed (see its comment on `repositoryPathTextSchema`),

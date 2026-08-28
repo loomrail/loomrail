@@ -6,6 +6,7 @@ import { inspectRepository } from "@loomrail/workspace";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  isRegisteredRepositoryUsable,
   materialiseFixtureRepository,
   resolveRegisteredRepository,
   type ResolvedFixtureProject,
@@ -138,6 +139,76 @@ describe("fixture materialisation", () => {
     // problem with their repository instead of the stray space the terminal appended.
     const resolved = await resolveRegisteredRepository(`${repositoryPath} `);
     expect(resolved).toBe(await realpath(repositoryPath));
+  });
+
+  // The probe on `GET /api/v1/projects`, which the web client fetches to render the app's main
+  // screen. `runGit` REJECTS with `GitMissingError` when `git` cannot be spawned, `inspectRepository`
+  // does not catch it, and the route had no branch for it -- so on a machine with no `git` on PATH
+  // one Project turned the whole list into a generic 500 and the owner could not see any of their
+  // Projects at all.
+  //
+  // PATH is emptied for the duration of the call and restored immediately after, in a `finally`, so
+  // the rest of this file still gets a working `git`. That is the one honest way to reach this from
+  // a test: it is the same ENOENT on the child that a machine without the executable produces.
+  it("answers for a repository it cannot inspect at all rather than failing the caller", async () => {
+    const demoProjectsRoot = await scratch("materialise root no git ");
+    const templatePath = await scratch("materialise template no git ");
+    await writeFile(join(templatePath, "README.md"), "# Template\n", "utf8");
+    const { repositoryPath } = await materialiseFixtureRepository(
+      templateFixture(templatePath),
+      demoProjectsRoot,
+    );
+    // The premise: with `git` reachable this is a perfectly healthy repository, so the answer below
+    // is attributable to the missing executable and to nothing about the path.
+    expect(await isRegisteredRepositoryUsable(repositoryPath)).toBe(true);
+
+    const realPath = process.env["PATH"];
+    const probe = (async () => {
+      try {
+        process.env["PATH"] = "";
+        return await isRegisteredRepositoryUsable(repositoryPath);
+      } finally {
+        process.env["PATH"] = realPath;
+      }
+    })();
+
+    // Awaited through `.resolves`, not with a bare `await`: an uncontained `GitMissingError` would
+    // otherwise leave this test throwing rather than failing, and a thrown Error names nothing about
+    // the behaviour under test. This way "it rejected" is reported as the assertion it is.
+    //
+    // What is asserted is a plain "no, not usable right now" -- not a rejection the route would have
+    // to turn into a 500 over a Project the owner can do nothing about from a project list.
+    await expect(probe).resolves.toBe(false);
+    // And nothing was broken on the way: the probe is restored with PATH.
+    expect(await isRegisteredRepositoryUsable(repositoryPath)).toBe(true);
+  });
+
+  // Neither `runGit` nor `realpath` has a timeout of its own, and both block on a sleeping external
+  // disk or an unreachable network mount. Without a bound, one Project registered on such a mount
+  // wedged the project list for as long as the mount stayed silent, which can be forever.
+  //
+  // A hung mount cannot be manufactured portably, so the bound itself is what is exercised: the same
+  // real repository, once with room to answer and once with none. The pair is the assertion -- the
+  // second answer is `false` because the deadline passed, not because there is anything wrong with
+  // the path.
+  it("answers within its bound rather than waiting on a filesystem that never replies", async () => {
+    const demoProjectsRoot = await scratch("materialise root probe bound ");
+    const templatePath = await scratch("materialise template probe bound ");
+    await writeFile(join(templatePath, "README.md"), "# Template\n", "utf8");
+    const { repositoryPath } = await materialiseFixtureRepository(
+      templateFixture(templatePath),
+      demoProjectsRoot,
+    );
+
+    expect(await isRegisteredRepositoryUsable(repositoryPath)).toBe(true);
+
+    // Zero, so the deadline is already past before the first `git` process could possibly report:
+    // the inspection needs at least one child process, and a timer callback runs long before one
+    // spawns, execs and exits.
+    const startedAt = Date.now();
+    expect(await isRegisteredRepositoryUsable(repositoryPath, 0)).toBe(false);
+    // Bounded generously -- this asserts "did not wait on the work", not a performance figure.
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
   it("refuses a path inside another repository with the reason that is actually true", async () => {
