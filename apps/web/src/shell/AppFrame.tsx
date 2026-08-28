@@ -236,18 +236,6 @@ const SettingChoice = <TValue extends string>({
 };
 
 /**
- * Where the owner registers a local Git repository of their own as a Project (spec §4).
- *
- * It sits beside the project list rather than in the empty state, because the empty state is gone
- * the moment the demo is initialised, and registering your own repository is exactly the thing you
- * do *after* looking at the demo. The one field is the path: the daemon takes the repository
- * directory's own name, so there is nothing else to ask for.
- *
- * The refusal shown under the field is the daemon's, word for word. It names the path and, when the
- * path is a directory inside another repository, says which repository that is -- a message the
- * domain already writes, and one this form would only make vaguer by paraphrasing.
- */
-/**
  * What an owner does about a Project whose recorded path is no longer a repository.
  *
  * Only shown for a Project that has one, and only where the owner is already looking at the path
@@ -293,6 +281,18 @@ const RepairFixtureProject = ({ project }: { project: ListedProject }): React.JS
   );
 };
 
+/**
+ * Where the owner registers a local Git repository of their own as a Project (spec §4).
+ *
+ * It sits beside the project list rather than in the empty state, because the empty state is gone
+ * the moment the demo is initialised, and registering your own repository is exactly the thing you
+ * do *after* looking at the demo. The one field is the path: the daemon takes the repository
+ * directory's own name, so there is nothing else to ask for.
+ *
+ * The refusal shown under the field is the daemon's, word for word. It names the path and, when the
+ * path is a directory inside another repository, says which repository that is -- a message the
+ * domain already writes, and one this form would only make vaguer by paraphrasing.
+ */
 const RegisterRepositoryField = (): React.JSX.Element => {
   const { t } = useI18n();
   const inputId = useId();
