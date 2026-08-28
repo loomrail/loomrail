@@ -171,3 +171,53 @@ export const makeWorktreeWithEveryKindOfChange = async (): Promise<WorktreeWithC
 
   return { worktreePath: dir, baseline };
 };
+
+export type WorktreeWithHostileConfig = WorktreeWithChanges & {
+  // The one changed file, named in UTF-8. Non-ASCII on purpose: `core.quotepath` defaults to true,
+  // so without the flag git escapes this name to octal in every path it prints.
+  nonAsciiPath: string;
+};
+
+// Creates a throwaway repository whose own config is set up to change what git prints: an external
+// diff driver that replaces every patch with a marker, colour forced on, rename detection turned
+// off, and `core.quotepath` left explicitly at the default that escapes non-ASCII paths. Exists so
+// a test can read a diff on a machine configured against it (spec D4) rather than only assert the
+// argv Loomrail passes.
+//
+// The driver script lives outside the worktree, so that it is not itself one of the changes.
+export const makeWorktreeWithHostileGitConfig = async (): Promise<WorktreeWithHostileConfig> => {
+  const dir = await mkdtemp(join(tmpdir(), "loomrail-workspace-hostile-"));
+  const driverDir = await mkdtemp(join(tmpdir(), "loomrail-workspace-driver-"));
+  const driver = join(driverDir, "evil-diff.sh");
+  const nonAsciiPath = "é-файл.txt";
+
+  await writeFile(driver, "#!/bin/sh\necho PWNED-BY-EXTERNAL-DIFF\n", { mode: 0o755 });
+
+  await execFileAsync("git", ["init", "--quiet", "-b", "main"], { cwd: dir });
+  await writeFile(join(dir, nonAsciiPath), "one\n");
+  await execFileAsync("git", ["add", "-A"], { cwd: dir });
+  await execFileAsync("git", [...testCommitterArgs, "commit", "--quiet", "-m", "base"], { cwd: dir });
+
+  const baseline = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: dir })).stdout.trim();
+
+  await writeFile(join(dir, nonAsciiPath), "one\ntwo\n");
+
+  const hostile: readonly (readonly [string, string])[] = [
+    ["diff.external", driver],
+    ["color.ui", "always"],
+    ["color.diff", "always"],
+    ["diff.renames", "false"],
+    ["core.quotepath", "true"],
+  ];
+  for (const [key, value] of hostile) {
+    await execFileAsync("git", ["config", key, value], { cwd: dir });
+  }
+
+  return { worktreePath: dir, baseline, nonAsciiPath };
+};
+
+// The owner's own `git diff` in a repository, run only so a test can show that a hostile config
+// really is hostile. Asserting immunity to a config that turns out to change nothing would prove
+// nothing at all.
+export const readPorcelainDiff = async (dir: string, baseline: string, path: string): Promise<string> =>
+  (await execFileAsync("git", ["diff", baseline, "--", path], { cwd: dir })).stdout;
