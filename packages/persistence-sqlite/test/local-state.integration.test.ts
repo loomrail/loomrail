@@ -1236,6 +1236,84 @@ describe("SQLite local state", () => {
     expect(second.type).toBe("PROJECT_REGISTERED");
   });
 
+  // The two UNIQUE constraints migration 0012 rewrites `projects` to keep, asserted against the
+  // table rather than through a handler.
+  //
+  // Every other duplicate-registration test in this suite goes through `execute`, where
+  // `executeFresh` reads the row first and refuses with PROJECT_ALREADY_REGISTERED before it
+  // writes -- so all of them prove the application-level pre-check and none of them prove the
+  // schema. Dropping `UNIQUE` from both `fixture_id` and `repository_path` in 0012 left this
+  // package at 61/61 and the daemon at 123/123. These two insert straight into the table, so the
+  // pre-check is not in the path at all and the only thing that can refuse is the constraint.
+  //
+  // `INSERT ... SELECT` from the row that is already there, overriding only the columns that must
+  // differ: the duplicate is then identical to a real Project in every respect except the one
+  // under test, which is what makes the named constraint the only possible reason for the refusal.
+  it("refuses a second Project row recording the same bundled fixture, in the schema itself", async () => {
+    const localState = await open();
+    localState.execute(registerProject("project-web", "register-web-fixture-constraint"));
+    localState.close();
+    state = undefined;
+
+    const raw = new DatabaseSync(databasePath);
+    try {
+      const insertDuplicateFixture = (): void => {
+        raw
+          .prepare(
+            `INSERT INTO projects
+               (id, workspace_id, fixture_id, name, repository_path, status, version, created_at, updated_at)
+             SELECT 'project-duplicate-fixture', workspace_id, fixture_id, name, ?, status, version,
+                    created_at, updated_at
+             FROM projects WHERE id = 'project-web'`,
+          )
+          .run(join(temporaryDirectory, "a-second-directory"));
+      };
+      expect(insertDuplicateFixture).toThrow(/UNIQUE constraint failed: projects\.fixture_id/);
+    } finally {
+      raw.close();
+    }
+  });
+
+  it("refuses a second Project row recording the same repository path, in the schema itself", async () => {
+    const localState = await open();
+    localState.execute(registerProject("project-web", "register-web-path-constraint"));
+    localState.close();
+    state = undefined;
+
+    const raw = new DatabaseSync(databasePath);
+    try {
+      const insertDuplicatePath = (): void => {
+        raw
+          .prepare(
+            `INSERT INTO projects
+               (id, workspace_id, fixture_id, name, repository_path, status, version, created_at, updated_at)
+             SELECT 'project-duplicate-path', workspace_id, NULL, name, repository_path, status, version,
+                    created_at, updated_at
+             FROM projects WHERE id = 'project-web'`,
+          )
+          .run();
+      };
+      expect(insertDuplicatePath).toThrow(/UNIQUE constraint failed: projects\.repository_path/);
+
+      // And the other half of the same constraint, which is why `fixture_id` above is set to NULL
+      // rather than left alone: in SQLite every NULL is distinct in a UNIQUE index, so any number
+      // of path-registered Projects coexist. A row that differs only in its path lands.
+      raw
+        .prepare(
+          `INSERT INTO projects
+             (id, workspace_id, fixture_id, name, repository_path, status, version, created_at, updated_at)
+           SELECT 'project-own-path', workspace_id, NULL, name, ?, status, version, created_at, updated_at
+           FROM projects WHERE id = 'project-web'`,
+        )
+        .run(join(temporaryDirectory, "own-repository"));
+      expect(
+        raw.prepare("SELECT COUNT(*) AS total FROM projects WHERE fixture_id IS NULL").get(),
+      ).toMatchObject({ total: 1 });
+    } finally {
+      raw.close();
+    }
+  });
+
   // The repair for the one database that matters. The owner's two demo Projects were registered
   // before a bundled fixture became a real repository, so their `repository_path` names a directory
   // inside Loomrail's own checkout; migration 0012 carried those paths across verbatim, as it must,
@@ -3906,6 +3984,93 @@ describe("SQLite local state", () => {
 
       const after = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
       expect(after.type === "WORKSPACE" ? after.workspace?.status : null).toBe("READY");
+    });
+
+    // 0011's own comment says it plainly -- "that invariant belongs to the schema, not to a
+    // convention callers are trusted to follow" -- and nothing checked that the schema kept it.
+    // Dropping `UNIQUE` from `work_item_id` and the status CHECK from the table left this package
+    // at 61/61 and the daemon at 123/123, because every test that touches a second workspace goes
+    // through CREATE_WORK_ITEM_WORKSPACE, which reads the existing row and refuses first. These two
+    // write into the table directly, so the refusal can only come from the constraint.
+    it("refuses a second workspace row for the same WorkItem, in the schema itself", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { workItemId, projectId } = startWorkflow(
+        localState,
+        "start-work-item-unique",
+        "create-work-item-unique",
+      );
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-unique", workItemId, projectId),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+      localState.close();
+      state = undefined;
+
+      const raw = new DatabaseSync(databasePath);
+      try {
+        const insertSecondWorkspace = (): void => {
+          raw
+            .prepare(
+              `INSERT INTO work_item_workspaces
+                 (id, schema_version, project_id, work_item_id, branch, worktree_path, base_commit,
+                  snapshot_commit, status, lease_holder, created_at, version)
+               SELECT 'workspace-second-writer', schema_version, project_id, work_item_id, ?, ?,
+                      base_commit, snapshot_commit, status, lease_holder, created_at, version
+               FROM work_item_workspaces WHERE id = ?`,
+            )
+            .run(
+              `loomrail/${workItemId}-second`,
+              join(temporaryDirectory, "worktrees", `${workItemId}-second`),
+              created.workspace.id,
+            );
+        };
+        // A second row for one WorkItem is two writers past the lease -- the outcome the lease
+        // exists to make impossible -- so the table refuses it whatever the caller believed.
+        expect(insertSecondWorkspace).toThrow(/UNIQUE constraint failed: work_item_workspaces\.work_item_id/);
+      } finally {
+        raw.close();
+      }
+    });
+
+    it("refuses a workspace status outside the three the schema names, in the schema itself", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { workItemId, projectId } = startWorkflow(
+        localState,
+        "start-work-item-status-check",
+        "create-work-item-status-check",
+      );
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-status-check", workItemId, projectId),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+      localState.close();
+      state = undefined;
+
+      const raw = new DatabaseSync(databasePath);
+      try {
+        const writeUnknownStatus = (): void => {
+          raw
+            .prepare("UPDATE work_item_workspaces SET status = 'ABANDONED' WHERE id = ?")
+            .run(created.workspace.id);
+        };
+        expect(writeUnknownStatus).toThrow(/CHECK constraint failed/);
+        // The row is untouched, which is the point of a CHECK rather than a convention: a status
+        // reconciliation cannot read back is not a state this table can be left in.
+        expect(
+          raw.prepare("SELECT status FROM work_item_workspaces WHERE id = ?").get(created.workspace.id),
+        ).toMatchObject({ status: "READY" });
+        // And each of the three the schema does name is accepted, so the CHECK is not passing this
+        // test by refusing everything.
+        for (const status of ["ORPHANED", "REMOVED", "READY"]) {
+          raw
+            .prepare("UPDATE work_item_workspaces SET status = ? WHERE id = ?")
+            .run(status, created.workspace.id);
+        }
+      } finally {
+        raw.close();
+      }
     });
   });
 });
