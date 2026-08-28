@@ -20,6 +20,8 @@ import {
   controlPipeline,
   createWorkItem,
   getProviderCapabilities,
+  getWorkItemChanges,
+  getWorkItemFileDiff,
   getWorkItemWorkflow,
   getWorkItemWorkspace,
   listOpenHumanRequests,
@@ -49,6 +51,15 @@ const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "
 // signal (eventStream.ts, scopesForSignal), so a stage that cuts a workspace refreshes the card
 // without a reload and without a second entry in that mapping.
 const workItemWorkspaceKey = (workItemId: string) => ["work-items", workItemId, "workspace"] as const;
+// Both change keys sit under that same `["work-items", <id>]` prefix, and that is what implements
+// spec D6: a stage event invalidates the prefix, so an open card rereads the summary -- and the
+// body of the one file the owner expanded, because that is the only body query mounted -- without
+// a reload and without a second entry in `scopesForSignal`. The channel's own coalescing window
+// (eventStream.ts, COALESCE_WINDOW_MS) is the debounce D6 asks for; react-query then dedupes,
+// so a burst can never put two summary reads in flight at once.
+const workItemChangesKey = (workItemId: string) => ["work-items", workItemId, "changes"] as const;
+const workItemFileDiffKey = (workItemId: string, path: string) =>
+  ["work-items", workItemId, "changes", "diff", path] as const;
 const projectHumanRequestsKey = (projectId: string) =>
   ["projects", projectId, "human-requests", "OPEN"] as const;
 const stageAttemptSessionsKey = (stageAttemptId: string) =>
@@ -184,6 +195,35 @@ export const useWorkItemWorkspace = (workItemId: string | undefined) =>
       return getWorkItemWorkspace(workItemId);
     },
     enabled: workItemId !== undefined,
+  });
+
+/**
+ * What this work item changed in its worktree, or `null` when it has no workspace to change.
+ *
+ * Separate from `useWorkItemWorkspace` even though both answer for the same worktree: the workspace
+ * row is state the daemon already holds, while this is a reading it performs on demand -- four git
+ * processes over a temporary index -- and folding the expensive one into the cheap one would make
+ * every card that only wants a worktree path pay for a diff.
+ */
+export const useWorkItemChanges = (workItemId: string) =>
+  useQuery({
+    queryKey: workItemChangesKey(workItemId),
+    queryFn: () => getWorkItemChanges(workItemId),
+  });
+
+/**
+ * One file's unified diff, kept a query of its own so it is fetched only while that file is
+ * expanded (spec D5).
+ *
+ * Both arguments are required rather than optional-with-`enabled`, unlike the hooks above: the only
+ * caller mounts this at all when the owner has expanded a specific file, so there is no "no file
+ * chosen yet" state for it to represent -- and an `enabled: false` variant would be a way to fetch
+ * bodies for files nobody asked for.
+ */
+export const useWorkItemFileDiff = (workItemId: string, path: string) =>
+  useQuery({
+    queryKey: workItemFileDiffKey(workItemId, path),
+    queryFn: () => getWorkItemFileDiff(workItemId, path),
   });
 
 /**

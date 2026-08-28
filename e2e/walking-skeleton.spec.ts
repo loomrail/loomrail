@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -522,11 +522,77 @@ const seedNoProgressHardPause = async (databasePath: string, title: string): Pro
 type SeededWorkspaces = {
   baseCommit: string;
   branch: string;
+  changed: SeededChanges;
   goneTitle: string;
   liveTitle: string;
   noWorkspaceTitle: string;
   repositoryPath: string;
   worktreePath: string;
+};
+
+/** The paths `seedWorkspaces` leaves changed in the live worktree, named once for both readers. */
+type SeededChanges = {
+  added: string;
+  binary: string;
+  modified: string;
+  modifiedLine: string;
+  oversized: string;
+  renamed: string;
+  renamedFrom: string;
+};
+
+/**
+ * What the agent did inside the live worktree, written as files rather than driven through a
+ * pipeline: what is under test is what the card says about a change, not how the change came to be,
+ * and a mock delivery would take twenty seconds to produce a less controlled version of this.
+ *
+ * One case per row spec §10 names: a created file (§10.1, the regression the whole milestone starts
+ * from -- `git diff` against the worktree cannot see one), a rename that must not read as a delete
+ * plus an add (§10.4), a binary file whose line counts are absent rather than zero (§10.5), and a
+ * body past the 512 KiB cap that has to come back marked as cut (§10.6).
+ */
+/**
+ * A file path as a locator pattern, with the characters a regular expression would otherwise read
+ * as syntax escaped. The seeded paths deliberately carry `.`, a space and a `#`.
+ */
+const asPattern = (path: string): RegExp => new RegExp(path.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
+const seedWorktreeChanges = async (worktreePath: string): Promise<SeededChanges> => {
+  const changed: SeededChanges = {
+    // A space and a `#`, both legal in a filename and both fatal to a client that interpolates a
+    // path into a query string instead of encoding it: everything from the `#` onwards never
+    // leaves the browser, so the daemon is asked about a different file than the owner opened.
+    added: "src/added file #1.ts",
+    binary: "logo.bin",
+    modified: "README.md",
+    modifiedLine: "changed by the agent",
+    oversized: "generated/oversized.txt",
+    renamed: "fixture.json",
+    renamedFrom: "loomrail-fixture.json",
+  };
+
+  await mkdir(join(worktreePath, "src"), { recursive: true });
+  await mkdir(join(worktreePath, "generated"), { recursive: true });
+  await writeFile(
+    join(worktreePath, changed.modified),
+    `# Fixture web application\n\n${changed.modifiedLine}\n`,
+    "utf8",
+  );
+  await writeFile(join(worktreePath, changed.added), "export const added = true;\n", "utf8");
+  await rename(join(worktreePath, changed.renamedFrom), join(worktreePath, changed.renamed));
+  // Real NUL bytes, not just a `.bin` suffix: git decides a file is binary by reading it, and a
+  // file merely named like one is still text to it -- which would leave the binary row of this
+  // test asserting nothing.
+  await writeFile(join(worktreePath, changed.binary), Buffer.from([0, 1, 2, 0, 255, 0, 7, 9]));
+  // Comfortably past MAX_PATCH_BYTES (512 KiB, apps/daemon/src/workspace-changes.ts) at roughly
+  // 756 KB, so the body handle has to cut this one and say by how much.
+  await writeFile(
+    join(worktreePath, changed.oversized),
+    "a line of generated output\n".repeat(28_000),
+    "utf8",
+  );
+
+  return changed;
 };
 
 /**
@@ -561,6 +627,7 @@ const seedWorkspaces = async (databasePath: string): Promise<SeededWorkspaces> =
     startPoint: baseCommit,
   });
   if (added.type !== "ADDED") throw new Error(`The seeded worktree was refused: ${added.refusal.type}`);
+  const changed = await seedWorktreeChanges(worktreePath);
 
   const titles = {
     goneTitle: "Task whose worktree went away",
@@ -645,7 +712,7 @@ const seedWorkspaces = async (databasePath: string): Promise<SeededWorkspaces> =
     localState.close();
   }
 
-  return { ...titles, baseCommit, branch, repositoryPath, worktreePath };
+  return { ...titles, baseCommit, branch, changed, repositoryPath, worktreePath };
 };
 
 /**
@@ -1556,6 +1623,151 @@ test.describe("authenticated walking skeleton", () => {
       ).toBeVisible();
       await expect(bareInspector.getByRole("button", { name: "Start mock workflow" })).toBeVisible();
       await expect(bareInspector.getByText("Workspace", { exact: true })).toHaveCount(0);
+    } finally {
+      await daemon?.close();
+      daemon = undefined;
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("names the files a task changed, and reads a body only for the file the owner opens", async ({
+    page,
+  }) => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail changes "));
+    try {
+      const databasePath = join(temporaryDirectory, "local-state.sqlite");
+      const seeded = await seedWorkspaces(databasePath);
+
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        stateDatabasePath: databasePath,
+        webRoot: resolve("apps/web/dist"),
+      });
+
+      // Every request the page makes for a file's BODY, recorded from before the first paint.
+      //
+      // Spec D5 keeps the summary and the body on separate handles precisely so that drawing the
+      // file list costs no patches at all -- and a section that fetched each file's diff to render
+      // its row would look identical on screen while undoing that. Nothing else in this test can
+      // tell the two apart, so the requests themselves are counted.
+      const bodyRequests: string[] = [];
+      page.on("request", (request) => {
+        const url = new URL(request.url());
+        if (url.pathname.endsWith("/changes/diff")) bodyRequests.push(url.searchParams.get("path") ?? "");
+      });
+
+      await page.goto(daemon.bootstrapUrl);
+      await page.getByRole("button", { name: "All issues", exact: true }).click();
+      await page.getByRole("button", { name: seeded.liveTitle }).click();
+
+      const inspector = page.getByRole("complementary", { name: seeded.liveTitle });
+      const changes = inspector
+        .locator(".lr-inspector-section")
+        .filter({ has: page.getByText("Changes", { exact: true }) });
+      await expect(changes).toBeVisible();
+
+      // Spec §10.1, the regression this milestone exists for: a created file is the commonest thing
+      // an agent leaves behind, and it is exactly what a naive `git diff` against the worktree
+      // cannot see.
+      const added = changes.getByRole("button", { name: asPattern(seeded.changed.added) });
+      await expect(added).toContainText("Added");
+      await expect(added.locator(".changes-row__insertions")).toHaveText("+1");
+
+      const modified = changes.getByRole("button", { name: asPattern(seeded.changed.modified) });
+      await expect(modified).toContainText("Modified");
+      await expect(modified.locator(".changes-row__insertions")).toHaveText("+1");
+      await expect(modified.locator(".changes-row__deletions")).toHaveText("−1");
+
+      // Spec §10.4: one file that moved, named on both sides. A row that printed only the new name
+      // would leave the owner unable to tell a rename from a fresh file.
+      const renamed = changes.getByRole("button", { name: asPattern(seeded.changed.renamed) });
+      await expect(renamed).toContainText("Renamed");
+      await expect(renamed).toContainText(`Renamed from ${seeded.changed.renamedFrom}`);
+
+      // Spec §10.5 and D8. Three separate claims, because each is a different way to lie about a
+      // binary file: it is named binary, it carries no line counts at all (a `+0 −0` would read as
+      // "nothing changed in it"), and it offers no control, because there is no body behind one.
+      const binary = changes.locator(".changes-list__item").filter({ hasText: seeded.changed.binary });
+      await expect(binary.getByText("Binary", { exact: true })).toBeVisible();
+      await expect(binary.locator(".changes-row__counts")).toHaveCount(0);
+      await expect(binary.getByRole("button")).toHaveCount(0);
+
+      // The whole list is on screen, and not one patch has been read to put it there.
+      expect(bodyRequests).toEqual([]);
+
+      await modified.click();
+      const patch = changes.locator(".changes-diff__patch");
+      await expect(patch).toContainText(`+${seeded.changed.modifiedLine}`);
+      await expect(patch).toContainText("-Synthetic Phase 0 fixture.");
+      // One body, for the one file that was opened -- not one per row, and not one for a file the
+      // owner never touched.
+      expect(bodyRequests).toEqual([seeded.changed.modified]);
+
+      // The created file's own body, and with it the path that carries a space and a `#`. The
+      // daemon answers about the file it was asked for, so a path that arrived truncated at the `#`
+      // does not come back as this file's diff -- it comes back as a refusal.
+      await added.click();
+      await expect(patch).toContainText("+export const added = true;");
+      expect(bodyRequests).toEqual([seeded.changed.modified, seeded.changed.added]);
+
+      // Spec §10.6 and D8: a body over the 512 KiB cap comes back cut, and the card says so where
+      // the owner is reading it. Silent truncation turns "there are another seven hundred kilobytes
+      // of this" into "that is all of it".
+      await changes.getByRole("button", { name: asPattern(seeded.changed.oversized) }).click();
+      await expect(changes.getByText(/more bytes are not shown here/)).toBeVisible();
+      expect(bodyRequests).toEqual([seeded.changed.modified, seeded.changed.added, seeded.changed.oversized]);
+
+      // Spec D8's other half, for the list rather than a body.
+      //
+      // A genuinely cut list needs more than two thousand changed files (MAX_SUMMARY_FILES). That
+      // costs 2.1 s per summary read on this machine, measured, plus two thousand rows for the card
+      // to draw on every stage event -- paid by every run of this suite, to test one sentence. So
+      // the daemon's own answer is taken and its `truncated` flag flipped on the way to the browser:
+      // what is under test here is the card saying so, and that the daemon raises the flag when the
+      // list really is cut is asserted where the cutting happens.
+      await page.route(/\/changes(\?.*)?$/, async (route) => {
+        const response = await route.fetch();
+        const body = (await response.json()) as { changes: { truncated: boolean } | null };
+        if (body.changes) body.changes.truncated = true;
+        await route.fulfill({
+          status: response.status(),
+          contentType: "application/json",
+          body: JSON.stringify(body),
+        });
+      });
+      await page.reload();
+      // Which task is selected is React state, not a search parameter, so a reload falls back to
+      // the first item on the board rather than restoring this one.
+      await page.getByRole("button", { name: seeded.liveTitle }).click();
+      await expect(changes.getByText(/Only the first \d+ changed files are listed/)).toBeVisible();
+
+      // A worktree that is not there any more is a refusal that names what happened, never an empty
+      // list: an empty list claims the worktree is unchanged, and a read that did not happen is not
+      // entitled to make that claim (spec D7). No action is offered with it, because Loomrail has
+      // none -- nothing here cuts a second worktree.
+      await page.getByRole("button", { name: seeded.goneTitle }).click();
+      const goneChanges = page
+        .getByRole("complementary", { name: seeded.goneTitle })
+        .locator(".lr-inspector-section")
+        .filter({ has: page.getByText("Changes", { exact: true }) });
+      await expect(
+        goneChanges.getByText(
+          "The worktree for this task is no longer on disk, so there is nothing left to read its changes from.",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(goneChanges.getByRole("button")).toHaveCount(0);
+
+      // A task that never needed a repository has no changes section at all -- not an empty one.
+      // The workspace panel next to it makes the same call for the same reason, and the wait below
+      // borrows its positive signal for the same reason that test does: both sections render
+      // nothing while their query is in flight, so an absence check fired too early would pass
+      // against a section that had not loaded yet.
+      await page.getByRole("button", { name: seeded.noWorkspaceTitle }).click();
+      const bare = page.getByRole("complementary", { name: seeded.noWorkspaceTitle });
+      await expect(bare.getByRole("button", { name: "Start mock workflow" })).toBeVisible();
+      await expect(bare.getByText("Changes", { exact: true })).toHaveCount(0);
     } finally {
       await daemon?.close();
       daemon = undefined;

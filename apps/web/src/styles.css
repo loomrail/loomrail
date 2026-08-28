@@ -1343,6 +1343,154 @@ body.is-resizing {
   overflow-wrap: anywhere;
 }
 
+/*
+ * E1.5 §9: the files a task changed, and the diff inside the one the owner expanded.
+ *
+ * Paths wrap rather than clip, for the same reason the worktree path above does: a path the owner
+ * can only see half of is a path they cannot look up.
+ */
+.changes {
+  display: grid;
+  gap: var(--lr-space-2);
+}
+
+.changes__note,
+.changes__refusal {
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-xs);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.changes-list {
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.changes-list__row {
+  align-items: start;
+  background: none;
+  border: 0;
+  border-radius: var(--lr-radius-control);
+  color: inherit;
+  display: flex;
+  font: inherit;
+  gap: var(--lr-space-2);
+  padding: var(--lr-space-2);
+  text-align: left;
+  width: 100%;
+}
+
+.changes-list__toggle {
+  cursor: pointer;
+}
+
+.changes-list__toggle:hover {
+  background: var(--lr-surface-hover);
+}
+
+.changes-list__toggle:focus-visible {
+  outline: 2px solid var(--lr-focus);
+  outline-offset: -2px;
+}
+
+/* Aligned to the first line of the row rather than centred on it, so a two-line row (a rename,
+   which prints both names) does not float the marker into the middle of nothing. The icon carries
+   no meaning of its own: `aria-expanded` on the button is what states the disclosure. */
+.changes-list__chevron {
+  color: var(--lr-text-faint);
+  flex: none;
+  margin-top: 3px;
+}
+
+.changes-row {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  width: 100%;
+}
+
+.changes-row__head,
+.changes-row__meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lr-space-2);
+}
+
+.changes-row__path {
+  color: var(--lr-text-secondary);
+  font-family: var(--lr-font-mono);
+  font-size: var(--lr-font-xs);
+  line-height: 1.5;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.changes-row__previous {
+  color: var(--lr-text-faint);
+  font-size: var(--lr-font-xs);
+  overflow-wrap: anywhere;
+}
+
+.changes-row__counts {
+  display: flex;
+  font-family: var(--lr-font-mono);
+  font-size: var(--lr-font-xs);
+  gap: var(--lr-space-2);
+}
+
+/* Colour is an accent on a count that is already signed `+` or `-` in the text itself, never the
+   only way to tell the two apart (AGENTS.md, "must not rely on color alone"). */
+.changes-row__insertions {
+  color: var(--lr-success);
+}
+
+.changes-row__deletions {
+  color: var(--lr-danger);
+}
+
+.changes-diff {
+  display: grid;
+  gap: var(--lr-space-2);
+  padding: 0 var(--lr-space-2) var(--lr-space-2);
+}
+
+/*
+ * The patch scrolls sideways inside its own box instead of widening the inspector: a unified diff
+ * has lines as long as the file's longest line, and wrapping them would break the column alignment
+ * that makes a diff readable at all.
+ */
+.changes-diff__patch {
+  background: var(--lr-surface-inset);
+  border: 1px solid var(--lr-border-subtle);
+  border-radius: var(--lr-radius-control);
+  color: var(--lr-text-secondary);
+  font-family: var(--lr-font-mono);
+  font-size: var(--lr-font-xs);
+  line-height: 1.5;
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: var(--lr-space-2-5);
+  white-space: pre;
+}
+
+.changes-diff__note {
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-xs);
+  line-height: 1.45;
+  margin: 0;
+  padding: 0 var(--lr-space-2) var(--lr-space-2);
+}
+
+.changes-diff .changes-diff__note {
+  padding: 0;
+}
+
 .workspace-identity__note {
   background: var(--lr-warning-soft);
   border: 1px solid color-mix(in srgb, var(--lr-warning) 28%, var(--lr-border));

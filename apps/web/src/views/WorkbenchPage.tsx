@@ -61,6 +61,7 @@ import {
   type TimelineEventProps,
 } from "@loomrail/ui";
 
+import { ChangesSection } from "./ChangesSection";
 import {
   defaultBoardView,
   isBoardOrdering,
@@ -1894,6 +1895,12 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
       </InspectorSection>
 
       <WorkspacePanel item={item} />
+
+      {/* Keyed by work item, unlike its siblings, because this one holds state: which file the
+          owner expanded. Without the key React would reconcile the same component across a switch
+          to a different task and carry that path over, reopening a same-named file in a card the
+          owner never asked it about. */}
+      <ChangesSection key={item.id} workItemId={item.id} />
 
       <InspectorSection title={t("task.acceptanceCriteria")}>
         {item.acceptanceCriteria.length > 0 ? (

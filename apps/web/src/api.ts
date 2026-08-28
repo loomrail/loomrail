@@ -6,6 +6,8 @@ import {
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
   stateCommandResultSchema,
+  workItemChangesResponseSchema,
+  workItemFileDiffResponseSchema,
   workItemsResponseSchema,
   workItemWorkspaceResponseSchema,
   workflowSnapshotSchema,
@@ -163,6 +165,38 @@ export const getWorkItemWorkspace = async (workItemId: string) =>
   requestLocalApi(
     `/api/v1/work-items/${encodeURIComponent(workItemId)}/workspace`,
     workItemWorkspaceResponseSchema,
+  );
+
+/**
+ * What this work item's agent changed in its worktree (spec E1.5 §5): one record per file, with
+ * status and line counts, and the flag saying whether the list itself was cut.
+ *
+ * Answers `changes: null` -- with 200 -- for a work item that has no workspace, which is the
+ * ordinary state of every prose-only stage rather than a failure, exactly as `getWorkItemWorkspace`
+ * above answers `workspace: null` for the same condition.
+ */
+export const getWorkItemChanges = async (workItemId: string) =>
+  requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(workItemId)}/changes`,
+    workItemChangesResponseSchema,
+  );
+
+/**
+ * The unified diff of ONE file in that worktree.
+ *
+ * A second call rather than a field on the summary above, because spec D5 makes them two handles on
+ * purpose: the summary is cheap and reread while a stage runs, a body is expensive and wanted only
+ * for the file the owner expanded. A client that fetched every body to render a list would undo
+ * that split at the one layer it is visible from.
+ *
+ * The path is a value read out of the summary and sent back, so it is encoded rather than
+ * interpolated: a changed path may legally contain `&`, `#`, `+` or a space, and any of those
+ * unencoded would arrive at the daemon as a different path -- or as a second query parameter.
+ */
+export const getWorkItemFileDiff = async (workItemId: string, path: string) =>
+  requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(workItemId)}/changes/diff?path=${encodeURIComponent(path)}`,
+    workItemFileDiffResponseSchema,
   );
 
 export const listProviderSessions = async (stageAttemptId: string) =>

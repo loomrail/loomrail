@@ -254,6 +254,37 @@ const en = {
     "The worktree for this task is no longer on disk. Loomrail does not cut a second one, and nothing returns this workspace to service — the branch still holds whatever was committed to it.",
   "workspace.uncommitted":
     "Loomrail has committed nothing. The work sits in this worktree, on this branch, until you keep it or discard it.",
+  "changes.title": "Changes",
+  "changes.empty": "This task has changed nothing in its worktree yet.",
+  "changes.truncated":
+    "Only the first {count} changed files are listed. This worktree holds more than Loomrail prints here.",
+  "changes.binary": "Binary",
+  "changes.binaryNoPatch": "This is a binary file, so there is no text diff to show for it.",
+  "changes.renamedFrom": "Renamed from {path}",
+  "changes.lineCounts": "{insertions} lines added, {deletions} removed",
+  "changes.diffPending": "Reading this file’s diff…",
+  "changes.diffUnavailable": "This diff cannot be read: the task no longer has a workspace.",
+  "changes.patchTruncated":
+    "Loomrail prints only the first part of this diff — {bytes} more bytes are not shown here.",
+  "changes.status.ADDED": "Added",
+  "changes.status.MODIFIED": "Modified",
+  "changes.status.DELETED": "Deleted",
+  "changes.status.RENAMED": "Renamed",
+  "changes.error.WORKSPACE_WORKTREE_MISSING":
+    "The worktree for this task is no longer on disk, so there is nothing left to read its changes from.",
+  "changes.error.WORKSPACE_WORKTREE_UNREADABLE":
+    "Loomrail cannot enter this task’s worktree, so it cannot say what changed. The work is still there — only the way in is closed.",
+  "changes.error.WORKSPACE_HAS_NO_BASELINE":
+    "This workspace records no commit to compare against, so there is nothing to measure its changes from.",
+  "changes.error.CHANGES_UNREADABLE":
+    "Loomrail could not read this worktree against the commit it was cut from, so it is not showing a file list it cannot stand behind.",
+  "changes.error.GIT_UNAVAILABLE":
+    "Loomrail could not start git on this machine, so it cannot read what this task changed.",
+  "changes.error.PATH_OUTSIDE_WORKSPACE":
+    "That path lies outside this task’s worktree, so Loomrail did not read it.",
+  "changes.error.PATH_NOT_A_FILE": "That path does not name a changed file in this worktree.",
+  "changes.error.PATH_UNRESOLVABLE": "Loomrail could not resolve that path inside this worktree.",
+  "changes.error.other": "Loomrail could not read what this task changed.",
   "acceptance.eyebrow": "Owner gate",
   "acceptance.title": "Acceptance package",
   "acceptance.evidence": "Recorded evidence",
@@ -589,6 +620,37 @@ const ru = {
     "Каталога worktree этой задачи больше нет на диске. Loomrail не создаёт второй, и вернуть эту рабочую область в строй нечем — ветка по-прежнему хранит всё, что в неё закоммичено.",
   "workspace.uncommitted":
     "Loomrail ничего не коммитил. Работа лежит в этом worktree, на этой ветке, пока вы её не сохраните или не удалите.",
+  "changes.title": "Изменения",
+  "changes.empty": "Задача пока ничего не изменила в своей рабочей области.",
+  "changes.truncated":
+    "Показаны только первые {count} изменённых файлов. В этом worktree их больше, чем Loomrail выводит здесь.",
+  "changes.binary": "Бинарный",
+  "changes.binaryNoPatch": "Это бинарный файл — текстового диффа для него нет.",
+  "changes.renamedFrom": "Переименован из {path}",
+  "changes.lineCounts": "Добавлено строк: {insertions}, удалено: {deletions}",
+  "changes.diffPending": "Читаем дифф этого файла…",
+  "changes.diffUnavailable": "Этот дифф прочитать нечем: у задачи больше нет рабочей области.",
+  "changes.patchTruncated":
+    "Loomrail выводит только начало этого диффа — ещё {bytes} байт здесь не показано.",
+  "changes.status.ADDED": "Добавлен",
+  "changes.status.MODIFIED": "Изменён",
+  "changes.status.DELETED": "Удалён",
+  "changes.status.RENAMED": "Переименован",
+  "changes.error.WORKSPACE_WORKTREE_MISSING":
+    "Каталога worktree этой задачи больше нет на диске — читать изменения больше не из чего.",
+  "changes.error.WORKSPACE_WORKTREE_UNREADABLE":
+    "Loomrail не может войти в worktree этой задачи и поэтому не может сказать, что изменилось. Работа на месте — закрыт только путь к ней.",
+  "changes.error.WORKSPACE_HAS_NO_BASELINE":
+    "У этой рабочей области не записан коммит для сравнения, поэтому измерять изменения не от чего.",
+  "changes.error.CHANGES_UNREADABLE":
+    "Loomrail не смог прочитать этот worktree относительно коммита, от которого он отрезан, и не показывает список, за который не может отвечать.",
+  "changes.error.GIT_UNAVAILABLE":
+    "Loomrail не смог запустить git на этой машине и поэтому не может прочитать, что изменила задача.",
+  "changes.error.PATH_OUTSIDE_WORKSPACE":
+    "Этот путь лежит за пределами рабочей области задачи, и Loomrail его не читал.",
+  "changes.error.PATH_NOT_A_FILE": "Этот путь не именует изменённый файл в этом worktree.",
+  "changes.error.PATH_UNRESOLVABLE": "Loomrail не смог разрешить этот путь внутри этого worktree.",
+  "changes.error.other": "Loomrail не смог прочитать, что изменила эта задача.",
   "acceptance.eyebrow": "Решение владельца",
   "acceptance.title": "Пакет приёмки",
   "acceptance.evidence": "Сохранённые доказательства",
