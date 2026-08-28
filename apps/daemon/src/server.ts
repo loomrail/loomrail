@@ -672,6 +672,13 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         // already pays for, and the alternative -- a cheaper guess such as "is there a `.git` here"
         // -- would be a second definition of "is this a repository" that could disagree with the
         // one that actually refuses the stage.
+        //
+        // The probe cannot fail this route, and cannot hang it: `isRegisteredRepositoryUsable`
+        // contains every rejection and bounds itself (see its own comment). That containment is the
+        // difference between one Project being reported UNUSABLE and the owner losing the screen --
+        // this route was a pure database read before the probe was added, and a machine with no
+        // `git` on PATH, or a Project on a sleeping mount, would otherwise have made listing
+        // Projects at all impossible.
         const repositoryStatuses = await Promise.all(
           projects.map(({ repositoryPath }) => isRegisteredRepositoryUsable(repositoryPath)),
         );
@@ -713,13 +720,36 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         // every IMPLEMENT stage refused at a path no route could repair.
         const existing = localState.query({ type: "GET_PROJECT", projectId: fixture.projectId });
         const project = existing.type === "PROJECT" ? existing.project : null;
-        const staleTemplatePath =
+        // What "stale" means here is **not a usable repository**, not "still the bundled template".
+        //
+        // The template was only ever the first way to reach this state, and narrowing the repair to
+        // it made "Repair demo repository" a button that could only fail for every other way: the
+        // materialised `<data>/demo-projects/<id>` deleted or moved, its `.git` removed, or a second
+        // daemon with a data directory of its own. All of those leave a demo Project recorded at a
+        // path no stage can branch, the UI offers the button (it renders on `repositoryStatus`,
+        // which asks exactly this question), and the route answered PROJECT_ALREADY_REGISTERED --
+        // the path unchanged, the button still there, pressable forever.
+        //
+        // `isRegisteredRepositoryUsable` is the same judgment the list renders the button on, so
+        // the button is offered and the repoint applies on one condition rather than two that can
+        // disagree. The template comparison is kept as well, and first: it is two `realpath` calls
+        // against a `git` invocation, and it still answers the one case usability does not -- an
+        // owner who ran `git init` inside the bundled template, which makes the template its own
+        // top level and therefore "usable" at a path that is nonetheless inside this checkout.
+        //
+        // The fence stays exactly where it was. `project.fixtureId === fixture.fixtureId` is what
+        // guarantees a Project the owner registered by path is never repointed: such a Project
+        // carries a null `fixtureId`, so it fails this test, and `REPOINT_FIXTURE_PROJECT` refuses
+        // it again inside the write transaction (persistence-sqlite, precondition 1). Widening
+        // *which paths* are repaired does not widen *whose* paths are.
+        const stalePath =
           project !== null &&
           project.fixtureId === fixture.fixtureId &&
-          (await isSameExistingPath(project.repositoryPath, fixture.templatePath))
+          ((await isSameExistingPath(project.repositoryPath, fixture.templatePath)) ||
+            !(await isRegisteredRepositoryUsable(project.repositoryPath)))
             ? project.repositoryPath
             : null;
-        if (project !== null && staleTemplatePath === null) {
+        if (project !== null && stalePath === null) {
           // A Project already recorded at this fixture's id, and not stuck at the bundled template --
           // most often a second daemon sharing this database with a data directory of its own, asking
           // to register the same demo fixture the first daemon already materialised and recorded.
@@ -751,10 +781,14 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         const repositoryPath = materialised.created
           ? materialised.repositoryPath
           : await resolveRegisteredRepository(materialised.repositoryPath);
-        if (staleTemplatePath !== null) {
-          // Only ever a fixture-backed Project still pointing at the bundled template: a Project the
-          // owner registered by path has a null `fixtureId` and a different id, and cannot reach
+        if (stalePath !== null) {
+          // Only ever a fixture-backed Project whose recorded path no stage could branch: a Project
+          // the owner registered by path has a null `fixtureId` and a different id, and cannot reach
           // here or past the persistence layer's own four checks.
+          //
+          // `expectedRepositoryPath` is the path read above, not re-read: the repoint must be
+          // refused, not silently redirected, if anything moved the row between that read and this
+          // write.
           return localState.execute({
             schemaVersion: 1,
             commandId: body.commandId,
@@ -764,7 +798,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             payload: {
               projectId: fixture.projectId,
               fixtureId: fixture.fixtureId,
-              expectedRepositoryPath: staleTemplatePath,
+              expectedRepositoryPath: stalePath,
               repositoryPath,
             },
           });

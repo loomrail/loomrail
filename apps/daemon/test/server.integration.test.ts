@@ -603,6 +603,226 @@ describe("local daemon session and state boundary", () => {
     expect(apiErrorResponseSchema.parse(await second.json()).error.code).toBe("PROJECT_ALREADY_REGISTERED");
   }, 30_000);
 
+  // "Repair demo repository" is offered on `repositoryStatus === "UNUSABLE"`, which asks one
+  // question: could a workspace be cut from this path right now. The repoint behind the button used
+  // to apply on a narrower one -- is this path the bundled template -- so for every other way a demo
+  // Project goes bad the button was pressable and could only fail. The reviewer's reproduction, and
+  // this test's shape: a demo Project recorded at an ordinary directory that is not a repository.
+  // Pressing Repair answered 409 with "A Project is already registered with this id, fixture or
+  // repository path" printed under the button, the path unchanged, the button still there.
+  //
+  // Ordinary to reach without any migration in the story: the materialised
+  // `<data>/demo-projects/<id>` moved or deleted, or a second daemon with a data directory of its
+  // own.
+  it("repairs a demo Project recorded at a directory that is not a repository, not only at the bundled template", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail broken demo project "));
+    temporaryDirectories.push(temporaryDirectory);
+    const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    const demoProjectsRoot = join(temporaryDirectory, "demo-projects");
+    const fixture = await resolveBundledFixture("web-app-a");
+    // Not the bundled template, and not the materialised path either: an ordinary directory that
+    // exists and is not a repository -- what is left when the demo repository is moved away and its
+    // parent recreated, or what the row already names on a machine whose data directory has since
+    // been replaced.
+    const brokenPath = join(temporaryDirectory, "not-a-repository");
+    await mkdir(brokenPath, { recursive: true });
+
+    const seedState = await openLocalState({ databasePath: stateDatabasePath });
+    try {
+      seedState.execute({
+        schemaVersion: 1,
+        commandId: "register-broken-demo-project",
+        correlationId: "correlation-register-broken-demo",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_PROJECT",
+        payload: {
+          id: fixture.projectId,
+          fixtureId: fixture.fixtureId,
+          name: fixture.name,
+          repositoryPath: brokenPath,
+        },
+      });
+    } finally {
+      seedState.close();
+    }
+
+    const token = bootstrapToken();
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      stateDatabasePath,
+      demoProjectsRoot,
+    });
+    const session = await authenticate(daemon, token);
+
+    // The premise, asserted rather than assumed: the UI really does offer the button here, because
+    // the list really does report this Project as unusable. A test that skipped this would prove
+    // nothing about the button an owner can actually press.
+    const before = projectsResponseSchema.parse(
+      await (
+        await fetch(`${daemon.baseUrl}/api/v1/projects`, { headers: { cookie: session.cookie } })
+      ).json(),
+    );
+    expect(before.projects.map(({ id, repositoryStatus }) => ({ id, repositoryStatus }))).toEqual([
+      { id: fixture.projectId, repositoryStatus: "UNUSABLE" },
+    ]);
+
+    const response = await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "repair-broken-demo-project",
+        fixtureId: "web-app-a",
+      }),
+    });
+
+    // Not 409. The defect, stated directly.
+    expect(response.status).toBe(200);
+    const repointed = stateCommandResultSchema.parse(await response.json());
+    if (repointed.type !== "PROJECT_REGISTERED") throw new Error("Expected the Project to be repointed");
+    const materialisedPath = await realpath(join(demoProjectsRoot, "web-app-a"));
+    expect(repointed.project.id).toBe(fixture.projectId);
+    expect(repointed.project.repositoryPath).toBe(materialisedPath);
+
+    // And the button is gone, because the condition it renders on is now false: one Project, at a
+    // real repository. A repair that leaves the Project reported UNUSABLE is the same defect wearing
+    // a 200.
+    const after = projectsResponseSchema.parse(
+      await (
+        await fetch(`${daemon.baseUrl}/api/v1/projects`, { headers: { cookie: session.cookie } })
+      ).json(),
+    );
+    expect(
+      after.projects.map(({ id, repositoryPath, repositoryStatus }) => ({
+        id,
+        repositoryPath,
+        repositoryStatus,
+      })),
+    ).toEqual([{ id: fixture.projectId, repositoryPath: materialisedPath, repositoryStatus: "READY" }]);
+    expect((await inspectRepository(materialisedPath))?.topLevel).toBe(materialisedPath);
+  }, 30_000);
+
+  // The guarantee widening the repoint must not touch: a Project the owner registered BY PATH is
+  // never moved, however unusable its path has become. Loomrail does not know where they moved their
+  // repository to, so "repairing" it would either do nothing or point their Project somewhere they
+  // did not choose -- they register the new path themselves.
+  //
+  // Seeded with the fixture's own id and a null `fixtureId`, which is the only way to put such a
+  // Project in front of this branch at all: the id is what the route looks the row up by, and
+  // `fixtureId` is the fence. Without that fence the route would compute a repoint for a row it has
+  // no business moving, and the refusal would come back as PROJECT_REPOINT_REFUSED from inside the
+  // write transaction -- a different answer, from a check that exists as the second line of defence
+  // rather than the first.
+  it("never repoints a Project that was not registered from the bundled fixture", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail own project unusable "));
+    temporaryDirectories.push(temporaryDirectory);
+    const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    const demoProjectsRoot = join(temporaryDirectory, "demo-projects");
+    const fixture = await resolveBundledFixture("web-app-a");
+    const ownPath = join(temporaryDirectory, "the-owners-own-checkout");
+    await mkdir(ownPath, { recursive: true });
+
+    const seedState = await openLocalState({ databasePath: stateDatabasePath });
+    try {
+      seedState.execute({
+        schemaVersion: 1,
+        commandId: "register-owners-own-project",
+        correlationId: "correlation-register-owners-own",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_PROJECT",
+        payload: {
+          id: fixture.projectId,
+          fixtureId: null,
+          name: "The owner's own repository",
+          repositoryPath: ownPath,
+        },
+      });
+    } finally {
+      seedState.close();
+    }
+
+    const token = bootstrapToken();
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      stateDatabasePath,
+      demoProjectsRoot,
+    });
+    const session = await authenticate(daemon, token);
+
+    const response = await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "repair-owners-own-project",
+        fixtureId: "web-app-a",
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(apiErrorResponseSchema.parse(await response.json()).error.code).toBe("PROJECT_ALREADY_REGISTERED");
+    // The row is exactly where the owner left it.
+    const projects = projectsResponseSchema.parse(
+      await (
+        await fetch(`${daemon.baseUrl}/api/v1/projects`, { headers: { cookie: session.cookie } })
+      ).json(),
+    );
+    expect(projects.projects.map(({ id, repositoryPath }) => ({ id, repositoryPath }))).toEqual([
+      { id: fixture.projectId, repositoryPath: ownPath },
+    ]);
+  }, 30_000);
+
+  // The project list is what the web client fetches to render the app's main screen. Adding a
+  // per-Project repository probe to it turned a pure database read into one that spawns `git`, and
+  // `runGit` REJECTS with `GitMissingError` when `git` cannot be spawned at all -- uncaught by
+  // `inspectRepository`, unhandled by `sendOperationError`. On a machine with no `git` on PATH the
+  // route therefore answered a generic 500 and the owner could not list ANY of their Projects,
+  // because of a question about one of them.
+  //
+  // PATH is emptied around the one fetch and restored in a `finally`: the same ENOENT on the child
+  // that a machine without the executable produces, without breaking `git` for anything else.
+  it("lists Projects on a machine where git cannot be spawned, reporting them as unusable", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail projects without git "));
+    temporaryDirectories.push(temporaryDirectory);
+    const demoProjectsRoot = join(temporaryDirectory, "demo-projects");
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, logger: false, demoProjectsRoot });
+    const session = await authenticate(daemon, token);
+    const registration = await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "register-demo-before-git-goes-missing",
+        fixtureId: "web-app-a",
+      }),
+    });
+    expect(registration.status).toBe(200);
+
+    const realPath = process.env["PATH"];
+    let response: Response;
+    try {
+      process.env["PATH"] = "";
+      response = await fetch(`${daemon.baseUrl}/api/v1/projects`, {
+        headers: { cookie: session.cookie },
+      });
+    } finally {
+      process.env["PATH"] = realPath;
+    }
+
+    // The whole of it: an answer, not a 500. Asserted before the body is parsed, so a regression
+    // reads as "the route failed" rather than as a schema error about an error envelope.
+    expect(response.status).toBe(200);
+    const listed = projectsResponseSchema.parse(await response.json());
+    // The Project is still listed -- the owner can see their work -- and it is reported as what it
+    // is right now: nothing can be cut from it while this machine cannot run `git`.
+    expect(listed.projects.map(({ id, repositoryStatus }) => ({ id, repositoryStatus }))).toEqual([
+      { id: "project-fixture-web-app-a", repositoryStatus: "UNUSABLE" },
+    ]);
+  }, 30_000);
+
   // A second daemon process, its own data directory, pointed at the same state database -- what two
   // daemons on one machine's shared state look like, and the shape the refused registration used to
   // get wrong: it does not share the first daemon's demo root, so nothing there names the same
