@@ -1241,4 +1241,42 @@ describe("session loop workspace provisioning", () => {
     },
     GIT_TIMEOUT_MS,
   );
+
+  // `@loomrail/workspace` reports ANY failure to spawn `git` as `GitMissingError` -- "git
+  // executable was not found" -- and a working directory that does not exist is one of the ways
+  // spawning fails, indistinguishable at that boundary from git not being on PATH. The vanished
+  // worktree above is exactly that case, so what the log says about it is pinned here, separately
+  // from the message text: an operator reading `error` must not be told to go check their git
+  // installation over a worktree an agent (or a stray `rm`) already removed.
+  it(
+    "logs the vanished worktree as itself, not as git being missing from the machine",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      const worktreePath = join(workspacesRoot, PROJECT_ID, seeded.workItemId);
+      const treeWarnings: Record<string, string | number>[] = [];
+      const adapter = completingAdapter(async () => {
+        await rm(worktreePath, { recursive: true, force: true });
+      });
+
+      await runStageAttempt({
+        ...depsFor(localState, seeded, adapter),
+        logger: {
+          info: () => undefined,
+          warn: (fields, message) => {
+            if (message === "The tree this stage ended on could not be recorded") {
+              treeWarnings.push(fields);
+            }
+          },
+        },
+      });
+
+      expect(treeWarnings).toHaveLength(1);
+      const error = String(treeWarnings[0]?.["error"] ?? "");
+      expect(error).not.toContain("GitMissingError");
+      expect(error).not.toContain("git executable was not found");
+    },
+    GIT_TIMEOUT_MS,
+  );
 });

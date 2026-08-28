@@ -1,4 +1,4 @@
-import { mkdir, realpath } from "node:fs/promises";
+import { access, constants, mkdir, realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { assembleContextPack } from "@loomrail/context-assembly";
@@ -727,6 +727,16 @@ const releaseWorkspaceLease = (deps: RunStageAttemptDeps, workspaceId: string): 
  * real work to protect a convenience. What a failure produces instead is `null` -- "no tree was
  * measured", the same fact every pre-0013 attempt records -- and a line in the log, so a label that
  * is quietly never taken cannot pass for a stage that ended on the tree it started on.
+ *
+ * The worktree's existence is checked before `treeOfWorktree` is ever called, and not folded into
+ * its `catch`. `spawn`ing git with a working directory that does not exist fails to start at all,
+ * the same failure as git not being on PATH, and `@loomrail/workspace` reports both as
+ * `GitMissingError` -- "git executable was not found". Read through `errorName` in the log that
+ * would tell an operator whose agent's worktree was cleaned up mid-session that git is not
+ * installed on this machine, which is not true and not fixable by installing anything. The daemon
+ * already drew this line once, in `server.ts`'s change routes, for the same reason: ask the
+ * filesystem first, so a missing worktree is named as itself rather than reaching git's own
+ * ENOENT-for-anything reporting.
  */
 const readStageResultTree = async (
   deps: RunStageAttemptDeps,
@@ -736,6 +746,19 @@ const readStageResultTree = async (
   // (spec §7's first row), and warning on each would bury the case that matters.
   if (workspace === null) return null;
   const stageAttemptId = deps.dispatch.stageAttemptId;
+
+  try {
+    // `R_OK | X_OK`, never a bare `access` (which defaults to `F_OK` and would pass for a worktree
+    // this process cannot actually enter). See the identical check in `server.ts`'s
+    // `changeReadContext`, which this one exists to stay consistent with.
+    await access(workspace.worktreePath, constants.R_OK | constants.X_OK);
+  } catch (error: unknown) {
+    deps.logger.warn(
+      { stageAttemptId, worktreePath: workspace.worktreePath, error: errorName(error) },
+      "The tree this stage ended on could not be recorded",
+    );
+    return null;
+  }
 
   try {
     return await treeOfWorktree({ worktreePath: workspace.worktreePath });
