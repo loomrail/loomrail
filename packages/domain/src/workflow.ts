@@ -434,6 +434,8 @@ export const decideStartMockPipeline = (
     failureCode: null,
     unproductiveSessions: 0,
     packShareBackoffs: 0,
+    // A stage that has not run has no tree to name yet (contracts' `resultTree`).
+    resultTree: null,
   };
   const run: PipelineRun = {
     schemaVersion: 1,
@@ -939,6 +941,12 @@ export const decideApplyProviderOutcome = (
     status: "SUCCEEDED",
     version: context.stageAttempt.version + 1,
     finishedAt: context.now,
+    // The one place the stage-end tree label is stored, and it is stored in the same transaction
+    // that ends the stage (spec §6.5): a stage recorded as succeeded and a label recorded for it
+    // either both land or neither does, so no crash can leave a succeeded stage whose label was
+    // measured and lost. The other branches of this function do not set it -- WAITING_HUMAN parks a
+    // stage rather than ending it, and a session-level outcome is not a stage result at all.
+    resultTree: command.payload.resultTree,
   };
   const nextStage = nextWorkflowStage(template, completedStage.stage);
   if (nextStage === null) {
@@ -989,6 +997,8 @@ export const decideApplyProviderOutcome = (
     failureCode: null,
     unproductiveSessions: 0,
     packShareBackoffs: 0,
+    // A stage that has not run has no tree to name yet (contracts' `resultTree`).
+    resultTree: null,
   };
   const run: PipelineRun = {
     ...context.run,
@@ -1404,6 +1414,9 @@ export const decideApproveBudgetOverride = (
     startedAt: null,
     finishedAt: null,
     failureCode: null,
+    // A retry starts its own measurement; it does not inherit the tree the previous attempt ended
+    // on, which belongs to that attempt.
+    resultTree: null,
   };
   const run: PipelineRun = {
     ...context.run,

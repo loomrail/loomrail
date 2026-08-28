@@ -122,6 +122,7 @@ describe("mock workflow decisions", () => {
       failureCode: null,
       unproductiveSessions: 0,
       packShareBackoffs: 0,
+      resultTree: null,
     };
     const request: HumanRequest = {
       schemaVersion: 1,

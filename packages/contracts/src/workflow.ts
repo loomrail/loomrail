@@ -9,6 +9,14 @@ import {
 } from "./shared.js";
 import { workItemWorkspaceOrphanedEventSchema, workItemWorkspaceSchema } from "./workspace.js";
 
+// A Git TREE object id, not a commit one. Same forty lowercase hex characters as
+// `commitShaSchema` in workspace.ts and deliberately a separate declaration: what this names is the
+// content of a directory, and a schema that called it a commit would invite a reader to pass it to
+// `git log` or `git show <sha>^` and get nothing. The SHA-1 bound is the same statement about this
+// codebase that workspace.ts spells out -- no SHA-256 repository is created or accepted anywhere in
+// Loomrail, so widening the regex is part of adding that support rather than a bug fix.
+const treeShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
+
 export const workflowStageSchema = z.enum(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
 export const pipelineRunStatusSchema = z.enum([
   "RUNNING",
@@ -343,6 +351,45 @@ export const stageAttemptSchema = z
     // makes a daemon restart an ordinary end of a session, so a counter held in daemon memory
     // would be cleared by the very event the "one automatic retry, then ask" rule must survive.
     packShareBackoffs: z.number().int().nonnegative(),
+    /**
+     * The Git tree the work item's worktree held when this stage succeeded (spec D3, §4).
+     *
+     * NOTHING IN E1.5 READS THIS, and that is deliberate rather than unfinished: spec §11 lists the
+     * per-stage breakdown among the milestone's non-goals, so this field is written by the session
+     * loop and displayed nowhere. A field with no reader is normally a declaration wearing the
+     * shape of a contract, so here is the reader it is precomputed for, named:
+     *
+     *   WHICH MILESTONE: the one that closes the second half of GD-002 -- checkpoint commits,
+     *   squash, and the Conventional Commit message the owner sees before acceptance -- which
+     *   requires GD-001, the agent's right to write Git history. Named in
+     *   docs/plans/06-post-phase-0-decomposition.ru.md §2 and in the E1.5 spec §1, both of which say
+     *   only that it "goes separately". It carries no ID in the approved order in that document's
+     *   §7 and is not scheduled; that is a gap in the roadmap, stated here rather than papered over.
+     *
+     *   WHAT WILL READ IT: that milestone's per-stage breakdown, which needs one point of reference
+     *   per stage to say what each stage contributed, and its squash step, which builds checkpoint
+     *   commits from those same points. Neither can reconstruct them afterwards -- once the worktree
+     *   moves on, the tree a stage ended on is not recoverable from anything Loomrail keeps -- which
+     *   is the whole reason for spending forty bytes now.
+     *
+     * What survives to that milestone is narrower than "a point to diff from", and the difference is
+     * measured rather than assumed. `git write-tree` writes the tree into the repository's object
+     * database UNREACHABLE from any ref, along with the blobs `add -A` wrote for it; `git prune`
+     * (and `git gc --auto`, which ordinary git commands trigger) removes unreachable objects older
+     * than `gc.pruneExpire`, two weeks by default. Probed on a throwaway repository: after
+     * `git prune --expire=now` the recorded tree answers `could not get object info`. So a reader
+     * arriving weeks later can always compare two of these for EQUALITY -- "this stage changed
+     * nothing", "these two stages ended on the same tree" -- and can only diff from one while the
+     * owner's repository still holds the objects.
+     *
+     * Nullable, not optional, and the two states are genuinely different facts. `null` is "no tree
+     * was measured for this stage": it never ran in a worktree (every prose stage), it has not
+     * finished, or the worktree was gone when the label was taken. A stage that ran and changed
+     * NOTHING is not null -- it records the tree it started on, which is a real sha -- so "changed
+     * nothing" can never be mistaken for "never measured". Every StageAttempt recorded before
+     * migration 0013 is null forever, which is the same fact and needs no special reading.
+     */
+    resultTree: treeShaSchema.nullable(),
   })
   .strict();
 
@@ -838,6 +885,21 @@ const applyProviderOutcomePayloadSchema = z
     dispatchId: opaqueIdSchema,
     outcome: providerOutcomeSchema,
     template: workflowTemplateSchema,
+    /**
+     * The stage-end tree label (see `stageAttemptSchema.resultTree`), measured by the daemon just
+     * before it applies the outcome.
+     *
+     * Beside `outcome` rather than inside it, because it is not the provider's claim: `outcome` is
+     * untrusted output from an agent, while this is Loomrail's own reading of the worktree through
+     * `summariseChanges`. Folding it into the COMPLETED outcome would let a provider name the tree
+     * its own work is recorded against.
+     *
+     * Required and nullable rather than optional: every caller states what it measured, `null`
+     * included, so a caller that simply forgot is caught by the schema instead of being recorded as
+     * "no tree was there". Only the COMPLETED branch stores it -- the others end a session or park
+     * the stage on a question, neither of which is a stage ending.
+     */
+    resultTree: treeShaSchema.nullable(),
   })
   .strict();
 

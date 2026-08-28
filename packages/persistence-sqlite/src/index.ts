@@ -289,6 +289,9 @@ const stageAttemptRowSchema = z.object({
   failure_code: z.string().nullable(),
   unproductive_sessions: z.number().int(),
   pack_share_backoffs: z.number().int(),
+  // Migration 0013. Nullable in the column and nullable here: `null` is "no tree was measured for
+  // this stage", which is what every StageAttempt written before that migration will say forever.
+  result_tree: z.string().nullable(),
 });
 
 const humanRequestRowSchema = z.object({
@@ -640,6 +643,7 @@ const stageAttemptFromRow = (value: unknown): StageAttempt => {
     failureCode: row.failure_code,
     unproductiveSessions: row.unproductive_sessions,
     packShareBackoffs: row.pack_share_backoffs,
+    resultTree: row.result_tree,
   });
 };
 
@@ -1925,8 +1929,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO stage_attempts (
             id, pipeline_run_id, project_id, work_item_id, stage, attempt, status, version,
-            started_at, finished_at, failure_code, unproductive_sessions, pack_share_backoffs
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            started_at, finished_at, failure_code, unproductive_sessions, pack_share_backoffs,
+            result_tree
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           attempt.id,
@@ -1942,6 +1947,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           attempt.failureCode,
           attempt.unproductiveSessions,
           attempt.packShareBackoffs,
+          attempt.resultTree,
         );
     };
 
@@ -1949,7 +1955,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       const update = database
         .prepare(
           `UPDATE stage_attempts SET status = ?, version = ?, started_at = ?, finished_at = ?,
-             failure_code = ?, unproductive_sessions = ?, pack_share_backoffs = ?
+             failure_code = ?, unproductive_sessions = ?, pack_share_backoffs = ?,
+             result_tree = ?
            WHERE id = ? AND version = ?`,
         )
         .run(
@@ -1960,6 +1967,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           attempt.failureCode,
           attempt.unproductiveSessions,
           attempt.packShareBackoffs,
+          attempt.resultTree,
           attempt.id,
           attempt.version - 1,
         );

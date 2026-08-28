@@ -1471,6 +1471,7 @@ describe("local daemon session and state boundary", () => {
         actor: { type: "SYSTEM", id: "mock-provider" },
         type: "APPLY_PROVIDER_OUTCOME",
         payload: {
+          resultTree: null,
           dispatchId: started.dispatch.id,
           template: {
             schemaVersion: 1,

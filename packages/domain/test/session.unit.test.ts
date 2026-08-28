@@ -49,6 +49,7 @@ const attemptWith = (overrides: Partial<StageAttempt> = {}): StageAttempt => ({
   failureCode: null,
   unproductiveSessions: 0,
   packShareBackoffs: 0,
+  resultTree: null,
   ...overrides,
 });
 

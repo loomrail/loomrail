@@ -64,6 +64,11 @@ const migrations: readonly Migration[] = [
     filename: "0012_registered_repository_projects.sql",
     rebuildsAReferencedTable: true,
   },
+  {
+    version: 13,
+    name: "stage_attempt_result_tree",
+    filename: "0013_stage_attempt_result_tree.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

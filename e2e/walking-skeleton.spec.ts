@@ -425,6 +425,7 @@ const seedHandoffAndExhaustedSessions = async (databasePath: string, title: stri
       actor: sessionLoopActor,
       type: "APPLY_PROVIDER_OUTCOME",
       payload: {
+        resultTree: null,
         dispatchId,
         outcome: {
           type: "NEEDS_HUMAN",

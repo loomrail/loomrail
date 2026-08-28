@@ -48,8 +48,11 @@ import {
   deleteBranchIfUnmoved,
   inspectRepository,
   removeWorktree,
+  summariseChanges,
   type AddWorktreeRefusal,
 } from "@loomrail/workspace";
+
+import { changeBaselineOf, MAX_SUMMARY_FILES } from "./workspace-changes.js";
 
 /**
  * The share of the provider's context window handed to the assembled pack. The rest is the agent's
@@ -706,6 +709,55 @@ const releaseWorkspaceLease = (deps: RunStageAttemptDeps, workspaceId: string): 
 };
 
 /**
+ * The tree the work item's worktree holds right now -- the stage-end label of spec D3, taken at the
+ * moment the stage is about to be recorded as succeeded.
+ *
+ * Read through `summariseChanges` rather than by running `write-tree` here, which is D3 itself: the
+ * summary and the label come out of ONE temporary index, so the two can never disagree about what
+ * the stage produced. The cost is that this also runs the summary's two `diff-index` reads, whose
+ * answers are thrown away -- next to `add -A`'s walk of the working tree, which both would pay for
+ * anyway, that is the cheaper mistake than a second traversal able to drift from the first.
+ *
+ * Never throws, and never refuses the stage. A label is Loomrail's bookkeeping; the stage is the
+ * owner's work. A stage whose agent finished and whose worktree then vanished has genuinely
+ * succeeded, and failing it over a forty-byte note nobody reads in this milestone would destroy
+ * real work to protect a convenience. What a failure produces instead is `null` -- "no tree was
+ * measured", the same fact every pre-0013 attempt records -- and a line in the log, so a label that
+ * is quietly never taken cannot pass for a stage that ended on the tree it started on.
+ */
+const readStageResultTree = async (
+  deps: RunStageAttemptDeps,
+  workspace: WorkItemWorkspace | null,
+): Promise<string | null> => {
+  // No workspace at all is not a failure and earns no log line: every prose stage ends this way
+  // (spec §7's first row), and warning on each would bury the case that matters.
+  if (workspace === null) return null;
+  const baseline = changeBaselineOf(workspace);
+  const stageAttemptId = deps.dispatch.stageAttemptId;
+  if (baseline === null) {
+    deps.logger.warn(
+      { stageAttemptId, worktreePath: workspace.worktreePath },
+      "The tree this stage ended on could not be recorded",
+    );
+    return null;
+  }
+  try {
+    const summary = await summariseChanges({
+      worktreePath: workspace.worktreePath,
+      baseline,
+      maxFiles: MAX_SUMMARY_FILES,
+    });
+    return summary.tree;
+  } catch (error: unknown) {
+    deps.logger.warn(
+      { stageAttemptId, worktreePath: workspace.worktreePath, error: errorName(error) },
+      "The tree this stage ended on could not be recorded",
+    );
+    return null;
+  }
+};
+
+/**
  * The workspace this attempt leased, so the `finally` below knows whether to give it back -- and so
  * every session in the attempt can be handed the worktree it is meant to write in.
  *
@@ -766,6 +818,10 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           dispatchId: deps.dispatch.id,
           outcome: { type: "NEEDS_HUMAN", request: boundedRequest(decision.request) },
           template: deps.template,
+          // No stage ran, so there is nothing to have ended on. Neither refusal here reaches a
+          // worktree: one is an adapter that does not serve the stage, the other a workspace that
+          // could not be prepared at all.
+          resultTree: null,
         },
       });
       deps.logger.warn(
@@ -1362,6 +1418,16 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     if (ended.type !== "PROVIDER_SESSION_ENDED") throw new Error("The ProviderSession did not end");
 
     if (stageResult !== null) {
+      // Spec §6 step 5: the tree is measured HERE, immediately before the command that ends the
+      // stage, so that what the label names is the worktree as the stage left it -- and so that the
+      // label and the ending land in one transaction (the domain writes it onto the succeeding
+      // attempt). Measured before the command rather than inside it because reading a worktree
+      // means running `git`, and `execute` is synchronous by design.
+      //
+      // `lease.workspace` rather than a fresh read: this attempt holds the lease on that row, so
+      // nothing else could have moved the worktree under it, and re-reading would only add a way
+      // for the two to differ.
+      const resultTree = await readStageResultTree(deps, lease.workspace);
       // The stage-level result. The outcome is untrusted provider output and is validated where it
       // is written: `execute` parses the whole command, outcome included, before touching state.
       deps.state.execute({
@@ -1370,7 +1436,12 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         correlationId: deps.correlationId,
         actor,
         type: "APPLY_PROVIDER_OUTCOME",
-        payload: { dispatchId: deps.dispatch.id, outcome: stageResult, template: deps.template },
+        payload: {
+          dispatchId: deps.dispatch.id,
+          outcome: stageResult,
+          template: deps.template,
+          resultTree,
+        },
       });
       return;
     }

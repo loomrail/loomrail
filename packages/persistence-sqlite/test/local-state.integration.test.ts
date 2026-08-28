@@ -83,6 +83,34 @@ const halfLegacySessionCounters = (value: unknown): unknown =>
     return attempt;
   });
 
+// The same two shapes for the stage-end tree label of migration 0013: what a database written
+// before that milestone holds, and how many such payloads are left. `resultTree` is required by
+// `stageAttemptSchema` exactly as the two counters are, so an unbackfilled payload fails to parse
+// exactly as hard.
+const withoutResultTree = (value: unknown): unknown =>
+  mapStageAttempts(value, (attempt) => {
+    delete attempt["resultTree"];
+    return attempt;
+  });
+
+// `json_type` answers the string 'null' for a key that is present and null, and SQL NULL only for a
+// key that is absent -- so this counts payloads the backfill has not reached, and not the ones it
+// filled in with null.
+const countLegacyResultTrees = (raw: DatabaseSync): { events: number; commands: number } => {
+  const count = (table: "events" | "commands", column: "data_json" | "result_json"): number =>
+    (
+      raw
+        .prepare(
+          `SELECT COUNT(*) AS count FROM ${table}, json_tree(${table}.${column}) AS tree
+           WHERE tree.key IN ('stageAttempt', 'previousStageAttempt')
+             AND tree.type = 'object'
+             AND json_type(tree.value, '$.resultTree') IS NULL`,
+        )
+        .get() as { count: number }
+    ).count;
+  return { events: count("events", "data_json"), commands: count("commands", "result_json") };
+};
+
 // How many embedded StageAttempts anywhere in the stored payloads still lack *either* counter.
 // Asserted non-zero before the migration runs and zero after it, so the test cannot pass by finding
 // nothing. Either, not just the first: a payload carrying `unproductiveSessions` and not
@@ -411,7 +439,7 @@ describe("SQLite local state", () => {
         correlationId: `correlation-apply-${dispatch.id}`,
         actor: { type: "SYSTEM", id: "mock-provider" },
         type: "APPLY_PROVIDER_OUTCOME",
-        payload: { dispatchId: dispatch.id, template: acceptanceTemplate, outcome },
+        payload: { dispatchId: dispatch.id, template: acceptanceTemplate, outcome, resultTree: null },
       });
     };
 
@@ -529,7 +557,7 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);
@@ -575,6 +603,7 @@ describe("SQLite local state", () => {
       actor: { type: "SYSTEM", id: "mock-provider" },
       type: "APPLY_MOCK_PROVIDER_OUTCOME",
       payload: {
+        resultTree: null,
         dispatchId: started.dispatch.id,
         template: mockTemplate,
         outcome: { type: "COMPLETED", summary: "Legacy discovery completed." },
@@ -654,6 +683,7 @@ describe("SQLite local state", () => {
       actor: { type: "SYSTEM", id: "mock-provider" },
       type: "APPLY_MOCK_PROVIDER_OUTCOME",
       payload: {
+        resultTree: null,
         dispatchId: started.dispatch.id,
         template: mockTemplate,
         outcome: { type: "COMPLETED", summary: "Legacy M4 discovery completed." },
@@ -808,7 +838,7 @@ describe("SQLite local state", () => {
         correlationId: `correlation-apply-${dispatch.id}`,
         actor: { type: "SYSTEM", id: "mock-provider" },
         type: "APPLY_PROVIDER_OUTCOME",
-        payload: { dispatchId: dispatch.id, template: acceptanceTemplate, outcome },
+        payload: { dispatchId: dispatch.id, template: acceptanceTemplate, outcome, resultTree: null },
       });
     };
 
@@ -1098,6 +1128,237 @@ describe("SQLite local state", () => {
     const swept = new DatabaseSync(databasePath);
     expect(countLegacyStageAttempts(swept)).toEqual({ events: 0, commands: 0 });
     swept.close();
+  });
+
+  // Migration 0013's history half, and the same hazard 0008 exists for: the ALTER gives every
+  // stored ROW a correct `result_tree`, but `stageAttemptSchema` is `.strict()` and requires
+  // `resultTree`, and the entity is embedded verbatim in ten event payloads and in every command
+  // receipt. A database written before E1.5 holds none of them, and no test that starts from an
+  // empty database can see that -- which is precisely how the same defect shipped before 0008.
+  //
+  // The pre-0013 shape is reached by REVERTING a current database rather than by replaying old
+  // migrations: the column is dropped and the stored JSON is stripped in JS, so the assertions
+  // afterwards cannot be satisfied by the migration's own statements being their own inverse.
+  it("backfills the stage-end tree label into StageAttempt payloads stored before it existed", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-pre-0013-item"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-pre-0013", created.workItem.id, 1, "READY"));
+    const preLabelTemplate: StartMockPipelineCommand["payload"]["template"] = {
+      schemaVersion: 1,
+      id: "pre-0013-v1",
+      version: 1,
+      name: "Pre-0013 label fixture",
+      stages: [
+        { stage: "REVIEW", ordinal: 0, contextPack },
+        { stage: "QA", ordinal: 1, contextPack },
+      ],
+    };
+    const startCommand: StartMockPipelineCommand = {
+      schemaVersion: 1,
+      commandId: "start-pre-0013",
+      correlationId: "correlation-start-pre-0013",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: preLabelTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    };
+    localState.execute(startCommand);
+
+    // A real label on the first stage, not null: a backfill that stamped every embedded attempt
+    // rather than only the ones missing the key would flatten this one back and show up below.
+    const reviewTree = "1".repeat(40);
+    const applyNext = (
+      outcome: ApplyProviderOutcomeCommand["payload"]["outcome"],
+      resultTree: string | null,
+    ): void => {
+      const pendingDispatches = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (pendingDispatches.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
+      const dispatch = pendingDispatches.dispatches[0];
+      if (!dispatch) throw new Error("Expected a pending dispatch");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `mark-0013-${dispatch.id}`,
+        correlationId: `correlation-mark-0013-${dispatch.id}`,
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: dispatch.id },
+      });
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `apply-0013-${dispatch.id}`,
+        correlationId: `correlation-apply-0013-${dispatch.id}`,
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: { dispatchId: dispatch.id, template: preLabelTemplate, outcome, resultTree },
+      });
+    };
+
+    applyNext(
+      {
+        type: "COMPLETED",
+        summary: "Review passed.",
+        artifacts: [
+          {
+            kind: "REVIEW_REPORT",
+            title: "Review report",
+            summary: "Review passed.",
+            checks: ["Contract review passed."],
+          },
+        ],
+      },
+      reviewTree,
+    );
+
+    const snapshot = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: created.workItem.id });
+    if (snapshot.type !== "WORKFLOW_SNAPSHOT" || !snapshot.snapshot.run) {
+      throw new Error("Expected a workflow snapshot");
+    }
+    const budgetPolicy = snapshot.snapshot.budgetPolicies[0];
+    const anyAttempt = snapshot.snapshot.stageAttempts[0];
+    if (!budgetPolicy || !anyAttempt) throw new Error("Expected a budget policy and a stage attempt");
+    const originalEvents = (() => {
+      const before = localState.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id });
+      if (before.type !== "EVENTS") throw new Error("Expected events");
+      return before.events.map((event) => ({ sequence: event.sequence, type: event.type }));
+    })();
+    localState.close();
+    state = undefined;
+
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("DROP TRIGGER events_are_append_only_update");
+    raw.exec("DROP TRIGGER commands_are_append_only_update");
+    // The one event type embedding two StageAttempts under two different keys, so the migration's
+    // recursive fold is exercised on a row with more than one occurrence rather than only on rows
+    // with exactly one.
+    raw
+      .prepare(
+        `INSERT INTO events (
+          id, schema_version, type, aggregate_type, aggregate_id, project_id,
+          actor_type, actor_id, occurred_at, correlation_id, data_json
+        ) VALUES ('event-pre-0013-override', 1, 'BUDGET_OVERRIDE_APPROVED', 'WORK_ITEM', ?, ?,
+          'HUMAN', 'local-owner', ?, 'correlation-pre-0013-override', ?)`,
+      )
+      .run(
+        created.workItem.id,
+        created.workItem.projectId,
+        timestamp,
+        JSON.stringify({
+          run: snapshot.snapshot.run,
+          previousStageAttempt: anyAttempt,
+          stageAttempt: { ...anyAttempt, version: anyAttempt.version + 1 },
+          budgetPolicy,
+        }),
+      );
+
+    const stripped = { events: 0, commands: 0 };
+    for (const row of raw.prepare("SELECT sequence, data_json FROM events").all() as {
+      sequence: number;
+      data_json: string;
+    }[]) {
+      const legacy = JSON.stringify(withoutResultTree(JSON.parse(row.data_json)));
+      if (legacy === row.data_json) continue;
+      stripped.events += 1;
+      raw.prepare("UPDATE events SET data_json = ? WHERE sequence = ?").run(legacy, row.sequence);
+    }
+    for (const row of raw.prepare("SELECT command_id, result_json FROM commands").all() as {
+      command_id: string;
+      result_json: string;
+    }[]) {
+      const legacy = JSON.stringify(withoutResultTree(JSON.parse(row.result_json)));
+      if (legacy === row.result_json) continue;
+      stripped.commands += 1;
+      raw.prepare("UPDATE commands SET result_json = ? WHERE command_id = ?").run(legacy, row.command_id);
+    }
+    // Without these the whole test would still pass if the fixture stopped storing StageAttempts.
+    expect(stripped.events).toBeGreaterThan(0);
+    expect(stripped.commands).toBeGreaterThan(0);
+    const legacyBefore = countLegacyResultTrees(raw);
+    // Strictly greater: the override event above holds two StageAttempts in one row.
+    expect(legacyBefore.events).toBeGreaterThan(stripped.events);
+    expect(legacyBefore.commands).toBeGreaterThan(0);
+    raw.exec(`
+      CREATE TRIGGER events_are_append_only_update
+      BEFORE UPDATE ON events
+      BEGIN
+        SELECT RAISE(ABORT, 'events are append-only');
+      END;
+    `);
+    raw.exec(`
+      CREATE TRIGGER commands_are_append_only_update
+      BEFORE UPDATE ON commands
+      BEGIN
+        SELECT RAISE(ABORT, 'commands are append-only');
+      END;
+    `);
+    raw.close();
+
+    // Migration 13 stays recorded as applied here, and the column stays: this is the state the
+    // history would be left in by an ALTER with no history pass behind it. The timeline has to be
+    // unreadable now, or the assertions after the pass prove nothing about why it exists.
+    const skipped = await open();
+    expect(skipped.startup.appliedMigrations).toEqual([]);
+    expect(() => skipped.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id })).toThrow(
+      StateStoreError,
+    );
+    expect(() => skipped.execute(startCommand)).toThrow();
+    skipped.close();
+    state = undefined;
+
+    // Now the column goes too, which is what makes this a genuinely pre-0013 database rather than a
+    // current one with damaged payloads.
+    const reset = new DatabaseSync(databasePath);
+    reset.exec("ALTER TABLE stage_attempts DROP COLUMN result_tree");
+    reset.prepare("DELETE FROM schema_migrations WHERE version = 13").run();
+    reset.close();
+
+    const migrated = await open();
+    expect(migrated.startup.appliedMigrations).toEqual([13]);
+
+    // Every StageAttempt recorded before the migration keeps a null label, forever (spec §12.3),
+    // and the row half says the same as the payload half.
+    const attempts = migrated.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: created.workItem.id });
+    if (attempts.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected a snapshot");
+    expect(attempts.snapshot.stageAttempts.map(({ resultTree }) => resultTree)).toEqual(
+      attempts.snapshot.stageAttempts.map(() => null),
+    );
+
+    // Each half of the pass named by its own assertion, and as a non-throw rather than by reading
+    // the value out: an unbackfilled payload does not answer wrongly, it makes the reader throw --
+    // so a half of the migration that went missing has to red here, not in a stack trace.
+    expect(() => migrated.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id })).not.toThrow();
+    expect(() => migrated.execute(startCommand)).not.toThrow();
+
+    const after = migrated.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id });
+    if (after.type !== "EVENTS") throw new Error("Expected events");
+    expect(
+      after.events
+        .filter(({ type }) => type !== "BUDGET_OVERRIDE_APPROVED")
+        .map((event) => ({ sequence: event.sequence, type: event.type })),
+    ).toEqual(originalEvents);
+    const override = after.events.find(({ type }) => type === "BUDGET_OVERRIDE_APPROVED");
+    if (override?.type !== "BUDGET_OVERRIDE_APPROVED") throw new Error("Expected the override event");
+    expect(override.data.stageAttempt.resultTree).toBeNull();
+    expect(override.data.previousStageAttempt.resultTree).toBeNull();
+
+    // The commands pass: a receipt written before this milestone is replayed through
+    // `stateCommandResultSchema`, which requires the field just as strictly.
+    expect(migrated.execute(startCommand)).toMatchObject({
+      type: "PIPELINE_STARTED",
+      replayed: true,
+      stageAttempt: { resultTree: null },
+    });
+    migrated.close();
+    state = undefined;
+
+    const sweptLabels = new DatabaseSync(databasePath);
+    expect(countLegacyResultTrees(sweptLabels)).toEqual({ events: 0, commands: 0 });
+    sweptLabels.close();
   });
 
   // A stored payload this build cannot parse is a storage fault, not a malformed request. Left as
@@ -1593,6 +1854,7 @@ describe("SQLite local state", () => {
       actor: { type: "SYSTEM", id: "mock-provider" },
       type: "APPLY_PROVIDER_OUTCOME",
       payload: {
+        resultTree: null,
         dispatchId: started.dispatch.id,
         template: mockTemplate,
         outcome: {
@@ -1677,6 +1939,7 @@ describe("SQLite local state", () => {
         actor: { type: "SYSTEM", id: "mock-provider" },
         type: "APPLY_PROVIDER_OUTCOME",
         payload: {
+          resultTree: null,
           dispatchId,
           template: mockTemplate,
           outcome: { type: "COMPLETED", summary: "Synthetic stage completed." },
@@ -3901,6 +4164,7 @@ describe("SQLite local state", () => {
         actor: { type: "SYSTEM", id: "mock-provider" },
         type: "APPLY_PROVIDER_OUTCOME",
         payload: {
+          resultTree: null,
           dispatchId: dispatch.id,
           template: mockTemplate,
           outcome: { type: "COMPLETED", summary: "Discovery finished." },

@@ -78,6 +78,7 @@ const stageAttempt: StageAttempt = {
   failureCode: null,
   unproductiveSessions: 0,
   packShareBackoffs: 0,
+  resultTree: null,
 };
 const dispatch: WorkflowDispatch = {
   schemaVersion: 1,
@@ -113,6 +114,7 @@ describe("M5 workflow decisions", () => {
       actor: { type: "SYSTEM", id: "mock-provider" },
       type: "APPLY_PROVIDER_OUTCOME",
       payload: {
+        resultTree: null,
         dispatchId: dispatch.id,
         template,
         outcome: {
@@ -155,6 +157,7 @@ describe("M5 workflow decisions", () => {
       actor: { type: "SYSTEM", id: "mock-provider" },
       type: "APPLY_PROVIDER_OUTCOME",
       payload: {
+        resultTree: null,
         dispatchId: dispatch.id,
         template,
         outcome: { type: "COMPLETED", summary: "Implementation complete." },

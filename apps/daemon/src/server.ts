@@ -83,6 +83,7 @@ import {
   resolveRegisteredRepository,
 } from "./fixtures.js";
 import { createSessionWorker } from "./session-worker.js";
+import { changeBaselineOf, MAX_PATCH_BYTES, MAX_SUMMARY_FILES } from "./workspace-changes.js";
 
 const API_VERSION = "v1" as const;
 const DAEMON_VERSION = "0.0.0";
@@ -90,13 +91,6 @@ const SESSION_COOKIE = "loomrail_session";
 const CSRF_HEADER = "x-loomrail-csrf";
 const BOOTSTRAP_TTL_MS = 60_000;
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
-// The bounds E1.5's plan names once ("Пределы", spec §12.1) for the two reads below. Neither is a
-// measurement: they are working values, and the plan says in so many words that changing them is
-// allowed only after measuring on a genuinely large repository. What matters at this boundary is
-// that exceeding either is visible in the answer -- `truncated` on the summary, `truncated` plus
-// `omittedBytes` on a body (spec D8) -- rather than silently shortening what the owner is shown.
-const MAX_SUMMARY_FILES = 2_000;
-const MAX_PATCH_BYTES = 512 * 1_024;
 const DEFAULT_MOCK_BUDGET = 100;
 const DEFAULT_MOCK_BUDGET_THRESHOLDS = [0.5, 0.8, 0.95] as const;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1"]);
@@ -1077,13 +1071,10 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         return null;
       }
 
-      // Spec D1, and the line in this file that decides whether the whole milestone tells the
-      // truth. The base is the carry-in snapshot when there was one, and the repository's HEAD
-      // only when there was not. `baseCommit` alone would attribute every uncommitted edit the
-      // owner had open when the stage started -- carried into the worktree by design -- to the
-      // agent, producing a plausible-looking file list that is a lie. That is the exact failure
-      // this milestone exists to prevent, so it is not a preference.
-      const baseline = workspace.snapshotCommit ?? workspace.baseCommit;
+      // Spec D1. Read from the one module that states it (`workspace-changes.ts`), because the
+      // stage-end tree label measures from the same point and a second spelling here is how the
+      // two would silently come to disagree.
+      const baseline = changeBaselineOf(workspace);
       if (baseline === null) {
         // Not reachable through provisioning today, which refuses a repository with no commit to
         // branch from -- but both fields are nullable in the contract, and a summary computed from

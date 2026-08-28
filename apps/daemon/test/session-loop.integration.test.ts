@@ -1146,4 +1146,99 @@ describe("session loop workspace provisioning", () => {
     },
     GIT_TIMEOUT_MS,
   );
+  // ---------------------------------------------------------------------------------------------
+  // The stage-end tree label (spec D3, §4). Written here and read by nothing in this milestone --
+  // see the comment on `resultTree` in @loomrail/contracts for who is meant to read it and what
+  // they can still do with it by then.
+  // ---------------------------------------------------------------------------------------------
+
+  it(
+    "records the tree the worktree ended on, naming what the agent actually produced",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      const worktreePath = join(workspacesRoot, PROJECT_ID, seeded.workItemId);
+      const adapter = completingAdapter(async () => {
+        await writeFile(join(worktreePath, "added by the agent.txt"), "the agent's work\n");
+      });
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      const attempt = snapshotOf(localState, seeded.workItemId).stageAttempts.at(-1);
+      expect(attempt?.status).toBe("SUCCEEDED");
+      // Asserted before the shape so that a label that was never taken reds as "expected null not
+      // to be null" rather than as `.toMatch` complaining about its own argument.
+      expect(attempt?.resultTree).not.toBeNull();
+      expect(attempt?.resultTree).toMatch(/^[0-9a-f]{40}$/);
+      // Forty hex characters is not evidence: the BASELINE's tree has exactly that shape, so a
+      // label computed over the wrong index -- or over an index the agent's file never reached --
+      // passes the regex above with room to spare (the same trap E15-1 found in Task 1). What the
+      // label names is therefore read back out of the repository it was written into.
+      const listed = await runGit(["ls-tree", "-r", "--name-only", attempt?.resultTree ?? ""], {
+        cwd: repositoryPath,
+      });
+      expect(listed.exitCode).toBe(0);
+      expect(listed.stdout.split("\n")).toContain("added by the agent.txt");
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  // The question the label only answers if it is never collapsed to null: a stage that changed
+  // nothing is a measurement, and it must not be stored as the absence of one. Both readings are
+  // pinned -- that the value is there, and that it is the tree the stage started on -- because
+  // "not null" alone would still pass for a label naming some other tree.
+  it(
+    "records a measured tree for a stage that changed nothing, rather than no measurement at all",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      const worktreePath = join(workspacesRoot, PROJECT_ID, seeded.workItemId);
+      const adapter = completingAdapter(() => undefined);
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      const attempt = snapshotOf(localState, seeded.workItemId).stageAttempts.at(-1);
+      expect(attempt?.status).toBe("SUCCEEDED");
+      const carriedIn = await runGit(["rev-parse", "HEAD^{tree}"], { cwd: worktreePath });
+      expect(attempt?.resultTree).toBe(carriedIn.stdout.trim());
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  // The label is Loomrail's bookkeeping and the stage is the owner's work, so the stage outranks
+  // it: a tree that could not be read is recorded as "not measured" and said in the log, and the
+  // stage still succeeds. The worktree is removed from INSIDE the session, which is the one order
+  // that leaves a genuinely completed stage with nothing left to measure.
+  it(
+    "completes the stage, saying so in the log, when the tree could not be recorded",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      const worktreePath = join(workspacesRoot, PROJECT_ID, seeded.workItemId);
+      const warnings: string[] = [];
+      const adapter = completingAdapter(async () => {
+        await rm(worktreePath, { recursive: true, force: true });
+      });
+
+      // Asserted as a resolution rather than merely awaited, the same way the refusal test below
+      // is: what this guards against is a label that could not be taken escaping as an exception
+      // and taking a finished stage down with it, and that has to red as an assertion rather than
+      // as a rejected promise nobody named.
+      await expect(
+        runStageAttempt({
+          ...depsFor(localState, seeded, adapter),
+          logger: { info: () => undefined, warn: (_fields, message) => warnings.push(message) },
+        }),
+      ).resolves.toBeUndefined();
+
+      const attempt = snapshotOf(localState, seeded.workItemId).stageAttempts.at(-1);
+      expect(attempt?.status).toBe("SUCCEEDED");
+      expect(attempt?.resultTree).toBeNull();
+      expect(warnings).toContain("The tree this stage ended on could not be recorded");
+    },
+    GIT_TIMEOUT_MS,
+  );
 });

@@ -277,6 +277,7 @@ const seedMeasuredAndHandedOffSessions = async (databasePath: string, title: str
       actor: sessionLoopActor,
       type: "APPLY_PROVIDER_OUTCOME",
       payload: {
+        resultTree: null,
         dispatchId,
         outcome: {
           type: "NEEDS_HUMAN",

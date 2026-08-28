@@ -79,6 +79,7 @@ const stageAttempt = (stage: StageAttempt["stage"], id: string): StageAttempt =>
   failureCode: null,
   unproductiveSessions: 0,
   packShareBackoffs: 0,
+  resultTree: null,
 });
 const dispatch = (attempt: StageAttempt): WorkflowDispatch => ({
   schemaVersion: 1,
@@ -123,6 +124,7 @@ describe("M6 acceptance decisions", () => {
       actor: { type: "SYSTEM", id: "mock-provider" },
       type: "APPLY_PROVIDER_OUTCOME",
       payload: {
+        resultTree: null,
         dispatchId: "dispatch-review",
         template,
         outcome: { type: "COMPLETED", summary: "Review complete." },
@@ -186,6 +188,7 @@ describe("M6 acceptance decisions", () => {
         actor: { type: "SYSTEM", id: "mock-provider" },
         type: "APPLY_PROVIDER_OUTCOME",
         payload: {
+          resultTree: null,
           dispatchId: "dispatch-acceptance",
           template,
           outcome: {
