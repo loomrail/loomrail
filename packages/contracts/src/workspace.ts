@@ -279,6 +279,87 @@ export const workItemWorkspaceResponseSchema = z
   })
   .strict();
 
+// E1.5 (docs/plans/15-e1-5-change-visibility-spec.ru.md §4, §5): what a work item has changed in
+// its worktree, given a boundary form so the daemon can answer GET
+// /api/v1/work-items/:workItemId/changes and .../changes/diff with it.
+//
+// The shape of a change summary is declared once, in @loomrail/workspace's
+// packages/workspace/src/changes.ts (Tasks 1-2 of this milestone) -- ChangeStatus, ChangedFile,
+// ChangeSummary, FileDiff. `changedFileSchema` below and the shared fields of `fileDiffSchema` are
+// that declaration's boundary FORM, not a second declaration of it: their shape is copied by hand
+// here (Zod cannot be derived from a plain TypeScript type), but
+// packages/contracts/test/workspace.unit.test.ts imports ChangedFile and FileDiff straight from
+// packages/workspace/src/changes.ts and asserts, at the type level, that
+// `z.infer<typeof changedFileSchema>` equals `ChangedFile` and that fileDiffSchema's non-boundary
+// fields equal `FileDiff`, in both directions. If a field is ever added, renamed, widened, or
+// narrowed on one side and not the other, `pnpm typecheck` fails before either side ships --
+// which is the point: a runtime test only catches the fixtures it was given, and this shape has
+// already drifted silently once in this milestone (session.unit.test.ts's incomplete-fixture bug,
+// named in the Task 3 brief). The import is type-only (`import type`, erased by
+// `verbatimModuleSyntax`) and reaches across a relative path rather than "@loomrail/workspace" the
+// package, so it costs neither package a new dependency edge: @loomrail/contracts stays the
+// zero-dependency package every other workspace package (including @loomrail/workspace's own
+// consumer, @loomrail/persistence-sqlite) builds on, and no dist output of either package embeds
+// the other.
+//
+// `ChangeSummary.tree` -- the resultTree label spec D3 has the daemon write onto StageAttempt at
+// the end of a stage -- is deliberately NOT part of this response and so is not part of the
+// equality check either: D3 says in so many words that the label "не показывается в этой вехе"
+// (is not shown this milestone). `workItemChangeSummarySchema` carries `baseline` instead, which
+// ChangeSummary does not carry at all -- the daemon knows the baseline it asked
+// `summariseChanges`/`readFileDiff` for and attaches it when building the response, the same way it
+// already attaches `workItemId` via the URL rather than the payload (see
+// `publishedWorkItemWorkspaceSchema` above, which drops that same field for that same reason).
+const changeStatusSchema = z.enum(["ADDED", "MODIFIED", "DELETED", "RENAMED"]);
+
+// Shared by `changedFileSchema.path`/`previousPath` and `fileDiffSchema.path`: a path this contract
+// shows the owner, bounded the same way `carriedPathsSchema` above bounds one -- 4096 characters,
+// spec §5 -- because every path here is a string the daemon read from git output and will store,
+// log, or interpolate into a request, not a value this contract can otherwise trust to be short.
+const changedPathSchema = z.string().trim().min(1).max(4_096);
+
+// A line count from a work item's change summary. Nullable, never defaulted to zero: a binary
+// file's `insertions`/`deletions` are null because there is no line count to report, and reporting
+// zero would read as "nothing changed in it" -- spec §4, D8, and the Task 3 brief's own worked
+// example (a binary file whose counts stay null through this schema).
+const changeLineCountSchema = z.number().int().nonnegative().nullable();
+
+export const changedFileSchema = z
+  .object({
+    path: changedPathSchema,
+    previousPath: changedPathSchema.nullable(),
+    status: changeStatusSchema,
+    insertions: changeLineCountSchema,
+    deletions: changeLineCountSchema,
+    binary: z.boolean(),
+  })
+  .strict();
+
+export const workItemChangeSummarySchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    // Non-nullable, unlike WorkItemWorkspace.baseCommit above: a summary computed with no base to
+    // compare against is not a degraded summary, it is not a summary (spec §5).
+    baseline: commitShaSchema,
+    files: z.array(changedFileSchema),
+    truncated: z.boolean(),
+  })
+  .strict();
+
+export const fileDiffSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    path: changedPathSchema,
+    baseline: commitShaSchema,
+    binary: z.boolean(),
+    // Null for a binary file, never "": an empty string would read as an empty, but real, diff
+    // (spec D8).
+    patch: z.string().nullable(),
+    truncated: z.boolean(),
+    omittedBytes: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export type WorkItemWorkspaceStatus = z.infer<typeof workItemWorkspaceStatusSchema>;
 export type WorkItemWorkspaceResponse = z.infer<typeof workItemWorkspaceResponseSchema>;
 export type PublishedWorkItemWorkspace = z.infer<typeof publishedWorkItemWorkspaceSchema>;
@@ -293,3 +374,7 @@ export type WorkItemWorkspaceCreatedResult = z.infer<typeof workItemWorkspaceCre
 export type WorkspaceLeaseAcquiredResult = z.infer<typeof workspaceLeaseAcquiredResultSchema>;
 export type WorkspaceLeaseReleasedResult = z.infer<typeof workspaceLeaseReleasedResultSchema>;
 export type WorkItemWorkspaceOrphanedResult = z.infer<typeof workItemWorkspaceOrphanedResultSchema>;
+export type ChangeStatus = z.infer<typeof changeStatusSchema>;
+export type ChangedFile = z.infer<typeof changedFileSchema>;
+export type WorkItemChangeSummary = z.infer<typeof workItemChangeSummarySchema>;
+export type FileDiff = z.infer<typeof fileDiffSchema>;

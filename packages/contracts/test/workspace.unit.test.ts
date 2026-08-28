@@ -1,16 +1,33 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
   acquireWorkspaceLeaseCommandSchema,
+  changedFileSchema,
   createWorkItemWorkspaceCommandSchema,
+  fileDiffSchema,
   markWorkspaceOrphanedCommandSchema,
   maxCarriedPaths,
   releaseWorkspaceLeaseCommandSchema,
+  workItemChangeSummarySchema,
   workItemWorkspaceCreatedEventSchema,
   workItemWorkspaceOrphanedEventSchema,
   workItemWorkspaceResponseSchema,
   workItemWorkspaceSchema,
 } from "../src/index.js";
+// Type-only, erased by verbatimModuleSyntax: reaches across a relative path into
+// @loomrail/workspace's own source rather than the package "@loomrail/workspace", so neither
+// package gains a dependency edge (see the long comment above workItemChangeSummarySchema in
+// ../src/workspace.ts for why). ChangedFile and FileDiff are the ONE declaration of these shapes
+// (Tasks 1-2 of this milestone); the equality checks below hold changedFileSchema/fileDiffSchema to
+// it at the type level, in both directions, so the two cannot drift without `pnpm typecheck` (part
+// of `pnpm verify`) catching it -- a stronger guarantee than any runtime fixture test can give,
+// because a fixture only proves the cases it was given and this is checked against every field of
+// the actual type.
+import type {
+  ChangedFile as WorkspaceChangedFile,
+  FileDiff as WorkspaceFileDiff,
+} from "../../workspace/src/changes.js";
 
 // Drops one key from a fixture built by validWorkspace/validAcquireCommand/etc. so a negative case
 // can test "this field is missing" without a destructured-and-discarded binding that
@@ -361,5 +378,227 @@ describe("work item workspace contracts", () => {
     ).toBe("/var/loomrail/worktrees/workspace-1");
     // And "no workspace at all" is still the ordinary answer, not an error.
     expect(workItemWorkspaceResponseSchema.parse({ schemaVersion: 1, workspace: null }).workspace).toBeNull();
+  });
+});
+
+describe("work item change summary and file diff contracts (E1.5, spec §4 §5)", () => {
+  // Built field by field, then every negative case below changes exactly one field of it -- the
+  // same discipline validWorkspace above documents and session.unit.test.ts (A2) is the cautionary
+  // tale for.
+  const validChangedFile = (overrides: Record<string, unknown> = {}) => ({
+    path: "src/index.ts",
+    previousPath: null,
+    status: "MODIFIED",
+    insertions: 3,
+    deletions: 1,
+    binary: false,
+    ...overrides,
+  });
+
+  it("accepts a well-formed modified file", () => {
+    expect(changedFileSchema.parse(validChangedFile())).toBeTruthy();
+  });
+
+  it("accepts a renamed file carrying its previous path", () => {
+    expect(
+      changedFileSchema.parse(validChangedFile({ status: "RENAMED", previousPath: "src/old-name.ts" })),
+    ).toBeTruthy();
+  });
+
+  // Verbatim from the Task 3 brief (§ Задача 3, Step 1): the case this whole schema exists to get
+  // right. A binary file's line counts are null, not zero -- zero would read as "nothing changed".
+  it("keeps a binary file's line counts null, so zero cannot be read as `nothing changed`", () => {
+    const parsed = changedFileSchema.parse({
+      path: "pic.bin",
+      previousPath: null,
+      status: "MODIFIED",
+      insertions: null,
+      deletions: null,
+      binary: true,
+    });
+
+    expect(parsed.insertions).toBeNull();
+    expect(parsed.deletions).toBeNull();
+  });
+
+  // Verbatim from the Task 3 brief (§ Задача 3, Step 1): a file record carrying a field nobody
+  // declared -- `hunks`, the kind of thing a careless refactor might one day bolt onto a
+  // ChangedFile -- must be refused, not silently accepted.
+  //
+  // Mutation performed and reverted for this test: removed `.strict()` from changedFileSchema in
+  // ../src/workspace.ts. Red, by assertion: "expected [Function] to throw" (the object parsed
+  // successfully with `hunks` intact instead of throwing). Restored by re-adding `.strict()` --
+  // never by `git checkout --`.
+  it("refuses a file record carrying an unknown field", () => {
+    expect(() =>
+      changedFileSchema.parse({
+        path: "a.txt",
+        previousPath: null,
+        status: "MODIFIED",
+        insertions: 1,
+        deletions: 1,
+        binary: false,
+        hunks: [],
+      }),
+    ).toThrow();
+  });
+
+  it("refuses a negative insertions count", () => {
+    expect(() => changedFileSchema.parse(validChangedFile({ insertions: -1 }))).toThrow();
+  });
+
+  it("refuses a non-integer insertions count", () => {
+    expect(() => changedFileSchema.parse(validChangedFile({ insertions: 1.5 }))).toThrow();
+  });
+
+  it("refuses a status outside ADDED, MODIFIED, DELETED, RENAMED", () => {
+    expect(() => changedFileSchema.parse(validChangedFile({ status: "COPIED" }))).toThrow();
+  });
+
+  it("refuses an empty path", () => {
+    expect(() => changedFileSchema.parse(validChangedFile({ path: "" }))).toThrow();
+  });
+
+  // Both sides of the bound, from the one complete fixture, the same shape as the worktree-path and
+  // branch bound tests above. 4096 is the Task 3 brief's own figure ("path — до 4096 символов, как
+  // carriedPathsSchema рядом").
+  it("accepts a path at 4096 characters and refuses one past it", () => {
+    const at = "p".repeat(4_096);
+    expect(changedFileSchema.parse(validChangedFile({ path: at }))).toBeTruthy();
+    expect(() => changedFileSchema.parse(validChangedFile({ path: `${at}p` }))).toThrow();
+  });
+
+  const validChangeSummary = (overrides: Record<string, unknown> = {}) => ({
+    schemaVersion: 1,
+    baseline: "a".repeat(40),
+    files: [validChangedFile()],
+    truncated: false,
+    ...overrides,
+  });
+
+  it("accepts a well-formed change summary", () => {
+    expect(workItemChangeSummarySchema.parse(validChangeSummary())).toBeTruthy();
+  });
+
+  // D7: an empty file list is "the worktree is unchanged", a fact about the world, not a refusal --
+  // so the schema has to accept it rather than treat it as a shape the daemon failed to fill in.
+  it("accepts a change summary with no changed files", () => {
+    expect(workItemChangeSummarySchema.parse(validChangeSummary({ files: [] }))).toBeTruthy();
+  });
+
+  it("accepts a change summary marked truncated", () => {
+    expect(workItemChangeSummarySchema.parse(validChangeSummary({ truncated: true }))).toBeTruthy();
+  });
+
+  it("refuses a change summary whose baseline is not a 40-character hex sha", () => {
+    expect(() => workItemChangeSummarySchema.parse(validChangeSummary({ baseline: "not-a-sha" }))).toThrow();
+  });
+
+  // Unlike WorkItemWorkspace.baseCommit, `baseline` here is never null: a summary computed with no
+  // base to compare against is not a summary at all (spec §5, the Task 3 brief's "ненулевой").
+  it("refuses a change summary with a null baseline", () => {
+    expect(() => workItemChangeSummarySchema.parse(validChangeSummary({ baseline: null }))).toThrow();
+  });
+
+  it("refuses a change summary with a file entry that is itself invalid", () => {
+    expect(() =>
+      workItemChangeSummarySchema.parse(
+        validChangeSummary({ files: [validChangedFile({ insertions: -1 })] }),
+      ),
+    ).toThrow();
+  });
+
+  it("does not silently accept a field the change summary never declared", () => {
+    expect(() => workItemChangeSummarySchema.parse({ ...validChangeSummary(), workItemId: "x" })).toThrow();
+  });
+
+  const validFileDiff = (overrides: Record<string, unknown> = {}) => ({
+    schemaVersion: 1,
+    path: "src/index.ts",
+    baseline: "a".repeat(40),
+    binary: false,
+    patch: "@@ -1,1 +1,1 @@\n-old\n+new\n",
+    truncated: false,
+    omittedBytes: 0,
+    ...overrides,
+  });
+
+  it("accepts a well-formed text file diff", () => {
+    expect(fileDiffSchema.parse(validFileDiff())).toBeTruthy();
+  });
+
+  // D8: a binary file's patch is null, never "" -- an empty string would read as an empty but real
+  // diff rather than "there is no text to show".
+  it("accepts a binary file diff whose patch is null", () => {
+    const parsed = fileDiffSchema.parse(validFileDiff({ binary: true, patch: null }));
+    expect(parsed.patch).toBeNull();
+  });
+
+  it("accepts a truncated file diff naming how many bytes were omitted", () => {
+    expect(fileDiffSchema.parse(validFileDiff({ truncated: true, omittedBytes: 42 }))).toBeTruthy();
+  });
+
+  // Nullable, not optional -- the same distinction the workspace tests draw for baseCommit above,
+  // applied here to patch: omitting the field entirely would let a lazy caller skip stating whether
+  // there was anything to show, which null forces it to.
+  it("refuses a file diff with patch omitted rather than recorded as null", () => {
+    expect(() => fileDiffSchema.parse(omitField(validFileDiff(), "patch"))).toThrow();
+  });
+
+  it("refuses a negative omittedBytes", () => {
+    expect(() => fileDiffSchema.parse(validFileDiff({ omittedBytes: -1 }))).toThrow();
+  });
+
+  it("refuses a file diff whose baseline is not a 40-character hex sha", () => {
+    expect(() => fileDiffSchema.parse(validFileDiff({ baseline: "a".repeat(39) }))).toThrow();
+  });
+
+  it("does not silently accept a field the file diff never declared", () => {
+    expect(() => fileDiffSchema.parse({ ...validFileDiff(), hunkCount: 1 })).toThrow();
+  });
+});
+
+// R2 (controller ruling): the shape of a change summary is declared once, in
+// packages/workspace/src/changes.ts (ChangeStatus/ChangedFile/ChangeSummary/FileDiff, Tasks 1-2).
+// changedFileSchema and fileDiffSchema's non-boundary fields are that declaration's boundary form,
+// copied by hand because Zod cannot be derived from a plain TypeScript type -- so what stops the
+// copy from drifting is not a runtime test (a fixture only proves the cases someone thought to
+// write) but a type-level equality check that runs on every `pnpm typecheck`, which `pnpm verify`
+// always runs. Mutual assignability (each side extends the other) is enough here: every field below
+// is a plain string/number/boolean/literal-union, optionally unioned with `null`, and never itself a
+// bare, undistributed type parameter -- exactly the shapes mutual `extends` tells apart correctly,
+// including a required field from an optional one and `T | null` from `T | null | undefined`.
+type IsEqual<A, B> = A extends B ? (B extends A ? true : false) : false;
+
+describe("changedFileSchema and fileDiffSchema stay equal to @loomrail/workspace's declared shape (R2)", () => {
+  // Mutation performed and reverted for this test: changed `insertions: changeLineCountSchema` to
+  // `insertions: changeLineCountSchema.optional()` in ../src/workspace.ts (making it `number | null
+  // | undefined` instead of `number | null`, which ChangedFile.insertions never allows). Red, by
+  // assertion: a TypeScript compile error at this test's `const identical: IsEqual<...> = true;`
+  // line -- "Type 'true' is not assignable to type 'false'" -- caught by `pnpm typecheck` even
+  // though vitest's own esbuild-transformed run stays green (esbuild strips types; it does not
+  // check them). Restored by re-editing the field back to `changeLineCountSchema`, never by `git
+  // checkout --`.
+  it("keeps changedFileSchema's inferred type identical to ChangedFile, in both directions", () => {
+    const identical: IsEqual<z.infer<typeof changedFileSchema>, WorkspaceChangedFile> = true;
+    expect(identical).toBe(true);
+  });
+
+  // fileDiffSchema carries two boundary-only fields ChangeSummary/FileDiff never declare --
+  // `schemaVersion` and `baseline`, spec §5 -- so the check compares FileDiff against exactly the
+  // fields the two shapes actually share, not the whole inferred type.
+  //
+  // Mutation performed and reverted for this test: changed `patch: z.string().nullable()` to
+  // `patch: z.string().nullable().optional()` in ../src/workspace.ts. Red, by assertion: the same
+  // "Type 'true' is not assignable to type 'false'" compile error as above, at this test's
+  // `identical` declaration -- FileDiff.patch is `string | null`, never `undefined`. Restored by
+  // re-editing the field back to `z.string().nullable()`.
+  it("keeps fileDiffSchema's non-boundary fields identical to FileDiff, in both directions", () => {
+    type FileDiffSharedFields = Pick<
+      z.infer<typeof fileDiffSchema>,
+      "path" | "binary" | "patch" | "truncated" | "omittedBytes"
+    >;
+    const identical: IsEqual<FileDiffSharedFields, WorkspaceFileDiff> = true;
+    expect(identical).toBe(true);
   });
 });
