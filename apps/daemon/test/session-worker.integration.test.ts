@@ -160,6 +160,14 @@ const awaitIdle = async (worker: Pick<SessionWorker, "whenIdle">): Promise<void>
   }
 };
 
+// The pending queue by id rather than by mode: which dispatches are still there is what the
+// skip-and-continue behaviour is about, and `pendingDispatchModes` cannot tell two apart.
+const pendingDispatchIds = (localState: LocalState): string[] => {
+  const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+  if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatches");
+  return pending.dispatches.map(({ id }) => id);
+};
+
 describe("session worker", () => {
   let temporaryDirectory = "";
   let databasePath = "";
@@ -175,7 +183,12 @@ describe("session worker", () => {
     openState = await openLocalState({
       databasePath,
       now: () => new Date(timestamp),
-      createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+      // Zero-padded, so a generated id sorts the way it was created. `LIST_PENDING_DISPATCHES`
+      // orders by `created_at` then `id`, and every row here carries the same fixed timestamp --
+      // with a bare counter, `workflowDispatch-20` sorts before `workflowDispatch-8`, so which of
+      // two seeded dispatches is the head of the queue depended on how many ids happened to have
+      // been minted before them.
+      createId: (kind) => `${kind}-${(nextId += 1).toString().padStart(4, "0")}`,
     });
   });
 
@@ -359,8 +372,8 @@ describe("session worker", () => {
     expect(settled).toBe(true);
   }, 20_000);
 
-  // Without this guard the loop would spin on the same unmovable head row to the cycle limit.
-  it("stops the pass when the head of the queue did not move", async () => {
+  // Without this guard the loop would spin on the same unmovable row to the cycle limit.
+  it("ends the pass once every pending dispatch is one it cannot start", async () => {
     const localState = state();
     const logger = createRecordingLogger();
     const worker = createSessionWorker({
@@ -376,8 +389,58 @@ describe("session worker", () => {
     worker.wake();
     await awaitIdle(worker);
 
+    const messages = logger.records.map(({ msg }) => msg);
+    // Once, not once per cycle: the dispatch is skipped and then nothing is left to pick, so the
+    // pass returns instead of retrying the same row twenty times.
+    expect(
+      messages.filter(
+        (msg) => msg === "This pending workflow dispatch could not be started yet; the drain moves past it",
+      ),
+    ).toHaveLength(1);
+    // And it did not reach the cycle limit, which is what a spin looks like from the outside.
+    expect(messages).not.toContain("The workflow dispatch queue exceeded its safety limit");
+  }, 20_000);
+
+  // Spec §7 postpones a dispatch whose work item's workspace is being written by another attempt,
+  // and `runStageAttempt` returns quietly when a session is already running on the attempt. Both
+  // leave the dispatch PENDING. The queue is strict FIFO, so while the worker took `dispatches[0]`
+  // and returned as soon as the head had not moved, either of those -- legitimate, concurrent, or
+  // transient -- stopped every newer dispatch behind it until the daemon restarted.
+  it("runs a newer dispatch that is queued behind one it cannot start yet", async () => {
+    const localState = state();
+    const logger = createRecordingLogger();
+    const worker = createSessionWorker({
+      state: localState,
+      adapter: createMockProvider(),
+      template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
+      createCommandId,
+      logger,
+    });
+    // Seeded in this order, so the unmovable one is genuinely the head the FIFO query returns
+    // first and the runnable one is genuinely behind it.
+    const blockedHead = seedUnmovableDispatch(localState);
+    const behind = seedQueuedAttempt(localState);
+
+    // The premise, asserted rather than assumed: `LIST_PENDING_DISPATCHES` orders by `created_at`
+    // then `id`, and every id in these tests carries the same fixed timestamp -- so which of the
+    // two is the head is decided by a string comparison, and a test that merely seeded them in
+    // order could be passing with the runnable one in front and never touch the defect at all.
+    expect(pendingDispatchIds(localState)[0]).toBe(blockedHead.dispatch.id);
+
+    worker.wake();
+    await awaitIdle(worker);
+
+    // The work item behind the blocked head ran to a decision of its own rather than waiting for a
+    // daemon restart. Asserted first: this is the whole defect.
+    expect(snapshotOf(localState, behind.workItemId).stageAttempts[0]?.status).not.toBe("QUEUED");
+    const stillPending = pendingDispatchIds(localState);
+    expect(stillPending).not.toContain(behind.dispatch.id);
+    // And the head was not lost, run twice, or completed on its behalf -- it is exactly where it
+    // was, for the next wake to pick up once whoever holds it lets go.
+    expect(stillPending).toContain(blockedHead.dispatch.id);
     expect(logger.records.map(({ msg }) => msg)).toContain(
-      "The pending workflow dispatch is already being run elsewhere; this drain stops",
+      "This pending workflow dispatch could not be started yet; the drain moves past it",
     );
   }, 20_000);
 

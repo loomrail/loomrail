@@ -55,7 +55,27 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
   // runStageAttempt call are all copies. Exactly two outcomes differ from the original, both noted
   // where they happen below.
   const runOnce = async (): Promise<void> => {
-    let previousDispatchId: string | undefined;
+    // Dispatches this pass tried and could not move, so it does not try them again and does not
+    // stop at them either.
+    //
+    // `LIST_PENDING_DISPATCHES` is strict FIFO, and this loop used to take `dispatches[0]` and
+    // return as soon as the head had not moved. A head that cannot start yet -- its work item's
+    // workspace lease is held by a concurrent attempt, or a session is already RUNNING on the
+    // attempt -- therefore blocked every newer dispatch behind it until the daemon restarted. A
+    // queue that stops at the head is not a queue.
+    //
+    // Skipping cannot spin, because each cycle does one of exactly two things and both are
+    // bounded: it moves a dispatch out of the pending set, or it adds one to `blocked`. Once every
+    // pending dispatch is blocked there is nothing left to pick and the pass returns, so a stuck
+    // queue costs one pass over it rather than a busy loop -- DISPATCH_CYCLE_LIMIT stays as the
+    // backstop it was, not as the thing that ends the pass.
+    //
+    // And skipping cannot starve, because `blocked` is cleared the moment any dispatch actually
+    // completes: whatever was holding the lease may have just given it back, so everything gets one
+    // more turn in the same pass. A dispatch still blocked when the pass ends is retried on the
+    // next wake, which is what `wake()` is for.
+    const blocked = new Set<string>();
+    let attempted: string | undefined;
     for (let cycle = 0; cycle < DISPATCH_CYCLE_LIMIT; cycle += 1) {
       // `stop()` only sets a flag and aborts the live session -- it does not (and per spec D5,
       // cannot) unwind an `await runStageAttempt(...)` already in flight. Without this check, the
@@ -63,22 +83,33 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
       // and open a brand-new provider session on a daemon that was just told to shut down.
       if (stopping) return;
       const queued = deps.state.query({ type: "LIST_PENDING_DISPATCHES" });
-      const dispatch = queued.type === "WORKFLOW_DISPATCHES" ? queued.dispatches[0] : undefined;
-      if (!dispatch) return;
+      const dispatches = queued.type === "WORKFLOW_DISPATCHES" ? queued.dispatches : [];
 
-      // A pass over this dispatch already returned without closing it out. With a single worker
-      // there is no second concurrent drain to reach this any more, but `runStageAttempt` still
-      // returns quietly when the attempt already has a session RUNNING on it (another caller's, or
-      // one left behind), and without this guard the loop would spin on the same unmoved dispatch
-      // until DISPATCH_CYCLE_LIMIT.
-      if (dispatch.id === previousDispatchId) {
-        deps.logger.info(
-          { dispatchId: dispatch.id, stageAttemptId: dispatch.stageAttemptId },
-          "The pending workflow dispatch is already being run elsewhere; this drain stops",
-        );
-        return;
+      // What the previous cycle's `runStageAttempt` did, read off the queue rather than off a
+      // return value: a dispatch stays PENDING for its whole attempt and is completed by
+      // APPLY_PROVIDER_OUTCOME, so "still listed" is exactly "did not close out". `runStageAttempt`
+      // returns quietly in that case -- another caller owns the attempt's session, or another
+      // StageAttempt holds the work item's workspace lease -- and says so in its own log.
+      if (attempted !== undefined) {
+        // Copied to a const because the callback below is a closure: TypeScript's narrowing of a
+        // `let` does not survive into one, and a non-null assertion would be the wrong way to say
+        // what this line already knows.
+        const previous = attempted;
+        if (dispatches.some(({ id }) => id === previous)) {
+          blocked.add(previous);
+          deps.logger.info(
+            { dispatchId: previous },
+            "This pending workflow dispatch could not be started yet; the drain moves past it",
+          );
+        } else {
+          blocked.clear();
+        }
+        attempted = undefined;
       }
-      previousDispatchId = dispatch.id;
+
+      const dispatch = dispatches.find(({ id }) => !blocked.has(id));
+      if (!dispatch) return;
+      attempted = dispatch.id;
 
       const snapshotResult = deps.state.query({
         type: "GET_WORKFLOW_SNAPSHOT",
