@@ -185,6 +185,38 @@ export const isSameExistingPath = async (left: string, right: string): Promise<b
  * *subdirectory* of a repository, which would branch the enclosing repository by surprise. See
  * `docs/security/THREAT-MODEL.md`, E1 delta.
  */
+/**
+ * What `path` is, as far as registering or keeping a Project at it is concerned: its canonical
+ * form, git's view of it, and whether it is a repository's own top level.
+ *
+ * One function so the judgment has one definition. `resolveRegisteredRepository` below refuses a
+ * path on it, and `isRegisteredRepositoryUsable` reports on it for a Project already recorded at
+ * one -- and those two answering differently is exactly how a UI ends up offering to repair a
+ * healthy Project, or hiding a broken one.
+ */
+const inspectRegisteredPath = async (
+  path: string,
+): Promise<{ canonical: string | null; insideRepository: string | null; isOwnTopLevel: boolean }> => {
+  const canonical = await canonicalPathOf(path);
+  const inspected = canonical === null ? null : await inspectRepository(canonical);
+  // git reports its top level as a physical path, so the comparison is against the canonical form
+  // for the same reason the provisioning guard compares canonical forms (session-loop.ts).
+  const isOwnTopLevel = canonical !== null && inspected !== null && inspected.topLevel === canonical;
+  return { canonical, insideRepository: isOwnTopLevel ? null : (inspected?.topLevel ?? null), isOwnTopLevel };
+};
+
+/**
+ * Whether a Project recorded at `path` could have a workspace cut from it right now.
+ *
+ * The same question `resolveRegisteredRepository` refuses on, asked without the refusal: this one
+ * answers about a Project that is already registered, so there is nothing to reject and nobody to
+ * word a message for. A path that no longer resolves, one that stopped being a repository, and one
+ * that is a directory *inside* a repository are all equally unusable here -- the fixes differ, and
+ * the fix is the repair route's business, not the list's.
+ */
+export const isRegisteredRepositoryUsable = async (path: string): Promise<boolean> =>
+  (await inspectRegisteredPath(path.trim())).isOwnTopLevel;
+
 export const resolveRegisteredRepository = async (path: string): Promise<string> => {
   // Trimmed before anything judges it, not at the contract: `registerRepositoryProjectRequestSchema`
   // deliberately carries the path exactly as typed (see its comment on `repositoryPathTextSchema`),
@@ -209,14 +241,9 @@ export const resolveRegisteredRepository = async (path: string): Promise<string>
       `A Project's repository path must be absolute, and ${trimmedPath} is relative. A relative path is resolved against whatever directory the Loomrail daemon was started from, which is not something you chose and not the same on the next start. Enter the repository's full path, starting from the root of the filesystem.`,
     );
   }
-  const canonical = await canonicalPathOf(trimmedPath);
-  const inspected = canonical === null ? null : await inspectRepository(canonical);
-  // git reports its top level as a physical path, so the comparison is against the canonical form
-  // for the same reason the provisioning guard compares canonical forms (session-loop.ts).
-  const isOwnTopLevel = canonical !== null && inspected !== null && inspected.topLevel === canonical;
-  if (isOwnTopLevel) return canonical;
+  const { canonical, insideRepository, isOwnTopLevel } = await inspectRegisteredPath(trimmedPath);
+  if (isOwnTopLevel && canonical !== null) return canonical;
 
-  const insideRepository = inspected?.topLevel ?? null;
   const decision = decideProvisionWorkspace({
     repository: { isRepository: false, inProgress: null, path: trimmedPath, insideRepository },
   });

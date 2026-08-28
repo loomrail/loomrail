@@ -1,7 +1,7 @@
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
 import { useEffect, useId, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
-import { prioritySchema, type WorkItem } from "@loomrail/contracts";
+import { prioritySchema, type ListedProject, type WorkItem } from "@loomrail/contracts";
 import {
   ActionMenu,
   Button,
@@ -29,6 +29,7 @@ import {
   useCreateWorkItem,
   useProjectHumanRequests,
   useRegisterRepositoryProject,
+  useRepairFixtureProject,
   useWorkspace,
 } from "../workspace";
 
@@ -246,6 +247,52 @@ const SettingChoice = <TValue extends string>({
  * path is a directory inside another repository, says which repository that is -- a message the
  * domain already writes, and one this form would only make vaguer by paraphrasing.
  */
+/**
+ * What an owner does about a Project whose recorded path is no longer a repository.
+ *
+ * Only shown for a Project that has one, and only where the owner is already looking at the path
+ * that is wrong. A demo Project gets a button, because Loomrail knows exactly where its repository
+ * belongs and can put it there (`useRepairFixtureProject`). A Project the owner registered by path
+ * gets the explanation and no button: nothing here knows where they moved their repository to, and
+ * offering to "repair" it would either do nothing or do the wrong thing -- they register the new
+ * path in the field below.
+ *
+ * This is the reachability half of the repair. `REPOINT_FIXTURE_PROJECT` and its route existed and
+ * were tested through HTTP, but the only thing in the product that called the route was "Initialize
+ * demo workspace", which renders only when there is no selected project at all -- so an owner with
+ * two stale demo Projects, which is the shape of the one database that matters, could not reach it
+ * by any sequence of clicks.
+ */
+const RepairFixtureProject = ({ project }: { project: ListedProject }): React.JSX.Element => {
+  const { t } = useI18n();
+  const repairMutation = useRepairFixtureProject();
+  const fixtureId = project.fixtureId;
+  const error = repairMutation.error instanceof Error ? repairMutation.error.message : null;
+
+  return (
+    <div className="settings__project-repair">
+      <p className="settings__note" role="note">
+        {t("settings.projects.unusable")}
+      </p>
+      {fixtureId === null ? null : (
+        <Button
+          loading={repairMutation.isPending}
+          onClick={() => {
+            repairMutation.mutate(fixtureId);
+          }}
+        >
+          {t("settings.projects.repair")}
+        </Button>
+      )}
+      {error === null ? null : (
+        <p className="settings__project-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+};
+
 const RegisterRepositoryField = (): React.JSX.Element => {
   const { t } = useI18n();
   const inputId = useId();
@@ -388,9 +435,21 @@ const SettingsDialog = ({ onOpenChange, open }: SettingsDialogProps): React.JSX.
                     type="button"
                   >
                     <span>{project.name.slice(0, 1).toUpperCase()}</span>
-                    <strong>{project.name}</strong>
+                    <span className="settings__project-copy">
+                      <strong>{project.name}</strong>
+                      {/* The path, not only the name. A Project whose repository has moved or was
+                          never one is otherwise indistinguishable here from a healthy one -- which
+                          is how two demo Projects stuck at a directory inside Loomrail's own
+                          checkout stayed invisible while every IMPLEMENT on them was refused. */}
+                      <small className="settings__project-path" title={project.repositoryPath}>
+                        {t("settings.projects.repositoryLabel")}: {project.repositoryPath}
+                      </small>
+                    </span>
                     {project.id === selectedProject?.id ? <Icon name="check" size={14} /> : null}
                   </button>
+                  {project.repositoryStatus === "UNUSABLE" ? (
+                    <RepairFixtureProject project={project} />
+                  ) : null}
                 </li>
               ))}
             </ul>

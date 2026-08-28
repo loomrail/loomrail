@@ -30,6 +30,47 @@ const seedRepositoryPath = async (databasePath: string): Promise<string> =>
   ).repositoryPath;
 
 /**
+ * The two demo Projects exactly as the owner's own database holds them: recorded at the bundled
+ * fixture TEMPLATE inside Loomrail's checkout, which is a directory inside a repository rather
+ * than a repository of its own.
+ *
+ * `resolveBundledFixture` is used for the paths, ids and names rather than literals, so this seed
+ * cannot drift from what a registration would actually have written back when it wrote them.
+ */
+const seedStaleFixtureProjects = async (
+  databasePath: string,
+): Promise<{ apiServiceB: string; webAppA: string }> => {
+  const webAppA = await resolveBundledFixture("web-app-a");
+  const apiServiceB = await resolveBundledFixture("api-service-b");
+  let nextId = 0;
+  const localState = await openLocalState({
+    databasePath,
+    now: () => new Date("2026-08-22T18:00:00.000Z"),
+    createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+  });
+  try {
+    for (const fixture of [webAppA, apiServiceB]) {
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `seed-stale-${fixture.fixtureId}`,
+        correlationId: `correlation-seed-stale-${fixture.fixtureId}`,
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_PROJECT",
+        payload: {
+          id: fixture.projectId,
+          fixtureId: fixture.fixtureId,
+          name: fixture.name,
+          repositoryPath: fixture.templatePath,
+        },
+      });
+    }
+  } finally {
+    localState.close();
+  }
+  return { apiServiceB: apiServiceB.templatePath, webAppA: webAppA.templatePath };
+};
+
+/**
  * Writes a task carrying more activity than a single page holds. Driving forty moves through the
  * board would dominate the run, and the point under test is what the inspector does with a long
  * log, not how the log came to be long.
@@ -972,6 +1013,80 @@ test.describe("authenticated walking skeleton", () => {
       await expect(project).toContainText("web-app-a");
       // A Project like any other: the board is live and a task can be filed against it.
       await createTask(page, "Task in my own repository");
+    } finally {
+      await daemon?.close();
+      daemon = undefined;
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The one database that matters, and the repair reached the way a person reaches it.
+   *
+   * The owner's two demo Projects were registered before a bundled fixture became a real
+   * repository, so their `repository_path` names a directory inside Loomrail's own checkout;
+   * migration 0012 carried those paths across verbatim, as it must, since a migration cannot know
+   * the data directory. Every IMPLEMENT and QA on them is refused there.
+   *
+   * REPOINT_FIXTURE_PROJECT and its route were built for exactly this and were verified by calling
+   * the route. But the only thing in the product that called the route was "Initialize demo
+   * workspace", which renders only when there is no selected project -- and this owner has two --
+   * and the mutation behind it then skipped any `fixtureId` already registered. So the repair was
+   * unreachable by any sequence of clicks, and the Projects list showed names only, which is why
+   * nothing looked wrong.
+   *
+   * Seeded at the bundled template path on purpose, rather than at a materialised repository the
+   * way every other test here seeds: that path IS the defect.
+   */
+  test("repairs a demo project still recorded at the bundled fixture template, from settings", async ({
+    page,
+  }) => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail stale demo "));
+    try {
+      const databasePath = join(temporaryDirectory, "local-state.sqlite");
+      const stalePaths = await seedStaleFixtureProjects(databasePath);
+
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        stateDatabasePath: databasePath,
+        webRoot: resolve("apps/web/dist"),
+      });
+
+      await page.goto(daemon.bootstrapUrl);
+      // Two Projects, so the "Initialize demo workspace" empty state never appears -- which is the
+      // owner's actual situation and the reason the repair could not be reached.
+      await expect(page.getByRole("button", { name: "Switch project" })).toBeVisible();
+      await expect(page.getByText("No local projects yet", { exact: true })).toHaveCount(0);
+
+      const settings = page.locator(".lr-dialog");
+      await page.getByRole("button", { name: "Open settings" }).click();
+      await expect(settings).toBeVisible();
+
+      // The path is on screen at all, which it was not: the list was names only, so a Project stuck
+      // at the template looked exactly like a healthy one.
+      const staleRow = settings.locator(".settings__projects li", { hasText: "Fixture web application" });
+      await expect(staleRow.locator(".settings__project-path")).toContainText(stalePaths.webAppA);
+
+      const repair = staleRow.getByRole("button", { name: "Repair demo repository" });
+      await expect(repair).toBeVisible();
+      await repair.click();
+
+      // Repaired: the Project now records a repository under the daemon's own data directory --
+      // beside the database, where `demoProjectsRoot` defaults -- and not the bundled template.
+      const repaired = join(temporaryDirectory, "demo-projects", "web-app-a");
+      await expect(staleRow.locator(".settings__project-path")).toContainText(repaired, {
+        timeout: DEMO_INITIALISATION_MS,
+      });
+      await expect(staleRow.locator(".settings__project-path")).not.toContainText(stalePaths.webAppA);
+      // And the row stops offering a repair, because there is nothing left to repair.
+      await expect(staleRow.getByRole("button", { name: "Repair demo repository" })).toHaveCount(0);
+
+      // The second demo Project is untouched by the first one's repair -- each is repaired on its
+      // own row -- so the affordance is still there for it.
+      const otherRow = settings.locator(".settings__projects li", { hasText: "Fixture API service" });
+      await expect(otherRow.locator(".settings__project-path")).toContainText(stalePaths.apiServiceB);
+      await expect(otherRow.getByRole("button", { name: "Repair demo repository" })).toBeVisible();
     } finally {
       await daemon?.close();
       daemon = undefined;

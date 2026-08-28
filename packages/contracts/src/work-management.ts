@@ -525,8 +525,25 @@ export const moveWorkItemRequestSchema = z
   })
   .strict();
 
+/**
+ * Whether a Project's recorded `repositoryPath` is, right now, the top level of a Git repository.
+ *
+ * A Project is a durable record and this is a fact about the filesystem this minute, so it is not a
+ * field of `projectSchema`: it is never stored, never carried on an event, and it can be true one
+ * start and false the next without the Project having changed at all. It rides on the list response
+ * because the list is the one place the owner sees their Projects, and a Project whose repository
+ * has gone is otherwise indistinguishable from a healthy one -- the two demo Projects on a database
+ * that predates E1 record a path inside Loomrail's own checkout, every IMPLEMENT and QA on them is
+ * refused there, and nothing in the UI said so.
+ */
+export const projectRepositoryStatusSchema = z.enum(["READY", "UNUSABLE"]);
+
+export const listedProjectSchema = projectSchema
+  .extend({ repositoryStatus: projectRepositoryStatusSchema })
+  .strict();
+
 export const projectsResponseSchema = z
-  .object({ schemaVersion: schemaVersionSchema, projects: z.array(projectSchema) })
+  .object({ schemaVersion: schemaVersionSchema, projects: z.array(listedProjectSchema) })
   .strict();
 export const workItemResponseSchema = z
   .object({ schemaVersion: schemaVersionSchema, workItem: workItemSchema })
@@ -546,6 +563,8 @@ export const eventsResponseSchema = z
 
 export type FixtureProjectId = z.infer<typeof fixtureProjectIdSchema>;
 export type Project = z.infer<typeof projectSchema>;
+export type ProjectRepositoryStatus = z.infer<typeof projectRepositoryStatusSchema>;
+export type ListedProject = z.infer<typeof listedProjectSchema>;
 export type WorkItem = z.infer<typeof workItemSchema>;
 export type WorkItemType = z.infer<typeof workItemTypeSchema>;
 export type WorkItemState = z.infer<typeof workItemStateSchema>;

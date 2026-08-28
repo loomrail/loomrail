@@ -24,6 +24,10 @@ const en = {
     "The absolute path to a Git repository on this machine. Its directory name becomes the project name.",
   "settings.projects.register.placeholder": "/absolute/path/to/your-repository",
   "settings.projects.register.action": "Register repository",
+  "settings.projects.repositoryLabel": "Repository",
+  "settings.projects.unusable":
+    "This path is not a Git repository right now, so any stage that changes files is refused here.",
+  "settings.projects.repair": "Repair demo repository",
   "language.change": "Change language",
   "language.english": "English",
   "language.russian": "Русский",
@@ -354,6 +358,10 @@ const ru = {
     "Абсолютный путь к Git-репозиторию на этой машине. Имя каталога станет именем проекта.",
   "settings.projects.register.placeholder": "/absolute/path/to/your-repository",
   "settings.projects.register.action": "Подключить репозиторий",
+  "settings.projects.repositoryLabel": "Репозиторий",
+  "settings.projects.unusable":
+    "Сейчас по этому пути нет Git-репозитория, поэтому любая стадия, изменяющая файлы, здесь отклоняется.",
+  "settings.projects.repair": "Починить demo-репозиторий",
   "language.change": "Сменить язык",
   "language.english": "English",
   "language.russian": "Русский",

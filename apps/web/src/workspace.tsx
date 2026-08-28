@@ -6,9 +6,10 @@ import type {
   AcceptanceAction,
   AcceptancePackage,
   HumanRequest,
+  FixtureProjectId,
   HumanRequestAnswer,
+  ListedProject,
   PipelineRun,
-  Project,
   WorkItem,
   WorkItemState,
 } from "@loomrail/contracts";
@@ -58,9 +59,9 @@ type WorkspaceContextValue = {
   connection: ConnectionResult | undefined;
   connectionPending: boolean;
   error: Error | null;
-  projects: readonly Project[];
+  projects: readonly ListedProject[];
   projectsPending: boolean;
-  selectedProject: Project | null;
+  selectedProject: ListedProject | null;
   retryConnection: () => void;
   selectProject: (projectId: string) => void;
 };
@@ -220,10 +221,43 @@ export const useInitializeFixtureWorkspace = () => {
   const { projects } = useWorkspace();
   return useMutation({
     mutationFn: async () => {
-      const registered = new Set(projects.map((project) => project.fixtureId));
-      if (!registered.has("web-app-a")) await registerFixtureProject("web-app-a");
-      if (!registered.has("api-service-b")) await registerFixtureProject("api-service-b");
+      // A demo fixture is registered when it is absent, and again when the Project that records it
+      // no longer points at a repository. The second half is the one that was missing: this used to
+      // skip any `fixtureId` already present, so on a database that predates E1 -- where both demo
+      // Projects record a directory inside Loomrail's own checkout, carried across verbatim by
+      // migration 0012 -- pressing this did nothing at all, and the repair route it is the only
+      // caller of was unreachable from the product.
+      const usable = new Set(
+        projects
+          .filter(({ repositoryStatus }) => repositoryStatus === "READY")
+          .map(({ fixtureId }) => fixtureId),
+      );
+      if (!usable.has("web-app-a")) await registerFixtureProject("web-app-a");
+      if (!usable.has("api-service-b")) await registerFixtureProject("api-service-b");
     },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: projectsKey });
+    },
+  });
+};
+
+/**
+ * Repairs one demo Project whose recorded path is no longer a repository (spec §4).
+ *
+ * The same route `useInitializeFixtureWorkspace` calls, aimed at a single fixture rather than at
+ * both -- because this is reached from the Projects list, where the owner is looking at one
+ * Project and its path. `POST /api/v1/projects/fixtures/register` materialises the fixture under
+ * the daemon's data directory and moves the Project onto it (REPOINT_FIXTURE_PROJECT), so the
+ * button does exactly what "initialize the demo workspace" does, for the Project the owner picked.
+ *
+ * There is deliberately no equivalent for a Project the owner registered by path: Loomrail does not
+ * know where they moved their repository to, and inventing a path for them is not a repair. That
+ * one is fixed by registering the new path, which the field below already does.
+ */
+export const useRepairFixtureProject = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (fixtureId: FixtureProjectId) => registerFixtureProject(fixtureId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: projectsKey });
     },

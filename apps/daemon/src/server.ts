@@ -65,6 +65,7 @@ import {
 import {
   describeRegisteredRepository,
   FixtureResolutionError,
+  isRegisteredRepositoryUsable,
   isSameExistingPath,
   materialiseFixtureRepository,
   ProjectRegistrationError,
@@ -654,14 +655,32 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       });
     });
 
-    app.get("/api/v1/projects", (request, reply) => {
+    app.get("/api/v1/projects", async (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!requireSession(request, reply, correlationId)) return;
       try {
         const result = localState.query({ type: "LIST_PROJECTS" });
+        const projects = result.type === "PROJECTS" ? result.projects : [];
+        // Whether each Project's recorded path is still a repository, asked here rather than
+        // stored, because it is a fact about the filesystem this minute (see
+        // `projectRepositoryStatusSchema`). Without it the list is names alone, and the two demo
+        // Projects on a database that predates E1 -- recorded at a directory inside Loomrail's own
+        // checkout, where every IMPLEMENT and QA is refused -- look exactly like healthy ones.
+        //
+        // One `git rev-parse` per Project, in parallel, on a route the web client fetches on load
+        // and after a registration rather than on a poll. That is the same inspection registration
+        // already pays for, and the alternative -- a cheaper guess such as "is there a `.git` here"
+        // -- would be a second definition of "is this a repository" that could disagree with the
+        // one that actually refuses the stage.
+        const repositoryStatuses = await Promise.all(
+          projects.map(({ repositoryPath }) => isRegisteredRepositoryUsable(repositoryPath)),
+        );
         return projectsResponseSchema.parse({
           schemaVersion: 1,
-          projects: result.type === "PROJECTS" ? result.projects : [],
+          projects: projects.map((project, index) => ({
+            ...project,
+            repositoryStatus: repositoryStatuses[index] === true ? "READY" : "UNUSABLE",
+          })),
         });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);

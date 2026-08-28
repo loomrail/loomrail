@@ -469,7 +469,9 @@ body.is-resizing {
   color: var(--lr-text);
 }
 
-.settings__projects button > span {
+/* The avatar tile, and only it: the row now also carries a copy column, which must not inherit the
+   fixed 20px square. */
+.settings__projects button > span:first-child {
   align-items: center;
   background: var(--lr-surface-raised);
   border-radius: var(--lr-radius-xs);
@@ -478,6 +480,35 @@ body.is-resizing {
   height: 20px;
   justify-content: center;
   width: 20px;
+}
+
+.settings__project-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* The path is long and is allowed to be: it is truncated rather than wrapped, with the whole value
+   on the element's title, so a row stays one line and the full path is still readable. */
+.settings__project-path {
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings__project-repair {
+  display: grid;
+  gap: var(--lr-space-2);
+  justify-items: start;
+  padding: 0 var(--lr-space-2) var(--lr-space-2) calc(var(--lr-space-2) * 2 + 20px);
+}
+
+.settings__project-error {
+  color: var(--lr-danger);
+  font-size: var(--lr-font-xs);
+  margin: 0;
 }
 
 .settings__note {

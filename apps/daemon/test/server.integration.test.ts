@@ -554,7 +554,13 @@ describe("local daemon session and state boundary", () => {
         workItemId: seeded.workItemId,
       });
       const cut = workspace.type === "WORKSPACE" ? workspace.workspace : null;
-      if (!cut) throw new Error("Expected the IMPLEMENT stage to cut a workspace");
+      // The defect this test is named for -- a repaired Project whose IMPLEMENT still cuts nothing --
+      // arrives here. Asserted so it is reported as that, rather than as a crash on a sentence of
+      // ours that says nothing about which of the two ways it failed.
+      expect(cut, "the IMPLEMENT stage should have cut a workspace").not.toBeNull();
+      if (!cut) {
+        throw new Error("unreachable: the assertion above should already have failed");
+      }
       expect(cut.status).toBe("READY");
       // Cut from the materialised repository -- asked of that repository itself, so this cannot pass
       // on a worktree that merely exists somewhere. At the stale path the provisioning guard refused
