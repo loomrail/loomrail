@@ -70,11 +70,26 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
     // queue costs one pass over it rather than a busy loop -- DISPATCH_CYCLE_LIMIT stays as the
     // backstop it was, not as the thing that ends the pass.
     //
-    // And skipping cannot starve, because `blocked` is cleared the moment any dispatch actually
-    // completes: whatever was holding the lease may have just given it back, so everything gets one
-    // more turn in the same pass. A dispatch still blocked when the pass ends is retried on the
-    // next wake, which is what `wake()` is for.
+    // And skipping cannot starve: once nothing unblocked is left to pick, `blocked` is cleared and
+    // everything gets one more turn in the same pass -- whatever was holding a lease may have given
+    // it back while the rest of the queue ran. A dispatch still blocked after that second turn is
+    // retried on the next wake, which is what `wake()` is for.
+    //
+    // WHEN that clear happens is the whole of this loop's cost. Clearing on every completion, which
+    // is what this did first, gives a permanently unstartable head a fresh turn after each dispatch
+    // that runs -- so every runnable dispatch costs two cycles instead of one, and one such head
+    // spends half of DISPATCH_CYCLE_LIMIT. Measured: one unstartable head and fifteen runnable
+    // dispatches ran ten of the fifteen, ended by hitting the safety limit, and logged the limit at
+    // error level on a queue that was working perfectly; the five that never ran then waited for an
+    // external `wake()`, of which there is no timer. Deferring the clear to "nothing left to pick"
+    // runs all fifteen in eighteen cycles with the limit untouched.
     const blocked = new Set<string>();
+    // Whether any dispatch has actually completed since `blocked` was last given a clean slate. It
+    // is what keeps the retry above from becoming the spin the skip was designed to avoid: without
+    // it, clearing whenever nothing is pickable would re-offer the same unstartable rows forever,
+    // and DISPATCH_CYCLE_LIMIT would be the only thing ending the pass. With it, a retry is only
+    // ever spent when something changed that could plausibly have unblocked them.
+    let progressedSinceRetry = false;
     let attempted: string | undefined;
     for (let cycle = 0; cycle < DISPATCH_CYCLE_LIMIT; cycle += 1) {
       // `stop()` only sets a flag and aborts the live session -- it does not (and per spec D5,
@@ -102,13 +117,24 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
             "This pending workflow dispatch could not be started yet; the drain moves past it",
           );
         } else {
-          blocked.clear();
+          progressedSinceRetry = true;
         }
         attempted = undefined;
       }
 
-      const dispatch = dispatches.find(({ id }) => !blocked.has(id));
-      if (!dispatch) return;
+      let dispatch = dispatches.find(({ id }) => !blocked.has(id));
+      if (!dispatch) {
+        // Nothing unblocked left. If something completed since these rows were set aside, they get
+        // one more turn in this pass -- that completion may be exactly the lease they were waiting
+        // on. If nothing did, this pass has done all it can and the next wake owns the retry.
+        if (!progressedSinceRetry) return;
+        blocked.clear();
+        progressedSinceRetry = false;
+        // Nothing is set aside any more, so this is the head of the queue: the same row a pass that
+        // had skipped nothing would have taken.
+        dispatch = dispatches[0];
+        if (!dispatch) return;
+      }
       attempted = dispatch.id;
 
       const snapshotResult = deps.state.query({

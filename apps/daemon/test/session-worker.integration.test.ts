@@ -9,7 +9,7 @@ import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import type { FastifyBaseLogger } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createSessionWorker, type SessionWorker } from "../src/session-worker.js";
+import { createSessionWorker, DISPATCH_CYCLE_LIMIT, type SessionWorker } from "../src/session-worker.js";
 import { gatedAdapter } from "./gated-adapter.js";
 import {
   pendingDispatchModes,
@@ -443,6 +443,61 @@ describe("session worker", () => {
       "This pending workflow dispatch could not be started yet; the drain moves past it",
     );
   }, 20_000);
+
+  // Skipping a head is only half the fix; not PAYING for the skip on every dispatch behind it is
+  // the other half. `blocked` was cleared the moment any dispatch completed, so a permanently
+  // unstartable head was offered a fresh turn after each one that ran: every runnable dispatch then
+  // cost two cycles instead of one, and half of DISPATCH_CYCLE_LIMIT went on a row that could never
+  // move. The queue ended by hitting its safety limit -- logged at error level, on a queue that was
+  // working -- and whatever it had not reached waited for an external `wake()`, of which there is
+  // no timer.
+  it("does not spend the pass's safety budget re-offering a head it cannot start", async () => {
+    const localState = state();
+    const logger = createRecordingLogger();
+    const worker = createSessionWorker({
+      state: localState,
+      adapter: createMockProvider(),
+      template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
+      createCommandId,
+      logger,
+    });
+    const blockedHead = seedUnmovableDispatch(localState);
+    // Enough runnable dispatches that the old two-cycles-each cost cannot finish them, and few
+    // enough that one cycle each comfortably can. The fixed loop spends `runnable + 3` cycles here
+    // -- one to pick the head, one per runnable dispatch, one to give the head its single retry once
+    // nothing else is left, and one to find nothing pickable and stop -- so 15 fits inside 20 with
+    // room to spare, while the old loop reached the limit after running only 10 of them.
+    const runnableCount = DISPATCH_CYCLE_LIMIT - 5;
+    const runnable = Array.from({ length: runnableCount }, () => seedQueuedAttempt(localState));
+
+    // The premise, asserted rather than assumed, as in the test above: the unstartable dispatch is
+    // genuinely the head of the FIFO, and everything else is genuinely behind it.
+    expect(pendingDispatchIds(localState)[0]).toBe(blockedHead.dispatch.id);
+    expect(pendingDispatchIds(localState)).toHaveLength(runnableCount + 1);
+
+    worker.wake();
+    await awaitIdle(worker);
+
+    // Every one of them ran, in this single pass. Under the defect, five were still sitting here
+    // with nothing scheduled to come back for them.
+    expect(pendingDispatchIds(localState)).toEqual([blockedHead.dispatch.id]);
+    for (const seeded of runnable) {
+      expect(snapshotOf(localState, seeded.workItemId).stageAttempts[0]?.status).not.toBe("QUEUED");
+    }
+    const messages = logger.records.map(({ msg }) => msg);
+    // The pass ended because it was finished, not because it ran out of budget. This is the line
+    // that appeared at error level on a perfectly healthy queue.
+    expect(messages).not.toContain("The workflow dispatch queue exceeded its safety limit");
+    // Twice, not once per completed dispatch: the head is tried, set aside for the rest of the
+    // queue, and offered exactly one more turn once nothing else is left -- because by then a
+    // completion may have released whatever it was waiting on.
+    expect(
+      messages.filter(
+        (msg) => msg === "This pending workflow dispatch could not be started yet; the drain moves past it",
+      ),
+    ).toHaveLength(2);
+  }, 40_000);
 
   // The background loop has no caller to hand a 500 to. A throw must stay inside it, and must not
   // leave the worker permanently busy -- which is what would make every later wake a no-op.
