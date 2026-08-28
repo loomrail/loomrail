@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { access } from "node:fs/promises";
+import { access, constants } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
 import { platform, tmpdir } from "node:os";
@@ -55,6 +55,7 @@ import {
 import type { ProviderAdapter, ProviderId } from "@loomrail/provider-core";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import {
+  GitMissingError,
   PathNotAFileError,
   PathOutsideWorktreeError,
   PathUnresolvableError,
@@ -281,6 +282,7 @@ type WorkItemChangesErrorCode =
   | "WORKSPACE_WORKTREE_MISSING"
   | "WORKSPACE_WORKTREE_UNREADABLE"
   | "WORKSPACE_HAS_NO_BASELINE"
+  | "GIT_UNAVAILABLE"
   | "CHANGES_UNREADABLE";
 
 /**
@@ -367,11 +369,11 @@ const sendOperationError = (
     return reply.code(400).send(createError("PATH_UNRESOLVABLE", error.message, correlationId));
   }
   if (error instanceof WorkItemChangesError) {
-    if (error.code === "CHANGES_UNREADABLE") {
-      // The one branch whose cause the owner cannot act on from the message alone -- a baseline
-      // that no longer resolves, or git failing to run. Logged with the cause so the diagnostic
-      // spec §7 asks for exists somewhere, while the response stays the named refusal it demands
-      // instead of an empty summary.
+    if (error.code === "CHANGES_UNREADABLE" || error.code === "GIT_UNAVAILABLE") {
+      // The two branches this machine, not the client, has to answer for: git could not be started
+      // at all, or the read it ran could not be made sense of. Both are logged with the cause so
+      // the diagnostic spec §7 asks for exists somewhere, and both answer with the named refusal
+      // it demands instead of an empty summary.
       request.log.error({ correlationId, err: error }, error.message);
       return reply.code(500).send(createError(error.code, error.message, correlationId));
     }
@@ -1103,7 +1105,17 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       // spawn as GitMissingError -- "git executable was not found" -- which would send the owner
       // looking for a broken git installation instead of at their deleted worktree.
       try {
-        await access(workspace.worktreePath);
+        // `R_OK | X_OK` on the worktree ITSELF, never a bare `access` (which defaults to `F_OK`).
+        // `F_OK` asks only whether the name resolves, which needs traverse permission on the
+        // PARENTS and says nothing about the directory named -- so a worktree the daemon may see
+        // but not enter passed this check and failed later, deeper, as something else: measured on
+        // a chmod-0 worktree, the summary answered 500 CHANGES_UNREADABLE and the file diff
+        // answered 400 PATH_UNRESOLVABLE, blaming the client's path for a workspace whose work is
+        // intact behind a permission change. Both handles have to answer one condition one way,
+        // and this is the check that decides it -- before the read, and before anything can reach
+        // the "git could not be started" mapping below and tell the owner their git installation
+        // is broken.
+        await access(workspace.worktreePath, constants.R_OK | constants.X_OK);
       } catch (error: unknown) {
         // Two facts, kept apart rather than merged, because they are not the same news: a worktree
         // that is not there any more is gone for good (nothing in Loomrail resurrects one), while
@@ -1134,12 +1146,20 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
      * Runs one of the two reads and turns anything it fails on into a named refusal.
      *
      * The three refusals about the client's own path travel on untouched, because they already say
-     * what happened and are mapped to 400 by `sendOperationError`. Everything else -- a baseline
-     * that no longer resolves after a rewritten history, git failing to run, git answering
-     * something the parser cannot read -- becomes CHANGES_UNREADABLE, whose message names the
-     * worktree and the base (spec §7's "Отказ, называющий базу"). What it must never become is an
-     * empty summary: an empty file list is a claim that the worktree is unchanged, and a read that
-     * did not happen is not entitled to make it (spec D7).
+     * what happened and are mapped to 400 by `sendOperationError`.
+     *
+     * `git` not being on this machine at all gets its own code, because spec §7 gives it its own
+     * row ("`git` не запустился") separate from the base's ("База не разрешается"). Both are this
+     * machine failing rather than the client, but they are not the same failure and they do not
+     * have the same fix: one is an installation to repair, the other a baseline that no longer
+     * resolves after a rewritten history. Answering both with CHANGES_UNREADABLE named the
+     * worktree and the base at an owner whose worktree and base are fine.
+     *
+     * Everything else -- a baseline that no longer resolves, git answering something the parser
+     * cannot read, git exiting non-zero -- becomes CHANGES_UNREADABLE, whose message names the
+     * worktree and the base. What neither must ever become is an empty summary: an empty file list
+     * is a claim that the worktree is unchanged, and a read that did not happen is not entitled to
+     * make it (spec D7).
      */
     const readOrRefuse = async <T>(
       context: { worktreePath: string; baseline: string },
@@ -1154,6 +1174,13 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           error instanceof PathUnresolvableError
         ) {
           throw error;
+        }
+        if (error instanceof GitMissingError) {
+          throw new WorkItemChangesError(
+            "GIT_UNAVAILABLE",
+            "The changes could not be read because git could not be started on this machine",
+            { cause: error },
+          );
         }
         throw new WorkItemChangesError(
           "CHANGES_UNREADABLE",

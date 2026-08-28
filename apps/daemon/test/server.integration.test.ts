@@ -2006,7 +2006,7 @@ describe("local daemon session and state boundary", () => {
 
   const startDaemonWithChangedWorkspace = async (
     slug: string,
-    options: { recordedBase?: "REAL" | "UNRESOLVABLE" | "NONE" } = {},
+    options: { recordedBase?: "REAL" | "UNRESOLVABLE" | "NONE" | "SNAPSHOTLESS" } = {},
   ): Promise<ChangesFixture> => {
     const recordedBase = options.recordedBase ?? "REAL";
     const temporaryDirectory = await mkdtemp(join(tmpdir(), `loomrail daemon changes ${slug} `));
@@ -2096,8 +2096,12 @@ describe("local daemon session and state boundary", () => {
           // was rewritten under the workspace, which spec §7 requires be refused by name rather
           // than answered from whatever git falls back to.
           baseCommit: recordedBase === "NONE" ? null : inspected.headCommit,
+          // "SNAPSHOTLESS" is the other arm of spec D1: a workspace cut from a repository with
+          // nothing uncommitted to carry in records no snapshot at all, and the base is then the
+          // repository's HEAD. Every other fixture here records a snapshot, which left that arm
+          // unexecuted by the whole suite.
           snapshotCommit:
-            recordedBase === "NONE"
+            recordedBase === "NONE" || recordedBase === "SNAPSHOTLESS"
               ? null
               : recordedBase === "UNRESOLVABLE"
                 ? "a".repeat(40)
@@ -2277,6 +2281,96 @@ describe("local daemon session and state boundary", () => {
     const error = apiErrorResponseSchema.parse(await response.json()).error;
     expect(error.code).toBe("CHANGES_UNREADABLE");
     expect(error.message).toContain("a".repeat(40));
+  });
+
+  // The same condition as the test above, on the directory the check is actually ABOUT. The one
+  // above breaks the ENCLOSING directory, which a bare `access` (F_OK) does catch because
+  // resolving a name needs traverse permission on the parents -- so it is the configuration in
+  // which the defect cannot show. Breaking the worktree itself is the configuration in which it
+  // does: measured before the fix, this answered 500 CHANGES_UNREADABLE on the summary and 400
+  // PATH_UNRESOLVABLE on the diff -- two different answers, one of them blaming the client's path,
+  // for one workspace whose work is intact behind a permission change.
+  it.skipIf(platform() === "win32")(
+    "refuses both handles the same way when the worktree itself cannot be entered",
+    async () => {
+      const fixture = await startDaemonWithChangedWorkspace("locked-worktree");
+      if (!daemon) throw new Error("Expected a daemon");
+      const running = daemon;
+      const cookie = { cookie: fixture.session.cookie };
+      await chmod(fixture.worktreePath, 0o000);
+
+      try {
+        const summary = await fetch(changesUrl(running, fixture.workItemId), { headers: cookie });
+        expect(summary.status).toBe(409);
+        const summaryError = apiErrorResponseSchema.parse(await summary.json()).error;
+        expect(summaryError.code).toBe("WORKSPACE_WORKTREE_UNREADABLE");
+        expect(summaryError.message).toContain(fixture.worktreePath);
+
+        const diff = await fetch(diffUrl(running, fixture.workItemId, "committed.txt"), { headers: cookie });
+        expect(diff.status).toBe(409);
+        expect(apiErrorResponseSchema.parse(await diff.json()).error.code).toBe(
+          "WORKSPACE_WORKTREE_UNREADABLE",
+        );
+      } finally {
+        // Restored before the suite's own cleanup, which cannot delete a directory it may not enter.
+        await chmod(fixture.worktreePath, 0o755);
+      }
+    },
+  );
+
+  // The other arm of spec D1's `snapshotCommit ?? baseCommit`, and the one no fixture reached: a
+  // workspace recorded with no carry-in snapshot is an ordinary, healthy workspace -- it is what a
+  // stage started from a clean repository looks like -- and its base is the repository's HEAD.
+  // Read from `snapshotCommit` alone it has no base at all, and the owner is told 409
+  // WORKSPACE_HAS_NO_BASELINE about a work item with nothing wrong with it.
+  it("computes from the recorded base when there was no carry-in snapshot to compute from", async () => {
+    const fixture = await startDaemonWithChangedWorkspace("snapshotless", { recordedBase: "SNAPSHOTLESS" });
+    if (!daemon) throw new Error("Expected a daemon");
+    const running = daemon;
+    const cookie = { cookie: fixture.session.cookie };
+
+    const summary = await fetch(changesUrl(running, fixture.workItemId), { headers: cookie });
+    expect(summary.status).toBe(200);
+    expect(workItemChangesResponseSchema.parse(await summary.json()).changes?.baseline).toBe(
+      fixture.baseCommit,
+    );
+
+    // Both handles, because they resolve the base through the same helper and a fix applied to one
+    // of them would leave the other answering about a different commit.
+    const diff = await fetch(diffUrl(running, fixture.workItemId, "committed.txt"), { headers: cookie });
+    expect(diff.status).toBe(200);
+    expect(workItemFileDiffResponseSchema.parse(await diff.json()).diff?.baseline).toBe(fixture.baseCommit);
+  });
+
+  // The row ABOVE that one in spec §7 ("`git` не запустился"), and the reason it needs a code of
+  // its own: a machine with no usable git and a baseline that no longer resolves are different
+  // problems with different fixes, and answering both with CHANGES_UNREADABLE named this owner's
+  // worktree and base at them when both are fine.
+  it("refuses with its own code, not the base's, when git cannot be started at all", async () => {
+    const fixture = await startDaemonWithChangedWorkspace("no-git");
+    if (!daemon) throw new Error("Expected a daemon");
+    const running = daemon;
+
+    // `runGit` resolves "git" through PATH and rejects with GitMissingError when spawn cannot find
+    // it, which is the one failure this branch exists for. Put back in `finally` before anything
+    // else in this file runs; the daemon itself is already up, so nothing but this request looks
+    // for git while it is unset.
+    const realPath = process.env["PATH"];
+    process.env["PATH"] = join(tmpdir(), "loomrail-there-is-no-git-here");
+
+    try {
+      const response = await fetch(changesUrl(running, fixture.workItemId), {
+        headers: { cookie: fixture.session.cookie },
+      });
+
+      expect(response.status).toBe(500);
+      const error = apiErrorResponseSchema.parse(await response.json()).error;
+      expect(error.code).toBe("GIT_UNAVAILABLE");
+      // And it does not send the owner to look at a worktree and a base that are both intact.
+      expect(error.message).not.toContain(fixture.worktreePath);
+    } finally {
+      process.env["PATH"] = realPath;
+    }
   });
 
   it("refuses a workspace that records no commit to compare against", async () => {
