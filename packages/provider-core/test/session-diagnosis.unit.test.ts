@@ -147,7 +147,7 @@ describe("describeUnproductiveSession", () => {
     expect(request.recommendation).toContain('Nothing is wrong with "codex"');
   });
 
-  // The one reason reached WITH something published. A session killed after its first
+  // One of the two reasons reached WITH something published. A session killed after its first
   // `agent_message` has already streamed a checkpoint to the daemon, which persisted it -- so the
   // closing sentence every other diagnosis ends on ("No checkpoint was published") would be false
   // here, and it is the sentence an owner reads to decide whether anything survived. Both halves
@@ -162,6 +162,54 @@ describe("describeUnproductiveSession", () => {
     expect(request.context).toContain("killed by SIGKILL");
     expect(request.context).toContain("checkpoint this session published is kept");
     expect(request.context).not.toContain("No checkpoint was published");
+  });
+
+  // The other reason reached with a checkpoint in hand, and the one whose wording had to stop
+  // borrowing the first one's. A CLI that exits 0 without ever reporting its turn complete was not
+  // cut off -- it ran to its end and said so in words this adapter does not know -- so the
+  // "cut off before it finished" title sat directly above "The process exited with code 0",
+  // contradicting itself, naming no missing event, and recommending a resume that reaches this same
+  // question again on every stage of every work item.
+  it("says the terminal event never arrived, rather than that a cleanly exited session was cut off", () => {
+    const request = requestOf(
+      describeUnproductiveSession(
+        report({
+          reason: "TERMINAL_TURN_EVENT_MISSING",
+          terminalEvent: "turn.completed",
+          exitCode: 0,
+          signal: null,
+        }),
+      ),
+    );
+
+    // What it must no longer say. The contradiction is the defect, so it is asserted before
+    // anything about the replacement wording.
+    expect(request.title).not.toContain("cut off");
+    expect(request.context).not.toContain("cut off");
+    expect(request.recommendation).not.toContain("resume the attempt");
+
+    expect(request.title).toContain("never reported the turn finished");
+    expect(request.context).toContain("exited with code 0");
+    // The missing signal, by name, and the reason it goes missing.
+    expect(request.context).toContain("turn.completed");
+    expect(request.context).toContain("renamed");
+    expect(request.recommendation).toContain("turn.completed");
+    // Still a checkpoint-in-hand reason: the closing sentence has to be the one that says so.
+    expect(request.context).toContain("checkpoint this session published is kept");
+    expect(request.context).not.toContain("No checkpoint was published");
+  });
+
+  // A report that names no event still has to produce a usable question rather than a sentence with
+  // a hole in it -- `terminalEvent` is optional, and an adapter that does not name one is honest
+  // rather than broken.
+  it("still asks a whole question when the report does not name the missing event", () => {
+    const request = requestOf(
+      describeUnproductiveSession(report({ reason: "TERMINAL_TURN_EVENT_MISSING", exitCode: 0 })),
+    );
+    expect(request.context).toContain("the event that reports a turn finished");
+    expect(request.context).not.toContain("undefined");
+    expect(request.recommendation).not.toContain("undefined");
+    expect(() => humanRequestDraftSchema.parse(request)).not.toThrow();
   });
 
   it("names the executable when the process could never be started", () => {

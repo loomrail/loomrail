@@ -21,10 +21,10 @@ import {
 } from "@loomrail/provider-core";
 import { z } from "zod";
 
-import { parseCodexEvent } from "./stream.js";
+import { parseCodexEvent, TERMINAL_TURN_EVENT } from "./stream.js";
 
 export type { CodexEvent } from "./stream.js";
-export { parseCodexEvent } from "./stream.js";
+export { parseCodexEvent, TERMINAL_TURN_EVENT } from "./stream.js";
 
 // Between the terminate signal and the unconditional kill, mirroring provider-core's own default
 // (spec's named constant): long enough for `codex exec` to unwind, short enough that abortSession
@@ -490,16 +490,33 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         }
         // A turn the CLI said failed is named as that even when a checkpoint arrived first: it is
         // the more specific fact, and it is the one carrying the provider's own message.
+        //
+        // The two checkpoint-in-hand reasons are told apart by the process exit, because the owner
+        // needs different things from them. A session that was killed, or that exited non-zero, was
+        // CUT OFF -- resuming it carries on from the checkpoint, which is what
+        // SESSION_ENDED_UNFINISHED says. A session that exited 0 and still never emitted
+        // `turn.completed` was not cut off at all: it ran to its end and said so in a vocabulary
+        // this adapter does not recognise, which is what a future `codex` renaming that event (or a
+        // field inside its `usage`, which stops it parsing just as completely) looks like from here.
+        // Reported as SESSION_ENDED_UNFINISHED, that told the owner "CODEX was cut off before it
+        // finished this stage" directly above "The process exited with code 0" -- a self-
+        // contradiction naming nothing, whose advice to resume reproduced it identically on every
+        // stage of every work item.
         const reason =
           providerFailureText !== undefined
             ? "PROVIDER_REPORTED_FAILURE"
-            : finalCheckpoint !== undefined
-              ? "SESSION_ENDED_UNFINISHED"
-              : "NO_STRUCTURED_RESULT";
+            : finalCheckpoint === undefined
+              ? "NO_STRUCTURED_RESULT"
+              : endedNormally
+                ? "TERMINAL_TURN_EVENT_MISSING"
+                : "SESSION_ENDED_UNFINISHED";
         return describeUnproductiveSession({
           provider: "CODEX",
           command: resolved.command,
           reason,
+          // The event this adapter waited for, named from the one place its name is written, so a
+          // rename here cannot leave the diagnosis pointing at an event that no longer exists.
+          terminalEvent: TERMINAL_TURN_EVENT,
           exitCode: exit.code,
           signal: exit.signal,
           linesReceived,

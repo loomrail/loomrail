@@ -4,10 +4,12 @@ import { humanRequestDraftSchema, type ProviderOutcome } from "@loomrail/contrac
  * Turns "the session ended and there is no result to close the stage on" into a question the owner
  * can act on.
  *
- * Four of the five reasons below are sessions with nothing at all to show. The fifth
- * (`SESSION_ENDED_UNFINISHED`) is a session that published a checkpoint and then died before
- * finishing, which is not the same thing and does not read the same way to an owner -- see
- * `carryForwardLine`.
+ * Four of the six reasons below are sessions with nothing at all to show. The other two published a
+ * checkpoint and still could not close a stage on it, which is not the same thing and does not read
+ * the same way to an owner -- see `carryForwardLine`. Those two are kept apart from each other as
+ * well: `SESSION_ENDED_UNFINISHED` is a session that died before finishing, where resuming is the
+ * fix, and `TERMINAL_TURN_EVENT_MISSING` is a session that finished while the CLI said so in words
+ * this adapter does not know, where resuming is a loop.
  *
  * Both live adapters used to answer every one of these situations with `CONTEXT_EXHAUSTED` -- a
  * *business result*, and a false one: neither `codex exec` nor `claude -p` reports context
@@ -55,7 +57,21 @@ export type UnproductiveSessionReason =
    * So the checkpoint is kept (it is a real checkpoint, and the next session resumes from it) and
    * the stage is not closed.
    */
-  | "SESSION_ENDED_UNFINISHED";
+  | "SESSION_ENDED_UNFINISHED"
+  /**
+   * The CLI published a structured result, exited cleanly, and never emitted the event that reports
+   * a turn finished -- so the adapter could not tell a completed stage from a session that stopped
+   * after its opening sentence, and refused to close the stage on it.
+   *
+   * Split out of SESSION_ENDED_UNFINISHED because that reason's own words are false here and lead
+   * the owner in a circle. "Cut off before it finished" beside "the process exited with code 0"
+   * contradicts itself; nothing in it names the missing event; and its advice -- resume the attempt
+   * -- reproduces the same outcome on every stage of every work item, because nothing about the run
+   * was transient. The fact is about the CLI's event vocabulary, not about this session: a build of
+   * the CLI that renamed the terminal turn event, or renamed a field inside the usage it carries
+   * (which stops it parsing just as completely), produces exactly this and will produce it again.
+   */
+  | "TERMINAL_TURN_EVENT_MISSING";
 
 export type UnproductiveSessionReport = {
   provider: string;
@@ -73,6 +89,19 @@ export type UnproductiveSessionReport = {
    * this builder describes honestly rather than throwing on top of a session that already failed.
    */
   workingDirectory?: string;
+  /**
+   * The name of the terminal turn event this adapter waits for -- the signal whose absence is the
+   * whole of `TERMINAL_TURN_EVENT_MISSING`, and the one fact that turns that diagnosis from "the
+   * CLI said something unexpected" into something a reader can go and look for.
+   *
+   * Read only by that reason's wording, so an adapter may carry it on every report or on none.
+   * Optional because an adapter whose outcome does not turn on a named event has nothing true to
+   * put here -- `provider-claude-code` takes its result from the CLI's own terminal `result` event,
+   * so a session that never emits one simply never produces a result at all, and it never reaches
+   * this reason. A report that omits the name still produces a valid question; it just cannot tell
+   * the reader which event to grep the CLI's output for.
+   */
+  terminalEvent?: string;
   /** `null` when the process never ran, or when a signal ended it. */
   exitCode: number | null;
   signal: string | null;
@@ -147,6 +176,12 @@ const describeLines = (report: UnproductiveSessionReport): string => {
 const workingDirectoryOf = (report: UnproductiveSessionReport): string =>
   report.workingDirectory ?? "the directory it was given";
 
+// The event's name when the caller named one, and a phrase that claims no name when it did not.
+const terminalEventOf = (report: UnproductiveSessionReport): string =>
+  report.terminalEvent === undefined
+    ? "the event that reports a turn finished"
+    : `the event that reports a turn finished ("${report.terminalEvent}")`;
+
 const describeExit = (report: UnproductiveSessionReport): string => {
   if (report.reason === "SPAWN_FAILED" || report.reason === "WORKING_DIRECTORY_MISSING") {
     return `The process never started.`;
@@ -168,6 +203,8 @@ const openingLine = (report: UnproductiveSessionReport): string => {
       return `The ${report.provider} session ended without the structured result Loomrail asked it for, and without saying why.`;
     case "SESSION_ENDED_UNFINISHED":
       return `The ${report.provider} session was cut off before it finished. It did publish a checkpoint, but a checkpoint written while a session is still working states what the agent meant to do next, not what it did, so Loomrail will not close a stage on it.`;
+    case "TERMINAL_TURN_EVENT_MISSING":
+      return `The ${report.provider} CLI ran to the end and exited cleanly, and it published a checkpoint -- but Loomrail never saw ${terminalEventOf(report)}, so it cannot tell this session's checkpoint from one the agent published while it was still working. This is a mismatch between Loomrail and the build of "${report.command}" on this machine, not something that went wrong with this stage: a CLI that renamed that event, or renamed a field inside the token usage it carries, looks exactly like this.`;
   }
 };
 
@@ -183,6 +220,12 @@ const recommendationFor = (report: UnproductiveSessionReport): string => {
       return "Check that the provider CLI on this machine still accepts the flags this adapter sends (a CLI upgrade can move where the final answer arrives), then resume the attempt.";
     case "SESSION_ENDED_UNFINISHED":
       return "Nothing has to be repaired if this was a shutdown or a timeout: resume the attempt and the next session carries on from the checkpoint this one published. If the process ended on its own, read the exit above and the provider's own message before resuming.";
+    case "TERMINAL_TURN_EVENT_MISSING":
+      // No "resume the attempt" on this branch, deliberately. Nothing here was transient: the
+      // session already ran to a clean exit, so a resumed one ends the same way, on this stage and
+      // on every other stage of every work item. Advising a retry would send the owner around a
+      // loop that cannot terminate.
+      return `Retrying will not change this -- the session already ran to a clean exit, and the next one ends the same way. Compare the events "${report.command}" emits on this machine against ${terminalEventOf(report)}: install or pin a build of it that still reports one, or report this so the adapter can learn the new name.`;
   }
 };
 
@@ -198,16 +241,18 @@ const titleFor = (report: UnproductiveSessionReport): string => {
       return `${report.provider} ended a session with no result`;
     case "SESSION_ENDED_UNFINISHED":
       return `${report.provider} was cut off before it finished this stage`;
+    case "TERMINAL_TURN_EVENT_MISSING":
+      return `${report.provider} never reported the turn finished`;
   }
 };
 
 // The last sentence of every diagnosis, and the one place a published checkpoint changes what is
-// true. SESSION_ENDED_UNFINISHED is the only reason on this list reached with a checkpoint in hand:
-// the adapter published it live as the stream delivered it, so telling the owner nothing was
-// carried forward would be false, and telling them the stage completed would be the defect this
-// reason exists to close.
+// true. Two reasons on this list are reached with a checkpoint in hand -- SESSION_ENDED_UNFINISHED
+// and TERMINAL_TURN_EVENT_MISSING: the adapter published it live as the stream delivered it, so
+// telling the owner nothing was carried forward would be false, and telling them the stage
+// completed would be the defect those reasons exist to close.
 const carryForwardLine = (report: UnproductiveSessionReport): string =>
-  report.reason === "SESSION_ENDED_UNFINISHED"
+  report.reason === "SESSION_ENDED_UNFINISHED" || report.reason === "TERMINAL_TURN_EVENT_MISSING"
     ? "The checkpoint this session published is kept, so a resumed attempt starts from it rather than from nothing; the stage itself is not closed on it."
     : "No checkpoint was published, so nothing from this session is carried forward.";
 

@@ -154,3 +154,16 @@ export const parseCodexEvent = (line: string): CodexEvent | null => {
   const result = codexLineSchema.safeParse(line);
   return result.success ? toCodexEvent(result.data) : null;
 };
+
+/**
+ * The name of the terminal turn event, as it appears on the wire.
+ *
+ * Here so that a diagnosis can NAME the signal it waited for and never got (see
+ * `TERMINAL_TURN_EVENT_MISSING` in `@loomrail/provider-core`) without a second copy of the string
+ * living in the adapter, where the two would drift the first time Codex renamed it -- and the
+ * message that exists to explain a rename would then be the one thing still saying the old name.
+ *
+ * `satisfies` rather than a bare string: if this event is ever renamed in `CodexEvent` above, this
+ * line stops compiling instead of quietly naming an event nothing waits for any more.
+ */
+export const TERMINAL_TURN_EVENT = "turn.completed" satisfies CodexEvent["type"];

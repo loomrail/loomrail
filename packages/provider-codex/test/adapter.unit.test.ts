@@ -19,7 +19,7 @@ import type {
 import { contextWindowUsageSchema } from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createCodexProvider } from "../src/index.js";
+import { createCodexProvider, TERMINAL_TURN_EVENT } from "../src/index.js";
 
 const fakeCodexPath = fileURLToPath(new URL("./fixtures/fake-codex.mjs", import.meta.url));
 
@@ -754,9 +754,11 @@ describe("createCodexProvider", () => {
   // real one -- ending on a non-zero exit. A CLI that gives up after answering is telling Loomrail
   // something went wrong, and the honest response is the owner's question, not a closed stage.
   //
-  // Second run: the truncated stream ending at exit 0, which is what a `turn.failed` after an
-  // intention message, or a CLI that stops mid-work, looks like from outside. The exit says nothing
-  // is wrong; the missing `turn.completed` says the turn never finished.
+  // Second run: the truncated stream ending at exit 0, which is what a CLI that stopped saying
+  // `turn.completed` looks like from outside. The exit says nothing is wrong; the missing terminal
+  // event says the turn was never reported finished. The stage is still not closed -- which is the
+  // property this test is about -- and the question the owner gets is the one for that specific
+  // shape (see the test below it).
   it("needs both the CLI's own completed turn and a clean exit before it closes a stage", async () => {
     const afterCompletedTurn = await runAgainstStreamEnding(wholeRecording("workspace-write.jsonl"), {
       exitCode: 3,
@@ -768,8 +770,51 @@ describe("createCodexProvider", () => {
       exitCode: 0,
     });
     const request = expectNeedsHuman(withoutCompletedTurn);
-    expect(request.title).toContain("cut off before it finished");
+    expect(request.title).toContain("never reported the turn finished");
     expect(request.context).toContain("exited with code 0");
+  });
+
+  // A checkpoint, a clean exit, and no `turn.completed`: what a future `codex` that renamed its
+  // terminal event -- or renamed a field inside the `usage` it carries, which stops it parsing just
+  // as completely -- looks like on every stage of every work item.
+  //
+  // Reported as SESSION_ENDED_UNFINISHED, the owner was told "CODEX was cut off before it finished
+  // this stage" one sentence above "The process exited with code 0", with nothing naming the
+  // missing event and an instruction to resume that reproduced the identical question every time.
+  // Cut off and exited cleanly cannot both be true, and the pair is worse than either alone: it
+  // sends the reader looking for a crash that did not happen.
+  it("names the missing terminal event, and does not tell the owner to resume, when the CLI exits cleanly without one", async () => {
+    const checkpoints: CheckpointDraft[] = [];
+    const outcome = await runAgainstStreamEnding(
+      recordingPrefix("workspace-write.jsonl", 3),
+      { exitCode: 0 },
+      { onCheckpoint: (checkpoint) => checkpoints.push(checkpoint) },
+    );
+
+    // Asserted first, as in the kill test above: a checkpoint really did arrive, so what follows is
+    // the adapter refusing to close on it rather than the empty-stream branch answering.
+    expect(checkpoints).toHaveLength(1);
+    const intention = checkpoints[0]?.summary ?? "";
+    expect(intention).toContain("inspect");
+
+    const request = expectNeedsHuman(outcome);
+    expect(JSON.stringify(outcome)).not.toContain(intention);
+
+    // The contradiction, gone: nothing claims the session was cut off.
+    expect(request.title).not.toContain("cut off");
+    expect(request.context).not.toContain("cut off");
+    expect(request.context).toContain("exited with code 0");
+    // The missing signal is named, by the name the parser actually matches on, so the owner has
+    // something to grep their CLI's output for.
+    expect(request.context).toContain(TERMINAL_TURN_EVENT);
+    // And the diagnosis says which kind of fact this is -- the CLI's vocabulary, not this session.
+    expect(request.context).toContain("renamed");
+    // The advice that made this a loop. Resuming reruns a session that already exited 0 and ends
+    // exactly here again, so the recommendation must not send the owner back around it.
+    expect(request.recommendation).not.toContain("resume the attempt");
+    expect(request.recommendation).toContain("Retrying will not change this");
+    // The checkpoint is still kept: it was published as it arrived and the daemon has persisted it.
+    expect(request.context).toContain("checkpoint this session published is kept");
   });
 
   // `hello.jsonl` ends on a plain `turn.completed` whose agent message is prose, not a checkpoint.
