@@ -1,7 +1,7 @@
 import { once } from "node:events";
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -11,6 +11,8 @@ import {
   eventsResponseSchema,
   projectsResponseSchema,
   stateCommandResultSchema,
+  workItemChangesResponseSchema,
+  workItemFileDiffResponseSchema,
   workItemsResponseSchema,
   workItemWorkspaceResponseSchema,
   workflowSnapshotSchema,
@@ -22,7 +24,7 @@ import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import { createCodexProvider } from "@loomrail/provider-codex";
 import { providerCapabilitiesSchema, type ProviderAdapter } from "@loomrail/provider-core";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
-import { inspectRepository, listWorktrees } from "@loomrail/workspace";
+import { addWorktree, createCarryInSnapshot, inspectRepository, listWorktrees } from "@loomrail/workspace";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { resolveBundledFixture } from "../src/fixtures.js";
@@ -1984,6 +1986,344 @@ describe("local daemon session and state boundary", () => {
     expect(cancelled.run?.status).toBe("CANCELLED");
     // Same reason as the restart test above: the resumed run reaches IMPLEMENT and cuts a worktree.
   }, 30_000);
+
+  // E1.5's two GET handles (spec §5). Every fixture below is a real repository with a real
+  // worktree cut from it, because the whole milestone is about whether what git reports matches
+  // what the owner is shown -- an invented fixture could only ever confirm what it was built to
+  // assert.
+  //
+  // The owner's uncommitted work is carried into the worktree in every one of them, exactly the
+  // way `provisionWorkspace` does it: that is the state in which a summary computed from the wrong
+  // commit looks entirely plausible and is a lie.
+  type ChangesFixture = {
+    session: AuthenticatedSession;
+    workItemId: string;
+    workItemWithoutWorkspaceId: string;
+    worktreePath: string;
+    baseCommit: string;
+    snapshotCommit: string;
+  };
+
+  const startDaemonWithChangedWorkspace = async (
+    slug: string,
+    options: { recordedBase?: "REAL" | "UNRESOLVABLE" | "NONE" } = {},
+  ): Promise<ChangesFixture> => {
+    const recordedBase = options.recordedBase ?? "REAL";
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), `loomrail daemon changes ${slug} `));
+    temporaryDirectories.push(temporaryDirectory);
+    const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    const repositoryPath = await makeThrowawayRepo(join(temporaryDirectory, "repo"));
+
+    // The owner is mid-edit when the stage starts: one file they never committed.
+    await writeFile(join(repositoryPath, "owner-was-editing.txt"), "the owner's own draft\n");
+    const inspected = await inspectRepository(repositoryPath);
+    if (inspected === null) throw new Error("Expected the fixture path to be a repository");
+    if (inspected.headCommit === null) throw new Error("Expected the fixture repository to have a HEAD");
+    const snapshot = await createCarryInSnapshot({
+      topLevel: inspected.topLevel,
+      headCommit: inspected.headCommit,
+      message: `Loomrail carry-in for ${slug}`,
+    });
+    if (snapshot === null) throw new Error("Expected the owner's uncommitted work to be carried in");
+
+    const worktreePath = join(temporaryDirectory, "workspaces", slug);
+    await mkdir(dirname(worktreePath), { recursive: true });
+    const added = await addWorktree({
+      topLevel: inspected.topLevel,
+      branch: `loomrail/${slug}`,
+      path: worktreePath,
+      startPoint: snapshot.commit,
+    });
+    if (added.type !== "ADDED") throw new Error("Expected a worktree");
+    // The carry-in landed, so the owner's draft is on disk in the worktree. Asserted rather than
+    // assumed: every "the owner's work is not reported" check below is a negative, and a negative
+    // over a file that was never carried in would pass while proving nothing.
+    expect(await readFile(join(worktreePath, "owner-was-editing.txt"), "utf8")).toBe(
+      "the owner's own draft\n",
+    );
+
+    // What the agent then did in it.
+    await writeFile(join(worktreePath, "agent-made-this.txt"), "written by the stage\n");
+    await writeFile(join(worktreePath, "committed.txt"), "committed\nagent line\n");
+
+    let workItemId = "";
+    let workItemWithoutWorkspaceId = "";
+    const localState = await openLocalState({ databasePath: stateDatabasePath });
+    try {
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `register-${slug}`,
+        correlationId: `correlation-register-${slug}`,
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_PROJECT",
+        payload: { id: `project-${slug}`, fixtureId: "web-app-a", name: `Changes ${slug}`, repositoryPath },
+      });
+      const createTask = (suffix: string, title: string): string => {
+        const created = localState.execute({
+          schemaVersion: 1,
+          commandId: `create-${slug}-${suffix}`,
+          correlationId: `correlation-create-${slug}-${suffix}`,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "CREATE_WORK_ITEM",
+          payload: {
+            projectId: `project-${slug}`,
+            parentId: null,
+            type: "TASK",
+            title,
+            description: "Synthetic change-visibility fixture",
+            priority: "MEDIUM",
+            risk: "LOW",
+            acceptanceCriteria: [],
+          },
+        });
+        if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+        return created.workItem.id;
+      };
+      workItemId = createTask("with", "A work item whose stage changed files");
+      workItemWithoutWorkspaceId = createTask("without", "A work item that never needed a repository");
+      const workspace = localState.execute({
+        schemaVersion: 1,
+        commandId: `record-workspace-${slug}`,
+        correlationId: `correlation-record-workspace-${slug}`,
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "CREATE_WORK_ITEM_WORKSPACE",
+        payload: {
+          workItemId,
+          projectId: `project-${slug}`,
+          branch: `loomrail/${slug}`,
+          worktreePath,
+          // "a" * 40 is a well-formed object id that resolves to nothing -- a base whose history
+          // was rewritten under the workspace, which spec §7 requires be refused by name rather
+          // than answered from whatever git falls back to.
+          baseCommit: recordedBase === "NONE" ? null : inspected.headCommit,
+          snapshotCommit:
+            recordedBase === "NONE"
+              ? null
+              : recordedBase === "UNRESOLVABLE"
+                ? "a".repeat(40)
+                : snapshot.commit,
+          carriedPaths: snapshot.carriedPaths.slice(),
+        },
+      });
+      if (workspace.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected a workspace");
+    } finally {
+      localState.close();
+    }
+
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, stateDatabasePath, logger: false });
+    return {
+      session: await authenticate(daemon, token),
+      workItemId,
+      workItemWithoutWorkspaceId,
+      worktreePath,
+      baseCommit: inspected.headCommit,
+      snapshotCommit: snapshot.commit,
+    };
+  };
+
+  const changesUrl = (running: RunningDaemon, workItemId: string): string =>
+    `${running.baseUrl}/api/v1/work-items/${workItemId}/changes`;
+  const diffUrl = (running: RunningDaemon, workItemId: string, path: string): string =>
+    `${changesUrl(running, workItemId)}/diff?path=${encodeURIComponent(path)}`;
+
+  // Spec D1, and acceptance criterion 3. The most valuable test of the four handles' behaviours,
+  // because the defect it names does not look like one: computing from `baseCommit` answers 200
+  // with a full, well-formed file list in which the owner's own half-finished work is presented as
+  // something the agent did.
+  it("does not report the owner's carried-in work as something the task changed", async () => {
+    const fixture = await startDaemonWithChangedWorkspace("carry-in");
+    if (!daemon) throw new Error("Expected a daemon");
+
+    const response = await fetch(changesUrl(daemon, fixture.workItemId), {
+      headers: { cookie: fixture.session.cookie },
+    });
+
+    expect(response.status).toBe(200);
+    const body = workItemChangesResponseSchema.parse(await response.json());
+    const paths = (body.changes?.files ?? []).map((file) => file.path);
+    // The positives come first and are not decoration: without them the negative below passes on
+    // any answer at all, including an empty list from a read that never happened.
+    expect(paths).toContain("agent-made-this.txt");
+    expect(paths).toContain("committed.txt");
+    expect(paths).not.toContain("owner-was-editing.txt");
+    expect(body.changes?.baseline).toBe(fixture.snapshotCommit);
+    expect(body.changes?.files.find((file) => file.path === "agent-made-this.txt")).toMatchObject({
+      status: "ADDED",
+      insertions: 1,
+      deletions: 0,
+      binary: false,
+    });
+    expect(body.changes?.truncated).toBe(false);
+  });
+
+  it("hands back one file's diff, and refuses every path that does not name one file inside the workspace", async () => {
+    const fixture = await startDaemonWithChangedWorkspace("diff");
+    if (!daemon) throw new Error("Expected a daemon");
+    const running = daemon;
+    const cookie = { cookie: fixture.session.cookie };
+    // A symlink that points at itself: spec §7's "петля симлинков", one of the three filesystem
+    // conditions that used to leave the boundary as three different internal errors.
+    await symlink("loop", join(fixture.worktreePath, "loop"));
+
+    const body = await fetch(diffUrl(running, fixture.workItemId, "committed.txt"), { headers: cookie });
+    expect(body.status).toBe(200);
+    const diff = workItemFileDiffResponseSchema.parse(await body.json()).diff;
+    expect(diff?.path).toBe("committed.txt");
+    expect(diff?.baseline).toBe(fixture.snapshotCommit);
+    expect(diff?.binary).toBe(false);
+    expect(diff?.patch).toContain("+agent line");
+    expect(diff?.truncated).toBe(false);
+    expect(diff?.omittedBytes).toBe(0);
+
+    // Each refusal names the path the client sent, and each is told apart from the others by its
+    // code: an owner whose client sent a typo must not be shown the same answer as one whose
+    // client tried to read outside the workspace.
+    const refusals: readonly { path: string; code: string }[] = [
+      { path: "../../etc/passwd", code: "PATH_OUTSIDE_WORKSPACE" },
+      { path: "no-such-file.txt", code: "PATH_NOT_A_FILE" },
+      // A directory is not a file, and answering for it would answer for the files inside it.
+      { path: ".", code: "PATH_OUTSIDE_WORKSPACE" },
+      { path: "loop", code: "PATH_UNRESOLVABLE" },
+      // Pathspec magic, which is not a path: `:/` answered with every changed file's diff before
+      // the last fix round, and `path=":"` had the whole repository's diff in memory. This handle
+      // passes the client's string to the reading that defends against both, and adds no check of
+      // its own that could drift from it.
+      { path: ":/", code: "PATH_NOT_A_FILE" },
+      { path: ":(top)committed.txt", code: "PATH_NOT_A_FILE" },
+      { path: "*", code: "PATH_NOT_A_FILE" },
+    ];
+    for (const { path, code } of refusals) {
+      const refused = await fetch(diffUrl(running, fixture.workItemId, path), { headers: cookie });
+      expect(refused.status, `path ${path}`).toBe(400);
+      const error = apiErrorResponseSchema.parse(await refused.json()).error;
+      expect(error.code, `path ${path}`).toBe(code);
+      expect(error.message, `path ${path}`).toContain(path);
+    }
+
+    // A body request with no path at all is a malformed request, not a refusal about a path.
+    const missing = await fetch(`${changesUrl(running, fixture.workItemId)}/diff`, { headers: cookie });
+    expect(missing.status).toBe(400);
+    expect(apiErrorResponseSchema.parse(await missing.json()).error.code).toBe("INVALID_REQUEST");
+  });
+
+  // Spec D7 and acceptance criterion 8. Reconciliation revisits a workspace's status at startup
+  // and never again, so a directory deleted while the daemon runs leaves a READY row pointing at
+  // nothing -- and the wrong answer here is not an error page, it is a cheerful 200 saying the
+  // stage changed nothing.
+  it("refuses both reads, naming the worktree, when the worktree is gone from disk", async () => {
+    const fixture = await startDaemonWithChangedWorkspace("gone");
+    if (!daemon) throw new Error("Expected a daemon");
+    const running = daemon;
+    const cookie = { cookie: fixture.session.cookie };
+    await rm(fixture.worktreePath, { recursive: true, force: true });
+
+    const summary = await fetch(changesUrl(running, fixture.workItemId), { headers: cookie });
+    const body = await fetch(diffUrl(running, fixture.workItemId, "committed.txt"), { headers: cookie });
+
+    expect(summary.status).toBe(409);
+    const summaryError = apiErrorResponseSchema.parse(await summary.json()).error;
+    expect(summaryError.code).toBe("WORKSPACE_WORKTREE_MISSING");
+    expect(summaryError.message).toContain(fixture.worktreePath);
+    // The same fact answered the same way on both handles: one condition, one convention.
+    expect(body.status).toBe(409);
+    expect(apiErrorResponseSchema.parse(await body.json()).error.code).toBe("WORKSPACE_WORKTREE_MISSING");
+  });
+
+  // The one filesystem condition on the WORKSPACE's own side that @loomrail/workspace deliberately
+  // leaves unnamed: canonicalising the worktree can throw EACCES, and that is a statement about the
+  // workspace rather than about the client's path, so it is refused here -- and told apart from a
+  // worktree that is simply gone, because "your directory was deleted" is the wrong thing to tell
+  // an owner whose work is still on disk behind a permission change.
+  //
+  // Skipped on Windows, where a 0-mode directory does not deny entry, and meaningless as root,
+  // where nothing does.
+  it.skipIf(platform() === "win32")(
+    "refuses, without calling it deleted, when the worktree cannot be reached at all",
+    async () => {
+      const fixture = await startDaemonWithChangedWorkspace("unreadable");
+      if (!daemon) throw new Error("Expected a daemon");
+      const running = daemon;
+      const enclosing = dirname(fixture.worktreePath);
+      await chmod(enclosing, 0o000);
+
+      try {
+        const response = await fetch(changesUrl(running, fixture.workItemId), {
+          headers: { cookie: fixture.session.cookie },
+        });
+
+        expect(response.status).toBe(409);
+        const error = apiErrorResponseSchema.parse(await response.json()).error;
+        expect(error.code).toBe("WORKSPACE_WORKTREE_UNREADABLE");
+        expect(error.message).toContain(fixture.worktreePath);
+      } finally {
+        // Restored before the suite's own cleanup, which cannot delete a directory it may not enter.
+        await chmod(enclosing, 0o755);
+      }
+    },
+  );
+
+  // Spec §7's last row. The worktree is there and readable; it is the base that no longer resolves,
+  // which is what a rewritten history under a running workspace looks like.
+  it("refuses, naming the base, when the base the summary would be computed from does not resolve", async () => {
+    const fixture = await startDaemonWithChangedWorkspace("rewritten", { recordedBase: "UNRESOLVABLE" });
+    if (!daemon) throw new Error("Expected a daemon");
+
+    const response = await fetch(changesUrl(daemon, fixture.workItemId), {
+      headers: { cookie: fixture.session.cookie },
+    });
+
+    expect(response.status).toBe(500);
+    const error = apiErrorResponseSchema.parse(await response.json()).error;
+    expect(error.code).toBe("CHANGES_UNREADABLE");
+    expect(error.message).toContain("a".repeat(40));
+  });
+
+  it("refuses a workspace that records no commit to compare against", async () => {
+    const fixture = await startDaemonWithChangedWorkspace("baseless", { recordedBase: "NONE" });
+    if (!daemon) throw new Error("Expected a daemon");
+
+    const response = await fetch(changesUrl(daemon, fixture.workItemId), {
+      headers: { cookie: fixture.session.cookie },
+    });
+
+    expect(response.status).toBe(409);
+    expect(apiErrorResponseSchema.parse(await response.json()).error.code).toBe("WORKSPACE_HAS_NO_BASELINE");
+  });
+
+  it("answers null for a work item with no workspace, 404 for one that does not exist, and 401 without a session", async () => {
+    const fixture = await startDaemonWithChangedWorkspace("boundaries");
+    if (!daemon) throw new Error("Expected a daemon");
+    const running = daemon;
+    const cookie = { cookie: fixture.session.cookie };
+
+    // A work item that never needed a repository is the ordinary state of every prose-only stage,
+    // and the card has to be able to tell it apart from a work item that does not exist -- the
+    // same distinction, and the same 200/null answer, that GET .../workspace already makes.
+    const absentSummary = await fetch(changesUrl(running, fixture.workItemWithoutWorkspaceId), {
+      headers: cookie,
+    });
+    expect(absentSummary.status).toBe(200);
+    expect(workItemChangesResponseSchema.parse(await absentSummary.json()).changes).toBeNull();
+    const absentDiff = await fetch(diffUrl(running, fixture.workItemWithoutWorkspaceId, "committed.txt"), {
+      headers: cookie,
+    });
+    expect(absentDiff.status).toBe(200);
+    expect(workItemFileDiffResponseSchema.parse(await absentDiff.json()).diff).toBeNull();
+
+    const unknownSummary = await fetch(changesUrl(running, "work-item-nowhere"), { headers: cookie });
+    expect(unknownSummary.status).toBe(404);
+    expect(apiErrorResponseSchema.parse(await unknownSummary.json()).error.code).toBe("WORK_ITEM_NOT_FOUND");
+    const unknownDiff = await fetch(diffUrl(running, "work-item-nowhere", "committed.txt"), {
+      headers: cookie,
+    });
+    expect(unknownDiff.status).toBe(404);
+
+    // The same session boundary as the rest of /api/v1. What an agent wrote in the owner's own
+    // files is exactly what the session exists to keep off an unauthenticated read.
+    expect((await fetch(changesUrl(running, fixture.workItemId))).status).toBe(401);
+    expect((await fetch(diffUrl(running, fixture.workItemId, "committed.txt"))).status).toBe(401);
+  });
 });
 
 // Bounds every "the answer must arrive before the gate opens" race below. This machine periodically

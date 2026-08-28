@@ -33,6 +33,8 @@ import {
   sessionExchangeResponseSchema,
   startMockPipelineRequestSchema,
   updateWorkItemRequestSchema,
+  workItemChangesResponseSchema,
+  workItemFileDiffResponseSchema,
   workItemResponseSchema,
   workItemsResponseSchema,
   workItemStateSchema,
@@ -52,6 +54,13 @@ import {
 } from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter, ProviderId } from "@loomrail/provider-core";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
+import {
+  PathNotAFileError,
+  PathOutsideWorktreeError,
+  PathUnresolvableError,
+  readFileDiff,
+  summariseChanges,
+} from "@loomrail/workspace";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
 
@@ -80,6 +89,13 @@ const SESSION_COOKIE = "loomrail_session";
 const CSRF_HEADER = "x-loomrail-csrf";
 const BOOTSTRAP_TTL_MS = 60_000;
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
+// The bounds E1.5's plan names once ("Пределы", spec §12.1) for the two reads below. Neither is a
+// measurement: they are working values, and the plan says in so many words that changing them is
+// allowed only after measuring on a genuinely large repository. What matters at this boundary is
+// that exceeding either is visible in the answer -- `truncated` on the summary, `truncated` plus
+// `omittedBytes` on a body (spec D8) -- rather than silently shortening what the owner is shown.
+const MAX_SUMMARY_FILES = 2_000;
+const MAX_PATCH_BYTES = 512 * 1_024;
 const DEFAULT_MOCK_BUDGET = 100;
 const DEFAULT_MOCK_BUDGET_THRESHOLDS = [0.5, 0.8, 0.95] as const;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1"]);
@@ -209,6 +225,13 @@ const acceptanceParamsSchema = z
   .object({ workItemId: opaqueIdSchema, acceptancePackageId: opaqueIdSchema })
   .strict();
 const workItemsQuerySchema = z.object({ state: workItemStateSchema.optional() }).strict();
+// The one untrusted input E1.5 adds (spec D9, §8). Bounded like every other path this contract
+// carries, and deliberately NOT trimmed: a trailing space is a legal character in a POSIX
+// filename, so trimming would quietly answer for a different path than the one asked about. What
+// the path is allowed to NAME is not decided here -- `resolveWorktreeRelativePath` in
+// @loomrail/workspace decides that, and this route does not second-guess it with a check of its
+// own (see the changes routes below).
+const fileDiffQuerySchema = z.object({ path: z.string().min(1).max(4_096) }).strict();
 const humanRequestsQuerySchema = z
   .object({ projectId: opaqueIdSchema.optional(), status: humanRequestStatusSchema.optional() })
   .strict();
@@ -254,6 +277,36 @@ const normalizePlatform = (): "darwin" | "win32" | "linux" | "other" => {
   return value === "darwin" || value === "win32" || value === "linux" ? value : "other";
 };
 
+type WorkItemChangesErrorCode =
+  | "WORKSPACE_WORKTREE_MISSING"
+  | "WORKSPACE_WORKTREE_UNREADABLE"
+  | "WORKSPACE_HAS_NO_BASELINE"
+  | "CHANGES_UNREADABLE";
+
+/**
+ * A read of what a work item changed that could not be done at all.
+ *
+ * Kept apart from the refusals @loomrail/workspace raises about the client's PATH (those carry
+ * their own classes, mapped in `sendOperationError`): these are statements about the work item's
+ * workspace -- the thing the read would have been done against -- and spec §7 answers the two
+ * groups with different status codes, so collapsing them into one code would make the caller guess
+ * which it was.
+ *
+ * `CHANGES_UNREADABLE` is the one that must never degrade into an empty summary (spec D7): an
+ * empty file list is a claim that the worktree is unchanged, and "Loomrail could not read it" is
+ * not that claim. Its message names the worktree and the baseline -- what the owner or a bug
+ * report needs -- and never git's own output, which the spec keeps on this machine (§8).
+ */
+class WorkItemChangesError extends Error {
+  readonly code: WorkItemChangesErrorCode;
+
+  constructor(code: WorkItemChangesErrorCode, message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "WorkItemChangesError";
+    this.code = code;
+  }
+}
+
 const createError = (
   code: string,
   message: string,
@@ -296,6 +349,36 @@ const sendOperationError = (
     // message rather than the generic 500 text, because both name the path the owner has to look at.
     const status = error.code === "FIXTURE_MATERIALISATION_FAILED" ? 500 : 400;
     return reply.code(status).send(createError(error.code, error.message, correlationId));
+  }
+  // Spec §7's three path rows, including the two the last fix round added ("path names no file"
+  // and "path the filesystem cannot resolve"). Each is raised by @loomrail/workspace's own
+  // boundary and only MAPPED here: the reading is where a path is resolved, and a second check at
+  // this layer could only ever disagree with the one that actually guards git. All three are 400
+  // -- the client named something this work item's changes cannot be shown for -- and each carries
+  // the message the reading built, which names the path the client sent and nothing about the
+  // machine it was resolved on.
+  if (error instanceof PathOutsideWorktreeError) {
+    return reply.code(400).send(createError("PATH_OUTSIDE_WORKSPACE", error.message, correlationId));
+  }
+  if (error instanceof PathNotAFileError) {
+    return reply.code(400).send(createError("PATH_NOT_A_FILE", error.message, correlationId));
+  }
+  if (error instanceof PathUnresolvableError) {
+    return reply.code(400).send(createError("PATH_UNRESOLVABLE", error.message, correlationId));
+  }
+  if (error instanceof WorkItemChangesError) {
+    if (error.code === "CHANGES_UNREADABLE") {
+      // The one branch whose cause the owner cannot act on from the message alone -- a baseline
+      // that no longer resolves, or git failing to run. Logged with the cause so the diagnostic
+      // spec §7 asks for exists somewhere, while the response stays the named refusal it demands
+      // instead of an empty summary.
+      request.log.error({ correlationId, err: error }, error.message);
+      return reply.code(500).send(createError(error.code, error.message, correlationId));
+    }
+    // A worktree that is gone or unreachable, or a workspace recorded with no base: the state on
+    // this machine is not what a summary can be computed from. 409 rather than 404 -- the WorkItem
+    // and its workspace both exist -- and rather than 200 with an empty list (spec D7).
+    return reply.code(409).send(createError(error.code, error.message, correlationId));
   }
   if (error instanceof WorkItemDomainError) {
     const status = error.code === "WORK_ITEM_NOT_FOUND" || error.code === "PARENT_NOT_FOUND" ? 404 : 409;
@@ -964,6 +1047,171 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           // `leaseHolder` plus every other field this route's one consumer never reads, and
           // `publishedWorkspace` below is what keeps that projection matching what the schema allows.
           workspace: stored === null ? null : publishedWorkspace(stored),
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    // What a work item's agent changed in that worktree, and the body of one file's diff --
+    // E1.5's two handles (spec §5). Two rather than one on purpose (spec D5): the summary is cheap
+    // and reread while a stage runs, a body is expensive and read only for the file the owner
+    // expanded, and one handle answering both would make the cheap read pay for the expensive one.
+    // Neither of the two below computes the other's work.
+    //
+    // Everything the two share -- which WorkItem, which worktree, which commit to compare against
+    // -- is resolved once here. It answers `null` for a work item that has no workspace, which is
+    // not a failure but the ordinary state of every prose-only stage (spec §7's first row).
+    const changeReadContext = async (
+      workItemId: string,
+    ): Promise<{ worktreePath: string; baseline: string } | null> => {
+      const workItem = localState.query({ type: "GET_WORK_ITEM", workItemId });
+      if (workItem.type !== "WORK_ITEM" || !workItem.workItem) {
+        throw new WorkItemDomainError("WORK_ITEM_NOT_FOUND", "The WorkItem does not exist");
+      }
+      const result = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      const workspace = result.type === "WORKSPACE" ? result.workspace : null;
+      if (workspace === null) {
+        return null;
+      }
+
+      // Spec D1, and the line in this file that decides whether the whole milestone tells the
+      // truth. The base is the carry-in snapshot when there was one, and the repository's HEAD
+      // only when there was not. `baseCommit` alone would attribute every uncommitted edit the
+      // owner had open when the stage started -- carried into the worktree by design -- to the
+      // agent, producing a plausible-looking file list that is a lie. That is the exact failure
+      // this milestone exists to prevent, so it is not a preference.
+      const baseline = workspace.snapshotCommit ?? workspace.baseCommit;
+      if (baseline === null) {
+        // Not reachable through provisioning today, which refuses a repository with no commit to
+        // branch from -- but both fields are nullable in the contract, and a summary computed from
+        // no base is not a degraded summary, it is not one. Named rather than guessed at.
+        throw new WorkItemChangesError(
+          "WORKSPACE_HAS_NO_BASELINE",
+          `The workspace at ${workspace.worktreePath} records no commit to compare the work item's changes against`,
+        );
+      }
+
+      // Whether the worktree is still there is asked of the filesystem, never of
+      // `workspace.status`. Reconciliation revisits that status at startup and at no other time
+      // (E1 D12), so a READY workspace whose directory was deleted an hour ago still reads READY:
+      // the directory is the fact and the row is a memory of it. Nothing is dispatched, repaired
+      // or re-marked here -- this route reads, and a read that cannot be done says so.
+      //
+      // Asking first is also what keeps the refusal honest. git started with a working directory
+      // that does not exist fails to spawn at all, and @loomrail/workspace reports a failure to
+      // spawn as GitMissingError -- "git executable was not found" -- which would send the owner
+      // looking for a broken git installation instead of at their deleted worktree.
+      try {
+        await access(workspace.worktreePath);
+      } catch (error: unknown) {
+        // Two facts, kept apart rather than merged, because they are not the same news: a worktree
+        // that is not there any more is gone for good (nothing in Loomrail resurrects one), while
+        // one that cannot be reached may still be holding the agent's work behind a directory
+        // whose permissions changed. Both are 409 and both name the path.
+        //
+        // The second is also this boundary's answer for an unreadable directory on the way to the
+        // worktree. `resolveWorktreeRelativePath` deliberately does not dress that up as a bad
+        // client path (@loomrail/workspace: a failure canonicalising the WORKTREE is not a
+        // statement about the request), which leaves a bare EACCES with no named refusal -- so it
+        // is named here, before the reading is entered at all, rather than reaching the owner as a
+        // 500 about nothing they can see.
+        const code = (error as NodeJS.ErrnoException).code;
+        const missing = code === "ENOENT" || code === "ENOTDIR";
+        throw new WorkItemChangesError(
+          missing ? "WORKSPACE_WORKTREE_MISSING" : "WORKSPACE_WORKTREE_UNREADABLE",
+          missing
+            ? `The worktree at ${workspace.worktreePath} is no longer on disk`
+            : `The worktree at ${workspace.worktreePath} could not be reached on this machine`,
+          { cause: error },
+        );
+      }
+
+      return { worktreePath: workspace.worktreePath, baseline };
+    };
+
+    /**
+     * Runs one of the two reads and turns anything it fails on into a named refusal.
+     *
+     * The three refusals about the client's own path travel on untouched, because they already say
+     * what happened and are mapped to 400 by `sendOperationError`. Everything else -- a baseline
+     * that no longer resolves after a rewritten history, git failing to run, git answering
+     * something the parser cannot read -- becomes CHANGES_UNREADABLE, whose message names the
+     * worktree and the base (spec §7's "Отказ, называющий базу"). What it must never become is an
+     * empty summary: an empty file list is a claim that the worktree is unchanged, and a read that
+     * did not happen is not entitled to make it (spec D7).
+     */
+    const readOrRefuse = async <T>(
+      context: { worktreePath: string; baseline: string },
+      read: () => Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await read();
+      } catch (error: unknown) {
+        if (
+          error instanceof PathOutsideWorktreeError ||
+          error instanceof PathNotAFileError ||
+          error instanceof PathUnresolvableError
+        ) {
+          throw error;
+        }
+        throw new WorkItemChangesError(
+          "CHANGES_UNREADABLE",
+          `The changes in ${context.worktreePath} could not be read against ${context.baseline}`,
+          { cause: error },
+        );
+      }
+    };
+
+    app.get("/api/v1/work-items/:workItemId/changes", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const context = await changeReadContext(params.workItemId);
+        if (context === null) {
+          return workItemChangesResponseSchema.parse({ schemaVersion: 1, changes: null });
+        }
+        const summary = await readOrRefuse(context, () =>
+          summariseChanges({ ...context, maxFiles: MAX_SUMMARY_FILES }),
+        );
+        return workItemChangesResponseSchema.parse({
+          schemaVersion: 1,
+          changes: {
+            schemaVersion: 1,
+            baseline: context.baseline,
+            files: summary.files,
+            truncated: summary.truncated,
+            // `summary.tree` is deliberately not carried: it is the stage's tree label, which spec
+            // D3 says this milestone stores and does not show.
+          },
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/work-items/:workItemId/changes/diff", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        // The path is parsed as a bounded string and handed on as it was sent. It is not validated
+        // here: `readFileDiff` resolves it against the worktree and refuses what leaves it, what
+        // the filesystem cannot resolve, and what names no single file (spec D9), and it is the
+        // same code that then hands the path to git as a `:(literal)` pathspec. A second, separate
+        // check at this layer is precisely how the two could come to disagree.
+        const query = fileDiffQuerySchema.parse(request.query);
+        const context = await changeReadContext(params.workItemId);
+        if (context === null) {
+          return workItemFileDiffResponseSchema.parse({ schemaVersion: 1, diff: null });
+        }
+        const diff = await readOrRefuse(context, () =>
+          readFileDiff({ ...context, path: query.path, maxBytes: MAX_PATCH_BYTES }),
+        );
+        return workItemFileDiffResponseSchema.parse({
+          schemaVersion: 1,
+          diff: { schemaVersion: 1, ...diff },
         });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
