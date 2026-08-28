@@ -22,13 +22,16 @@ export const MAX_PATCH_BYTES = 512 * 1_024;
  * plausible-looking file list that is a lie. That is the exact failure this milestone exists to
  * prevent, so it is not a preference.
  *
- * It lives in one module because it has two callers on different paths: the two change handles in
- * `server.ts`, which answer the owner, and the stage-end tree label in `session-loop.ts`. Restating
- * it in the second place is how the two would come to measure from different points without anyone
- * noticing -- the label barely moves when the base is wrong (`write-tree` over an index seeded from
- * a base and then `add -A`'d describes the working tree either way), so a drifted second copy would
- * not show up as a failing tree assertion. It shows up, if at all, as a summary and a label that
- * disagree about what the stage was measured against.
+ * It lives in one module because it has two callers, both in `server.ts`: the two change handles
+ * that answer the owner. Restating it a second time there is how the two would come to measure
+ * from different points without anyone noticing.
+ *
+ * The stage-end tree label in `session-loop.ts` is NOT a third caller, on purpose. That label
+ * comes from `treeOfWorktree` (`@loomrail/workspace`), which has no baseline parameter at all: an
+ * index seeded from any baseline and then `add -A`'d over describes the working tree either way
+ * (`read-tree <anything>` + `add -A` + `write-tree` depends only on what is currently on disk), so
+ * there is no baseline for the label to measure from being wrong about, and citing this function
+ * there would be citing a decision this value does not affect.
  *
  * `null` means the workspace records no commit at all, which is not a degraded baseline: it is the
  * absence of one, and each caller says what it does about that.

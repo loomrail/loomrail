@@ -1200,8 +1200,10 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             baseline: context.baseline,
             files: summary.files,
             truncated: summary.truncated,
-            // `summary.tree` is deliberately not carried: it is the stage's tree label, which spec
-            // D3 says this milestone stores and does not show.
+            // `summary.tree` is deliberately not carried. It is not the stage's tree label -- that
+            // is a separate, baseline-independent reading (`treeOfWorktree`) taken at stage end, not
+            // this request-time one -- but spec D3 says the label this milestone stores is not
+            // shown, and this route has no reason to show a tree sha either.
           },
         });
       } catch (error: unknown) {

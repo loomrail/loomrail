@@ -182,10 +182,14 @@ const expectSuccess = (result: { exitCode: number; stderr: string }, what: strin
 // covers the failure path too, so nothing is ever written into the worktree for the sake of
 // displaying something (spec D10) and the owner's own index is never touched.
 //
+// `baseline` is `null` for a reading that has none to seed from and wants the index to start
+// empty -- `read-tree --empty` rather than omitting the step, so the index is reset even if a
+// caller ever reused an index file (today none do; every caller still gets a fresh `mkdtemp`).
+//
 // `prefix` is the caller's own, so that a leftover scratch directory can be traced to the reading
 // that leaked it rather than to whichever reading happened to run alongside it.
 const withTemporaryIndex = async <T>(
-  context: { worktreePath: string; baseline: string; prefix: string },
+  context: { worktreePath: string; baseline: string | null; prefix: string },
   body: (indexFile: string) => Promise<T>,
 ): Promise<T> => {
   const { worktreePath, baseline, prefix } = context;
@@ -195,7 +199,11 @@ const withTemporaryIndex = async <T>(
   try {
     // `baseline` goes in as its own argv element, never concatenated into a string: it comes from
     // stored state, and an argv array is what keeps it an argument rather than syntax.
-    const readTree = await runGitWithIndex(["read-tree", baseline], worktreePath, indexFile);
+    const readTree = await runGitWithIndex(
+      baseline === null ? ["read-tree", "--empty"] : ["read-tree", baseline],
+      worktreePath,
+      indexFile,
+    );
     expectSuccess(readTree, "read-tree");
 
     // `add -A` honours `.gitignore` by itself, which is why build output stays out of the reading
@@ -219,8 +227,10 @@ const withTemporaryIndex = async <T>(
  * the single most common thing an agent does, would be invisible while the summary still looked
  * plausibly full. Spec D2 forbids the naive reading outright.
  *
- * `tree` comes from `write-tree` over that same index, so the file list and the stage's tree label
- * cannot disagree (spec D3).
+ * `tree` comes from `write-tree` over that same index, so `files` and `tree` are two readings of
+ * one temporary index rather than two independent walks able to disagree about what changed (spec
+ * D3). D3 governs pairing a summary with a tree; it says nothing about which tree a caller who
+ * wants no summary should use -- that caller is {@link treeOfWorktree}, not this function.
  *
  * Rejects when the reading cannot be done -- an unresolvable baseline, a worktree that is gone,
  * git failing to run. It never degrades into an empty list, because an empty list is a claim that
@@ -270,6 +280,31 @@ export const summariseChanges = async (context: {
       tree: writeTree.stdout.trim(),
       truncated: files.length > maxFiles,
     };
+  });
+};
+
+/**
+ * The tree a work item's worktree holds right now, with no baseline and no summary attached.
+ *
+ * Computed through a temporary index -- `read-tree --empty`, `add -A`, `write-tree` -- so the
+ * result is a function of the working tree alone. That is not an approximation of
+ * {@link summariseChanges}'s `tree`: seeding the index from any baseline and then `add -A`-ing
+ * every current change on top produces the exact same tree as a from-empty index does, because
+ * `add -A` restages every tracked path to its current worktree content and adds every untracked
+ * one, which is already everything the baseline's entries could have contributed. A caller with no
+ * baseline in hand, or with one it does not want to spend on a tree it already knows does not
+ * depend on it, does not need to resolve or pass one.
+ *
+ * Rejects when the reading cannot be done -- the worktree is gone, git failing to run -- the same
+ * way `summariseChanges` does, since it is built on the same temporary-index machinery.
+ */
+export const treeOfWorktree = async (context: { worktreePath: string }): Promise<string> => {
+  const { worktreePath } = context;
+
+  return withTemporaryIndex({ worktreePath, baseline: null, prefix: "loomrail-tree-" }, async (indexFile) => {
+    const writeTree = await runGitWithIndex(["write-tree"], worktreePath, indexFile);
+    expectSuccess(writeTree, "write-tree");
+    return writeTree.stdout.trim();
   });
 };
 

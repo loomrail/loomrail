@@ -891,8 +891,10 @@ const applyProviderOutcomePayloadSchema = z
      *
      * Beside `outcome` rather than inside it, because it is not the provider's claim: `outcome` is
      * untrusted output from an agent, while this is Loomrail's own reading of the worktree through
-     * `summariseChanges`. Folding it into the COMPLETED outcome would let a provider name the tree
-     * its own work is recorded against.
+     * `treeOfWorktree` (`@loomrail/workspace`) -- a baseline-independent reading, not the
+     * `summariseChanges` machinery the owner-facing change summary uses, because no summary is
+     * produced here for a tree to be paired with. Folding it into the COMPLETED outcome would let a
+     * provider name the tree its own work is recorded against.
      *
      * Required and nullable rather than optional: every caller states what it measured, `null`
      * included, so a caller that simply forgot is caught by the schema instead of being recorded as

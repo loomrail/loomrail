@@ -302,10 +302,12 @@ export const workItemWorkspaceResponseSchema = z
 // consumer, @loomrail/persistence-sqlite) builds on, and no dist output of either package embeds
 // the other.
 //
-// `ChangeSummary.tree` -- the resultTree label spec D3 has the daemon write onto StageAttempt at
-// the end of a stage -- is deliberately NOT part of this response and so is not part of the
-// equality check either: D3 says in so many words that the label "не показывается в этой вехе"
-// (is not shown this milestone).
+// `ChangeSummary.tree` is deliberately NOT part of this response and so is not part of the
+// equality check either. It is not the stage-end resultTree label the daemon writes onto
+// StageAttempt -- that label is read through `treeOfWorktree`, a separate, baseline-independent
+// function, not through this summary -- but the two would be shown together if either were shown at
+// all, and D3 says in so many words that the label "не показывается в этой вехе" (is not shown
+// this milestone).
 //
 // `baseline` is on both schemas and lands differently on each, because spec §4 puts it differently
 // on each. `FileDiff` there is a plain reading with no work item in it, so @loomrail/workspace's

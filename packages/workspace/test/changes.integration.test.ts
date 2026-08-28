@@ -11,6 +11,7 @@ import {
   readFileDiff,
   resolveWorktreeRelativePath,
   summariseChanges,
+  treeOfWorktree,
   type FileDiff,
 } from "../src/index.js";
 
@@ -223,6 +224,44 @@ describe("summariseChanges", () => {
       "pkg/pic2.bin",
       "renamed-to.txt",
     ]);
+  });
+});
+
+describe("treeOfWorktree", () => {
+  it("computes the same tree summariseChanges does for the worktree's real baseline", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+    const summary = await summariseChanges({ worktreePath, baseline, maxFiles: 2_000 });
+    const tree = await treeOfWorktree({ worktreePath });
+
+    expect(tree).toBe(summary.tree);
+  });
+
+  // The property Task 5's review fix depends on: the tree does not move when the baseline does,
+  // because `read-tree <anything>` + `add -A` + `write-tree` describes the working tree either way.
+  // Proven by seeding `summariseChanges` from git's canonical empty tree -- an unrelated baseline if
+  // there ever was one, and one `read-tree`/`diff-index` both accept without the object needing to
+  // exist in this repository's object database (probed) -- instead of the worktree's real base
+  // commit, and getting back the identical `tree` both times, matching what `treeOfWorktree`
+  // computes with no baseline at all.
+  it("does not depend on which baseline a caller who also wants a summary happens to use", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+    const fromRealBaseline = await summariseChanges({ worktreePath, baseline, maxFiles: 2_000 });
+    const fromEmptyTree = await summariseChanges({ worktreePath, baseline: EMPTY_TREE, maxFiles: 2_000 });
+    const tree = await treeOfWorktree({ worktreePath });
+
+    expect(fromEmptyTree.tree).toBe(fromRealBaseline.tree);
+    expect(tree).toBe(fromRealBaseline.tree);
+  });
+
+  it("keeps its own scratch out of both the worktree and its answer", async () => {
+    const { worktreePath } = await makeWorktreeWithEveryKindOfChange();
+    const before = await workingCopyPaths(worktreePath);
+
+    await treeOfWorktree({ worktreePath });
+
+    expect(await workingCopyPaths(worktreePath)).toEqual(before);
   });
 });
 
