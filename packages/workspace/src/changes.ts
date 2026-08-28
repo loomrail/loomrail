@@ -78,11 +78,19 @@ const parseNumstat = (stdout: string): readonly CountedFile[] => {
     const record = tokens[cursor] ?? "";
     cursor += 1;
 
-    const fields = record.split("\t");
-    const [insertions, deletions, path] = fields;
-    if (fields.length !== 3 || insertions === undefined || deletions === undefined || path === undefined) {
+    // Split on the FIRST two tabs and take everything after them as the path, rather than on every
+    // tab. A tab is an ordinary character in a POSIX filename (probed: git writes the record
+    // `1\t0\ttab\there.txt` for one), so splitting on all of them yields four fields, and a record
+    // count that has to be exactly three then turned one odd-but-legal filename anywhere in the
+    // worktree into an error for the owner's whole change list.
+    const firstTab = record.indexOf("\t");
+    const secondTab = firstTab === -1 ? -1 : record.indexOf("\t", firstTab + 1);
+    if (firstTab === -1 || secondTab === -1) {
       throw new Error(`git --numstat produced an unreadable record ${JSON.stringify(record)}`);
     }
+    const insertions = record.slice(0, firstTab);
+    const deletions = record.slice(firstTab + 1, secondTab);
+    const path = record.slice(secondTab + 1);
 
     let subject = path;
     if (subject === "") {
@@ -267,6 +275,10 @@ export const summariseChanges = async (context: {
 
 export type FileDiff = {
   path: string;
+  // The commit this diff was read against (spec §4). Carried on the answer rather than left for
+  // the caller to remember: the reading is where the baseline is known, and a patch whose base is
+  // supplied from somewhere else can be shown beside the wrong one without either side noticing.
+  baseline: string;
   binary: boolean;
   // Null for a binary file: there is no text to show, and an empty string would read as "no
   // change" (spec D8).
@@ -284,6 +296,49 @@ export class PathOutsideWorktreeError extends Error {
   constructor(requestedPath: string) {
     super(`path ${JSON.stringify(requestedPath)} is outside the work item's worktree`);
     this.name = "PathOutsideWorktreeError";
+    this.requestedPath = requestedPath;
+  }
+}
+
+/**
+ * The refusal for a path the filesystem cannot answer for at all, so that the boundary has one
+ * named failure where it used to leak three internal ones (probed on this machine): a NUL byte in
+ * the path throws `TypeError [ERR_INVALID_ARG_VALUE]` out of `realpath`, a symlink loop throws
+ * `ELOOP`, and a directory with no search permission throws `EACCES`.
+ *
+ * None of the three ever read anything -- the resolution fails before git is started -- so this is
+ * about what a caller mapping this boundary to a refusal is handed, not about exposure. The cause
+ * is kept for the daemon's log; the message names only the path the client sent.
+ */
+export class PathUnresolvableError extends Error {
+  readonly requestedPath: string;
+
+  constructor(requestedPath: string, cause: unknown) {
+    super(`path ${JSON.stringify(requestedPath)} could not be resolved inside the work item's worktree`, {
+      cause,
+    });
+    this.name = "PathUnresolvableError";
+    this.requestedPath = requestedPath;
+  }
+}
+
+/**
+ * The refusal for a path that does resolve inside the worktree and still names no single file this
+ * reading can show: a path that is not there at all, a directory, or a file git is not carrying
+ * (an ignored build artifact).
+ *
+ * Named rather than answered with `patch: ""`, which spec §7 now has a row for. An empty patch is
+ * a statement about the world -- "this file is there and nothing in it changed" -- and a client's
+ * typo is not evidence for it; the two were previously indistinguishable to the owner.
+ */
+export class PathNotAFileError extends Error {
+  readonly requestedPath: string;
+
+  constructor(requestedPath: string) {
+    super(
+      `path ${JSON.stringify(requestedPath)} does not name one file the work item's changes can be read for`,
+    );
+    this.name = "PathNotAFileError";
     this.requestedPath = requestedPath;
   }
 }
@@ -349,7 +404,17 @@ export const resolveWorktreeRelativePath = (worktreePath: string, requestedPath:
   const worktree = canonicalise(worktreePath);
   // `resolve` against the canonical worktree normalises `.` and `..` and leaves an absolute
   // request as itself, which is what makes an absolute path get judged rather than trusted.
-  const target = canonicalise(resolve(worktree, requestedPath));
+  //
+  // Only the CLIENT's side of the resolution is wrapped. A failure canonicalising `worktreePath`
+  // itself is not a statement about the request -- it says the work item's worktree is gone or
+  // unreadable, which spec §7 answers with its own row -- and dressing it up as a bad path would
+  // point the owner at the wrong thing.
+  let target: string;
+  try {
+    target = canonicalise(resolve(worktree, requestedPath));
+  } catch (error) {
+    throw new PathUnresolvableError(requestedPath, error);
+  }
 
   if (!target.startsWith(worktree + sep)) {
     throw new PathOutsideWorktreeError(requestedPath);
@@ -393,6 +458,61 @@ const clipPatch = (
 };
 
 /**
+ * Wraps a worktree-relative path in git's `literal` pathspec magic, so that git is handed a path
+ * rather than an expression.
+ *
+ * A pathspec is a small language, and the string reaching it comes from the client (spec D9).
+ * Measured in a repository with `secret.txt` and `pkg/a.txt` changed, with the path passed through
+ * as it was: `":/"` and `"*"` each answered with EVERY changed file's diff, `":(top)secret.txt"`
+ * fetched a file the caller had not asked for, and `":(exclude)pkg/a.txt"` fetched the other one.
+ * Nothing escaped the worktree -- git itself refuses `:(literal)../etc/passwd` -- but the promise
+ * this reading makes, the diff of one file and only that file, was not being kept, and `path=":"`
+ * had the whole repository's diff buffered in memory before the bound spec §8 asks for could run.
+ *
+ * `literal` makes every character in the rest of the string itself (probed: `:(literal)*` matches
+ * nothing in a worktree with no file called `*`, and `:(literal)star*name` matches exactly the
+ * file of that name).
+ *
+ * Deliberately NOT `:(literal,top)`. Without `top`, a pathspec is relative to the git process's
+ * working directory, which {@link runGitWithIndex} sets to `worktreePath` -- the very directory
+ * {@link resolveWorktreeRelativePath} returned a path relative to. `top` would anchor it at the
+ * repository root instead, which is the same directory only for as long as a worktree is one.
+ */
+const literalPathspec = (relativePath: string): string => `:(literal)${relativePath}`;
+
+// The answer for a path `--name-status` did not report: either a file that really is there and
+// really did not change, or a path that names nothing this reading can show. The two are told
+// apart by asking the temporary index -- the baseline with every current change staged over it --
+// for that exact entry, and only an exact match counts: a pathspec matches a directory's contents
+// as well (probed: `ls-files -- :(literal)pkg` lists `pkg/a.txt`), and a directory is not a file.
+//
+// `binary: false` here is about the patch, not about the file's bytes: nothing is being withheld,
+// because git reported no change at all. Git's own `--numstat` stays the only source of a true
+// `binary` (spec D8), and it has nothing to say about a file it did not report.
+const readUnchangedFileOrRefuse = async (context: {
+  worktreePath: string;
+  indexFile: string;
+  baseline: string;
+  relativePath: string;
+  requestedPath: string;
+}): Promise<FileDiff> => {
+  const { worktreePath, indexFile, baseline, relativePath, requestedPath } = context;
+
+  const listed = await runGitWithIndex(
+    ["-c", "core.quotepath=false", "ls-files", "--cached", "-z", "--", literalPathspec(relativePath)],
+    worktreePath,
+    indexFile,
+  );
+  expectSuccess(listed, "ls-files --cached");
+
+  if (!splitNul(listed.stdout).includes(relativePath)) {
+    throw new PathNotAFileError(requestedPath);
+  }
+
+  return { path: relativePath, baseline, binary: false, patch: "", truncated: false, omittedBytes: 0 };
+};
+
+/**
  * The unified diff of one file in a work item's worktree, relative to `baseline`.
  *
  * Separate from {@link summariseChanges} on purpose (spec D5): the summary is cheap and reread
@@ -402,13 +522,28 @@ const clipPatch = (
  * working tree at all.
  *
  * `path` comes from the client and is not trusted (spec D9). It is resolved against the worktree
- * first, before any scratch is created or any git process is started, and a path that leaves the
- * worktree is refused by name. It reaches git after `--`, so a path beginning with a dash is an
- * argument rather than a flag.
+ * first, before any scratch is created or any git process is started; a path that leaves the
+ * worktree, and a path the filesystem cannot resolve at all, are each refused by name. It reaches
+ * git after `--` and inside {@link literalPathspec}, so it is a path rather than a flag or a
+ * pathspec expression.
+ *
+ * Which file the answer is about is decided by looking the resolved path up, by name, in an
+ * unrestricted `--name-status` reading of the same index -- never by whatever a pathspec happened
+ * to match. That is what keeps the answer to one file: a directory holding changed files is
+ * refused rather than answered for, which it has to be, because a `binary` computed across
+ * several matched records once reported a directory holding two changed text files and one
+ * changed `.bin` as `{ binary: true, patch: null }` -- "there is nothing to show" about text
+ * files that did change, the exact claim spec D8 exists to forbid.
  *
  * A binary file gets `patch: null`, never `""` (spec D8). Whether it is binary comes from git's own
- * `--numstat`, the same signal the summary reads, so the two views of one file cannot disagree --
- * and not from matching git's "Binary files ... differ" wording, which is prose that changes.
+ * `--numstat` record FOR THIS PATH, the same signal the summary reads, so the two views of one file
+ * cannot disagree -- and not from matching git's "Binary files ... differ" wording, which is prose
+ * that changes.
+ *
+ * Known bound, left as it is by this round: `maxBytes` is applied to the finished patch, so git's
+ * whole output for the file is buffered before the cut. Limiting the read to one file is what
+ * makes that bound "one file" rather than "the whole repository"; streaming it is a change to
+ * `runGit` and belongs to its own task.
  */
 export const readFileDiff = async (context: {
   worktreePath: string;
@@ -422,30 +557,67 @@ export const readFileDiff = async (context: {
   return withTemporaryIndex(
     { worktreePath, baseline, prefix: "loomrail-file-diff-" },
     async (indexFile): Promise<FileDiff> => {
+      // One unrestricted `--name-status` read, before anything is limited to a path. Its output is
+      // one status and one path per CHANGED file and no content at all, so it does not bring back
+      // the memory bound this reading exists to keep (spec §8); what it buys is the two things the
+      // reads below cannot work out for themselves -- whether this path is a changed file, and
+      // where it came from if it was renamed.
+      const nameStatus = await runGitWithIndex(
+        [...readArgs, "--name-status", baseline],
+        worktreePath,
+        indexFile,
+      );
+      expectSuccess(nameStatus, "diff-index --name-status");
+      const status = parseNameStatus(nameStatus.stdout).get(relativePath);
+
+      if (status === undefined) {
+        return await readUnchangedFileOrRefuse({
+          worktreePath,
+          indexFile,
+          baseline,
+          relativePath,
+          requestedPath: path,
+        });
+      }
+
+      // A renamed file's body needs BOTH names after `--`. Pathspec limiting runs before rename
+      // detection, so `-M` cannot fire on a read limited to the new path alone: measured, that
+      // read answers `new file mode` plus the whole file as added, while the summary calls the
+      // same file RENAMED and names where it came from. With both names given, git answers
+      // `similarity index 100% / rename from ... / rename to ...`.
+      const pathspecs =
+        status.previousPath === null
+          ? [literalPathspec(relativePath)]
+          : [literalPathspec(status.previousPath), literalPathspec(relativePath)];
+
       const numstat = await runGitWithIndex(
-        [...readArgs, "--numstat", baseline, "--", relativePath],
+        [...readArgs, "--numstat", baseline, "--", ...pathspecs],
         worktreePath,
         indexFile,
       );
       expectSuccess(numstat, "diff-index --numstat");
 
-      // No record at all means this file did not change against the baseline -- a text file with
-      // an empty diff, which is not the same thing as a binary one.
-      const binary = parseNumstat(numstat.stdout).some((counted) => counted.binary);
-      if (binary) {
-        return { path: relativePath, binary: true, patch: null, truncated: false, omittedBytes: 0 };
+      const counted = parseNumstat(numstat.stdout).find((entry) => entry.path === relativePath);
+      if (counted === undefined) {
+        // Two readings of one index that disagree about which paths changed, the same way the
+        // summary's own join can. Refusing beats reporting a file as text because the record that
+        // would have called it binary went missing.
+        throw new Error(`git reported a status for ${JSON.stringify(relativePath)} but no line counts`);
+      }
+      if (counted.binary) {
+        return { path: relativePath, baseline, binary: true, patch: null, truncated: false, omittedBytes: 0 };
       }
 
       // `-z` comes back out for the patch read: it applies to the machine-readable listings, and a
-      // patch is not one. The path goes after `--` so that a file named `-p` stays a path.
+      // patch is not one. The paths go after `--` so that a file named `-p` stays a path.
       const patch = await runGitWithIndex(
-        [...readArgs.filter((arg) => arg !== "-z"), "-p", baseline, "--", relativePath],
+        [...readArgs.filter((arg) => arg !== "-z"), "-p", baseline, "--", ...pathspecs],
         worktreePath,
         indexFile,
       );
       expectSuccess(patch, "diff-index -p");
 
-      return { path: relativePath, binary: false, ...clipPatch(patch.stdout, maxBytes) };
+      return { path: relativePath, baseline, binary: false, ...clipPatch(patch.stdout, maxBytes) };
     },
   );
 };

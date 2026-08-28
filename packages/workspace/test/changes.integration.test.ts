@@ -1,11 +1,13 @@
-import { chmod, mkdtemp, readdir, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import {
+  PathNotAFileError,
   PathOutsideWorktreeError,
+  PathUnresolvableError,
   readFileDiff,
   resolveWorktreeRelativePath,
   summariseChanges,
@@ -13,10 +15,17 @@ import {
 } from "../src/index.js";
 
 import {
+  listTreePaths,
+  makeWorktreeWithAwkwardPaths,
   makeWorktreeWithEveryKindOfChange,
   makeWorktreeWithHostileGitConfig,
   readPorcelainDiff,
 } from "./helpers.js";
+
+// A filename may contain a tab or be a single `*` on POSIX and may not on Windows, where CI also
+// runs this suite. The tests that need such a name skip there rather than being written in a way
+// that cannot see the defect they name.
+const onWindows = process.platform === "win32";
 
 // git's canonical empty tree -- what `write-tree` produces from an index with nothing in it. A
 // summary that reported this as the stage's tree would be claiming the worktree is empty.
@@ -98,13 +107,34 @@ describe("summariseChanges", () => {
     });
   });
 
-  it("leaves an ignored file out of the summary", async () => {
+  it("leaves an ignored file out of the summary while still listing the work", async () => {
     const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
 
     const summary = await summariseChanges({ worktreePath, baseline, maxFiles: 2_000 });
 
+    // The positive comes first because the negative alone passes vacuously: a summary that listed
+    // nothing at all would satisfy "no build/ file is in it" while telling the owner the agent
+    // changed nothing.
+    expect(summary.files.map((file) => file.path)).toContain("added.txt");
     expect(summary.files.some((file) => file.path.startsWith("build/"))).toBe(false);
   });
+
+  it.skipIf(onWindows)(
+    "summarises a file whose name contains a tab instead of failing on the whole list",
+    async () => {
+      const { worktreePath, baseline, tabPath } = await makeWorktreeWithAwkwardPaths();
+
+      // Asserted through `.resolves` on purpose: under the defect this call rejects -- the record
+      // `1\t0\ttab\there.txt` split on every tab is four fields -- and one odd-but-legal filename
+      // anywhere in the worktree made the owner's whole change list an error. `.resolves` turns that
+      // into a failing assertion rather than a test that dies on its own await.
+      const listed = summariseChanges({ worktreePath, baseline, maxFiles: 2_000 }).then((summary) =>
+        summary.files.map((file) => `${file.status} ${file.path}`),
+      );
+
+      await expect(listed).resolves.toContain(`ADDED ${tabPath}`);
+    },
+  );
 
   it("says the summary was truncated instead of quietly returning fewer files", async () => {
     const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
@@ -123,6 +153,21 @@ describe("summariseChanges", () => {
     expect(summary.truncated).toBe(false);
   });
 
+  it("does not claim truncation when the file count lands exactly on the limit", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+    // The limit is taken from the fixture rather than written down, so that adding a file to the
+    // fixture cannot quietly move the test off the boundary it exists to sit on. `> maxFiles` and
+    // `>= maxFiles` agree on every other count and disagree here, which is why the two cases
+    // either side of it -- one file over, hundreds under -- both passed while the boundary was
+    // unpinned.
+    const whole = await summariseChanges({ worktreePath, baseline, maxFiles: 2_000 });
+    const exact = await summariseChanges({ worktreePath, baseline, maxFiles: whole.files.length });
+
+    expect(exact.files).toHaveLength(whole.files.length);
+    expect(exact.truncated).toBe(false);
+  });
+
   it("hands back the tree of the same index the files were read from", async () => {
     const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
 
@@ -130,6 +175,16 @@ describe("summariseChanges", () => {
 
     expect(summary.tree).toMatch(/^[0-9a-f]{40}$/);
     expect(summary.tree).not.toBe(EMPTY_TREE);
+    // What the label CONTAINS, which is the part the two lines above cannot see: a `write-tree`
+    // over a second index holding only the baseline returns the BASELINE's tree -- 40 hex
+    // characters, not the empty tree -- and that is a label meaning "nothing changed" printed
+    // beside a list of nine changed files. Named here by the file the agent created, which the
+    // baseline's tree does not hold, and the ignored one, which no correct tree holds.
+    const paths = await listTreePaths(worktreePath, summary.tree);
+    expect(paths).toContain("added.txt");
+    expect(paths).toContain("nested/deep/created.txt");
+    expect(paths).not.toContain("build/artifact.txt");
+    expect(paths).not.toContain("deleted.txt");
   });
 
   it("refuses a baseline it cannot resolve rather than summarising against nothing", async () => {
@@ -160,7 +215,11 @@ describe("summariseChanges", () => {
       "added.txt",
       "deleted.txt",
       "modified.txt",
+      "nested/deep/created.txt",
       "pic.bin",
+      "pkg/a.txt",
+      "pkg/b.txt",
+      "pkg/pic2.bin",
       "renamed-to.txt",
     ]);
   });
@@ -201,6 +260,111 @@ describe("readFileDiff", () => {
     // The file the agent created is a change too, and it is not the one that was asked for.
     expect(patch).not.toContain("added.txt");
     expect(diff).toMatchObject({ path: "modified.txt", binary: false, truncated: false, omittedBytes: 0 });
+  });
+
+  it("says which commit the patch was read against", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+    const diff = await readFileDiff({ worktreePath, baseline, path: "modified.txt", maxBytes: MAX_BYTES });
+
+    // Spec §4 puts `baseline` on FileDiff, and this is where it is known. A patch handed on
+    // without it can be shown beside the wrong base by a caller that remembered a different one,
+    // and nothing in the answer would contradict that.
+    expect(diff.baseline).toBe(baseline);
+  });
+
+  it("shows a renamed file as a rename rather than as a whole file added", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+    const diff = await readFileDiff({ worktreePath, baseline, path: "renamed-to.txt", maxBytes: MAX_BYTES });
+
+    // Pathspec limiting runs before rename detection, so a read limited to the new path alone
+    // cannot let `-M` fire: git answers `new file mode` and the five lines of an unchanged file as
+    // additions, while the summary calls the same file RENAMED and names where it came from. The
+    // two views of one file have to agree (D3's principle, one file down).
+    const patch = patchOf(diff);
+    expect(patch).toContain("rename from renamed-from.txt");
+    expect(patch).toContain("rename to renamed-to.txt");
+    expect(patch).not.toContain("+r1");
+  });
+
+  // Five pathspec expressions, each measured answering with something other than the one file it
+  // was supposed to name: `":/"` and `"*"` with EVERY changed file's diff, `":(top)modified.txt"`
+  // with a file the caller did not ask for, `":(exclude)pkg/a.txt"` with all the others, and
+  // `":"` with the whole repository's diff buffered before the truncation of spec §8 could run.
+  // On POSIX none of these exists as a file, so the path check that came before them concluded
+  // "inside the worktree" and passed them straight to git as the small language they are.
+  it.each([":/", ":(top)modified.txt", ":(exclude)pkg/a.txt", "*", ":(glob)**/*.txt"])(
+    "refuses %s, which is a pathspec expression and not a file",
+    async (expression) => {
+      const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+      await expect(
+        readFileDiff({ worktreePath, baseline, path: expression, maxBytes: MAX_BYTES }),
+      ).rejects.toThrow(PathNotAFileError);
+    },
+  );
+
+  it.skipIf(onWindows)("reads a file whose name is a glob character as that one file", async () => {
+    const { worktreePath, baseline, starPath, otherPath } = await makeWorktreeWithAwkwardPaths();
+
+    // The other half of the pathspec fix, and the half a refusal cannot show: a file really named
+    // `*` has to be readable AS that file. Without `:(literal)`, git evaluates the name and the
+    // patch comes back holding every changed file in the worktree (probed).
+    const diff = await readFileDiff({ worktreePath, baseline, path: starPath, maxBytes: MAX_BYTES });
+
+    const patch = patchOf(diff);
+    expect(patch).toContain(`--- a/${starPath}`);
+    expect(patch).toContain("+s2");
+    expect(patch).not.toContain(otherPath);
+  });
+
+  it("refuses a directory instead of calling the text files inside it binary", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+    // `pkg` holds two changed text files and one changed binary. Reading `binary` as a disjunction
+    // over however many records a pathspec matched answered `{ binary: true, patch: null }` for
+    // it -- "there is nothing to show" about two text files that did change, which is the exact
+    // claim spec D8 exists to forbid.
+    await expect(readFileDiff({ worktreePath, baseline, path: "pkg", maxBytes: MAX_BYTES })).rejects.toThrow(
+      PathNotAFileError,
+    );
+  });
+
+  it("refuses a path that is not there rather than reporting it as an unchanged file", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+    // `patch: ""` for a path that does not exist is a client's mistake turned into a positive
+    // claim about the world, and indistinguishable from the answer for a file that really is
+    // there and really did not change (spec §7's new row).
+    await expect(
+      readFileDiff({ worktreePath, baseline, path: "nope.txt", maxBytes: MAX_BYTES }),
+    ).rejects.toThrow(PathNotAFileError);
+  });
+
+  it("still answers an unchanged file with an empty patch rather than refusing it", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+    // The other side of the refusal above, which would otherwise be free to swallow the case it
+    // has to keep: `.gitignore` is committed in the baseline and untouched since.
+    const diff = await readFileDiff({ worktreePath, baseline, path: ".gitignore", maxBytes: MAX_BYTES });
+
+    expect(diff).toEqual({
+      path: ".gitignore",
+      baseline,
+      binary: false,
+      patch: "",
+      truncated: false,
+      omittedBytes: 0,
+    });
+  });
+
+  it("refuses an ignored file, which the summary never showed in the first place", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+    await expect(
+      readFileDiff({ worktreePath, baseline, path: "build/artifact.txt", maxBytes: MAX_BYTES }),
+    ).rejects.toThrow(PathNotAFileError);
   });
 
   it("marks a binary file binary instead of handing back an empty patch", async () => {
@@ -347,5 +511,41 @@ describe("resolveWorktreeRelativePath", () => {
     expect(resolveWorktreeRelativePath(worktreePath, join(worktreePath, "modified.txt"))).toBe(
       "modified.txt",
     );
+  });
+
+  // The three inputs that used to leave this boundary as somebody else's error object: a
+  // `TypeError [ERR_INVALID_ARG_VALUE]` from `realpath`, a bare `ELOOP`, a bare `EACCES` (all
+  // three probed on this machine). Each fails closed either way -- nothing is read -- so what
+  // these pin is that a caller mapping this boundary to a refusal has one named failure to map
+  // rather than three internal ones.
+  it("refuses a path with a NUL byte in it as a named refusal", async () => {
+    const { worktreePath } = await makeWorktreeWithEveryKindOfChange();
+
+    expect(() => resolveWorktreeRelativePath(worktreePath, `a${String.fromCharCode(0)}b.txt`)).toThrow(
+      PathUnresolvableError,
+    );
+  });
+
+  it.skipIf(onWindows)("refuses a path that runs into a symlink loop as a named refusal", async () => {
+    const { worktreePath } = await makeWorktreeWithEveryKindOfChange();
+    await symlink("loop", join(worktreePath, "loop"));
+
+    expect(() => resolveWorktreeRelativePath(worktreePath, "loop/inside.txt")).toThrow(PathUnresolvableError);
+  });
+
+  it.skipIf(onWindows)("refuses a path under a directory it cannot read as a named refusal", async () => {
+    const { worktreePath } = await makeWorktreeWithEveryKindOfChange();
+    const locked = join(worktreePath, "locked");
+    await mkdir(locked);
+    await chmod(locked, 0o000);
+
+    try {
+      expect(() => resolveWorktreeRelativePath(worktreePath, "locked/inside.txt")).toThrow(
+        PathUnresolvableError,
+      );
+    } finally {
+      // Put the mode back so the fixture can be cleaned up by whatever removes the temp directory.
+      await chmod(locked, 0o755);
+    }
   });
 });

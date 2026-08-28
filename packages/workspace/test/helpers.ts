@@ -123,6 +123,14 @@ export type WorktreeWithChanges = {
 // artifact that must stay out of the summary entirely. Returns the base commit to summarise
 // against.
 //
+// `pkg/` is a directory holding two changed text files and one changed binary, and it is that
+// mixture on purpose: asking for a directory is how a reading that answers for whatever a pathspec
+// matched, rather than for the file it was asked about, gets caught calling two changed text files
+// "binary, nothing to show".
+//
+// `nested/deep/` is a directory that does not exist in the baseline at all, so that a created file
+// two levels down -- the ordinary shape of an agent's work -- is covered rather than assumed.
+//
 // The created file is the point of the whole exercise: `git diff <baseline>` in a working tree
 // does not see it (spec §2.1), so a helper that left it out could not tell a correct
 // implementation from the naive one. The binary file and the rename are here for the same reason
@@ -145,6 +153,9 @@ export const makeWorktreeWithEveryKindOfChange = async (): Promise<WorktreeWithC
   // rename under `-M` instead of as a delete plus an add.
   await writeFile(join(dir, "renamed-from.txt"), "r1\nr2\nr3\nr4\nr5\n");
   await writeFile(join(dir, "pic.bin"), Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe, 0x00, 0x10]));
+  await mkdir(join(dir, "pkg"), { recursive: true });
+  await writeFile(join(dir, "pkg", "a.txt"), "pkg-a\n");
+  await writeFile(join(dir, "pkg", "pic2.bin"), Buffer.from([0x00, 0x7f, 0x00, 0xfe]));
   await execFileAsync("git", ["add", "-A"], { cwd: dir });
   await commit("base");
 
@@ -165,11 +176,61 @@ export const makeWorktreeWithEveryKindOfChange = async (): Promise<WorktreeWithC
   // Binary file whose bytes changed: git reports `-` for both line counts.
   await writeFile(join(dir, "pic.bin"), Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04, 0x00, 0x20, 0x7f]));
 
+  // A directory holding two changed text files and one changed binary.
+  await writeFile(join(dir, "pkg", "a.txt"), "pkg-a\npkg-a2\n");
+  await writeFile(join(dir, "pkg", "b.txt"), "pkg-b\n");
+  await writeFile(join(dir, "pkg", "pic2.bin"), Buffer.from([0x00, 0x7f, 0x01, 0xfd, 0x00]));
+
+  // A file created two levels down, in a directory the baseline does not have.
+  await mkdir(join(dir, "nested", "deep"), { recursive: true });
+  await writeFile(join(dir, "nested", "deep", "created.txt"), "deep\n");
+
   // Ignored build output, which `add -A` must leave out of the temporary index by itself.
   await mkdir(join(dir, "build"), { recursive: true });
   await writeFile(join(dir, "build", "artifact.txt"), "artifact\n");
 
   return { worktreePath: dir, baseline };
+};
+
+export type WorktreeWithAwkwardPaths = WorktreeWithChanges & {
+  // A changed file whose name contains a tab. Legal on POSIX, and the shape that broke the whole
+  // summary: `--numstat -z` writes the record `1\t0\ttab\there.txt`, which splitting on every tab
+  // reads as four fields instead of three.
+  tabPath: string;
+  // A changed file named exactly `*`. Also legal on POSIX, and the only way to tell a pathspec
+  // that git evaluates from one it takes literally: without `:(literal)`, `*` matches every
+  // changed file in the worktree (probed).
+  starPath: string;
+  // Another changed file, so that a pathspec git evaluated instead of taking literally has
+  // something to wrongly pull in.
+  otherPath: string;
+};
+
+// Creates a throwaway git repository whose changed files have names that are legal and awkward:
+// one with a tab in it, one that is a glob character on its own.
+//
+// Separate from `makeWorktreeWithEveryKindOfChange` rather than folded into it because neither
+// name can be created on Windows, and CI runs this suite on windows-latest. The tests that use
+// this helper skip there and say so; the fixture every other test shares stays portable.
+export const makeWorktreeWithAwkwardPaths = async (): Promise<WorktreeWithAwkwardPaths> => {
+  const dir = await mkdtemp(join(tmpdir(), "loomrail-workspace-awkward-"));
+  const tabPath = "tab\there.txt";
+  const starPath = "*";
+  const otherPath = "plain.txt";
+
+  await execFileAsync("git", ["init", "--quiet", "-b", "main"], { cwd: dir });
+  await writeFile(join(dir, starPath), "s1\n");
+  await writeFile(join(dir, otherPath), "p1\n");
+  await execFileAsync("git", ["add", "-A"], { cwd: dir });
+  await execFileAsync("git", [...testCommitterArgs, "commit", "--quiet", "-m", "base"], { cwd: dir });
+
+  const baseline = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: dir })).stdout.trim();
+
+  await writeFile(join(dir, starPath), "s1\ns2\n");
+  await writeFile(join(dir, otherPath), "p1\np2\n");
+  await writeFile(join(dir, tabPath), "t1\n");
+
+  return { worktreePath: dir, baseline, tabPath, starPath, otherPath };
 };
 
 export type WorktreeWithHostileConfig = WorktreeWithChanges & {
@@ -221,3 +282,15 @@ export const makeWorktreeWithHostileGitConfig = async (): Promise<WorktreeWithHo
 // nothing at all.
 export const readPorcelainDiff = async (dir: string, baseline: string, path: string): Promise<string> =>
   (await execFileAsync("git", ["diff", baseline, "--", path], { cwd: dir })).stdout;
+
+// Every path a tree object holds, sorted. A test that has a tree sha in hand can say what the tree
+// CONTAINS with it: 40 hex characters that are not the empty tree is a shape check, and a label of
+// the right shape can still name the wrong tree -- the baseline's, say, beside a list of five
+// changed files -- without either check noticing. `-z` keeps non-ASCII paths unquoted.
+export const listTreePaths = async (dir: string, tree: string): Promise<readonly string[]> => {
+  const { stdout } = await execFileAsync("git", ["ls-tree", "-r", "--name-only", "-z", tree], { cwd: dir });
+  return stdout
+    .split("\0")
+    .filter((path) => path.length > 0)
+    .sort();
+};
