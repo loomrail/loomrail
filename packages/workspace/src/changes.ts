@@ -382,10 +382,22 @@ const canonicalise = (target: string): string => {
  * Exported because the daemon refuses before doing any work, and the refusal has to be the same
  * one the read would have produced (spec D9).
  *
- * Both sides are canonicalised before they are compared, so the check is about which file is being
- * named rather than about how it was spelled: `..` is resolved, an absolute path is judged on where
- * it lands, and a symlink inside the worktree that points out of it is caught, which a lexical
- * check cannot do.
+ * The request is judged on where it LANDS and reported as what it NAMES, and those are two
+ * different paths whenever a symlink is involved. Canonicalising decides whether the request stays
+ * inside the worktree -- `..` is resolved, an absolute path is judged on where it lands, and a
+ * symlink inside the worktree that points out of it is caught, which a lexical check cannot do.
+ * But the path handed back, and so the path git is given and the path the answer is about, is the
+ * one the client named. Reporting the canonical form instead made the answer describe a different
+ * file than the one asked for: measured in a worktree holding `alias.txt -> secret.txt`, the
+ * summary listed `alias.txt` as ADDED while `readFileDiff({ path: "alias.txt" })` answered
+ * `path: "secret.txt"` carrying secret.txt's patch -- so a file the summary lists had no reachable
+ * body, and a caller rendering the answer under the row it asked from showed another file's diff.
+ * A symlinked DIRECTORY segment (`linkdir/a.txt`) did the same. Handing git the named path is also
+ * what git itself means by that path: it diffs index entries, and a symlink is an entry of its own
+ * whose diff is the link, while `linkdir/a.txt` is no entry at all and is refused by name.
+ *
+ * The refusal is not weakened by this: an escape is still caught on the canonical form, so
+ * `escape-link/secret.txt` is refused rather than answered for.
  *
  * The comparison is `startsWith(worktree + sep)` -- by path separator, never by string prefix, so
  * that `/tmp/wt-evil` is not read as living inside `/tmp/wt` -- and it compares the two strings
@@ -402,16 +414,25 @@ const canonicalise = (target: string): string => {
  */
 export const resolveWorktreeRelativePath = (worktreePath: string, requestedPath: string): string => {
   const worktree = canonicalise(worktreePath);
+  // The worktree as the caller spells it, kept alongside its canonical form. A client that echoes
+  // back the `worktreePath` Loomrail recorded names the same directory through whatever symlinks
+  // stand above it -- on macOS every temp worktree is reached through `/var -> private/var` -- and
+  // the request has to be readable against that spelling too, without that admitting anything the
+  // canonical check below has not already cleared.
+  const worktreeAsGiven = resolve(worktreePath);
+
   // `resolve` against the canonical worktree normalises `.` and `..` and leaves an absolute
-  // request as itself, which is what makes an absolute path get judged rather than trusted.
-  //
+  // request as itself, which is what makes an absolute path get judged rather than trusted. No
+  // symlink is followed here: this is the path the client named.
+  const named = resolve(worktree, requestedPath);
+
   // Only the CLIENT's side of the resolution is wrapped. A failure canonicalising `worktreePath`
   // itself is not a statement about the request -- it says the work item's worktree is gone or
   // unreadable, which spec §7 answers with its own row -- and dressing it up as a bad path would
   // point the owner at the wrong thing.
   let target: string;
   try {
-    target = canonicalise(resolve(worktree, requestedPath));
+    target = canonicalise(named);
   } catch (error) {
     throw new PathUnresolvableError(requestedPath, error);
   }
@@ -420,9 +441,22 @@ export const resolveWorktreeRelativePath = (worktreePath: string, requestedPath:
     throw new PathOutsideWorktreeError(requestedPath);
   }
 
+  // Where the request LANDS is inside the worktree; what it NAMES has to be inside it as well, or
+  // there is no worktree-relative spelling of the name to hand back. This is what a path that
+  // reaches in from outside through a symlink (`/tmp/elsewhere/link -> WT/a.txt`) fails: it lands
+  // on a file of the work item's, but it is not a name for it that this worktree has.
+  const base = named.startsWith(worktree + sep)
+    ? worktree
+    : named.startsWith(worktreeAsGiven + sep)
+      ? worktreeAsGiven
+      : null;
+  if (base === null) {
+    throw new PathOutsideWorktreeError(requestedPath);
+  }
+
   // git wants forward slashes in a pathspec on every platform, and `relative` uses the platform's
   // separator.
-  return relative(worktree, target).split(sep).join("/");
+  return relative(base, named).split(sep).join("/");
 };
 
 // Cuts a patch down to `maxBytes`, on a line boundary, and says how many bytes that left out.

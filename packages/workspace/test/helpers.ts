@@ -233,6 +233,42 @@ export const makeWorktreeWithAwkwardPaths = async (): Promise<WorktreeWithAwkwar
   return { worktreePath: dir, baseline, tabPath, starPath, otherPath };
 };
 
+export type WorktreeWithBracketPath = WorktreeWithChanges & {
+  // A changed file whose name contains a bracket expression: legal on every platform this suite
+  // runs on, Windows included, and still a pathspec expression if git is allowed to evaluate it.
+  bracketPath: string;
+  // The file that bracket expression matches when git evaluates it. `a[b].txt` as a pattern is
+  // "a", one character out of {b}, ".txt" -- which is `ab.txt` and not the file of that literal
+  // name. Probed: `diff-index -p HEAD -- 'a[b].txt'` answers with BOTH files' patches (git matches
+  // an exact name as well as a glob), while `-- ':(literal)a[b].txt'` answers with one.
+  decoyPath: string;
+};
+
+// Creates a throwaway git repository holding a changed file whose name is a pathspec expression
+// and a changed file that expression matches.
+//
+// Separate from `makeWorktreeWithAwkwardPaths` because that fixture's names (a tab, a bare `*`)
+// cannot exist on Windows, where CI also runs this suite: the `:(literal)` defence needs a test
+// that runs on every platform, and brackets are legal in an NTFS filename.
+export const makeWorktreeWithBracketPath = async (): Promise<WorktreeWithBracketPath> => {
+  const dir = await mkdtemp(join(tmpdir(), "loomrail-workspace-bracket-"));
+  const bracketPath = "a[b].txt";
+  const decoyPath = "ab.txt";
+
+  await execFileAsync("git", ["init", "--quiet", "-b", "main"], { cwd: dir });
+  await writeFile(join(dir, bracketPath), "x1\n");
+  await writeFile(join(dir, decoyPath), "y1\n");
+  await execFileAsync("git", ["add", "-A"], { cwd: dir });
+  await execFileAsync("git", [...testCommitterArgs, "commit", "--quiet", "-m", "base"], { cwd: dir });
+
+  const baseline = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: dir })).stdout.trim();
+
+  await writeFile(join(dir, bracketPath), "x1\nx2\n");
+  await writeFile(join(dir, decoyPath), "y1\ny2\n");
+
+  return { worktreePath: dir, baseline, bracketPath, decoyPath };
+};
+
 export type WorktreeWithHostileConfig = WorktreeWithChanges & {
   // The one changed file, named in UTF-8. Non-ASCII on purpose: `core.quotepath` defaults to true,
   // so without the flag git escapes this name to octal in every path it prints.

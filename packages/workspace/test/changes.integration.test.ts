@@ -17,6 +17,7 @@ import {
 import {
   listTreePaths,
   makeWorktreeWithAwkwardPaths,
+  makeWorktreeWithBracketPath,
   makeWorktreeWithEveryKindOfChange,
   makeWorktreeWithHostileGitConfig,
   readPorcelainDiff,
@@ -318,6 +319,72 @@ describe("readFileDiff", () => {
     expect(patch).toContain("+s2");
     expect(patch).not.toContain(otherPath);
   });
+
+  // The same half of the pathspec fix, on a name that exists on EVERY platform this suite runs on.
+  // The test above can only run where a file may be called `*`, so on Windows -- where CI also
+  // runs -- `:(literal)` could be deleted and the suite would stay green: the five refusals above
+  // guard the NAME LOOKUP, which happens before any pathspec is built, and none of them notices
+  // whether the pathspec that follows is literal.
+  //
+  // Brackets are legal in an NTFS filename and are still a pathspec expression. Probed: with the
+  // name passed through as it was, `diff-index -p HEAD -- 'a[b].txt'` answers with BOTH `a[b].txt`
+  // and `ab.txt` -- git matches the exact name AND the glob -- so the caller who asked about one
+  // file is handed another file's patch alongside it.
+  it("reads a file whose name is a bracket expression as that one file", async () => {
+    const { worktreePath, baseline, bracketPath, decoyPath } = await makeWorktreeWithBracketPath();
+
+    const diff = await readFileDiff({ worktreePath, baseline, path: bracketPath, maxBytes: MAX_BYTES });
+
+    const patch = patchOf(diff);
+    expect(diff.path).toBe(bracketPath);
+    expect(patch).toContain(`--- a/${bracketPath}`);
+    expect(patch).toContain("+x2");
+    // The decoy, by name and by the line only it has: a patch holding either is a patch about a
+    // file the caller did not ask about.
+    expect(patch).not.toContain(decoyPath);
+    expect(patch).not.toContain("+y2");
+  });
+
+  // Resolution is the other way a reading that promised "the diff of one file, and only that file"
+  // can answer about a different one. Canonicalising is right -- it is how a symlink pointing out
+  // of the worktree is caught -- but computing the worktree-relative path from the TARGET made the
+  // answer describe the target: measured in this worktree, `readFileDiff({ path: "alias.txt" })`
+  // answered `path: "modified.txt"` carrying modified.txt's patch, while the summary listed
+  // `alias.txt` as a file of its own. A file the summary lists must have a body reachable under
+  // the name the summary gave it.
+  it.skipIf(onWindows)(
+    "answers about the symlink the caller named, not about what it points at",
+    async () => {
+      const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+      await symlink("modified.txt", join(worktreePath, "alias.txt"));
+
+      // The premise, asserted rather than assumed: the summary really does offer this name.
+      const summary = await summariseChanges({ worktreePath, baseline, maxFiles: 2_000 });
+      expect(summary.files.map((file) => file.path)).toContain("alias.txt");
+
+      const diff = await readFileDiff({ worktreePath, baseline, path: "alias.txt", maxBytes: MAX_BYTES });
+
+      expect(diff.path).toBe("alias.txt");
+      // git diffs index entries, and a symlink is an entry of its own: its patch is the link, whose
+      // whole content is the name it points at. What it is NOT is modified.txt's edit.
+      expect(patchOf(diff)).not.toContain("+two");
+    },
+  );
+
+  it.skipIf(onWindows)(
+    "refuses a path through a symlinked directory instead of answering for the directory it points at",
+    async () => {
+      const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+      await symlink("pkg", join(worktreePath, "linkdir"));
+
+      // `linkdir/a.txt` is no entry of git's at all -- `linkdir` is a symlink blob, and nothing is
+      // tracked beneath it -- so the honest answer is the same refusal any other path that names no
+      // file gets. Reporting `pkg/a.txt`'s patch instead answers a question nobody asked.
+      await expect(
+        readFileDiff({ worktreePath, baseline, path: "linkdir/a.txt", maxBytes: MAX_BYTES }),
+      ).rejects.toThrow(PathNotAFileError);
+    },
+  );
 
   it("refuses a directory instead of calling the text files inside it binary", async () => {
     const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
