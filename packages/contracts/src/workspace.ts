@@ -320,7 +320,15 @@ const changeStatusSchema = z.enum(["ADDED", "MODIFIED", "DELETED", "RENAMED"]);
 // shows the owner, bounded the same way `carriedPathsSchema` above bounds one -- 4096 characters,
 // spec §5 -- because every path here is a string the daemon read from git output and will store,
 // log, or interpolate into a request, not a value this contract can otherwise trust to be short.
-const changedPathSchema = z.string().trim().min(1).max(4_096);
+//
+// Bounded but NOT trimmed, unlike `carriedPathsSchema`, and the difference is what the two strings
+// are for. A carried path is an input list this contract narrows on the way in; a changed path is
+// an identifier the contract publishes and then has to accept back on the file-diff handle. A
+// leading or trailing space is a legal filename character, and `.trim()` -- inherited from that
+// other schema -- silently renamed such a file: the summary listed `"trail "` while the contract
+// published `"trail"`, and asking for that published name back earned a PathNotAFileError for a
+// file that is really there. A contract that renames what it reports cannot be round-tripped.
+const changedPathSchema = z.string().min(1).max(4_096);
 
 // A line count from a work item's change summary. Nullable, never defaulted to zero: a binary
 // file's `insertions`/`deletions` are null because there is no line count to report, and reporting

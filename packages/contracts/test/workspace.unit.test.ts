@@ -470,6 +470,33 @@ describe("work item change summary and file diff contracts (E1.5, spec §4 §5)"
     expect(() => changedFileSchema.parse(validChangedFile({ path: `${at}p` }))).toThrow();
   });
 
+  // A path is an IDENTIFIER on these two schemas, not an input to be tidied: the summary publishes
+  // it and the file-diff handle has to accept the very same string back. `.trim()`, inherited from
+  // `carriedPathsSchema` where it bounds an input list, broke that round trip -- a file really
+  // named `"trail "` (a trailing space is a legal filename character on POSIX, and the summary
+  // lists it that way) was published as `"trail"`, and asking for `"trail"` back earned a
+  // PathNotAFileError for a file that is really there.
+  //
+  // Mutation performed and reverted for this test: put `.trim()` back on `changedPathSchema` in
+  // ../src/workspace.ts. Red, by assertion, on the first expect of this test:
+  // "expected 'dir/trail' to be 'dir/trail ' // Object.is equality". Restored by deleting
+  // `.trim()` again, never by `git checkout --`.
+  it("keeps a path with surrounding whitespace exactly as it was given, on both schemas", () => {
+    const trailing = "dir/trail ";
+    const leading = " dir/lead.txt";
+
+    expect(changedFileSchema.parse(validChangedFile({ path: trailing })).path).toBe(trailing);
+    expect(changedFileSchema.parse(validChangedFile({ path: leading })).path).toBe(leading);
+    expect(
+      changedFileSchema.parse(validChangedFile({ status: "RENAMED", previousPath: trailing })).previousPath,
+    ).toBe(trailing);
+
+    // The round trip itself, said in one line: what the summary publishes for a file is what the
+    // file-diff handle accepts and republishes for it.
+    const published = changedFileSchema.parse(validChangedFile({ path: trailing })).path;
+    expect(fileDiffSchema.parse(validFileDiff({ path: published })).path).toBe(trailing);
+  });
+
   const validChangeSummary = (overrides: Record<string, unknown> = {}) => ({
     schemaVersion: 1,
     baseline: "a".repeat(40),
@@ -629,21 +656,27 @@ describe("changedFileSchema and fileDiffSchema stay equal to @loomrail/workspace
   });
 
   // fileDiffSchema carries one boundary-only field FileDiff never declares -- `schemaVersion`, the
-  // envelope every response here has -- so the check compares FileDiff against exactly the fields
-  // the two shapes actually share, not the whole inferred type. `baseline` is one of the shared
-  // ones and is checked like any other: spec §4 lists it on FileDiff, the reading is where it is
-  // known, and it was missing from the workspace type until this round put it there.
+  // envelope every response here has -- so the check subtracts exactly that field and compares
+  // everything else. `baseline` is one of the shared ones and is checked like any other: spec §4
+  // lists it on FileDiff, the reading is where it is known, and it was missing from the workspace
+  // type until this round put it there.
   //
-  // Mutation performed and reverted for this test: changed `patch: z.string().nullable()` to
-  // `patch: z.string().nullable().optional()` in ../src/workspace.ts. Red, by assertion: the same
-  // "Type 'true' is not assignable to type 'false'" compile error as above, at this test's
-  // `identical` declaration -- FileDiff.patch is `string | null`, never `undefined`. Restored by
-  // re-editing the field back to `z.string().nullable()`.
+  // `Omit`, and deliberately not the `Pick<..., "path" | "baseline" | ...>` this test carried until
+  // now. A `Pick` names the fields to compare, so it is a THIRD hand-maintained copy of the same
+  // shape, and a field added to the schema and not to FileDiff was simply left out of the
+  // comparison -- the headline claim of this describe block ("stay equal") was false for this
+  // schema, proved by a mutation that added a field to fileDiffSchema and stayed green. `Omit`
+  // names only what is NOT compared, so a new field is compared by default and this test fails
+  // closed. `changedFileSchema` above shares no boundary-only field and needs no subtraction at
+  // all, so it compares the whole inferred type and never had the hole.
+  //
+  // Mutation performed and reverted for this test: added `mode: z.string()` to `fileDiffSchema` in
+  // ../src/workspace.ts -- a field FileDiff does not declare. Red, by assertion: "Type 'true' is
+  // not assignable to type 'false'" at this test's `identical` declaration, under `pnpm
+  // typecheck`. With the old `Pick`, the very same mutation was GREEN. Restored by deleting the
+  // added line, never by `git checkout --`.
   it("keeps fileDiffSchema's non-boundary fields identical to FileDiff, in both directions", () => {
-    type FileDiffSharedFields = Pick<
-      z.infer<typeof fileDiffSchema>,
-      "path" | "baseline" | "binary" | "patch" | "truncated" | "omittedBytes"
-    >;
+    type FileDiffSharedFields = Omit<z.infer<typeof fileDiffSchema>, "schemaVersion">;
     const identical: IsEqual<FileDiffSharedFields, WorkspaceFileDiff> = true;
     expect(identical).toBe(true);
   });
