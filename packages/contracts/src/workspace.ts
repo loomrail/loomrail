@@ -305,10 +305,14 @@ export const workItemWorkspaceResponseSchema = z
 // `ChangeSummary.tree` -- the resultTree label spec D3 has the daemon write onto StageAttempt at
 // the end of a stage -- is deliberately NOT part of this response and so is not part of the
 // equality check either: D3 says in so many words that the label "не показывается в этой вехе"
-// (is not shown this milestone). `workItemChangeSummarySchema` carries `baseline` instead, which
-// ChangeSummary does not carry at all -- the daemon knows the baseline it asked
-// `summariseChanges`/`readFileDiff` for and attaches it when building the response, the same way it
-// already attaches `workItemId` via the URL rather than the payload (see
+// (is not shown this milestone).
+//
+// `baseline` is on both schemas and lands differently on each, because spec §4 puts it differently
+// on each. `FileDiff` there is a plain reading with no work item in it, so @loomrail/workspace's
+// `FileDiff` carries the baseline it was read against and this schema's field is shared, checked
+// like the rest; `WorkItemChangeSummary` there is the boundary shape -- it carries `workItemId`,
+// which no reading knows -- so its `baseline` is attached by the daemon when it builds the
+// response, the same way it attaches `workItemId` via the URL rather than the payload (see
 // `publishedWorkItemWorkspaceSchema` above, which drops that same field for that same reason).
 const changeStatusSchema = z.enum(["ADDED", "MODIFIED", "DELETED", "RENAMED"]);
 

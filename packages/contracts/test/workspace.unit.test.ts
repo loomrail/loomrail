@@ -584,9 +584,11 @@ describe("changedFileSchema and fileDiffSchema stay equal to @loomrail/workspace
     expect(identical).toBe(true);
   });
 
-  // fileDiffSchema carries two boundary-only fields ChangeSummary/FileDiff never declare --
-  // `schemaVersion` and `baseline`, spec §5 -- so the check compares FileDiff against exactly the
-  // fields the two shapes actually share, not the whole inferred type.
+  // fileDiffSchema carries one boundary-only field FileDiff never declares -- `schemaVersion`, the
+  // envelope every response here has -- so the check compares FileDiff against exactly the fields
+  // the two shapes actually share, not the whole inferred type. `baseline` is one of the shared
+  // ones and is checked like any other: spec §4 lists it on FileDiff, the reading is where it is
+  // known, and it was missing from the workspace type until this round put it there.
   //
   // Mutation performed and reverted for this test: changed `patch: z.string().nullable()` to
   // `patch: z.string().nullable().optional()` in ../src/workspace.ts. Red, by assertion: the same
@@ -596,7 +598,7 @@ describe("changedFileSchema and fileDiffSchema stay equal to @loomrail/workspace
   it("keeps fileDiffSchema's non-boundary fields identical to FileDiff, in both directions", () => {
     type FileDiffSharedFields = Pick<
       z.infer<typeof fileDiffSchema>,
-      "path" | "binary" | "patch" | "truncated" | "omittedBytes"
+      "path" | "baseline" | "binary" | "patch" | "truncated" | "omittedBytes"
     >;
     const identical: IsEqual<FileDiffSharedFields, WorkspaceFileDiff> = true;
     expect(identical).toBe(true);
