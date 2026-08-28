@@ -808,6 +808,16 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     // into it, and an adapter that reads `invocation.workspace` nowhere would have all of that done
     // on its behalf and then discard it. Today that is `provider-claude-code`, which serves
     // DISCOVERY, PLAN and REVIEW out of its own temporary directory.
+    // Why this stage has no workspace, when it has none -- kept rather than acted on here.
+    //
+    // Whether the LACK of a workspace ends the dispatch is one decision and it is made in one
+    // place: `decideSessionWorkspace`, below. This block is the only thing that knows WHY there is
+    // no workspace, and that reason is what makes the owner's question specific to their own
+    // repository rather than generic, so it is carried down to the gate instead of being turned
+    // into a second, parallel refusal here. Null means there was nothing to prepare or the
+    // preparation succeeded -- and a writing stage reaching the gate with a null reason is the one
+    // case the gate's own wording describes: a Loomrail bug, not anything the owner can repair.
+    let provisionRefusal: HumanRequestDraft | null = null;
     if (
       lease.workspace === null &&
       stageRunsInWorkspace(attempt.stage) &&
@@ -815,33 +825,36 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     ) {
       const prepared = await prepareWorkspaceSafely(deps);
       if (prepared.type === "REFUSED") {
-        // Two reasons to end here as a blocking question, and they are different reasons.
-        //
-        // A stage that cannot run without a worktree (IMPLEMENT, QA) is refused whatever the cause:
-        // it could only report work it had nowhere to do.
-        //
-        // A stage that merely reads better with one is refused when the Project HAS a repository and
-        // the workspace could not be prepared from it -- mid-rebase, an occupied branch, a worktree
-        // that vanished, a `git` that would not run. This is the degrade that used to be silent: the
-        // session ran with no worktree and answered "there is no implementation to assess" about a
-        // work item whose implementation was sitting in the repository the Project names, while the
-        // only record of why was a warning in a log the owner never sees. Those causes are all
-        // repairable, and the owner is the one who repairs them, so they get the same question
-        // IMPLEMENT would have got.
-        //
-        // What must NOT start being refused is the case the previous implementer was protecting:
-        // a Project with no repository behind it at all -- a fixture Project still recorded at a
-        // bundled template, a path the owner moved. It has run its prose stages with no workspace
-        // since before E1, nothing about it is going to change, and a question about it would be one
-        // the owner cannot act on and did not ask for. That one still degrades, and says so.
-        if (stageRequiresWorkspace(attempt.stage) || prepared.cause === "REPOSITORY_UNUSABLE") {
+        provisionRefusal = prepared.request;
+        // A stage that merely reads better with a worktree is refused when the Project HAS a
+        // repository and the workspace could not be prepared from it -- mid-rebase, an occupied
+        // branch, a worktree that vanished, a `git` that would not run. This is the degrade that
+        // used to be silent: the session ran with no worktree and answered "there is no
+        // implementation to assess" about a work item whose implementation was sitting in the
+        // repository the Project names, while the only record of why was a warning in a log the
+        // owner never sees. Those causes are all repairable, and the owner is the one who repairs
+        // them, so they get the same question IMPLEMENT would have got. Refused here rather than at
+        // the gate because the gate does not refuse a prose stage at all, and must not start to.
+        if (prepared.cause === "REPOSITORY_UNUSABLE") {
           refuseDispatch({ type: "WORKSPACE_NOT_PROVISIONED", request: prepared.request });
           return;
         }
-        deps.logger.info(
-          { stageAttemptId, stage: attempt.stage, reason: prepared.request.title },
-          "This project has no repository to cut a workspace from; the stage runs on its context pack alone",
-        );
+        // A Project with no repository behind it at all -- a fixture Project still recorded at a
+        // bundled template, a path the owner moved. It has run its prose stages with no workspace
+        // since before E1, nothing about it is going to change, and a question about it would be
+        // one the owner cannot act on and did not ask for. That one still degrades, and says so.
+        //
+        // A writing stage on such a Project does NOT degrade; it falls through to the gate, which
+        // refuses it carrying `provisionRefusal` -- the same question, from the same draft, that
+        // this branch used to raise itself. Moving it there is what makes the gate load-bearing:
+        // it used to be unreachable by construction (every writing stage was refused here first),
+        // so deleting it changed no observable behaviour and no test could notice.
+        if (!stageRequiresWorkspace(attempt.stage)) {
+          deps.logger.info(
+            { stageAttemptId, stage: attempt.stage, reason: prepared.request.title },
+            "This project has no repository to cut a workspace from; the stage runs on its context pack alone",
+          );
+        }
       } else if (prepared.type === "POSTPONED") {
         // Spec §7: a lease another StageAttempt holds postpones this dispatch rather than failing
         // it. The dispatch stays PENDING -- exactly like the "another caller is already running a
@@ -913,7 +926,14 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       hasWorkspace: invocationWorkspace.workspace !== undefined,
     });
     if (sessionWorkspaceDecision.type === "REFUSED") {
-      refuseDispatch({ type: "WORKSPACE_NOT_PROVISIONED", request: sessionWorkspaceDecision.request });
+      // The reason from `prepareWorkspaceSafely` when there is one -- it names the owner's actual
+      // path and what to do about it -- and the gate's own wording when there is not, which is
+      // exactly the case that wording was written for: the worktree was prepared and Loomrail's own
+      // dispatch failed to pass it on.
+      refuseDispatch({
+        type: "WORKSPACE_NOT_PROVISIONED",
+        request: provisionRefusal ?? sessionWorkspaceDecision.request,
+      });
       return;
     }
 

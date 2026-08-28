@@ -290,7 +290,13 @@ describe("session loop workspace provisioning", () => {
       path: worktreePath,
       startPoint: "HEAD",
     });
-    if (added.type !== "ADDED") throw new Error(`Expected a worktree, got ${added.refusal.type}`);
+    // Asserted, not thrown: this helper builds the precondition several tests below depend on, and
+    // a `git worktree add` that refused should name itself as a failed expectation -- with git's own
+    // refusal in the message -- rather than as a crash from a sentence of ours.
+    expect(added, "the helper's `git worktree add` should have succeeded").toMatchObject({ type: "ADDED" });
+    if (added.type !== "ADDED") {
+      throw new Error("unreachable: the assertion above should already have failed");
+    }
     return worktreePath;
   };
 
@@ -657,6 +663,56 @@ describe("session loop workspace provisioning", () => {
       // refused -- that is the test two above -- because it could only report work it never did.
       expect(snapshotOf(localState, seeded.workItemId).humanRequests).toHaveLength(0);
       expect(snapshotOf(localState, seeded.workItemId).stageAttempts[0]?.status).toBe("SUCCEEDED");
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  // The gate that closes "the worst outcome this project has" (`decideSessionWorkspace`,
+  // @loomrail/domain), driven through the daemon rather than called in isolation.
+  //
+  // Its only test was the pure function, and nothing asserted the gate was wired in at all:
+  // deleting the `decideSessionWorkspace` call together with its `refuseDispatch` and `return` left
+  // this file at 15/15 and the whole daemon suite at 123/123. It could not have been otherwise --
+  // every writing stage was refused one branch earlier, so the gate was unreachable by
+  // construction. It is reachable now (see the comment on `provisionRefusal` in session-loop.ts),
+  // and this is the case that reaches it: a writing stage, an adapter that declares it, and a
+  // Project with no repository to cut a workspace from.
+  //
+  // The prose half of exactly this situation is the test above, which asserts the opposite outcome
+  // on the same Project: DISCOVERY runs, IMPLEMENT does not. The two differ in the stage and in
+  // nothing else.
+  it(
+    "refuses a writing stage that reached dispatch with no workspace, rather than letting it report work it never did",
+    async () => {
+      repositoryPath = join(temporaryDirectory, "not a repository either");
+      await mkdir(repositoryPath, { recursive: true });
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      let received: ProviderInvocation | undefined;
+      const adapter = completingAdapter((_count, invocation) => {
+        received = invocation;
+      });
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      // Asserted first, and about the adapter rather than about the owner's question: a session that
+      // opened at all is the defect. The adapter cannot tell an IMPLEMENT with no workspace from a
+      // DISCOVERY that was never meant to write, so it takes its read-only branch in an empty
+      // temporary directory, the agent answers from nothing, and the stage closes COMPLETED.
+      expect(received).toBeUndefined();
+
+      const snapshot = snapshotOf(localState, seeded.workItemId);
+      // Not SUCCEEDED, which is what a deleted gate produces here: the stage stops, and the owner
+      // is the one who decides what happens next.
+      expect(snapshot.stageAttempts[0]?.status).toBe("WAITING_HUMAN");
+      expect(snapshot.humanRequests).toHaveLength(1);
+      expect(snapshot.humanRequests[0]?.blocking).toBe(true);
+      // The question names this Project's own path, because that is the thing the owner can act on.
+      // The gate's own wording ("Nothing in the project or its repository caused this") would be a
+      // lie here, and it is deliberately not what is sent: the refusal `prepareWorkspace` produced
+      // travels down to the gate and is the one raised.
+      expect(snapshot.humanRequests[0]?.context).toContain(repositoryPath);
+      expect(workspaceOf(localState, seeded.workItemId)).toBeNull();
     },
     GIT_TIMEOUT_MS,
   );
