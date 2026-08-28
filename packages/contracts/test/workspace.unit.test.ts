@@ -10,6 +10,8 @@ import {
   maxCarriedPaths,
   releaseWorkspaceLeaseCommandSchema,
   workItemChangeSummarySchema,
+  workItemChangesResponseSchema,
+  workItemFileDiffResponseSchema,
   workItemWorkspaceCreatedEventSchema,
   workItemWorkspaceOrphanedEventSchema,
   workItemWorkspaceResponseSchema,
@@ -555,6 +557,48 @@ describe("work item change summary and file diff contracts (E1.5, spec §4 §5)"
 
   it("does not silently accept a field the file diff never declared", () => {
     expect(() => fileDiffSchema.parse({ ...validFileDiff(), hunkCount: 1 })).toThrow();
+  });
+
+  // The two response envelopes the daemon's handles answer with (spec §5). They exist because the
+  // fact "this work item has no workspace" cannot be said in a summary at all: `baseline` above is
+  // non-nullable on purpose, so the alternative to an envelope is a second, degraded summary shape
+  // -- and the daemon already says this same fact one way, on GET .../workspace, as `null` with a
+  // 200. One convention for one condition.
+  it("carries a summary, and says 'no workspace' with null rather than with a baseline-less summary", () => {
+    expect(
+      workItemChangesResponseSchema.parse({ schemaVersion: 1, changes: validChangeSummary() }).changes
+        ?.baseline,
+    ).toBe("a".repeat(40));
+    // Said as an assertion rather than left to the parse: if the envelope ever stopped being
+    // nullable, "this work item has no workspace" would become unsayable, and the failure should
+    // read as that claim rather than as a ZodError thrown out of the test body.
+    expect(() => workItemChangesResponseSchema.parse({ schemaVersion: 1, changes: null })).not.toThrow();
+    expect(workItemChangesResponseSchema.parse({ schemaVersion: 1, changes: null }).changes).toBeNull();
+    // Not an alternative spelling of the same news: a summary with no base is refused outright, so
+    // no caller can be handed one to interpret.
+    expect(() =>
+      workItemChangesResponseSchema.parse({
+        schemaVersion: 1,
+        changes: validChangeSummary({ baseline: null }),
+      }),
+    ).toThrow();
+    expect(() =>
+      workItemChangesResponseSchema.parse({ schemaVersion: 1, changes: null, workspace: null }),
+    ).toThrow();
+  });
+
+  it("carries a file diff, and says 'no workspace' the same way the summary response does", () => {
+    expect(workItemFileDiffResponseSchema.parse({ schemaVersion: 1, diff: validFileDiff() }).diff?.path).toBe(
+      "src/index.ts",
+    );
+    expect(() => workItemFileDiffResponseSchema.parse({ schemaVersion: 1, diff: null })).not.toThrow();
+    expect(workItemFileDiffResponseSchema.parse({ schemaVersion: 1, diff: null }).diff).toBeNull();
+    expect(() =>
+      workItemFileDiffResponseSchema.parse({ schemaVersion: 1, diff: validFileDiff({ patch: 1 }) }),
+    ).toThrow();
+    expect(() =>
+      workItemFileDiffResponseSchema.parse({ schemaVersion: 1, diff: null, path: "src/index.ts" }),
+    ).toThrow();
   });
 });
 

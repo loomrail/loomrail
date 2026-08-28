@@ -364,6 +364,32 @@ export const fileDiffSchema = z
   })
   .strict();
 
+// The `changes` handle's response, and NOT `workItemChangeSummarySchema` on its own.
+//
+// A WorkItem with no workspace has nothing to summarise, and that is the ordinary state of every
+// prose-only stage rather than a failure (spec §7's first row). It cannot be expressed as a
+// degraded summary, because `baseline` above is deliberately non-nullable: a summary with no base
+// to compare against is not a summary. So the fact travels the way E1's
+// GET /api/v1/work-items/:workItemId/workspace already carries the very same fact --
+// `null` with 200, with 404 left to mean the one thing it should mean, that the WorkItem itself
+// does not exist. One convention for one condition, rather than a second one invented here.
+export const workItemChangesResponseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    changes: workItemChangeSummarySchema.nullable(),
+  })
+  .strict();
+
+// The body handle's response, enveloped for the same reason and answering the same `null` for the
+// same condition (spec D5 keeps the two handles apart; it does not make them answer "no workspace"
+// two different ways).
+export const workItemFileDiffResponseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    diff: fileDiffSchema.nullable(),
+  })
+  .strict();
+
 export type WorkItemWorkspaceStatus = z.infer<typeof workItemWorkspaceStatusSchema>;
 export type WorkItemWorkspaceResponse = z.infer<typeof workItemWorkspaceResponseSchema>;
 export type PublishedWorkItemWorkspace = z.infer<typeof publishedWorkItemWorkspaceSchema>;
@@ -382,3 +408,5 @@ export type ChangeStatus = z.infer<typeof changeStatusSchema>;
 export type ChangedFile = z.infer<typeof changedFileSchema>;
 export type WorkItemChangeSummary = z.infer<typeof workItemChangeSummarySchema>;
 export type FileDiff = z.infer<typeof fileDiffSchema>;
+export type WorkItemChangesResponse = z.infer<typeof workItemChangesResponseSchema>;
+export type WorkItemFileDiffResponse = z.infer<typeof workItemFileDiffResponseSchema>;
