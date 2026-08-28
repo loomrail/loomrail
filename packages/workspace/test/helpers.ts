@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -110,4 +110,64 @@ export const makeEmptyRepoWithUntrackedFile = async (): Promise<string> => {
   await execFileAsync("git", ["init", "--quiet", "-b", "main"], { cwd: dir });
   await writeFile(join(dir, "untracked-new.txt"), "new\n");
   return dir;
+};
+
+export type WorktreeWithChanges = {
+  worktreePath: string;
+  baseline: string;
+};
+
+// Creates a throwaway git repository, commits a base, and then leaves in the working tree one of
+// every kind of change a summary has to account for: a tracked file edited, a file created, a
+// tracked file deleted, a file renamed, a binary file whose bytes changed, and an ignored build
+// artifact that must stay out of the summary entirely. Returns the base commit to summarise
+// against.
+//
+// The created file is the point of the whole exercise: `git diff <baseline>` in a working tree
+// does not see it (spec §2.1), so a helper that left it out could not tell a correct
+// implementation from the naive one. The binary file and the rename are here for the same reason
+// one level down -- they are the two shapes `--numstat -z` encodes differently from every other
+// record, and a parser is where a format assumption hides.
+//
+// Committer identity comes from -c flags rather than the machine's global git config, so the test
+// does not depend on the settings of whoever runs it.
+export const makeWorktreeWithEveryKindOfChange = async (): Promise<WorktreeWithChanges> => {
+  const dir = await mkdtemp(join(tmpdir(), "loomrail-workspace-changes-"));
+  const commit = (message: string) =>
+    execFileAsync("git", [...testCommitterArgs, "commit", "--quiet", "-m", message], { cwd: dir });
+
+  await execFileAsync("git", ["init", "--quiet", "-b", "main"], { cwd: dir });
+
+  await writeFile(join(dir, ".gitignore"), "build/\n");
+  await writeFile(join(dir, "modified.txt"), "one\n");
+  await writeFile(join(dir, "deleted.txt"), "gone\n");
+  // Five identical lines so that moving the file, with its content untouched, scores as a 100%
+  // rename under `-M` instead of as a delete plus an add.
+  await writeFile(join(dir, "renamed-from.txt"), "r1\nr2\nr3\nr4\nr5\n");
+  await writeFile(join(dir, "pic.bin"), Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe, 0x00, 0x10]));
+  await execFileAsync("git", ["add", "-A"], { cwd: dir });
+  await commit("base");
+
+  const baseline = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: dir })).stdout.trim();
+
+  // Tracked file edited: one line added, none removed.
+  await writeFile(join(dir, "modified.txt"), "one\ntwo\n");
+
+  // File created and left untracked -- what an agent does most of the time.
+  await writeFile(join(dir, "added.txt"), "added\n");
+
+  // Tracked file removed from the working copy.
+  await rm(join(dir, "deleted.txt"));
+
+  // File moved, content untouched.
+  await rename(join(dir, "renamed-from.txt"), join(dir, "renamed-to.txt"));
+
+  // Binary file whose bytes changed: git reports `-` for both line counts.
+  await writeFile(join(dir, "pic.bin"), Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04, 0x00, 0x20, 0x7f]));
+
+  // Ignored build output, which `add -A` must leave out of the temporary index by itself.
+  await mkdir(join(dir, "build"), { recursive: true });
+  await writeFile(join(dir, "build", "artifact.txt"), "artifact\n");
+
+  return { worktreePath: dir, baseline };
 };

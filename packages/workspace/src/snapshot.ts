@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runGit } from "./git.js";
+import { runGit, runGitWithIndex } from "./git.js";
 
 export type CarryInSnapshot = {
   commit: string;
@@ -18,13 +18,6 @@ const splitLines = (text: string): readonly string[] => {
   const trimmed = text.trim();
   return trimmed.length === 0 ? [] : trimmed.split("\n");
 };
-
-// Runs a git plumbing command against a temporary index rather than the repository's real one, so
-// building the snapshot never touches the owner's actual index. `env` is spread over `process.env`
-// rather than passed alone -- GitOptions.env replaces the child's environment, and passing only
-// GIT_INDEX_FILE would drop PATH and leave `spawn` unable to find "git" at all.
-const runGitWithIndex = (args: readonly string[], cwd: string, indexFile: string) =>
-  runGit(args, { cwd, env: { ...process.env, GIT_INDEX_FILE: indexFile } });
 
 // Carries everything the owner has not committed -- edits to tracked files, whatever is already
 // staged, untracked files including nested ones, and deletions -- into a standalone commit that

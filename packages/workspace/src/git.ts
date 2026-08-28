@@ -59,3 +59,13 @@ export const runGit = (args: readonly string[], options: GitOptions): Promise<Gi
       });
     });
   });
+
+// Runs a git plumbing command against a temporary index rather than the repository's real one, so
+// the caller never touches the owner's actual index. `env` is spread over `process.env` rather
+// than passed alone -- GitOptions.env replaces the child's environment, and passing only
+// GIT_INDEX_FILE would drop PATH and leave `spawn` unable to find "git" at all.
+export const runGitWithIndex = (
+  args: readonly string[],
+  cwd: string,
+  indexFile: string,
+): Promise<GitResult> => runGit(args, { cwd, env: { ...process.env, GIT_INDEX_FILE: indexFile } });
