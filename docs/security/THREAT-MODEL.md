@@ -322,6 +322,15 @@ Codex adapter picked its sandbox mode from the mere PRESENCE of a worktree, thos
 write-enabled and network-enabled — a review able to rewrite the code it was judging. Nothing else about the
 containment changed — same worktree, same branch, same `-c` key where it is still sent, same flag guards.
 
+**`-s read-only` was measured, not assumed.** A real `codex exec` run under that mode in a real linked
+worktree read the repository freely — `git status --porcelain`, `git log --oneline -1` and `git diff HEAD
+--stat` each exited 0 — and was refused both writes it attempted: appending to a tracked file
+(`operation not permitted`) and `git commit --allow-empty` (`fatal: Unable to create
+'<repo>/.git/worktrees/<name>/index.lock': Operation not permitted`). The second refusal is the load-bearing
+one: a linked worktree's `index.lock` lives in the owner's `.git`, OUTSIDE the directory passed to `-C`, so
+the sandbox bounds the gitdir as well as the working tree. The worktree was clean afterwards and its history
+unchanged. See spec §2.15 for the capture.
+
 Two bounds on that widening, both enforced in `apps/daemon/src/session-loop.ts`. A Project with no repository
 behind it — a fixture Project still recorded at a bundled template, a path the owner moved — still dispatches
 its prose stages with no workspace, exactly as it did before E1, rather than being refused (only IMPLEMENT and
