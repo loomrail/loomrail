@@ -2073,12 +2073,22 @@ test.describe("authenticated walking skeleton", () => {
       briefDescription.boundingBox(),
     ]);
     expect(fieldBoxes.every((box) => box !== null)).toBe(true);
+    // Chromium returns layout boxes in fractional CSS pixels. Font rasterisation can shift a box
+    // by a fraction of a pixel between otherwise identical runs, so verify the intended gaps to
+    // half a CSS pixel rather than requiring an unrealistically exact tenth.
+    const subpixelTolerance = 0.5;
     if (fieldBoxes[0] && fieldBoxes[1]) {
-      expect(Math.abs(fieldBoxes[1].y - (fieldBoxes[0].y + fieldBoxes[0].height) - 6)).toBeLessThan(0.1);
+      expect(Math.abs(fieldBoxes[1].y - (fieldBoxes[0].y + fieldBoxes[0].height) - 6)).toBeLessThanOrEqual(
+        subpixelTolerance,
+      );
     }
     if (fieldBoxes[2] && fieldBoxes[3] && fieldBoxes[4]) {
-      expect(Math.abs(fieldBoxes[3].y - (fieldBoxes[2].y + fieldBoxes[2].height) - 6)).toBeLessThan(0.1);
-      expect(Math.abs(fieldBoxes[4].y - (fieldBoxes[3].y + fieldBoxes[3].height) - 3)).toBeLessThan(0.1);
+      expect(Math.abs(fieldBoxes[3].y - (fieldBoxes[2].y + fieldBoxes[2].height) - 6)).toBeLessThanOrEqual(
+        subpixelTolerance,
+      );
+      expect(Math.abs(fieldBoxes[4].y - (fieldBoxes[3].y + fieldBoxes[3].height) - 3)).toBeLessThanOrEqual(
+        subpixelTolerance,
+      );
     }
     await expect(briefDescription).toHaveCSS("font-size", "11px");
     await expect(briefDescription).toHaveCSS("line-height", "14px");
