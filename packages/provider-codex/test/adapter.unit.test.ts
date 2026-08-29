@@ -859,7 +859,12 @@ describe("createCodexProvider", () => {
     // this stage is closed on.
     expect(JSON.stringify(outcome)).not.toContain(intention);
     expect(request.title).toContain("cut off before it finished");
-    expect(request.context).toContain("killed by SIGKILL");
+    // Windows has no POSIX signal outcome for this self-kill fixture and reports exit code 1;
+    // POSIX reports the SIGKILL itself. Both are real abnormal endings, and the invariant under
+    // test is that neither one promotes the last checkpoint into a completed stage.
+    expect(request.context).toContain(
+      process.platform === "win32" ? "exited with code 1" : "killed by SIGKILL",
+    );
     // And the checkpoint is not disowned either -- it was published as it arrived, the daemon has
     // persisted it, and a resumed attempt starts from it.
     expect(request.context).toContain("checkpoint this session published is kept");
