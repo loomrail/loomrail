@@ -1,4 +1,5 @@
 import { access } from "node:fs/promises";
+import { normalize } from "node:path";
 
 import { runGit } from "./git.js";
 
@@ -86,7 +87,10 @@ export const parseWorktreeListPorcelain = (stdout: string): readonly WorktreeEnt
       continue;
     }
     if (line.startsWith("worktree ")) {
-      path = line.slice("worktree ".length);
+      // Git for Windows reports drive paths with POSIX separators (`C:/...`) while Node's path
+      // APIs and the caller that chose the worktree return native separators (`C:\\...`). Keep one
+      // representation at the module boundary so occupancy and recovery comparisons can agree.
+      path = normalize(line.slice("worktree ".length));
     } else if (line.startsWith("branch ")) {
       branch = branchNameFromRef(line.slice("branch ".length));
     } else if (line === "prunable" || line.startsWith("prunable ")) {

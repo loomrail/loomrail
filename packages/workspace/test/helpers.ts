@@ -299,8 +299,12 @@ export const makeWorktreeWithHostileGitConfig = async (): Promise<WorktreeWithHo
 
   await writeFile(join(dir, nonAsciiPath), "one\ntwo\n");
 
+  // `diff.external` is executed by Git's shell. Git for Windows needs its POSIX-facing path form,
+  // and quoting keeps the probe valid if the temporary directory contains a space.
+  const driverCommand = `"${driver.replaceAll("\\", "/")}"`;
+
   const hostile: readonly (readonly [string, string])[] = [
-    ["diff.external", driver],
+    ["diff.external", driverCommand],
     ["color.ui", "always"],
     ["color.diff", "always"],
     ["diff.renames", "false"],

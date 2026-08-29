@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 
 import { runGit, runGitWithIndex } from "./git.js";
 
@@ -13,6 +14,16 @@ export type CarryInSnapshot = {
 // constant across every repository, which is what lets an empty repository (no HEAD to diff
 // against) still be told "nothing to carry" without special-casing the comparison.
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+// A carry-in commit is Loomrail's internal transport artifact, not a commit authored by the
+// repository owner. Pinning its identity keeps the operation independent of global/local Git
+// config and avoids attributing machine-generated plumbing to a person.
+const SNAPSHOT_GIT_IDENTITY = {
+  GIT_AUTHOR_NAME: "Loomrail",
+  GIT_AUTHOR_EMAIL: "loomrail@localhost",
+  GIT_COMMITTER_NAME: "Loomrail",
+  GIT_COMMITTER_EMAIL: "loomrail@localhost",
+} as const;
 
 const splitLines = (text: string): readonly string[] => {
   const trimmed = text.trim();
@@ -70,7 +81,10 @@ export const createCarryInSnapshot = async (context: {
       headCommit === null
         ? ["commit-tree", tree, "-m", message]
         : ["commit-tree", tree, "-p", headCommit, "-m", message];
-    const commitTree = await runGit(commitTreeArgs, { cwd: topLevel });
+    const commitTree = await runGit(commitTreeArgs, {
+      cwd: topLevel,
+      env: { ...process.env, ...SNAPSHOT_GIT_IDENTITY },
+    });
     if (commitTree.exitCode !== 0) {
       throw new Error(`git commit-tree failed (${String(commitTree.exitCode)}): ${commitTree.stderr}`);
     }

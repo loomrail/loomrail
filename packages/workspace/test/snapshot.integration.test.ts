@@ -69,6 +69,35 @@ const workingCopyBytes = async (repo: string): Promise<Record<string, string>> =
 };
 
 describe("createCarryInSnapshot", () => {
+  it("does not need the owner's Git identity to create its internal commit", async () => {
+    const repo = await makeRepoWithEveryKindOfChange();
+    const state = requireRepositoryState(await inspectRepository(repo));
+
+    // Empty repository-local values override any global identity on the machine. The snapshot is
+    // Loomrail's internal plumbing commit, so its ability to exist must not depend on who runs it
+    // or on whether that person has configured Git at all.
+    await runGit(["config", "user.name", ""], { cwd: repo });
+    await runGit(["config", "user.email", ""], { cwd: repo });
+
+    const snapshot = requireSnapshot(
+      await createCarryInSnapshot({
+        topLevel: state.topLevel,
+        headCommit: state.headCommit,
+        message: "loomrail: carry-in",
+      }),
+    );
+
+    expect(snapshot.commit).toMatch(/^[0-9a-f]{40}$/);
+
+    const identity = await runGit(["show", "-s", "--format=%an%n%ae%n%cn%n%ce", snapshot.commit], {
+      cwd: repo,
+    });
+    expect(identity.exitCode).toBe(0);
+    expect(identity.stdout.trim()).toBe(
+      ["Loomrail", "loomrail@localhost", "Loomrail", "loomrail@localhost"].join("\n"),
+    );
+  });
+
   it("carries the work the owner has not committed, and leaves the ignored files behind", async () => {
     const repo = await makeRepoWithEveryKindOfChange();
     const state = requireRepositoryState(await inspectRepository(repo));
@@ -110,7 +139,7 @@ describe("createCarryInSnapshot", () => {
     // whatever they were".
     expect(bytesBefore["tracked-modified.txt"]).toBe(Buffer.from("changed\n").toString("base64"));
     expect(bytesBefore["staged.txt"]).toBe(Buffer.from("staged\n").toString("base64"));
-    expect(bytesBefore["build/artifact.txt"]).toBe(Buffer.from("artifact\n").toString("base64"));
+    expect(bytesBefore[join("build", "artifact.txt")]).toBe(Buffer.from("artifact\n").toString("base64"));
 
     await createCarryInSnapshot({
       topLevel: state.topLevel,
