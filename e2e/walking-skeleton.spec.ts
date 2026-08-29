@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -1157,7 +1157,10 @@ test.describe("authenticated walking skeleton", () => {
 
       // Repaired: the Project now records a repository under the daemon's own data directory --
       // beside the database, where `demoProjectsRoot` defaults -- and not the bundled template.
-      const repaired = join(temporaryDirectory, "demo-projects", "web-app-a");
+      // Canonicalise the already-existing parent rather than the target: the target is created by
+      // the in-flight repair this assertion is waiting for, so resolving it here would race that
+      // creation. The resulting spelling still matches the canonical path the daemon records.
+      const repaired = join(await realpath(temporaryDirectory), "demo-projects", "web-app-a");
       await expect(staleRow.locator(".settings__project-path")).toContainText(repaired, {
         timeout: DEMO_INITIALISATION_MS,
       });
@@ -1864,6 +1867,10 @@ test.describe("authenticated walking skeleton", () => {
       expect(new Set(bodyRequests)).toEqual(new Set([seeded.changed.modified]));
     } finally {
       adapter.release();
+      // `close()` deliberately asks a live adapter to stop without waiting for it (session-worker
+      // D5). This test owns a deterministic gate, so once it releases that gate it can and must wait
+      // for the worker to settle before deleting the real worktree Git may still be inspecting.
+      await daemon?.whenIdle();
       await daemon?.close();
       daemon = undefined;
       await rm(temporaryDirectory, { recursive: true, force: true });

@@ -427,6 +427,11 @@ test.describe("attempt nesting", () => {
       await expect(session3).toBeVisible();
       await expect(session3.locator(".lr-session-timeline__occupancy")).toHaveCount(0);
     } finally {
+      // The daemon owns the SQLite handle after opening the seeded database. Windows refuses to
+      // unlink an open database, so release it here before removing the directory; afterEach then
+      // sees `undefined` and has nothing left to close.
+      await daemon?.close();
+      daemon = undefined;
       await rm(temporaryDirectory, { recursive: true, force: true });
     }
   });
