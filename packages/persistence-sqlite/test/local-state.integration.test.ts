@@ -3461,46 +3461,21 @@ describe("SQLite local state", () => {
       }
     });
 
-    // How long the reparented probe child may take to stop existing after its SIGKILL. Measured at
-    // about a millisecond -- init reaps it, and this process is not waiting on an event-loop turn
-    // to hear about it. Generous by three orders of magnitude, and a miss reads as a report of
-    // PROBE_FAILED rather than as a hang.
-    const ORPHAN_VANISH_TIMEOUT_MS = 2_000;
-
-    // A process this test process is NOT the parent of, and that distinction is the test.
-    // A direct child that is SIGKILLed becomes a zombie -- and a zombie still answers
-    // `process.kill(pid, 0)` -- until this process reaps it, which happens on an event-loop turn
-    // that a synchronous `execute` never yields. `/bin/sh` starts the child and exits, so the child
-    // is reparented to init, which reaps it at once; only then can a pid really stop existing in
-    // the middle of one synchronous `execute` call.
-    const spawnReparentedProbeChild = (): number => {
-      const printed = execFileSync(
-        "/bin/sh",
-        ["-c", `"${process.execPath}" -e 'setInterval(() => {}, 1000);' >/dev/null 2>&1 & echo $!`],
-        { encoding: "utf8" },
-      );
-      const pid = Number(printed.trim());
-      if (!Number.isInteger(pid) || pid <= 0) {
-        throw new Error("The reparented probe child did not start");
-      }
-      return pid;
-    };
-
     // The liveness check and the signal are not one atomic act: the identity guard runs a real
-    // synchronous `ps` between them. An orphan that exits inside that window makes `process.kill`
+    // synchronous OS probe between them. An orphan that exits inside that window makes the signal
     // throw ESRCH -- which, unwrapped, escapes `killOrphanedSessionProcess`, is re-wrapped by
     // `execute` as a PERSISTENCE_FAILURE, and propagates out of the daemon's own unwrapped
     // RECONCILE_WORKFLOWS call, which runs before `app.listen`. The daemon then does not start at
     // all: a strictly worse failure than the orphan the kill exists to prevent.
     //
-    // The window is closed here for real rather than simulated -- the probe kills the child and
-    // waits for its pid to actually stop existing before returning a start time -- so the kill
-    // that follows signals a pid that is genuinely gone.
+    // The OS race is injected at the signal boundary: that is both deterministic and portable,
+    // unlike a reparented `/bin/sh` child (which cannot exist on Windows). The liveness and identity
+    // guards still run against a real child before the injected signal reports ESRCH.
     //
     // Asserted through `resolves`, not a bare `await`: the defect is `execute` THROWING, and a bare
     // await would surface that as the raw StateStoreError rather than as a failed assertion about
     // what reconciliation did.
-    it("survives, and records it, when the orphan exits between the liveness check and the kill", async () => {
+    it("survives, and records it, when the orphan vanishes before the signal", async () => {
       const reconciled = orphanAndReconcile(
         {
           session: "start-orphan-vanished-session",
@@ -3508,22 +3483,13 @@ describe("SQLite local state", () => {
           reconcile: "reconcile-orphan-vanished-session",
         },
         () => ({
-          processStartedAt: (pid: number) => {
-            process.kill(pid, "SIGKILL");
-            const deadline = Date.now() + ORPHAN_VANISH_TIMEOUT_MS;
-            // A synchronous spin, not an `await`: `execute` is synchronous end to end, so there is
-            // no turn to yield to -- and needing one is precisely what a zombie would impose.
-            while (Date.now() < deadline) {
-              if (!isProcessAlive(pid)) {
-                // Believable identity: a second before the session that recorded it, so the guard
-                // passes and the kill below is actually attempted.
-                return new Date(Date.parse(timestamp) - 1_000);
-              }
-            }
-            throw new Error("The probe child was still alive when the identity probe gave up");
+          processStartedAt: () => new Date(Date.parse(timestamp) - 1_000),
+          signalProcess: () => {
+            const vanished = new Error("No such process") as Error & { code: string };
+            vanished.code = "ESRCH";
+            throw vanished;
           },
         }),
-        spawnReparentedProbeChild,
       );
 
       await expect(reconciled).resolves.toMatchObject({

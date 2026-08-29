@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, normalize } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { ContextSources } from "@loomrail/context-assembly";
@@ -849,10 +849,39 @@ const PID_IDENTITY_TOLERANCE_MS = 2_000;
 // etimes: keyword not found"), and `lstart`'s absolute timestamp is formatted with locale-dependent
 // month names. `etime` is `[[dd-]hh:]mm:ss`, numeric and locale-free, and subtracting it from now
 // gives the start time. Returns `null` -- never a guess -- when the probe cannot answer: `ps` is
-// absent (Windows), it exits non-zero, or its output does not parse. The caller treats `null` as
-// "do not kill".
+// absent, it exits non-zero, or its output does not parse. The caller treats `null` as "do not
+// kill".
 const readProcessStartTime = (pid: number, now: Date): Date | null => {
-  if (process.platform === "win32") return null;
+  if (process.platform === "win32") {
+    let output: string;
+    try {
+      // Win32_Process.CreationDate is the Windows source of truth for when a process began. Return
+      // elapsed milliseconds rather than the absolute timestamp so an injected clock behaves the
+      // same way here as it does with POSIX `ps -o etime` below. The pid is a validated number and
+      // the command is passed as one argv value, never interpolated through a shell.
+      const pidText = String(pid);
+      output = execFileSync(
+        "powershell.exe",
+        [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `$candidate = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = ${pidText}' -Property CreationDate; if ($null -ne $candidate) { [int64](([DateTime]::UtcNow - $candidate.CreationDate.ToUniversalTime()).TotalMilliseconds) }`,
+        ],
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          windowsHide: true,
+        },
+      );
+    } catch {
+      return null;
+    }
+    const elapsedMilliseconds = Number(output.trim());
+    if (!Number.isSafeInteger(elapsedMilliseconds) || elapsedMilliseconds < 0) return null;
+    return new Date(now.getTime() - elapsedMilliseconds);
+  }
   let output: string;
   try {
     output = execFileSync("ps", ["-o", "etime=", "-p", String(pid)], {
@@ -914,6 +943,7 @@ const killOrphanedSessionProcess = (context: {
   sessionId: string;
   sessionStartedAt: string;
   processStartedAt: (pid: number) => Date | null;
+  signalProcess: (pid: number, signal: "SIGKILL") => void;
   report: (event: OrphanProcessEvent) => void;
 }): void => {
   const { pid, sessionId } = context;
@@ -945,7 +975,7 @@ const killOrphanedSessionProcess = (context: {
       return;
     }
     try {
-      process.kill(pid, "SIGKILL");
+      context.signalProcess(pid, "SIGKILL");
     } catch (cause) {
       // ESRCH is the window this whole comment is about: the process was alive at the check and
       // gone by the signal. Nothing went wrong -- but a kill that did not happen must not be
@@ -1011,7 +1041,7 @@ const canonicalizeWorktreePath = (path: string): string => {
   let current = path;
   for (;;) {
     try {
-      const resolved = realpathSync(current);
+      const resolved = process.platform === "win32" ? realpathSync.native(current) : realpathSync(current);
       return tail.length === 0 ? resolved : join(resolved, ...tail.reverse());
     } catch (cause) {
       if (errorCodeOf(cause) !== "ENOENT") return path;
@@ -1023,10 +1053,21 @@ const canonicalizeWorktreePath = (path: string): string => {
   }
 };
 
+// Both sides are canonicalised. Git for Windows may preserve an 8.3 alias or the original drive
+// letter casing where Node reports the long path (or vice versa), while the filesystem considers
+// all of those names identical. `realpathSync.native` asks Windows to resolve those aliases; case
+// folding then matches the platform's case-insensitive path semantics. POSIX keeps exact case.
+const worktreePathComparisonKey = (path: string): string => {
+  const canonical = canonicalizeWorktreePath(normalize(path));
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+};
+
 export const openLocalState = async (options: OpenLocalStateOptions): Promise<LocalState> => {
   const now = options.now ?? (() => new Date());
   const createId = options.createId ?? ((kind) => `${kind}-${randomUUID()}`);
   const processStartedAt = options.processStartedAt ?? ((pid: number) => readProcessStartTime(pid, now()));
+  const signalProcess =
+    options.signalProcess ?? ((pid: number, signal: "SIGKILL") => process.kill(pid, signal));
   // The default of last resort. A SIGKILL to a process on the owner's machine that nothing recorded
   // is exactly the defect this callback closes, so an uninjected caller still gets a durable line
   // rather than silence. `apps/daemon` injects its own structured logger over this.
@@ -2867,6 +2908,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               sessionId: current.id,
               sessionStartedAt: current.startedAt,
               processStartedAt,
+              signalProcess,
               report: reportOrphanProcess,
             });
           }
@@ -3043,8 +3085,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             // `worktreePath` was never itself resolved that way, so it is canonicalised here, on
             // this side of the comparison, rather than trusting a string a healthy workspace would
             // otherwise fail to match by pure accident of where the OS temp directory lives.
-            const canonicalWorktreePath = canonicalizeWorktreePath(workspace.worktreePath);
-            const entry = entries.find((candidate) => candidate.path === canonicalWorktreePath);
+            const canonicalWorktreePath = worktreePathComparisonKey(workspace.worktreePath);
+            const entry = entries.find(
+              (candidate) => worktreePathComparisonKey(candidate.path) === canonicalWorktreePath,
+            );
             const isGone = entry === undefined || entry.prunable;
             if (!isGone) continue;
 

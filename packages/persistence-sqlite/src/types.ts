@@ -269,9 +269,15 @@ export type OpenLocalStateOptions = {
   /**
    * When the process with this pid started, or `null` if that cannot be determined. Injected only
    * so a test can drive both sides of the pid-reuse guard deterministically; production uses the
-   * default synchronous `ps` probe.
+   * default synchronous OS probe (`ps` on POSIX, Win32_Process through PowerShell on Windows).
    */
   processStartedAt?: (pid: number) => Date | null;
+  /**
+   * Sends the final forceful signal after the liveness and pid-identity guards pass. Test-only:
+   * production uses `process.kill`; injection lets the vanished-between-probe-and-signal race be
+   * verified deterministically on every supported OS.
+   */
+  signalProcess?: (pid: number, signal: "SIGKILL") => void;
   /**
    * Called synchronously, once per READY WorkItemWorkspace found gone or found un-checkable, at
    * the moment startup reconciliation decides what to do about it. Injected the way `onOrphanProcess`
