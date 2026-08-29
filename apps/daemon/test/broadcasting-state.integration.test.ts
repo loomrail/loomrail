@@ -157,11 +157,16 @@ describe("broadcastingState", () => {
       (signal) => published.push(signal),
       silentLogger,
     );
-    const created = createWorkItem(state, project.id, "Newer work");
+    try {
+      const created = createWorkItem(state, project.id, "Newer work");
 
-    expect(published).toEqual([
-      { projectId: project.id, aggregateType: "WORK_ITEM", aggregateId: created.id },
-    ]);
+      expect(published).toEqual([
+        { projectId: project.id, aggregateType: "WORK_ITEM", aggregateId: created.id },
+      ]);
+    } finally {
+      // Windows does not allow the afterEach cleanup to unlink an open SQLite database.
+      state.close();
+    }
   });
 
   // ADR-0002: a publication failure does not roll the state back. A throw from the channel must not

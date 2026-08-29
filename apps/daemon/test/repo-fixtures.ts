@@ -12,8 +12,14 @@ const execFileAsync = promisify(execFile);
 // these are the daemon-side copies, kept in one file rather than in each test that needs one.
 //
 // The committer identity is set with -c flags rather than relying on the machine's global git
-// config, so a repository builds the same way whoever runs the suite.
+// config, so a repository builds the same way whoever runs the suite. `core.autocrlf` is pinned in
+// each synthetic repository for the same reason: GitHub's Windows runner enables it globally,
+// which would otherwise rewrite these fixtures' authored LF bytes when a worktree is checked out.
 const testCommitterArgs = ["-c", "user.email=loomrail-test@example.com", "-c", "user.name=Loomrail Test"];
+
+const pinTestRepositoryConfig = async (dir: string): Promise<void> => {
+  await execFileAsync("git", ["config", "core.autocrlf", "false"], { cwd: dir });
+};
 
 /**
  * A repository with one committed file. Created at `at` when given -- so a caller can put it beside
@@ -24,6 +30,7 @@ export const makeThrowawayRepo = async (at?: string): Promise<string> => {
   const dir = at ?? (await mkdtemp(join(tmpdir(), "loomrail daemon repo ")));
   if (at !== undefined) await mkdir(dir, { recursive: true });
   await execFileAsync("git", ["init", "--quiet", "-b", "main"], { cwd: dir });
+  await pinTestRepositoryConfig(dir);
   await writeFile(join(dir, "committed.txt"), "committed\n");
   await execFileAsync("git", ["add", "committed.txt"], { cwd: dir });
   await execFileAsync("git", [...testCommitterArgs, "commit", "--quiet", "-m", "initial"], { cwd: dir });
@@ -42,6 +49,7 @@ export const makeRepoMidRebase = async (): Promise<string> => {
     execFileAsync("git", [...testCommitterArgs, "commit", "--quiet", "-m", message], { cwd: dir });
 
   await execFileAsync("git", ["init", "--quiet", "-b", "main"], { cwd: dir });
+  await pinTestRepositoryConfig(dir);
   await writeFile(sharedFile, "base\n");
   await execFileAsync("git", ["add", "shared.txt"], { cwd: dir });
   await commit("base");
