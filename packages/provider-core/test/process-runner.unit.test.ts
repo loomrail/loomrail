@@ -99,7 +99,7 @@ describe("runProcess", () => {
     expect(aliveWhenExitedResolved).toBe(false);
   });
 
-  it("kills a child that ignores the terminate signal", async () => {
+  it("stops a child that ignores termination where the platform permits it", async () => {
     const armed = waitForLine("armed");
     const run = runProcess({
       command: node,
@@ -118,7 +118,10 @@ describe("runProcess", () => {
     if (outcome === HUNG) {
       return;
     }
-    expect(outcome.signal).toBe("SIGKILL");
+    // Windows has no POSIX signal delivery: Node forcefully terminates the process on the first
+    // SIGTERM and reports that requested signal. On POSIX the child can really ignore SIGTERM, so
+    // runProcess must reach its post-grace SIGKILL escalation.
+    expect(outcome.signal).toBe(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
   });
 
   it("stops a child that produces nothing once its deadline passes", async () => {
