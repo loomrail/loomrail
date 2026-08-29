@@ -1,7 +1,7 @@
 # Releasing the Loomrail launcher
 
 **Status:** M7 public checkpoint
-**Updated:** 2026-08-25
+**Updated:** 2026-08-29
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
 the SQLite migrations and the bundled fixture projects. Consumers install one package and run one binary; they never
@@ -73,3 +73,22 @@ Publishing is a deliberate, human action and is not automated. Nothing in CI run
 5. Publish the tarball from an account with rights to the `loomrail` name.
 
 Until the first publish, the supported installation route is the tarball produced by `pnpm pack:release`.
+
+### First pre-alpha candidate
+
+The current candidate is `0.1.0-alpha.1`. It must be published under the `next` dist-tag so an explicitly unstable
+build never becomes the default `latest` install:
+
+```bash
+npm publish ./dist-release/loomrail-0.1.0-alpha.1.tgz --tag next --access public
+```
+
+Before running that command, authenticate the local npm CLI, satisfy the account's current 2FA requirements and
+review the [candidate notes](releases/0.1.0-alpha.1.md). After publishing, verify the registry rather than the local
+tarball:
+
+```bash
+npm view loomrail@next name version dist-tags --json
+npm install loomrail@next
+npx loomrail --no-open --port 4176
+```

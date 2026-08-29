@@ -6,7 +6,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
 
-import { repositoryRoot, toolCommand, toolSpawnOptions } from "./release-manifest.mjs";
+import {
+  releaseName,
+  releaseVersion,
+  repositoryRoot,
+  toolCommand,
+  toolSpawnOptions,
+} from "./release-manifest.mjs";
 
 /**
  * Installs the packed launcher into an empty directory and proves it runs there.
@@ -43,7 +49,8 @@ const waitForReady = async (baseUrl, launcher, readOutput) => {
 };
 
 const run = async () => {
-  const tarball = resolve(repositoryRoot, "dist-release", "loomrail-0.0.0.tgz");
+  const version = releaseVersion();
+  const tarball = resolve(repositoryRoot, "dist-release", `${releaseName}-${version}.tgz`);
   const installDirectory = await mkdtemp(join(tmpdir(), "loomrail-release-"));
   const dataDirectory = await mkdtemp(join(tmpdir(), "loomrail-state-"));
   let launcher;
@@ -71,8 +78,13 @@ const run = async () => {
     // shim needs a shell, and killing that shell leaves the real process running with its pipes
     // open, which hangs this script long after the check has passed. Reading `bin` from the
     // installed manifest also asserts that the published entry point is where it claims to be.
-    const installedRoot = join(installDirectory, "node_modules", "loomrail");
+    const installedRoot = join(installDirectory, "node_modules", releaseName);
     const installedManifest = JSON.parse(await readFile(join(installedRoot, "package.json"), "utf8"));
+    if (installedManifest.name !== releaseName || installedManifest.version !== version) {
+      throw new Error(
+        `unexpected installed package: ${String(installedManifest.name)}@${String(installedManifest.version)}`,
+      );
+    }
     const binaryPath = join(installedRoot, installedManifest.bin.loomrail);
     launcher = spawn(process.execPath, [binaryPath, "--no-open", "--port", String(port)], {
       cwd: installDirectory,

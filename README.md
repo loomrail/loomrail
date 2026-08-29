@@ -73,11 +73,18 @@ change review, restart, and state backup, use the [English user guide](docs/guid
 [руководство на русском](docs/guides/USER-GUIDE.ru.md).
 
 Loomrail ships as a single package: a bundled launcher, the prebuilt Workbench, the SQLite migrations and the bundled
-fixture projects. It is not published to npm yet, so build the tarball once and install it anywhere:
+fixture projects. Pre-alpha releases use the explicit `next` channel so they are never installed as a stable release:
+
+```bash
+npm install loomrail@next
+npx loomrail --port 4176
+```
+
+To verify a source revision before it reaches the registry, build and install the exact release tarball instead:
 
 ```bash
 pnpm pack:release
-npm install ./dist-release/loomrail-0.0.0.tgz
+npm install ./dist-release/loomrail-0.1.0-alpha.1.tgz
 npx loomrail --port 4176
 ```
 
