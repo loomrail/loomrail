@@ -179,10 +179,10 @@ const en = {
   "task.activityCountMore": "{count}+",
   "task.loadMoreActivity": "Show more",
   "workflow.title": "Workflow",
-  "workflow.mockName": "Mock delivery",
-  "workflow.start": "Start mock workflow",
+  "workflow.mockName": "Delivery workflow",
+  "workflow.start": "Start workflow",
   "workflow.startDescription":
-    "Run the bounded Discovery → Plan scenario. It will stop on a durable question before continuing.",
+    "Run the bounded Discovery → Acceptance workflow. It may stop for a durable question or owner decision before continuing.",
   "workflow.readyRequired": "Move this task to Ready before starting its workflow.",
   "workflow.loading": "Loading workflow…",
   "workflow.status.RUNNING": "Running",
@@ -193,7 +193,7 @@ const en = {
   "workflow.status.SUCCEEDED": "Completed",
   "workflow.status.FAILED": "Failed",
   "workflow.status.CANCELLED": "Cancelled",
-  "workflow.completed": "The bounded mock workflow completed from the recorded decision.",
+  "workflow.completed": "The bounded delivery workflow completed from its recorded decisions.",
   "workflow.stage.QUEUED": "Queued",
   "workflow.stage.RUNNING": "Running",
   "workflow.stage.WAITING_HUMAN": "Waiting",
@@ -261,7 +261,7 @@ const en = {
   "changes.binary": "Binary",
   "changes.binaryNoPatch": "This is a binary file, so there is no text diff to show for it.",
   "changes.renamedFrom": "Renamed from {path}",
-  "changes.lineCounts": "{insertions} lines added, {deletions} removed",
+  "changes.lineCounts": "Lines added: {insertions}; removed: {deletions}",
   "changes.diffPending": "Reading this file’s diff…",
   "changes.diffUnavailable": "This diff cannot be read: the task no longer has a workspace.",
   "changes.patchTruncated":
@@ -273,7 +273,7 @@ const en = {
   "changes.error.WORKSPACE_WORKTREE_MISSING":
     "The worktree for this task is no longer on disk, so there is nothing left to read its changes from.",
   "changes.error.WORKSPACE_WORKTREE_UNREADABLE":
-    "Loomrail cannot enter this task’s worktree, so it cannot say what changed. The work is still there — only the way in is closed.",
+    "Loomrail cannot enter this task’s worktree, so it cannot say what changed. It may still hold the agent’s work, but Loomrail cannot verify that from here.",
   "changes.error.WORKSPACE_HAS_NO_BASELINE":
     "This workspace records no commit to compare against, so there is nothing to measure its changes from.",
   "changes.error.CHANGES_UNREADABLE":
@@ -319,7 +319,7 @@ const en = {
   "event.stateChangedDetail": "{from} → {to}",
   "event.projectRegistered": "Project registered",
   "event.pipelineStarted": "Workflow started",
-  "event.pipelineStartedDetail": "Mock delivery entered {stage}.",
+  "event.pipelineStartedDetail": "Delivery workflow entered {stage}.",
   "event.stageChanged": "Stage updated",
   "event.stageChangedDetail": "{stage}: {status}",
   "event.humanRequestOpened": "Decision requested",
@@ -347,7 +347,7 @@ const en = {
   "event.acceptanceResolved": "Acceptance resolved",
   "event.acceptanceResolvedDetail": "Owner action: {action}",
   "event.pipelineCompleted": "Workflow completed",
-  "event.pipelineCompletedDetail": "The bounded mock delivery run finished.",
+  "event.pipelineCompletedDetail": "The bounded delivery workflow finished.",
   "event.providerSessionStarted": "Agent session started",
   "event.providerSessionStartedDetail": "Session {ordinal}",
   "event.checkpointPublished": "Checkpoint published",
@@ -545,10 +545,10 @@ const ru = {
   "task.activityCountMore": "{count}+",
   "task.loadMoreActivity": "Показать ещё",
   "workflow.title": "Процесс",
-  "workflow.mockName": "Тестовый процесс",
-  "workflow.start": "Запустить тестовый процесс",
+  "workflow.mockName": "Процесс поставки",
+  "workflow.start": "Запустить процесс",
   "workflow.startDescription":
-    "Запустить ограниченный сценарий «Исследование → План». Перед продолжением он остановится на сохранённом вопросе.",
+    "Запустить ограниченный процесс «Исследование → Приёмка». Перед продолжением он может остановиться на сохранённом вопросе или решении владельца.",
   "workflow.readyRequired": "Перед запуском переведите задачу в состояние «Готово к работе».",
   "workflow.loading": "Загружаем процесс…",
   "workflow.status.RUNNING": "Выполняется",
@@ -559,7 +559,7 @@ const ru = {
   "workflow.status.SUCCEEDED": "Завершён",
   "workflow.status.FAILED": "Ошибка",
   "workflow.status.CANCELLED": "Отменён",
-  "workflow.completed": "Ограниченный тестовый процесс завершён на основе сохранённого решения.",
+  "workflow.completed": "Ограниченный процесс поставки завершён на основе сохранённых решений.",
   "workflow.stage.QUEUED": "В очереди",
   "workflow.stage.RUNNING": "Выполняется",
   "workflow.stage.WAITING_HUMAN": "Ожидает",
@@ -639,7 +639,7 @@ const ru = {
   "changes.error.WORKSPACE_WORKTREE_MISSING":
     "Каталога worktree этой задачи больше нет на диске — читать изменения больше не из чего.",
   "changes.error.WORKSPACE_WORKTREE_UNREADABLE":
-    "Loomrail не может войти в worktree этой задачи и поэтому не может сказать, что изменилось. Работа на месте — закрыт только путь к ней.",
+    "Loomrail не может войти в worktree этой задачи и поэтому не может сказать, что изменилось. Возможно, работа агента всё ещё там, но Loomrail не может проверить это отсюда.",
   "changes.error.WORKSPACE_HAS_NO_BASELINE":
     "У этой рабочей области не записан коммит для сравнения, поэтому измерять изменения не от чего.",
   "changes.error.CHANGES_UNREADABLE":
@@ -685,7 +685,7 @@ const ru = {
   "event.stateChangedDetail": "{from} → {to}",
   "event.projectRegistered": "Проект зарегистрирован",
   "event.pipelineStarted": "Процесс запущен",
-  "event.pipelineStartedDetail": "Тестовый процесс перешёл к этапу «{stage}».",
+  "event.pipelineStartedDetail": "Процесс поставки перешёл к этапу «{stage}».",
   "event.stageChanged": "Этап обновлён",
   "event.stageChangedDetail": "{stage}: {status}",
   "event.humanRequestOpened": "Требуется решение",
@@ -713,7 +713,7 @@ const ru = {
   "event.acceptanceResolved": "Приёмка завершена",
   "event.acceptanceResolvedDetail": "Решение владельца: {action}",
   "event.pipelineCompleted": "Процесс завершён",
-  "event.pipelineCompletedDetail": "Ограниченный тестовый процесс завершён.",
+  "event.pipelineCompletedDetail": "Ограниченный процесс поставки завершён.",
   "event.providerSessionStarted": "Сессия агента начата",
   "event.providerSessionStartedDetail": "Сессия {ordinal}",
   "event.checkpointPublished": "Checkpoint опубликован",

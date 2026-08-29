@@ -439,7 +439,13 @@ describe("SQLite local state", () => {
         correlationId: `correlation-apply-${dispatch.id}`,
         actor: { type: "SYSTEM", id: "mock-provider" },
         type: "APPLY_PROVIDER_OUTCOME",
-        payload: { dispatchId: dispatch.id, template: acceptanceTemplate, outcome, resultTree: null },
+        payload: {
+          dispatchId: dispatch.id,
+          provider: "CODEX",
+          template: acceptanceTemplate,
+          outcome,
+          resultTree: null,
+        },
       });
     };
 
@@ -486,7 +492,10 @@ describe("SQLite local state", () => {
     }
     expect(pendingSnapshot.snapshot).toMatchObject({
       run: { status: "WAITING_HUMAN" },
-      artifacts: [{ kind: "REVIEW_REPORT" }, { kind: "QA_REPORT" }],
+      artifacts: [
+        { kind: "REVIEW_REPORT", provider: "CODEX" },
+        { kind: "QA_REPORT", provider: "CODEX" },
+      ],
       acceptancePackage: { status: "PENDING" },
     });
     localState.close();
@@ -546,8 +555,144 @@ describe("SQLite local state", () => {
     acceptanceState.close();
     state = undefined;
     const raw = new DatabaseSync(databasePath);
+    const evidenceTable = raw
+      .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'evidence_artifacts'")
+      .get() as { sql: string };
+    expect(evidenceTable.sql).toContain("provider IN ('MOCK', 'CODEX', 'CLAUDE_CODE')");
+    expect(() =>
+      raw
+        .prepare(
+          `INSERT INTO evidence_artifacts (
+            id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+            stage, kind, status, provider, title, summary, checks_json, created_at
+          )
+          SELECT 'artifact-unknown-provider', schema_version, project_id, work_item_id,
+            pipeline_run_id, stage_attempt_id, stage, kind, status, 'GPT', title, summary,
+            checks_json, created_at
+          FROM evidence_artifacts LIMIT 1`,
+        )
+        .run(),
+    ).toThrow(/provider/);
     expect(() => raw.prepare("UPDATE evidence_artifacts SET title = ?").run("Tampered")).toThrow();
     raw.close();
+  });
+
+  it("widens the evidence provider without changing rows written before migration 0014", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-pre-0014-evidence-item"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-pre-0014-evidence", created.workItem.id, 1, "READY"));
+    const reviewOnlyTemplate: StartMockPipelineCommand["payload"]["template"] = {
+      schemaVersion: 1,
+      id: "pre-0014-review-v1",
+      version: 1,
+      name: "Pre-0014 review fixture",
+      stages: [{ stage: "REVIEW", ordinal: 0, contextPack }],
+    };
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-pre-0014-review",
+      correlationId: "correlation-start-pre-0014-review",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: reviewOnlyTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "mark-pre-0014-review",
+      correlationId: "correlation-mark-pre-0014-review",
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "MARK_WORKFLOW_DISPATCH_STARTED",
+      payload: { dispatchId: started.dispatch.id },
+    });
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "apply-pre-0014-review",
+      correlationId: "correlation-apply-pre-0014-review",
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "APPLY_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId: started.dispatch.id,
+        template: reviewOnlyTemplate,
+        resultTree: null,
+        outcome: {
+          type: "COMPLETED",
+          summary: "Historical mock review completed.",
+          artifacts: [
+            {
+              kind: "REVIEW_REPORT",
+              title: "Historical mock review",
+              summary: "The row predates live evidence attribution.",
+              checks: ["Historical row present"],
+            },
+          ],
+        },
+      },
+    });
+    localState.close();
+    state = undefined;
+
+    // Rebuild the one table to its v13 CHECK while preserving the real row above. This is an
+    // independent inverse of 0014, not the migration SQL copied backwards: the test would still
+    // fail if 0014 forgot the INSERT ... SELECT that carries old data forward.
+    const pre14 = new DatabaseSync(databasePath);
+    pre14.exec(`
+      DROP TRIGGER evidence_artifacts_are_append_only_update;
+      DROP TRIGGER evidence_artifacts_are_append_only_delete;
+      DROP INDEX evidence_artifacts_run_created_idx;
+      ALTER TABLE evidence_artifacts RENAME TO evidence_artifacts_current;
+      CREATE TABLE evidence_artifacts (
+        id TEXT PRIMARY KEY,
+        schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+        pipeline_run_id TEXT NOT NULL REFERENCES pipeline_runs(id) ON DELETE RESTRICT,
+        stage_attempt_id TEXT NOT NULL REFERENCES stage_attempts(id) ON DELETE RESTRICT,
+        stage TEXT NOT NULL CHECK (stage IN ('REVIEW', 'QA')),
+        kind TEXT NOT NULL CHECK (kind IN ('REVIEW_REPORT', 'QA_REPORT')),
+        status TEXT NOT NULL CHECK (status = 'PASSED'),
+        provider TEXT NOT NULL CHECK (provider = 'MOCK'),
+        title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+        summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 4000),
+        checks_json TEXT NOT NULL CHECK (json_valid(checks_json)),
+        created_at TEXT NOT NULL,
+        UNIQUE (pipeline_run_id, kind)
+      ) STRICT;
+      INSERT INTO evidence_artifacts SELECT * FROM evidence_artifacts_current;
+      DROP TABLE evidence_artifacts_current;
+      CREATE INDEX evidence_artifacts_run_created_idx
+        ON evidence_artifacts(pipeline_run_id, created_at, id);
+      CREATE TRIGGER evidence_artifacts_are_append_only_update
+      BEFORE UPDATE ON evidence_artifacts BEGIN
+        SELECT RAISE(ABORT, 'evidence artifacts are append-only');
+      END;
+      CREATE TRIGGER evidence_artifacts_are_append_only_delete
+      BEFORE DELETE ON evidence_artifacts BEGIN
+        SELECT RAISE(ABORT, 'evidence artifacts are append-only');
+      END;
+      DELETE FROM schema_migrations WHERE version = 14;
+    `);
+    expect(
+      (pre14.prepare("SELECT provider FROM evidence_artifacts").get() as { provider: string }).provider,
+    ).toBe("MOCK");
+    pre14.close();
+
+    const migrated = await open();
+    expect(migrated.startup.appliedMigrations).toEqual([14]);
+    const snapshot = migrated.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    expect(snapshot).toMatchObject({
+      snapshot: { artifacts: [{ kind: "REVIEW_REPORT", provider: "MOCK" }] },
+    });
   });
 
   it("creates a backup before migrating an existing non-empty database", async () => {
@@ -557,7 +702,7 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);

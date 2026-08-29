@@ -48,6 +48,12 @@ test.afterEach(async () => {
  */
 const DEMO_INITIALISATION_MS = 20_000;
 
+/**
+ * Discovery cuts a real worktree before the mock session starts. Give that background Git path the
+ * same bounded patience as the later IMPLEMENT wall without weakening what must appear.
+ */
+const DISCOVERY_DECISION_MS = 20_000;
+
 const initializeWorkspace = async (page: Page): Promise<void> => {
   const initialize = page.getByRole("button", { name: "Initialize demo workspace" });
   await expect(initialize).toBeVisible();
@@ -125,9 +131,11 @@ const BUDGET_WALL_MS = 20_000;
  */
 const readyForBudgetApproval = async (page: Page, inspector: Locator): Promise<Locator> => {
   await inspector.getByRole("button", { name: "Move to Ready" }).click();
-  await expect(inspector.getByRole("button", { name: "Start mock workflow" })).toBeEnabled();
-  await inspector.getByRole("button", { name: "Start mock workflow" }).click();
-  await expect(inspector.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible();
+  await expect(inspector.getByRole("button", { name: "Start workflow" })).toBeEnabled();
+  await inspector.getByRole("button", { name: "Start workflow" }).click();
+  await expect(inspector.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible({
+    timeout: DISCOVERY_DECISION_MS,
+  });
   await inspector.getByRole("radio", { name: /Focused pass/ }).click();
   await inspector.getByRole("button", { name: "Answer & resume" }).click();
 

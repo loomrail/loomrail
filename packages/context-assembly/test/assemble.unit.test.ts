@@ -10,6 +10,15 @@ const input = (budgetTokens: number) => ({
   bytesPerToken: 4,
 });
 
+const requiredFloorTokens = (): number => {
+  const sources = sampleSources();
+  const requiredSections = specWithAllSections().sections.filter(({ required }) => required);
+  const requiredBytes =
+    requiredSections.reduce((sum, section) => sum + renderSection(section.id, sources).bytes, 0) +
+    Math.max(0, requiredSections.length - 1);
+  return Math.ceil(requiredBytes / 4);
+};
+
 describe("context pack assembly", () => {
   it("produces a stable hash for the same input", () => {
     const first = assembleContextPack(input(10_000));
@@ -21,9 +30,7 @@ describe("context pack assembly", () => {
   });
 
   it("drops optional sections from the end when the budget is tight", () => {
-    const generous = assembleContextPack(input(10_000));
-    if (generous.type !== "ASSEMBLED") throw new Error("not assembled");
-    const tight = assembleContextPack(input(Math.ceil(generous.recipe.estimatedTokens / 2)));
+    const tight = assembleContextPack(input(requiredFloorTokens()));
     if (tight.type !== "ASSEMBLED") throw new Error("not assembled");
 
     // Truncation goes from the end: the last declared section is dropped first.
@@ -37,9 +44,7 @@ describe("context pack assembly", () => {
   });
 
   it("records every omission with its reason", () => {
-    const generous = assembleContextPack(input(10_000));
-    if (generous.type !== "ASSEMBLED") throw new Error("not assembled");
-    const tight = assembleContextPack(input(Math.ceil(generous.recipe.estimatedTokens / 2)));
+    const tight = assembleContextPack(input(requiredFloorTokens()));
     if (tight.type !== "ASSEMBLED") throw new Error("not assembled");
     expect(tight.recipe.omitted.length).toBeGreaterThan(0);
     expect(tight.recipe.omitted.map(({ reason }) => reason)).toEqual(
@@ -134,9 +139,7 @@ describe("context pack assembly", () => {
     // This is the executable form of D7: without it, the audit claim is only a promise. A generous
     // budget drops nothing, so replaying it would replay the original spec and prove little -- the
     // first assembly here must actually drop at least one section.
-    const generous = assembleContextPack(input(10_000));
-    if (generous.type !== "ASSEMBLED") throw new Error("not assembled");
-    const tightBudgetTokens = Math.ceil(generous.recipe.estimatedTokens / 2);
+    const tightBudgetTokens = requiredFloorTokens();
     const first = assembleContextPack(input(tightBudgetTokens));
     if (first.type !== "ASSEMBLED") throw new Error("not assembled");
 

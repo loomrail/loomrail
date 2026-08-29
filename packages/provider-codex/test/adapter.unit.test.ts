@@ -145,11 +145,16 @@ const expectNoForbiddenArguments = (args: readonly string[]): void => {
 // Reads back what `fakeCodexPath` recorded about the one invocation it saw (see
 // FAKE_CODEX_RECORD_PATH in the fixture). `args`/`stdinClosed` start empty/false and are filled in
 // by `startWith` once the adapter's `start()` call has actually finished.
-type Spawned = { args: string[]; stdinClosed: boolean; readonly recordPath: string };
+type Spawned = {
+  args: string[];
+  stdinClosed: boolean;
+  outputSchema: string | null;
+  readonly recordPath: string;
+};
 
 const recordSpawn = (): Spawned => {
   const dir = mkdtempSync(join(tmpdir(), "loomrail-codex-test-"));
-  return { args: [], stdinClosed: false, recordPath: join(dir, "spawn-record.json") };
+  return { args: [], stdinClosed: false, outputSchema: null, recordPath: join(dir, "spawn-record.json") };
 };
 
 const withEnv = async <T>(name: string, value: string, run: () => Promise<T>): Promise<T> => {
@@ -180,7 +185,12 @@ const fixtureWorkspace = (path: string, access: ProviderWorkspace["access"]): Pr
   access,
 });
 
-const fixtureInvocation = (sessionId = "session-1", workspace?: ProviderWorkspace): ProviderInvocation => ({
+const fixtureInvocation = (
+  sessionId = "session-1",
+  workspace?: ProviderWorkspace,
+  stage: ProviderInvocation["session"]["stage"] = "DISCOVERY",
+  humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
+): ProviderInvocation => ({
   dispatch: {
     schemaVersion: 1,
     id: "dispatch-1",
@@ -197,7 +207,7 @@ const fixtureInvocation = (sessionId = "session-1", workspace?: ProviderWorkspac
     id: sessionId,
     ordinal: 1,
     stageAttemptId: "attempt-1",
-    stage: "DISCOVERY",
+    stage,
     attempt: 1,
   },
   contextPack: {
@@ -205,6 +215,7 @@ const fixtureInvocation = (sessionId = "session-1", workspace?: ProviderWorkspac
     text: "Discover the requirements for the payments retry policy.",
     contentHash: `sha256:${"0".repeat(64)}`,
   },
+  humanRequests,
   // Omitted rather than set to undefined: `exactOptionalPropertyTypes` makes those different
   // things, and the adapter reads absence as "this session was never meant to change anything".
   ...(workspace === undefined ? {} : { workspace }),
@@ -222,16 +233,19 @@ const startWith = async (
   spawned: Spawned,
   adapter: ProviderAdapter,
   workspace?: ProviderWorkspace,
+  humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
 ): Promise<ProviderOutcome> => {
   const outcome = await withEnv("FAKE_CODEX_RECORD_PATH", spawned.recordPath, () =>
-    adapter.start(fixtureInvocation("session-1", workspace), noopListener()),
+    adapter.start(fixtureInvocation("session-1", workspace, "DISCOVERY", humanRequests), noopListener()),
   );
   const recorded = JSON.parse(readFileSync(spawned.recordPath, "utf8")) as {
     args: string[];
     stdinClosed: boolean;
+    outputSchema: string | null;
   };
   spawned.args = recorded.args;
   spawned.stdinClosed = recorded.stdinClosed;
+  spawned.outputSchema = recorded.outputSchema;
   return outcome;
 };
 
@@ -285,13 +299,18 @@ const runAdapterAgainstRecording = async (file: string): Promise<Spawned> => {
 const runAgainstLines = async (
   lines: readonly string[],
   listener: Partial<ProviderSessionListener> = {},
+  stage: ProviderInvocation["session"]["stage"] = "DISCOVERY",
+  humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
 ): Promise<ProviderOutcome> => {
   const dir = mkdtempSync(join(tmpdir(), "loomrail-codex-stream-"));
   const streamPath = join(dir, "stream.jsonl");
   writeFileSync(streamPath, lines.map((line) => `${line}\n`).join(""), "utf8");
   const adapter = createCodexProvider({ command: fakeCodexPath });
   return withEnv("FAKE_CODEX_OUTPUT_FILE", streamPath, () =>
-    adapter.start(fixtureInvocation(), { ...noopListener(), ...listener }),
+    adapter.start(fixtureInvocation("session-1", undefined, stage, humanRequests), {
+      ...noopListener(),
+      ...listener,
+    }),
   );
 };
 
@@ -647,6 +666,124 @@ describe("createCodexProvider", () => {
       COMPLETED_TURN_LINE,
     ]);
     expect(outcome).toEqual({ type: "COMPLETED", summary: "Bare-line answer." });
+  });
+
+  it("rejects a second provider-authored owner question even if the CLI ignores its output schema", async () => {
+    const duplicateQuestion = {
+      result: {
+        type: "NEEDS_HUMAN",
+        request: {
+          kind: "FREE_TEXT",
+          blocking: true,
+          title: "Ask the owner again",
+          context: "This attempt already received its owner answer.",
+          recommendation: "Repeat the answer.",
+          options: [],
+          allowOther: true,
+        },
+      },
+    };
+    const outcome = await runAgainstLines(
+      [
+        JSON.stringify({
+          type: "item.completed",
+          item: { id: "item-duplicate-gate", type: "agent_message", text: JSON.stringify(duplicateQuestion) },
+        }),
+        COMPLETED_TURN_LINE,
+      ],
+      {},
+      "DISCOVERY",
+      "DISALLOWED",
+    );
+
+    const request = expectNeedsHuman(outcome);
+    expect(request.title).not.toBe("Ask the owner again");
+    expect(request.context).toContain("without the structured result Loomrail asked it for");
+  });
+
+  it("returns typed Review evidence from the Review stage schema", async () => {
+    const stageResult = {
+      result: {
+        type: "COMPLETED",
+        summary: "The independent review passed.",
+        completed: ["Acceptance criteria traced"],
+        remaining: [],
+        deadEnds: [],
+        openQuestions: [],
+        artifact: {
+          kind: "REVIEW_REPORT",
+          title: "Independent review",
+          summary: "No blocking findings remain.",
+          checks: ["Requirements traced to the diff"],
+        },
+      },
+    };
+    const outcome = await runAgainstLines(
+      [
+        JSON.stringify({
+          type: "item.completed",
+          item: { id: "item-review", type: "agent_message", text: JSON.stringify(stageResult) },
+        }),
+        COMPLETED_TURN_LINE,
+      ],
+      {},
+      "REVIEW",
+    );
+    expect(outcome).toMatchObject({
+      type: "COMPLETED",
+      artifacts: [{ kind: "REVIEW_REPORT" }],
+    });
+  });
+
+  it("can only prepare Acceptance for the owner, never complete it directly", async () => {
+    const ready = await runAgainstLines(
+      [
+        JSON.stringify({
+          type: "item.completed",
+          item: {
+            id: "item-acceptance",
+            type: "agent_message",
+            text: JSON.stringify({
+              result: {
+                type: "READY_FOR_ACCEPTANCE",
+                releaseNote: "The bounded delivery is ready for owner review.",
+                verifyInstructions: ["Run the repository test."],
+              },
+            }),
+          },
+        }),
+        COMPLETED_TURN_LINE,
+      ],
+      {},
+      "ACCEPTANCE",
+    );
+    expect(ready).toMatchObject({ type: "READY_FOR_ACCEPTANCE" });
+
+    const invalidCompletion = await runAgainstLines(
+      [
+        JSON.stringify({
+          type: "item.completed",
+          item: {
+            id: "item-invalid-acceptance",
+            type: "agent_message",
+            text: JSON.stringify({
+              result: {
+                type: "COMPLETED",
+                summary: "Accepted by the provider.",
+                completed: [],
+                remaining: [],
+                deadEnds: [],
+                openQuestions: [],
+              },
+            }),
+          },
+        }),
+        COMPLETED_TURN_LINE,
+      ],
+      {},
+      "ACCEPTANCE",
+    );
+    expectNeedsHuman(invalidCompletion);
   });
 
   // "The last such match wins": a turn that emits several agent messages ends on the one the
@@ -1005,6 +1142,15 @@ describe("createCodexProvider", () => {
     // Removed with the scratch directory that held it, the same way the read-only path's working
     // directory is removed below.
     expect(existsSync(schemaPath)).toBe(false);
+  });
+
+  it("removes NEEDS_HUMAN from the schema after this attempt has used its owner gate", async () => {
+    const spawned = recordSpawn();
+    await startWith(spawned, createCodexProvider({ command: fakeCodexPath }), undefined, "DISALLOWED");
+    if (spawned.outputSchema === null) throw new Error("expected the fake CLI to capture the schema file");
+
+    expect(spawned.outputSchema).toContain('"const":"COMPLETED"');
+    expect(spawned.outputSchema).not.toContain('"const":"NEEDS_HUMAN"');
   });
 
   it("removes its per-session working directory once the session ends", async () => {

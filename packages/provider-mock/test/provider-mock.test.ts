@@ -38,6 +38,7 @@ const invocation = (
       attempt: options.attempt ?? 1,
     },
     contextPack: contextPack(),
+    humanRequests: "ALLOWED",
   };
 };
 

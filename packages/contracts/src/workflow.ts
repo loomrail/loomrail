@@ -18,6 +18,10 @@ import { workItemWorkspaceOrphanedEventSchema, workItemWorkspaceSchema } from ".
 const treeShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
 
 export const workflowStageSchema = z.enum(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
+// Provider identity belongs to the durable contract, not to an adapter implementation: commands,
+// EvidenceArtifacts and provider capabilities must all use the same closed vocabulary without
+// making @loomrail/contracts depend back on @loomrail/provider-core.
+export const providerIdSchema = z.enum(["MOCK", "CODEX", "CLAUDE_CODE"]);
 export const pipelineRunStatusSchema = z.enum([
   "RUNNING",
   "WAITING_HUMAN",
@@ -479,7 +483,7 @@ export const evidenceArtifactSchema = providerArtifactDraftSchema
     stageAttemptId: opaqueIdSchema,
     stage: z.enum(["REVIEW", "QA"]),
     status: evidenceArtifactStatusSchema,
-    provider: z.literal("MOCK"),
+    provider: providerIdSchema,
     createdAt: utcTimestampSchema,
   })
   .strict();
@@ -591,17 +595,40 @@ export const workflowDispatchSchema = z
   })
   .strict();
 
-export const humanRequestDraftSchema = humanRequestSchema
+const humanRequestDraftBaseSchema = humanRequestSchema
   .pick({
-    kind: true,
     blocking: true,
     title: true,
     context: true,
     recommendation: true,
-    options: true,
-    allowOther: true,
   })
   .strict();
+
+const enumeratedHumanRequestDraftSchema = (kind: "SINGLE_CHOICE" | "MULTIPLE_CHOICE" | "CONFIRMATION") =>
+  humanRequestDraftBaseSchema
+    .extend({
+      kind: z.literal(kind),
+      options: z.array(humanRequestOptionSchema).min(1).max(20),
+      allowOther: z.boolean(),
+    })
+    .strict();
+
+// A provider-originated request must always expose at least one answer path. Enumerated requests
+// therefore carry an option, while FREE_TEXT explicitly accepts the OTHER answer shape. Keeping
+// these as a plain union emits nested `anyOf` for Structured Outputs; a discriminated union would
+// emit `oneOf`, which the Codex CLI schema subset does not accept.
+export const humanRequestDraftSchema = z.union([
+  enumeratedHumanRequestDraftSchema("SINGLE_CHOICE"),
+  enumeratedHumanRequestDraftSchema("MULTIPLE_CHOICE"),
+  enumeratedHumanRequestDraftSchema("CONFIRMATION"),
+  humanRequestDraftBaseSchema
+    .extend({
+      kind: z.literal("FREE_TEXT"),
+      options: z.array(humanRequestOptionSchema).max(0),
+      allowOther: z.literal(true),
+    })
+    .strict(),
+]);
 
 export const providerOutcomeSchema = z.discriminatedUnion("type", [
   z
@@ -883,6 +910,15 @@ export const markWorkflowDispatchStartedCommandSchema = commandBaseSchema.extend
 const applyProviderOutcomePayloadSchema = z
   .object({
     dispatchId: opaqueIdSchema,
+    /**
+     * The adapter identity measured by the daemon, not a claim inside untrusted provider output.
+     *
+     * Optional only for append-only command-receipt compatibility: commands recorded before D2
+     * have no such member and must keep the exact parsed shape their input hash was computed from.
+     * Every new production caller supplies it; the domain reads an absent historical value as
+     * MOCK, which was the only EvidenceArtifact provider the old schema could persist.
+     */
+    provider: providerIdSchema.optional(),
     outcome: providerOutcomeSchema,
     template: workflowTemplateSchema,
     /**
@@ -1505,6 +1541,7 @@ export type BudgetPolicy = z.infer<typeof budgetPolicySchema>;
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
 export type RecoveryReport = z.infer<typeof recoveryReportSchema>;
 export type EvidenceArtifact = z.infer<typeof evidenceArtifactSchema>;
+export type ProviderId = z.infer<typeof providerIdSchema>;
 export type ProviderArtifactDraft = z.infer<typeof providerArtifactDraftSchema>;
 export type AcceptancePackage = z.infer<typeof acceptancePackageSchema>;
 export type AcceptanceAction = z.infer<typeof acceptanceActionSchema>;

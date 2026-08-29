@@ -126,6 +126,7 @@ describe("M6 acceptance decisions", () => {
       payload: {
         resultTree: null,
         dispatchId: "dispatch-review",
+        provider: "CODEX",
         template,
         outcome: { type: "COMPLETED", summary: "Review complete." },
       },
@@ -163,9 +164,41 @@ describe("M6 acceptance decisions", () => {
       artifactIds: ["artifact-review"],
     });
     expect(decision).toMatchObject({
-      artifacts: [{ id: "artifact-review", kind: "REVIEW_REPORT", status: "PASSED" }],
+      artifacts: [{ id: "artifact-review", kind: "REVIEW_REPORT", status: "PASSED", provider: "CODEX" }],
       nextStageAttempt: { stage: "QA" },
     });
+  });
+
+  it("forbids ordinary provider completion from bypassing owner acceptance", () => {
+    const attempt = stageAttempt("ACCEPTANCE", "attempt-acceptance");
+    expect(() =>
+      decideApplyProviderOutcome(
+        {
+          schemaVersion: 1,
+          commandId: "complete-acceptance-without-owner",
+          correlationId: "correlation-complete-acceptance-without-owner",
+          actor: { type: "SYSTEM", id: "codex-provider" },
+          type: "APPLY_PROVIDER_OUTCOME",
+          payload: {
+            resultTree: null,
+            dispatchId: "dispatch-acceptance",
+            provider: "CODEX",
+            template,
+            outcome: { type: "COMPLETED", summary: "The provider says it is done." },
+          },
+        },
+        {
+          now,
+          workItem: { ...workItem, currentStage: "ACCEPTANCE" },
+          run: { ...run, currentStageAttemptId: attempt.id },
+          stageAttempt: attempt,
+          dispatch: dispatch(attempt),
+          budgetPolicy: null,
+          existingUsageRecords: [],
+          usageRecordIds: [],
+        },
+      ),
+    ).toThrow(expect.objectContaining({ code: "ACCEPTANCE_NOT_READY" }));
   });
 
   it("creates a blocking package and only human acceptance can finish the WorkItem", () => {

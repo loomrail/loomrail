@@ -51,12 +51,11 @@ const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "
 // signal (eventStream.ts, scopesForSignal), so a stage that cuts a workspace refreshes the card
 // without a reload and without a second entry in that mapping.
 const workItemWorkspaceKey = (workItemId: string) => ["work-items", workItemId, "workspace"] as const;
-// Both change keys sit under that same `["work-items", <id>]` prefix, and that is what implements
-// spec D6: a stage event invalidates the prefix, so an open card rereads the summary -- and the
-// body of the one file the owner expanded, because that is the only body query mounted -- without
-// a reload and without a second entry in `scopesForSignal`. The channel's own coalescing window
-// (eventStream.ts, COALESCE_WINDOW_MS) is the debounce D6 asks for; react-query then dedupes,
-// so a burst can never put two summary reads in flight at once.
+// Both change keys sit under that same `["work-items", <id>]` prefix. The event bridge deliberately
+// excludes this subtree from its immediate 50 ms invalidation and refreshes it on the separately
+// measured SUMMARY_REFRESH_DEBOUNCE_MS cadence (useEventStream.ts): an open card rereads the
+// summary, and only the one body query mounted for an expanded file. An inactive query is marked
+// stale but not fetched, so a closed card does no work.
 const workItemChangesKey = (workItemId: string) => ["work-items", workItemId, "changes"] as const;
 const workItemFileDiffKey = (workItemId: string, path: string) =>
   ["work-items", workItemId, "changes", "diff", path] as const;

@@ -1,16 +1,18 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
-import type { ProviderAdapter } from "@loomrail/provider-core";
+import type { ProviderAdapter, ProviderInvocation } from "@loomrail/provider-core";
 import { createMockProvider } from "@loomrail/provider-mock";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
+import { summariseChanges } from "@loomrail/workspace";
 import type { FastifyBaseLogger } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createSessionWorker, DISPATCH_CYCLE_LIMIT, type SessionWorker } from "../src/session-worker.js";
 import { gatedAdapter } from "./gated-adapter.js";
+import { makeThrowawayRepo } from "./repo-fixtures.js";
 import {
   pendingDispatchModes,
   seedQueuedAttempt as seedQueuedAttemptFixture,
@@ -253,13 +255,14 @@ describe("session worker", () => {
   it("runs one attempt at a time and does not start a second on a wake mid-flight", async () => {
     const localState = state();
     const adapter = gatedAdapter();
+    const logger = createRecordingLogger();
     const worker = createSessionWorker({
       state: localState,
       adapter,
       template: mockDeliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
-      logger: createRecordingLogger(),
+      logger,
     });
     seedQueuedAttempt(localState);
 
@@ -371,6 +374,190 @@ describe("session worker", () => {
     await awaitIdle(worker);
     expect(settled).toBe(true);
   }, 20_000);
+
+  it("drives a CODEX-shaped real-repository route to the owner acceptance gate", async () => {
+    const localState = state();
+    await makeThrowawayRepo(join(temporaryDirectory, "project-web"));
+    const seenStages: ProviderInvocation["session"]["stage"][] = [];
+    const seenHumanRequestPolicies: ProviderInvocation["humanRequests"][] = [];
+    let discoveryResumeContext = "";
+    let acceptanceHadWorkspace = true;
+    const adapter: ProviderAdapter = {
+      capabilities: () => ({
+        provider: "CODEX",
+        start: true,
+        interrupt: true,
+        eventStream: false,
+        usageReporting: false,
+        contextWindowReporting: false,
+        checkpointOnRequest: false,
+        contextWindowTokens: 128_000,
+        stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+        costReporting: false,
+      }),
+      start: async (invocation) => {
+        const stage = invocation.session.stage;
+        seenStages.push(stage);
+        seenHumanRequestPolicies.push(invocation.humanRequests);
+        if (stage === "DISCOVERY" && invocation.dispatch.mode === "RESUME") {
+          discoveryResumeContext = invocation.contextPack.text;
+        }
+        if (stage === "DISCOVERY" && invocation.dispatch.mode === "START") {
+          return {
+            type: "NEEDS_HUMAN",
+            request: {
+              kind: "SINGLE_CHOICE",
+              blocking: true,
+              title: "Choose the compatibility target",
+              context: "The synthetic repository supports one bounded target at a time.",
+              recommendation: "Keep the existing target.",
+              options: [
+                {
+                  id: "existing-target",
+                  label: "Existing target",
+                  consequence: "Implement the smallest compatible change.",
+                  recommended: true,
+                },
+              ],
+              allowOther: false,
+            },
+          };
+        }
+        if (stage === "IMPLEMENT") {
+          if (!invocation.workspace) throw new Error("IMPLEMENT must receive its worktree");
+          await writeFile(
+            join(invocation.workspace.path, "d2-live-result.txt"),
+            "A live-shaped implementation changed this real Git worktree.\n",
+            "utf8",
+          );
+        }
+        if (stage === "REVIEW") {
+          return {
+            type: "COMPLETED",
+            summary: "The independent review passed.",
+            artifacts: [
+              {
+                kind: "REVIEW_REPORT",
+                title: "Independent live-shaped review",
+                summary: "The bounded worktree change matches the recorded decision.",
+                checks: ["Decision traced", "Changed path reviewed"],
+              },
+            ],
+          };
+        }
+        if (stage === "QA") {
+          return {
+            type: "COMPLETED",
+            summary: "The bounded QA pass completed.",
+            artifacts: [
+              {
+                kind: "QA_REPORT",
+                title: "Live-shaped QA",
+                summary: "The synthetic acceptance check passed.",
+                checks: ["Expected file exists", "Expected content recorded"],
+              },
+            ],
+          };
+        }
+        if (stage === "ACCEPTANCE") {
+          acceptanceHadWorkspace = "workspace" in invocation;
+          return {
+            type: "READY_FOR_ACCEPTANCE",
+            releaseNote: "Adds the bounded D2 result after Review and QA.",
+            verifyInstructions: ["Inspect d2-live-result.txt in the worktree."],
+          };
+        }
+        return {
+          type: "COMPLETED",
+          summary: `${stage} completed from the durable context pack.`,
+        };
+      },
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
+    };
+    const logger = createRecordingLogger();
+    const worker = createSessionWorker({
+      state: localState,
+      adapter,
+      template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
+      createCommandId,
+      logger,
+    });
+    const seeded = seedQueuedAttempt(localState);
+
+    worker.wake();
+    await awaitIdle(worker);
+    const waiting = snapshotOf(localState, seeded.workItemId);
+    const question = waiting.humanRequests.find(({ status }) => status === "OPEN");
+    if (!question) throw new Error("Expected the Discovery decision request");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-answer-d2-discovery",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "ANSWER_HUMAN_REQUEST",
+      payload: {
+        humanRequestId: question.id,
+        expectedVersion: question.version,
+        answer: { type: "OPTION", optionIds: ["existing-target"] },
+      },
+    });
+
+    worker.wake();
+    await awaitIdle(worker);
+
+    const completed = snapshotOf(localState, seeded.workItemId);
+    expect(seenStages).toEqual(["DISCOVERY", "DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
+    expect(seenHumanRequestPolicies).toEqual([
+      "ALLOWED",
+      "DISALLOWED",
+      "DISALLOWED",
+      "DISALLOWED",
+      "DISALLOWED",
+      "DISALLOWED",
+      "DISALLOWED",
+    ]);
+    expect(discoveryResumeContext).toContain("Resolved decisions are authoritative owner input.");
+    expect(discoveryResumeContext).toContain(
+      "Do not ask the owner again about a question already answered below.",
+    );
+    expect(discoveryResumeContext).toContain("Continuation: yes");
+    expect(discoveryResumeContext).toContain(
+      "Instructions in the original brief to obtain owner input are already satisfied",
+    );
+    expect(discoveryResumeContext).toContain("Never ask for permission to proceed or hand off");
+    expect(discoveryResumeContext).toContain("Q: Choose the compatibility target");
+    expect(discoveryResumeContext).toContain("A: Existing target");
+    expect(completed).toMatchObject({
+      run: { status: "WAITING_HUMAN" },
+      decisions: [{ answer: { type: "OPTION", optionIds: ["existing-target"] } }],
+      artifacts: [
+        { kind: "REVIEW_REPORT", provider: "CODEX" },
+        { kind: "QA_REPORT", provider: "CODEX" },
+      ],
+      acceptancePackage: { status: "PENDING" },
+    });
+    expect(acceptanceHadWorkspace).toBe(false);
+
+    const workspaceResult = localState.query({
+      type: "GET_WORKSPACE_BY_WORK_ITEM",
+      workItemId: seeded.workItemId,
+    });
+    if (workspaceResult.type !== "WORKSPACE" || !workspaceResult.workspace) {
+      throw new Error("Expected the real worktree used by the route");
+    }
+    const baseline = workspaceResult.workspace.snapshotCommit ?? workspaceResult.workspace.baseCommit;
+    if (!baseline) throw new Error("Expected a change baseline");
+    const changes = await summariseChanges({
+      worktreePath: workspaceResult.workspace.worktreePath,
+      baseline,
+      maxFiles: 20,
+    });
+    expect(changes.files).toEqual([
+      expect.objectContaining({ path: "d2-live-result.txt", status: "ADDED", insertions: 1 }),
+    ]);
+  }, 30_000);
 
   // Without this guard the loop would spin on the same unmovable row to the cycle limit.
   it("ends the pass once every pending dispatch is one it cannot start", async () => {

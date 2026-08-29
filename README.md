@@ -38,14 +38,14 @@ decisions instead of disconnected chat sessions.
 
 ## Current checkpoint
 
-| Area          | Today                                                                                                                 | Next                                                                                                   |
-| ------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Local runtime | Loopback daemon, CLI launcher, one-time browser session, installable tarball                                          | Published package and desktop installer                                                                |
-| State         | Tasks, runs, budgets, recovery, typed evidence, acceptance packages, Decisions, append-only Events                    | Retention and restore hardening                                                                        |
-| Workbench     | Persisted board, workflow cockpit, command summary, evidence matrix, owner acceptance, EN/RU, light/dark              | Full Attention Inbox and richer workflow views                                                         |
-| Agents        | Capability-checked provider contract, deterministic mock, live Codex/Claude CLI adapters, and a per-task Git worktree | The changed files of a task shown next to its workspace, and the Claude Code adapter on the write path |
-| Projects      | Bundled demo repositories, plus any local Git repository registered by absolute path                                  | Per-project guardrails and permissions                                                                 |
-| Platforms     | macOS and Windows CI are green                                                                                        | Clean-machine acceptance and hardening                                                                 |
+| Area          | Today                                                                                                                    | Next                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| Local runtime | Loopback daemon, CLI launcher, one-time browser session, installable tarball                                             | Published package and desktop installer        |
+| State         | Tasks, runs, budgets, recovery, typed evidence, acceptance packages, Decisions, append-only Events                       | Retention and restore hardening                |
+| Workbench     | Persisted board, workflow cockpit, command summary, evidence matrix, owner acceptance, EN/RU, light/dark                 | Full Attention Inbox and richer workflow views |
+| Agents        | Capability-checked provider contract, live Codex/Claude CLI adapters, per-task Git worktrees, and on-demand change diffs | The Claude Code adapter on the write path      |
+| Projects      | Bundled demo repositories, plus any local Git repository registered by absolute path                                     | Per-project guardrails and permissions         |
+| Platforms     | macOS and Windows CI are green                                                                                           | Clean-machine acceptance and hardening         |
 
 ## How it is intended to work
 
@@ -68,6 +68,10 @@ model, clear permissions, recoverable state, and an inspectable history.
 
 ## Install
 
+For the complete route from installation through the first Human Request, budget decision, acceptance, live provider,
+change review, restart, and state backup, use the [English user guide](docs/guides/USER-GUIDE.md) or the
+[руководство на русском](docs/guides/USER-GUIDE.ru.md).
+
 Loomrail ships as a single package: a bundled launcher, the prebuilt Workbench, the SQLite migrations and the bundled
 fixture projects. It is not published to npm yet, so build the tarball once and install it anywhere:
 
@@ -79,7 +83,7 @@ npx loomrail --port 4176
 
 Install it globally with `npm install -g` instead if you want `loomrail` on your `PATH`. Either way the launcher
 starts on loopback and opens a one-time authenticated URL; add `--no-open` and it prints that URL instead, so a
-headless or remote terminal can still sign in.
+same-machine browser can still sign in without being opened automatically.
 
 `pnpm test:release` performs exactly this install into an empty project using only the public registry, and runs on
 macOS and Windows in CI. See the [release guide](docs/RELEASE.md) for the full procedure.
@@ -115,9 +119,8 @@ pnpm start --port 4176
 ```
 
 Use `pnpm start --no-open --port 4176` when the browser should not open automatically; the launcher then prints the
-one-time sign-in URL so a headless or remote terminal can still authenticate a browser. That URL signs in a single
-browser, expires after 60 seconds, and is replaced on every restart. `LOOMRAIL_DATA_DIR` can point a development run at
-an isolated data directory.
+one-time sign-in URL for a browser on the same machine. That URL signs in a single browser, expires after 60 seconds,
+and is replaced on every restart. `LOOMRAIL_DATA_DIR` can point a development run at an isolated data directory.
 
 | Platform | Default local state                                   |
 | -------- | ----------------------------------------------------- |
@@ -219,6 +222,10 @@ did it. The launcher also says when a selected adapter's CLI is not installed on
 
 The CLIs authenticate themselves: Loomrail adds nothing to the child's environment and never handles your provider
 credentials.
+
+The task card shows the files in that worktree that differ from its starting snapshot and reads one unified diff only
+when you expand that file. This is inspection, not Git authority: Loomrail still does not commit, push, or merge those
+changes.
 
 ```bash
 LOOMRAIL_PROVIDER=CODEX loomrail

@@ -3,23 +3,28 @@ import type {
   ContextPack,
   ContextWindowUsage,
   ProviderOutcome,
+  ProviderId,
   ProviderUsage,
   WorkflowDispatch,
   WorkflowStage,
 } from "@loomrail/contracts";
-import { workflowStageSchema } from "@loomrail/contracts";
+import { providerIdSchema, workflowStageSchema } from "@loomrail/contracts";
 import { z } from "zod";
+
+import type { ProviderStageResultPolicy } from "./stage-result.js";
 
 export type { ProcessExitOutcome, ProcessRun, RunProcessOptions } from "./process-runner.js";
 export { ProcessSpawnError, runProcess } from "./process-runner.js";
 export type { UnproductiveSessionReason, UnproductiveSessionReport } from "./session-diagnosis.js";
 export { describeUnproductiveSession } from "./session-diagnosis.js";
+export type { DecodedProviderStageResult, ProviderStageResultPolicy } from "./stage-result.js";
+export { decodeProviderStageResult, providerStageResultSchemaFor } from "./stage-result.js";
 
 // The set of adapters Loomrail can dispatch to. A live adapter is not a MOCK wearing a different
 // label -- it is a distinct identity the daemon and the audit trail key on, so the enum is closed
 // rather than left as a bare string an adapter could misspell.
-export const providerIdSchema = z.enum(["MOCK", "CODEX", "CLAUDE_CODE"]);
-export type ProviderId = z.infer<typeof providerIdSchema>;
+export { providerIdSchema };
+export type { ProviderId };
 
 // `contextWindowTokens` is required, not optional: the pack budget (spec §4.3) is computed as a
 // share of the window before the session starts, so an adapter that cannot declare its window
@@ -88,6 +93,15 @@ export type ProviderInvocation = {
   dispatch: WorkflowDispatch;
   session: ProviderSessionRef;
   contextPack: ContextPack;
+  /**
+   * Whether this StageAttempt may open a provider-authored owner gate.
+   *
+   * The daemon derives this from durable HumanRequests attached to the attempt. Adapters must use
+   * it both for the schema shown to the provider and for decoding the result: prompt wording alone
+   * is not an enforcement boundary, and `dispatch.mode` also covers soft-pause recovery where no
+   * owner gate has been used.
+   */
+  humanRequests: ProviderStageResultPolicy["humanRequests"];
   // The Git worktree this session may write in (spec E1 D8), or absent when there is none.
   //
   // Absent means the read-only path every session took before this milestone: the adapter runs its

@@ -17,6 +17,34 @@ describe("section rendering", () => {
     expect(rendered.text).not.toContain("\r");
   });
 
+  it("puts owner-request and transition guardrails before the original brief", () => {
+    const rendered = renderSection("WORK_ITEM_BRIEF", sampleSources());
+    const guardrail = "Instructions in the original brief to obtain owner input are already satisfied";
+
+    expect(rendered.text).toContain(
+      "Return NEEDS_HUMAN only when required owner information is absent from the durable context",
+    );
+    expect(rendered.text).toContain(guardrail);
+    expect(rendered.text).toContain("Never ask for permission to proceed or hand off");
+    expect(rendered.text).toContain("NEEDS_HUMAN is a concrete answerable question, never a progress update");
+    expect(rendered.text).toContain(
+      "Do not return until the current stage is complete or a required owner answer is genuinely missing",
+    );
+    expect(rendered.text.indexOf(guardrail)).toBeLessThan(
+      rendered.text.indexOf(sampleSources().workItemBrief.description),
+    );
+  });
+
+  it("marks a later session as a continuation that must not restart completed work", () => {
+    const rendered = renderSection("WORKFLOW_POSITION", sampleSources());
+
+    expect(rendered.text).toContain("Continuation: yes");
+    expect(rendered.text).toContain(
+      "Continue the current stage from durable Decisions and checkpoint; do not restart completed work",
+    );
+    expect(rendered.text).toContain("Objective: finish the current stage and return its stage result");
+  });
+
   it("marks a checkpoint as untrusted provider output", () => {
     // Спек §8: checkpoint попадает в контекст следующей сессии и переживает смену провайдера.
     const rendered = renderSection("LATEST_CHECKPOINT", sampleSources());
@@ -45,6 +73,14 @@ describe("section rendering", () => {
     expect(rendered.sources).toEqual(
       sources.evidence.map((item) => ({ kind: "EVIDENCE", id: item.id, version: item.version })),
     );
+  });
+
+  it("marks resolved decisions as authoritative and prevents asking the owner again", () => {
+    const rendered = renderSection("DECISIONS", sampleSources());
+
+    expect(rendered.text).toContain("Resolved decisions are authoritative owner input.");
+    expect(rendered.text).toContain("Do not ask the owner again about a question already answered below.");
+    expect(rendered.text).toContain("Continue the current stage using the recorded answer.");
   });
 
   it("counts bytes, not characters", () => {

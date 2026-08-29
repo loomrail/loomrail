@@ -30,7 +30,10 @@ WorkItem
 
 Blocking HumanRequest переводит только связанный WorkItem в `BLOCKED` и StageAttempt в `WAITING_HUMAN`.
 `Answer & resume` атомарно сохраняет Decision, закрывает HumanRequest и создаёт resume WorkflowDispatch. Независимые
-WorkItem не меняются.
+WorkItem не меняются. Обычный first-attempt путь PipelineRun допускает не более одного provider-authored owner gate:
+после первого HumanRequest последующие ProviderInvocation, включая автоматически следующие стадии, получают
+`humanRequests: DISALLOWED`. Явный retry (`StageAttempt.attempt > 1`) получает один новый gate. Operational
+fail-closed request не продвигает стадию и не считается ответом провайдера.
 
 Acceptance — отдельный owner gate: обычный ответ на HumanRequest и generic pipeline controls его не обходят. Только
 versioned `Accept`, `Return to work` или `Reject` закрывают AcceptancePackage; лишь `Accept` переводит WorkItem в

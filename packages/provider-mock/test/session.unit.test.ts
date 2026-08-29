@@ -35,6 +35,7 @@ const implementInvocation = (): ProviderInvocation => {
       text,
       contentHash: `sha256:${createHash("sha256").update(text).digest("hex")}`,
     },
+    humanRequests: "ALLOWED",
   };
 };
 

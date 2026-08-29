@@ -3,21 +3,20 @@ import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, sep } from "node:path";
 
+import type { ProviderOutcome, ProviderUsage, WorkflowStage } from "@loomrail/contracts";
 import {
-  checkpointDraftSchema,
-  type CheckpointDraft,
-  type ProviderOutcome,
-  type ProviderUsage,
-} from "@loomrail/contracts";
-import {
+  decodeProviderStageResult,
   describeUnproductiveSession,
+  providerStageResultSchemaFor,
   providerCapabilitiesSchema,
   runProcess,
   ProcessSpawnError,
+  type DecodedProviderStageResult,
   type ProcessExitOutcome,
   type ProviderAdapter,
   type ProviderInvocation,
   type ProviderSessionListener,
+  type ProviderStageResultPolicy,
 } from "@loomrail/provider-core";
 import { z } from "zod";
 
@@ -96,15 +95,18 @@ const isExecutableOnDisk = (command: string): boolean => {
 // `parseCodexEvent` matches. That enveloped path is the documented one and is tried first in
 // `onLine` below. The bare-line attempt is kept as well -- it costs nothing, and a CLI version that
 // prints the answer unenveloped would otherwise silently reopen the same Critical.
-const tryParseStructuredCheckpoint = (line: string): CheckpointDraft | null => {
+const tryParseStructuredResult = (
+  line: string,
+  stage: WorkflowStage,
+  policy: ProviderStageResultPolicy,
+): DecodedProviderStageResult | null => {
   let candidate: unknown;
   try {
     candidate = JSON.parse(line);
   } catch {
     return null;
   }
-  const result = checkpointDraftSchema.safeParse(candidate);
-  return result.success ? result.data : null;
+  return decodeProviderStageResult(stage, candidate, policy);
 };
 
 // Whether the CLI can actually be launched in `path`. Asked before the spawn, because `spawn`
@@ -212,8 +214,18 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
       // dropped there would show up as the agent's own work.
       const scratchDir = await mkdtemp(join(tmpdir(), "loomrail-codex-"));
       try {
-        const outputSchemaPath = join(scratchDir, "checkpoint-output-schema.json");
-        await writeFile(outputSchemaPath, JSON.stringify(z.toJSONSchema(checkpointDraftSchema)), "utf8");
+        const outputSchemaPath = join(scratchDir, "stage-result-output-schema.json");
+        await writeFile(
+          outputSchemaPath,
+          JSON.stringify(
+            z.toJSONSchema(
+              providerStageResultSchemaFor(invocation.session.stage, {
+                humanRequests: invocation.humanRequests,
+              }),
+            ),
+          ),
+          "utf8",
+        );
 
         // With no workspace the scratch directory doubles as the working directory, and an EMPTY
         // directory plus `-s read-only` is the whole containment story (spec D1): the agent has
@@ -315,7 +327,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
           invocation.contextPack.text,
         ];
 
-        let finalCheckpoint: CheckpointDraft | undefined;
+        let finalResult: DecodedProviderStageResult | undefined;
         // The provider's own last diagnostic, when it gave one. Kept so a failed session can name
         // what the CLI said instead of inventing a business result for it (see
         // `describeUnproductiveSession`).
@@ -338,7 +350,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // that carries the turn's real token usage -- a session that never emits it did not finish,
         // whatever else arrived before it. Read below as one half of "this session ended normally".
         //
-        // Holds the report rather than a flag, matching `finalCheckpoint` above: a `let` initialised
+        // Holds the report rather than a flag, matching `finalResult` above: a `let` initialised
         // to `false` and only ever assigned inside the stream callback reads as the constant `false`
         // to the type checker, which would make the test below dead code by its own reckoning.
         let completedTurn: ProviderUsage | undefined;
@@ -367,13 +379,15 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
               }
               if (event.type === "item.completed") {
                 // The documented path for `--output-schema`'s answer (see
-                // `tryParseStructuredCheckpoint` above). The LAST match in the stream wins: a turn
+                // `tryParseStructuredResult` above). The LAST match in the stream wins: a turn
                 // can emit several `agent_message` items, and the final one is the answer the
                 // schema constrained.
-                const checkpoint = tryParseStructuredCheckpoint(event.item.text);
-                if (checkpoint !== null) {
-                  finalCheckpoint = checkpoint;
-                  listener.onCheckpoint(checkpoint);
+                const stageResult = tryParseStructuredResult(event.item.text, invocation.session.stage, {
+                  humanRequests: invocation.humanRequests,
+                });
+                if (stageResult !== null) {
+                  finalResult = stageResult;
+                  if (stageResult.checkpoint !== null) listener.onCheckpoint(stageResult.checkpoint);
                   consumed = true;
                 }
               }
@@ -408,10 +422,12 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
               if (!consumed) linesUnused += 1;
               return;
             }
-            const checkpoint = tryParseStructuredCheckpoint(line);
-            if (checkpoint !== null) {
-              finalCheckpoint = checkpoint;
-              listener.onCheckpoint(checkpoint);
+            const stageResult = tryParseStructuredResult(line, invocation.session.stage, {
+              humanRequests: invocation.humanRequests,
+            });
+            if (stageResult !== null) {
+              finalResult = stageResult;
+              if (stageResult.checkpoint !== null) listener.onCheckpoint(stageResult.checkpoint);
               return;
             }
             linesUnused += 1;
@@ -454,7 +470,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         }
 
         // `codex exec` is one-shot: the single turn it ran either produced a structured answer
-        // conforming to the checkpoint schema we asked for, or it did not. What it must NOT do is
+        // conforming to the current stage-result schema, or it did not. What it must NOT do is
         // report a business result nobody measured -- this branch used to return
         // `CONTEXT_EXHAUSTED`, which `codex exec` never reports and which was therefore a lie in
         // every situation that reached it, this milestone's Critical included. Nothing is
@@ -485,8 +501,8 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // `provider-claude-code` needs none of this: its outcome comes from the CLI's own terminal
         // `result` event, so a killed session simply never produces one.
         const endedNormally = exit.signal === null && exit.code === 0;
-        if (finalCheckpoint !== undefined && completedTurn !== undefined && endedNormally) {
-          return { type: "COMPLETED", summary: finalCheckpoint.summary };
+        if (finalResult !== undefined && completedTurn !== undefined && endedNormally) {
+          return finalResult.outcome;
         }
         // A turn the CLI said failed is named as that even when a checkpoint arrived first: it is
         // the more specific fact, and it is the one carrying the provider's own message.
@@ -505,7 +521,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         const reason =
           providerFailureText !== undefined
             ? "PROVIDER_REPORTED_FAILURE"
-            : finalCheckpoint === undefined
+            : finalResult === undefined
               ? "NO_STRUCTURED_RESULT"
               : endedNormally
                 ? "TERMINAL_TURN_EVENT_MISSING"

@@ -3,21 +3,20 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, sep } from "node:path";
 
+import type { ProviderOutcome, ProviderUsage, WorkflowStage } from "@loomrail/contracts";
 import {
-  checkpointDraftSchema,
-  type CheckpointDraft,
-  type ProviderOutcome,
-  type ProviderUsage,
-} from "@loomrail/contracts";
-import {
+  decodeProviderStageResult,
   describeUnproductiveSession,
+  providerStageResultSchemaFor,
   providerCapabilitiesSchema,
   runProcess,
   ProcessSpawnError,
+  type DecodedProviderStageResult,
   type ProcessExitOutcome,
   type ProviderAdapter,
   type ProviderInvocation,
   type ProviderSessionListener,
+  type ProviderStageResultPolicy,
 } from "@loomrail/provider-core";
 import { z } from "zod";
 
@@ -101,18 +100,21 @@ const isExecutableOnDisk = (command: string): boolean => {
 // a path -- `claude --help` shows this in the flag's own usage text, and passing a path instead
 // makes the real CLI exit 0 with no output at all, silently) is what lets a single `claude -p`
 // turn deliver a structured answer instead of free prose: on success the terminal `result`
-// event's text is expected to be JSON conforming to `checkpointDraftSchema`. Untrusted process
+// event's text is expected to be JSON conforming to the current stage-result schema. Untrusted process
 // output either way -- a line that fails to parse or fails the shape check returns `null` rather
-// than throwing, exactly like `tryParseStructuredCheckpoint` in provider-codex.
-const tryParseStructuredCheckpoint = (text: string): CheckpointDraft | null => {
+// than throwing, exactly like `tryParseStructuredResult` in provider-codex.
+const tryParseStructuredResult = (
+  text: string,
+  stage: WorkflowStage,
+  policy: ProviderStageResultPolicy,
+): DecodedProviderStageResult | null => {
   let candidate: unknown;
   try {
     candidate = JSON.parse(text);
   } catch {
     return null;
   }
-  const result = checkpointDraftSchema.safeParse(candidate);
-  return result.success ? result.data : null;
+  return decodeProviderStageResult(stage, candidate, policy);
 };
 
 type SessionRuntime = {
@@ -202,10 +204,16 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
       // whatever the agent wrote into it.
       const workingDir = await mkdtemp(join(tmpdir(), "loomrail-claude-"));
       try {
-        // Inline JSON text, not a path -- see the doc comment on `tryParseStructuredCheckpoint`
+        // Inline JSON text, not a path -- see the doc comment on `tryParseStructuredResult`
         // above for why. Nothing writes this to `workingDir`: there is no reader left for a file
         // version of it, and a file created for no reader is one more thing to leak.
-        const checkpointJsonSchema = JSON.stringify(z.toJSONSchema(checkpointDraftSchema));
+        const stageResultJsonSchema = JSON.stringify(
+          z.toJSONSchema(
+            providerStageResultSchemaFor(invocation.session.stage, {
+              humanRequests: invocation.humanRequests,
+            }),
+          ),
+        );
 
         // Verbatim, exactly as task 1's reconnaissance established it against the real CLI --
         // with one correction: `claude --help` documents `-p, --print` as a boolean flag ("Print
@@ -234,7 +242,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
           "--max-budget-usd",
           String(resolved.maxBudgetUsd),
           "--json-schema",
-          checkpointJsonSchema,
+          stageResultJsonSchema,
           invocation.contextPack.text,
         ];
 
@@ -319,24 +327,18 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
               return;
             }
 
-            const checkpoint = tryParseStructuredCheckpoint(event.text);
-            if (checkpoint !== null) {
-              listener.onCheckpoint(checkpoint);
-              outcome = { type: "COMPLETED", summary: checkpoint.summary };
+            const stageResult = tryParseStructuredResult(event.text, invocation.session.stage, {
+              humanRequests: invocation.humanRequests,
+            });
+            if (stageResult !== null) {
+              if (stageResult.checkpoint !== null) listener.onCheckpoint(stageResult.checkpoint);
+              outcome = stageResult.outcome;
               return;
             }
-            // `--json-schema` is what is supposed to make a successful turn's result conform to
-            // `checkpointDraftSchema`; if it somehow does not, the turn still succeeded --
-            // `event.ok` said so, and that reading must not be re-derived from parseability here
-            // -- so the outcome is still COMPLETED, just without a structured checkpoint to
-            // publish, falling back to the CLI's own text as the summary.
-            // `.trim() ||`, not `||`: a result of "   " is not the empty string, so it survived the
-            // fallback and then failed `providerOutcomeSchema`'s own `.trim().min(1)` deep inside
-            // the daemon's `execute`, turning a completed stage into a persistence error.
-            outcome = {
-              type: "COMPLETED",
-              summary: event.text.slice(0, 4_000).trim() || "(no summary text)",
-            };
+            // A successful CLI turn is not a successful workflow stage unless its output satisfies
+            // that stage's contract. Falling back to prose here would let Review skip evidence or
+            // Acceptance skip the owner gate, so the session remains without an outcome and takes
+            // the existing fail-closed Human Request path below.
           },
           // The CLI's own diagnostics, not an event stream Loomrail parses. Untrusted process
           // output either way, so nothing here is fed to a structured logger unexamined.

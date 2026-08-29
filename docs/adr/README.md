@@ -6,8 +6,9 @@ record.
 
 ## Index
 
-| ADR                                          | Status                | Decision                                            |
-| -------------------------------------------- | --------------------- | --------------------------------------------------- |
-| [0001](0001-typescript-monorepo-baseline.md) | Accepted              | TypeScript monorepo and runtime baseline            |
-| [0002](0002-sqlite-state-and-audit.md)       | Accepted with CI gate | Relational SQLite state plus append-only audit      |
-| [0003](0003-loopback-session-security.md)    | Accepted              | Loopback-only daemon and one-time browser bootstrap |
+| ADR                                              | Status                | Decision                                            |
+| ------------------------------------------------ | --------------------- | --------------------------------------------------- |
+| [0001](0001-typescript-monorepo-baseline.md)     | Accepted              | TypeScript monorepo and runtime baseline            |
+| [0002](0002-sqlite-state-and-audit.md)           | Accepted with CI gate | Relational SQLite state plus append-only audit      |
+| [0003](0003-loopback-session-security.md)        | Accepted              | Loopback-only daemon and one-time browser bootstrap |
+| [0004](0004-one-owner-gate-per-stage-attempt.md) | Accepted              | One provider owner gate until explicit retry        |

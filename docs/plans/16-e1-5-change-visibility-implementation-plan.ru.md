@@ -23,7 +23,8 @@ diff` по рабочему дереву: последний не видит с�
 - TypeScript strict. Zod 4 на каждой границе, `.strict()` несущий.
 - Новых зависимостей времени исполнения не добавлять. `git` запускается как процесс, без обёрток.
 - `node:sqlite` импортирует только `packages/persistence-sqlite`.
-- Применённую миграцию не редактировать — добавлять новую. Текущая последняя — 0011.
+- Применённую миграцию не редактировать — добавлять новую. Перед этой вехой последней была 0012;
+  метка стадии добавлена миграцией 0013.
 - Реальную базу владельца (`~/Library/Application Support/Loomrail/state.sqlite`) не трогать. Для
   проверок — копия через backup API, никогда не `cp` (WAL теряется).
 - **Наивный `git diff <baseline>` по рабочему дереву запрещён на всех путях** (спека D2). Состав
@@ -48,10 +49,13 @@ diff` по рабочему дереву: последний не видит с�
 
 - `MAX_SUMMARY_FILES = 2_000` — файлов в сводке. Больше — `truncated: true`.
 - `MAX_PATCH_BYTES = 512 * 1024` — байт тела одного файла. Больше — обрезка с `omittedBytes`.
-- `SUMMARY_REFRESH_DEBOUNCE_MS = 750` — не чаще одного перечитывания сводки в этот интервал.
+- `SUMMARY_REFRESH_DEBOUNCE_MS = 1_600` — не чаще одного перечитывания сводки в этот интервал.
 
-Числа выбраны как рабочие значения, а не измерены. Задача 7 требует измерить их на настоящем
-большом репозитории и записать результат; менять их разрешено только после измерения.
+Первые два числа остаются рабочими пределами. Интервал обновления измерен в Задаче 7:
+`summariseChanges` занял медиану 295 мс на трёх файлах, 341 мс на checkout Loomrail и **1 594 мс**
+на настоящем репозитории из 20 000 файлов. Исходные 750 мс были меньше времени одного чтения;
+1 600 мс — округлённый измеренный предел. Общий канал событий сохраняет окно коалесцирования 50 мс:
+замедляется только поддерево запросов Changes, а не workflow и board.
 
 ## Структура файлов
 
@@ -687,8 +691,17 @@ git commit -m "feat(web): show the files a task changed, and the diff inside the
 
 **Файлы:**
 
-- Изменить: `apps/web/src/views/ChangesSection.tsx`
+- Изменить: `apps/web/src/changesView.ts`, `apps/web/src/useEventStream.ts`,
+  `apps/web/src/workspace.tsx`, `apps/web/src/views/ChangesSection.tsx`
 - Тест: `apps/web/src/views/ChangesSection.test.ts`, `e2e/walking-skeleton.spec.ts`
+
+> **ПРАВКА ПОСЛЕ РЕАЛИЗАЦИИ.** Канал A1.5 уже инвалидировал весь префикс
+> `["work-items", id]` через 50 мс. Дебаунс внутри `ChangesSection` не мог бы отменить это немедленное
+> чтение. Поэтому `useEventStream` исключает только поддерево `changes` из немедленной
+> инвалидизации и планирует его отдельно; все остальные запросы WorkItem остаются на 50 мс.
+> Неактивные query только помечаются stale и не читаются, поэтому закрытая карточка не делает
+> сетевой запрос. Тело находится под тем же префиксом и перечитывается лишь когда query раскрытого
+> файла активно.
 
 Пока карточка открыта, событие стадии из существующего канала (`useEventStream`) вызывает
 перечитывание сводки, не чаще `SUMMARY_REFRESH_DEBOUNCE_MS`. Тело перечитывается только для
@@ -699,12 +712,12 @@ git commit -m "feat(web): show the files a task changed, and the diff inside the
 ```ts
 it("reads the summary once for a burst of events, not once per event", async () => {
   const read = vi.fn().mockResolvedValue(emptySummary);
-  const debounced = makeSummaryRefresher(read, 750);
+  const debounced = makeSummaryRefresher(read, SUMMARY_REFRESH_DEBOUNCE_MS);
 
   debounced();
   debounced();
   debounced();
-  await vi.advanceTimersByTimeAsync(800);
+  await vi.advanceTimersByTimeAsync(SUMMARY_REFRESH_DEBOUNCE_MS);
 
   expect(read).toHaveBeenCalledTimes(1);
 });

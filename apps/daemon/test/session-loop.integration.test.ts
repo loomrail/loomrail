@@ -78,6 +78,20 @@ const completingAdapter = (
     start: async (invocation: ProviderInvocation): Promise<ProviderOutcome> => {
       started += 1;
       await onStart(started, invocation);
+      if (invocation.session.stage === "ACCEPTANCE") {
+        return {
+          type: "NEEDS_HUMAN",
+          request: {
+            kind: "FREE_TEXT",
+            blocking: true,
+            title: "Confirm the acceptance note",
+            context: "The owner must resolve this before an acceptance package can be prepared.",
+            recommendation: "Confirm the bounded note.",
+            options: [],
+            allowOther: true,
+          },
+        };
+      }
       // REVIEW and QA are the two stages the domain refuses to complete without their typed
       // evidence artifact (`decideApplyProviderOutcome`, @loomrail/domain). Produced here so a test
       // driving one of them asserts what this suite is about -- the workspace the adapter was

@@ -69,6 +69,13 @@ export const gatedAdapter = (
       // template needs those or the drain stalls on REVIEW for a reason that has nothing to do with
       // whatever the caller's test is actually about.
       const { stage } = invocation.session;
+      if (stage === "ACCEPTANCE") {
+        return {
+          type: "READY_FOR_ACCEPTANCE",
+          releaseNote: "The gated delivery is ready for its owner.",
+          verifyInstructions: ["Inspect the recorded Review and QA evidence."],
+        };
+      }
       const artifacts =
         stage === "REVIEW"
           ? [

@@ -53,9 +53,9 @@ const ChangedFileRow = ({ file, t }: { file: ChangedFile; t: Translator }): Reac
  *
  * A component of its own so that the query lives and dies with the disclosure: a body is fetched
  * when this mounts and never before, which is what keeps the file list free of the cost of the
- * patches it lists (spec D5). It is also what makes the reread on a stage event cost one body
- * rather than all of them -- only the mounted query is active for the event channel to refetch
- * (spec D6).
+ * patches it lists (spec D5). It is also what makes the measured, debounced reread after a stage
+ * event cost one body rather than all of them -- only the mounted query is active when the event
+ * bridge invalidates the changes subtree (spec D6).
  *
  * The patch is printed as preformatted text and nothing else. Colouring each line would mean one
  * element per line, and this diff is capped at 512 KiB rather than at a number of lines -- a

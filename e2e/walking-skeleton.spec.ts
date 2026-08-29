@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { gatedAdapter } from "../apps/daemon/test/gated-adapter.js";
 import { materialiseFixtureRepository, resolveBundledFixture } from "../apps/daemon/dist/fixtures.js";
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
 import { openLocalState, type LocalState } from "../packages/persistence-sqlite/dist/index.js";
@@ -523,6 +524,7 @@ type SeededWorkspaces = {
   baseCommit: string;
   branch: string;
   changed: SeededChanges;
+  cleanTitle: string;
   goneTitle: string;
   liveTitle: string;
   noWorkspaceTitle: string;
@@ -628,8 +630,20 @@ const seedWorkspaces = async (databasePath: string): Promise<SeededWorkspaces> =
   });
   if (added.type !== "ADDED") throw new Error(`The seeded worktree was refused: ${added.refusal.type}`);
   const changed = await seedWorktreeChanges(worktreePath);
+  const cleanBranch = "loomrail/seeded-clean-workspace";
+  const cleanWorktreePath = join(dirname(databasePath), "workspaces", "project web", "неизменённая задача");
+  const cleanAdded = await addWorktree({
+    topLevel: inspected.topLevel,
+    branch: cleanBranch,
+    path: cleanWorktreePath,
+    startPoint: baseCommit,
+  });
+  if (cleanAdded.type !== "ADDED") {
+    throw new Error(`The clean seeded worktree was refused: ${cleanAdded.refusal.type}`);
+  }
 
   const titles = {
+    cleanTitle: "Task with an unchanged workspace",
     goneTitle: "Task whose worktree went away",
     liveTitle: "Task with a live workspace",
     noWorkspaceTitle: "Task that never needed a repository",
@@ -702,6 +716,7 @@ const seedWorkspaces = async (databasePath: string): Promise<SeededWorkspaces> =
     };
 
     recordWorkspace(createSeededTask("live", titles.liveTitle), branch, worktreePath);
+    recordWorkspace(createSeededTask("clean", titles.cleanTitle), cleanBranch, cleanWorktreePath);
     recordWorkspace(
       createSeededTask("gone", titles.goneTitle),
       "loomrail/seeded-vanished-workspace",
@@ -1354,8 +1369,8 @@ test.describe("authenticated walking skeleton", () => {
     await createTask(page, "Human decision workflow");
     const inspector = page.getByRole("complementary", { name: "Human decision workflow" });
     await inspector.getByRole("button", { name: "Move to Ready" }).click();
-    await expect(inspector.getByRole("button", { name: "Start mock workflow" })).toBeEnabled();
-    await inspector.getByRole("button", { name: "Start mock workflow" }).click();
+    await expect(inspector.getByRole("button", { name: "Start workflow" })).toBeEnabled();
+    await inspector.getByRole("button", { name: "Start workflow" }).click();
 
     await expect(inspector.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible();
     await expect(inspector.getByText("Waiting for you", { exact: true })).toBeVisible();
@@ -1611,7 +1626,7 @@ test.describe("authenticated walking skeleton", () => {
       // absence check upstream, there is no positive state to reach for on the workspace query
       // itself -- still-loading and genuinely-empty both render nothing -- so this borrows one from
       // `WorkflowPanel` next to it instead: it shows a loading skeleton while its own query is
-      // pending, and the real "Start mock workflow" button once that query resolves. Both queries are
+      // pending, and the real "Start workflow" button once that query resolves. Both queries are
       // fired from the same mount, `useWorkItemWorkflow` before `useWorkItemWorkspace` in render
       // order, so proving the workflow query has landed proves the workspace one has had at least as
       // long to land too -- and a fetch to the same idle local daemon that started no later does not
@@ -1621,7 +1636,7 @@ test.describe("authenticated walking skeleton", () => {
       await expect(
         bareInspector.getByRole("heading", { level: 2, name: seeded.noWorkspaceTitle }),
       ).toBeVisible();
-      await expect(bareInspector.getByRole("button", { name: "Start mock workflow" })).toBeVisible();
+      await expect(bareInspector.getByRole("button", { name: "Start workflow" })).toBeVisible();
       await expect(bareInspector.getByText("Workspace", { exact: true })).toHaveCount(0);
     } finally {
       await daemon?.close();
@@ -1690,7 +1705,8 @@ test.describe("authenticated walking skeleton", () => {
       // "nothing changed in it"), and it offers no control, because there is no body behind one.
       const binary = changes.locator(".changes-list__item").filter({ hasText: seeded.changed.binary });
       await expect(binary.getByText("Binary", { exact: true })).toBeVisible();
-      await expect(binary.locator(".changes-row__counts")).toHaveCount(0);
+      await expect(binary).not.toContainText("+0");
+      await expect(binary).not.toContainText("−0");
       await expect(binary.getByRole("button")).toHaveCount(0);
 
       // The whole list is on screen, and not one patch has been read to put it there.
@@ -1742,6 +1758,18 @@ test.describe("authenticated walking skeleton", () => {
       await page.getByRole("button", { name: seeded.liveTitle }).click();
       await expect(changes.getByText(/Only the first \d+ changed files are listed/)).toBeVisible();
 
+      // D7's positive empty state is a statement, not a missing render: this is a real, unchanged
+      // worktree, and the owner is told that it has changed nothing. The refusal cases below are
+      // separate branches with separate words.
+      await page.getByRole("button", { name: seeded.cleanTitle }).click();
+      const cleanChanges = page
+        .getByRole("complementary", { name: seeded.cleanTitle })
+        .locator(".lr-inspector-section")
+        .filter({ has: page.getByText("Changes", { exact: true }) });
+      await expect(
+        cleanChanges.getByText("This task has changed nothing in its worktree yet.", { exact: true }),
+      ).toBeVisible();
+
       // A worktree that is not there any more is a refusal that names what happened, never an empty
       // list: an empty list claims the worktree is unchanged, and a read that did not happen is not
       // entitled to make that claim (spec D7). No action is offered with it, because Loomrail has
@@ -1766,9 +1794,76 @@ test.describe("authenticated walking skeleton", () => {
       // against a section that had not loaded yet.
       await page.getByRole("button", { name: seeded.noWorkspaceTitle }).click();
       const bare = page.getByRole("complementary", { name: seeded.noWorkspaceTitle });
-      await expect(bare.getByRole("button", { name: "Start mock workflow" })).toBeVisible();
+      await expect(bare.getByRole("button", { name: "Start workflow" })).toBeVisible();
       await expect(bare.getByText("Changes", { exact: true })).toHaveCount(0);
     } finally {
+      await daemon?.close();
+      daemon = undefined;
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("grows the change list while a stage is running, without a reload or eager file bodies", async ({
+    page,
+  }) => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail live changes "));
+    const adapter = gatedAdapter();
+    try {
+      const databasePath = join(temporaryDirectory, "local-state.sqlite");
+      const seeded = await seedWorkspaces(databasePath);
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        providerAdapter: adapter,
+        stateDatabasePath: databasePath,
+        webRoot: resolve("apps/web/dist"),
+      });
+
+      const bodyRequests: string[] = [];
+      page.on("request", (request) => {
+        const url = new URL(request.url());
+        if (url.pathname.endsWith("/changes/diff")) bodyRequests.push(url.searchParams.get("path") ?? "");
+      });
+
+      await page.goto(daemon.bootstrapUrl);
+      await page.getByRole("button", { name: "All issues", exact: true }).click();
+      await page.getByRole("button", { name: seeded.liveTitle }).click();
+      const inspector = page.getByRole("complementary", { name: seeded.liveTitle });
+      const changes = inspector
+        .locator(".lr-inspector-section")
+        .filter({ has: page.getByText("Changes", { exact: true }) });
+      const modified = changes.getByRole("button", { name: asPattern(seeded.changed.modified) });
+      await modified.click();
+      await expect(changes.locator(".changes-diff__patch")).toContainText(`+${seeded.changed.modifiedLine}`);
+
+      await inspector.getByRole("button", { name: "Move to Ready" }).click();
+      await expect(inspector.getByRole("button", { name: "Start workflow" })).toBeEnabled();
+      // Let the READY event's own delayed refresh finish before measuring the running stage's burst.
+      await page.waitForTimeout(1_700);
+      bodyRequests.length = 0;
+
+      await inspector.getByRole("button", { name: "Start workflow" }).click();
+      await adapter.started;
+      const duringStagePath = "src/added while stage runs.ts";
+      await writeFile(join(seeded.worktreePath, duringStagePath), "export const live = true;\n", "utf8");
+
+      // The adapter is still held inside its first ProviderSession, so the list cannot have grown
+      // because the stage ended or because the page reloaded. Its background event is the only
+      // invalidation source, and the measured window gives the file write time to land first.
+      const workflow = inspector
+        .locator(".lr-inspector-section")
+        .filter({ has: page.getByText("Workflow", { exact: true }) });
+      await expect(workflow.getByText("Running", { exact: true }).first()).toBeVisible();
+      await expect(changes.getByRole("button", { name: asPattern(duringStagePath) })).toBeVisible({
+        timeout: 10_000,
+      });
+
+      // The mounted body is reread with the summary, but no body for the new or any other collapsed
+      // file is fetched. This is the observable half of D5/D6; the rows look the same either way.
+      expect(bodyRequests.length).toBeGreaterThan(0);
+      expect(new Set(bodyRequests)).toEqual(new Set([seeded.changed.modified]));
+    } finally {
+      adapter.release();
       await daemon?.close();
       daemon = undefined;
       await rm(temporaryDirectory, { recursive: true, force: true });

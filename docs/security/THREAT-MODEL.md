@@ -1,7 +1,7 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-08-28
+**Updated:** 2026-08-29
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
@@ -92,6 +92,8 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T16 | Live adapter spawns an owner-privileged child process         | High     | argv array to `child_process.spawn`, no shell interpolation; never enable a provider's permission-bypass flag automatically (SD-001)                                                         | see A2 delta below                                          |
 | T17 | Child process orphaned by a dead daemon outlives it           | Medium   | pid recorded on the `ProviderSession`; startup reconciliation kills it before the session is marked ended                                                                                    | see A2 delta below                                          |
 | T18 | Untrusted provider stream carries the owner's own hook output | High     | only typed fields cross the adapter boundary; no raw wire line is retained anywhere a caller can observe                                                                                     | see A2 delta below                                          |
+| T21 | Client path expands a diff read or exhausts the daemon        | Medium   | authenticated route; canonical worktree boundary; literal Git pathspec plus exact name match; file-count and byte limits; summary debounce                                                   | see E1.5 change-visibility delta below                      |
+| T22 | Live provider bypasses typed evidence or owner acceptance     | High     | stage-specific strict result schema; daemon-owned provider attribution; Review/QA typed artifacts; domain rejects ordinary Acceptance completion                                             | see D2 live-route delta below                               |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -460,6 +462,81 @@ repository on the next start than it did on this one. `repositoryPathSchema`
 (`packages/contracts/src/work-management.ts`) enforces it on the command and on the Project itself, so no route
 or fixture can put one in the database, and `resolveRegisteredRepository` answers `REPOSITORY_PATH_NOT_ABSOLUTE`
 naming the path, rather than letting the owner discover it as a Project pointing somewhere they never chose.
+
+### E1.5 change-visibility delta (T21)
+
+E1.5 (`docs/plans/15-e1-5-change-visibility-spec.ru.md`) adds two authenticated GET routes that
+read a worktree's changed-file summary and one client-named file diff. The local owner already has
+authority to read that repository; the new risk is answer integrity and resource exhaustion: Git
+pathspec is a language, so a string that looks like one filename can select the whole tree, and an
+unbounded patch can make the daemon buffer far more than the owner asked to see.
+
+The controls are implemented at the `packages/workspace` boundary and verified through both that
+boundary and the HTTP surface:
+
+- the client path is canonicalised inside the recorded worktree and refused on escape, including a
+  prefix-sibling path such as `/tmp/wt-evil`; symlink escape is checked on its canonical target;
+- every Git pathspec uses `:(literal)`, and a separate unrestricted `--name-status` read must contain
+  the exact requested name. Both halves are necessary: the literal form prevents `*`, `:/` and
+  `:(top)` from selecting other files, while the exact-name check prevents a directory from
+  answering for every file below it;
+- a path that names no changed file, cannot be resolved, or leaves the worktree is a named 400
+  refusal, never an empty diff that would claim the file was unchanged;
+- a summary is capped at 2,000 files and one body at 512 KiB, with explicit `truncated` and
+  `omittedBytes`; refreshes of the expensive subtree are coalesced to the measured 1,600-ms window,
+  while closed cards have no active read;
+- the routes require the same local session as every other GET. Diff content is returned only to
+  that browser response and is not added to structured log fields or durable state.
+
+Verification: `packages/workspace/test/changes.integration.test.ts` covers traversal, symlink,
+pathspec-magic, directory, missing-file and byte-boundary cases against real temporary Git
+repositories; `apps/daemon/test/server.integration.test.ts` repeats hostile paths through HTTP and
+checks session, missing/unreadable worktrees and missing Git; the Workbench browser test proves the
+summary does not fetch bodies eagerly and that only the expanded body refreshes.
+
+One repository write is deliberately recorded rather than hidden: the temporary index itself is
+outside the worktree, but `git add -A` and `write-tree` put unreachable blobs/trees in the owner's
+shared object database. They do not touch the working tree, the owner's index, refs or commit
+history, and normal Git garbage collection may remove them. The stage label therefore preserves
+SHA equality indefinitely but is a usable diff base only while those objects remain.
+
+### D2 live-route delta (T22)
+
+D2 (`docs/plans/19-d2-full-route-example-spec.ru.md`) closes a false-success path at the provider
+boundary. Before it, both live adapters constrained every final answer to a generic checkpoint and
+translated it to `COMPLETED`. Review and QA therefore had no way to produce their required evidence,
+while the same ordinary completion on the final Acceptance stage followed `nextStage === null` and
+marked the PipelineRun succeeded without an AcceptancePackage or owner decision.
+
+The controls are structural and verified below the model layer:
+
+- `provider-core` selects one strict JSON Schema from the durable WorkflowStage. Review and QA each
+  require exactly their own typed artifact; Acceptance permits `READY_FOR_ACCEPTANCE` or a blocking
+  owner question, never ordinary completion;
+- an invalid terminal result is an unproductive session. Claude Code no longer promotes arbitrary
+  prose or whitespace to a successful stage merely because the CLI exited zero;
+- the daemon supplies `capabilities().provider` beside the untrusted outcome in
+  `APPLY_PROVIDER_OUTCOME`; provider output cannot choose its own audit attribution;
+- the domain independently rejects `COMPLETED` on Acceptance, even if an adapter or internal caller
+  bypasses the stage-result decoder;
+- EvidenceArtifact and SQLite accept only `MOCK`, `CODEX` or `CLAUDE_CODE`. Migration 0014 preserves
+  historical MOCK rows, and append-only triggers remain after the table rebuild.
+- the normal first-attempt path may expose at most one provider-authored owner gate. The daemon derives
+  this from durable HumanRequests on StageAttempts in the current run and passes an explicit policy to
+  the adapter; after the gate is used, both the CLI schema and the shared decoder reject `NEEDS_HUMAN`
+  on the resumed attempt and automatically following stages. An explicit retry receives one fresh,
+  bounded gate. This bounds a provider-driven question loop without weakening the separate human-only
+  AcceptancePackage. Operational provider/CLI failures still fail closed and never advance the workflow.
+
+Verification: provider-core and both live-adapter unit suites cover stage decoding, wrong evidence
+kind, invalid prose, last-result semantics and the owner-only Acceptance result; domain tests cover
+the forbidden transition; persistence tests cover live attribution, unknown-provider rejection and
+v13 row preservation; the daemon worker integration drives a CODEX-shaped route over a temporary
+real Git repository to a durable Decision, diff, both evidence artifacts and pending Acceptance.
+
+The artifact body is still provider-authored output. Typed shape and attribution make it auditable;
+they do not turn a claimed QA check into independently measured BrowserDriver evidence. The example
+therefore asks the owner to run its standard-library test separately before accepting.
 
 ## 7. Future execution threats
 

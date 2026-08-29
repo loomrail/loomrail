@@ -49,6 +49,13 @@ const seedRepositoryPath = async (databasePath: string): Promise<string> =>
  */
 const DEMO_INITIALISATION_MS = 20_000;
 
+/**
+ * Discovery also cuts the task's real worktree before its first provider session now. Under a
+ * loaded machine that background Git work can exceed Playwright's default five-second assertion
+ * window even though the route is progressing normally; the state assertion itself stays exact.
+ */
+const DISCOVERY_DECISION_MS = 20_000;
+
 const initializeWorkspace = async (page: Page): Promise<void> => {
   const initialize = page.getByRole("button", { name: "Initialize demo workspace" });
   await expect(initialize).toBeVisible();
@@ -327,12 +334,14 @@ test.describe("attempt nesting", () => {
 
     const inspector = page.getByRole("complementary", { name: "Attempt header task" });
     await inspector.getByRole("button", { name: "Move to Ready" }).click();
-    await expect(inspector.getByRole("button", { name: "Start mock workflow" })).toBeEnabled();
-    await inspector.getByRole("button", { name: "Start mock workflow" }).click();
+    await expect(inspector.getByRole("button", { name: "Start workflow" })).toBeEnabled();
+    await inspector.getByRole("button", { name: "Start workflow" }).click();
 
     // The mock pipeline's first ProviderSession has ended by the time this human decision surfaces
     // -- the earliest point the sessions list (and so its attempt header) is guaranteed to render.
-    await expect(inspector.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible();
+    await expect(inspector.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible({
+      timeout: DISCOVERY_DECISION_MS,
+    });
 
     const workflowSection = inspector
       .locator(".lr-inspector-section")

@@ -8,10 +8,11 @@
 //   FAKE_CODEX_HANG_MARKER_PATH -- write { pid: process.pid } to the given file, then hang
 //                                  (nothing else) until killed. Used to test that abortSession
 //                                  really waits for the child to exit.
-//   FAKE_CODEX_RECORD_PATH      -- write { args, stdinClosed } (this process's own argv and
-//                                  whether its stdin was closed by the parent) to the given file,
-//                                  then exit. Used to inspect exactly what the adapter under test
-//                                  launched it with.
+//   FAKE_CODEX_RECORD_PATH      -- write { args, stdinClosed, outputSchema } (this process's own
+//                                  argv, whether its stdin was closed by the parent, and the schema
+//                                  file's text while it still exists) to the given file, then exit.
+//                                  Used to inspect exactly what the adapter under test launched it
+//                                  with.
 //   FAKE_CODEX_OUTPUT_FILE      -- write the contents of the given file to stdout verbatim,
 //                                  standing in for a real `codex exec --json` recording, then
 //                                  exit.
@@ -62,7 +63,17 @@ if (hangMarkerPath !== undefined) {
     // by hanging until the runner gives up.
     process.stdin.pause();
     if (recordPath !== undefined) {
-      writeFileSync(recordPath, JSON.stringify({ args: process.argv.slice(2), stdinClosed }));
+      const args = process.argv.slice(2);
+      const schemaPath = args[args.indexOf("--output-schema") + 1];
+      let outputSchema = null;
+      if (schemaPath !== undefined) {
+        try {
+          outputSchema = readFileSync(schemaPath, "utf8");
+        } catch {
+          outputSchema = null;
+        }
+      }
+      writeFileSync(recordPath, JSON.stringify({ args, stdinClosed, outputSchema }));
     }
     if (killSelf) {
       // Held open so the only way out of this process is the signal below, never a natural exit

@@ -801,8 +801,8 @@ export const decideApplyProviderOutcome = (
       kind: "SINGLE_CHOICE",
       blocking: true,
       title: "Review the acceptance package",
-      context: "Only the owner can accept, return, or reject this completed mock delivery.",
-      recommendation: "Accept when the criterion matrix and synthetic evidence are sufficient.",
+      context: "Only the owner can accept, return, or reject this completed delivery.",
+      recommendation: "Accept when the criterion matrix and recorded evidence are sufficient.",
       options: [
         {
           id: "accept",
@@ -841,13 +841,13 @@ export const decideApplyProviderOutcome = (
       status: "PENDING",
       criteria: workItem.acceptanceCriteria.map((criterion, index) => ({
         criterion,
-        implementation: "The deterministic mock implementation completed under the approved budget policy.",
+        implementation: "The implementation stage completed under the approved budget policy.",
         reviewArtifactId: reviewArtifact.id,
         qaArtifactId: qaArtifact.id,
         verification:
           acceptanceOutcome.verifyInstructions.at(index) ??
           acceptanceOutcome.verifyInstructions[0] ??
-          "Run the deterministic verification suite.",
+          "Run the recorded verification suite.",
         knownRisk: null,
       })),
       artifactIds,
@@ -876,6 +876,13 @@ export const decideApplyProviderOutcome = (
         { type: "ACCEPTANCE_REQUESTED", data: { acceptancePackage, request, run, stageAttempt } },
       ],
     };
+  }
+
+  if (context.stageAttempt.stage === "ACCEPTANCE") {
+    throw new WorkflowDomainError(
+      "ACCEPTANCE_NOT_READY",
+      "Acceptance must produce a package for the owner; ordinary completion cannot finish the run",
+    );
   }
 
   // HANDED_OFF and CONTEXT_EXHAUSTED are session-level results (spec §5.2, §6.3): a session
@@ -926,7 +933,7 @@ export const decideApplyProviderOutcome = (
       stageAttemptId: context.stageAttempt.id,
       stage: context.stageAttempt.stage,
       status: "PASSED",
-      provider: "MOCK",
+      provider: command.payload.provider ?? "MOCK",
       createdAt: context.now,
       ...draft,
     };

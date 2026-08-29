@@ -5,6 +5,45 @@ import { isLocalApiError } from "./api";
 import type { TranslationKey } from "./i18n";
 
 /**
+ * The largest measured median of one summary read in Task 7, rounded to a stable millisecond
+ * boundary: 1,594 ms over a real 20,000-file repository. The original 750 ms in the plan was an
+ * unmeasured working value; keeping it would schedule work faster than that repository can finish
+ * it. This window applies only to change reads -- the rest of the event-driven workbench keeps the
+ * channel's 50 ms coalescing window.
+ */
+export const SUMMARY_REFRESH_DEBOUNCE_MS = 1_600;
+
+export type SummaryRefresher = (() => void) & { dispose: () => void };
+
+/**
+ * Schedules one read at the end of a fixed window that starts with the first event in a burst.
+ *
+ * Later events do not move the deadline: a stage that publishes continuously must still refresh
+ * while it is running. `dispose` makes closing the card cancel a read nobody can see.
+ */
+export const makeSummaryRefresher = (
+  read: () => void | Promise<void>,
+  windowMs: number = SUMMARY_REFRESH_DEBOUNCE_MS,
+): SummaryRefresher => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const refresh = (() => {
+    timer ??= setTimeout(() => {
+      timer = undefined;
+      // A query client records its own read failure. Catch the returned promise here so a failed
+      // background refresh does not also become an unhandled rejection in the browser.
+      void Promise.resolve()
+        .then(read)
+        .catch(() => undefined);
+    }, windowMs);
+  }) as SummaryRefresher;
+  refresh.dispose = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+  };
+  return refresh;
+};
+
+/**
  * How a changed file's status is named and toned.
  *
  * A `Record<ChangeStatus, …>` rather than a switch with a default, so adding a fifth status to the

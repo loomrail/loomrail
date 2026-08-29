@@ -137,7 +137,11 @@ const withEnv = async <T>(name: string, value: string, run: () => Promise<T>): P
   }
 };
 
-const fixtureInvocation = (sessionId = "session-1"): ProviderInvocation => ({
+const fixtureInvocation = (
+  sessionId = "session-1",
+  stage: ProviderInvocation["session"]["stage"] = "DISCOVERY",
+  humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
+): ProviderInvocation => ({
   dispatch: {
     schemaVersion: 1,
     id: "dispatch-1",
@@ -154,7 +158,7 @@ const fixtureInvocation = (sessionId = "session-1"): ProviderInvocation => ({
     id: sessionId,
     ordinal: 1,
     stageAttemptId: "attempt-1",
-    stage: "DISCOVERY",
+    stage,
     attempt: 1,
   },
   contextPack: {
@@ -162,6 +166,7 @@ const fixtureInvocation = (sessionId = "session-1"): ProviderInvocation => ({
     text: "Discover the requirements for the payments retry policy.",
     contentHash: `sha256:${"0".repeat(64)}`,
   },
+  humanRequests,
 });
 
 const noopListener = (): ProviderSessionListener => ({
@@ -172,9 +177,13 @@ const noopListener = (): ProviderSessionListener => ({
 
 // Runs `adapter.start()` once against `fakeClaudePath` with `spawned.recordPath` wired in, then
 // fills `spawned.args` in from what the fake process recorded about itself.
-const startWith = async (spawned: Spawned, adapter: ProviderAdapter): Promise<ProviderOutcome> => {
+const startWith = async (
+  spawned: Spawned,
+  adapter: ProviderAdapter,
+  humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
+): Promise<ProviderOutcome> => {
   const outcome = await withEnv("FAKE_CLAUDE_RECORD_PATH", spawned.recordPath, () =>
-    adapter.start(fixtureInvocation(), noopListener()),
+    adapter.start(fixtureInvocation("session-1", "DISCOVERY", humanRequests), noopListener()),
   );
   const recorded = JSON.parse(readFileSync(spawned.recordPath, "utf8")) as { args: string[]; cwd: string };
   spawned.args = recorded.args;
@@ -213,13 +222,18 @@ const runAgainstRecording = async (
 const runAgainstLines = async (
   lines: readonly string[],
   listener: Partial<ProviderSessionListener> = {},
+  stage: ProviderInvocation["session"]["stage"] = "DISCOVERY",
+  humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
 ): Promise<ProviderOutcome> => {
   const dir = mkdtempSync(join(tmpdir(), "loomrail-claude-stream-"));
   const streamPath = join(dir, "stream.jsonl");
   writeFileSync(streamPath, lines.map((line) => `${line}\n`).join(""), "utf8");
   const adapter = createClaudeCodeProvider({ command: fakeClaudePath });
   return withEnv("FAKE_CLAUDE_OUTPUT_FILE", streamPath, () =>
-    adapter.start(fixtureInvocation(), { ...noopListener(), ...listener }),
+    adapter.start(fixtureInvocation("session-1", stage, humanRequests), {
+      ...noopListener(),
+      ...listener,
+    }),
   );
 };
 
@@ -394,14 +408,14 @@ describe("createClaudeCodeProvider", () => {
     expect(request.context).toContain("Please run /login");
   });
 
-  // M10: `|| "(no summary text)"` only caught the empty string. A result of "   " survived it and
-  // then failed `providerOutcomeSchema`'s own `.trim().min(1)` deep inside the daemon's `execute`,
-  // turning a stage the CLI had actually completed into a persistence error.
-  it("completes a turn whose result text is nothing but whitespace", async () => {
+  // A successful CLI exit is not evidence that the workflow stage completed. Whitespace cannot
+  // satisfy the stage contract and must take the safe owner-request path instead of being promoted
+  // to a synthetic success summary.
+  it("does not complete a stage whose result text is nothing but whitespace", async () => {
     const outcome = await runAgainstLines([
       '{"type":"result","subtype":"success","is_error":false,"result":"   ","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":0}}',
     ]);
-    expect(outcome).toEqual({ type: "COMPLETED", summary: "(no summary text)" });
+    expectNeedsHuman(outcome);
   });
 
   // The other half of R25: a stream the adapter can make nothing of at all (a wrong flag makes the
@@ -495,6 +509,79 @@ describe("createClaudeCodeProvider", () => {
     expect(checkpoints).toHaveLength(1);
   });
 
+  it("rejects a second provider-authored owner question even if the CLI ignores its output schema", async () => {
+    const duplicateQuestion = JSON.stringify({
+      result: {
+        type: "NEEDS_HUMAN",
+        request: {
+          kind: "FREE_TEXT",
+          blocking: true,
+          title: "Ask the owner again",
+          context: "This attempt already received its owner answer.",
+          recommendation: "Repeat the answer.",
+          options: [],
+          allowOther: true,
+        },
+      },
+    });
+    const outcome = await runAgainstLines(
+      [
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: duplicateQuestion,
+          total_cost_usd: 0.01,
+          usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0 },
+        }),
+      ],
+      {},
+      "DISCOVERY",
+      "DISALLOWED",
+    );
+
+    const request = expectNeedsHuman(outcome);
+    expect(request.title).not.toBe("Ask the owner again");
+    expect(request.context).toContain("without the structured result Loomrail asked it for");
+  });
+
+  it("uses the Review contract to return one typed evidence artifact", async () => {
+    const result = JSON.stringify({
+      result: {
+        type: "COMPLETED",
+        summary: "The independent review passed.",
+        completed: ["Acceptance criteria traced"],
+        remaining: [],
+        deadEnds: [],
+        openQuestions: [],
+        artifact: {
+          kind: "REVIEW_REPORT",
+          title: "Independent review",
+          summary: "No blocking findings remain.",
+          checks: ["Requirements traced to the diff"],
+        },
+      },
+    });
+    const outcome = await runAgainstLines(
+      [
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result,
+          total_cost_usd: 0.01,
+          usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0 },
+        }),
+      ],
+      {},
+      "REVIEW",
+    );
+    expect(outcome).toMatchObject({
+      type: "COMPLETED",
+      artifacts: [{ kind: "REVIEW_REPORT" }],
+    });
+  });
+
   // requestHandoff is declared unsupported; it must be a no-op that *resolves* rather than an
   // error, because the session loop calls it whenever the occupancy threshold is crossed and
   // cannot know which adapter it is talking to -- rejecting would break a loop behaving
@@ -539,7 +626,7 @@ describe("createClaudeCodeProvider", () => {
   // checkable without the real CLI, and it is exactly the check that would have caught the
   // original defect: the value must parse as JSON and describe a JSON Schema object, not a
   // filesystem path.
-  it("passes the checkpoint schema inline, not as a file path", async () => {
+  it("passes the stage-result schema inline, not as a file path", async () => {
     const spawned = recordSpawn();
     await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
     const schemaFlagIndex = spawned.args.indexOf("--json-schema");
@@ -549,10 +636,39 @@ describe("createClaudeCodeProvider", () => {
       throw new Error("expected --json-schema to be followed by the schema itself");
     }
     const parsed: unknown = JSON.parse(schemaValue);
-    expect(parsed).toMatchObject({ type: "object" });
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("expected --json-schema to contain an object schema");
+    }
+    const parsedSchema = parsed as Record<string, unknown>;
+    expect(parsedSchema["description"]).toBe("Result of the DISCOVERY stage.");
+    expect(parsedSchema["type"]).toBe("object");
+    expect(parsedSchema["required"]).toEqual(["result"]);
+    expect(parsedSchema["additionalProperties"]).toBe(false);
+    const properties = parsedSchema["properties"];
+    if (typeof properties !== "object" || properties === null || Array.isArray(properties)) {
+      throw new Error("expected --json-schema to describe the result property");
+    }
+    const result = (properties as Record<string, unknown>)["result"];
+    if (typeof result !== "object" || result === null || Array.isArray(result)) {
+      throw new Error("expected --json-schema to describe result as a nested union");
+    }
+    expect(Array.isArray((result as Record<string, unknown>)["anyOf"])).toBe(true);
+    expect(JSON.stringify(parsed)).not.toContain('"oneOf"');
+    expect(JSON.stringify(parsed)).toContain('"const":"COMPLETED"');
     // Not a path: nothing in the working directory the adapter created should exist there for
     // this flag to have named.
     expect(existsSync(schemaValue)).toBe(false);
+  });
+
+  it("removes NEEDS_HUMAN from the schema after this attempt has used its owner gate", async () => {
+    const spawned = recordSpawn();
+    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }), "DISALLOWED");
+    const schemaFlagIndex = spawned.args.indexOf("--json-schema");
+    const schemaValue = spawned.args[schemaFlagIndex + 1];
+    if (schemaValue === undefined) throw new Error("expected --json-schema to carry the stage schema");
+
+    expect(schemaValue).toContain('"const":"COMPLETED"');
+    expect(schemaValue).not.toContain('"const":"NEEDS_HUMAN"');
   });
 
   // A spawn failure (missing executable) must become a session failure, not an unhandled

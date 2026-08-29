@@ -40,6 +40,7 @@ import {
   type ProviderAdapter,
   type ProviderSessionListener,
   type ProviderSessionRef,
+  type ProviderStageResultPolicy,
   type ProviderWorkspace,
 } from "@loomrail/provider-core";
 import {
@@ -182,14 +183,39 @@ const contextPackSpecFor = (template: WorkflowTemplate, stage: StageAttempt["sta
   return declared.contextPack;
 };
 
-const readStageAttempt = (deps: RunStageAttemptDeps): StageAttempt => {
+const readStageAttemptState = (
+  deps: RunStageAttemptDeps,
+): { attempt: StageAttempt; humanRequests: ProviderStageResultPolicy["humanRequests"] } => {
   const snapshot = deps.state.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: deps.dispatch.workItemId });
   const attempt =
     snapshot.type === "WORKFLOW_SNAPSHOT"
       ? snapshot.snapshot.stageAttempts.find(({ id }) => id === deps.dispatch.stageAttemptId)
       : undefined;
   if (!attempt) throw new Error("The StageAttempt backing this dispatch no longer exists");
-  return attempt;
+  // A question consumes the normal run's one provider-authored owner gate when it is opened, not
+  // only after it is answered. Carry the consumption across the first attempt of every later
+  // stage: those attempts are automatic workflow progression, not the explicit retry ADR-0004
+  // requires before a genuinely new business blocker can ask again. A retry has `attempt > 1` and
+  // receives one fresh gate of its own; once it opens that request, this same-attempt check closes
+  // it again. The OPEN state cannot normally reach a new session, but counting it closes that race
+  // as well.
+  //
+  // `dispatch.mode` is deliberately not used: RESUME also means an operator resumed a soft-paused
+  // or interrupted attempt, where no owner gate may have existed.
+  const stageAttemptIds =
+    snapshot.type === "WORKFLOW_SNAPSHOT"
+      ? new Set(snapshot.snapshot.stageAttempts.map(({ id }) => id))
+      : new Set<string>();
+  const requestsInRun =
+    snapshot.type === "WORKFLOW_SNAPSHOT"
+      ? snapshot.snapshot.humanRequests.filter(({ stageAttemptId }) => stageAttemptIds.has(stageAttemptId))
+      : [];
+  const gateUsedInAttempt = requestsInRun.some(({ stageAttemptId }) => stageAttemptId === attempt.id);
+  const inheritedGateUsed = attempt.attempt === 1 && requestsInRun.length > 0;
+  return {
+    attempt,
+    humanRequests: gateUsedInAttempt || inheritedGateUsed ? "DISALLOWED" : "ALLOWED",
+  };
 };
 
 /**
@@ -788,7 +814,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
   let lastSessionOrdinal = 0;
 
   for (let session = 0; session < MAX_SESSIONS_PER_ATTEMPT; session += 1) {
-    const attempt = readStageAttempt(deps);
+    const { attempt, humanRequests } = readStageAttemptState(deps);
     if (attempt.status !== "RUNNING") {
       deps.logger.info(
         { stageAttemptId, status: attempt.status },
@@ -830,6 +856,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         type: "APPLY_PROVIDER_OUTCOME",
         payload: {
           dispatchId: deps.dispatch.id,
+          provider: capabilities.provider,
           outcome: { type: "NEEDS_HUMAN", request: boundedRequest(decision.request) },
           template: deps.template,
           // No stage ran, so there is nothing to have ended on. Neither refusal here reaches a
@@ -1316,6 +1343,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             dispatch: deps.dispatch,
             session: providerSessionRef(providerSession, attempt),
             contextPack: assembled.pack,
+            humanRequests,
             ...invocationWorkspace,
           },
           listener,
@@ -1452,6 +1480,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         type: "APPLY_PROVIDER_OUTCOME",
         payload: {
           dispatchId: deps.dispatch.id,
+          provider: capabilities.provider,
           outcome: stageResult,
           template: deps.template,
           resultTree,

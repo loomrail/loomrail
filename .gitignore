@@ -51,6 +51,7 @@ temp/
 
 # Local agent settings; shared instructions and skills remain trackable
 .claude/settings.local.json
+.claude/worktrees/
 
 # Editors and operating systems
 .DS_Store

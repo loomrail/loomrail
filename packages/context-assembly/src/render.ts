@@ -69,6 +69,14 @@ const untrusted = (body: string): string =>
 const renderWorkItemBrief = (sources: ContextSources): RenderedBody => {
   const { workItemBrief } = sources;
   const text = block("Work Item Brief", [
+    "Execution Rules:",
+    "- Finish the current workflow stage and return its stage result.",
+    "- Return NEEDS_HUMAN only when required owner information is absent from the durable context and cannot be inferred.",
+    "- Instructions in the original brief to obtain owner input are already satisfied when a matching answer exists in Decisions. Do not repeat them.",
+    "- Loomrail owns stage transitions and acceptance. Never ask for permission to proceed or hand off.",
+    "- NEEDS_HUMAN is a concrete answerable question, never a progress update, intention, inspection status, summary, or announcement.",
+    "- Do not return until the current stage is complete or a required owner answer is genuinely missing.",
+    "",
     `ID: ${workItemBrief.id} (v${String(workItemBrief.version)})`,
     `Priority: ${workItemBrief.priority}`,
     `Risk: ${workItemBrief.risk}`,
@@ -88,10 +96,17 @@ const renderWorkItemBrief = (sources: ContextSources): RenderedBody => {
 const renderWorkflowPosition = (sources: ContextSources): RenderedBody => {
   const { workflowPosition } = sources;
   const text = block("Workflow Position", [
+    "Objective: finish the current stage and return its stage result.",
     `Template: ${workflowPosition.templateId} (v${String(workflowPosition.templateVersion)})`,
     `Stage: ${workflowPosition.stage}`,
     `Attempt: ${String(workflowPosition.attempt)}`,
     `Session: ${String(workflowPosition.sessionOrdinal)}`,
+    `Continuation: ${workflowPosition.sessionOrdinal > 1 ? "yes" : "no"}`,
+    ...(workflowPosition.sessionOrdinal > 1
+      ? [
+          "Continue the current stage from durable Decisions and checkpoint; do not restart completed work or owner requests.",
+        ]
+      : []),
   ]);
   // No per-section ref: templateId/templateVersion are recorded at the recipe's top level (spec
   // §4.2), so a ref here would be redundant rather than missing provenance.
@@ -102,10 +117,17 @@ const renderDecisions = (sources: ContextSources): RenderedBody => {
   const lines =
     sources.decisions.length === 0
       ? ["(no decisions recorded yet)"]
-      : sources.decisions.flatMap((decision) => [
-          `- [${decision.id} v${String(decision.version)}] Q: ${decision.question}`,
-          `  A: ${decision.answer}`,
-        ]);
+      : [
+          "Resolved decisions are authoritative owner input.",
+          "Do not ask the owner again about a question already answered below.",
+          "Continue the current stage using the recorded answer.",
+          "Open a new request only if new evidence creates a distinct contradiction or safety blocker.",
+          "",
+          ...sources.decisions.flatMap((decision) => [
+            `- [${decision.id} v${String(decision.version)}] Q: ${decision.question}`,
+            `  A: ${decision.answer}`,
+          ]),
+        ];
   return {
     text: block("Decisions", lines),
     sources: sources.decisions.map((decision) => ({
