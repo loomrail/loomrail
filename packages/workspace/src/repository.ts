@@ -1,5 +1,5 @@
 import { access } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, normalize } from "node:path";
 
 import { runGit } from "./git.js";
 
@@ -57,7 +57,10 @@ export const inspectRepository = async (path: string): Promise<RepositoryState |
   if (topLevelResult.exitCode !== 0) {
     return null;
   }
-  const topLevel = topLevelResult.stdout.trim();
+  // Git for Windows prints drive paths with POSIX separators (`C:/...`), while `realpath` and the
+  // callers that register repositories use native separators (`C:\\...`). Expose one native form
+  // from this module so a repository is not mistaken for a subdirectory of itself.
+  const topLevel = normalize(topLevelResult.stdout.trim());
 
   const headResult = await runGit(["rev-parse", "HEAD"], { cwd: path });
   const headCommit = headResult.exitCode === 0 ? headResult.stdout.trim() : null;
@@ -74,7 +77,7 @@ export const inspectRepository = async (path: string): Promise<RepositoryState |
     // refuses to provision a workspace from it rather than proceeding on a base it never verified.
     return null;
   }
-  const rawGitDir = gitDirResult.stdout.trim();
+  const rawGitDir = normalize(gitDirResult.stdout.trim());
   const gitDir = isAbsolute(rawGitDir) ? rawGitDir : join(path, rawGitDir);
 
   const inProgress = await detectInProgressOperation(gitDir);

@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,7 @@ describe("inspectRepository", () => {
 
     const state = await inspectRepository(repo);
 
+    expect(state?.topLevel).toBe(await realpath(repo));
     expect(state?.headCommit).toMatch(/^[0-9a-f]{40}$/);
     expect(state?.inProgress).toBeNull();
   });
