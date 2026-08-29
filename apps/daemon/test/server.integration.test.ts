@@ -937,9 +937,10 @@ describe("local daemon session and state boundary", () => {
     expect(response.status).toBe(400);
     const failure = apiErrorResponseSchema.parse(await response.json());
     expect(failure.error.code).toBe("REPOSITORY_PATH_NOT_A_REPOSITORY");
-    // Named as the owner would see it on disk: the message has to point at a path they can go look
-    // at, not at a canonicalised form of it they never typed.
-    expect(failure.error.message).toContain(occupied);
+    // Named as the owner would see its physical location on disk. Windows may spell `tmpdir()` with
+    // an 8.3 alias such as RUNNER~1 even though `realpath` and Git report the ordinary long path;
+    // fixture materialisation intentionally records that canonical form on every platform.
+    expect(failure.error.message).toContain(await realpath(occupied));
     // Nothing was registered on the way to the refusal.
     const projects = await fetch(`${daemon.baseUrl}/api/v1/projects`, {
       headers: { cookie: session.cookie },

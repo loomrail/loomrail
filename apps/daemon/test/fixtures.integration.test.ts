@@ -21,7 +21,18 @@ describe("fixture materialisation", () => {
 
   afterEach(async () => {
     await Promise.all(
-      temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+      temporaryDirectories.splice(0).map((path) =>
+        rm(path, {
+          recursive: true,
+          force: true,
+          // A zero-deadline repository probe deliberately returns before its losing Git inspection
+          // settles. Windows will not unlink a directory while that short-lived child still has it
+          // open as its cwd, whereas POSIX permits the unlink. `rm`'s bounded retry handles that
+          // platform rule without making the product probe wait for work it explicitly timed out.
+          maxRetries: 5,
+          retryDelay: 100,
+        }),
+      ),
     );
   });
 
