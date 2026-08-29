@@ -55,18 +55,23 @@ export type CreateClaudeCodeProviderOptions = {
   // The `claude` executable to spawn. Overridable so tests can point it at a stand-in without
   // touching PATH.
   command?: string;
+  // Trusted argv placed before the adapter-built Claude arguments. This keeps executable wrappers
+  // shell-free (tests use `node <fixture>`) while leaving the default CLI invocation unchanged.
+  commandArgsPrefix?: readonly string[];
   contextWindowTokens?: number;
   maxBudgetUsd?: number;
 };
 
 type ResolvedOptions = {
   command: string;
+  commandArgsPrefix: readonly string[];
   contextWindowTokens: number;
   maxBudgetUsd: number;
 };
 
 const resolveOptions = (options: CreateClaudeCodeProviderOptions): ResolvedOptions => ({
   command: options.command ?? "claude",
+  commandArgsPrefix: options.commandArgsPrefix ?? [],
   contextWindowTokens: options.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
   maxBudgetUsd: options.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
 });
@@ -267,7 +272,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
 
         const run = runProcess({
           command: resolved.command,
-          args,
+          args: [...resolved.commandArgsPrefix, ...args],
           cwd: workingDir,
           onLine: (line) => {
             linesReceived += 1;

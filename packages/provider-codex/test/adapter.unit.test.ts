@@ -23,6 +23,16 @@ import { createCodexProvider, TERMINAL_TURN_EVENT } from "../src/index.js";
 
 const fakeCodexPath = fileURLToPath(new URL("./fixtures/fake-codex.mjs", import.meta.url));
 
+// A `.mjs` file is directly executable through its shebang on POSIX, but Windows has no such
+// contract. Run the same fixture through this test process's Node binary on every platform so the
+// process boundary is real and the adapter's argv still arrives untouched after the script path.
+const createFakeCodexProvider = (options: { contextWindowTokens?: number } = {}): ProviderAdapter =>
+  createCodexProvider({
+    command: process.execPath,
+    commandArgsPrefix: [fakeCodexPath],
+    ...options,
+  });
+
 // SD-001 forbids Loomrail from ever enabling a provider's permission-bypass mode automatically. This
 // is the named, closed list: adding a spelling later is then a decision someone makes here, not
 // something that quietly never happens. Shared verbatim with provider-claude-code's own copy (no
@@ -258,12 +268,7 @@ const runAgainstRecording = async (
   options: { contextWindowTokens?: number } = {},
 ): Promise<ProviderOutcome> => {
   const recordingPath = fileURLToPath(new URL(`./recordings/${file}`, import.meta.url));
-  const adapter = createCodexProvider({
-    command: fakeCodexPath,
-    ...(options.contextWindowTokens === undefined
-      ? {}
-      : { contextWindowTokens: options.contextWindowTokens }),
-  });
+  const adapter = createFakeCodexProvider(options);
   return withEnv("FAKE_CODEX_OUTPUT_FILE", recordingPath, () =>
     adapter.start(fixtureInvocation(), { ...noopListener(), ...listener }),
   );
@@ -277,7 +282,7 @@ const runAgainstRecording = async (
 const runAdapterAgainstRecording = async (file: string): Promise<Spawned> => {
   const spawned = recordSpawn();
   const recordingPath = fileURLToPath(new URL(`./recordings/${file}`, import.meta.url));
-  const adapter = createCodexProvider({ command: fakeCodexPath });
+  const adapter = createFakeCodexProvider();
   await withEnv("FAKE_CODEX_RECORD_PATH", spawned.recordPath, () =>
     withEnv("FAKE_CODEX_OUTPUT_FILE", recordingPath, () =>
       adapter.start(fixtureInvocation(), noopListener()),
@@ -305,7 +310,7 @@ const runAgainstLines = async (
   const dir = mkdtempSync(join(tmpdir(), "loomrail-codex-stream-"));
   const streamPath = join(dir, "stream.jsonl");
   writeFileSync(streamPath, lines.map((line) => `${line}\n`).join(""), "utf8");
-  const adapter = createCodexProvider({ command: fakeCodexPath });
+  const adapter = createFakeCodexProvider();
   return withEnv("FAKE_CODEX_OUTPUT_FILE", streamPath, () =>
     adapter.start(fixtureInvocation("session-1", undefined, stage, humanRequests), {
       ...noopListener(),
@@ -356,7 +361,7 @@ const runAgainstStreamEnding = async (
   const dir = mkdtempSync(join(tmpdir(), "loomrail-codex-ending-"));
   const streamPath = join(dir, "stream.jsonl");
   writeFileSync(streamPath, stream, "utf8");
-  const adapter = createCodexProvider({ command: fakeCodexPath });
+  const adapter = createFakeCodexProvider();
   const environment =
     "killed" in ending
       ? { name: "FAKE_CODEX_KILL_SELF", value: "1" }
@@ -428,7 +433,7 @@ describe("createCodexProvider", () => {
   // refused.
   it("runs with stdin closed and the trusted-directory check skipped", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
+    await startWith(spawned, createFakeCodexProvider());
     expect(spawned.args).toContain("--skip-git-repo-check");
     expect(spawned.stdinClosed).toBe(true);
   });
@@ -442,11 +447,11 @@ describe("createCodexProvider", () => {
   // fails this test even if nobody thought to add its exact spelling to a list first.
   it("runs read-only without a workspace and workspace-write with a writable one, never a wider mode", async () => {
     const withoutWorkspace = recordSpawn();
-    await startWith(withoutWorkspace, createCodexProvider({ command: fakeCodexPath }));
+    await startWith(withoutWorkspace, createFakeCodexProvider());
     const withWorkspace = recordSpawn();
     await startWith(
       withWorkspace,
-      createCodexProvider({ command: fakeCodexPath }),
+      createFakeCodexProvider(),
       fixtureWorkspace(workspaceDirectory(), "READ_WRITE"),
     );
     for (const spawned of [withoutWorkspace, withWorkspace]) {
@@ -470,11 +475,7 @@ describe("createCodexProvider", () => {
   it("gives a reading stage the same worktree without write access or an opened network", async () => {
     const worktree = workspaceDirectory();
     const spawned = recordSpawn();
-    await startWith(
-      spawned,
-      createCodexProvider({ command: fakeCodexPath }),
-      fixtureWorkspace(worktree, "READ_ONLY"),
-    );
+    await startWith(spawned, createFakeCodexProvider(), fixtureWorkspace(worktree, "READ_ONLY"));
 
     // The worktree itself is unchanged by the access mode: this stage reads the work item's own
     // branch, with whatever an earlier stage changed on it.
@@ -497,12 +498,12 @@ describe("createCodexProvider", () => {
   // here fail loudly, instead of a check that only ever knew about one flag.
   it("never builds a command carrying a permission-bypass flag (SD-001)", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
+    await startWith(spawned, createFakeCodexProvider());
     expectNoForbiddenArguments(spawned.args);
     const withWorkspace = recordSpawn();
     await startWith(
       withWorkspace,
-      createCodexProvider({ command: fakeCodexPath }),
+      createFakeCodexProvider(),
       fixtureWorkspace(workspaceDirectory(), "READ_WRITE"),
     );
     expectNoForbiddenArguments(withWorkspace.args);
@@ -562,7 +563,7 @@ describe("createCodexProvider", () => {
   // temporary directory that is this milestone's whole containment story.
   it("never connects an MCP server (D6)", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
+    await startWith(spawned, createFakeCodexProvider());
     // Matched by spelling rather than by exact token, for the same reason the config guard is:
     // `--mcp-config=<path>` is one token, and `not.toContain` would never see it.
     for (const forbidden of FORBIDDEN_MCP_FLAGS) {
@@ -1028,7 +1029,7 @@ describe("createCodexProvider", () => {
   it("names the vanished worktree, not the CLI, when the directory it was given is gone", async () => {
     const worktree = workspaceDirectory();
     rmSync(worktree, { recursive: true, force: true });
-    const started = createCodexProvider({ command: fakeCodexPath }).start(
+    const started = createFakeCodexProvider().start(
       fixtureInvocation("session-1", fixtureWorkspace(worktree, "READ_WRITE")),
       noopListener(),
     );
@@ -1052,11 +1053,7 @@ describe("createCodexProvider", () => {
   it("runs the CLI inside the worktree it was given, with write access to that directory", async () => {
     const worktree = workspaceDirectory();
     const spawned = recordSpawn();
-    await startWith(
-      spawned,
-      createCodexProvider({ command: fakeCodexPath }),
-      fixtureWorkspace(worktree, "READ_WRITE"),
-    );
+    await startWith(spawned, createFakeCodexProvider(), fixtureWorkspace(worktree, "READ_WRITE"));
     expect(spawned.args[spawned.args.indexOf("-C") + 1]).toBe(worktree);
     expect(spawned.args[spawned.args.indexOf("-s") + 1]).toBe("workspace-write");
     expect(spawned.args).toContain("--ignore-user-config");
@@ -1073,11 +1070,7 @@ describe("createCodexProvider", () => {
   // containment check: a second key riding along fails here.
   it("opens exactly one config key and no others", async () => {
     const spawned = recordSpawn();
-    await startWith(
-      spawned,
-      createCodexProvider({ command: fakeCodexPath }),
-      fixtureWorkspace(workspaceDirectory(), "READ_WRITE"),
-    );
+    await startWith(spawned, createFakeCodexProvider(), fixtureWorkspace(workspaceDirectory(), "READ_WRITE"));
     const configValues = spawned.args.filter((arg, index) => spawned.args[index - 1] === "-c");
     expect(configValues).toEqual(["sandbox_workspace_write.network_access=true"]);
   });
@@ -1085,7 +1078,7 @@ describe("createCodexProvider", () => {
   // And none at all on the read-only path, which has nothing to widen.
   it("opens no config key when it has no workspace to write in", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
+    await startWith(spawned, createFakeCodexProvider());
     expect(spawned.args.filter((arg, index) => spawned.args[index - 1] === "-c")).toEqual([]);
     expect(spawned.args).not.toContain("-c");
   });
@@ -1096,11 +1089,7 @@ describe("createCodexProvider", () => {
   // is not a repository, the CLI says so instead of running the session anyway.
   it("keeps the CLI's own repository check when it was given a worktree", async () => {
     const spawned = recordSpawn();
-    await startWith(
-      spawned,
-      createCodexProvider({ command: fakeCodexPath }),
-      fixtureWorkspace(workspaceDirectory(), "READ_WRITE"),
-    );
+    await startWith(spawned, createFakeCodexProvider(), fixtureWorkspace(workspaceDirectory(), "READ_WRITE"));
     expect(spawned.args).not.toContain("--skip-git-repo-check");
   });
 
@@ -1110,11 +1099,7 @@ describe("createCodexProvider", () => {
   // true.
   it("never passes an approval flag, which codex exec rejects outright", async () => {
     const spawned = recordSpawn();
-    await startWith(
-      spawned,
-      createCodexProvider({ command: fakeCodexPath }),
-      fixtureWorkspace(workspaceDirectory(), "READ_WRITE"),
-    );
+    await startWith(spawned, createFakeCodexProvider(), fixtureWorkspace(workspaceDirectory(), "READ_WRITE"));
     const flags = spawned.args.filter((arg) => arg.startsWith("-"));
     expect(flags.filter((flag) => flag.includes("approval"))).toEqual([]);
   });
@@ -1128,11 +1113,7 @@ describe("createCodexProvider", () => {
   it("leaves the worktree exactly as it found it and writes its own schema elsewhere", async () => {
     const worktree = workspaceDirectory();
     const spawned = recordSpawn();
-    await startWith(
-      spawned,
-      createCodexProvider({ command: fakeCodexPath }),
-      fixtureWorkspace(worktree, "READ_WRITE"),
-    );
+    await startWith(spawned, createFakeCodexProvider(), fixtureWorkspace(worktree, "READ_WRITE"));
     expect(existsSync(worktree)).toBe(true);
     expect(readdirSync(worktree)).toEqual([]);
     const schemaPath = spawned.args[spawned.args.indexOf("--output-schema") + 1];
@@ -1146,7 +1127,7 @@ describe("createCodexProvider", () => {
 
   it("removes NEEDS_HUMAN from the schema after this attempt has used its owner gate", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createCodexProvider({ command: fakeCodexPath }), undefined, "DISALLOWED");
+    await startWith(spawned, createFakeCodexProvider(), undefined, "DISALLOWED");
     if (spawned.outputSchema === null) throw new Error("expected the fake CLI to capture the schema file");
 
     expect(spawned.outputSchema).toContain('"const":"COMPLETED"');
@@ -1155,7 +1136,7 @@ describe("createCodexProvider", () => {
 
   it("removes its per-session working directory once the session ends", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
+    await startWith(spawned, createFakeCodexProvider());
     const dirFlagIndex = spawned.args.indexOf("-C");
     expect(dirFlagIndex).toBeGreaterThanOrEqual(0);
     const workingDir = spawned.args[dirFlagIndex + 1];
@@ -1188,7 +1169,7 @@ describe("createCodexProvider", () => {
   // fail it, and that failure would say nothing true.
   it("never resumes a provider-side session", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createCodexProvider({ command: fakeCodexPath }));
+    await startWith(spawned, createFakeCodexProvider());
     const flags = spawned.args.filter((arg) => arg.startsWith("-"));
     expect(flags).not.toContain("--continue");
     expect(flags).not.toContain("--fork-session");
@@ -1225,7 +1206,7 @@ describe("createCodexProvider", () => {
     const markerPath = join(markerDir, "hang-marker.json");
     process.env["FAKE_CODEX_HANG_MARKER_PATH"] = markerPath;
 
-    const adapter = createCodexProvider({ command: fakeCodexPath });
+    const adapter = createFakeCodexProvider();
     const sessionId = "session-abort-1";
     const started = adapter.start(fixtureInvocation(sessionId), noopListener());
 

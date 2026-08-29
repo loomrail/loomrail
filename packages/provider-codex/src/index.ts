@@ -46,16 +46,21 @@ export type CreateCodexProviderOptions = {
   // The `codex` executable to spawn. Overridable so tests can point it at a stand-in without
   // touching PATH.
   command?: string;
+  // Trusted argv placed before the adapter-built Codex arguments. This keeps executable wrappers
+  // shell-free (tests use `node <fixture>`) while leaving the default CLI invocation unchanged.
+  commandArgsPrefix?: readonly string[];
   contextWindowTokens?: number;
 };
 
 type ResolvedOptions = {
   command: string;
+  commandArgsPrefix: readonly string[];
   contextWindowTokens: number;
 };
 
 const resolveOptions = (options: CreateCodexProviderOptions): ResolvedOptions => ({
   command: options.command ?? "codex",
+  commandArgsPrefix: options.commandArgsPrefix ?? [],
   contextWindowTokens: options.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
 });
 
@@ -357,7 +362,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
 
         const run = runProcess({
           command: resolved.command,
-          args,
+          args: [...resolved.commandArgsPrefix, ...args],
           cwd: workingDir,
           onLine: (line) => {
             linesReceived += 1;

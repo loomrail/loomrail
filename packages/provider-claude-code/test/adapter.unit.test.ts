@@ -17,6 +17,18 @@ import { createClaudeCodeProvider } from "../src/index.js";
 
 const fakeClaudePath = fileURLToPath(new URL("./fixtures/fake-claude.mjs", import.meta.url));
 
+// A `.mjs` file is directly executable through its shebang on POSIX, but Windows has no such
+// contract. Run the same fixture through this test process's Node binary on every platform so the
+// process boundary is real and the adapter's argv still arrives untouched after the script path.
+const createFakeClaudeProvider = (
+  options: { contextWindowTokens?: number; maxBudgetUsd?: number } = {},
+): ProviderAdapter =>
+  createClaudeCodeProvider({
+    command: process.execPath,
+    commandArgsPrefix: [fakeClaudePath],
+    ...options,
+  });
+
 // SD-001 forbids Loomrail from ever enabling a provider's permission-bypass mode automatically. This
 // is the named, closed list: adding a spelling later is then a decision someone makes here, not
 // something that quietly never happens. Duplicated from provider-codex's copy rather than shared
@@ -203,13 +215,7 @@ const runAgainstRecording = async (
   options: { contextWindowTokens?: number; maxBudgetUsd?: number } = {},
 ): Promise<ProviderOutcome> => {
   const recordingPath = fileURLToPath(new URL(`./recordings/${file}`, import.meta.url));
-  const adapter = createClaudeCodeProvider({
-    command: fakeClaudePath,
-    ...(options.contextWindowTokens === undefined
-      ? {}
-      : { contextWindowTokens: options.contextWindowTokens }),
-    ...(options.maxBudgetUsd === undefined ? {} : { maxBudgetUsd: options.maxBudgetUsd }),
-  });
+  const adapter = createFakeClaudeProvider(options);
   return withEnv("FAKE_CLAUDE_OUTPUT_FILE", recordingPath, () =>
     adapter.start(fixtureInvocation(), { ...noopListener(), ...listener }),
   );
@@ -228,7 +234,7 @@ const runAgainstLines = async (
   const dir = mkdtempSync(join(tmpdir(), "loomrail-claude-stream-"));
   const streamPath = join(dir, "stream.jsonl");
   writeFileSync(streamPath, lines.map((line) => `${line}\n`).join(""), "utf8");
-  const adapter = createClaudeCodeProvider({ command: fakeClaudePath });
+  const adapter = createFakeClaudeProvider();
   return withEnv("FAKE_CLAUDE_OUTPUT_FILE", streamPath, () =>
     adapter.start(fixtureInvocation("session-1", stage, humanRequests), {
       ...noopListener(),
@@ -297,7 +303,7 @@ describe("createClaudeCodeProvider", () => {
   // regression here fail loudly, instead of a check that only ever knew about two flags.
   it("never builds a command carrying a permission-bypass flag (SD-001)", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
+    await startWith(spawned, createFakeClaudeProvider());
     expectNoForbiddenArguments(spawned.args);
   });
 
@@ -306,7 +312,7 @@ describe("createClaudeCodeProvider", () => {
   // temporary directory that is this milestone's whole containment story.
   it("never connects an MCP server (D6)", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
+    await startWith(spawned, createFakeClaudeProvider());
     // Matched by spelling rather than by exact token, for the same reason the bypass guard is:
     // `--mcp-config=<path>` is one argv token, and `not.toContain` would never see it.
     for (const forbidden of FORBIDDEN_MCP_FLAGS) {
@@ -357,13 +363,13 @@ describe("createClaudeCodeProvider", () => {
   // have needed.
   it("never builds a command carrying the unverified stream-json input channel", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
+    await startWith(spawned, createFakeClaudeProvider());
     expect(spawned.args).not.toContain("--input-format");
   });
 
   it("runs in plan mode, with no session persisted", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
+    await startWith(spawned, createFakeClaudeProvider());
     const permissionModeIndex = spawned.args.indexOf("--permission-mode");
     expect(permissionModeIndex).toBeGreaterThanOrEqual(0);
     expect(spawned.args[permissionModeIndex + 1]).toBe("plan");
@@ -380,7 +386,7 @@ describe("createClaudeCodeProvider", () => {
   // so losing it produces the same silence.
   it("requests JSONL output, verbosely, so events are ever seen at all", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
+    await startWith(spawned, createFakeClaudeProvider());
     const outputFormatIndex = spawned.args.indexOf("--output-format");
     expect(outputFormatIndex).toBeGreaterThanOrEqual(0);
     expect(spawned.args[outputFormatIndex + 1]).toBe("stream-json");
@@ -390,7 +396,7 @@ describe("createClaudeCodeProvider", () => {
   // BD-001: the budget stops being a Loomrail estimate and becomes something the CLI enforces.
   it("passes the remaining budget to the CLI so the limit is enforced where the spending happens", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath, maxBudgetUsd: 1.25 }));
+    await startWith(spawned, createFakeClaudeProvider({ maxBudgetUsd: 1.25 }));
     expect(spawned.args).toContain("--max-budget-usd");
     expect(spawned.args[spawned.args.indexOf("--max-budget-usd") + 1]).toBe("1.25");
   });
@@ -598,7 +604,7 @@ describe("createClaudeCodeProvider", () => {
   // that flag's value.
   it("removes its per-session working directory once the session ends", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
+    await startWith(spawned, createFakeClaudeProvider());
     expect(spawned.cwd).toContain("loomrail-claude-");
     expect(existsSync(spawned.cwd)).toBe(false);
   });
@@ -610,7 +616,7 @@ describe("createClaudeCodeProvider", () => {
     const spawned = recordSpawn();
     await withEnv("FAKE_CLAUDE_OUTPUT_FILE", recordingPath, () =>
       withEnv("FAKE_CLAUDE_RECORD_PATH", spawned.recordPath, () =>
-        createClaudeCodeProvider({ command: fakeClaudePath }).start(fixtureInvocation(), noopListener()),
+        createFakeClaudeProvider().start(fixtureInvocation(), noopListener()),
       ),
     );
     const recorded = JSON.parse(readFileSync(spawned.recordPath, "utf8")) as { cwd: string };
@@ -628,7 +634,7 @@ describe("createClaudeCodeProvider", () => {
   // filesystem path.
   it("passes the stage-result schema inline, not as a file path", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
+    await startWith(spawned, createFakeClaudeProvider());
     const schemaFlagIndex = spawned.args.indexOf("--json-schema");
     expect(schemaFlagIndex).toBeGreaterThanOrEqual(0);
     const schemaValue = spawned.args[schemaFlagIndex + 1];
@@ -662,7 +668,7 @@ describe("createClaudeCodeProvider", () => {
 
   it("removes NEEDS_HUMAN from the schema after this attempt has used its owner gate", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }), "DISALLOWED");
+    await startWith(spawned, createFakeClaudeProvider(), "DISALLOWED");
     const schemaFlagIndex = spawned.args.indexOf("--json-schema");
     const schemaValue = spawned.args[schemaFlagIndex + 1];
     if (schemaValue === undefined) throw new Error("expected --json-schema to carry the stage schema");
@@ -705,7 +711,7 @@ describe("createClaudeCodeProvider", () => {
   // deciding to.
   it("never resumes a provider-side session", async () => {
     const spawned = recordSpawn();
-    await startWith(spawned, createClaudeCodeProvider({ command: fakeClaudePath }));
+    await startWith(spawned, createFakeClaudeProvider());
     const line = spawned.args.join(" ");
     expect(line).not.toContain("resume");
     expect(line).not.toContain("--continue");
@@ -746,7 +752,7 @@ describe("createClaudeCodeProvider", () => {
     const markerPath = join(markerDir, "hang-marker.json");
     process.env["FAKE_CLAUDE_HANG_MARKER_PATH"] = markerPath;
 
-    const adapter = createClaudeCodeProvider({ command: fakeClaudePath });
+    const adapter = createFakeClaudeProvider();
     const sessionId = "session-abort-1";
     const started = adapter.start(fixtureInvocation(sessionId), noopListener());
 
