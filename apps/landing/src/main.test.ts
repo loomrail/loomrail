@@ -14,13 +14,12 @@ function renderControls(): void {
       <meta property="og:description" content="Description" />
     </head>
     <body>
-      <button data-locale="en">EN</button>
-      <button data-locale="ru">RU</button>
+      <button data-locale-toggle><span data-locale-toggle-label>RU</span></button>
       <p data-i18n="heroTitle">Hero</p>
       <a data-doc-link="quick-start" href="https://example.test/start">Guide</a>
       <button data-theme-toggle><span data-theme-label></span></button>
       <img data-product-image data-i18n-alt="workbenchAlt" alt="Workbench" />
-      <button data-copy=""><span data-copy-label data-i18n="copy">Copy</span></button>
+      <button data-copy><span data-copy-label data-i18n="copy">Copy</span></button>
     </body>
   `;
   delete document.documentElement.dataset["landingReady"];
@@ -51,33 +50,33 @@ describe("landing interactions", () => {
     initializeLanding(document, window);
   });
 
-  test("switches and stores the selected theme with the matching product capture", () => {
+  test("switches and stores the selected theme across every product capture", () => {
     const toggle = document.querySelector<HTMLButtonElement>("[data-theme-toggle]");
-    const image = document.querySelector<HTMLImageElement>("[data-product-image]");
+    const images = document.querySelectorAll<HTMLImageElement>("[data-product-image]");
     expect(document.documentElement.dataset["theme"]).toBe("light");
-    expect(image?.getAttribute("src")).toContain("workbench-light.png");
+    expect([...images].every((image) => image.src.includes("workbench-light.png"))).toBe(true);
 
     toggle?.click();
 
     expect(document.documentElement.dataset["theme"]).toBe("dark");
     expect(localStorage.getItem("loomrail-landing-theme")).toBe("dark");
     expect(toggle?.getAttribute("aria-label")).toBe("Switch to light theme");
-    expect(image?.getAttribute("src")).toContain("workbench-dark.png");
+    expect([...images].every((image) => image.src.includes("workbench-dark.png"))).toBe(true);
   });
 
   test("switches the full document and guide destination to Russian", () => {
-    document.querySelector<HTMLButtonElement>('[data-locale="ru"]')?.click();
+    document.querySelector<HTMLButtonElement>("[data-locale-toggle]")?.click();
 
     expect(document.documentElement.lang).toBe("ru");
-    expect(document.title).toBe("Loomrail — локальный центр управления ответственной работой AI-команды.");
+    expect(document.title).toBe("Loomrail — задача не заканчивается вместе с чатом.");
     expect(localStorage.getItem("loomrail-landing-locale")).toBe("ru");
     expect(document.querySelector<HTMLElement>('[data-i18n="heroTitle"]')?.textContent).toBe(
-      "Локальный центр управления ответственной работой AI-команды",
+      "Задача не заканчивается вместе с чатом.",
     );
     expect(document.querySelector<HTMLAnchorElement>('[data-doc-link="quick-start"]')?.href).toContain(
       "GETTING-STARTED.ru.md",
     );
-    expect(document.querySelector('[data-locale="ru"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector("[data-locale-toggle-label]")?.textContent).toBe("EN");
   });
 
   test("copies the complete project-local safe-start sequence", async () => {
@@ -111,14 +110,18 @@ describe("landing public contract", () => {
     }
 
     expect(parsed.querySelectorAll("h1")).toHaveLength(1);
-    expect(html).toContain("The local control plane for accountable AI software teams.");
+    expect(html).toContain("The task outlives the chat.");
     expect(html).toContain("0.1.0-alpha.2");
+    expect(html).toContain("Apache-2.0");
+    expect(html).not.toContain("· MIT ·");
     expect(html).toContain("npm install loomrail@next");
-    expect(html).toContain('data-locale="en"');
-    expect(html).toContain('data-locale="ru"');
-    expect(html).toContain("No automatic commit, push, merge, or deploy.");
-    expect(html).toContain("A complete operating-system security sandbox");
-    expect(parsed.querySelector("[data-product-image]")?.getAttribute("loading")).toBe("lazy");
+    expect(html).toContain("data-locale-toggle");
+    expect(html).toContain("Try Loomrail without giving it a repository.");
+    expect(html).toContain("Automatic commit, push, merge, deploy, or browser execution.");
+    expect(html).toContain("A complete operating-system sandbox");
+    expect(parsed.querySelectorAll("[data-product-image]")).toHaveLength(1);
+    expect(parsed.querySelectorAll("[data-product-image]")[0]?.getAttribute("loading")).toBe("lazy");
+    expect(parsed.querySelectorAll("[data-copy-label][aria-live='polite']")).toHaveLength(1);
     expect(html).not.toMatch(/plausible|segment|google-analytics|gtag|mixpanel/i);
   });
 });

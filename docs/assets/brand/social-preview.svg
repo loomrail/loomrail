@@ -1,15 +1,35 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
-  <title id="title">Loomrail — the local control plane for accountable AI software teams</title>
-  <desc id="desc">Grid poster for Loomrail public pre-alpha version 0.1.0-alpha.2.</desc>
-  <rect width="1280" height="640" fill="#f8f9fc" />
-  <path d="M64 0v640M160 0v640M256 0v640M352 0v640M448 0v640M544 0v640M640 0v640M736 0v640M832 0v640M928 0v640M1024 0v640M1120 0v640M1216 0v640" fill="none" stroke="#d7dbe4" stroke-width="1" />
-  <path d="M80 68v38h38M96 68v22h22" fill="none" stroke="#2348c7" stroke-linecap="square" stroke-linejoin="miter" stroke-width="7" />
-  <text x="138" y="101" fill="#17191f" font-family="Archivo, Arial Narrow, sans-serif" font-size="38" font-weight="800" letter-spacing="-1.8">loomrail</text>
-  <text x="1024" y="96" fill="#17191f" font-family="Archivo, Arial Narrow, sans-serif" font-size="20" font-weight="700" letter-spacing="1">0.1.0-ALPHA.2</text>
-  <text x="80" y="256" fill="#17191f" font-family="Archivo, Arial Narrow, sans-serif" font-size="84" font-weight="800" letter-spacing="-5">the local control plane</text>
-  <text x="80" y="346" fill="#17191f" font-family="Archivo, Arial Narrow, sans-serif" font-size="84" font-weight="800" letter-spacing="-5">for accountable</text>
-  <text x="80" y="436" fill="#17191f" font-family="Archivo, Arial Narrow, sans-serif" font-size="84" font-weight="800" letter-spacing="-5">ai software teams</text>
-  <rect x="812" y="374" width="62" height="62" fill="#2348c7" />
-  <path d="M80 518h1120" fill="none" stroke="#17191f" stroke-width="3" />
-  <text x="80" y="568" fill="#484c58" font-family="Archivo, Arial Narrow, sans-serif" font-size="18" font-weight="700" letter-spacing="1">PUBLIC PRE-ALPHA / LOCAL LOOPBACK / HUMAN ACCEPTANCE REQUIRED</text>
+  <title id="title">Loomrail — AI agents work. You decide.</title>
+  <desc id="desc">Dark product-led preview showing Loomrail's brief, agent work, evidence, and owner-decision route.</desc>
+
+  <rect width="1280" height="640" fill="#111217" />
+  <rect x="64" y="54" width="44" height="44" rx="11" fill="#6173ff" />
+  <path d="M77 67v18h18M85 67v10h10" fill="none" stroke="#f7f8fc" stroke-width="5" stroke-linecap="square" stroke-linejoin="miter" />
+  <text x="126" y="87" fill="#f7f8fc" font-family="Geist, Inter, Arial, sans-serif" font-size="31" font-weight="700" letter-spacing="-1.2">Loomrail</text>
+
+  <text x="64" y="196" fill="#8990a2" font-family="JetBrains Mono, monospace" font-size="18">PUBLIC PRE-ALPHA · 0.1.0-ALPHA.2</text>
+  <text x="64" y="286" fill="#f7f8fc" font-family="Geist, Inter, Arial, sans-serif" font-size="67" font-weight="680" letter-spacing="-3.2">AI agents work.</text>
+  <text x="64" y="358" fill="#f7f8fc" font-family="Geist, Inter, Arial, sans-serif" font-size="67" font-weight="680" letter-spacing="-3.2">You decide.</text>
+  <text x="64" y="420" fill="#aeb3c0" font-family="Geist, Inter, Arial, sans-serif" font-size="23">Durable state, observable gates,</text>
+  <text x="64" y="452" fill="#aeb3c0" font-family="Geist, Inter, Arial, sans-serif" font-size="23">evidence, budgets, and owner acceptance.</text>
+  <rect x="64" y="510" width="374" height="58" rx="29" fill="#f7f8fc" />
+  <text x="95" y="547" fill="#111217" font-family="JetBrains Mono, monospace" font-size="18" font-weight="650">npm install loomrail@next</text>
+
+  <path d="M786 156v332" stroke="#343847" stroke-width="2" />
+  <circle cx="786" cy="164" r="7" fill="#6173ff" />
+  <text x="820" y="171" fill="#f7f8fc" font-family="Geist, Inter, Arial, sans-serif" font-size="27" font-weight="650">Brief</text>
+  <text x="820" y="199" fill="#8990a2" font-family="Geist, Inter, Arial, sans-serif" font-size="17">Observable acceptance</text>
+
+  <circle cx="786" cy="265" r="7" fill="#6173ff" />
+  <text x="820" y="272" fill="#f7f8fc" font-family="Geist, Inter, Arial, sans-serif" font-size="27" font-weight="650">Agent work</text>
+  <text x="820" y="300" fill="#8990a2" font-family="Geist, Inter, Arial, sans-serif" font-size="17">Bounded provider sessions</text>
+
+  <circle cx="786" cy="366" r="7" fill="#6173ff" />
+  <text x="820" y="373" fill="#f7f8fc" font-family="Geist, Inter, Arial, sans-serif" font-size="27" font-weight="650">Evidence</text>
+  <text x="820" y="401" fill="#8990a2" font-family="Geist, Inter, Arial, sans-serif" font-size="17">Review and QA stay attached</text>
+
+  <circle cx="786" cy="467" r="9" fill="#6173ff" />
+  <rect x="810" y="430" width="370" height="78" rx="16" fill="none" stroke="#6173ff" stroke-width="2" />
+  <text x="840" y="465" fill="#f7f8fc" font-family="Geist, Inter, Arial, sans-serif" font-size="27" font-weight="650">Owner decision</text>
+  <text x="840" y="492" fill="#aeb3c0" font-family="Geist, Inter, Arial, sans-serif" font-size="17">Accept or return to work</text>
 </svg>
