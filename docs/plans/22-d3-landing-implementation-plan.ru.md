@@ -1,6 +1,6 @@
 # D3 — план реализации публичного лендинга
 
-**Статус:** in progress
+**Статус:** completed
 
 **Дата:** 2026-08-30
 
@@ -49,3 +49,13 @@
 - включить GitHub Pages через workflow, дождаться deploy и проверить публичный URL.
 
 **Gate:** `main` синхронизирован, CI/Pages зелёные, live URL возвращает актуальную страницу.
+
+## Результат
+
+- публичная страница: <https://loomrail.github.io/loomrail/>;
+- static workspace: `apps/landing`;
+- publication workflow: `.github/workflows/pages.yml`;
+- Pages build/deploy: <https://github.com/loomrail/loomrail/actions/runs/33305350772>;
+- локально пройдены `pnpm verify`, production browser smoke, light/dark и 320/375/414/768/1280/1440/1920 px;
+- live smoke подтвердил отсутствие внешних resource requests, console errors и failed responses, а также работу
+  command palette, theme toggle и copy state.

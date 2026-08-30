@@ -2,6 +2,11 @@
   <img src="docs/assets/brand/loomrail-wordmark.svg" alt="Loomrail" width="360" />
   <p><strong>The local control plane for accountable AI software teams.</strong></p>
   <p>
+    <a href="https://loomrail.github.io/loomrail/">Website</a> ·
+    <a href="docs/guides/USER-GUIDE.md">User guide</a> ·
+    <a href="docs/examples/full-route/README.md">Full-route example</a>
+  </p>
+  <p>
     <a href="https://github.com/loomrail/loomrail/actions/workflows/ci.yml"><img src="https://github.com/loomrail/loomrail/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-5e6ad2" alt="Apache 2.0 license" /></a>
     <img src="https://img.shields.io/badge/status-pre--alpha-c58b20" alt="Pre-alpha status" />
@@ -40,7 +45,7 @@ decisions instead of disconnected chat sessions.
 
 | Area          | Today                                                                                                                    | Next                                           |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| Local runtime | Loopback daemon, CLI launcher, one-time browser session, installable tarball                                             | Published package and desktop installer        |
+| Local runtime | Loopback daemon, CLI launcher, one-time browser session, and public npm pre-alpha package                                | Desktop installer                              |
 | State         | Tasks, runs, budgets, recovery, typed evidence, acceptance packages, Decisions, append-only Events                       | Retention and restore hardening                |
 | Workbench     | Persisted board, workflow cockpit, command summary, evidence matrix, owner acceptance, EN/RU, light/dark                 | Full Attention Inbox and richer workflow views |
 | Agents        | Capability-checked provider contract, live Codex/Claude CLI adapters, per-task Git worktrees, and on-demand change diffs | The Claude Code adapter on the write path      |
@@ -172,6 +177,10 @@ to an agent, a shell or Git directly: every one of those crossings goes through 
 - [x] **M6 — Acceptance:** typed Review/QA evidence, criterion matrix, owner-only final approval, audit surface
 - [x] **M7 — Public checkpoint:** packaged launcher, clean-install gates on macOS and Windows, and the first public
       npm pre-alpha release
+
+The public distribution track is complete as well: the [website](https://loomrail.github.io/loomrail/) compresses the
+current product boundary, while the user guides and reproducible full-route example remain the detailed source of
+setup and verification steps.
 
 Real Codex and Claude Code execution has landed, and milestone E1 has since given it somewhere to work. Before
 dispatching a work item's first agent stage, Loomrail cuts a Git worktree for that work item on a branch of its own and
