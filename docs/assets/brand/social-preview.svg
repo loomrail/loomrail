@@ -1,15 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
-  <title id="title">Loomrail — accountable AI software teams</title>
-  <desc id="desc">Repository preview with the Loomrail mark, name, and product descriptor.</desc>
-  <rect width="1280" height="640" fill="#171719" />
-  <path d="M760 0h1v640h-1zM902 0h1v640h-1zM1044 0h1v640h-1zM1186 0h1v640h-1z" fill="#2b2b2f" />
-  <path d="M760 137h520v1H760zM760 279h520v1H760zM760 421h520v1H760zM760 563h520v1H760z" fill="#2b2b2f" />
-  <rect x="104" y="128" width="136" height="136" rx="34" fill="#5e6ad2" />
-  <path d="M143 161v70h70" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="16" />
-  <path d="M174 161v39h39" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="16" />
-  <text x="104" y="365" fill="#f3f3f5" font-family="Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="92" font-weight="700" letter-spacing="-4">Loomrail</text>
-  <text x="108" y="425" fill="#a7a7ad" font-family="Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="30">The local control plane for</text>
-  <text x="108" y="467" fill="#a7a7ad" font-family="Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="30">accountable AI software teams.</text>
-  <path d="M860 320h204M1064 320l-34-34M1064 320l-34 34" fill="none" stroke="#5e6ad2" stroke-linecap="round" stroke-linejoin="round" stroke-width="14" />
-  <circle cx="860" cy="320" r="18" fill="#5e6ad2" />
+  <title id="title">Loomrail — the local control plane for accountable AI software teams</title>
+  <desc id="desc">Grid poster for Loomrail public pre-alpha version 0.1.0-alpha.2.</desc>
+  <rect width="1280" height="640" fill="#f8f9fc" />
+  <path d="M64 0v640M160 0v640M256 0v640M352 0v640M448 0v640M544 0v640M640 0v640M736 0v640M832 0v640M928 0v640M1024 0v640M1120 0v640M1216 0v640" fill="none" stroke="#d7dbe4" stroke-width="1" />
+  <path d="M80 68v38h38M96 68v22h22" fill="none" stroke="#2348c7" stroke-linecap="square" stroke-linejoin="miter" stroke-width="7" />
+  <text x="138" y="101" fill="#17191f" font-family="Archivo, Arial Narrow, sans-serif" font-size="38" font-weight="800" letter-spacing="-1.8">loomrail</text>
+  <text x="1024" y="96" fill="#17191f" font-family="Archivo, Arial Narrow, sans-serif" font-size="20" font-weight="700" letter-spacing="1">0.1.0-ALPHA.2</text>
+  <text x="80" y="256" fill="#17191f" font-family="Archivo, Arial Narrow, sans-serif" font-size="84" font-weight="800" letter-spacing="-5">the local control plane</text>
+  <text x="80" y="346" fill="#17191f" font-family="Archivo, Arial Narrow, sans-serif" font-size="84" font-weight="800" letter-spacing="-5">for accountable</text>
+  <text x="80" y="436" fill="#17191f" font-family="Archivo, Arial Narrow, sans-serif" font-size="84" font-weight="800" letter-spacing="-5">ai software teams</text>
+  <rect x="812" y="374" width="62" height="62" fill="#2348c7" />
+  <path d="M80 518h1120" fill="none" stroke="#17191f" stroke-width="3" />
+  <text x="80" y="568" fill="#484c58" font-family="Archivo, Arial Narrow, sans-serif" font-size="18" font-weight="700" letter-spacing="1">PUBLIC PRE-ALPHA / LOCAL LOOPBACK / HUMAN ACCEPTANCE REQUIRED</text>
 </svg>

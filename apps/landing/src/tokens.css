@@ -1,114 +1,99 @@
-/* Hallmark · D3 token contract · OKLCH only · 4px spacing · two radii */
-@import "@fontsource-variable/space-grotesk/wght.css";
-@import "@fontsource-variable/inter/wght.css";
-@import "@fontsource-variable/jetbrains-mono/wght.css";
+/* Hallmark · genre: editorial · theme: Grid/ultramarine · palette: cool sheet + signal rail · 4px scale */
+@import "@fontsource-variable/archivo/wght.css";
 
 :root {
   color-scheme: light dark;
 
-  --font-display: "Space Grotesk Variable", "Arial Narrow", sans-serif;
-  --font-body: "Inter Variable", Arial, sans-serif;
-  --font-mono: "JetBrains Mono Variable", "Courier New", monospace;
+  --font-display: "Archivo Variable", "Arial Narrow", sans-serif;
+  --font-body: "Archivo Variable", Arial, sans-serif;
 
-  --color-canvas: oklch(0.985 0.004 265);
-  --color-surface: oklch(0.998 0.002 265);
-  --color-surface-raised: oklch(0.969 0.007 265);
-  --color-ink: oklch(0.205 0.018 265);
-  --color-ink-muted: oklch(0.47 0.024 265);
-  --color-line: oklch(0.875 0.012 265);
-  --color-line-strong: oklch(0.72 0.022 265);
-  --color-accent: oklch(0.565 0.145 275);
-  --color-accent-strong: oklch(0.47 0.17 275);
-  --color-accent-soft: oklch(0.94 0.034 275);
-  --color-accent-ink: oklch(0.99 0.003 265);
-  --color-success: oklch(0.51 0.12 153);
-  --color-success-soft: oklch(0.94 0.035 153);
-  --color-danger: oklch(0.53 0.18 27);
-  --color-danger-soft: oklch(0.95 0.04 27);
-  --color-band: oklch(0.19 0.022 265);
-  --color-band-raised: oklch(0.235 0.025 265);
-  --color-band-ink: oklch(0.96 0.008 265);
-  --color-band-muted: oklch(0.75 0.025 265);
-  --color-band-line: oklch(0.35 0.03 265);
-  --color-selection: oklch(0.84 0.08 275);
+  --color-paper: oklch(0.985 0.004 255);
+  --color-paper-2: oklch(0.958 0.006 255);
+  --color-paper-3: oklch(0.925 0.008 255);
+  --color-ink: oklch(0.155 0.012 255);
+  --color-ink-2: oklch(0.285 0.014 255);
+  --color-muted: oklch(0.42 0.014 255);
+  --color-rule: oklch(0.83 0.01 255);
+  --color-rule-strong: oklch(0.56 0.018 255);
+  --color-accent: oklch(0.45 0.19 264);
+  --color-accent-ink: oklch(0.985 0.004 255);
+  --color-focus: oklch(0.55 0.21 264);
+  --color-error: oklch(0.53 0.19 28);
+  --color-selection: oklch(0.84 0.08 264);
 
-  --space-1: 0.25rem;
-  --space-2: 0.5rem;
-  --space-3: 0.75rem;
-  --space-4: 1rem;
-  --space-5: 1.25rem;
-  --space-6: 1.5rem;
-  --space-8: 2rem;
-  --space-10: 2.5rem;
-  --space-12: 3rem;
-  --space-16: 4rem;
-  --space-20: 5rem;
-  --space-24: 6rem;
-  --space-32: 8rem;
+  --space-3xs: 0.125rem;
+  --space-2xs: 0.25rem;
+  --space-xs: 0.5rem;
+  --space-sm: 0.75rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2.5rem;
+  --space-2xl: 4rem;
+  --space-3xl: 6rem;
+  --space-4xl: 9rem;
+  --space-5xl: 12rem;
 
-  --radius-control: 0.5rem;
-  --radius-panel: 0.75rem;
-  --content-width: 74rem;
+  --page-gutter: clamp(1rem, 4vw, 4rem);
+  --shell-width: 80rem;
   --measure: 65ch;
-  --line: 0.0625rem;
+  --rule-hair: 0.0625rem;
+  --rule-heavy: 0.1875rem;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-md: 1.25rem;
+  --text-lg: 1.5625rem;
+  --text-xl: 1.953rem;
+  --text-2xl: 2.441rem;
+  --text-3xl: 3.052rem;
+  --text-display: clamp(3rem, 8.2vw, 7rem);
+
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
   --duration-micro: 120ms;
-  --duration-short: 220ms;
+  --duration-short: 200ms;
   --duration-long: 420ms;
-  --z-header: 20;
-  --z-overlay: 40;
-  --z-skip: 60;
+
+  --z-base: 1;
+  --z-raised: 10;
+  --z-sticky: 200;
+  --z-modal: 400;
+  --z-skip: 600;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-canvas: oklch(0.17 0.014 265);
-  --color-surface: oklch(0.205 0.018 265);
-  --color-surface-raised: oklch(0.245 0.021 265);
-  --color-ink: oklch(0.955 0.008 265);
-  --color-ink-muted: oklch(0.72 0.022 265);
-  --color-line: oklch(0.32 0.026 265);
-  --color-line-strong: oklch(0.45 0.03 265);
-  --color-accent: oklch(0.7 0.13 275);
-  --color-accent-strong: oklch(0.78 0.11 275);
-  --color-accent-soft: oklch(0.29 0.07 275);
-  --color-accent-ink: oklch(0.16 0.02 265);
-  --color-success: oklch(0.72 0.12 153);
-  --color-success-soft: oklch(0.27 0.045 153);
-  --color-danger: oklch(0.72 0.15 27);
-  --color-danger-soft: oklch(0.28 0.06 27);
-  --color-band: oklch(0.125 0.012 265);
-  --color-band-raised: oklch(0.18 0.018 265);
-  --color-band-ink: oklch(0.97 0.006 265);
-  --color-band-muted: oklch(0.72 0.023 265);
-  --color-band-line: oklch(0.29 0.025 265);
-  --color-selection: oklch(0.48 0.13 275);
+  --color-paper: oklch(0.135 0.01 255);
+  --color-paper-2: oklch(0.18 0.012 255);
+  --color-paper-3: oklch(0.225 0.014 255);
+  --color-ink: oklch(0.94 0.006 255);
+  --color-ink-2: oklch(0.82 0.01 255);
+  --color-muted: oklch(0.72 0.012 255);
+  --color-rule: oklch(0.31 0.016 255);
+  --color-rule-strong: oklch(0.47 0.022 255);
+  --color-accent: oklch(0.7 0.15 264);
+  --color-accent-ink: oklch(0.135 0.01 255);
+  --color-focus: oklch(0.77 0.16 264);
+  --color-error: oklch(0.72 0.15 28);
+  --color-selection: oklch(0.42 0.12 264);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
-    --color-canvas: oklch(0.17 0.014 265);
-    --color-surface: oklch(0.205 0.018 265);
-    --color-surface-raised: oklch(0.245 0.021 265);
-    --color-ink: oklch(0.955 0.008 265);
-    --color-ink-muted: oklch(0.72 0.022 265);
-    --color-line: oklch(0.32 0.026 265);
-    --color-line-strong: oklch(0.45 0.03 265);
-    --color-accent: oklch(0.7 0.13 275);
-    --color-accent-strong: oklch(0.78 0.11 275);
-    --color-accent-soft: oklch(0.29 0.07 275);
-    --color-accent-ink: oklch(0.16 0.02 265);
-    --color-success: oklch(0.72 0.12 153);
-    --color-success-soft: oklch(0.27 0.045 153);
-    --color-danger: oklch(0.72 0.15 27);
-    --color-danger-soft: oklch(0.28 0.06 27);
-    --color-band: oklch(0.125 0.012 265);
-    --color-band-raised: oklch(0.18 0.018 265);
-    --color-band-ink: oklch(0.97 0.006 265);
-    --color-band-muted: oklch(0.72 0.023 265);
-    --color-band-line: oklch(0.29 0.025 265);
-    --color-selection: oklch(0.48 0.13 275);
+    --color-paper: oklch(0.135 0.01 255);
+    --color-paper-2: oklch(0.18 0.012 255);
+    --color-paper-3: oklch(0.225 0.014 255);
+    --color-ink: oklch(0.94 0.006 255);
+    --color-ink-2: oklch(0.82 0.01 255);
+    --color-muted: oklch(0.72 0.012 255);
+    --color-rule: oklch(0.31 0.016 255);
+    --color-rule-strong: oklch(0.47 0.022 255);
+    --color-accent: oklch(0.7 0.15 264);
+    --color-accent-ink: oklch(0.135 0.01 255);
+    --color-focus: oklch(0.77 0.16 264);
+    --color-error: oklch(0.72 0.15 28);
+    --color-selection: oklch(0.42 0.12 264);
   }
 }

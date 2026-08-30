@@ -17,19 +17,10 @@ function renderControls(): void {
       <button data-locale="en">EN</button>
       <button data-locale="ru">RU</button>
       <p data-i18n="heroTitle">Hero</p>
-      <a data-doc-link="getting-started" href="https://example.test/start">Guide</a>
+      <a data-doc-link="quick-start" href="https://example.test/start">Guide</a>
       <button data-theme-toggle><span data-theme-label></span></button>
-      <button data-copy="npm install loomrail@next"><span data-copy-label data-i18n="copy">Copy</span></button>
-      <button data-command-open>Menu</button>
-      <dialog data-command-dialog>
-        <input data-command-search data-i18n-placeholder="searchPlaceholder" />
-        <button data-command-close>Close</button>
-        <ul>
-          <li><a class="command-link" href="#route"><span data-i18n="routeNav">Route</span><span>Section</span></a></li>
-          <li><a class="command-link" href="#install"><span data-i18n="installNav">Install</span><span>Section</span></a></li>
-        </ul>
-        <p data-command-empty hidden data-i18n="noDestination">Empty</p>
-      </dialog>
+      <img data-product-image data-i18n-alt="workbenchAlt" alt="Workbench" />
+      <button data-copy=""><span data-copy-label data-i18n="copy">Copy</span></button>
     </body>
   `;
   delete document.documentElement.dataset["landingReady"];
@@ -57,66 +48,58 @@ describe("landing interactions", () => {
       configurable: true,
       value: { writeText: writeTextMock },
     });
-    HTMLDialogElement.prototype.showModal = function showModal(): void {
-      this.open = true;
-    };
-    HTMLDialogElement.prototype.close = function close(): void {
-      this.open = false;
-    };
     initializeLanding(document, window);
   });
 
-  test("switches and stores the selected theme", () => {
+  test("switches and stores the selected theme with the matching product capture", () => {
     const toggle = document.querySelector<HTMLButtonElement>("[data-theme-toggle]");
+    const image = document.querySelector<HTMLImageElement>("[data-product-image]");
+    expect(document.documentElement.dataset["theme"]).toBe("light");
+    expect(image?.getAttribute("src")).toContain("workbench-light.png");
+
     toggle?.click();
+
     expect(document.documentElement.dataset["theme"]).toBe("dark");
     expect(localStorage.getItem("loomrail-landing-theme")).toBe("dark");
     expect(toggle?.getAttribute("aria-label")).toBe("Switch to light theme");
+    expect(image?.getAttribute("src")).toContain("workbench-dark.png");
   });
 
-  test("switches the full document and guide destinations to Russian", () => {
+  test("switches the full document and guide destination to Russian", () => {
     document.querySelector<HTMLButtonElement>('[data-locale="ru"]')?.click();
+
     expect(document.documentElement.lang).toBe("ru");
-    expect(document.title).toBe("Loomrail — Агенты предлагают. Владелец принимает.");
+    expect(document.title).toBe("Loomrail — локальный центр управления ответственной работой AI-команды.");
     expect(localStorage.getItem("loomrail-landing-locale")).toBe("ru");
     expect(document.querySelector<HTMLElement>('[data-i18n="heroTitle"]')?.textContent).toBe(
-      "Агенты предлагают. Владелец принимает.",
+      "Локальный центр управления ответственной работой AI-команды",
     );
-    expect(document.querySelector<HTMLAnchorElement>('[data-doc-link="getting-started"]')?.href).toContain(
+    expect(document.querySelector<HTMLAnchorElement>('[data-doc-link="quick-start"]')?.href).toContain(
       "GETTING-STARTED.ru.md",
     );
     expect(document.querySelector('[data-locale="ru"]')?.getAttribute("aria-pressed")).toBe("true");
   });
 
-  test("copies the explicit project-local pre-alpha install command", async () => {
+  test("copies the complete project-local safe-start sequence", async () => {
     const copy = document.querySelector<HTMLButtonElement>("[data-copy]");
     copy?.click();
     await Promise.resolve();
-    expect(writeTextMock).toHaveBeenCalledWith("npm install loomrail@next");
+
+    expect(writeTextMock).toHaveBeenCalledWith(
+      [
+        "mkdir loomrail-evaluation",
+        "cd loomrail-evaluation",
+        "npm install loomrail@next",
+        "npx loomrail",
+      ].join("\n"),
+    );
     expect(copy?.dataset["state"]).toBe("success");
     expect(copy?.textContent).toBe("Copied");
-  });
-
-  test("opens, filters and closes the keyboard palette", () => {
-    const dialog = document.querySelector<HTMLDialogElement>("[data-command-dialog]");
-    const search = document.querySelector<HTMLInputElement>("[data-command-search]");
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
-    expect(dialog?.open).toBe(true);
-    if (search !== null) {
-      search.value = "install";
-      search.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    }
-    const routeItem = document.querySelector<HTMLAnchorElement>('a[href="#route"]')?.closest("li");
-    const installItem = document.querySelector<HTMLAnchorElement>('a[href="#install"]')?.closest("li");
-    expect(routeItem?.hidden).toBe(true);
-    expect(installItem?.hidden).toBe(false);
-    search?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(dialog?.open).toBe(false);
   });
 });
 
 describe("landing public contract", () => {
-  test("uses local resources and publishes the honest bilingual install boundary", () => {
+  test("uses local resources and publishes the honest bilingual alpha.2 boundary", () => {
     const html = readFileSync(resolve(import.meta.dirname, "../index.html"), "utf8");
     const parsed = new DOMParser().parseFromString(html, "text/html");
     const resources = parsed.querySelectorAll<HTMLScriptElement | HTMLImageElement | HTMLLinkElement>(
@@ -126,12 +109,16 @@ describe("landing public contract", () => {
       const value = resource.getAttribute("src") ?? resource.getAttribute("href");
       expect(value?.startsWith("http")).toBe(false);
     }
-    expect(html).toContain("Agents propose. Owners accept.");
-    expect(html).toContain("Public pre-alpha");
+
+    expect(parsed.querySelectorAll("h1")).toHaveLength(1);
+    expect(html).toContain("The local control plane for accountable AI software teams.");
+    expect(html).toContain("0.1.0-alpha.2");
     expect(html).toContain("npm install loomrail@next");
     expect(html).toContain('data-locale="en"');
     expect(html).toContain('data-locale="ru"');
     expect(html).toContain("No automatic commit, push, merge, or deploy.");
+    expect(html).toContain("A complete operating-system security sandbox");
+    expect(parsed.querySelector("[data-product-image]")?.getAttribute("loading")).toBe("lazy");
     expect(html).not.toMatch(/plausible|segment|google-analytics|gtag|mixpanel/i);
   });
 });
