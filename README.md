@@ -91,7 +91,7 @@ To verify a source revision before it reaches the registry, build and install th
 
 ```bash
 pnpm pack:release
-npm install ./dist-release/loomrail-0.1.0-alpha.1.tgz
+npm install ./dist-release/loomrail-0.1.0-alpha.2.tgz
 npx loomrail --port 4176
 ```
 

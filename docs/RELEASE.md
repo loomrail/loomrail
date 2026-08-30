@@ -74,14 +74,15 @@ Publishing is a deliberate, human action and is not automated. Nothing in CI run
 
 ### Pre-alpha channel
 
-The first public release is `0.1.0-alpha.1`. Pre-alpha releases are published under the explicit `next` dist-tag:
+The current public checkpoint is `0.1.0-alpha.2`. Pre-alpha releases are published under the explicit `next`
+dist-tag:
 
 ```bash
-npm publish ./dist-release/loomrail-0.1.0-alpha.1.tgz --tag next --access public
+npm publish ./dist-release/loomrail-0.1.0-alpha.2.tgz --tag next --access public
 ```
 
 Before running that command, authenticate the local npm CLI, satisfy the account's current 2FA requirements and
-review the [release notes](releases/0.1.0-alpha.1.md). After publishing, verify the registry rather than the local
+review the [release notes](releases/0.1.0-alpha.2.md). After publishing, verify the registry rather than the local
 tarball:
 
 ```bash
@@ -90,7 +91,6 @@ npm install loomrail@next
 npx loomrail --no-open --port 4176
 ```
 
-The public npm registry requires every package's metadata to contain a `latest` tag, so the first and currently only
-version is also reachable through `latest`. It is still a pre-alpha release. Documentation and release checks use
-`loomrail@next` or the exact version so the intended channel stays explicit; `latest` will move to a stable release
-only when one exists.
+Until a stable release exists, `latest` mirrors the same current public checkpoint so a bare npm metadata lookup does
+not resolve to an older alpha. It is still a pre-alpha release. Documentation and release checks use `loomrail@next`
+or the exact version so the intended channel stays explicit.

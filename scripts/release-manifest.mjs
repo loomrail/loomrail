@@ -17,12 +17,17 @@ export const releaseName = "loomrail";
 const runtimeWorkspacePackages = [
   "apps/cli",
   "apps/daemon",
+  "packages/context-assembly",
   "packages/contracts",
   "packages/domain",
   "packages/persistence-sqlite",
+  "packages/project-constitution",
+  "packages/provider-claude-code",
+  "packages/provider-codex",
   "packages/provider-core",
   "packages/provider-mock",
   "packages/workflow-engine",
+  "packages/workspace",
 ];
 
 const readPackageJson = (relativePath) =>
