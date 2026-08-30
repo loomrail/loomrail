@@ -23,7 +23,11 @@ const messages = {
     skipLink: "Skip to content",
     primaryNavigation: "Primary navigation",
     homeLabel: "Loomrail home",
-    headerCta: "Run demo",
+    navHow: "How it works",
+    navInstall: "Install",
+    navBoundary: "Scope",
+    navDocs: "Docs",
+    headerCta: "Get started",
     languageLabel: "Language",
     switchToRussian: "Switch to Russian",
     switchToEnglish: "Switch to English",
@@ -31,72 +35,147 @@ const messages = {
     lightTheme: "Light",
     switchToLight: "Switch to light theme",
     switchToDark: "Switch to dark theme",
-    releaseLine: "Version 0.1.0-alpha.2 · public pre-alpha",
+
     heroTitle: "The task outlives the chat.",
     heroBody:
-      "Loomrail keeps the brief, allowed actions, requests, evidence, budgets, and final decision in one local record. Agent sessions can stop, restart, or change provider without rewriting the work.",
-    quickStartCta: "Read quick start",
-    sourceCta: "Inspect source",
-    installTitle: "Try Loomrail without giving it a repository.",
-    installIntro: "The first run uses a deterministic mock, binds to loopback, and does not start an agent.",
-    installCommandLabel: "Install and launch Loomrail safely",
-    copyInstallCommand: "Copy the safe install and launch commands",
-    copy: "Copy commands",
-    copying: "Copying…",
-    copied: "Copied",
-    copyFailed: "Copy failed",
-    scopeLabel: "Directory",
-    scopeValue: "New and empty",
-    firstRunLabel: "First run",
-    firstRunValue: "Deterministic mock",
-    networkLabel: "Network",
-    networkValue: "127.0.0.1 only",
-    runtimeLabel: "Runtime",
-    runtimeValue: "Node.js 24.19–24.x",
-    productTitle: "The task, not the transcript.",
-    productIntro:
-      "The Workbench shows current state, the task contract, Human Requests, evidence, and the owner’s decision. Raw provider output stays diagnostic.",
+      "A local control plane for AI coding agents. The brief, the limits, the open questions and the final decision live in one durable record on your machine — not in a transcript that ends with the session.",
+    heroPrimaryCta: "Install and run",
+    heroSecondaryCta: "See how it works",
+    heroNote: "Free and open source · Apache-2.0 · Runs entirely on your machine",
+    heroShotCaption: "The Workbench: current work, one durable task, and every action that changed it.",
     workbenchAlt:
       "Loomrail Workbench showing current work, a durable task, its state, and the owner activity trail",
-    workbenchCaptionTitle: "Workbench",
-    workbenchCaptionBody: "Current work, one durable task, and the actions that changed it.",
-    ledgerTitle: "What survives a provider session?",
-    ledgerIntro:
-      "Provider output is input. Loomrail’s deterministic model owns workflow state and acceptance.",
-    ledgerBrief: "Brief",
-    ledgerBriefBody: "Acceptance criteria, workflow version, permissions, and budget.",
-    ledgerRequests: "Human Requests",
-    ledgerRequestsBody: "Questions that need a person stay attached to the task.",
-    ledgerEvidence: "Evidence",
-    ledgerEvidenceBody: "Changes, review, QA, and durable follow-up work.",
-    ledgerDecision: "Decision",
-    ledgerDecisionBody: "Only the owner accepts the delivery or returns it to work.",
-    boundaryTitle: "What does alpha.2 actually do?",
-    boundaryIntro: "The boundary is part of the product, not release-note fine print.",
-    todayTitle: "Available in alpha.2",
+
+    promisesLabel: "What Loomrail never does",
+    promiseCommit: "Never commits",
+    promisePush: "Never pushes",
+    promiseMerge: "Never merges",
+    promiseDeploy: "Never deploys",
+    promiseAccept: "You accept the delivery",
+
+    whyTitle: "Chat is a poor place to keep a task.",
+    whyBody:
+      "A session ends, a process dies, a provider changes. Anything that lived only in the transcript goes with it. Loomrail moves the parts that matter out of the conversation and into a record that a deterministic state machine owns.",
+    whyOneTitle: "Durable by default",
+    whyOneBody:
+      "State, requests, budgets, evidence and decisions are written to local SQLite in one transaction. Restart the daemon and the task is exactly where you left it.",
+    whyTwoTitle: "Bounded by design",
+    whyTwoBody:
+      "Every task carries allowed actions and a spend limit. The agent works inside them, and raising a limit is an explicit decision that gets recorded.",
+    whyThreeTitle: "You stay the owner",
+    whyThreeBody:
+      "An agent never closes its own task. Loomrail never commits, pushes, merges or deploys. The delivery is accepted or returned by a person.",
+
+    howTitle: "How a task moves through Loomrail",
+    howIntro:
+      "Four steps, the same every time. The first run does all of this against a deterministic mock, so nothing is sent to a provider and nothing in your repository is touched.",
+    stepOneTitle: "Write the task, not the prompt",
+    stepOneBody:
+      "A task states its outcome, its acceptance criteria, which actions the agent may take and how much it may spend. That contract is fixed before any work starts, and it is what the result is judged against later.",
+    stepTwoTitle: "The agent works inside the limits",
+    stepTwoBody:
+      "Loomrail starts the provider session, watches the spend and advances the workflow state itself. The provider’s output is treated as input to that state machine, never as the source of truth about progress.",
+    stepThreeTitle: "It stops and asks when it must",
+    stepThreeBody:
+      "When a decision needs a person, the agent raises a Human Request. The task blocks, the question stays attached to it, and your answer is recorded next to the work instead of scrolling away in a chat.",
+    stepFourTitle: "You accept the delivery, or send it back",
+    stepFourBody:
+      "The task arrives with its evidence: the changes, the review, the QA result and any follow-up work it created. You inspect it and decide. Nothing is committed, pushed or merged for you.",
+
+    chipReady: "Ready",
+    chipBlocked: "Blocked",
+    uiTaskTitle: "Persisted board integration",
+    uiTaskDesc:
+      "Verify project isolation, state transitions and activity through the authenticated local API.",
+    uiAcceptance: "Acceptance",
+    uiAcceptanceValue: "3 criteria",
+    uiAllowed: "Allowed actions",
+    uiAllowedValue: "Read, edit, run tests",
+    uiBudget: "Budget",
+    flowBacklog: "Backlog",
+    flowReady: "Ready",
+    flowRunning: "Running",
+    flowReview: "Review",
+    flowDone: "Accepted",
+    uiWorkflowState: "Workflow state",
+    uiSpend: "Spend",
+    uiProvider: "Provider",
+    uiProviderValue: "Deterministic mock",
+    uiSession: "Session",
+    uiSessionValue: "Restarted once, state kept",
+    uiRequestLabel: "Human Request",
+    uiQuestion:
+      "Should the migration drop the legacy sessions table, or keep it read-only until the next release?",
+    uiAnswer: "Answer",
+    uiReturn: "Return to work",
+    uiEvidence: "Evidence",
+    uiChanges: "Changes",
+    uiReview: "Review",
+    uiReviewValue: "2 findings, both resolved",
+    uiQa: "QA",
+    uiQaValue: "84 checks passed",
+    uiAccept: "Accept delivery",
+
+    installTitle: "Try Loomrail without giving it a repository.",
+    installIntro:
+      "The first run uses a deterministic mock, binds to loopback, and does not start an agent. Start in a new empty directory, not inside a repository you care about.",
+    installCommandLabel: "Install and launch Loomrail safely",
+    copyInstallCommand: "Copy the safe install and launch commands",
+    copy: "Copy",
+    copying: "Copying…",
+    copied: "Copied",
+    copyFailed: "Failed",
+    runStepOne: "Choose “Initialize demo workspace” in the browser tab that opens.",
+    runStepTwo: "Create a task, move it to Ready and start the workflow.",
+    runStepThree: "Answer the blocking Human Request and approve the budget increase.",
+    runStepFour: "Inspect the evidence, then accept the delivery or return it.",
+    installLive:
+      "Live providers are opt-in. Install and authenticate the provider CLI yourself, then start the same installation with LOOMRAIL_PROVIDER=CODEX or LOOMRAIL_PROVIDER=CLAUDE_CODE.",
+    runtimeLabel: "Runtime",
+    runtimeValue: "Node.js 24.19–24.x",
+    networkLabel: "Network",
+    networkValue: "127.0.0.1 only",
+    firstRunLabel: "First run",
+    firstRunValue: "Deterministic mock",
+    platformLabel: "Platforms",
+    platformValue: "macOS, Windows, Linux",
+
+    boundaryTitle: "What alpha.2 actually does",
+    boundaryIntro:
+      "Loomrail 0.1.0-alpha.2 is public pre-alpha. The second column is an honest list of what it does not do yet — not a roadmap.",
+    todayTitle: "Available today",
     todayLocal: "Same-machine browser UI, loopback daemon, and local SQLite state.",
     todayProviders: "Deterministic mock, plus bounded Codex and Claude Code adapters.",
     todayRecovery: "Restart recovery, Human Requests, budgets, evidence, and Decisions.",
-    todayRepo: "Repository registration and an owner-approved Project Constitution.",
-    notYetTitle: "Deliberately not claimed",
+    todayRepo: "Repository registration, per-task worktrees, and change inspection.",
+    notYetTitle: "Not claimed yet",
     notCloud: "Cloud sync, remote access, mobile control, or team accounts.",
     notDesktop: "Desktop packaging, automatic updates, or a desktop installer.",
     notGit: "Automatic commit, push, merge, deploy, or browser execution.",
     notSandbox: "A complete operating-system sandbox for live providers.",
-    docsTitle: "Where should I start?",
+
+    docsTitle: "Documentation",
     docsIntro:
-      "Run the mock first. Register a repository second. Connect a provider only after reading the boundary.",
+      "Run the mock first. Register a repository second. Connect a live provider only after reading the threat model.",
     docsNavigation: "Loomrail documentation",
     quickStartTitle: "Quick start",
-    quickStartBody: "Empty directory to persisted mock acceptance.",
+    quickStartBody: "From an empty directory to a persisted mock acceptance.",
     userGuideTitle: "Owner guide",
-    userGuideBody: "Repositories, providers, recovery, backup, and troubleshooting.",
+    userGuideBody: "Repositories, providers, recovery, backup, troubleshooting.",
     fullRouteTitle: "Full-route example",
     fullRouteBody: "A bounded repository and a reproducible live task.",
-    securityTitle: "Security model",
-    securityBody: "Trust boundaries, High/Critical threats, and verified controls.",
+    securityTitle: "Threat model",
+    securityBody: "Trust boundaries, High and Critical threats, verified controls.",
     architectureTitle: "Architecture",
     architectureBody: "Domain ownership, persistence, providers, and delivery.",
+    sourceTitle: "Source code",
+    sourceBody: "Read it, build it, or open an issue on GitHub.",
+
+    ctaTitle: "Start with the mock. It spends nothing.",
+    ctaBody:
+      "One command, a new empty directory, and a workflow that runs end to end without touching a repository or a provider account.",
+    ctaAction: "Get the commands",
+    sourceCta: "View the source",
     footerNavigation: "Footer navigation",
     footerTagline: "Local state. Human acceptance.",
     footerSource: "Source",
@@ -112,7 +191,11 @@ const messages = {
     skipLink: "К содержимому",
     primaryNavigation: "Основная навигация",
     homeLabel: "Главная Loomrail",
-    headerCta: "Демо",
+    navHow: "Как это работает",
+    navInstall: "Установка",
+    navBoundary: "Границы",
+    navDocs: "Документация",
+    headerCta: "Начать",
     languageLabel: "Язык",
     switchToRussian: "Переключить на русский",
     switchToEnglish: "Переключить на английский",
@@ -120,73 +203,147 @@ const messages = {
     lightTheme: "Светлая",
     switchToLight: "Переключить на светлую тему",
     switchToDark: "Переключить на тёмную тему",
-    releaseLine: "Версия 0.1.0-alpha.2 · публичный pre-alpha",
+
     heroTitle: "Задача не заканчивается вместе с чатом.",
     heroBody:
-      "Loomrail хранит постановку, разрешённые действия, запросы, доказательства, бюджеты и финальное решение в одной локальной записи. Сессию агента можно остановить, восстановить или сменить, не переписывая работу.",
-    quickStartCta: "Открыть быстрый старт",
-    sourceCta: "Изучить исходники",
+      "Локальная панель управления для AI-агентов, которые пишут код. Постановка, ограничения, открытые вопросы и финальное решение живут в одной устойчивой записи на вашей машине, а не в переписке, которая заканчивается вместе с сессией.",
+    heroPrimaryCta: "Установить и запустить",
+    heroSecondaryCta: "Как это работает",
+    heroNote: "Открытый исходный код · Apache-2.0 · Работает полностью на вашей машине",
+    heroShotCaption: "Workbench: текущая работа, одна устойчивая задача и все действия, которые её изменили.",
+    workbenchAlt:
+      "Workbench Loomrail с текущей работой, устойчивой задачей, её состоянием и историей действий владельца",
+
+    promisesLabel: "Чего Loomrail не делает",
+    promiseCommit: "Не коммитит",
+    promisePush: "Не пушит",
+    promiseMerge: "Не мержит",
+    promiseDeploy: "Не деплоит",
+    promiseAccept: "Поставку принимаете вы",
+
+    whyTitle: "Чат — плохое место для задачи.",
+    whyBody:
+      "Сессия заканчивается, процесс падает, провайдер меняется. Всё, что жило только в переписке, уходит вместе с ней. Loomrail выносит важное из разговора в запись, которой управляет детерминированный конечный автомат.",
+    whyOneTitle: "Устойчиво по умолчанию",
+    whyOneBody:
+      "Состояние, запросы, бюджеты, доказательства и решения пишутся в локальный SQLite одной транзакцией. После перезапуска задача ровно там, где вы её оставили.",
+    whyTwoTitle: "Ограничено по проекту",
+    whyTwoBody:
+      "У каждой задачи есть разрешённые действия и лимит трат. Агент работает внутри них, а повышение лимита — явное решение, которое записывается.",
+    whyThreeTitle: "Владелец — вы",
+    whyThreeBody:
+      "Агент никогда не закрывает свою задачу сам. Loomrail не коммитит, не пушит, не мержит и не деплоит. Поставку принимает или возвращает человек.",
+
+    howTitle: "Как задача проходит через Loomrail",
+    howIntro:
+      "Четыре шага, каждый раз одинаковых. Первый запуск проходит их на детерминированном mock: ничего не уходит провайдеру и ничего в вашем репозитории не меняется.",
+    stepOneTitle: "Пишете задачу, а не промпт",
+    stepOneBody:
+      "Задача описывает результат, критерии приёмки, разрешённые действия и лимит трат. Этот контракт фиксируется до начала работы, и именно по нему потом оценивается результат.",
+    stepTwoTitle: "Агент работает внутри ограничений",
+    stepTwoBody:
+      "Loomrail запускает сессию провайдера, следит за тратами и сам двигает состояние workflow. Вывод провайдера — это вход для конечного автомата, а не источник истины о прогрессе.",
+    stepThreeTitle: "Останавливается и спрашивает, когда нужно",
+    stepThreeBody:
+      "Когда решение требует человека, агент создаёт Human Request. Задача блокируется, вопрос остаётся прикреплённым к ней, а ваш ответ записывается рядом с работой, а не уезжает вверх по переписке.",
+    stepFourTitle: "Вы принимаете поставку или возвращаете её",
+    stepFourBody:
+      "Задача приходит с доказательствами: изменения, ревью, результат QA и созданные ею последующие задачи. Вы смотрите и решаете. Ничего не коммитится, не пушится и не мержится за вас.",
+
+    chipReady: "Ready",
+    chipBlocked: "Blocked",
+    uiTaskTitle: "Persisted board integration",
+    uiTaskDesc:
+      "Проверить изоляцию проектов, переходы состояний и активность через аутентифицированный локальный API.",
+    uiAcceptance: "Приёмка",
+    uiAcceptanceValue: "3 критерия",
+    uiAllowed: "Разрешено",
+    uiAllowedValue: "Чтение, правки, тесты",
+    uiBudget: "Бюджет",
+    flowBacklog: "Backlog",
+    flowReady: "Ready",
+    flowRunning: "Running",
+    flowReview: "Review",
+    flowDone: "Accepted",
+    uiWorkflowState: "Состояние workflow",
+    uiSpend: "Потрачено",
+    uiProvider: "Провайдер",
+    uiProviderValue: "Детерминированный mock",
+    uiSession: "Сессия",
+    uiSessionValue: "Перезапущена, состояние сохранено",
+    uiRequestLabel: "Human Request",
+    uiQuestion:
+      "Удалять ли в миграции старую таблицу sessions или оставить её только для чтения до следующего релиза?",
+    uiAnswer: "Ответить",
+    uiReturn: "Вернуть в работу",
+    uiEvidence: "Доказательства",
+    uiChanges: "Изменения",
+    uiReview: "Ревью",
+    uiReviewValue: "2 замечания, оба закрыты",
+    uiQa: "QA",
+    uiQaValue: "84 проверки пройдено",
+    uiAccept: "Принять поставку",
+
     installTitle: "Попробуйте Loomrail без доступа к репозиторию.",
     installIntro:
-      "Первый запуск использует детерминированный mock, слушает только loopback и не запускает агента.",
+      "Первый запуск использует детерминированный mock, слушает только loopback и не запускает агента. Начните в новом пустом каталоге, а не внутри репозитория, который вам дорог.",
     installCommandLabel: "Безопасная установка и запуск Loomrail",
     copyInstallCommand: "Скопировать безопасные команды установки и запуска",
     copy: "Копировать",
     copying: "Копируем…",
     copied: "Скопировано",
-    copyFailed: "Не скопировано",
-    scopeLabel: "Каталог",
-    scopeValue: "Новый и пустой",
-    firstRunLabel: "Первый запуск",
-    firstRunValue: "Детерминированный mock",
-    networkLabel: "Сеть",
-    networkValue: "Только 127.0.0.1",
+    copyFailed: "Ошибка",
+    runStepOne: "Выберите «Initialize demo workspace» во вкладке, которая откроется.",
+    runStepTwo: "Создайте задачу, переведите её в Ready и запустите workflow.",
+    runStepThree: "Ответьте на блокирующий Human Request и подтвердите увеличение бюджета.",
+    runStepFour: "Посмотрите доказательства и примите поставку либо верните её в работу.",
+    installLive:
+      "Живые провайдеры подключаются явно. Установите и авторизуйте CLI провайдера сами, затем запустите ту же установку с LOOMRAIL_PROVIDER=CODEX или LOOMRAIL_PROVIDER=CLAUDE_CODE.",
     runtimeLabel: "Runtime",
     runtimeValue: "Node.js 24.19–24.x",
-    productTitle: "Задача, а не переписка.",
-    productIntro:
-      "Workbench показывает текущее состояние, контракт задачи, Human Requests, доказательства и решение владельца. Сырой вывод провайдера остаётся диагностикой.",
-    workbenchAlt:
-      "Workbench Loomrail с текущей работой, устойчивой задачей, её состоянием и историей действий владельца",
-    workbenchCaptionTitle: "Workbench",
-    workbenchCaptionBody: "Текущая работа, одна устойчивая задача и действия, которые её изменили.",
-    ledgerTitle: "Что переживает сессию провайдера?",
-    ledgerIntro:
-      "Вывод провайдера — это входные данные. Состоянием workflow и приёмкой управляет детерминированная модель Loomrail.",
-    ledgerBrief: "Постановка",
-    ledgerBriefBody: "Критерии приёмки, версия workflow, разрешения и бюджет.",
-    ledgerRequests: "Human Requests",
-    ledgerRequestsBody: "Вопросы, требующие ответа человека, остаются рядом с задачей.",
-    ledgerEvidence: "Доказательства",
-    ledgerEvidenceBody: "Изменения, ревью, QA и устойчивые последующие задачи.",
-    ledgerDecision: "Решение",
-    ledgerDecisionBody: "Только владелец принимает поставку или возвращает её в работу.",
-    boundaryTitle: "Что на самом деле умеет alpha.2?",
-    boundaryIntro: "Границы — часть продукта, а не мелкий шрифт в release notes.",
-    todayTitle: "Доступно в alpha.2",
+    networkLabel: "Сеть",
+    networkValue: "Только 127.0.0.1",
+    firstRunLabel: "Первый запуск",
+    firstRunValue: "Детерминированный mock",
+    platformLabel: "Платформы",
+    platformValue: "macOS, Windows, Linux",
+
+    boundaryTitle: "Что alpha.2 действительно умеет",
+    boundaryIntro:
+      "Loomrail 0.1.0-alpha.2 — публичная pre-alpha. Вторая колонка — честный список того, чего он пока не делает, а не дорожная карта.",
+    todayTitle: "Доступно сейчас",
     todayLocal: "Браузер на той же машине, loopback daemon и локальное состояние SQLite.",
     todayProviders: "Детерминированный mock и ограниченные адаптеры Codex и Claude Code.",
     todayRecovery: "Восстановление после перезапуска, Human Requests, бюджеты, доказательства и Decisions.",
-    todayRepo: "Регистрация репозитория и Project Constitution с одобрением владельца.",
-    notYetTitle: "Намеренно не обещаем",
+    todayRepo: "Регистрация репозитория, worktree на задачу и просмотр изменений.",
+    notYetTitle: "Пока не обещаем",
     notCloud: "Cloud sync, удалённый доступ, mobile control или командные аккаунты.",
     notDesktop: "Desktop packaging, автоматические обновления или desktop installer.",
     notGit: "Автоматические commit, push, merge, deploy или browser execution.",
     notSandbox: "Полный OS-level sandbox для живых providers.",
-    docsTitle: "С чего начать?",
+
+    docsTitle: "Документация",
     docsIntro:
-      "Сначала запустите mock. Затем зарегистрируйте репозиторий. Подключайте провайдера только после чтения границ.",
+      "Сначала запустите mock. Потом зарегистрируйте репозиторий. Живого провайдера подключайте только после чтения threat model.",
     docsNavigation: "Документация Loomrail",
     quickStartTitle: "Быстрый старт",
     quickStartBody: "От пустого каталога до сохранённой mock-приёмки.",
     userGuideTitle: "Руководство владельца",
-    userGuideBody: "Репозитории, providers, recovery, backup и troubleshooting.",
+    userGuideBody: "Репозитории, провайдеры, восстановление, бэкап, диагностика.",
     fullRouteTitle: "Full-route пример",
     fullRouteBody: "Ограниченный репозиторий и воспроизводимая живая задача.",
-    securityTitle: "Модель безопасности",
-    securityBody: "Границы доверия, High/Critical угрозы и проверенные controls.",
+    securityTitle: "Модель угроз",
+    securityBody: "Границы доверия, High и Critical угрозы, проверенные меры.",
     architectureTitle: "Архитектура",
     architectureBody: "Владение доменом, persistence, providers и delivery.",
+    sourceTitle: "Исходный код",
+    sourceBody: "Прочитать, собрать или завести issue на GitHub.",
+
+    ctaTitle: "Начните с mock. Он ничего не тратит.",
+    ctaBody:
+      "Одна команда, новый пустой каталог и workflow, который проходит целиком, не трогая ни репозиторий, ни аккаунт провайдера.",
+    ctaAction: "Показать команды",
+    sourceCta: "Открыть исходники",
     footerNavigation: "Навигация в подвале",
     footerTagline: "Локальное состояние. Приёмка человеком.",
     footerSource: "Исходники",
@@ -400,12 +557,58 @@ function setupCopyButtons(doc: Document, win: Window): void {
   }
 }
 
+/** Walks the illustrated workflow pipeline so the "how it works" step shows movement, not a static diagram. */
+function setupFlow(doc: Document, win: Window): void {
+  const flow = doc.querySelector<HTMLElement>("[data-flow]");
+  if (flow === null) return;
+  const stages = [...flow.children];
+  if (stages.length === 0) return;
+
+  const reduced = win.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let current = reduced ? Math.min(2, stages.length - 1) : 0;
+  const paint = (): void => {
+    stages.forEach((stage, index) => {
+      stage.classList.toggle("is-current", index === current);
+    });
+  };
+
+  paint();
+  if (reduced) return;
+  win.setInterval(() => {
+    current = (current + 1) % stages.length;
+    paint();
+  }, 1700);
+}
+
+/** Progressive enhancement: sections stay visible unless the browser can observe and animate them. */
+function setupReveal(doc: Document, win: Window): void {
+  const targets = doc.querySelectorAll<HTMLElement>("[data-reveal]");
+  const observerFactory = Reflect.get(win, "IntersectionObserver") as typeof IntersectionObserver | undefined;
+  if (targets.length === 0 || observerFactory === undefined) return;
+  if (win.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  doc.documentElement.dataset["motion"] = "ready";
+  const observer = new observerFactory(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        entry.target.classList.add("is-visible");
+        observer.unobserve(entry.target);
+      }
+    },
+    { rootMargin: "0px 0px -10% 0px", threshold: 0.05 },
+  );
+  for (const target of targets) observer.observe(target);
+}
+
 export function initializeLanding(doc: Document, win: Window): void {
   if (doc.documentElement.dataset["landingReady"] === "true") return;
   doc.documentElement.dataset["landingReady"] = "true";
   setupLocale(doc, win);
   setupTheme(doc, win);
   setupCopyButtons(doc, win);
+  setupFlow(doc, win);
+  setupReveal(doc, win);
 }
 
 initializeLanding(document, window);
