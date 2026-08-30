@@ -1,6 +1,6 @@
 # Loomrail user guide
 
-> Early pre-alpha · [Русская версия](USER-GUIDE.ru.md)
+> Early pre-alpha · [Quick start](GETTING-STARTED.md) · [Русская версия](USER-GUIDE.ru.md)
 
 This guide takes you from a clean local launch to an accepted delivery, then explains how to run a real coding agent,
 inspect its work, recover after a restart, and preserve Loomrail's local state.
@@ -145,6 +145,21 @@ selected agent.
 A worktree prevents two tasks from accidentally editing the same checkout. It does not restrict the agent's operating-
 system permissions or network access. Review the [threat model](../security/THREAT-MODEL.md) before using a live
 provider on sensitive code.
+
+### Review and adopt the Project Constitution
+
+After registration, open **Settings → Project Constitution**. The first scan is read-only and bounded: it inspects
+allowlisted root metadata, CI workflows, and architecture documentation without reading source files, environment
+files, lockfile contents, or script bodies. Scan results show warnings when a source was skipped or a limit was
+reached.
+
+Choose the suggested preset or another preset, then review all seven proposed sections and their source labels.
+Loomrail writes nothing to the repository until you choose **Adopt and publish**. Adoption creates a versioned owner
+decision and publishes `.loomrail/constitution.md` through a compare-and-set write. If the target changed after the
+scan, publication fails without overwriting the owner's file; rescan or review the conflict before retrying.
+
+The Constitution is durable project policy, not a provider transcript. Replacing it creates a new version and keeps
+the earlier decision in the audit history.
 
 ## 5. Run and inspect live work
 

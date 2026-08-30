@@ -3,6 +3,7 @@
   <p><strong>The local control plane for accountable AI software teams.</strong></p>
   <p>
     <a href="https://loomrail.github.io/loomrail/">Website</a> ·
+    <a href="docs/guides/GETTING-STARTED.md">Quick start</a> ·
     <a href="docs/guides/USER-GUIDE.md">User guide</a> ·
     <a href="docs/examples/full-route/README.md">Full-route example</a>
   </p>
@@ -49,7 +50,7 @@ decisions instead of disconnected chat sessions.
 | State         | Tasks, runs, budgets, recovery, typed evidence, acceptance packages, Decisions, append-only Events                       | Retention and restore hardening                |
 | Workbench     | Persisted board, workflow cockpit, command summary, evidence matrix, owner acceptance, EN/RU, light/dark                 | Full Attention Inbox and richer workflow views |
 | Agents        | Capability-checked provider contract, live Codex/Claude CLI adapters, per-task Git worktrees, and on-demand change diffs | The Claude Code adapter on the write path      |
-| Projects      | Bundled demo repositories, plus any local Git repository registered by absolute path                                     | Per-project guardrails and permissions         |
+| Projects      | Bundled demos, local Git repositories, and owner-approved versioned Project Constitutions                                | Per-project permission enforcement             |
 | Platforms     | macOS and Windows CI are green                                                                                           | Clean-machine acceptance and hardening         |
 
 ## How it is intended to work
@@ -73,9 +74,10 @@ model, clear permissions, recoverable state, and an inspectable history.
 
 ## Install
 
-For the complete route from installation through the first Human Request, budget decision, acceptance, live provider,
-change review, restart, and state backup, use the [English user guide](docs/guides/USER-GUIDE.md) or the
-[руководство на русском](docs/guides/USER-GUIDE.ru.md).
+For the shortest safe mock route, use the [English quick start](docs/guides/GETTING-STARTED.md) or
+[быстрый старт на русском](docs/guides/GETTING-STARTED.ru.md). For the complete route through Human Requests, budgets,
+acceptance, a live provider, change review, restart, and state backup, continue with the
+[English user guide](docs/guides/USER-GUIDE.md) or [руководство на русском](docs/guides/USER-GUIDE.ru.md).
 
 Loomrail ships as a single package: a bundled launcher, the prebuilt Workbench, the SQLite migrations and the bundled
 fixture projects. Use the explicit `next` channel for pre-alpha releases:

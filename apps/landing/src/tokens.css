@@ -51,6 +51,14 @@
   --content-width: 74rem;
   --measure: 65ch;
   --line: 0.0625rem;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --duration-micro: 120ms;
+  --duration-short: 220ms;
+  --duration-long: 420ms;
+  --z-header: 20;
+  --z-overlay: 40;
+  --z-skip: 60;
 }
 
 :root[data-theme="dark"] {

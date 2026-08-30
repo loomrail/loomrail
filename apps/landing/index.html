@@ -2,10 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta
       name="description"
-      content="Loomrail is the local control plane for accountable AI software teams. Define work, inspect evidence, and keep final acceptance human."
+      content="Loomrail keeps AI software delivery accountable: durable tasks, evidence, budgets, decisions, and owner acceptance in a local control plane."
     />
     <meta name="theme-color" content="#f9f9fa" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#171719" media="(prefers-color-scheme: dark)" />
@@ -14,40 +14,41 @@
       content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self' ws://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="Loomrail — Make agents show their work" />
-    <meta property="og:description" content="The local control plane for accountable AI software teams." />
+    <meta property="og:title" content="Loomrail — Agents propose. Owners accept." />
+    <meta
+      property="og:description"
+      content="Durable tasks, evidence, budgets, decisions, and owner acceptance around local coding agents."
+    />
     <meta property="og:image" content="https://loomrail.github.io/loomrail/brand/social-preview.svg" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="canonical" href="https://loomrail.github.io/loomrail/" />
     <link rel="icon" href="./brand/loomrail-mark.svg" type="image/svg+xml" />
-    <title>Loomrail — Make agents show their work</title>
+    <title>Loomrail — Agents propose. Owners accept.</title>
     <script type="module" src="/src/main.ts"></script>
   </head>
   <body>
-    <a class="skip-link" href="#main">Skip to content</a>
+    <a class="skip-link" href="#main" data-i18n="skipLink">Skip to content</a>
 
     <header class="site-header">
-      <nav class="nav shell" aria-label="Primary navigation">
-        <a class="brand" href="#top" aria-label="Loomrail home">
+      <nav class="nav shell" data-i18n-aria-label="primaryNavigation">
+        <a class="brand" href="#top" data-i18n-aria-label="homeLabel">
           <img src="./brand/loomrail-mark.svg" alt="" width="24" height="24" />
           <span>Loomrail</span>
         </a>
 
-        <div class="nav-links">
-          <a href="#route">Route</a>
-          <a href="#workbench">Workbench</a>
-          <a href="#limits">Limits</a>
-          <a href="#install">Install</a>
-        </div>
+        <button class="command-trigger" type="button" data-command-open aria-haspopup="dialog">
+          <span data-i18n="searchNavigation">Search sections and docs</span>
+          <span class="key" aria-hidden="true">⌘K</span>
+        </button>
 
         <div class="nav-actions">
-          <button class="button" type="button" data-theme-toggle aria-label="Switch theme">
+          <div class="locale-switch" role="group" data-i18n-aria-label="languageLabel">
+            <button type="button" data-locale="en" aria-pressed="true">EN</button>
+            <button type="button" data-locale="ru" aria-pressed="false">RU</button>
+          </div>
+          <button class="icon-button" type="button" data-theme-toggle data-i18n-aria-label="switchTheme">
             <span aria-hidden="true">◐</span>
-            <span class="theme-label" data-theme-label>Theme</span>
-          </button>
-          <button class="button" type="button" data-command-open aria-haspopup="dialog">
-            <span>Menu</span>
-            <span class="key" aria-hidden="true">⌘K</span>
+            <span class="visually-hidden" data-theme-label>Light</span>
           </button>
         </div>
       </nav>
@@ -56,318 +57,409 @@
     <main id="main">
       <section class="hero shell" id="top" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <span class="status-chip">Public pre-alpha · 0.1.0-alpha.1</span>
-          <h1 id="hero-title">Make agents show their work.</h1>
-          <p class="lede">
-            <strong>The local control plane for accountable AI software teams.</strong>
-            Define the task, preserve decisions, inspect evidence, and keep final acceptance yours.
+          <p class="release-line" data-i18n="releaseLine">Public pre-alpha · 0.1.0-alpha.1 · local only</p>
+          <h1 id="hero-title" data-i18n="heroTitle">Agents propose. Owners accept.</h1>
+          <p class="lede" data-i18n="heroLede">
+            Loomrail keeps the task, evidence, budgets, decisions, and final acceptance intact when an agent
+            session ends.
           </p>
           <div class="hero-actions">
-            <a class="button button-primary" href="#install">Install the pre-alpha</a>
-            <a class="button" href="https://github.com/loomrail/loomrail">View on GitHub</a>
+            <a class="button button-primary" href="#install" data-i18n="installCta">Install the pre-alpha</a>
+            <a
+              class="button"
+              href="https://github.com/loomrail/loomrail/blob/main/docs/guides/GETTING-STARTED.md"
+              data-doc-link="getting-started"
+              data-i18n="quickStartCta"
+              >Read quick start</a
+            >
           </div>
-          <p class="hero-note">Local runtime · No account · No analytics</p>
+          <p class="hero-note" data-i18n="heroNote">Loopback runtime · No Loomrail account · No analytics</p>
         </div>
 
-        <figure class="hero-figure">
-          <div class="product-frame">
-            <img
-              src="./screenshots/workbench-light.png"
-              alt="Loomrail Workbench in light theme showing a delivery board and task inspector"
-              width="1905"
-              height="1233"
-              fetchpriority="high"
-            />
+        <aside class="launch-brief" aria-labelledby="launch-brief-title">
+          <div class="launch-brief-header">
+            <div>
+              <p class="launch-label" data-i18n="safeFirstRun">Safe first run</p>
+              <h2 id="launch-brief-title" data-i18n="launchTitle">
+                Reach owner acceptance without provider quota.
+              </h2>
+            </div>
+            <span class="version">MOCK</span>
           </div>
-          <figcaption class="figure-caption">
-            <span>Real Phase 0 Workbench</span>
-            <span>Light theme · persisted local state</span>
-          </figcaption>
-        </figure>
+          <ol class="launch-steps">
+            <li>
+              <span>1</span>
+              <div>
+                <strong data-i18n="launchStepInstall">Install the explicit pre-alpha channel</strong>
+                <code>npm install loomrail@next</code>
+              </div>
+            </li>
+            <li>
+              <span>2</span>
+              <div>
+                <strong data-i18n="launchStepRun">Start the loopback Workbench</strong>
+                <code>npx loomrail</code>
+              </div>
+            </li>
+            <li>
+              <span>3</span>
+              <div>
+                <strong data-i18n="launchStepRoute">Initialize the demo and run one task</strong>
+                <small data-i18n="launchStepRouteNote"
+                  >Answer a Human Request, approve a budget, inspect evidence.</small
+                >
+              </div>
+            </li>
+          </ol>
+          <a class="inline-link" href="#install" data-i18n="seeInstallDetails"
+            >Requirements and alternatives</a
+          >
+        </aside>
       </section>
 
-      <section class="section shell" id="route" aria-labelledby="route-title">
-        <div class="section-heading">
-          <div>
-            <h2 id="route-title">One task. Four accountable moments.</h2>
-          </div>
-          <p>
-            Agent sessions come and go. Loomrail keeps the durable route around them, so progress is a
-            sequence of explicit state changes instead of a persuasive chat transcript.
+      <section class="workflow-section shell" id="route" aria-labelledby="route-title">
+        <div class="section-intro">
+          <h2 id="route-title" data-i18n="routeTitle">A delivery route that survives the chat.</h2>
+          <p data-i18n="routeIntro">
+            Provider messages are inputs. Loomrail owns the workflow state and records each consequential
+            change.
           </p>
         </div>
 
         <ol class="route">
-          <li class="route-step">
+          <li>
             <span class="route-number">01</span>
-            <div class="route-content">
-              <h3>Define what done means</h3>
-              <p>
-                A WorkItem carries the brief, acceptance criteria, workflow version, permissions, and budget.
-              </p>
-              <span class="route-output">Output → versioned task contract</span>
-            </div>
+            <h3 data-i18n="routeOneTitle">Define done</h3>
+            <p data-i18n="routeOneBody">
+              Brief, criteria, permissions, workflow version, and budget become one task contract.
+            </p>
+            <small data-i18n="routeOneOutput">Output: versioned WorkItem</small>
           </li>
-          <li class="route-step">
+          <li>
             <span class="route-number">02</span>
-            <div class="route-content">
-              <h3>Decide at the real fork</h3>
-              <p>
-                Questions and approvals become typed Human Requests. Your answer is stored as a durable
-                Decision.
-              </p>
-              <span class="route-output">Output → attributable decision</span>
-            </div>
+            <h3 data-i18n="routeTwoTitle">Decide at the fork</h3>
+            <p data-i18n="routeTwoBody">
+              Questions and approvals become typed Human Requests and durable Decisions.
+            </p>
+            <small data-i18n="routeTwoOutput">Output: attributable decision</small>
           </li>
-          <li class="route-step">
+          <li>
             <span class="route-number">03</span>
-            <div class="route-content">
-              <h3>Verify the repository change</h3>
-              <p>
-                Review and QA produce typed evidence against criteria while the work stays isolated in its
-                worktree.
-              </p>
-              <span class="route-output">Output → inspectable evidence matrix</span>
-            </div>
+            <h3 data-i18n="routeThreeTitle">Inspect the change</h3>
+            <p data-i18n="routeThreeBody">Review and QA attach typed evidence to the acceptance criteria.</p>
+            <small data-i18n="routeThreeOutput">Output: evidence matrix</small>
           </li>
-          <li class="route-step">
+          <li>
             <span class="route-number">04</span>
-            <div class="route-content">
-              <h3>Accept as the owner</h3>
-              <p>
-                Done is not an agent claim. Acceptance is a separate owner-only event with an auditable
-                package.
-              </p>
-              <span class="route-output">Output → acceptance package + event</span>
-            </div>
+            <h3 data-i18n="routeFourTitle">Accept as owner</h3>
+            <p data-i18n="routeFourBody">Done is a separate owner-only event, never a provider claim.</p>
+            <small data-i18n="routeFourOutput">Output: acceptance package</small>
           </li>
         </ol>
       </section>
 
-      <div class="proof-band">
-        <section class="section shell" id="workbench" aria-labelledby="workbench-title">
-          <div class="section-heading">
-            <div>
-              <h2 id="workbench-title">The board is the index. The task is the cockpit.</h2>
-            </div>
-            <p>
-              The Workbench keeps current state compact, then opens the evidence, criteria and activity behind
-              it. Raw provider logs remain diagnostic data, not the primary product surface.
+      <section class="product-section" id="workbench" aria-labelledby="workbench-title">
+        <div class="shell product-layout">
+          <div class="product-copy">
+            <h2 id="workbench-title" data-i18n="workbenchTitle">
+              The board is the index. The task is the cockpit.
+            </h2>
+            <p data-i18n="workbenchIntro">
+              Current state stays compact. The contract, criteria, provider sessions, changes, evidence, and
+              owner actions open behind the task.
             </p>
+            <dl class="ownership-list">
+              <div>
+                <dt data-i18n="ownsStateTitle">Durable state</dt>
+                <dd data-i18n="ownsStateBody">
+                  SQLite, restart recovery, idempotent commands, append-only events.
+                </dd>
+              </div>
+              <div>
+                <dt data-i18n="ownsRepoTitle">Repository boundary</dt>
+                <dd data-i18n="ownsRepoBody">
+                  Per-task worktrees, bounded Constitution scan, owner-approved publication.
+                </dd>
+              </div>
+              <div>
+                <dt data-i18n="ownsHumanTitle">Human authority</dt>
+                <dd data-i18n="ownsHumanBody">
+                  Explicit requests, budgets, recovery decisions, and final acceptance.
+                </dd>
+              </div>
+            </dl>
           </div>
 
-          <div class="proof-layout">
-            <div class="proof-image">
-              <img
-                src="./screenshots/workbench-dark.png"
-                alt="Loomrail Workbench in dark theme with a task card, inspector and activity history"
-                width="1905"
-                height="1233"
-                loading="lazy"
-                decoding="async"
-              />
-              <span class="annotation-marker marker-one" aria-hidden="true">1</span>
-              <span class="annotation-marker marker-two" aria-hidden="true">2</span>
-              <span class="annotation-marker marker-three" aria-hidden="true">3</span>
-            </div>
-            <ol class="annotations">
-              <li>
-                <span>1</span>
-                <div>
-                  <strong>State you can scan</strong>
-                  <p>
-                    The task card shows where the route is now without pretending that board position is
-                    proof.
-                  </p>
-                </div>
-              </li>
-              <li>
-                <span>2</span>
-                <div>
-                  <strong>Criteria you can inspect</strong>
-                  <p>The inspector keeps the task contract and owner actions beside the work.</p>
-                </div>
-              </li>
-              <li>
-                <span>3</span>
-                <div>
-                  <strong>History you cannot hand-wave</strong>
-                  <p>Commands, Decisions and evidence remain attributable in append-only activity.</p>
-                </div>
-              </li>
-            </ol>
-          </div>
-        </section>
-      </div>
-
-      <section class="section shell" id="limits" aria-labelledby="limits-title">
-        <div class="section-heading">
-          <div>
-            <h2 id="limits-title">Useful now. Explicit about what is not.</h2>
-          </div>
-          <p>
-            This is an early public checkpoint, not a finished desktop product. The boundary below is part of
-            the contract, not fine print.
-          </p>
+          <figure class="product-figure">
+            <img
+              src="./screenshots/workbench-dark.png"
+              data-i18n-alt="workbenchAlt"
+              alt="Loomrail Workbench in dark theme with a task card, inspector, and activity history"
+              width="1905"
+              height="1233"
+              loading="lazy"
+              decoding="async"
+            />
+            <figcaption>
+              <span data-i18n="workbenchCaption">Real Phase 0 Workbench</span>
+              <span data-i18n="workbenchCaptionMeta">Dark theme · persisted local state</span>
+            </figcaption>
+          </figure>
         </div>
+      </section>
 
-        <dl class="boundary-grid">
-          <div class="boundary-item">
-            <dt>Runtime</dt>
-            <dd>
-              <strong>Today:</strong> loopback daemon, authenticated browser session, local SQLite state.
+      <section class="boundary-section shell" id="limits" aria-labelledby="limits-title">
+        <div class="section-intro">
+          <h2 id="limits-title" data-i18n="limitsTitle">Useful now. Exact about the boundary.</h2>
+          <p data-i18n="limitsIntro">Pre-alpha is a product state, not fine print.</p>
+        </div>
+        <dl class="boundary-list">
+          <div>
+            <dt data-i18n="boundaryRuntimeTitle">Runtime</dt>
+            <dd data-i18n="boundaryRuntimeBody">
+              Loopback daemon, authenticated browser session, local SQLite state.
             </dd>
           </div>
-          <div class="boundary-item">
-            <dt>Providers</dt>
-            <dd>
-              <strong>Today:</strong> Codex across six stages; Claude Code for Discovery, Plan and Review.
+          <div>
+            <dt data-i18n="boundaryProvidersTitle">Providers</dt>
+            <dd data-i18n="boundaryProvidersBody">
+              Codex: six stages. Claude Code: Discovery, Plan, and Review.
             </dd>
           </div>
-          <div class="boundary-item">
-            <dt>Repository</dt>
-            <dd><strong>Today:</strong> per-task Git worktree and on-demand diff visibility.</dd>
+          <div>
+            <dt data-i18n="boundaryGitTitle">Git</dt>
+            <dd data-i18n="boundaryGitBody">
+              Task worktrees and change inspection. No automatic commit, push, merge, or deploy.
+            </dd>
           </div>
-          <div class="boundary-item">
-            <dt>After the edit</dt>
-            <dd><strong>Not today:</strong> Loomrail does not commit, push, merge or deploy.</dd>
+          <div>
+            <dt data-i18n="boundaryPlatformsTitle">Platforms</dt>
+            <dd data-i18n="boundaryPlatformsBody">macOS and Windows are blocking. Linux is best effort.</dd>
           </div>
-          <div class="boundary-item">
-            <dt>Platforms</dt>
-            <dd><strong>Blocking:</strong> macOS and Windows. Linux remains best effort.</dd>
+          <div>
+            <dt data-i18n="boundaryNetworkTitle">Security</dt>
+            <dd data-i18n="boundaryNetworkBody">
+              Local-first is not a sandbox. Live agents keep the OS account’s permissions and network.
+            </dd>
           </div>
-          <div class="boundary-item">
-            <dt>Distribution</dt>
-            <dd><strong>Not today:</strong> desktop installer, remote mode, cloud sync and plugins.</dd>
+          <div>
+            <dt data-i18n="boundaryDistributionTitle">Distribution</dt>
+            <dd data-i18n="boundaryDistributionBody">
+              npm package today. No desktop installer, remote mode, cloud sync, or plugins.
+            </dd>
           </div>
         </dl>
       </section>
 
-      <section class="section shell" id="install" aria-labelledby="install-title">
-        <div class="install-panel">
+      <section class="install-section" id="install" aria-labelledby="install-title">
+        <div class="shell install-layout">
           <div class="install-copy">
-            <h2 id="install-title">Start locally in two commands.</h2>
-            <p>
-              Requires Node.js 24.19.x on macOS or Windows. The launcher opens a one-time authenticated URL on
-              loopback; add <code>--no-open</code> to print it instead.
+            <h2 id="install-title" data-i18n="installTitle">Install locally. Verify safely.</h2>
+            <p data-i18n="installIntro">
+              Start with the deterministic mock route. Connect a live provider only after the local workflow
+              behaves as expected.
             </p>
-            <div class="install-links">
-              <a
-                class="text-link"
-                href="https://github.com/loomrail/loomrail/blob/main/docs/guides/USER-GUIDE.md"
-                >User guide</a
-              >
-              <a
-                class="text-link"
-                href="https://github.com/loomrail/loomrail/tree/main/docs/examples/full-route"
-                >Full-route example</a
-              >
-              <a class="text-link" href="https://www.npmjs.com/package/loomrail/v/0.1.0-alpha.1"
-                >npm package</a
-              >
-              <a
-                class="text-link"
-                href="https://github.com/loomrail/loomrail/blob/main/docs/guides/USER-GUIDE.ru.md"
-                >Руководство на русском</a
-              >
-            </div>
+            <dl class="requirements">
+              <div>
+                <dt>Node.js</dt>
+                <dd>&gt;=24.19 &lt;25</dd>
+              </div>
+              <div>
+                <dt data-i18n="operatingSystem">OS</dt>
+                <dd>macOS · Windows</dd>
+              </div>
+              <div>
+                <dt data-i18n="networkBinding">Binding</dt>
+                <dd>127.0.0.1 / ::1</dd>
+              </div>
+            </dl>
           </div>
 
-          <div class="command-block" aria-label="Installation commands">
+          <div class="installer">
+            <div class="installer-heading">
+              <div>
+                <span class="installer-kicker" data-i18n="recommended">Recommended</span>
+                <h3 data-i18n="localInstallTitle">Project-local install</h3>
+              </div>
+              <span class="version">npm @next</span>
+            </div>
             <div class="command-row">
-              <code>npm install -g loomrail@next</code>
+              <span class="command-index">1</span>
+              <code>npm install loomrail@next</code>
               <button
-                class="button copy-button"
+                class="copy-button"
                 type="button"
-                data-copy="npm install -g loomrail@next"
-                aria-label="Copy install command"
+                data-copy="npm install loomrail@next"
+                data-i18n-aria-label="copyInstallCommand"
               >
-                Copy
+                <span data-copy-label data-i18n="copy">Copy</span>
               </button>
             </div>
             <div class="command-row">
-              <code>loomrail --port 4176</code>
+              <span class="command-index">2</span>
+              <code>npx loomrail</code>
               <button
-                class="button copy-button"
+                class="copy-button"
                 type="button"
-                data-copy="loomrail --port 4176"
-                aria-label="Copy launch command"
+                data-copy="npx loomrail"
+                data-i18n-aria-label="copyLaunchCommand"
               >
-                Copy
+                <span data-copy-label data-i18n="copy">Copy</span>
               </button>
             </div>
+            <p class="after-launch" data-i18n="afterLaunch">
+              Then initialize the demo workspace, run one task, answer the request, approve the mock budget,
+              and inspect acceptance evidence.
+            </p>
+            <details class="install-alternative">
+              <summary data-i18n="globalAlternative">Need a global command or a fixed port?</summary>
+              <div>
+                <code>npm install -g loomrail@next</code>
+                <code>loomrail --no-open --port 4176</code>
+                <p data-i18n="noOpenNote">
+                  Open the printed one-time URL on the same machine within 60 seconds.
+                </p>
+              </div>
+            </details>
           </div>
         </div>
+      </section>
+
+      <section class="docs-section shell" id="docs" aria-labelledby="docs-title">
+        <div class="section-intro">
+          <h2 id="docs-title" data-i18n="docsTitle">Documentation by the job at hand.</h2>
+          <p data-i18n="docsIntro">
+            Start small, then move to live repository work with the boundary visible.
+          </p>
+        </div>
+        <nav class="docs-index" data-i18n-aria-label="documentationNavigation">
+          <a
+            href="https://github.com/loomrail/loomrail/blob/main/docs/guides/GETTING-STARTED.md"
+            data-doc-link="getting-started"
+          >
+            <span
+              ><strong data-i18n="quickStartTitle">Quick start</strong
+              ><small data-i18n="quickStartBody">Install and complete the mock route.</small></span
+            >
+            <span aria-hidden="true">01 ↗</span>
+          </a>
+          <a
+            href="https://github.com/loomrail/loomrail/blob/main/docs/guides/USER-GUIDE.md"
+            data-doc-link="user-guide"
+          >
+            <span
+              ><strong data-i18n="userGuideTitle">User guide</strong
+              ><small data-i18n="userGuideBody"
+                >Repository, Constitution, providers, recovery, backup.</small
+              ></span
+            >
+            <span aria-hidden="true">02 ↗</span>
+          </a>
+          <a href="https://github.com/loomrail/loomrail/tree/main/docs/examples/full-route">
+            <span
+              ><strong data-i18n="fullRouteTitle">Full-route example</strong
+              ><small data-i18n="fullRouteBody"
+                >A bounded repository and reproducible Codex task.</small
+              ></span
+            >
+            <span aria-hidden="true">03 ↗</span>
+          </a>
+          <a href="https://github.com/loomrail/loomrail/blob/main/docs/security/THREAT-MODEL.md">
+            <span
+              ><strong data-i18n="securityTitle">Security model</strong
+              ><small data-i18n="securityBody">Trust boundaries, threats, and verified controls.</small></span
+            >
+            <span aria-hidden="true">04 ↗</span>
+          </a>
+        </nav>
       </section>
     </main>
 
     <footer class="site-footer">
-      <div class="footer-statement shell">
-        <p>The agent can propose. Only the owner accepts.</p>
-        <div class="footer-meta">
-          <div class="footer-links">
-            <a href="https://github.com/loomrail/loomrail">GitHub</a>
-            <a href="https://github.com/loomrail/loomrail/releases/tag/v0.1.0-alpha.1">Release</a>
-            <a href="https://github.com/loomrail/loomrail/blob/main/LICENSE">Apache 2.0</a>
-          </div>
-          <small>Public pre-alpha · no telemetry</small>
-        </div>
+      <div class="footer-line shell">
+        <p data-i18n="footerStatement">The agent can propose. Only the owner accepts.</p>
+        <nav data-i18n-aria-label="footerNavigation">
+          <a href="https://github.com/loomrail/loomrail">GitHub</a>
+          <a href="https://www.npmjs.com/package/loomrail">npm</a>
+          <a href="https://github.com/loomrail/loomrail/blob/main/LICENSE">Apache 2.0</a>
+        </nav>
+        <small data-i18n="footerMeta">Public pre-alpha · no telemetry</small>
       </div>
     </footer>
 
-    <dialog class="command-dialog" data-command-dialog aria-label="Navigate Loomrail">
+    <dialog class="command-dialog" data-command-dialog data-i18n-aria-label="navigateLoomrail">
       <div class="dialog-header">
         <input
           class="dialog-search"
           type="search"
+          data-i18n-placeholder="searchPlaceholder"
+          data-i18n-aria-label="filterNavigation"
           placeholder="Go to a section or resource…"
-          aria-label="Filter navigation"
           autocomplete="off"
           data-command-search
         />
-        <button class="button dialog-close" type="button" data-command-close aria-label="Close menu">
+        <button class="dialog-close" type="button" data-command-close data-i18n-aria-label="closeMenu">
           Esc
         </button>
       </div>
       <ul class="command-list" data-command-list>
         <li>
-          <a class="command-link" href="#route"><span>Route</span><span>Section</span></a>
+          <a class="command-link" href="#route"
+            ><span data-i18n="routeNav">Delivery route</span><span data-i18n="sectionType">Section</span></a
+          >
         </li>
         <li>
-          <a class="command-link" href="#workbench"><span>Workbench</span><span>Section</span></a>
+          <a class="command-link" href="#workbench"
+            ><span>Workbench</span><span data-i18n="sectionType">Section</span></a
+          >
         </li>
         <li>
-          <a class="command-link" href="#limits"><span>Current limits</span><span>Section</span></a>
+          <a class="command-link" href="#limits"
+            ><span data-i18n="limitsNav">Current boundary</span
+            ><span data-i18n="sectionType">Section</span></a
+          >
         </li>
         <li>
-          <a class="command-link" href="#install"><span>Install</span><span>Section</span></a>
+          <a class="command-link" href="#install"
+            ><span data-i18n="installNav">Install</span><span data-i18n="sectionType">Section</span></a
+          >
+        </li>
+        <li>
+          <a class="command-link" href="#docs"
+            ><span data-i18n="docsNav">Documentation</span><span data-i18n="sectionType">Section</span></a
+          >
+        </li>
+        <li>
+          <a
+            class="command-link"
+            href="https://github.com/loomrail/loomrail/blob/main/docs/guides/GETTING-STARTED.md"
+            data-doc-link="getting-started"
+            ><span data-i18n="quickStartTitle">Quick start</span><span data-i18n="docsType">Docs</span></a
+          >
         </li>
         <li>
           <a
             class="command-link"
             href="https://github.com/loomrail/loomrail/blob/main/docs/guides/USER-GUIDE.md"
-            ><span>User guide</span><span>Docs</span></a
-          >
-        </li>
-        <li>
-          <a
-            class="command-link"
-            href="https://github.com/loomrail/loomrail/tree/main/docs/examples/full-route"
-            ><span>Full-route example</span><span>Docs</span></a
+            data-doc-link="user-guide"
+            ><span data-i18n="userGuideTitle">User guide</span><span data-i18n="docsType">Docs</span></a
           >
         </li>
         <li>
           <a class="command-link" href="https://github.com/loomrail/loomrail"
-            ><span>GitHub repository</span><span>External</span></a
+            ><span data-i18n="githubRepository">GitHub repository</span
+            ><span data-i18n="externalType">External</span></a
           >
         </li>
         <li>
-          <a class="command-link" href="https://www.npmjs.com/package/loomrail/v/0.1.0-alpha.1"
-            ><span>npm package</span><span>External</span></a
+          <a class="command-link" href="https://www.npmjs.com/package/loomrail"
+            ><span>npm package</span><span data-i18n="externalType">External</span></a
           >
         </li>
       </ul>
-      <p class="command-empty" data-command-empty hidden>No matching destination.</p>
+      <p class="command-empty" data-command-empty hidden data-i18n="noDestination">
+        No matching destination.
+      </p>
     </dialog>
   </body>
 </html>
