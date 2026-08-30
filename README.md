@@ -73,7 +73,7 @@ change review, restart, and state backup, use the [English user guide](docs/guid
 [руководство на русском](docs/guides/USER-GUIDE.ru.md).
 
 Loomrail ships as a single package: a bundled launcher, the prebuilt Workbench, the SQLite migrations and the bundled
-fixture projects. Pre-alpha releases use the explicit `next` channel so they are never installed as a stable release:
+fixture projects. Use the explicit `next` channel for pre-alpha releases:
 
 ```bash
 npm install loomrail@next
@@ -170,8 +170,8 @@ to an agent, a shell or Git directly: every one of those crossings goes through 
       pipeline
 - [x] **M5 — Budgets and recovery:** explicit limits, pause/resume, crash recovery
 - [x] **M6 — Acceptance:** typed Review/QA evidence, criterion matrix, owner-only final approval, audit surface
-- [ ] **M7 — Public checkpoint:** packaged launcher and clean-install gate are in place; remaining work is hardening
-      and the first published release
+- [x] **M7 — Public checkpoint:** packaged launcher, clean-install gates on macOS and Windows, and the first public
+      npm pre-alpha release
 
 Real Codex and Claude Code execution has landed, and milestone E1 has since given it somewhere to work. Before
 dispatching a work item's first agent stage, Loomrail cuts a Git worktree for that work item on a branch of its own and

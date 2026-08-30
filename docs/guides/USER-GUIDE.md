@@ -11,34 +11,22 @@ workflow state; it does not commit, push, or merge the agent's result.
 
 ## 1. Install and start Loomrail
 
-Loomrail is not published to npm yet. The supported pre-alpha installation is the tarball built from this repository.
-You need the Node.js version pinned in [`.nvmrc`](../../.nvmrc) and Corepack.
-
-From a Loomrail checkout:
+Install the explicit public pre-alpha channel with Node.js `>=24.19 <25`:
 
 ```bash
-corepack enable
-pnpm install --frozen-lockfile
-pnpm pack:release
-```
-
-The last command writes `dist-release/loomrail-<version>.tgz`. Use the filename it actually printed; the current
-pre-alpha filename in the examples is `loomrail-0.0.0.tgz`. Installing globally keeps this checkout free of an
-npm-generated manifest or lockfile.
-
-On macOS:
-
-```bash
-npm install -g "/absolute/path/to/loomrail/dist-release/loomrail-0.0.0.tgz"
+npm install -g loomrail@next
 loomrail
 ```
 
-In Windows PowerShell:
+Use a project-local install instead if you prefer not to add a global binary:
 
-```powershell
-npm install -g "D:\path\to\loomrail\dist-release\loomrail-0.0.0.tgz"
-loomrail
+```bash
+npm install loomrail@next
+npx loomrail
 ```
+
+The npm registry also exposes the first and currently only version through its required `latest` metadata tag. Keep
+`next` or the exact version in install commands to make the pre-alpha channel explicit.
 
 Loomrail binds to an available loopback port and opens the Workbench in your default browser. If the browser should not
 open automatically:
@@ -254,7 +242,7 @@ instead of masquerading as an empty list.
 
 ## Current pre-alpha limits
 
-- The package is not published and there is no desktop installer.
+- The npm package is pre-alpha and there is no desktop installer.
 - The daemon is local-only; there is no remote or multi-user mode.
 - One provider is selected for the daemon's whole lifetime.
 - Claude Code has no validated write path for Implementation or QA.

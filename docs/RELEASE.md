@@ -1,7 +1,7 @@
 # Releasing the Loomrail launcher
 
-**Status:** M7 public checkpoint
-**Updated:** 2026-08-29
+**Status:** M7 public checkpoint published
+**Updated:** 2026-08-30
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
 the SQLite migrations and the bundled fixture projects. Consumers install one package and run one binary; they never
@@ -72,19 +72,16 @@ Publishing is a deliberate, human action and is not automated. Nothing in CI run
 4. Inspect `dist-release/package/` — confirm no local paths, no state databases and no logs were staged.
 5. Publish the tarball from an account with rights to the `loomrail` name.
 
-Until the first publish, the supported installation route is the tarball produced by `pnpm pack:release`.
+### Pre-alpha channel
 
-### First pre-alpha candidate
-
-The current candidate is `0.1.0-alpha.1`. It must be published under the `next` dist-tag so an explicitly unstable
-build never becomes the default `latest` install:
+The first public release is `0.1.0-alpha.1`. Pre-alpha releases are published under the explicit `next` dist-tag:
 
 ```bash
 npm publish ./dist-release/loomrail-0.1.0-alpha.1.tgz --tag next --access public
 ```
 
 Before running that command, authenticate the local npm CLI, satisfy the account's current 2FA requirements and
-review the [candidate notes](releases/0.1.0-alpha.1.md). After publishing, verify the registry rather than the local
+review the [release notes](releases/0.1.0-alpha.1.md). After publishing, verify the registry rather than the local
 tarball:
 
 ```bash
@@ -92,3 +89,8 @@ npm view loomrail@next name version dist-tags --json
 npm install loomrail@next
 npx loomrail --no-open --port 4176
 ```
+
+The public npm registry requires every package's metadata to contain a `latest` tag, so the first and currently only
+version is also reachable through `latest`. It is still a pre-alpha release. Documentation and release checks use
+`loomrail@next` or the exact version so the intended channel stays explicit; `latest` will move to a stable release
+only when one exists.

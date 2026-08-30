@@ -12,34 +12,22 @@ Loomrail работает локально, но не является security 
 
 ## 1. Установка и запуск
 
-Пакет Loomrail ещё не опубликован в npm. Поддержанный способ установки текущего pre-alpha — tarball, собранный из
-этого репозитория. Нужны версия Node.js из [`.nvmrc`](../../.nvmrc) и Corepack.
-
-В checkout Loomrail выполните:
+Установите явный публичный pre-alpha канал под Node.js `>=24.19 <25`:
 
 ```bash
-corepack enable
-pnpm install --frozen-lockfile
-pnpm pack:release
-```
-
-Последняя команда создаёт `dist-release/loomrail-<version>.tgz`. Используйте фактическое имя из вывода команды; в
-примерах текущего pre-alpha это `loomrail-0.0.0.tgz`. Глобальная установка не добавит созданные npm файлы в checkout
-Loomrail.
-
-В macOS:
-
-```bash
-npm install -g "/absolute/path/to/loomrail/dist-release/loomrail-0.0.0.tgz"
+npm install -g loomrail@next
 loomrail
 ```
 
-В Windows PowerShell:
+Если не хотите добавлять глобальный бинарник, используйте локальную установку в проект:
 
-```powershell
-npm install -g "D:\path\to\loomrail\dist-release\loomrail-0.0.0.tgz"
-loomrail
+```bash
+npm install loomrail@next
+npx loomrail
 ```
+
+Реестр npm также показывает первую и пока единственную версию через обязательный metadata-тег `latest`. Оставляйте
+`next` или точную версию в командах установки, чтобы явно выбирать pre-alpha канал.
 
 Loomrail занимает свободный loopback-порт и открывает Workbench в браузере по умолчанию. Чтобы не открывать браузер
 автоматически:
@@ -262,7 +250,7 @@ Loomrail. Пока выбранный adapter не может стартоват
 
 ## Текущие ограничения pre-alpha
 
-- Пакет не опубликован, desktop installer отсутствует.
+- Пакет в npm имеет статус pre-alpha, desktop installer отсутствует.
 - Daemon работает только локально; remote и multi-user режимов нет.
 - На весь срок жизни daemon выбирается один provider.
 - Для Claude Code не проверен write path стадий Implementation и QA.
