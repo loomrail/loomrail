@@ -95,6 +95,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T21 | Client path expands a diff read or exhausts the daemon         | Medium   | authenticated route; canonical worktree boundary; literal Git pathspec plus exact name match; file-count and byte limits; summary debounce                                                   | see E1.5 change-visibility delta below                      |
 | T22 | Live provider bypasses typed evidence or owner acceptance      | High     | stage-specific strict result schema; daemon-owned provider attribution; Review/QA typed artifacts; domain rejects ordinary Acceptance completion                                             | see D2 live-route delta below                               |
 | T23 | Public landing leaks private data or executes third-party code | High     | static build from reviewed assets; no forms, analytics or external runtime resources; self-only CSP; pinned Pages actions; build and deploy permissions separated                            | landing public-contract test, public-tree scan and Pages CI |
+| T24 | Repository onboarding leaks data or overwrites owner policy    | High     | bounded allowlist scan; no source/env/lock contents; no command execution; untrusted provenance; explicit owner adoption; compare-and-set digest; atomic publication; durable recovery       | see B5+B1 Constitution delta below                          |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -600,6 +601,37 @@ workflow could ship browser code, and an accidentally selected asset could publi
   `pages: write` and OIDC `id-token: write`, and no repository or deployment secret enters the build;
 - the landing shows the exact public pre-alpha version and explicit capability limits. It links to the normative guide
   and example rather than inventing executable setup instructions of its own.
+
+### B5+B1 repository-onboarding and Constitution delta (T24)
+
+B5+B1 lets the daemon inspect an existing Project repository and, after a separate owner decision, publish
+`.loomrail/constitution.md`. This crosses two boundaries at once: untrusted repository text enters durable local
+state, and an approved state transition causes a write in the owner's repository. The combined threat is rated
+**High** because an over-broad scan could disclose secrets and a stale proposal could replace a policy file the owner
+changed after review.
+
+- `packages/project-constitution` is the one deep module that owns both boundaries. Its scanner considers only named
+  root metadata, CI workflows and bounded architecture documents; it reads at most 128 candidates, 512 KiB per file
+  and 2 MiB total, does not follow symlinks, never traverses a source tree, and records lockfiles by presence only;
+- `.env` and arbitrary source files are not candidates. Package scripts contribute validated names and constructed
+  package-manager argv only: their command bodies never enter a Proposal, Event, SQLite row, response or log, and no
+  discovered command is executed;
+- every one of the seven proposed sections carries source provenance. Repository paths are labelled untrusted and
+  cannot override the trusted preset, product security invariants or the owner's approval gate;
+- scanning is read-only. `REQUEST_PROJECT_CONSTITUTION_ADOPTION` is a separate authenticated Origin+CSRF mutation;
+  the Constitution, audit Event and durable publication follow-up are committed in one SQLite transaction;
+- publication re-checks the canonical Git top level, refuses symlink/non-file targets, compares the current target
+  digest with the reviewed scan, writes a same-directory temporary file and renames it atomically. A changed target is
+  preserved and the publication becomes `FAILED` with a typed code;
+- startup drains pending publications. If the file landed before a crash but completion did not, its content digest
+  makes the retry idempotent; an older failed publication cannot be retried after a newer Constitution version exists.
+
+Verification: `packages/project-constitution/test/onboarding.integration.test.ts` covers symlink refusal, byte bounds,
+secret-script canaries, create/idempotent publication and compare-and-set preservation;
+`packages/persistence-sqlite/test/constitution-state.integration.test.ts` covers transactionality, command replay and
+restart recovery; `apps/daemon/test/constitution.integration.test.ts` covers the authenticated HTTP path, absence of
+`.env`, instruction and script-body canaries in the response, no write before owner adoption, and preservation of an
+owner edit made between scan and adoption.
 
 ### Provider CLI
 

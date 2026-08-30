@@ -24,6 +24,7 @@
     "@loomrail/contracts": "workspace:*",
     "@loomrail/domain": "workspace:*",
     "@loomrail/persistence-sqlite": "workspace:*",
+    "@loomrail/project-constitution": "workspace:*",
     "@loomrail/provider-claude-code": "workspace:*",
     "@loomrail/provider-codex": "workspace:*",
     "@loomrail/provider-core": "workspace:*",

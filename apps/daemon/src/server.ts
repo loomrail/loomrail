@@ -10,9 +10,11 @@ import helmet from "@fastify/helmet";
 import fastifyStatic from "@fastify/static";
 import {
   answerHumanRequestRequestSchema,
+  adoptProjectConstitutionRequestSchema,
   apiErrorResponseSchema,
   budgetOverrideRequestSchema,
   correlationIdSchema,
+  constitutionPresetsResponseSchema,
   createWorkItemRequestSchema,
   daemonStatusResponseSchema,
   eventPageDirectionSchema,
@@ -23,12 +25,15 @@ import {
   moveWorkItemRequestSchema,
   opaqueIdSchema,
   pipelineControlRequestSchema,
+  projectConstitutionSnapshotSchema,
   projectsResponseSchema,
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
   registerFixtureProjectRequestSchema,
   registerRepositoryProjectRequestSchema,
   resolveAcceptanceRequestSchema,
+  retryProjectConstitutionPublicationRequestSchema,
+  scanProjectConstitutionRequestSchema,
   sessionExchangeRequestSchema,
   sessionExchangeResponseSchema,
   startMockPipelineRequestSchema,
@@ -45,13 +50,26 @@ import {
   type WorkflowStage,
   type WorkItemWorkspace,
 } from "@loomrail/contracts";
-import { adapterWorksInWorkspace, WorkflowDomainError, WorkItemDomainError } from "@loomrail/domain";
+import {
+  adapterWorksInWorkspace,
+  ConstitutionDomainError,
+  WorkflowDomainError,
+  WorkItemDomainError,
+} from "@loomrail/domain";
 import {
   openLocalState,
   StateStoreError,
   type OrphanProcessEvent,
   type OrphanWorkspaceEvent,
 } from "@loomrail/persistence-sqlite";
+import {
+  constitutionPresets,
+  ConstitutionPublicationError,
+  proposeProjectConstitution,
+  publishProjectConstitution,
+  RepositoryScanError,
+  scanProjectRepository,
+} from "@loomrail/project-constitution";
 import type { ProviderAdapter, ProviderId } from "@loomrail/provider-core";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import {
@@ -149,6 +167,7 @@ export type StartDaemonOptions = {
   // seconds -- which is why the chain from the timer through `tick()` to the session recheck was
   // covered only in its middle link. Production always gets HEARTBEAT_INTERVAL_MS.
   heartbeatIntervalMs?: number;
+  constitutionPublisher?: typeof publishProjectConstitution;
 };
 
 // One message per ending, so a reader grepping the daemon log finds all three. `FAILED` is the
@@ -346,6 +365,22 @@ const sendOperationError = (
     const status = error.code === "FIXTURE_MATERIALISATION_FAILED" ? 500 : 400;
     return reply.code(status).send(createError(error.code, error.message, correlationId));
   }
+  if (error instanceof RepositoryScanError) {
+    return reply.code(409).send(createError(error.code, error.message, correlationId));
+  }
+  if (error instanceof ConstitutionPublicationError) {
+    return reply.code(409).send(createError(error.code, error.message, correlationId));
+  }
+  if (error instanceof ConstitutionDomainError) {
+    const status =
+      error.code === "PROJECT_NOT_FOUND" ||
+      error.code === "PROPOSAL_NOT_FOUND" ||
+      error.code === "CONSTITUTION_NOT_FOUND" ||
+      error.code === "PUBLICATION_NOT_FOUND"
+        ? 404
+        : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
   // Spec §7's three path rows, including the two the last fix round added ("path names no file"
   // and "path the filesystem cannot resolve"). Each is raised by @loomrail/workspace's own
   // boundary and only MAPPED here: the reading is where a path is resolved, and a second check at
@@ -520,6 +555,87 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     eventStreams.publish,
     app.log,
   );
+
+  const constitutionPublisher = options.constitutionPublisher ?? publishProjectConstitution;
+  const publicationCommandId = (
+    action: "complete" | "fail",
+    publicationId: string,
+    version: number,
+  ): string =>
+    `constitution-${action}-${createHash("sha256")
+      .update(`${publicationId}\0${version.toString()}`)
+      .digest("hex")}`;
+
+  const drainConstitutionPublications = async (): Promise<void> => {
+    const result = localState.query({ type: "LIST_PENDING_CONSTITUTION_PUBLICATIONS" });
+    if (result.type !== "CONSTITUTION_PUBLICATIONS") return;
+    for (const bundle of result.publications) {
+      const projectResult = localState.query({
+        type: "GET_PROJECT",
+        projectId: bundle.publication.projectId,
+      });
+      const project = projectResult.type === "PROJECT" ? projectResult.project : null;
+      try {
+        if (project === null) {
+          throw new ConstitutionPublicationError(
+            "REPOSITORY_UNAVAILABLE",
+            "The Project repository is no longer available",
+          );
+        }
+        await constitutionPublisher({
+          repositoryPath: project.repositoryPath,
+          expectedTargetDigest: bundle.publication.expectedTargetDigest,
+          renderedMarkdown: bundle.constitution.renderedMarkdown,
+          contentDigest: bundle.constitution.contentDigest,
+        });
+        localState.execute({
+          schemaVersion: 1,
+          commandId: publicationCommandId("complete", bundle.publication.id, bundle.publication.version),
+          correlationId: `constitution-publication-${bundle.publication.id}`,
+          actor: { type: "SYSTEM", id: "constitution-publisher" },
+          type: "COMPLETE_PROJECT_CONSTITUTION_PUBLICATION",
+          payload: {
+            publicationId: bundle.publication.id,
+            expectedVersion: bundle.publication.version,
+          },
+        });
+      } catch (error: unknown) {
+        const errorCode =
+          error instanceof ConstitutionPublicationError ? error.code : "CONSTITUTION_WRITE_FAILED";
+        app.log.error(
+          {
+            publicationId: bundle.publication.id,
+            projectId: bundle.publication.projectId,
+            errorCode,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+          },
+          "Constitution publication failed",
+        );
+        try {
+          localState.execute({
+            schemaVersion: 1,
+            commandId: publicationCommandId("fail", bundle.publication.id, bundle.publication.version),
+            correlationId: `constitution-publication-${bundle.publication.id}`,
+            actor: { type: "SYSTEM", id: "constitution-publisher" },
+            type: "FAIL_PROJECT_CONSTITUTION_PUBLICATION",
+            payload: {
+              publicationId: bundle.publication.id,
+              expectedVersion: bundle.publication.version,
+              errorCode,
+            },
+          });
+        } catch (recordError: unknown) {
+          app.log.error(
+            {
+              publicationId: bundle.publication.id,
+              errorName: recordError instanceof Error ? recordError.name : "UnknownError",
+            },
+            "Constitution publication failure could not be recorded",
+          );
+        }
+      }
+    }
+  };
 
   /**
    * Connections a client opened without ever sending a request on them.
@@ -934,6 +1050,133 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             repositoryPath: repository.repositoryPath,
           },
         });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/constitution-presets", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      return constitutionPresetsResponseSchema.parse({ schemaVersion: 1, presets: constitutionPresets });
+    });
+
+    app.get("/api/v1/projects/:projectId/constitution", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const project = localState.query({ type: "GET_PROJECT", projectId: params.projectId });
+        if (project.type !== "PROJECT" || project.project === null) {
+          throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+        const result = localState.query({
+          type: "GET_PROJECT_CONSTITUTION_SNAPSHOT",
+          projectId: params.projectId,
+        });
+        if (result.type !== "PROJECT_CONSTITUTION_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The Constitution snapshot is unavailable");
+        }
+        return projectConstitutionSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/constitution/scan", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = scanProjectConstitutionRequestSchema.parse(request.body);
+        const projectResult = localState.query({ type: "GET_PROJECT", projectId: params.projectId });
+        const project = projectResult.type === "PROJECT" ? projectResult.project : null;
+        if (project === null) {
+          throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+        const scan = await scanProjectRepository(project.repositoryPath);
+        const proposal = proposeProjectConstitution({
+          projectName: project.name,
+          scan,
+          ...(body.presetId === undefined ? {} : { presetId: body.presetId }),
+        });
+        return localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "PROPOSE_PROJECT_CONSTITUTION",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            ...proposal,
+          },
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/constitution/adopt", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = adoptProjectConstitutionRequestSchema.parse(request.body);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "REQUEST_PROJECT_CONSTITUTION_ADOPTION",
+          payload: {
+            projectId: params.projectId,
+            proposalId: body.proposalId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            expectedProposalVersion: body.expectedProposalVersion,
+          },
+        });
+        await drainConstitutionPublications();
+        const result = localState.query({
+          type: "GET_PROJECT_CONSTITUTION_SNAPSHOT",
+          projectId: params.projectId,
+        });
+        if (result.type !== "PROJECT_CONSTITUTION_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The Constitution snapshot is unavailable");
+        }
+        return projectConstitutionSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/constitution/publication/retry", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = retryProjectConstitutionPublicationRequestSchema.parse(request.body);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "RETRY_PROJECT_CONSTITUTION_PUBLICATION",
+          payload: {
+            projectId: params.projectId,
+            publicationId: body.publicationId,
+            expectedVersion: body.expectedVersion,
+          },
+        });
+        await drainConstitutionPublications();
+        const result = localState.query({
+          type: "GET_PROJECT_CONSTITUTION_SNAPSHOT",
+          projectId: params.projectId,
+        });
+        if (result.type !== "PROJECT_CONSTITUTION_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The Constitution snapshot is unavailable");
+        }
+        return projectConstitutionSnapshotSchema.parse(result.snapshot);
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }
@@ -1725,6 +1968,8 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         return reply.sendFile("index.html");
       });
     }
+
+    await drainConstitutionPublications();
 
     // Said out loud at startup, both of them. An unrecognised value falls back to the mock rather
     // than stopping the daemon (a typo must not), but the mock then completes stages successfully:

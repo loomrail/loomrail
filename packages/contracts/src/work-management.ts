@@ -75,6 +75,22 @@ import {
   workspaceLeaseAcquiredResultSchema,
   workspaceLeaseReleasedResultSchema,
 } from "./workspace.js";
+import {
+  completeProjectConstitutionPublicationCommandSchema,
+  failProjectConstitutionPublicationCommandSchema,
+  projectConstitutionActivatedEventSchema,
+  projectConstitutionActivatedResultSchema,
+  projectConstitutionProposedEventSchema,
+  projectConstitutionProposedResultSchema,
+  projectConstitutionPublicationFailedEventSchema,
+  projectConstitutionPublicationFailedResultSchema,
+  projectConstitutionPublicationRequestedEventSchema,
+  projectConstitutionPublicationRequestedResultSchema,
+  projectConstitutionPublicationRetriedResultSchema,
+  proposeProjectConstitutionCommandSchema,
+  requestProjectConstitutionAdoptionCommandSchema,
+  retryProjectConstitutionPublicationCommandSchema,
+} from "./constitution.js";
 
 export const fixtureProjectIdSchema = z.enum(["web-app-a", "api-service-b"]);
 export const projectStatusSchema = z.enum(["ACTIVE", "ARCHIVED"]);
@@ -234,6 +250,10 @@ export const workItemStateChangedEventSchema = eventBaseSchema.extend({
 
 export const domainEventSchema = z.discriminatedUnion("type", [
   projectRegisteredEventSchema,
+  projectConstitutionProposedEventSchema,
+  projectConstitutionPublicationRequestedEventSchema,
+  projectConstitutionActivatedEventSchema,
+  projectConstitutionPublicationFailedEventSchema,
   workItemCreatedEventSchema,
   workItemUpdatedEventSchema,
   workItemStateChangedEventSchema,
@@ -379,6 +399,11 @@ export const moveWorkItemCommandSchema = commandBaseSchema.extend({
 export const stateCommandSchema = z.discriminatedUnion("type", [
   registerProjectCommandSchema,
   repointFixtureProjectCommandSchema,
+  proposeProjectConstitutionCommandSchema,
+  requestProjectConstitutionAdoptionCommandSchema,
+  completeProjectConstitutionPublicationCommandSchema,
+  failProjectConstitutionPublicationCommandSchema,
+  retryProjectConstitutionPublicationCommandSchema,
   createWorkItemCommandSchema,
   updateWorkItemCommandSchema,
   moveWorkItemCommandSchema,
@@ -439,6 +464,11 @@ export const workItemMovedResultSchema = commandResultBaseSchema.extend({
 
 export const stateCommandResultSchema = z.discriminatedUnion("type", [
   projectRegisteredResultSchema,
+  projectConstitutionProposedResultSchema,
+  projectConstitutionPublicationRequestedResultSchema,
+  projectConstitutionActivatedResultSchema,
+  projectConstitutionPublicationFailedResultSchema,
+  projectConstitutionPublicationRetriedResultSchema,
   workItemCreatedResultSchema,
   workItemUpdatedResultSchema,
   workItemMovedResultSchema,

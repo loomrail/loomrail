@@ -1,7 +1,13 @@
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
 import { useEffect, useId, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
-import { prioritySchema, type ListedProject, type WorkItem } from "@loomrail/contracts";
+import {
+  constitutionPresetIdSchema,
+  prioritySchema,
+  type ConstitutionPresetId,
+  type ListedProject,
+  type WorkItem,
+} from "@loomrail/contracts";
 import {
   ActionMenu,
   Button,
@@ -27,9 +33,14 @@ import { applyDensityPreference, readDensityPreference, type DensityPreference }
 import { applyThemePreference, readThemePreference, type ThemePreference } from "../theme";
 import {
   useCreateWorkItem,
+  useAdoptProjectConstitution,
+  useConstitutionPresets,
+  useProjectConstitution,
   useProjectHumanRequests,
   useRegisterRepositoryProject,
   useRepairFixtureProject,
+  useRetryProjectConstitutionPublication,
+  useScanProjectConstitution,
   useWorkspace,
 } from "../workspace";
 
@@ -340,6 +351,162 @@ const RegisterRepositoryField = (): React.JSX.Element => {
   );
 };
 
+type PresetSelection = "AUTO" | ConstitutionPresetId;
+
+const ProjectConstitutionPanel = ({ project }: { project: ListedProject }): React.JSX.Element => {
+  const { t } = useI18n();
+  const presetQuery = useConstitutionPresets();
+  const snapshotQuery = useProjectConstitution(project.id);
+  const scanMutation = useScanProjectConstitution();
+  const adoptMutation = useAdoptProjectConstitution();
+  const retryMutation = useRetryProjectConstitutionPublication();
+  const [preset, setPreset] = useState<PresetSelection>("AUTO");
+  const snapshot = snapshotQuery.data;
+  const proposal = snapshot?.latestProposal ?? null;
+  const publication = snapshot?.publication ?? null;
+  const active = snapshot?.activeConstitution ?? null;
+  const blocked = proposal?.scan.targetConstitution.state === "BLOCKED";
+  const operationError =
+    scanMutation.error instanceof Error
+      ? scanMutation.error
+      : adoptMutation.error instanceof Error
+        ? adoptMutation.error
+        : retryMutation.error instanceof Error
+          ? retryMutation.error
+          : snapshotQuery.error instanceof Error
+            ? snapshotQuery.error
+            : null;
+
+  return (
+    <div className="constitution-settings">
+      <div className="constitution-settings__heading">
+        <div>
+          <h4>{t("settings.constitution.title")}</h4>
+          <p>{t("settings.constitution.description")}</p>
+        </div>
+        {active === null ? null : (
+          <span className="constitution-settings__state">
+            <Icon name="check" size={13} />
+            {t("settings.constitution.activeVersion", { ordinal: active.ordinal })}
+          </span>
+        )}
+      </div>
+
+      <div className="constitution-settings__scan">
+        <Field htmlFor="constitution-preset" label={t("settings.constitution.preset")}>
+          <SelectControl
+            ariaLabel={t("settings.constitution.preset")}
+            disabled={presetQuery.isPending || project.repositoryStatus !== "READY"}
+            id="constitution-preset"
+            onValueChange={(value) => {
+              setPreset(value === "AUTO" ? "AUTO" : constitutionPresetIdSchema.parse(value));
+            }}
+            options={[
+              { label: t("settings.constitution.presetAuto"), value: "AUTO" },
+              ...(presetQuery.data?.presets.map((candidate) => ({
+                description: candidate.description,
+                label: candidate.name,
+                value: candidate.id,
+              })) ?? []),
+            ]}
+            value={preset}
+          />
+        </Field>
+        <Button
+          disabled={project.repositoryStatus !== "READY"}
+          loading={scanMutation.isPending}
+          onClick={() => {
+            scanMutation.mutate({
+              project,
+              ...(preset === "AUTO" ? {} : { presetId: preset }),
+            });
+          }}
+        >
+          {proposal === null ? t("settings.constitution.scan") : t("settings.constitution.rescan")}
+        </Button>
+      </div>
+
+      {proposal === null ? (
+        <p className="settings__note">{t("settings.constitution.empty")}</p>
+      ) : (
+        <div className="constitution-proposal">
+          <div className="constitution-proposal__summary">
+            <strong>{t("settings.constitution.proposal")}</strong>
+            <span>
+              {t("settings.constitution.sourceSummary", {
+                files: proposal.scan.files.length,
+                preset: proposal.presetId,
+              })}
+            </span>
+          </div>
+          <p className="settings__note">{t("settings.constitution.reviewHint")}</p>
+          {proposal.scan.warnings.length === 0 ? null : (
+            <div className="constitution-proposal__warnings" role="note">
+              <strong>{t("settings.constitution.warnings")}</strong>
+              <ul>
+                {proposal.scan.warnings.map((warning, index) => (
+                  <li key={`${warning.code}-${index.toString()}`}>{warning.message}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="constitution-proposal__sections">
+            {proposal.sections.map((section) => (
+              <details key={section.key}>
+                <summary>{section.title}</summary>
+                <pre>{section.body}</pre>
+                <small>
+                  {t("settings.constitution.sources")}:{" "}
+                  {section.sources.map((source) => source.reference).join(", ")}
+                </small>
+              </details>
+            ))}
+          </div>
+          {blocked ? (
+            <p className="constitution-settings__error" role="alert">
+              {t("settings.constitution.targetBlocked")}
+            </p>
+          ) : null}
+          {proposal.status === "PROPOSED" ? (
+            <Button
+              disabled={blocked}
+              loading={adoptMutation.isPending}
+              onClick={() => {
+                adoptMutation.mutate({ project, proposal });
+              }}
+              variant="primary"
+            >
+              {active === null ? t("settings.constitution.adopt") : t("settings.constitution.replace")}
+            </Button>
+          ) : null}
+        </div>
+      )}
+
+      {publication?.status === "FAILED" ? (
+        <div className="constitution-settings__failure" role="alert">
+          <div>
+            <strong>{t("settings.constitution.failed")}</strong>
+            <span>{publication.lastErrorCode ?? t("error.unknown")}</span>
+          </div>
+          <Button
+            loading={retryMutation.isPending}
+            onClick={() => {
+              retryMutation.mutate({ projectId: project.id, publication });
+            }}
+          >
+            {t("settings.constitution.retry")}
+          </Button>
+        </div>
+      ) : null}
+      {operationError === null ? null : (
+        <p className="constitution-settings__error" role="alert">
+          {operationError.message}
+        </p>
+      )}
+    </div>
+  );
+};
+
 /**
  * Gathers the preferences that belong to this browser.
  *
@@ -457,6 +624,7 @@ const SettingsDialog = ({ onOpenChange, open }: SettingsDialogProps): React.JSX.
             <p className="settings__note">{t("project.none")}</p>
           )}
           <RegisterRepositoryField />
+          {selectedProject === null ? null : <ProjectConstitutionPanel project={selectedProject} />}
         </section>
       </div>
     </DialogSurface>

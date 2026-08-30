@@ -78,6 +78,9 @@ importers:
       '@loomrail/persistence-sqlite':
         specifier: workspace:*
         version: link:../../packages/persistence-sqlite
+      '@loomrail/project-constitution':
+        specifier: workspace:*
+        version: link:../../packages/project-constitution
       '@loomrail/provider-claude-code':
         specifier: workspace:*
         version: link:../../packages/provider-claude-code
@@ -203,6 +206,15 @@ importers:
       zod:
         specifier: ^4.0.0
         version: 4.4.3
+
+  packages/project-constitution:
+    dependencies:
+      '@loomrail/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@loomrail/workspace':
+        specifier: workspace:*
+        version: link:../workspace
 
   packages/provider-claude-code:
     dependencies:

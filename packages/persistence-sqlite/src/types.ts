@@ -1,6 +1,8 @@
 import type { ContextSources } from "@loomrail/context-assembly";
 import type {
   Checkpoint,
+  ConstitutionProposal,
+  ConstitutionPublication,
   ContextPackRecipe,
   ContextWindowUsage,
   DomainEvent,
@@ -8,6 +10,8 @@ import type {
   HumanRequest,
   HumanRequestStatus,
   Project,
+  ProjectConstitutionSnapshot,
+  ProjectConstitutionVersion,
   ProviderSession,
   StateCommand,
   StateCommandResult,
@@ -72,6 +76,8 @@ export class StateStoreError extends Error {
 export type StateQuery =
   | { type: "LIST_PROJECTS" }
   | { type: "GET_PROJECT"; projectId: string }
+  | { type: "GET_PROJECT_CONSTITUTION_SNAPSHOT"; projectId: string }
+  | { type: "LIST_PENDING_CONSTITUTION_PUBLICATIONS" }
   | { type: "GET_WORK_ITEM"; workItemId: string }
   | { type: "GET_WORKFLOW_SNAPSHOT"; workItemId: string }
   | {
@@ -118,6 +124,15 @@ export type StateQuery =
 export type StateQueryResult =
   | { type: "PROJECTS"; projects: Project[] }
   | { type: "PROJECT"; project: Project | null }
+  | { type: "PROJECT_CONSTITUTION_SNAPSHOT"; snapshot: ProjectConstitutionSnapshot }
+  | {
+      type: "CONSTITUTION_PUBLICATIONS";
+      publications: {
+        proposal: ConstitutionProposal;
+        constitution: ProjectConstitutionVersion;
+        publication: ConstitutionPublication;
+      }[];
+    }
   | { type: "WORK_ITEM"; workItem: WorkItem | null }
   | { type: "WORKFLOW_SNAPSHOT"; snapshot: WorkflowSnapshot }
   | { type: "HUMAN_REQUESTS"; humanRequests: HumanRequest[] }
@@ -175,7 +190,10 @@ export type LocalStateIdKind =
   | "providerSession"
   | "contextPackRecipe"
   | "checkpoint"
-  | "workItemWorkspace";
+  | "workItemWorkspace"
+  | "constitutionProposal"
+  | "projectConstitutionVersion"
+  | "constitutionPublication";
 
 /**
  * What startup reconciliation did about the process an orphaned ProviderSession left behind.

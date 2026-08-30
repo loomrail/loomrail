@@ -1,3 +1,5 @@
+export * from "./constitution.js";
+
 import type {
   CreateWorkItemCommand,
   MoveWorkItemCommand,

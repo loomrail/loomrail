@@ -74,6 +74,11 @@ const migrations: readonly Migration[] = [
     name: "live_evidence_provider",
     filename: "0014_live_evidence_provider.sql",
   },
+  {
+    version: 15,
+    name: "project_constitutions",
+    filename: "0015_project_constitutions.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

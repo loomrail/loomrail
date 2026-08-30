@@ -579,6 +579,37 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
       };
     case "PROJECT_REGISTERED":
       return { detail: event.data.project.name, icon: "projects", label: t("event.projectRegistered") };
+    case "PROJECT_CONSTITUTION_PROPOSED":
+      return {
+        detail: t("event.constitutionProposedDetail", { preset: event.data.proposal.presetId }),
+        icon: "settings",
+        label: t("event.constitutionProposed"),
+      };
+    case "PROJECT_CONSTITUTION_PUBLICATION_REQUESTED":
+      return {
+        detail: t("event.constitutionPublicationRequestedDetail", {
+          ordinal: event.data.constitution.ordinal,
+        }),
+        icon: "clock",
+        label: t("event.constitutionPublicationRequested"),
+        tone: "accent",
+      };
+    case "PROJECT_CONSTITUTION_ACTIVATED":
+      return {
+        detail: t("event.constitutionActivatedDetail", {
+          ordinal: event.data.constitution.ordinal,
+        }),
+        icon: "check",
+        label: t("event.constitutionActivated"),
+        tone: "success",
+      };
+    case "PROJECT_CONSTITUTION_PUBLICATION_FAILED":
+      return {
+        detail: event.data.publication.lastErrorCode ?? t("error.unknown"),
+        icon: "pause",
+        label: t("event.constitutionPublicationFailed"),
+        tone: "warning",
+      };
     case "PIPELINE_STARTED":
       return {
         detail: t("event.pipelineStartedDetail", {

@@ -10,6 +10,8 @@ import {
   acceptancePackageSchema,
   budgetPolicySchema,
   checkpointSchema,
+  constitutionProposalSchema,
+  constitutionPublicationSchema,
   contextPackRecipeSchema,
   contextWindowUsageSchema,
   decisionSchema,
@@ -22,6 +24,8 @@ import {
   opaqueIdSchema,
   pipelineRunSchema,
   projectSchema,
+  projectConstitutionSnapshotSchema,
+  projectConstitutionVersionSchema,
   providerSessionSchema,
   recoveryReportSchema,
   stageAttemptSchema,
@@ -38,6 +42,8 @@ import {
   type Actor,
   type AcceptancePackage,
   type Checkpoint,
+  type ConstitutionProposal,
+  type ConstitutionPublication,
   type ContextPackRecipe,
   type ContextWindowUsage,
   type Decision,
@@ -46,6 +52,7 @@ import {
   type HumanRequest,
   type PipelineRun,
   type Project,
+  type ProjectConstitutionVersion,
   type ProviderSession,
   type RecoveryReport,
   type RegisterProjectCommand,
@@ -61,11 +68,17 @@ import {
   type WorkItemWorkspace,
 } from "@loomrail/contracts";
 import {
+  ConstitutionDomainError,
   decideApproveBudgetOverride,
   decideAnswerHumanRequest,
   decideApplyProviderOutcome,
   decideCancelPipeline,
   decideContextWindowReported,
+  decideProjectConstitutionAdoption,
+  decideProjectConstitutionPublicationCompleted,
+  decideProjectConstitutionPublicationFailed,
+  decideProjectConstitutionPublicationRetry,
+  decideProjectConstitutionProposal,
   decideMarkWorkflowDispatchStarted,
   decidePausePipeline,
   decideRecoverInterruptedWorkflow,
@@ -79,6 +92,10 @@ import {
   WorkflowDomainError,
   WorkItemDomainError,
   type BudgetOverrideDecision,
+  type ConstitutionActivatedIntent,
+  type ConstitutionProposedIntent,
+  type ConstitutionPublicationFailedIntent,
+  type ConstitutionPublicationRequestedIntent,
   type AcceptanceResolutionDecision,
   type AnswerHumanRequestDecision,
   type ApplyProviderOutcomeDecision,
@@ -158,6 +175,58 @@ const workItemWorkspaceRowSchema = z.object({
   lease_holder: z.string().nullable(),
   created_at: z.string(),
   version: z.number().int(),
+});
+
+const constitutionProposalRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  project_version: z.number().int(),
+  status: z.string(),
+  preset_id: z.string(),
+  preset_version: z.number().int(),
+  recommended_preset_id: z.string(),
+  scan_json: z.string(),
+  sections_json: z.string(),
+  rendered_markdown: z.string(),
+  content_digest: z.string(),
+  version: z.number().int(),
+  created_at: z.string(),
+  adopted_at: z.string().nullable(),
+});
+
+const projectConstitutionVersionRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  proposal_id: z.string(),
+  ordinal: z.number().int(),
+  preset_id: z.string(),
+  preset_version: z.number().int(),
+  source_digest: z.string(),
+  content_digest: z.string(),
+  rendered_markdown: z.string(),
+  status: z.string(),
+  version: z.number().int(),
+  created_at: z.string(),
+  activated_at: z.string().nullable(),
+});
+
+const constitutionPublicationRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  constitution_version_id: z.string(),
+  target_path: z.string(),
+  expected_target_digest: z.string().nullable(),
+  content_digest: z.string(),
+  status: z.string(),
+  attempts: z.number().int(),
+  last_error_code: z.string().nullable(),
+  version: z.number().int(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  applied_at: z.string().nullable(),
 });
 
 const eventRowSchema = z.object({
@@ -404,6 +473,8 @@ const workflowDispatchRowSchema = z.object({
 const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LIST_PROJECTS") }).strict(),
   z.object({ type: z.literal("GET_PROJECT"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_PROJECT_CONSTITUTION_SNAPSHOT"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("LIST_PENDING_CONSTITUTION_PUBLICATIONS") }).strict(),
   z.object({ type: z.literal("GET_WORK_ITEM"), workItemId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_WORKFLOW_SNAPSHOT"), workItemId: opaqueIdSchema }).strict(),
   z
@@ -475,6 +546,67 @@ const projectFromRow = (value: unknown): Project => {
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  });
+};
+
+const constitutionProposalFromRow = (value: unknown): ConstitutionProposal => {
+  const row = constitutionProposalRowSchema.parse(value);
+  return constitutionProposalSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    projectVersion: row.project_version,
+    status: row.status,
+    presetId: row.preset_id,
+    presetVersion: row.preset_version,
+    recommendedPresetId: row.recommended_preset_id,
+    scan: parseJson(row.scan_json),
+    sections: parseJson(row.sections_json),
+    renderedMarkdown: row.rendered_markdown,
+    contentDigest: row.content_digest,
+    version: row.version,
+    createdAt: row.created_at,
+    adoptedAt: row.adopted_at,
+  });
+};
+
+const projectConstitutionVersionFromRow = (value: unknown): ProjectConstitutionVersion => {
+  const row = projectConstitutionVersionRowSchema.parse(value);
+  return projectConstitutionVersionSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    proposalId: row.proposal_id,
+    ordinal: row.ordinal,
+    presetId: row.preset_id,
+    presetVersion: row.preset_version,
+    sourceDigest: row.source_digest,
+    contentDigest: row.content_digest,
+    renderedMarkdown: row.rendered_markdown,
+    status: row.status,
+    version: row.version,
+    createdAt: row.created_at,
+    activatedAt: row.activated_at,
+  });
+};
+
+const constitutionPublicationFromRow = (value: unknown): ConstitutionPublication => {
+  const row = constitutionPublicationRowSchema.parse(value);
+  return constitutionPublicationSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    constitutionVersionId: row.constitution_version_id,
+    targetPath: row.target_path,
+    expectedTargetDigest: row.expected_target_digest,
+    contentDigest: row.content_digest,
+    status: row.status,
+    attempts: row.attempts,
+    lastErrorCode: row.last_error_code,
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    appliedAt: row.applied_at,
   });
 };
 
@@ -1119,6 +1251,74 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       .run(DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACE_NAME, openedAt, openedAt);
 
     const selectProjectById = database.prepare("SELECT * FROM projects WHERE id = ?");
+    const selectConstitutionProposalById = database.prepare(
+      "SELECT * FROM constitution_proposals WHERE id = ?",
+    );
+    const selectLatestConstitutionProposal = database.prepare(
+      `SELECT * FROM constitution_proposals
+       WHERE project_id = ? ORDER BY rowid DESC LIMIT 1`,
+    );
+    const selectProjectConstitutionById = database.prepare(
+      "SELECT * FROM project_constitution_versions WHERE id = ?",
+    );
+    const selectActiveProjectConstitution = database.prepare(
+      `SELECT * FROM project_constitution_versions
+       WHERE project_id = ? AND status = 'ACTIVE' LIMIT 1`,
+    );
+    const selectPendingProjectConstitution = database.prepare(
+      `SELECT * FROM project_constitution_versions
+       WHERE project_id = ? AND status IN ('PUBLISHING', 'FAILED')
+       ORDER BY ordinal DESC LIMIT 1`,
+    );
+    const selectMaxProjectConstitutionOrdinal = database.prepare(
+      "SELECT COALESCE(MAX(ordinal), 0) AS max_ordinal FROM project_constitution_versions WHERE project_id = ?",
+    );
+    const selectConstitutionPublicationById = database.prepare(
+      "SELECT * FROM constitution_publications WHERE id = ?",
+    );
+    const selectLatestConstitutionPublication = database.prepare(
+      `SELECT publication.* FROM constitution_publications AS publication
+       INNER JOIN project_constitution_versions AS constitution
+         ON constitution.id = publication.constitution_version_id
+       WHERE publication.project_id = ?
+       ORDER BY constitution.ordinal DESC LIMIT 1`,
+    );
+    const selectPendingConstitutionPublications = database.prepare(
+      "SELECT * FROM constitution_publications WHERE status = 'PENDING' ORDER BY created_at, id",
+    );
+    const insertConstitutionProposal = database.prepare(
+      `INSERT INTO constitution_proposals (
+        id, schema_version, project_id, project_version, status, preset_id, preset_version,
+        recommended_preset_id, scan_json, sections_json, rendered_markdown, content_digest,
+        version, created_at, adopted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateConstitutionProposal = database.prepare(
+      `UPDATE constitution_proposals SET status = ?, version = ?, adopted_at = ?
+       WHERE id = ? AND version = ?`,
+    );
+    const insertProjectConstitutionVersion = database.prepare(
+      `INSERT INTO project_constitution_versions (
+        id, schema_version, project_id, proposal_id, ordinal, preset_id, preset_version,
+        source_digest, content_digest, rendered_markdown, status, version, created_at, activated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateProjectConstitutionVersion = database.prepare(
+      `UPDATE project_constitution_versions SET status = ?, version = ?, activated_at = ?
+       WHERE id = ? AND version = ?`,
+    );
+    const insertConstitutionPublication = database.prepare(
+      `INSERT INTO constitution_publications (
+        id, schema_version, project_id, constitution_version_id, target_path,
+        expected_target_digest, content_digest, status, attempts, last_error_code,
+        version, created_at, updated_at, applied_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateConstitutionPublication = database.prepare(
+      `UPDATE constitution_publications SET
+        status = ?, attempts = ?, last_error_code = ?, version = ?, updated_at = ?, applied_at = ?
+       WHERE id = ? AND version = ?`,
+    );
     const selectWorkItemById = database.prepare("SELECT * FROM work_items WHERE id = ?");
     // Migration 0011. Named `WorkItemWorkspace`, not `Workspace`, throughout this file to keep it
     // apart from the pre-existing `workspaces` table (DEFAULT_WORKSPACE_ID above) -- an unrelated,
@@ -1313,6 +1513,36 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const readProject = (projectId: string): Project | null => {
       const row = selectProjectById.get(projectId);
       return row === undefined ? null : projectFromRow(row);
+    };
+
+    const readConstitutionProposal = (proposalId: string): ConstitutionProposal | null => {
+      const row = selectConstitutionProposalById.get(proposalId);
+      return row === undefined ? null : constitutionProposalFromRow(row);
+    };
+
+    const readLatestConstitutionProposal = (projectId: string): ConstitutionProposal | null => {
+      const row = selectLatestConstitutionProposal.get(projectId);
+      return row === undefined ? null : constitutionProposalFromRow(row);
+    };
+
+    const readProjectConstitutionVersion = (id: string): ProjectConstitutionVersion | null => {
+      const row = selectProjectConstitutionById.get(id);
+      return row === undefined ? null : projectConstitutionVersionFromRow(row);
+    };
+
+    const readActiveProjectConstitution = (projectId: string): ProjectConstitutionVersion | null => {
+      const row = selectActiveProjectConstitution.get(projectId);
+      return row === undefined ? null : projectConstitutionVersionFromRow(row);
+    };
+
+    const readPendingProjectConstitution = (projectId: string): ProjectConstitutionVersion | null => {
+      const row = selectPendingProjectConstitution.get(projectId);
+      return row === undefined ? null : projectConstitutionVersionFromRow(row);
+    };
+
+    const readConstitutionPublication = (id: string): ConstitutionPublication | null => {
+      const row = selectConstitutionPublicationById.get(id);
+      return row === undefined ? null : constitutionPublicationFromRow(row);
     };
 
     const readWorkItemWorkspace = (id: string): WorkItemWorkspace | null => {
@@ -1641,6 +1871,118 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       });
     };
 
+    const insertProposal = (proposal: ConstitutionProposal): void => {
+      insertConstitutionProposal.run(
+        proposal.id,
+        proposal.schemaVersion,
+        proposal.projectId,
+        proposal.projectVersion,
+        proposal.status,
+        proposal.presetId,
+        proposal.presetVersion,
+        proposal.recommendedPresetId,
+        JSON.stringify(proposal.scan),
+        JSON.stringify(proposal.sections),
+        proposal.renderedMarkdown,
+        proposal.contentDigest,
+        proposal.version,
+        proposal.createdAt,
+        proposal.adoptedAt,
+      );
+    };
+
+    const updateProposal = (proposal: ConstitutionProposal, expectedVersion: number): void => {
+      const result = updateConstitutionProposal.run(
+        proposal.status,
+        proposal.version,
+        proposal.adoptedAt,
+        proposal.id,
+        expectedVersion,
+      );
+      if (result.changes !== 1) {
+        throw new ConstitutionDomainError(
+          "PROPOSAL_VERSION_CONFLICT",
+          "The Constitution Proposal changed while the command was applied",
+        );
+      }
+    };
+
+    const insertConstitutionVersion = (constitution: ProjectConstitutionVersion): void => {
+      insertProjectConstitutionVersion.run(
+        constitution.id,
+        constitution.schemaVersion,
+        constitution.projectId,
+        constitution.proposalId,
+        constitution.ordinal,
+        constitution.presetId,
+        constitution.presetVersion,
+        constitution.sourceDigest,
+        constitution.contentDigest,
+        constitution.renderedMarkdown,
+        constitution.status,
+        constitution.version,
+        constitution.createdAt,
+        constitution.activatedAt,
+      );
+    };
+
+    const updateConstitutionVersion = (
+      constitution: ProjectConstitutionVersion,
+      expectedVersion: number,
+    ): void => {
+      const result = updateProjectConstitutionVersion.run(
+        constitution.status,
+        constitution.version,
+        constitution.activatedAt,
+        constitution.id,
+        expectedVersion,
+      );
+      if (result.changes !== 1) {
+        throw new ConstitutionDomainError(
+          "CONSTITUTION_STATUS_INVALID",
+          "The Constitution version changed while the command was applied",
+        );
+      }
+    };
+
+    const insertPublication = (publication: ConstitutionPublication): void => {
+      insertConstitutionPublication.run(
+        publication.id,
+        publication.schemaVersion,
+        publication.projectId,
+        publication.constitutionVersionId,
+        publication.targetPath,
+        publication.expectedTargetDigest,
+        publication.contentDigest,
+        publication.status,
+        publication.attempts,
+        publication.lastErrorCode,
+        publication.version,
+        publication.createdAt,
+        publication.updatedAt,
+        publication.appliedAt,
+      );
+    };
+
+    const updatePublication = (publication: ConstitutionPublication, expectedVersion: number): void => {
+      const result = updateConstitutionPublication.run(
+        publication.status,
+        publication.attempts,
+        publication.lastErrorCode,
+        publication.version,
+        publication.updatedAt,
+        publication.appliedAt,
+        publication.id,
+        expectedVersion,
+      );
+      if (result.changes !== 1) {
+        throw new ConstitutionDomainError(
+          "PUBLICATION_VERSION_CONFLICT",
+          "The Constitution publication changed while the command was applied",
+        );
+      }
+    };
+
     const appendEvent = (
       intent: WorkItemEventIntent,
       metadata: {
@@ -1716,6 +2058,50 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         occurredAt,
         correlationId: command.correlationId,
         data,
+      });
+    };
+
+    type ConstitutionEventIntent =
+      | ConstitutionProposedIntent
+      | ConstitutionPublicationRequestedIntent
+      | ConstitutionActivatedIntent
+      | ConstitutionPublicationFailedIntent;
+
+    const appendConstitutionEvent = (
+      intent: ConstitutionEventIntent,
+      metadata: {
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "PROJECT",
+        metadata.projectId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "PROJECT",
+        aggregateId: metadata.projectId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
       });
     };
 
@@ -2486,6 +2872,173 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           type: "PROJECT_REGISTERED",
           replayed: false,
           project: repointed,
+          event,
+        });
+      }
+
+      if (command.type === "PROPOSE_PROJECT_CONSTITUTION") {
+        const project = readProject(command.payload.projectId);
+        const decision = decideProjectConstitutionProposal(command, {
+          now: occurredAt,
+          newProposalId: createId("constitutionProposal"),
+          ...(project === null ? {} : { project }),
+        });
+        insertProposal(decision.proposal);
+        const event = appendConstitutionEvent(decision.event, {
+          projectId: decision.proposal.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_CONSTITUTION_PROPOSED",
+          replayed: false,
+          proposal: decision.proposal,
+          event,
+        });
+      }
+
+      if (command.type === "REQUEST_PROJECT_CONSTITUTION_ADOPTION") {
+        const ordinalRow = maxOrdinalRowSchema.parse(
+          selectMaxProjectConstitutionOrdinal.get(command.payload.projectId),
+        );
+        const currentProposal = readConstitutionProposal(command.payload.proposalId);
+        const project = readProject(command.payload.projectId);
+        const pendingConstitution = readPendingProjectConstitution(command.payload.projectId);
+        const decision = decideProjectConstitutionAdoption(command, {
+          now: occurredAt,
+          newConstitutionId: createId("projectConstitutionVersion"),
+          newPublicationId: createId("constitutionPublication"),
+          nextOrdinal: ordinalRow.max_ordinal + 1,
+          ...(project === null ? {} : { project }),
+          ...(currentProposal === null ? {} : { proposal: currentProposal }),
+          ...(pendingConstitution === null ? {} : { pendingConstitution }),
+        });
+        updateProposal(decision.proposal, currentProposal?.version ?? 0);
+        insertConstitutionVersion(decision.constitution);
+        insertPublication(decision.publication);
+        const event = appendConstitutionEvent(decision.event, {
+          projectId: decision.proposal.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_CONSTITUTION_PUBLICATION_REQUESTED",
+          replayed: false,
+          proposal: decision.proposal,
+          constitution: decision.constitution,
+          publication: decision.publication,
+          event,
+        });
+      }
+
+      if (command.type === "COMPLETE_PROJECT_CONSTITUTION_PUBLICATION") {
+        const currentPublication = readConstitutionPublication(command.payload.publicationId);
+        const currentConstitution = currentPublication
+          ? readProjectConstitutionVersion(currentPublication.constitutionVersionId)
+          : null;
+        const currentProposal = currentConstitution
+          ? readConstitutionProposal(currentConstitution.proposalId)
+          : null;
+        const activeConstitution = currentPublication
+          ? readActiveProjectConstitution(currentPublication.projectId)
+          : null;
+        const decision = decideProjectConstitutionPublicationCompleted(command, {
+          now: occurredAt,
+          ...(currentPublication === null ? {} : { publication: currentPublication }),
+          ...(currentConstitution === null ? {} : { constitution: currentConstitution }),
+          ...(currentProposal === null ? {} : { proposal: currentProposal }),
+          ...(activeConstitution === null ? {} : { activeConstitution }),
+        });
+        if (decision.supersededConstitution) {
+          updateConstitutionVersion(
+            decision.supersededConstitution,
+            decision.supersededConstitution.version - 1,
+          );
+        }
+        updateProposal(decision.proposal, currentProposal?.version ?? 0);
+        updateConstitutionVersion(decision.constitution, currentConstitution?.version ?? 0);
+        updatePublication(decision.publication, currentPublication?.version ?? 0);
+        const event = appendConstitutionEvent(decision.event, {
+          projectId: decision.publication.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_CONSTITUTION_ACTIVATED",
+          replayed: false,
+          proposal: decision.proposal,
+          constitution: decision.constitution,
+          publication: decision.publication,
+          event,
+        });
+      }
+
+      if (command.type === "FAIL_PROJECT_CONSTITUTION_PUBLICATION") {
+        const currentPublication = readConstitutionPublication(command.payload.publicationId);
+        const currentConstitution = currentPublication
+          ? readProjectConstitutionVersion(currentPublication.constitutionVersionId)
+          : null;
+        const decision = decideProjectConstitutionPublicationFailed(command, {
+          now: occurredAt,
+          ...(currentPublication === null ? {} : { publication: currentPublication }),
+          ...(currentConstitution === null ? {} : { constitution: currentConstitution }),
+        });
+        updateConstitutionVersion(decision.constitution, currentConstitution?.version ?? 0);
+        updatePublication(decision.publication, currentPublication?.version ?? 0);
+        const event = appendConstitutionEvent(decision.event, {
+          projectId: decision.publication.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_CONSTITUTION_PUBLICATION_FAILED",
+          replayed: false,
+          constitution: decision.constitution,
+          publication: decision.publication,
+          event,
+        });
+      }
+
+      if (command.type === "RETRY_PROJECT_CONSTITUTION_PUBLICATION") {
+        const latestOrdinal = maxOrdinalRowSchema.parse(
+          selectMaxProjectConstitutionOrdinal.get(command.payload.projectId),
+        ).max_ordinal;
+        const currentPublication = readConstitutionPublication(command.payload.publicationId);
+        const currentConstitution = currentPublication
+          ? readProjectConstitutionVersion(currentPublication.constitutionVersionId)
+          : null;
+        const proposal = currentConstitution
+          ? readConstitutionProposal(currentConstitution.proposalId)
+          : null;
+        const decision = decideProjectConstitutionPublicationRetry(command, {
+          now: occurredAt,
+          latestConstitutionOrdinal: latestOrdinal,
+          ...(currentPublication === null ? {} : { publication: currentPublication }),
+          ...(currentConstitution === null ? {} : { constitution: currentConstitution }),
+          ...(proposal === null ? {} : { proposal }),
+        });
+        updateConstitutionVersion(decision.constitution, currentConstitution?.version ?? 0);
+        updatePublication(decision.publication, currentPublication?.version ?? 0);
+        const event = appendConstitutionEvent(decision.event, {
+          projectId: decision.publication.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_CONSTITUTION_PUBLICATION_RETRIED",
+          replayed: false,
+          constitution: decision.constitution,
+          publication: decision.publication,
           event,
         });
       }
@@ -3998,6 +4551,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       } catch (error: unknown) {
         if (transactionStarted) database.exec("ROLLBACK");
         if (
+          error instanceof ConstitutionDomainError ||
           error instanceof WorkItemDomainError ||
           error instanceof WorkflowDomainError ||
           error instanceof StateStoreError
@@ -4024,6 +4578,39 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           };
         case "GET_PROJECT":
           return { type: "PROJECT", project: readProject(queryValue.projectId) };
+        case "GET_PROJECT_CONSTITUTION_SNAPSHOT": {
+          if (!readProject(queryValue.projectId)) {
+            throw new ConstitutionDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+          }
+          const publicationRow = selectLatestConstitutionPublication.get(queryValue.projectId);
+          return {
+            type: "PROJECT_CONSTITUTION_SNAPSHOT",
+            snapshot: projectConstitutionSnapshotSchema.parse({
+              schemaVersion: 1,
+              latestProposal: readLatestConstitutionProposal(queryValue.projectId),
+              activeConstitution: readActiveProjectConstitution(queryValue.projectId),
+              pendingConstitution: readPendingProjectConstitution(queryValue.projectId),
+              publication:
+                publicationRow === undefined ? null : constitutionPublicationFromRow(publicationRow),
+            }),
+          };
+        }
+        case "LIST_PENDING_CONSTITUTION_PUBLICATIONS":
+          return {
+            type: "CONSTITUTION_PUBLICATIONS",
+            publications: selectPendingConstitutionPublications.all().map((row) => {
+              const publication = constitutionPublicationFromRow(row);
+              const constitution = readProjectConstitutionVersion(publication.constitutionVersionId);
+              const proposal = constitution ? readConstitutionProposal(constitution.proposalId) : null;
+              if (!constitution || !proposal) {
+                throw new StateStoreError(
+                  "PERSISTENCE_FAILURE",
+                  "A pending Constitution publication has incomplete durable state",
+                );
+              }
+              return { proposal, constitution, publication };
+            }),
+          };
         case "GET_WORK_ITEM":
           return { type: "WORK_ITEM", workItem: readWorkItem(queryValue.workItemId) };
         case "GET_WORKFLOW_SNAPSHOT":

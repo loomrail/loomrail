@@ -6,6 +6,9 @@ import type {
   AcceptanceAction,
   AcceptancePackage,
   HumanRequest,
+  ConstitutionPresetId,
+  ConstitutionProposal,
+  ConstitutionPublication,
   FixtureProjectId,
   HumanRequestAnswer,
   ListedProject,
@@ -16,15 +19,18 @@ import type {
 
 import {
   approveBudgetOverride,
+  adoptProjectConstitution,
   answerHumanRequest,
   controlPipeline,
   createWorkItem,
   getProviderCapabilities,
+  getProjectConstitution,
   getWorkItemChanges,
   getWorkItemFileDiff,
   getWorkItemWorkflow,
   getWorkItemWorkspace,
   listOpenHumanRequests,
+  listConstitutionPresets,
   listProjects,
   listProjectWorkItems,
   listProviderSessions,
@@ -32,8 +38,10 @@ import {
   moveWorkItem,
   registerFixtureProject,
   registerRepositoryProject,
+  retryProjectConstitutionPublication,
   resolveAcceptance,
   startMockPipeline,
+  scanProjectConstitution,
   updateWorkItem,
   type CreateWorkItemInput,
   type PipelineControlAction,
@@ -43,6 +51,8 @@ import { localConnectionQuery, type ConnectionResult } from "./session";
 import { useEventStream } from "./useEventStream";
 
 const projectsKey = ["projects"] as const;
+const constitutionPresetsKey = ["constitution-presets"] as const;
+const projectConstitutionKey = (projectId: string) => ["projects", projectId, "constitution"] as const;
 const projectWorkItemsKey = (projectId: string) => ["projects", projectId, "work-items"] as const;
 const workItemEventsKey = (projectId: string, workItemId: string) =>
   ["projects", projectId, "work-items", workItemId, "events"] as const;
@@ -310,6 +320,52 @@ export const useRegisterRepositoryProject = () => {
     mutationFn: (repositoryPath: string) => registerRepositoryProject(repositoryPath),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: projectsKey });
+    },
+  });
+};
+
+export const useConstitutionPresets = () =>
+  useQuery({ queryKey: constitutionPresetsKey, queryFn: listConstitutionPresets });
+
+export const useProjectConstitution = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: projectId ? projectConstitutionKey(projectId) : ["projects", "none", "constitution"],
+    queryFn: () => {
+      if (!projectId) throw new Error("A project is required to load its Constitution");
+      return getProjectConstitution(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+
+export const useScanProjectConstitution = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ presetId, project }: { presetId?: ConstitutionPresetId; project: ListedProject }) =>
+      scanProjectConstitution(project, presetId),
+    onSuccess: async (proposal) => {
+      await queryClient.invalidateQueries({ queryKey: projectConstitutionKey(proposal.projectId) });
+    },
+  });
+};
+
+export const useAdoptProjectConstitution = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ project, proposal }: { project: ListedProject; proposal: ConstitutionProposal }) =>
+      adoptProjectConstitution(project, proposal),
+    onSuccess: async (_, { project }) => {
+      await queryClient.invalidateQueries({ queryKey: projectConstitutionKey(project.id) });
+    },
+  });
+};
+
+export const useRetryProjectConstitutionPublication = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ projectId, publication }: { projectId: string; publication: ConstitutionPublication }) =>
+      retryProjectConstitutionPublication(projectId, publication),
+    onSuccess: async (_, { projectId }) => {
+      await queryClient.invalidateQueries({ queryKey: projectConstitutionKey(projectId) });
     },
   });
 };

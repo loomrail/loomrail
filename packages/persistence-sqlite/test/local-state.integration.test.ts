@@ -702,7 +702,7 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);

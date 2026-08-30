@@ -4,16 +4,61 @@
 [`PRODUCT-DECISIONS.ru.md`](../product/PRODUCT-DECISIONS.ru.md), а полная модель — в
 [`MASTER-PLAN.ru.md`](../product/MASTER-PLAN.ru.md).
 
-| Термин           | Значение                                                                                   | Не означает                                      |
-| ---------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------ |
-| WorkItem         | Задача пользователя с brief, критериями, work state и текущей workflow stage               | Чат или provider session                         |
-| PipelineRun      | Один запуск конкретной версии WorkflowTemplate для одного WorkItem                         | Отдельный агент                                  |
-| StageAttempt     | Повторяемая попытка одной workflow stage внутри PipelineRun                                | Колонка Kanban или work state                    |
-| WorkflowDispatch | Durable намерение запустить или возобновить StageAttempt                                   | Уже выполненный provider turn                    |
-| HumanRequest     | First-class запрос внимания с типом ответа, контекстом, последствиями и blocking semantics | Модалка, уведомление или канал передачи секретов |
-| Decision         | Неизменяемая запись принятого человеком ответа на HumanRequest                             | Свободный комментарий без workflow effect        |
-| Attention Inbox  | Проекция открытых HumanRequest, требующих внимания человека                                | Отдельный источник истины                        |
-| ProviderAdapter  | Capability-checked граница start/resume/interrupt/events/usage для конкретного provider    | Прямая shell-интеграция из браузера              |
+## Work orchestration
+
+**WorkItem**:
+Задача пользователя с brief, критериями, work state и текущей workflow stage.
+_Не означает_: чат или provider session.
+
+**PipelineRun**:
+Один запуск конкретной версии WorkflowTemplate для одного WorkItem.
+_Не означает_: отдельный агент.
+
+**StageAttempt**:
+Повторяемая попытка одной workflow stage внутри PipelineRun.
+_Не означает_: колонка Kanban или work state.
+
+**WorkflowDispatch**:
+Durable намерение запустить или возобновить StageAttempt.
+_Не означает_: уже выполненный provider turn.
+
+**HumanRequest**:
+First-class запрос внимания с типом ответа, контекстом, последствиями и blocking semantics.
+_Не означает_: модалка, уведомление или канал передачи секретов.
+
+**Decision**:
+Неизменяемая запись принятого человеком ответа на HumanRequest.
+_Не означает_: свободный комментарий без workflow effect.
+
+**Attention Inbox**:
+Проекция открытых HumanRequest, требующих внимания человека.
+_Не означает_: отдельный источник истины.
+
+**ProviderAdapter**:
+Capability-checked граница start/resume/interrupt/events/usage для конкретного provider.
+_Не означает_: прямая shell-интеграция из браузера.
+
+## Project rules
+
+**Repository Scan**:
+Ограниченное наблюдение известных файлов и структуры зарегистрированного репозитория.
+_Не означает_: инструкции, разрешение исполнить найденную команду или полный индекс исходного кода.
+
+**Constitution Preset**:
+Встроенный versioned baseline доверенных Loomrail guardrails.
+_Не означает_: boilerplate, installer или автоматическая смена стека проекта.
+
+**Constitution Proposal**:
+Неизменяемый draft Project Constitution с provenance, warnings и snapshot конкретного Repository Scan.
+_Не означает_: активные правила Project.
+
+**Project Constitution Version**:
+Неизменяемая версия правил Project, явно утверждённая владельцем.
+_Не означает_: найденный `AGENTS.md`, provider output или Constitution Proposal.
+
+**Constitution Publication**:
+Durable compare-and-set запись утверждённой версии в `.loomrail/constitution.md`.
+_Не означает_: Git commit, push или самостоятельное approval сканером.
 
 ## M6 relationship
 

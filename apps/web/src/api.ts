@@ -1,10 +1,12 @@
 import {
   apiErrorResponseSchema,
+  constitutionPresetsResponseSchema,
   eventsResponseSchema,
   humanRequestsResponseSchema,
   projectsResponseSchema,
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
+  projectConstitutionSnapshotSchema,
   stateCommandResultSchema,
   workItemChangesResponseSchema,
   workItemFileDiffResponseSchema,
@@ -16,6 +18,10 @@ import {
   type AcceptancePackage,
   type HumanRequest,
   type HumanRequestAnswer,
+  type ConstitutionPresetId,
+  type ConstitutionProposal,
+  type ConstitutionPublication,
+  type ListedProject,
   type PipelineRun,
   type WorkItem,
   type WorkItemState,
@@ -139,6 +145,72 @@ export const requestLocalApi = async <T>(
 };
 
 export const listProjects = async () => requestLocalApi("/api/v1/projects", projectsResponseSchema);
+
+export const listConstitutionPresets = async () =>
+  requestLocalApi("/api/v1/constitution-presets", constitutionPresetsResponseSchema);
+
+export const getProjectConstitution = async (projectId: string) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/constitution`,
+    projectConstitutionSnapshotSchema,
+  );
+
+export const scanProjectConstitution = async (
+  project: ListedProject,
+  presetId?: ConstitutionPresetId,
+): Promise<ConstitutionProposal> => {
+  const result = await requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(project.id)}/constitution/scan`,
+    stateCommandResultSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: project.version,
+        ...(presetId === undefined ? {} : { presetId }),
+      }),
+    },
+  );
+  if (result.type !== "PROJECT_CONSTITUTION_PROPOSED") {
+    throw new Error("The local daemon returned an unexpected Constitution Proposal result");
+  }
+  return result.proposal;
+};
+
+export const adoptProjectConstitution = async (project: ListedProject, proposal: ConstitutionProposal) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(project.id)}/constitution/adopt`,
+    projectConstitutionSnapshotSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        proposalId: proposal.id,
+        expectedProjectVersion: project.version,
+        expectedProposalVersion: proposal.version,
+      }),
+    },
+  );
+
+export const retryProjectConstitutionPublication = async (
+  projectId: string,
+  publication: ConstitutionPublication,
+) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/constitution/publication/retry`,
+    projectConstitutionSnapshotSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        publicationId: publication.id,
+        expectedVersion: publication.version,
+      }),
+    },
+  );
 
 export const listProjectWorkItems = async (projectId: string) =>
   requestLocalApi(`/api/v1/projects/${encodeURIComponent(projectId)}/work-items`, workItemsResponseSchema);
