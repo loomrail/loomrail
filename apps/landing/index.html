@@ -83,21 +83,25 @@
               <span class="frame-dot" aria-hidden="true"></span>
               <span class="frame-url" aria-hidden="true">127.0.0.1:4176</span>
             </div>
-            <div class="frame-shot">
-              <img
-                src="./screenshots/workbench-light.png"
-                width="1905"
-                height="1233"
-                loading="lazy"
-                decoding="async"
-                data-product-image
-                data-i18n-alt="workbenchAlt"
-                alt="Loomrail Workbench showing current work, a durable task, its state, and the owner activity trail"
-              />
-            </div>
+            <video
+              class="frame-media"
+              width="1280"
+              height="800"
+              poster="./demo/mock-route-light.png"
+              preload="metadata"
+              muted
+              loop
+              playsinline
+              data-product-demo
+              data-i18n-aria-label="demoAlt"
+            >
+              <source data-demo-format="webm" src="./demo/mock-route-light.webm" type="video/webm" />
+              <source data-demo-format="mp4" src="./demo/mock-route-light.mp4" type="video/mp4" />
+            </video>
           </div>
           <figcaption data-i18n="heroShotCaption">
-            The Workbench: current work, one durable task, and every action that changed it.
+            A real run of 0.1.0-alpha.2 against the deterministic mock: the task contract, a blocking Human
+            Request, an approved budget increase, and the owner accepting the delivery.
           </figcaption>
         </figure>
       </section>

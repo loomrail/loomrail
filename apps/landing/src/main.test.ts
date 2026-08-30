@@ -18,7 +18,10 @@ function renderControls(): void {
       <p data-i18n="heroTitle">Hero</p>
       <a data-doc-link="quick-start" href="https://example.test/start">Guide</a>
       <button data-theme-toggle><span data-theme-label></span></button>
-      <img data-product-image data-i18n-alt="workbenchAlt" alt="Workbench" />
+      <video data-product-demo poster="./demo/mock-route-light.png">
+        <source data-demo-format="webm" src="./demo/mock-route-light.webm" type="video/webm" />
+        <source data-demo-format="mp4" src="./demo/mock-route-light.mp4" type="video/mp4" />
+      </video>
       <button data-copy><span data-copy-label data-i18n="copy">Copy</span></button>
       <section data-reveal><p data-i18n="whyTitle">Why</p></section>
       <ol data-flow><li>Backlog</li><li>Ready</li><li>Running</li></ol>
@@ -57,18 +60,22 @@ describe("landing interactions", () => {
     initializeLanding(document, window);
   });
 
-  test("switches and stores the selected theme across every product capture", () => {
+  test("switches and stores the selected theme across the hero recording", () => {
     const toggle = document.querySelector<HTMLButtonElement>("[data-theme-toggle]");
-    const images = document.querySelectorAll<HTMLImageElement>("[data-product-image]");
+    const sources = () => [...document.querySelectorAll<HTMLSourceElement>("source[data-demo-format]")];
+    const poster = () => document.querySelector<HTMLVideoElement>("[data-product-demo]")?.poster ?? "";
     expect(document.documentElement.dataset["theme"]).toBe("light");
-    expect([...images].every((image) => image.src.includes("workbench-light.png"))).toBe(true);
+    expect(sources().every((source) => source.src.includes("mock-route-light"))).toBe(true);
+    expect(poster()).toContain("mock-route-light.png");
 
     toggle?.click();
 
     expect(document.documentElement.dataset["theme"]).toBe("dark");
     expect(localStorage.getItem("loomrail-landing-theme")).toBe("dark");
     expect(toggle?.getAttribute("aria-label")).toBe("Switch to light theme");
-    expect([...images].every((image) => image.src.includes("workbench-dark.png"))).toBe(true);
+    expect(sources().every((source) => source.src.includes("mock-route-dark"))).toBe(true);
+    expect(poster()).toContain("mock-route-dark.png");
+    expect(sources().map((source) => source.dataset["demoFormat"])).toEqual(["webm", "mp4"]);
   });
 
   test("switches the full document and guide destination to Russian", () => {
@@ -175,10 +182,20 @@ describe("landing public contract", () => {
     expect(parsed.querySelectorAll("[style]")).toHaveLength(0);
   });
 
-  test("publishes one heading outline and one product capture", () => {
+  test("publishes one heading outline and one product recording", () => {
     expect(parsed.querySelectorAll("h1")).toHaveLength(1);
-    expect(parsed.querySelectorAll("[data-product-image]")).toHaveLength(1);
-    expect(parsed.querySelectorAll("[data-product-image]")[0]?.getAttribute("loading")).toBe("lazy");
+    const demo = parsed.querySelectorAll<HTMLVideoElement>("[data-product-demo]");
+    expect(demo).toHaveLength(1);
+    // Muted and inline are what let the recording autoplay at all; a poster keeps the hero
+    // meaningful before the file loads, and both codecs keep it playable outside Chromium.
+    expect(demo[0]?.hasAttribute("muted")).toBe(true);
+    expect(demo[0]?.hasAttribute("loop")).toBe(true);
+    expect(demo[0]?.hasAttribute("playsinline")).toBe(true);
+    expect(demo[0]?.getAttribute("poster")).toBe("./demo/mock-route-light.png");
+    expect([...(demo[0]?.querySelectorAll("source") ?? [])].map((s) => s.getAttribute("type"))).toEqual([
+      "video/webm",
+      "video/mp4",
+    ]);
     expect(parsed.querySelectorAll("[data-copy-label][aria-live='polite']")).toHaveLength(1);
     expect(html).toContain("data-locale-toggle");
   });

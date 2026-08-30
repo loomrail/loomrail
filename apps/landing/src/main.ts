@@ -42,9 +42,10 @@ const messages = {
     heroPrimaryCta: "Install and run",
     heroSecondaryCta: "See how it works",
     heroNote: "Free and open source · Apache-2.0 · Runs entirely on your machine",
-    heroShotCaption: "The Workbench: current work, one durable task, and every action that changed it.",
-    workbenchAlt:
-      "Loomrail Workbench showing current work, a durable task, its state, and the owner activity trail",
+    heroShotCaption:
+      "A real run of 0.1.0-alpha.2 against the deterministic mock: the task contract, a blocking Human Request, an approved budget increase, and the owner accepting the delivery.",
+    demoAlt:
+      "Screen recording of Loomrail: a task is created, the workflow blocks on a Human Request, a budget increase is approved, and the owner accepts the delivery",
 
     promisesLabel: "What Loomrail never does",
     promiseCommit: "Never commits",
@@ -210,9 +211,10 @@ const messages = {
     heroPrimaryCta: "Установить и запустить",
     heroSecondaryCta: "Как это работает",
     heroNote: "Открытый исходный код · Apache-2.0 · Работает полностью на вашей машине",
-    heroShotCaption: "Workbench: текущая работа, одна устойчивая задача и все действия, которые её изменили.",
-    workbenchAlt:
-      "Workbench Loomrail с текущей работой, устойчивой задачей, её состоянием и историей действий владельца",
+    heroShotCaption:
+      "Реальный прогон 0.1.0-alpha.2 на детерминированном mock: контракт задачи, блокирующий Human Request, подтверждение бюджета и приёмка владельцем.",
+    demoAlt:
+      "Запись экрана Loomrail: создаётся задача, workflow блокируется на Human Request, подтверждается увеличение бюджета, владелец принимает поставку",
 
     promisesLabel: "Чего Loomrail не делает",
     promiseCommit: "Не коммитит",
@@ -471,8 +473,41 @@ function applyTheme(doc: Document, theme: Theme): void {
   if (label !== null && label !== undefined) {
     label.textContent = message(doc, nextTheme === "dark" ? "darkTheme" : "lightTheme");
   }
-  for (const image of doc.querySelectorAll<HTMLImageElement>("[data-product-image]")) {
-    image.src = `./screenshots/workbench-${theme}.png`;
+  applyDemoTheme(doc, theme);
+}
+
+/** The hero demo ships one recording per theme, so a theme switch reloads the matching sources. */
+function applyDemoTheme(doc: Document, theme: Theme): void {
+  for (const video of doc.querySelectorAll<HTMLVideoElement>("[data-product-demo]")) {
+    const wasPlaying = !video.paused;
+    video.poster = `./demo/mock-route-${theme}.png`;
+    for (const source of video.querySelectorAll<HTMLSourceElement>("source[data-demo-format]")) {
+      source.src = `./demo/mock-route-${theme}.${source.dataset["demoFormat"] ?? "webm"}`;
+    }
+    reloadDemo(video, wasPlaying);
+  }
+}
+
+/** Media playback is unavailable in some environments; the poster frame is an acceptable result there. */
+function reloadDemo(video: HTMLVideoElement, resume: boolean): void {
+  try {
+    video.load();
+    if (resume) startDemo(video);
+  } catch {
+    video.controls = true;
+  }
+}
+
+function startDemo(video: HTMLVideoElement): void {
+  try {
+    const started: unknown = video.play();
+    if (started instanceof Promise) {
+      started.catch(() => {
+        video.controls = true;
+      });
+    }
+  } catch {
+    video.controls = true;
   }
 }
 
@@ -580,6 +615,22 @@ function setupFlow(doc: Document, win: Window): void {
   }, 1700);
 }
 
+/** Autoplay is motion: a reader who asked for less of it gets the poster frame and real controls. */
+function setupDemo(doc: Document, win: Window): void {
+  const videos = doc.querySelectorAll<HTMLVideoElement>("[data-product-demo]");
+  if (videos.length === 0) return;
+
+  const reduced = win.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  for (const video of videos) {
+    if (reduced) {
+      video.controls = true;
+      continue;
+    }
+    video.autoplay = true;
+    startDemo(video);
+  }
+}
+
 /** Progressive enhancement: sections stay visible unless the browser can observe and animate them. */
 function setupReveal(doc: Document, win: Window): void {
   const targets = doc.querySelectorAll<HTMLElement>("[data-reveal]");
@@ -607,6 +658,7 @@ export function initializeLanding(doc: Document, win: Window): void {
   setupLocale(doc, win);
   setupTheme(doc, win);
   setupCopyButtons(doc, win);
+  setupDemo(doc, win);
   setupFlow(doc, win);
   setupReveal(doc, win);
 }
