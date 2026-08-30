@@ -11,29 +11,31 @@ workflow state; it does not commit, push, or merge the agent's result.
 
 ## 1. Install and start Loomrail
 
-Install the explicit public pre-alpha channel with Node.js `>=24.19 <25`:
+Use Node.js `>=24.19 <25`. For the first run, install the explicit public pre-alpha channel in a separate empty
+directory rather than inside a repository you care about:
+
+```bash
+mkdir loomrail-evaluation
+cd loomrail-evaluation
+npm install loomrail@next
+npx loomrail
+```
+
+The `next` tag keeps the pre-alpha channel explicit. To put the launcher on your `PATH` instead:
 
 ```bash
 npm install -g loomrail@next
 loomrail
 ```
 
-Use a project-local install instead if you prefer not to add a global binary:
-
-```bash
-npm install loomrail@next
-npx loomrail
-```
-
-The npm registry also exposes the first and currently only version through its required `latest` metadata tag. Keep
-`next` or the exact version in install commands to make the pre-alpha channel explicit.
-
 Loomrail binds to an available loopback port and opens the Workbench in your default browser. If the browser should not
 open automatically:
 
 ```bash
-loomrail --no-open --port 4176
+npx loomrail --no-open --port 4176
 ```
+
+For a global installation, run the same flags as `loomrail --no-open --port 4176`.
 
 Open the printed one-time URL in a browser **on the same machine** within 60 seconds. It signs in one browser and then
 stops working. `--no-open` is not remote mode: the daemon still listens only on loopback.
@@ -60,14 +62,14 @@ run cannot be mistaken for live work.
 For Codex on macOS or another POSIX shell:
 
 ```bash
-LOOMRAIL_PROVIDER=CODEX loomrail
+LOOMRAIL_PROVIDER=CODEX npx loomrail
 ```
 
 For Codex in Windows PowerShell:
 
 ```powershell
 $env:LOOMRAIL_PROVIDER = "CODEX"
-loomrail
+npx loomrail
 ```
 
 Replace `CODEX` with `CLAUDE_CODE` to use Claude Code. Install and authenticate that provider's CLI yourself before

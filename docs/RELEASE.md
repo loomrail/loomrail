@@ -1,6 +1,6 @@
 # Releasing the Loomrail launcher
 
-**Status:** M7 public checkpoint published
+**Status:** alpha.2 release procedure
 **Updated:** 2026-08-30
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
@@ -74,8 +74,9 @@ Publishing is a deliberate, human action and is not automated. Nothing in CI run
 
 ### Pre-alpha channel
 
-The current public checkpoint is `0.1.0-alpha.2`. Pre-alpha releases are published under the explicit `next`
-dist-tag:
+The release candidate version is `0.1.0-alpha.2`. Pre-alpha releases are published under the explicit `next`
+dist-tag. Check the registry before publishing; a prepared repository version is not evidence that the registry has
+already advanced.
 
 ```bash
 npm publish ./dist-release/loomrail-0.1.0-alpha.2.tgz --tag next --access public
@@ -91,6 +92,6 @@ npm install loomrail@next
 npx loomrail --no-open --port 4176
 ```
 
-Until a stable release exists, `latest` mirrors the same current public checkpoint so a bare npm metadata lookup does
-not resolve to an older alpha. It is still a pre-alpha release. Documentation and release checks use `loomrail@next`
-or the exact version so the intended channel stays explicit.
+Until a stable release exists, documentation and release checks use `loomrail@next` or an exact version so the
+intended pre-alpha channel stays explicit. Treat `npm view loomrail@next version` as the source of truth for what a
+new install will receive.

@@ -12,29 +12,31 @@ Loomrail работает локально, но не является security 
 
 ## 1. Установка и запуск
 
-Установите явный публичный pre-alpha канал под Node.js `>=24.19 <25`:
+Используйте Node.js `>=24.19 <25`. Для первого запуска установите явный публичный pre-alpha канал в отдельный пустой
+каталог, а не внутрь важного репозитория:
+
+```bash
+mkdir loomrail-evaluation
+cd loomrail-evaluation
+npm install loomrail@next
+npx loomrail
+```
+
+Тег `next` оставляет pre-alpha канал явным. Чтобы добавить launcher в `PATH`:
 
 ```bash
 npm install -g loomrail@next
 loomrail
 ```
 
-Если не хотите добавлять глобальный бинарник, используйте локальную установку в проект:
-
-```bash
-npm install loomrail@next
-npx loomrail
-```
-
-Реестр npm также показывает первую и пока единственную версию через обязательный metadata-тег `latest`. Оставляйте
-`next` или точную версию в командах установки, чтобы явно выбирать pre-alpha канал.
-
 Loomrail занимает свободный loopback-порт и открывает Workbench в браузере по умолчанию. Чтобы не открывать браузер
 автоматически:
 
 ```bash
-loomrail --no-open --port 4176
+npx loomrail --no-open --port 4176
 ```
+
+При глобальной установке используйте те же флаги: `loomrail --no-open --port 4176`.
 
 Откройте напечатанную одноразовую ссылку в браузере **на той же машине** в течение 60 секунд. Она авторизует один
 браузер, после чего перестаёт работать. `--no-open` не включает remote mode: daemon по-прежнему слушает только
@@ -62,14 +64,14 @@ Launcher называет provider до открытия Workbench. Для пе�
 Codex в macOS или другом POSIX shell:
 
 ```bash
-LOOMRAIL_PROVIDER=CODEX loomrail
+LOOMRAIL_PROVIDER=CODEX npx loomrail
 ```
 
 Codex в Windows PowerShell:
 
 ```powershell
 $env:LOOMRAIL_PROVIDER = "CODEX"
-loomrail
+npx loomrail
 ```
 
 Для Claude Code замените `CODEX` на `CLAUDE_CODE`. Установите и авторизуйте CLI выбранного provider до запуска
