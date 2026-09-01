@@ -7,6 +7,7 @@ on:
       - ".github/workflows/pages.yml"
       - "apps/landing/**"
       - "docs/assets/brand/**"
+      - "docs/assets/demo/**"
       - "docs/assets/screenshots/**"
       - "package.json"
       - "pnpm-lock.yaml"
