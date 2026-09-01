@@ -39,4 +39,4 @@
 - `pnpm verify` — passed;
 - `pnpm test:e2e` — 43/43 passed;
 - `pnpm audit --prod` — no known vulnerabilities;
-- `pnpm pack:release && pnpm test:release` — `0.1.0-alpha.3` tarball runs from a clean temporary install.
+- `pnpm pack:release && pnpm test:release` — `0.1.0-alpha.4` tarball runs from a clean temporary install.
