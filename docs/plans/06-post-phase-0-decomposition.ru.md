@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-01
 
-**Статус:** утверждённая последовательность до B4 реализована; `0.1.0-alpha.3` опубликована
+**Статус:** утверждённая последовательность до B4 и A4 реализована; `0.1.0-alpha.4` опубликована
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -168,12 +168,12 @@ mock-маршруте», а D2 всё равно ждёт E1.5.
 - где живут примеры из D2 — в этом репозитории рядом с fixture-проектами или отдельным репозиторием — там же.
 
 Текущий checkpoint: C1, C3, C2, B4 и A4 реализованы. Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
-marker-bound scaffolding и global Attention Inbox проверены локальными gates; B4 release candidate был проверен в
-clean npm tarball на macOS и Windows, полный `verify`, production audit и
-браузерный smoke также прошли на обеих платформах в
-[GitHub Actions run 33502010465](https://github.com/loomrail/loomrail/actions/runs/33502010465). Контракты находятся в
+marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
+npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах
+в [GitHub Actions run 33512453361](https://github.com/loomrail/loomrail/actions/runs/33512453361). Контракты находятся в
 [`33-c1-mcp-connections-spec.ru.md`](33-c1-mcp-connections-spec.ru.md),
 [`35-c3-context7-preset-spec.ru.md`](35-c3-context7-preset-spec.ru.md),
 [`37-c2-plugin-sdk-spec.ru.md`](37-c2-plugin-sdk-spec.ru.md) и
-[`39-b4-new-project-scaffolding-spec.ru.md`](39-b4-new-project-scaffolding-spec.ru.md). Версия `0.1.0-alpha.3`
+[`39-b4-new-project-scaffolding-spec.ru.md`](39-b4-new-project-scaffolding-spec.ru.md) и
+[`41-a4-attention-inbox-spec.ru.md`](41-a4-attention-inbox-spec.ru.md). Версия `0.1.0-alpha.4`
 прошла платформенный gate и опубликована в npm под dist-tag `next`.

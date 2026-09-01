@@ -1,6 +1,6 @@
 # Releasing the Loomrail launcher
 
-**Status:** alpha.4 release candidate; not yet published
+**Status:** alpha.4 published; procedure remains authoritative for the next release
 **Updated:** 2026-09-01
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
@@ -74,9 +74,9 @@ Publishing is a deliberate, human action and is not automated. Nothing in CI run
 
 ### Pre-alpha channel
 
-The current release candidate is `0.1.0-alpha.4`. Pre-alpha versions use the explicit `next` dist-tag. Future
-pre-alpha releases must advance the version and keep the same channel unless a product decision changes it. Check the
-registry before publishing; a prepared repository version is not evidence that the registry has already advanced.
+The current pre-alpha version is `0.1.0-alpha.4`. It is published under the explicit `next` dist-tag. Future pre-alpha
+releases must advance the version and keep the same channel unless a product decision changes it. Check the registry
+before publishing; a prepared repository version is not evidence that the registry has already advanced.
 
 ```bash
 npm publish ./dist-release/loomrail-0.1.0-alpha.4.tgz --tag next --access public
