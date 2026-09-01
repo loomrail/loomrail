@@ -90,6 +90,18 @@ authentication, persistence, Human Requests, бюджеты и acceptance без
 любого provider. С provider по умолчанию детерминированные результаты стадий даёт mock; с Codex работают настоящие
 сессии.
 
+### Параллельная работа в «Агентах»
+
+Откройте **Агенты** в sidebar, чтобы увидеть агентскую работу во всех локальных Project. Каждая строка показывает
+Task, Project, назначенную versioned-роль, stage, provider и состояние **В работе**, **Готов** или **Ожидает**. Для
+ожидающей строки указана точная причина планировщика: общий, Project- или provider-limit, нестабильный checkpoint либо
+конфликт workspace. Название Task возвращает в её Task Cockpit.
+
+По умолчанию Loomrail одновременно выполняет не более трёх AgentRun. «Агенты» — read-only проекция durable queue и
+run state, а не второй scheduler: reload страницы или restart Loomrail восстанавливает её из SQLite. Здесь нельзя
+выдать permission, поднять budget, ответить на Human Request или принять поставку — эти действия остаются в своих
+owner gates.
+
 ### Ответ на Human Request
 
 Mock-стадия Discovery открывает блокирующий вопрос, а задача получает статус **Ждёт вас**. Откройте **Внимание** в

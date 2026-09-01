@@ -487,6 +487,29 @@ claim/snooze/expiry или readiness attestations: у продукта ещё н
 можно проверить end to end. Полный контракт —
 [`docs/plans/41-a4-attention-inbox-spec.ru.md`](../plans/41-a4-attention-inbox-spec.ru.md).
 
+### PD-015 — Scheduler планирует, а AgentRun резервируется транзакцией
+
+`AgentRun`, а не `ProviderSession` и не worker promise, является единицей concurrency. Handoff меняет
+ProviderSession внутри того же run и не занимает дополнительный slot. Pure scheduler сортирует bounded pending
+dispatches и выдаёт machine-readable причины отсрочки, но его план не является authority: global/project/provider
+limit, active StageAttempt и active WorkItem повторно проверяются в SQLite transaction, которая создаёт AgentRun до
+запуска provider process. Существующий workspace lease берётся там же; первый worktree создаётся после claim, но до
+spawn и записывается уже leased, пока exclusive active WorkItem claim закрывает provisioning race.
+
+AgentRun фиксирует hash immutable policy snapshot: assignment/profile revision, effective provider и применённые
+capability/budget/workspace rules. Exact provider input не дублируется на этом уровне: его `contentHash` остаётся в
+ContextPackRecipe конкретной ProviderSession и может закономерно измениться при handoff внутри одного AgentRun.
+
+Default global concurrency — 3. Параллельные readers одного workspace допустимы только на одном immutable
+checkpoint; любой writer конфликтует и с writer, и с reader. Shutdown/restart не создаёт automatic retry
+оборванного AgentRun. Полный контракт —
+[`docs/plans/43-a3-parallel-squads-spec.ru.md`](../plans/43-a3-parallel-squads-spec.ru.md).
+
+Глобальный Agent Fleet является bounded authenticated projection durable AgentRun и pending dispatch state. Он
+показывает Task, Project, точную роль, stage, provider, running/waiting status и machine-readable причину ожидания,
+но не хранит собственную очередь и не меняет permissions, budget или acceptance. Reconnect и restart перестраивают
+тот же view из SQLite и текущей validated scheduling policy.
+
 ## 14. Отложенные решения
 
 Следующие решения намеренно принимаются отдельным spike/ADR после Phase 0, а не угадываются заранее:

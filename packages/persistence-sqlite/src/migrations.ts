@@ -100,6 +100,7 @@ const migrations: readonly Migration[] = [
     filename: "0019_project_scaffolding.sql",
     rebuildsAReferencedTable: true,
   },
+  { version: 20, name: "agent_runs", filename: "0020_agent_runs.sql" },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

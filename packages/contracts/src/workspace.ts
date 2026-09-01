@@ -130,6 +130,10 @@ export const createWorkItemWorkspaceCommandSchema = commandBaseSchema.extend({
       baseCommit: commitShaSchema.nullable(),
       snapshotCommit: commitShaSchema.nullable(),
       carriedPaths: carriedPathsSchema,
+      // A3 provisioning: optional for append-only command compatibility. When present,
+      // persistence verifies an active AgentRun owns this StageAttempt and records the first
+      // workspace already leased in the same transaction.
+      initialLeaseHolder: opaqueIdSchema.optional(),
     })
     .strict(),
 });

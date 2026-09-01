@@ -1,6 +1,8 @@
 import type { ContextSources } from "@loomrail/context-assembly";
 import type {
   AttentionInboxResponse,
+  AgentRun,
+  AgentRunStatus,
   Checkpoint,
   ConstitutionProposal,
   ConstitutionPublication,
@@ -19,6 +21,7 @@ import type {
   ProjectReadinessSnapshot,
   ProviderSession,
   ScaffoldOperation,
+  SquadAssignment,
   StateCommand,
   StateCommandResult,
   WorkItem,
@@ -48,6 +51,12 @@ export type StateStoreErrorCode =
   | "PROVIDER_SESSION_ALREADY_RUNNING"
   // Guards PUBLISH_CHECKPOINT/END_PROVIDER_SESSION against acting on a session that already ended.
   | "PROVIDER_SESSION_NOT_RUNNING"
+  // START_AGENT_RUN is daemon-internal. Keeping the actor refusal distinct prevents a browser or
+  // future API handler from learning to manufacture capacity/workspace claims by copying payloads.
+  | "AGENT_RUN_ACTOR_FORBIDDEN"
+  | "AGENT_RUN_ALREADY_ACTIVE"
+  | "AGENT_RUN_NOT_ACTIVE"
+  | "AGENT_RUN_CAPACITY_EXHAUSTED"
   | "WORKSPACE_NOT_FOUND"
   // Storage invariant (migration 0011's UNIQUE on work_item_id, spec D1): the workspace belongs to
   // the WorkItem, and a second row for the same WorkItem would mean two writers past the lease.
@@ -104,6 +113,8 @@ export type StateQuery =
       status?: HumanRequestStatus;
     }
   | { type: "LIST_PENDING_DISPATCHES" }
+  | { type: "GET_SQUAD_ASSIGNMENT"; pipelineRunId: string }
+  | { type: "LIST_AGENT_RUNS"; status?: AgentRunStatus; limit?: number }
   | {
       type: "LIST_WORK_ITEMS";
       projectId: string;
@@ -162,6 +173,8 @@ export type StateQueryResult =
   | { type: "ATTENTION_INBOX"; inbox: AttentionInboxResponse }
   | { type: "HUMAN_REQUESTS"; humanRequests: HumanRequest[] }
   | { type: "WORKFLOW_DISPATCHES"; dispatches: WorkflowDispatch[] }
+  | { type: "SQUAD_ASSIGNMENT"; assignment: SquadAssignment | null }
+  | { type: "AGENT_RUNS"; runs: AgentRun[] }
   | { type: "WORK_ITEMS"; workItems: WorkItem[] }
   | { type: "EVENTS"; events: DomainEvent[]; nextSequence: number; hasMore: boolean }
   | { type: "CONTEXT_SOURCES"; sources: ContextSources }
@@ -215,6 +228,8 @@ export type LocalStateIdKind =
   | "evidenceArtifact"
   | "acceptancePackage"
   | "providerSession"
+  | "squadAssignment"
+  | "agentRun"
   | "contextPackRecipe"
   | "checkpoint"
   | "workItemWorkspace"

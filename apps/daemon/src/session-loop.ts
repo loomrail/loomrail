@@ -522,6 +522,11 @@ const createWorkspace = async (
   }
 
   try {
+    const activeRuns = deps.state.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" });
+    const activeAgentRun =
+      activeRuns.type === "AGENT_RUNS"
+        ? activeRuns.runs.find(({ stageAttemptId }) => stageAttemptId === deps.dispatch.stageAttemptId)
+        : undefined;
     const created = deps.state.execute({
       schemaVersion: 1,
       commandId: deps.createCommandId(),
@@ -536,6 +541,7 @@ const createWorkspace = async (
         baseCommit: repository.headCommit,
         snapshotCommit: snapshot?.commit ?? null,
         carriedPaths: carriedPaths.slice(0, maxCarriedPaths),
+        ...(activeAgentRun === undefined ? {} : { initialLeaseHolder: deps.dispatch.stageAttemptId }),
       },
     });
     if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("The workspace was not recorded");

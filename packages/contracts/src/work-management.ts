@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { agentRunClaimLimitsSchema, agentRunSchema, squadAssignmentSchema } from "./agents.js";
 import {
   actorSchema,
   correlationIdSchema,
@@ -46,6 +47,7 @@ import {
   providerSessionProcessRecordedResultSchema,
   providerSessionStartedEventSchema,
   providerSessionStartedResultSchema,
+  providerIdSchema,
   publishCheckpointCommandSchema,
   reconcileWorkflowsCommandSchema,
   recordProviderSessionProcessCommandSchema,
@@ -290,6 +292,24 @@ export const workItemStateChangedEventSchema = eventBaseSchema.extend({
     .strict(),
 });
 
+export const squadAssignedEventSchema = eventBaseSchema.extend({
+  type: z.literal("SQUAD_ASSIGNED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z.object({ assignment: squadAssignmentSchema }).strict(),
+});
+
+export const agentRunStartedEventSchema = eventBaseSchema.extend({
+  type: z.literal("AGENT_RUN_STARTED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z.object({ run: agentRunSchema }).strict(),
+});
+
+export const agentRunFinishedEventSchema = eventBaseSchema.extend({
+  type: z.literal("AGENT_RUN_FINISHED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z.object({ run: agentRunSchema }).strict(),
+});
+
 export const domainEventSchema = z.discriminatedUnion("type", [
   projectRegisteredEventSchema,
   projectScaffoldRequestedEventSchema,
@@ -307,6 +327,9 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   workItemCreatedEventSchema,
   workItemUpdatedEventSchema,
   workItemStateChangedEventSchema,
+  squadAssignedEventSchema,
+  agentRunStartedEventSchema,
+  agentRunFinishedEventSchema,
   pipelineStartedEventSchema,
   stageAttemptChangedEventSchema,
   humanRequestOpenedEventSchema,
@@ -446,6 +469,17 @@ export const moveWorkItemCommandSchema = commandBaseSchema.extend({
     .strict(),
 });
 
+export const startAgentRunCommandSchema = commandBaseSchema.extend({
+  type: z.literal("START_AGENT_RUN"),
+  payload: z
+    .object({
+      dispatchId: opaqueIdSchema,
+      provider: providerIdSchema,
+      limits: agentRunClaimLimitsSchema,
+    })
+    .strict(),
+});
+
 export const stateCommandSchema = z.discriminatedUnion("type", [
   registerProjectCommandSchema,
   repointFixtureProjectCommandSchema,
@@ -470,6 +504,7 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   createWorkItemCommandSchema,
   updateWorkItemCommandSchema,
   moveWorkItemCommandSchema,
+  startAgentRunCommandSchema,
   startMockPipelineCommandSchema,
   markWorkflowDispatchStartedCommandSchema,
   applyProviderOutcomeCommandSchema,
@@ -525,6 +560,20 @@ export const workItemMovedResultSchema = commandResultBaseSchema.extend({
   event: workItemStateChangedEventSchema,
 });
 
+export const agentRunStartedResultSchema = commandResultBaseSchema.extend({
+  type: z.literal("AGENT_RUN_STARTED"),
+  workItemId: opaqueIdSchema,
+  assignment: squadAssignmentSchema,
+  run: agentRunSchema,
+  events: z.array(
+    z.discriminatedUnion("type", [
+      squadAssignedEventSchema,
+      stageAttemptChangedEventSchema,
+      agentRunStartedEventSchema,
+    ]),
+  ),
+});
+
 export const stateCommandResultSchema = z.discriminatedUnion("type", [
   projectRegisteredResultSchema,
   projectScaffoldRequestedResultSchema,
@@ -546,6 +595,7 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   workItemCreatedResultSchema,
   workItemUpdatedResultSchema,
   workItemMovedResultSchema,
+  agentRunStartedResultSchema,
   pipelineStartedResultSchema,
   workflowDispatchStartedResultSchema,
   mockProviderOutcomeAppliedResultSchema,
@@ -679,10 +729,14 @@ export type ProjectRegisteredEvent = z.infer<typeof projectRegisteredEventSchema
 export type WorkItemCreatedEvent = z.infer<typeof workItemCreatedEventSchema>;
 export type WorkItemUpdatedEvent = z.infer<typeof workItemUpdatedEventSchema>;
 export type WorkItemStateChangedEvent = z.infer<typeof workItemStateChangedEventSchema>;
+export type SquadAssignedEvent = z.infer<typeof squadAssignedEventSchema>;
+export type AgentRunStartedEvent = z.infer<typeof agentRunStartedEventSchema>;
+export type AgentRunFinishedEvent = z.infer<typeof agentRunFinishedEventSchema>;
 export type RegisterProjectCommand = z.infer<typeof registerProjectCommandSchema>;
 export type RepointFixtureProjectCommand = z.infer<typeof repointFixtureProjectCommandSchema>;
 export type CreateWorkItemCommand = z.infer<typeof createWorkItemCommandSchema>;
 export type UpdateWorkItemCommand = z.infer<typeof updateWorkItemCommandSchema>;
 export type MoveWorkItemCommand = z.infer<typeof moveWorkItemCommandSchema>;
+export type StartAgentRunCommand = z.infer<typeof startAgentRunCommandSchema>;
 export type StateCommand = z.infer<typeof stateCommandSchema>;
 export type StateCommandResult = z.infer<typeof stateCommandResultSchema>;

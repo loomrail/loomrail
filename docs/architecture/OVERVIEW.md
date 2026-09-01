@@ -1,7 +1,7 @@
 # Loomrail architecture overview
 
-**Status:** Phase 0 / M6 implemented baseline
-**Updated:** 2026-08-24
+**Status:** public pre-alpha; A3 durable parallel execution and Fleet UI implemented locally
+**Updated:** 2026-09-02
 
 Loomrail separates deterministic product authority from non-deterministic agent work. The daemon owns state,
 permissions, budgets, transitions and recovery. Providers produce proposals, tool activity and artifacts; they do not
@@ -157,6 +157,13 @@ AcceptancePackages, current state and Event append stay behind that interface.
 - gate/transition evaluation;
 - durable dispatch planning;
 - pause, resume, interrupt and stale semantics.
+
+### `packages/scheduler`
+
+- bounded deterministic dispatch-batch planning;
+- priority plus global/project/provider capacity accounting;
+- stable-checkpoint and workspace read/write compatibility;
+- advisory selection only: persistence remains authority through the atomic AgentRun/lease claim.
 
 ### `packages/provider-core` and `provider-mock`
 

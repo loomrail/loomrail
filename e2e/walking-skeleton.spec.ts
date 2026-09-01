@@ -2756,10 +2756,18 @@ test.describe("authenticated walking skeleton", () => {
 
     // Every sidebar entry resolves to a view the product actually serves.
     const links = page.locator(".app-sidebar .app-nav-link");
-    await expect(links).toHaveCount(2);
+    await expect(links).toHaveCount(3);
     for (const link of await links.all()) {
       await expect(link).toHaveAttribute("href", /^\//);
       await expect(link).not.toHaveAttribute("aria-disabled", "true");
+    }
+    for (const [name, path] of [
+      ["Agent Fleet", /\/fleet$/],
+      ["Attention", /\/attention$/],
+      ["Current work", /\/$/],
+    ] as const) {
+      await page.getByRole("link", { name, exact: true }).click();
+      await expect(page).toHaveURL(path);
     }
 
     // No control in the frame or the board toolbar is present purely for decoration.
@@ -2779,6 +2787,54 @@ test.describe("authenticated walking skeleton", () => {
       await expect(page).toHaveURL(expected);
       await expect(page.getByRole("button", { name, exact: true })).toHaveAttribute("aria-pressed", "true");
     }
+  });
+
+  test("shows running and capacity-waiting roles in the durable Agent Fleet", async ({ page }) => {
+    const adapter = gatedAdapter();
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      providerAdapter: adapter,
+      schedulingLimits: { global: 1, defaultProject: 1, defaultProvider: 1 },
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+
+    for (const title of ["Fleet running", "Fleet waiting"] as const) {
+      await createTask(page, title, "A bounded mock run for the Agent Fleet browser gate.");
+      const inspector = page.getByRole("complementary", { name: title });
+      await inspector.getByRole("button", { name: "Move to Ready" }).click();
+      await inspector.getByRole("button", { name: "Start workflow" }).click();
+      if (title === "Fleet running") await adapter.whenStarted(1);
+    }
+
+    await page.getByRole("link", { name: /Agent Fleet/ }).click();
+    await expect(page).toHaveURL(/\/fleet$/);
+    await expect(page.getByText("1 / 1 active", { exact: true })).toBeVisible();
+
+    const runningRow = page.getByRole("row", {
+      name: /Fleet running.*Product Analyst.*Discovery.*MOCK.*Running/,
+    });
+    await expect(runningRow).toBeVisible();
+    const waitingRow = page.getByRole("row", {
+      name: /Fleet waiting.*Product Analyst.*Discovery.*MOCK.*Waiting.*All global slots are occupied/,
+    });
+    await expect(waitingRow).toBeVisible();
+
+    await page.setViewportSize({ width: 320, height: 800 });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
+    ).toBe(true);
+
+    const taskButton = runningRow.getByRole("button");
+    await taskButton.focus();
+    await expect(taskButton).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\?project=.*&task=.*/);
+
+    adapter.release();
   });
 
   test("shows the newest activity first and loads older pages on demand", async ({ page }) => {

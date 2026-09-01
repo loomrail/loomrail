@@ -102,6 +102,9 @@ importers:
       '@loomrail/provider-mock':
         specifier: workspace:*
         version: link:../../packages/provider-mock
+      '@loomrail/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
       '@loomrail/workflow-engine':
         specifier: workspace:*
         version: link:../../packages/workflow-engine
@@ -322,6 +325,12 @@ importers:
       '@loomrail/provider-core':
         specifier: workspace:*
         version: link:../provider-core
+
+  packages/scheduler:
+    dependencies:
+      '@loomrail/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
   packages/ui:
     dependencies:

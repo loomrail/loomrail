@@ -22,6 +22,7 @@ const now = "2026-08-25T18:00:00.000Z";
 const runningSession = (overrides: Partial<ProviderSession> = {}): ProviderSession => ({
   schemaVersion: 1,
   id: "session-1",
+  agentRunId: null,
   stageAttemptId: "attempt-1",
   ordinal: 1,
   status: "RUNNING",

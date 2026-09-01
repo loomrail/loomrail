@@ -97,6 +97,8 @@ machine, so never include secrets, personal data, or proprietary code.
 
 - Local browser UI, loopback daemon, and local SQLite state.
 - Auto-discovered or explicitly selected providers, plus a deterministic Mock route with no provider quota.
+- Up to three agent runs in parallel by default, with durable global, Project, provider, and workspace gates plus an
+  Agent Fleet view of active roles and exact queue reasons.
 - Project-scoped local MCP connections and a bundled, owner-approved Context7 preset.
 - A global, restart-safe Attention Inbox for Human Requests and acceptance deep-links across every Project.
 - A typed read-only tool SDK at `loomrail/plugin-sdk`; local registration still uses explicit C1 consent and grant.

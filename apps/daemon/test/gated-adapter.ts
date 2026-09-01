@@ -9,6 +9,7 @@ const ALL_STAGES: readonly WorkflowStage[] = ["DISCOVERY", "PLAN", "IMPLEMENT", 
 // once instead of being pasted into both.
 export type GatedAdapter = ProviderAdapter & {
   started: Promise<void>;
+  whenStarted: (count: number) => Promise<void>;
   release: () => void;
   startCallCount: number;
   releasedCount: number;
@@ -33,9 +34,16 @@ export const gatedAdapter = (
     openGate = resolve;
   });
   const aborted: string[] = [];
+  const startWaiters: { count: number; resolve: () => void }[] = [];
 
   const adapter: GatedAdapter = {
     started,
+    whenStarted: (count) =>
+      adapter.startCallCount >= count
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            startWaiters.push({ count, resolve });
+          }),
     startCallCount: 0,
     releasedCount: 0,
     get abortedSessions() {
@@ -60,6 +68,13 @@ export const gatedAdapter = (
     start: async (invocation) => {
       adapter.startCallCount += 1;
       announceStarted();
+      for (let index = startWaiters.length - 1; index >= 0; index -= 1) {
+        const waiter = startWaiters[index];
+        if (waiter && adapter.startCallCount >= waiter.count) {
+          startWaiters.splice(index, 1);
+          waiter.resolve();
+        }
+      }
       await gate;
       // `providerOutcomeSchema`'s COMPLETED variant is just `{ type, summary, artifacts? }` -- no
       // session id or checkpoint travels on it, those are session-level outcomes (HANDED_OFF,

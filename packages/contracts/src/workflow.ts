@@ -206,6 +206,9 @@ export const providerSessionSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
     id: opaqueIdSchema,
+    // Nullable for sessions recorded before migration 0020. New A3 sessions infer this from the
+    // active StageAttempt claim in persistence; callers never choose the relationship themselves.
+    agentRunId: opaqueIdSchema.nullable().default(null),
     stageAttemptId: opaqueIdSchema,
     ordinal: z.number().int().positive(),
     status: providerSessionStatusSchema,

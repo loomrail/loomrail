@@ -1,8 +1,15 @@
-import type { WorkflowTemplate } from "@loomrail/contracts";
+import type { WorkflowDispatch, WorkflowTemplate } from "@loomrail/contracts";
 import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter } from "@loomrail/provider-core";
+import {
+  agentRunClaimLimits,
+  planDispatchBatch,
+  validateSchedulerLimits,
+  type SchedulerLimits,
+} from "@loomrail/scheduler";
 import type { FastifyBaseLogger } from "fastify";
 
+import { readAgentSchedulingSnapshot } from "./agent-scheduling.js";
 import { runStageAttempt, type OpenMcpConnections } from "./session-loop.js";
 
 /**
@@ -29,21 +36,20 @@ export type SessionWorkerDeps = {
   createCommandId: () => string;
   logger: FastifyBaseLogger;
   openMcpConnections?: OpenMcpConnections;
+  /** Validated once at construction; persistence repeats the resolved limits in every claim. */
+  schedulingLimits?: SchedulerLimits;
 };
 
 /**
- * Runs the whole workflow-dispatch queue as a single background worker (milestone A1.5, spec D4/D5).
+ * Runs the workflow-dispatch queue through one scheduler pump and a bounded AgentRun pool.
  *
- * `wake()` schedules a pass over the pending-dispatch queue; at most one pass runs at a time, and a
- * wake that arrives while a pass is already running is honoured by another pass immediately after,
- * never dropped. `whenIdle()` resolves once no pass is running and none is scheduled. `stop()` asks
- * the live provider session to abort and returns without waiting for it to actually stop (spec D5;
- * that gap belongs to the milestone with an adapter that can fail to stop).
- *
- * Task 8 wires this in as the replacement for `server.ts`'s synchronous `drainProviderDispatches`,
- * which `runOnce` below is a straight copy of.
+ * `wake()` schedules a pass over the pending queue; at most one planner pump runs at a time, while
+ * the tasks it selects execute concurrently up to the validated global limit. A wake that arrives
+ * mid-pass is honoured immediately after it, never dropped. `stop()` asks every captured live
+ * ProviderSession to abort and prevents newly freed slots from being filled.
  */
 export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
+  const schedulingLimits = validateSchedulerLimits(deps.schedulingLimits);
   const fixedAdapter = deps.adapter;
   const resolveAdapter =
     deps.resolveAdapter ??
@@ -55,101 +61,20 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
   let running = false;
   let pending = false;
   let stopping = false;
-  let liveSessionId: string | null = null;
-  let liveAdapter: ProviderAdapter | null = null;
+  const liveSessions = new Map<string, { adapter: ProviderAdapter; providerSessionId: string }>();
+  type DispatchTaskResult = { dispatchId: string; moved: boolean };
+  const activeTasks = new Map<string, Promise<DispatchTaskResult>>();
   const idleWaiters: (() => void)[] = [];
 
   const settleIdle = (): void => {
     for (const waiter of idleWaiters.splice(0)) waiter();
   };
 
-  // The body of `drainProviderDispatches` (server.ts), moved rather than rewritten: the head-of-
-  // queue read, the unmoved-head guard and its log line, MARK_WORKFLOW_DISPATCH_STARTED and the
-  // runStageAttempt call are all copies. Exactly two outcomes differ from the original, both noted
-  // where they happen below.
-  const runOnce = async (): Promise<void> => {
-    // Dispatches this pass tried and could not move, so it does not try them again and does not
-    // stop at them either.
-    //
-    // `LIST_PENDING_DISPATCHES` is strict FIFO, and this loop used to take `dispatches[0]` and
-    // return as soon as the head had not moved. A head that cannot start yet -- its work item's
-    // workspace lease is held by a concurrent attempt, or a session is already RUNNING on the
-    // attempt -- therefore blocked every newer dispatch behind it until the daemon restarted. A
-    // queue that stops at the head is not a queue.
-    //
-    // Skipping cannot spin, because each cycle does one of exactly two things and both are
-    // bounded: it moves a dispatch out of the pending set, or it adds one to `blocked`. Once every
-    // pending dispatch is blocked there is nothing left to pick and the pass returns, so a stuck
-    // queue costs one pass over it rather than a busy loop -- DISPATCH_CYCLE_LIMIT stays as the
-    // backstop it was, not as the thing that ends the pass.
-    //
-    // And skipping cannot starve: once nothing unblocked is left to pick, `blocked` is cleared and
-    // everything gets one more turn in the same pass -- whatever was holding a lease may have given
-    // it back while the rest of the queue ran. A dispatch still blocked after that second turn is
-    // retried on the next wake, which is what `wake()` is for.
-    //
-    // WHEN that clear happens is the whole of this loop's cost. Clearing on every completion, which
-    // is what this did first, gives a permanently unstartable head a fresh turn after each dispatch
-    // that runs -- so every runnable dispatch costs two cycles instead of one, and one such head
-    // spends half of DISPATCH_CYCLE_LIMIT. Measured: one unstartable head and fifteen runnable
-    // dispatches ran ten of the fifteen, ended by hitting the safety limit, and logged the limit at
-    // error level on a queue that was working perfectly; the five that never ran then waited for an
-    // external `wake()`, of which there is no timer. Deferring the clear to "nothing left to pick"
-    // runs all fifteen in eighteen cycles with the limit untouched.
-    const blocked = new Set<string>();
-    // Whether any dispatch has actually completed since `blocked` was last given a clean slate. It
-    // is what keeps the retry above from becoming the spin the skip was designed to avoid: without
-    // it, clearing whenever nothing is pickable would re-offer the same unstartable rows forever,
-    // and DISPATCH_CYCLE_LIMIT would be the only thing ending the pass. With it, a retry is only
-    // ever spent when something changed that could plausibly have unblocked them.
-    let progressedSinceRetry = false;
-    let attempted: string | undefined;
-    for (let cycle = 0; cycle < DISPATCH_CYCLE_LIMIT; cycle += 1) {
-      // `stop()` only sets a flag and aborts the live session -- it does not (and per spec D5,
-      // cannot) unwind an `await runStageAttempt(...)` already in flight. Without this check, the
-      // cycle that resumes once that await settles would happily pull the *next* pending dispatch
-      // and open a brand-new provider session on a daemon that was just told to shut down.
-      if (stopping) return;
-      const queued = deps.state.query({ type: "LIST_PENDING_DISPATCHES" });
-      const dispatches = queued.type === "WORKFLOW_DISPATCHES" ? queued.dispatches : [];
-
-      // What the previous cycle's `runStageAttempt` did, read off the queue rather than off a
-      // return value: a dispatch stays PENDING for its whole attempt and is completed by
-      // APPLY_PROVIDER_OUTCOME, so "still listed" is exactly "did not close out". `runStageAttempt`
-      // returns quietly in that case -- another caller owns the attempt's session, or another
-      // StageAttempt holds the work item's workspace lease -- and says so in its own log.
-      if (attempted !== undefined) {
-        // Copied to a const because the callback below is a closure: TypeScript's narrowing of a
-        // `let` does not survive into one, and a non-null assertion would be the wrong way to say
-        // what this line already knows.
-        const previous = attempted;
-        if (dispatches.some(({ id }) => id === previous)) {
-          blocked.add(previous);
-          deps.logger.info(
-            { dispatchId: previous },
-            "This pending workflow dispatch could not be started yet; the drain moves past it",
-          );
-        } else {
-          progressedSinceRetry = true;
-        }
-        attempted = undefined;
-      }
-
-      let dispatch = dispatches.find(({ id }) => !blocked.has(id));
-      if (!dispatch) {
-        // Nothing unblocked left. If something completed since these rows were set aside, they get
-        // one more turn in this pass -- that completion may be exactly the lease they were waiting
-        // on. If nothing did, this pass has done all it can and the next wake owns the retry.
-        if (!progressedSinceRetry) return;
-        blocked.clear();
-        progressedSinceRetry = false;
-        // Nothing is set aside any more, so this is the head of the queue: the same row a pass that
-        // had skipped nothing would have taken.
-        dispatch = dispatches[0];
-        if (!dispatch) return;
-      }
-      attempted = dispatch.id;
-
+  const executeDispatch = async (
+    dispatch: WorkflowDispatch,
+    adapter: ProviderAdapter,
+  ): Promise<DispatchTaskResult> => {
+    try {
       const snapshotResult = deps.state.query({
         type: "GET_WORKFLOW_SNAPSHOT",
         workItemId: dispatch.workItemId,
@@ -162,48 +87,133 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         throw new StateStoreError("PERSISTENCE_FAILURE", "A pending workflow dispatch is incomplete");
       }
 
-      // A dispatch whose attempt is already RUNNING was picked back up after a restart: spec §6.4
-      // makes that the ordinary end of a ProviderSession, so reconciliation closed the orphaned
-      // session and the attempt keeps going from its last checkpoint rather than starting over.
+      // A3 reservations replace the old mark-only transition for executable agent stages.
+      // ACCEPTANCE remains the owner gate and therefore has no synthetic AgentRun.
       if (stageAttempt.status !== "RUNNING") {
-        const started = deps.state.execute({
-          schemaVersion: 1,
-          commandId: `mark-started-${dispatch.id}`,
-          correlationId: `dispatch-${dispatch.id}`,
-          actor: { type: "SYSTEM", id: "local-daemon" },
-          type: "MARK_WORKFLOW_DISPATCH_STARTED",
-          payload: { dispatchId: dispatch.id },
-        });
-        if (started.type !== "WORKFLOW_DISPATCH_STARTED") {
-          throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow dispatch did not start");
+        if (stageAttempt.stage === "ACCEPTANCE") {
+          const started = deps.state.execute({
+            schemaVersion: 1,
+            commandId: `mark-started-${dispatch.id}`,
+            correlationId: `dispatch-${dispatch.id}`,
+            actor: { type: "SYSTEM", id: "local-daemon" },
+            type: "MARK_WORKFLOW_DISPATCH_STARTED",
+            payload: { dispatchId: dispatch.id },
+          });
+          if (started.type !== "WORKFLOW_DISPATCH_STARTED") {
+            throw new StateStoreError("PERSISTENCE_FAILURE", "The owner-acceptance dispatch did not start");
+          }
+        } else {
+          const provider = adapter.capabilities().provider;
+          const started = deps.state.execute({
+            schemaVersion: 1,
+            commandId: `start-agent-run-${dispatch.id}`,
+            correlationId: `dispatch-${dispatch.id}`,
+            actor: { type: "SYSTEM", id: "local-daemon" },
+            type: "START_AGENT_RUN",
+            payload: {
+              dispatchId: dispatch.id,
+              provider,
+              limits: agentRunClaimLimits(schedulingLimits, dispatch.projectId, provider),
+            },
+          });
+          if (started.type !== "AGENT_RUN_STARTED") {
+            throw new StateStoreError("PERSISTENCE_FAILURE", "The AgentRun reservation did not start");
+          }
         }
       }
 
-      const adapter = resolveAdapter(dispatch.projectId);
-      try {
-        await runStageAttempt({
-          state: deps.state,
-          adapter,
-          dispatch,
-          template: deps.template,
-          workspacesRoot: deps.workspacesRoot,
-          createCommandId: deps.createCommandId,
-          correlationId: `dispatch-${dispatch.id}`,
-          logger: deps.logger,
-          ...(deps.openMcpConnections === undefined ? {} : { openMcpConnections: deps.openMcpConnections }),
-          onSessionLive: (providerSessionId) => {
-            liveSessionId = providerSessionId;
-            liveAdapter = adapter;
-          },
-        });
-      } finally {
-        liveSessionId = null;
-        liveAdapter = null;
-      }
+      await runStageAttempt({
+        state: deps.state,
+        adapter,
+        dispatch,
+        template: deps.template,
+        workspacesRoot: deps.workspacesRoot,
+        createCommandId: deps.createCommandId,
+        correlationId: `dispatch-${dispatch.id}`,
+        logger: deps.logger,
+        ...(deps.openMcpConnections === undefined ? {} : { openMcpConnections: deps.openMcpConnections }),
+        onSessionLive: (providerSessionId) => {
+          if (providerSessionId === null) liveSessions.delete(dispatch.id);
+          else liveSessions.set(dispatch.id, { adapter, providerSessionId });
+        },
+      });
+    } catch (error: unknown) {
+      deps.logger.error(
+        { dispatchId: dispatch.id, error: error instanceof Error ? error.name : "unknown" },
+        "A background AgentRun could not finish",
+      );
+    } finally {
+      liveSessions.delete(dispatch.id);
     }
-    // There is no HTTP caller left to turn this into a 500 for: the worker has no caller at all.
-    // Logging and returning leaves the dispatch exactly where a request-driven drain would have left
-    // it after raising -- the next wake tries again rather than taking the whole worker down.
+
+    const queued = deps.state.query({ type: "LIST_PENDING_DISPATCHES" });
+    const moved =
+      queued.type === "WORKFLOW_DISPATCHES" && !queued.dispatches.some(({ id }) => id === dispatch.id);
+    return { dispatchId: dispatch.id, moved };
+  };
+
+  const runOnce = async (): Promise<void> => {
+    const blocked = new Set<string>();
+    let progressedSinceRetry = false;
+
+    const consumeOne = async (): Promise<boolean> => {
+      const settled = await Promise.race(activeTasks.values());
+      activeTasks.delete(settled.dispatchId);
+      if (settled.moved) {
+        return true;
+      }
+      blocked.add(settled.dispatchId);
+      deps.logger.info(
+        { dispatchId: settled.dispatchId },
+        "This pending workflow dispatch could not be started yet; the drain moves past it",
+      );
+      return false;
+    };
+
+    let cycle = 0;
+    while (cycle < DISPATCH_CYCLE_LIMIT) {
+      if (stopping) return;
+      const available = Math.max(0, schedulingLimits.global - activeTasks.size);
+      if (available > 0) {
+        const excludedDispatchIds = new Set([...blocked, ...activeTasks.keys()]);
+        const snapshot = readAgentSchedulingSnapshot({
+          state: deps.state,
+          resolveAdapter,
+          excludedDispatchIds,
+        });
+        const plan = planDispatchBatch({
+          candidates: snapshot.candidates,
+          activeRuns: snapshot.activeRuns,
+          limits: schedulingLimits,
+        });
+        const selected = plan.selectedDispatchIds.slice(0, available);
+        for (const dispatchId of selected) {
+          const context = snapshot.contexts.get(dispatchId);
+          if (!context) {
+            throw new StateStoreError("PERSISTENCE_FAILURE", "A selected dispatch lost its context");
+          }
+          activeTasks.set(dispatchId, executeDispatch(context.dispatch, context.adapter));
+        }
+        if (selected.length > 0) {
+          cycle += selected.length;
+          continue;
+        }
+      }
+
+      if (activeTasks.size > 0) {
+        if (await consumeOne()) progressedSinceRetry = true;
+        continue;
+      }
+      if (progressedSinceRetry && blocked.size > 0) {
+        cycle += 1;
+        blocked.clear();
+        progressedSinceRetry = false;
+        continue;
+      }
+      return;
+    }
+
+    while (activeTasks.size > 0) await consumeOne();
     deps.logger.error(
       { limit: DISPATCH_CYCLE_LIMIT },
       "The workflow dispatch queue exceeded its safety limit",
@@ -255,7 +265,7 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
       });
     },
     whenIdle: () =>
-      stopping || (!running && !pending)
+      stopping || (!running && !pending && activeTasks.size === 0)
         ? Promise.resolve()
         : new Promise<void>((resolve) => {
             idleWaiters.push(resolve);
@@ -266,9 +276,11 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
       // Spec D5: the provider is told to stop, and we do not wait to be told it did. `abortSession`
       // resolving is not proof the run ended -- that gap is the next milestone's, where there will
       // finally be an adapter capable of failing to stop.
-      if (liveSessionId !== null && liveAdapter !== null) {
-        await liveAdapter.abortSession(liveSessionId).catch(() => undefined);
-      }
+      await Promise.all(
+        [...liveSessions.values()].map(({ adapter, providerSessionId }) =>
+          adapter.abortSession(providerSessionId).catch(() => undefined),
+        ),
+      );
       settleIdle();
     },
   };

@@ -26,6 +26,7 @@ const runtimeWorkspacePackages = [
   "packages/project-constitution",
   "packages/project-readiness",
   "packages/project-scaffolding",
+  "packages/scheduler",
   "packages/provider-claude-code",
   "packages/provider-codex",
   "packages/provider-core",

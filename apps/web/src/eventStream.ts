@@ -24,12 +24,13 @@ export const scopesForSignal = (signal: EventSignal): readonly QueryScope[] => {
     case "WORK_ITEM":
       return [
         ["attention"],
+        ["agent-fleet"],
         ["projects", signal.projectId],
         ["work-items", signal.aggregateId],
         ["stage-attempts"],
       ];
     case "PROJECT":
-      return [["attention"], ["projects", signal.projectId], ["projects"]];
+      return [["attention"], ["agent-fleet"], ["projects", signal.projectId], ["projects"]];
     default: {
       const unhandled: never = signal.aggregateType;
       throw new Error(`Unhandled event signal aggregate type: ${String(unhandled)}`);

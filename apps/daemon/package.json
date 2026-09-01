@@ -28,6 +28,7 @@
     "@loomrail/project-constitution": "workspace:*",
     "@loomrail/project-readiness": "workspace:*",
     "@loomrail/project-scaffolding": "workspace:*",
+    "@loomrail/scheduler": "workspace:*",
     "@loomrail/provider-claude-code": "workspace:*",
     "@loomrail/provider-codex": "workspace:*",
     "@loomrail/provider-core": "workspace:*",

@@ -8,6 +8,8 @@ import { DatabaseSync } from "node:sqlite";
 import type { ContextSources } from "@loomrail/context-assembly";
 import {
   acceptancePackageSchema,
+  agentRunSchema,
+  agentRunStatusSchema,
   maxAttentionProjectionSources,
   budgetPolicySchema,
   checkpointSchema,
@@ -44,6 +46,7 @@ import {
   scaffoldOperationSchema,
   securityFindingSchema,
   stageAttemptSchema,
+  squadAssignmentSchema,
   stateCommandResultSchema,
   stateCommandSchema,
   usageRecordSchema,
@@ -56,6 +59,8 @@ import {
   type BudgetPolicy,
   type Actor,
   type AcceptancePackage,
+  type AgentRun,
+  type AgentRunStatus,
   type Checkpoint,
   type ConstitutionProposal,
   type ConstitutionPublication,
@@ -85,6 +90,7 @@ import {
   type RegisterProjectCommand,
   type RepointFixtureProjectCommand,
   type StageAttempt,
+  type SquadAssignment,
   type StartMockPipelineCommand,
   type StateCommand,
   type StateCommandResult,
@@ -97,6 +103,7 @@ import {
 import {
   ConstitutionDomainError,
   buildAttentionInbox,
+  builtinAgentProfiles,
   canonicalMcpProfileSource,
   decideProjectReadinessAssessment,
   decideProjectReadinessAttestation,
@@ -115,6 +122,9 @@ import {
   decideProjectScaffoldFailed,
   decideProjectScaffoldRequested,
   decideProjectScaffoldRetry,
+  createAgentRun,
+  createStandardSquadAssignment,
+  finishAgentRun,
   decideMarkWorkflowDispatchStarted,
   decideMcpCapabilitySnapshot,
   decideMcpProfileConfirmation,
@@ -211,6 +221,37 @@ const workItemRowSchema = z.object({
   version: z.number().int(),
   created_at: z.string(),
   updated_at: z.string(),
+});
+
+const squadAssignmentRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  revision: z.number().int(),
+  stages_json: z.string(),
+  created_at: z.string(),
+});
+
+const agentRunRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  stage_attempt_id: z.string(),
+  ordinal: z.number().int(),
+  squad_assignment_id: z.string(),
+  profile_id: z.string(),
+  profile_revision: z.number().int(),
+  profile_role: z.string(),
+  provider: z.string(),
+  status: z.string(),
+  policy_snapshot_hash: z.string(),
+  started_at: z.string(),
+  finished_at: z.string().nullable(),
+  version: z.number().int(),
 });
 
 const criterionRowSchema = z.object({ criterion: z.string() });
@@ -603,6 +644,7 @@ const decisionRowSchema = z.object({
 const providerSessionRowSchema = z.object({
   id: z.string(),
   schema_version: z.number().int(),
+  agent_run_id: z.string().nullable(),
   stage_attempt_id: z.string(),
   ordinal: z.number().int(),
   status: z.string(),
@@ -704,6 +746,14 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("LIST_PENDING_DISPATCHES") }).strict(),
+  z.object({ type: z.literal("GET_SQUAD_ASSIGNMENT"), pipelineRunId: opaqueIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal("LIST_AGENT_RUNS"),
+      status: agentRunStatusSchema.optional(),
+      limit: z.number().int().min(1).max(200).default(200),
+    })
+    .strict(),
   z
     .object({
       type: z.literal("LIST_WORK_ITEMS"),
@@ -1024,6 +1074,45 @@ const workItemWorkspaceFromRow = (value: unknown): WorkItemWorkspace => {
   });
 };
 
+const squadAssignmentFromRow = (value: unknown): SquadAssignment => {
+  const row = squadAssignmentRowSchema.parse(value);
+  return squadAssignmentSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    revision: row.revision,
+    stages: parseJson(row.stages_json),
+    createdAt: row.created_at,
+  });
+};
+
+const agentRunFromRow = (value: unknown): AgentRun => {
+  const row = agentRunRowSchema.parse(value);
+  return agentRunSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    stageAttemptId: row.stage_attempt_id,
+    ordinal: row.ordinal,
+    squadAssignmentId: row.squad_assignment_id,
+    profile: {
+      id: row.profile_id,
+      revision: row.profile_revision,
+      role: row.profile_role,
+    },
+    provider: row.provider,
+    status: row.status,
+    policySnapshotHash: row.policy_snapshot_hash,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    version: row.version,
+  });
+};
+
 const budgetPolicyFromRow = (value: unknown): BudgetPolicy => {
   const row = budgetPolicyRowSchema.parse(value);
   return budgetPolicySchema.parse({
@@ -1213,6 +1302,7 @@ const providerSessionFromParsedRow = (row: ProviderSessionRow): ProviderSession 
   return providerSessionSchema.parse({
     schemaVersion: row.schema_version,
     id: row.id,
+    agentRunId: row.agent_run_id,
     stageAttemptId: row.stage_attempt_id,
     ordinal: row.ordinal,
     status: row.status,
@@ -2001,6 +2091,46 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectCurrentBudgetPolicy = database.prepare(
       "SELECT * FROM budget_policies WHERE pipeline_run_id = ? ORDER BY revision DESC LIMIT 1",
     );
+    const selectLatestSquadAssignment = database.prepare(
+      "SELECT * FROM squad_assignments WHERE pipeline_run_id = ? ORDER BY revision DESC LIMIT 1",
+    );
+    const insertSquadAssignment = database.prepare(
+      `INSERT INTO squad_assignments (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, revision, stages_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectRunningAgentRunForStageAttempt = database.prepare(
+      "SELECT * FROM agent_runs WHERE stage_attempt_id = ? AND status = 'RUNNING' LIMIT 1",
+    );
+    const selectRunningAgentRuns = database.prepare(
+      "SELECT * FROM agent_runs WHERE status = 'RUNNING' ORDER BY started_at, id",
+    );
+    const selectRunningAgentRunForWorkItem = database.prepare(
+      "SELECT id FROM agent_runs WHERE work_item_id = ? AND status = 'RUNNING' LIMIT 1",
+    );
+    const countRunningAgentRuns = database.prepare(
+      "SELECT COUNT(*) AS count FROM agent_runs WHERE status = 'RUNNING'",
+    );
+    const countRunningAgentRunsForProject = database.prepare(
+      "SELECT COUNT(*) AS count FROM agent_runs WHERE status = 'RUNNING' AND project_id = ?",
+    );
+    const countRunningAgentRunsForProvider = database.prepare(
+      "SELECT COUNT(*) AS count FROM agent_runs WHERE status = 'RUNNING' AND provider = ?",
+    );
+    const selectMaxAgentRunOrdinal = database.prepare(
+      "SELECT COALESCE(MAX(ordinal), 0) AS max_ordinal FROM agent_runs WHERE stage_attempt_id = ?",
+    );
+    const insertAgentRun = database.prepare(
+      `INSERT INTO agent_runs (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id, ordinal,
+        squad_assignment_id, profile_id, profile_revision, profile_role, provider, status,
+        policy_snapshot_hash, started_at, finished_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateAgentRunStatus = database.prepare(
+      `UPDATE agent_runs SET status = ?, finished_at = ?, version = ?
+       WHERE id = ? AND version = ? AND status = 'RUNNING'`,
+    );
     const selectAcceptancePackageById = database.prepare("SELECT * FROM acceptance_packages WHERE id = ?");
     const selectAcceptancePackageByRun = database.prepare(
       "SELECT * FROM acceptance_packages WHERE pipeline_run_id = ?",
@@ -2020,9 +2150,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     );
     const insertProviderSession = database.prepare(
       `INSERT INTO provider_sessions (
-        id, schema_version, stage_attempt_id, ordinal, status, end_reason, handoff_requested_at,
-        started_at, ended_at, version, process_pid
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, schema_version, agent_run_id, stage_attempt_id, ordinal, status, end_reason,
+        handoff_requested_at, started_at, ended_at, version, process_pid
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const updateProviderSession = database.prepare(
       `UPDATE provider_sessions
@@ -3286,6 +3416,112 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         correlationId: metadata.correlationId,
         data: intent.data,
       });
+    };
+
+    type AgentEventIntent =
+      | { type: "SQUAD_ASSIGNED"; data: { assignment: SquadAssignment } }
+      | { type: "AGENT_RUN_STARTED"; data: { run: AgentRun } }
+      | { type: "AGENT_RUN_FINISHED"; data: { run: AgentRun } };
+
+    const appendAgentEvent = (
+      intent: AgentEventIntent,
+      metadata: {
+        workItemId: string;
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "WORK_ITEM",
+        metadata.workItemId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "WORK_ITEM",
+        aggregateId: metadata.workItemId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
+    const finishActiveAgentRun = (
+      stageAttemptId: string,
+      status: Exclude<AgentRunStatus, "RUNNING">,
+      metadata: {
+        workItemId: string;
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): AgentRun | null => {
+      const value = selectRunningAgentRunForStageAttempt.get(stageAttemptId);
+      if (value === undefined) return null;
+      const current = agentRunFromRow(value);
+      const finished = finishAgentRun(current, status, metadata.occurredAt);
+      const update = updateAgentRunStatus.run(
+        finished.status,
+        finished.finishedAt,
+        finished.version,
+        finished.id,
+        current.version,
+      );
+      if (update.changes !== 1) {
+        throw new StateStoreError("PERSISTENCE_FAILURE", "The AgentRun changed while it was being finished");
+      }
+
+      const workspace = readWorkItemWorkspaceByWorkItemId(finished.workItemId);
+      if (workspace?.leaseHolder === stageAttemptId) {
+        const release = releaseWorkItemWorkspaceLease.run(workspace.id, workspace.version, stageAttemptId);
+        if (release.changes !== 1) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The AgentRun workspace lease changed while the run was being finished",
+          );
+        }
+      }
+      appendAgentEvent({ type: "AGENT_RUN_FINISHED", data: { run: finished } }, metadata);
+      return finished;
+    };
+
+    const terminalAgentRunStatus = (
+      status: StageAttempt["status"],
+    ): Exclude<AgentRunStatus, "RUNNING"> | null => {
+      switch (status) {
+        case "SUCCEEDED":
+        case "FAILED":
+        case "CANCELLED":
+        case "INTERRUPTED":
+        case "WAITING_HUMAN":
+        case "SOFT_PAUSED":
+        case "HARD_PAUSED":
+          return status;
+        case "RECOVERING":
+        case "STALE":
+          return "INTERRUPTED";
+        case "PENDING":
+        case "QUEUED":
+        case "RUNNING":
+          return null;
+      }
     };
 
     type WorkspaceEventIntent =
@@ -4564,13 +4800,33 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         insertStageAttempt(decision.stageAttempt);
         insertBudgetPolicy(decision.budgetPolicy);
         insertWorkflowDispatch(decision.dispatch);
-        const events = appendWorkflowEvents(decision.events, {
+        const assignment = createStandardSquadAssignment({
+          id: createId("squadAssignment"),
+          projectId: decision.workItem.projectId,
+          workItemId: decision.workItem.id,
+          pipelineRunId: decision.run.id,
+          revision: 1,
+          now: occurredAt,
+        });
+        insertSquadAssignment.run(
+          assignment.id,
+          assignment.schemaVersion,
+          assignment.projectId,
+          assignment.workItemId,
+          assignment.pipelineRunId,
+          assignment.revision,
+          JSON.stringify(assignment.stages),
+          assignment.createdAt,
+        );
+        const eventMetadata = {
           workItemId: decision.workItem.id,
           projectId: decision.workItem.projectId,
           actor: command.actor,
           occurredAt,
           correlationId: command.correlationId,
-        });
+        };
+        const events = appendWorkflowEvents(decision.events, eventMetadata);
+        appendAgentEvent({ type: "SQUAD_ASSIGNED", data: { assignment } }, eventMetadata);
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "PIPELINE_STARTED",
@@ -4621,6 +4877,225 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           run: decision.run,
           stageAttempt: decision.stageAttempt,
           dispatch: decision.dispatch,
+          events,
+        });
+      }
+
+      if (command.type === "START_AGENT_RUN") {
+        if (command.actor.type !== "SYSTEM" || command.actor.id !== "local-daemon") {
+          throw new StateStoreError(
+            "AGENT_RUN_ACTOR_FORBIDDEN",
+            "Only the local daemon may reserve an AgentRun",
+          );
+        }
+        const dispatch = readWorkflowDispatch(command.payload.dispatchId);
+        if (!dispatch) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_DISPATCH_NOT_FOUND",
+            "The workflow dispatch does not exist",
+          );
+        }
+        const workflowRun = readPipelineRun(dispatch.pipelineRunId);
+        const stageAttempt = readStageAttempt(dispatch.stageAttemptId);
+        const workItem = readWorkItem(dispatch.workItemId);
+        if (!workflowRun || !stageAttempt || !workItem) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow state is incomplete");
+        }
+        if (selectRunningAgentRunForStageAttempt.get(stageAttempt.id) !== undefined) {
+          throw new StateStoreError(
+            "AGENT_RUN_ALREADY_ACTIVE",
+            "The StageAttempt already has a running AgentRun",
+            { scope: "STAGE_ATTEMPT" },
+          );
+        }
+        if (selectRunningAgentRunForWorkItem.get(workItem.id) !== undefined) {
+          throw new StateStoreError(
+            "AGENT_RUN_ALREADY_ACTIVE",
+            "The WorkItem already has a running AgentRun",
+            { scope: "WORK_ITEM" },
+          );
+        }
+
+        const capacityChecks = [
+          {
+            scope: "GLOBAL",
+            active: countRowSchema.parse(countRunningAgentRuns.get()).count,
+            limit: command.payload.limits.global,
+          },
+          {
+            scope: "PROJECT",
+            active: countRowSchema.parse(countRunningAgentRunsForProject.get(workItem.projectId)).count,
+            limit: command.payload.limits.project,
+          },
+          {
+            scope: "PROVIDER",
+            active: countRowSchema.parse(countRunningAgentRunsForProvider.get(command.payload.provider))
+              .count,
+            limit: command.payload.limits.provider,
+          },
+        ] as const;
+        const exhausted = capacityChecks.find(({ active, limit }) => active >= limit);
+        if (exhausted) {
+          throw new StateStoreError(
+            "AGENT_RUN_CAPACITY_EXHAUSTED",
+            `${exhausted.scope} AgentRun capacity is exhausted`,
+            { scope: exhausted.scope, active: exhausted.active, limit: exhausted.limit },
+          );
+        }
+
+        const decision = decideMarkWorkflowDispatchStarted(
+          {
+            schemaVersion: 1,
+            commandId: command.commandId,
+            correlationId: command.correlationId,
+            actor: command.actor,
+            type: "MARK_WORKFLOW_DISPATCH_STARTED",
+            payload: { dispatchId: dispatch.id },
+          },
+          { now: occurredAt, workItem, run: workflowRun, stageAttempt, dispatch },
+        );
+
+        const storedAssignment = selectLatestSquadAssignment.get(workflowRun.id);
+        const assignment =
+          storedAssignment === undefined
+            ? createStandardSquadAssignment({
+                id: createId("squadAssignment"),
+                projectId: workItem.projectId,
+                workItemId: workItem.id,
+                pipelineRunId: workflowRun.id,
+                revision: 1,
+                now: occurredAt,
+              })
+            : squadAssignmentFromRow(storedAssignment);
+        const assignmentWasCreated = storedAssignment === undefined;
+        if (assignmentWasCreated) {
+          insertSquadAssignment.run(
+            assignment.id,
+            assignment.schemaVersion,
+            assignment.projectId,
+            assignment.workItemId,
+            assignment.pipelineRunId,
+            assignment.revision,
+            JSON.stringify(assignment.stages),
+            assignment.createdAt,
+          );
+        }
+
+        const agentRunOrdinal = maxOrdinalRowSchema.parse(
+          selectMaxAgentRunOrdinal.get(stageAttempt.id),
+        ).max_ordinal;
+        const stageProfile = assignment.stages.find(({ stage }) => stage === stageAttempt.stage)?.profile;
+        const profile = stageProfile
+          ? builtinAgentProfiles.find(
+              (candidate) => candidate.id === stageProfile.id && candidate.revision === stageProfile.revision,
+            )
+          : undefined;
+        if (!profile) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The assigned AgentProfile revision is unavailable",
+          );
+        }
+        const existingWorkspace = readWorkItemWorkspaceByWorkItemId(workItem.id);
+        const policySnapshotHash = `sha256:${createHash("sha256")
+          .update(
+            canonicalJson({
+              schemaVersion: 1,
+              assignment: {
+                id: assignment.id,
+                revision: assignment.revision,
+                profile: stageProfile,
+              },
+              provider: command.payload.provider,
+              limits: command.payload.limits,
+              profilePolicy: {
+                allowedCapabilities: profile.allowedCapabilities,
+                defaultModelTier: profile.defaultModelTier,
+                budgetEnvelope: profile.budgetEnvelope,
+              },
+              workspace:
+                existingWorkspace === null
+                  ? null
+                  : {
+                      id: existingWorkspace.id,
+                      baseCommit: existingWorkspace.baseCommit,
+                      snapshotCommit: existingWorkspace.snapshotCommit,
+                    },
+            }),
+          )
+          .digest("hex")}`;
+        const agentRun = createAgentRun({
+          id: createId("agentRun"),
+          projectId: workItem.projectId,
+          workItemId: workItem.id,
+          pipelineRunId: workflowRun.id,
+          stageAttemptId: stageAttempt.id,
+          ordinal: agentRunOrdinal + 1,
+          stage: stageAttempt.stage,
+          assignment,
+          provider: command.payload.provider,
+          policySnapshotHash,
+          now: occurredAt,
+        });
+        insertAgentRun.run(
+          agentRun.id,
+          agentRun.schemaVersion,
+          agentRun.projectId,
+          agentRun.workItemId,
+          agentRun.pipelineRunId,
+          agentRun.stageAttemptId,
+          agentRun.ordinal,
+          agentRun.squadAssignmentId,
+          agentRun.profile.id,
+          agentRun.profile.revision,
+          agentRun.profile.role,
+          agentRun.provider,
+          agentRun.status,
+          agentRun.policySnapshotHash,
+          agentRun.startedAt,
+          agentRun.finishedAt,
+          agentRun.version,
+        );
+
+        if (existingWorkspace) {
+          if (existingWorkspace.status !== "READY") {
+            throw new StateStoreError(
+              "WORKSPACE_NOT_READY",
+              "The WorkItem workspace is not ready for an AgentRun",
+            );
+          }
+          const lease = acquireWorkItemWorkspaceLease.run(
+            stageAttempt.id,
+            existingWorkspace.id,
+            existingWorkspace.version,
+          );
+          if (lease.changes !== 1) {
+            throw new StateStoreError("WORKSPACE_LEASE_HELD", "The WorkItem workspace lease is already held");
+          }
+        }
+
+        updateStageAttempt(decision.stageAttempt);
+        const metadata = {
+          workItemId: workItem.id,
+          projectId: workItem.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        };
+        const events: DomainEvent[] = [];
+        if (assignmentWasCreated) {
+          events.push(appendAgentEvent({ type: "SQUAD_ASSIGNED", data: { assignment } }, metadata));
+        }
+        events.push(...appendWorkflowEvents(decision.events, metadata));
+        events.push(appendAgentEvent({ type: "AGENT_RUN_STARTED", data: { run: agentRun } }, metadata));
+
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "AGENT_RUN_STARTED",
+          replayed: false,
+          workItemId: workItem.id,
+          assignment,
+          run: agentRun,
           events,
         });
       }
@@ -4678,13 +5153,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (decision.nextStageAttempt) insertStageAttempt(decision.nextStageAttempt);
         if (decision.nextDispatch) insertWorkflowDispatch(decision.nextDispatch);
         decision.usageRecords.forEach(insertUsageRecord);
-        const events = appendWorkflowEvents(decision.events, {
+        const metadata = {
           workItemId: decision.workItem.id,
           projectId: decision.workItem.projectId,
           actor: command.actor,
           occurredAt,
           correlationId: command.correlationId,
-        });
+        };
+        const agentStatus = terminalAgentRunStatus(decision.stageAttempt.status);
+        if (agentStatus) finishActiveAgentRun(decision.stageAttempt.id, agentStatus, metadata);
+        const events = appendWorkflowEvents(decision.events, metadata);
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "MOCK_PROVIDER_OUTCOME_APPLIED",
@@ -4845,13 +5323,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             )
             .run(occurredAt, workItem.id);
         }
-        const events = appendWorkflowEvents(decision.events, {
+        const metadata = {
           workItemId: workItem.id,
           projectId: workItem.projectId,
           actor: command.actor,
           occurredAt,
           correlationId: command.correlationId,
-        });
+        };
+        const agentStatus = terminalAgentRunStatus(decision.stageAttempt.status);
+        if (agentStatus) finishActiveAgentRun(decision.stageAttempt.id, agentStatus, metadata);
+        const events = appendWorkflowEvents(decision.events, metadata);
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "PIPELINE_CONTROL_APPLIED",
@@ -4914,6 +5395,38 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
       if (command.type === "RECONCILE_WORKFLOWS") {
         const interruptedSessions: ProviderSession[] = [];
+        // AgentRun is the A3 concurrency authority. Every RUNNING row at startup is orphaned even
+        // when no ProviderSession was created yet; ending all of them first frees capacity and
+        // ensures the dispatch-level recovery below never resurrects one implicitly.
+        for (const runRow of selectRunningAgentRuns.all()) {
+          const current = agentRunFromRow(runRow);
+          const interrupted = finishAgentRun(current, "INTERRUPTED", occurredAt);
+          const update = updateAgentRunStatus.run(
+            interrupted.status,
+            interrupted.finishedAt,
+            interrupted.version,
+            interrupted.id,
+            current.version,
+          );
+          if (update.changes !== 1) {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "An orphaned AgentRun changed while it was being interrupted",
+            );
+          }
+          // The existing reconciliation result predates A3 and intentionally remains compatible
+          // with old command receipts; the durable Event is the new lifecycle fact.
+          appendAgentEvent(
+            { type: "AGENT_RUN_FINISHED", data: { run: interrupted } },
+            {
+              workItemId: interrupted.workItemId,
+              projectId: interrupted.projectId,
+              actor: command.actor,
+              occurredAt,
+              correlationId: command.correlationId,
+            },
+          );
+        }
         // A STARTED record means the request may already have crossed the stdio boundary. Recovery
         // records uncertainty before dispatch resumes and never retries it automatically.
         for (const callRow of selectStartedMcpToolCalls.all()) {
@@ -4991,7 +5504,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             );
           }
           interruptedSessions.push(session);
-          attemptsWithInterruptedSession.add(session.stageAttemptId);
+          // Historical sessions had no AgentRun and keep A1's continuation semantics. An A3
+          // session belongs to a run just interrupted above, so its StageAttempt must follow the
+          // ordinary AD-008 dispatch recovery path instead of being silently resumed.
+          if (session.agentRunId === null) attemptsWithInterruptedSession.add(session.stageAttemptId);
           events.push(
             appendSessionEvent(
               { type: "PROVIDER_SESSION_ENDED", data: { session } },
@@ -5215,9 +5731,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const maxOrdinal = maxOrdinalRowSchema.parse(
           selectMaxProviderSessionOrdinal.get(command.payload.stageAttemptId),
         ).max_ordinal;
+        const activeAgentRunValue = database
+          .prepare("SELECT * FROM agent_runs WHERE stage_attempt_id = ? AND status = 'RUNNING' LIMIT 1")
+          .get(command.payload.stageAttemptId);
+        const activeAgentRun =
+          activeAgentRunValue === undefined ? null : agentRunFromRow(activeAgentRunValue);
         const session = providerSessionSchema.parse({
           schemaVersion: 1,
           id: createId("providerSession"),
+          agentRunId: activeAgentRun?.id ?? null,
           stageAttemptId: command.payload.stageAttemptId,
           ordinal: maxOrdinal + 1,
           status: "RUNNING",
@@ -5237,6 +5759,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         insertProviderSession.run(
           session.id,
           session.schemaVersion,
+          session.agentRunId,
           session.stageAttemptId,
           session.ordinal,
           session.status,
@@ -5533,6 +6056,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             }
           }
         }
+        const agentStatus = terminalAgentRunStatus(attemptAfterEnd.status);
+        if (agentStatus) finishActiveAgentRun(attemptAfterEnd.id, agentStatus, eventMetadata);
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "PROVIDER_SESSION_ENDED",
@@ -5721,13 +6246,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         updateWorkflowWorkItem(decision.workItem);
         if (decision.dispatch) updateWorkflowDispatch(decision.dispatch);
         insertHumanRequest(decision.request);
-        const events = appendWorkflowEvents(decision.events, {
+        const metadata = {
           workItemId: workItem.id,
           projectId: workItem.projectId,
           actor: command.actor,
           occurredAt,
           correlationId: command.correlationId,
-        });
+        };
+        finishActiveAgentRun(decision.stageAttempt.id, "HARD_PAUSED", metadata);
+        const events = appendWorkflowEvents(decision.events, metadata);
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "STAGE_ATTEMPT_HARD_PAUSED",
@@ -5758,6 +6285,21 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (selectWorkItemWorkspaceByWorkItemId.get(command.payload.workItemId) !== undefined) {
           throw new StateStoreError("WORKSPACE_ALREADY_EXISTS", "The WorkItem already has a workspace");
         }
+        const initialLeaseHolder = command.payload.initialLeaseHolder ?? null;
+        if (initialLeaseHolder !== null) {
+          const leaseAttempt = readStageAttempt(initialLeaseHolder);
+          const activeAgentRun = selectRunningAgentRunForStageAttempt.get(initialLeaseHolder);
+          if (
+            leaseAttempt?.workItemId !== workItem.id ||
+            leaseAttempt.projectId !== workItem.projectId ||
+            activeAgentRun === undefined
+          ) {
+            throw new StateStoreError(
+              "AGENT_RUN_NOT_ACTIVE",
+              "The initial workspace lease needs an active AgentRun for this WorkItem",
+            );
+          }
+        }
         const workspace = workItemWorkspaceSchema.parse({
           schemaVersion: 1,
           id: createId("workItemWorkspace"),
@@ -5768,7 +6310,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           baseCommit: command.payload.baseCommit,
           snapshotCommit: command.payload.snapshotCommit,
           status: "READY",
-          leaseHolder: null,
+          leaseHolder: initialLeaseHolder,
           createdAt: occurredAt,
           version: 1,
         });
@@ -6267,10 +6809,32 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           return {
             type: "WORKFLOW_DISPATCHES",
             dispatches: database
-              .prepare("SELECT * FROM workflow_dispatches WHERE status = 'PENDING' ORDER BY created_at, id")
+              .prepare(
+                "SELECT * FROM workflow_dispatches WHERE status = 'PENDING' ORDER BY created_at, id LIMIT 200",
+              )
               .all()
               .map(workflowDispatchFromRow),
           };
+        case "GET_SQUAD_ASSIGNMENT": {
+          const row = selectLatestSquadAssignment.get(queryValue.pipelineRunId);
+          return {
+            type: "SQUAD_ASSIGNMENT",
+            assignment: row === undefined ? null : squadAssignmentFromRow(row),
+          };
+        }
+        case "LIST_AGENT_RUNS": {
+          const rows =
+            queryValue.status === undefined
+              ? database
+                  .prepare("SELECT * FROM agent_runs ORDER BY started_at DESC, id DESC LIMIT ?")
+                  .all(queryValue.limit)
+              : database
+                  .prepare(
+                    "SELECT * FROM agent_runs WHERE status = ? ORDER BY started_at DESC, id DESC LIMIT ?",
+                  )
+                  .all(queryValue.status, queryValue.limit);
+          return { type: "AGENT_RUNS", runs: rows.map(agentRunFromRow) };
+        }
         case "LIST_WORK_ITEMS": {
           const rows =
             queryValue.state === undefined

@@ -87,6 +87,18 @@ in Mock mode. Ordinary use does not require this variable.
 The button starts the same bounded Discovery → Plan → Implementation → Review → QA → Acceptance template for every
 provider. With the default provider, the mock supplies deterministic stage results; with Codex, real sessions do.
 
+### Watch parallel work in Agent Fleet
+
+Open **Agent Fleet** in the sidebar to see agent work across every local Project. Each row identifies the Task,
+Project, assigned versioned role, stage, provider, and either **Running**, **Ready**, or **Waiting**. A waiting row also
+states the exact scheduler reason, such as a global, Project, provider, checkpoint, or workspace limit. Select the
+Task name to return to its Task Cockpit.
+
+Loomrail runs at most three AgentRuns at once by default. The Fleet count is a read-only projection of durable queue
+and run state, not a second scheduler: reloading the page or restarting Loomrail reconstructs it from SQLite. Fleet
+cannot grant permissions, raise a budget, answer a Human Request, or accept a delivery. Those actions stay in their
+existing owner gates.
+
 ### Answer the Human Request
 
 The mock Discovery stage opens a blocking question and the task becomes **Waiting for you**. Open **Attention** in the

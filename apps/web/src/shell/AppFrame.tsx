@@ -45,6 +45,7 @@ import {
   useProjectReadiness,
   useProjectProviderSelection,
   useAttentionInbox,
+  useAgentFleet,
   useRegisterRepositoryProject,
   useRepairFixtureProject,
   useRetryProjectConstitutionPublication,
@@ -990,7 +991,7 @@ const SidebarLink = ({
   countOverflow?: boolean;
   icon: IconName;
   label: string;
-  to: "/" | "/attention";
+  to: "/" | "/attention" | "/fleet";
 }): React.JSX.Element => {
   const content = (
     <>
@@ -1002,12 +1003,22 @@ const SidebarLink = ({
     </>
   );
   const className = cn("app-nav-link", active && "is-active");
-  return to === "/" ? (
-    <Link className={className} search={{}} to="/">
-      {content}
-    </Link>
-  ) : (
-    <Link className={className} to="/attention">
+  if (to === "/") {
+    return (
+      <Link className={className} search={{}} to="/">
+        {content}
+      </Link>
+    );
+  }
+  if (to === "/attention") {
+    return (
+      <Link className={className} to="/attention">
+        {content}
+      </Link>
+    );
+  }
+  return (
+    <Link className={className} to="/fleet">
       {content}
     </Link>
   );
@@ -1051,6 +1062,7 @@ const WorkspaceNavigation = ({
   const { t } = useI18n();
   const { connection, projects, selectedProject, selectProject } = useWorkspace();
   const attentionQuery = useAttentionInbox();
+  const fleetQuery = useAgentFleet();
   const pathname = useLocation({ select: (location) => location.pathname });
   const connected = connection?.status === "connected";
   const projectInitial = selectedProject?.name.slice(0, 1).toUpperCase() ?? "–";
@@ -1058,6 +1070,7 @@ const WorkspaceNavigation = ({
   const { clipped: projectNameClipped, ref: projectNameRef } = useClippedLabel(projectName);
   const attentionCount = attentionQuery.data?.items.length ?? 0;
   const onAttention = pathname === "/attention";
+  const onFleet = pathname === "/fleet";
 
   return (
     <>
@@ -1096,7 +1109,14 @@ const WorkspaceNavigation = ({
           </div>
         )}
         <nav aria-label={t("nav.workspace")} className="app-nav app-nav--nested" onClick={onNavigate}>
-          <SidebarLink active={!onAttention} icon="board" label={t("nav.currentWork")} to="/" />
+          <SidebarLink active={pathname === "/"} icon="board" label={t("nav.currentWork")} to="/" />
+          <SidebarLink
+            active={onFleet}
+            icon="agents"
+            label={t("nav.fleet")}
+            to="/fleet"
+            {...(fleetQuery.data === undefined ? {} : { count: fleetQuery.data.capacity.active })}
+          />
           <SidebarLink
             active={onAttention}
             count={attentionCount}
@@ -1130,7 +1150,7 @@ const WorkspaceNavigation = ({
 export const AppFrame = (): React.JSX.Element => {
   const { t } = useI18n();
   const { connectionPending, projectsPending, selectedProject } = useWorkspace();
-  const onAttention = useLocation({ select: (location) => location.pathname === "/attention" });
+  const pathname = useLocation({ select: (location) => location.pathname });
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const projectInitial = selectedProject?.name.slice(0, 1).toUpperCase() ?? "–";
@@ -1187,7 +1207,15 @@ export const AppFrame = (): React.JSX.Element => {
               {selectedProject?.name ?? t("project.noneSingle")}
             </span>
             <Icon name="chevronRight" size={12} />
-            <strong>{t(onAttention ? "attention.inboxTitle" : "work.current")}</strong>
+            <strong>
+              {t(
+                pathname === "/attention"
+                  ? "attention.inboxTitle"
+                  : pathname === "/fleet"
+                    ? "fleet.title"
+                    : "work.current",
+              )}
+            </strong>
           </div>
           <div className="app-topbar__actions">
             <NewTaskDialog />

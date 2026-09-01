@@ -22,6 +22,31 @@ _Не означает_: колонка Kanban или work state.
 Durable намерение запустить или возобновить StageAttempt.
 _Не означает_: уже выполненный provider turn.
 
+**AgentProfile**:
+Versioned постоянная роль с mission, policy defaults, permission profile, model tier, budget envelope и role
+playbook.
+_Не означает_: живой процесс, provider account или право расширить Project policy.
+
+**SquadAssignment**:
+Неизменяемое назначение точных ревизий AgentProfile на executable stages одного approved PipelineRun.
+_Не означает_: групповой чат, весь доступный roster или автоматическое расширение scope.
+
+**AgentRun**:
+Один непрерывный запуск immutable AgentProfile revision на StageAttempt; canonical единица concurrency и
+проверяемого результата. Хранит hash immutable policy snapshot (assignment/profile/provider/effective policy),
+а точный состав provider input принадлежит ContextPackRecipe каждой ProviderSession. Resume после owner gate
+создаёт следующий ordinal; одновременно активен максимум один.
+_Не означает_: ProviderSession, worker promise или повтор stage.
+
+**ProviderSession**:
+Один provider-native запуск внутри AgentRun; handoff создаёт следующую session того же run.
+_Не означает_: workflow state, роль или отдельный concurrency slot.
+
+**Scheduler Plan**:
+Bounded deterministic выбор pending WorkflowDispatch, которые можно попытаться зарезервировать сейчас, с
+machine-readable причинами отсрочки.
+_Не означает_: durable claim, permission grant или право запустить provider process до SQLite transaction.
+
 **HumanRequest**:
 First-class запрос внимания с типом ответа, контекстом, последствиями и blocking semantics.
 _Не означает_: модалка, уведомление или канал передачи секретов.
@@ -144,8 +169,11 @@ _Не означает_: атомарный filesystem transaction, rollback ч�
 ```text
 WorkItem
   └── PipelineRun
+        ├── SquadAssignment
         ├── StageAttempt
-        │     └── WorkflowDispatch
+        │     ├── WorkflowDispatch
+        │     └── AgentRun
+        │           └── ProviderSession
         ├── EvidenceArtifact (Review / QA)
         ├── AcceptancePackage
         └── HumanRequest
@@ -166,3 +194,8 @@ versioned `Accept`, `Return to work` или `Reject` закрывают Acceptan
 Attention Inbox читает все Project одной локальной session, но state не меняет. `ANSWER_REQUEST` использует тот же
 атомарный `Answer & resume`; `REVIEW_ACCEPTANCE` только открывает exact Project/WorkItem в Task Cockpit. Project name,
 WorkItem title и HumanRequest text остаются untrusted data и не участвуют в machine-readable классификации.
+
+Scheduler сортирует только bounded machine-readable candidates. Фактическое право занять global/project/provider
+slot и exclusive WorkItem claim появляется лишь у durable AgentRun после повторной проверки в transaction;
+существующий workspace lease берётся там же, а первый workspace записывается leased до provider spawn. Handoff
+внутри run concurrency не увеличивает.

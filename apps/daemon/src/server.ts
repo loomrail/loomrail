@@ -10,6 +10,7 @@ import helmet from "@fastify/helmet";
 import fastifyStatic from "@fastify/static";
 import {
   attentionInboxResponseSchema,
+  agentFleetResponseSchema,
   answerHumanRequestRequestSchema,
   attestProjectReadinessRequestSchema,
   adoptProjectConstitutionRequestSchema,
@@ -107,6 +108,7 @@ import {
   publishProjectScaffold,
 } from "@loomrail/project-scaffolding";
 import type { ProviderAdapter, ProviderId } from "@loomrail/provider-core";
+import { validateSchedulerLimits, type SchedulerLimits } from "@loomrail/scheduler";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import {
   GitMissingError,
@@ -120,6 +122,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { z, ZodError } from "zod";
 
 import { broadcastingState } from "./broadcasting-state.js";
+import { buildAgentFleet } from "./agent-fleet.js";
 import {
   CONTEXT7_PRESET_NAME,
   CONTEXT7_PRESET_TOOLS,
@@ -209,6 +212,8 @@ export type StartDaemonOptions = {
   providerAdapter?: ProviderAdapter;
   /** Injected availability/routing seam for deterministic provider-selection integration tests. */
   providerRegistry?: ProviderRegistry;
+  /** Optional bounded A3 concurrency policy; defaults to three globally, per Project and provider. */
+  schedulingLimits?: SchedulerLimits;
   /** Injected only for daemon route tests; production owns the real bounded stdio gateway. */
   mcpGateway?: McpGateway;
   // Injected for the same reason as `providerAdapter` above, and only for it: the heartbeat is the
@@ -604,6 +609,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   const providerRegistry = options.providerRegistry ?? createProviderRegistry({ env: registryEnvironment });
   await providerRegistry.refresh();
   const fixedProviderAdapter = options.providerAdapter;
+  const schedulingLimits = validateSchedulerLimits(options.schedulingLimits);
 
   let allowedOrigin = "";
   let closing = false;
@@ -930,6 +936,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     workspacesRoot,
     createCommandId: () => `session-${randomUUID()}`,
     logger: app.log,
+    schedulingLimits,
     openMcpConnections: createMcpConnectionOpener({
       state: localState,
       gateway: mcpGateway,
@@ -2402,6 +2409,22 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           );
         }
         return attentionInboxResponseSchema.parse(result.inbox);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/agent-fleet", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        return agentFleetResponseSchema.parse(
+          buildAgentFleet({
+            state: localState,
+            resolveAdapter: resolveProjectProvider,
+            schedulingLimits,
+          }),
+        );
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }

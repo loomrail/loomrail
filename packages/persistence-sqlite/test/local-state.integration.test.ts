@@ -21,6 +21,7 @@ import type {
   ReleaseWorkspaceLeaseCommand,
   RequestContextHandoffCommand,
   StartMockPipelineCommand,
+  StartAgentRunCommand,
   StartProviderSessionCommand,
   UpdateWorkItemCommand,
 } from "@loomrail/contracts";
@@ -733,7 +734,7 @@ describe("SQLite local state", () => {
 
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -741,6 +742,248 @@ describe("SQLite local state", () => {
     const backup = new DatabaseSync(localState.startup.backupPath, { readOnly: true });
     expect(backup.prepare("SELECT value FROM legacy_marker").get()).toEqual({ value: "preserve-me" });
     backup.close();
+  });
+
+  describe("A3 AgentRun reservation (migration 0020)", () => {
+    const startReadyWorkflow = (localState: LocalState, suffix: string, projectId = "project-web") => {
+      const created = localState.execute(createWorkItem(`create-${suffix}`, projectId));
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      localState.execute(moveWorkItem(`ready-${suffix}`, created.workItem.id, 1, "READY"));
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `pipeline-${suffix}`,
+        correlationId: `correlation-pipeline-${suffix}`,
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_MOCK_PIPELINE",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedVersion: 2,
+          template: mockTemplate,
+          budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+        },
+      });
+      const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
+      const dispatch = pending.dispatches.find(({ workItemId }) => workItemId === created.workItem.id);
+      if (!dispatch) throw new Error("Expected a pending dispatch");
+      return { workItemId: created.workItem.id, dispatch };
+    };
+
+    const startAgentRun = (
+      suffix: string,
+      dispatchId: string,
+      limits: StartAgentRunCommand["payload"]["limits"] = {
+        global: 3,
+        project: 3,
+        provider: 3,
+      },
+    ): StartAgentRunCommand => ({
+      schemaVersion: 1,
+      commandId: `agent-run-${suffix}`,
+      correlationId: `correlation-agent-run-${suffix}`,
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId,
+        provider: "CODEX",
+        limits,
+      },
+    });
+
+    it("claims one run atomically, audits it and replays idempotently", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { workItemId, dispatch } = startReadyWorkflow(localState, "a3-idempotent");
+
+      expect(() =>
+        localState.execute({
+          ...startAgentRun("human-refused", dispatch.id),
+          actor: { type: "HUMAN", id: "local-owner" },
+        }),
+      ).toThrow(expect.objectContaining({ code: "AGENT_RUN_ACTOR_FORBIDDEN" }));
+      expect(() =>
+        localState.execute({
+          ...startAgentRun("system-refused", dispatch.id),
+          actor: { type: "SYSTEM", id: "browser-proxy" },
+        }),
+      ).toThrow(expect.objectContaining({ code: "AGENT_RUN_ACTOR_FORBIDDEN" }));
+      expect(() =>
+        localState.execute(startAgentRun("paused", dispatch.id, { global: 0, project: 3, provider: 3 })),
+      ).toThrow(expect.objectContaining({ code: "AGENT_RUN_CAPACITY_EXHAUSTED" }));
+
+      const command = startAgentRun("accepted", dispatch.id);
+      const started = localState.execute(command);
+      const replayed = localState.execute(command);
+      if (started.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun start");
+      expect(started).toMatchObject({
+        type: "AGENT_RUN_STARTED",
+        replayed: false,
+        workItemId,
+        assignment: { revision: 1 },
+        run: {
+          stageAttemptId: dispatch.stageAttemptId,
+          ordinal: 1,
+          status: "RUNNING",
+          provider: "CODEX",
+          profile: { role: "PRODUCT_ANALYST" },
+        },
+        events: [{ type: "STAGE_ATTEMPT_CHANGED" }, { type: "AGENT_RUN_STARTED" }],
+      });
+      expect(replayed).toMatchObject({ type: "AGENT_RUN_STARTED", replayed: true });
+      expect(localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING", limit: 1 })).toMatchObject({
+        type: "AGENT_RUNS",
+        runs: [{ id: started.run.id }],
+      });
+      expect(() => localState.query({ type: "LIST_AGENT_RUNS", limit: 201 })).toThrow(ZodError);
+
+      const session = localState.execute({
+        schemaVersion: 1,
+        commandId: "start-a3-provider-session",
+        correlationId: "correlation-start-a3-provider-session",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "START_PROVIDER_SESSION",
+        payload: {
+          stageAttemptId: dispatch.stageAttemptId,
+          recipe: {
+            schemaVersion: 1,
+            templateId: mockTemplate.id,
+            templateVersion: mockTemplate.version,
+            specSource: "WORKFLOW_TEMPLATE",
+            sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
+            omitted: [],
+            contentHash: `sha256:${"0".repeat(64)}`,
+            estimatedTokens: 10,
+            budgetTokens: 100,
+            estimateQuality: "LOOMRAIL_ESTIMATE",
+          },
+        },
+      });
+      expect(session).toMatchObject({
+        type: "PROVIDER_SESSION_STARTED",
+        session: { agentRunId: started.run.id },
+      });
+      expect(() => localState.execute(startAgentRun("duplicate", dispatch.id))).toThrow(
+        expect.objectContaining({ code: "AGENT_RUN_ALREADY_ACTIVE" }),
+      );
+
+      const reconciled = localState.execute({
+        schemaVersion: 1,
+        commandId: "reconcile-a3-agent-run",
+        correlationId: "correlation-reconcile-a3-agent-run",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "RECONCILE_WORKFLOWS",
+        payload: {},
+      });
+      expect(reconciled).toMatchObject({
+        type: "WORKFLOWS_RECONCILED",
+        recoveryReports: [{ stageAttemptId: dispatch.stageAttemptId, recoveredStatus: "INTERRUPTED" }],
+        interruptedSessions: [{ agentRunId: started.run.id, endReason: "INTERRUPTED" }],
+      });
+      expect(localState.query({ type: "LIST_AGENT_RUNS", status: "INTERRUPTED" })).toMatchObject({
+        type: "AGENT_RUNS",
+        runs: [{ id: started.run.id, finishedAt: timestamp }],
+      });
+
+      const raw = new DatabaseSync(databasePath, { readOnly: true });
+      expect(raw.prepare("SELECT COUNT(*) AS count FROM squad_assignments").get()).toEqual({ count: 1 });
+      expect(raw.prepare("SELECT COUNT(*) AS count FROM agent_runs").get()).toEqual({ count: 1 });
+      expect(raw.prepare("SELECT status, finished_at FROM agent_runs").get()).toEqual({
+        status: "INTERRUPTED",
+        finished_at: timestamp,
+      });
+      raw.close();
+
+      const events = localState.query({ type: "LIST_EVENTS", aggregateId: workItemId });
+      expect(
+        events.type === "EVENTS" ? events.events.filter(({ type }) => type === "AGENT_RUN_FINISHED") : [],
+      ).toHaveLength(1);
+    });
+
+    it("enforces the default 3+1 boundary from durable active runs", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const workflows = ["one", "two", "three", "four"].map((suffix) =>
+        startReadyWorkflow(localState, `a3-${suffix}`),
+      );
+
+      for (const [index, workflow] of workflows.slice(0, 3).entries()) {
+        expect(
+          localState.execute(startAgentRun(`slot-${index.toString()}`, workflow.dispatch.id)),
+        ).toMatchObject({
+          type: "AGENT_RUN_STARTED",
+        });
+      }
+      const fourth = workflows[3];
+      if (!fourth) throw new Error("Expected a fourth workflow");
+      expect(() => localState.execute(startAgentRun("slot-four", fourth.dispatch.id))).toThrow(
+        expect.objectContaining({
+          code: "AGENT_RUN_CAPACITY_EXHAUSTED",
+          details: { scope: "GLOBAL", active: 3, limit: 3 },
+        }),
+      );
+
+      const raw = new DatabaseSync(databasePath, { readOnly: true });
+      expect(raw.prepare("SELECT COUNT(*) AS count FROM agent_runs WHERE status = 'RUNNING'").get()).toEqual({
+        count: 3,
+      });
+      expect(raw.prepare("SELECT COUNT(*) AS count FROM squad_assignments").get()).toEqual({ count: 4 });
+      raw.close();
+    });
+
+    it("claims an existing WorkItem workspace in the same transaction", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { workItemId, dispatch } = startReadyWorkflow(localState, "a3-workspace");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "provision-a3-workspace",
+        correlationId: "correlation-provision-a3-workspace",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "CREATE_WORK_ITEM_WORKSPACE",
+        payload: {
+          projectId: "project-web",
+          workItemId,
+          branch: `loomrail/${workItemId}`,
+          worktreePath: join(temporaryDirectory, "worktrees", workItemId),
+          baseCommit: null,
+          snapshotCommit: null,
+          carriedPaths: [],
+        },
+      });
+
+      localState.execute(startAgentRun("workspace", dispatch.id));
+      const workspace = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(workspace.type === "WORKSPACE" ? workspace.workspace : null).toMatchObject({
+        leaseHolder: dispatch.stageAttemptId,
+        version: 2,
+      });
+
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "finish-a3-workspace-run",
+        correlationId: "correlation-finish-a3-workspace-run",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: dispatch.id,
+          provider: "CODEX",
+          template: mockTemplate,
+          outcome: { type: "COMPLETED", summary: "Discovery finished." },
+          resultTree: null,
+        },
+      });
+      const released = localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(released.type === "WORKSPACE" ? released.workspace : null).toMatchObject({
+        leaseHolder: null,
+        version: 3,
+      });
+      const raw = new DatabaseSync(databasePath, { readOnly: true });
+      expect(raw.prepare("SELECT status, finished_at FROM agent_runs").get()).toEqual({
+        status: "SUCCEEDED",
+        finished_at: timestamp,
+      });
+      raw.close();
+    });
   });
 
   it("keeps a historical APPLY_MOCK_PROVIDER_OUTCOME command receipt readable after the provider rename", async () => {
@@ -931,6 +1174,15 @@ describe("SQLite local state", () => {
     state = undefined;
 
     const beforeM6 = new DatabaseSync(databasePath);
+    beforeM6.exec("DROP TRIGGER events_are_append_only_delete");
+    beforeM6.exec("DELETE FROM events WHERE type = 'SQUAD_ASSIGNED'");
+    beforeM6.exec(`
+      CREATE TRIGGER events_are_append_only_delete
+      BEFORE DELETE ON events
+      BEGIN
+        SELECT RAISE(ABORT, 'events are append-only');
+      END;
+    `);
     beforeM6.exec("DROP TABLE acceptance_packages");
     beforeM6.exec("DROP TABLE evidence_artifacts");
     beforeM6.exec("DROP TRIGGER commands_are_append_only_update");
@@ -2562,11 +2814,13 @@ describe("SQLite local state", () => {
       );
       const before = localState.query({ type: "LIST_EVENTS" });
       if (before.type !== "EVENTS") throw new Error("Expected events");
-      const originalEvents = before.events.map((event) => ({
-        sequence: event.sequence,
-        id: event.id,
-        type: event.type,
-      }));
+      const originalEvents = before.events
+        .filter(({ type }) => type !== "SQUAD_ASSIGNED")
+        .map((event) => ({
+          sequence: event.sequence,
+          id: event.id,
+          type: event.type,
+        }));
       expect(originalEvents.length).toBeGreaterThan(0);
       localState.close();
       state = undefined;
@@ -2576,6 +2830,8 @@ describe("SQLite local state", () => {
       raw.exec("DROP TABLE checkpoints");
       raw.exec("DROP TABLE context_pack_recipes");
       raw.exec("DROP TABLE provider_sessions");
+      raw.exec("DROP TABLE agent_runs");
+      raw.exec("DROP TABLE squad_assignments");
       raw.exec("ALTER TABLE stage_attempts DROP COLUMN unproductive_sessions");
 
       raw.exec("DROP TRIGGER events_are_append_only_update");
@@ -2617,6 +2873,7 @@ describe("SQLite local state", () => {
           sequence, id, schema_version, type, aggregate_type, aggregate_id, project_id,
           actor_type, actor_id, occurred_at, correlation_id, data_json
         FROM events_v6
+        WHERE type != 'SQUAD_ASSIGNED'
       `);
       raw.exec("DROP TABLE events_v6");
       raw.exec("CREATE INDEX events_project_sequence_idx ON events(project_id, sequence)");
@@ -2635,14 +2892,14 @@ describe("SQLite local state", () => {
           SELECT RAISE(ABORT, 'events are append-only');
         END;
       `);
-      // 0009 and 0010 both add columns to the table 0006 creates, so a database that predates 0006
-      // predates them too: dropping provider_sessions took those columns with it, and all three
-      // migrations have to be pending for the reconstruction to be honest.
-      raw.prepare("DELETE FROM schema_migrations WHERE version IN (6, 9, 10)").run();
+      // 0009, 0010 and 0020 all add columns or relations to the table 0006 creates, so a database
+      // that predates 0006 predates them too. All four migrations must be pending for the
+      // reconstruction to be honest.
+      raw.prepare("DELETE FROM schema_migrations WHERE version IN (6, 9, 10, 20)").run();
       raw.close();
 
       const migrated = await open();
-      expect(migrated.startup.appliedMigrations).toEqual([6, 9, 10]);
+      expect(migrated.startup.appliedMigrations).toEqual([6, 9, 10, 20]);
 
       const after = migrated.query({ type: "LIST_EVENTS" });
       if (after.type !== "EVENTS") throw new Error("Expected events");

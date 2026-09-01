@@ -13,6 +13,7 @@ import {
 import { AppFrame } from "./shell/AppFrame";
 import { WorkbenchPage } from "./views/WorkbenchPage";
 import { AttentionPage } from "./views/AttentionPage";
+import { AgentFleetPage } from "./views/AgentFleetPage";
 
 const rootRoute = createRootRoute({ component: AppFrame });
 
@@ -99,7 +100,13 @@ const attentionRoute = createRoute({
   component: AttentionPage,
 });
 
-const routeTree = rootRoute.addChildren([workbenchRoute, attentionRoute]);
+const agentFleetRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/fleet",
+  component: AgentFleetPage,
+});
+
+const routeTree = rootRoute.addChildren([workbenchRoute, attentionRoute, agentFleetRoute]);
 
 export const router = createRouter({
   routeTree,

@@ -7,6 +7,7 @@ import {
   riskSchema,
   type AcceptanceAction,
   type AcceptancePackage,
+  type AgentRunStatus,
   type Checkpoint,
   type ContextWindowUsage,
   type DomainEvent,
@@ -567,6 +568,17 @@ const acceptanceStatusTones: Record<AcceptancePackage["status"], StatusTone> = {
   REJECTED: "paused",
 };
 
+const agentRunStatusLabelKeys: Record<AgentRunStatus, TranslationKey> = {
+  RUNNING: "agentRun.status.RUNNING",
+  SUCCEEDED: "agentRun.status.SUCCEEDED",
+  FAILED: "agentRun.status.FAILED",
+  CANCELLED: "agentRun.status.CANCELLED",
+  INTERRUPTED: "agentRun.status.INTERRUPTED",
+  WAITING_HUMAN: "agentRun.status.WAITING_HUMAN",
+  SOFT_PAUSED: "agentRun.status.SOFT_PAUSED",
+  HARD_PAUSED: "agentRun.status.HARD_PAUSED",
+};
+
 const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEventProps, "time"> => {
   switch (event.type) {
     case "WORK_ITEM_CREATED":
@@ -820,6 +832,32 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         icon: "check",
         label: t("event.pipelineCompleted"),
         tone: "success",
+      };
+    case "SQUAD_ASSIGNED":
+      return {
+        detail: t("event.squadAssignedDetail", { count: event.data.assignment.stages.length }),
+        icon: "agents",
+        label: t("event.squadAssigned"),
+      };
+    case "AGENT_RUN_STARTED":
+      return {
+        detail: t("event.agentRunStartedDetail", {
+          role: t(`fleet.role.${event.data.run.profile.role}`),
+          provider: event.data.run.provider.replace("_", " "),
+        }),
+        icon: "agents",
+        label: t("event.agentRunStarted"),
+        tone: "accent",
+      };
+    case "AGENT_RUN_FINISHED":
+      return {
+        detail: t("event.agentRunFinishedDetail", {
+          role: t(`fleet.role.${event.data.run.profile.role}`),
+          status: t(agentRunStatusLabelKeys[event.data.run.status]),
+        }),
+        icon: "agents",
+        label: t("event.agentRunFinished"),
+        tone: event.data.run.status === "SUCCEEDED" ? "success" : "warning",
       };
     case "PROVIDER_SESSION_STARTED":
       return {

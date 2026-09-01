@@ -252,7 +252,7 @@ describe("session worker", () => {
     return { ...seeded, dispatch: dispatched.dispatch };
   };
 
-  it("runs one attempt at a time and does not start a second on a wake mid-flight", async () => {
+  it("starts at most three attempts and does not oversubscribe on wakes mid-flight", async () => {
     const localState = state();
     const adapter = gatedAdapter();
     const logger = createRecordingLogger();
@@ -264,23 +264,24 @@ describe("session worker", () => {
       createCommandId,
       logger,
     });
-    seedQueuedAttempt(localState);
+    const seeded = Array.from({ length: 4 }, () => seedQueuedAttempt(localState));
+    const fourth = seeded[3];
+    if (!fourth) throw new Error("Expected a fourth queued attempt");
 
     worker.wake();
-    await adapter.started;
+    await adapter.whenStarted(3);
     worker.wake();
     worker.wake();
 
-    expect(adapter.startCallCount).toBe(1);
+    expect(adapter.startCallCount).toBe(3);
+    expect(localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" })).toMatchObject({
+      type: "AGENT_RUNS",
+      runs: [{}, {}, {}],
+    });
+    expect(pendingDispatchIds(localState)).toContain(fourth.dispatch.id);
 
-    // `session-loop.ts`'s own "another caller already running a session on this attempt" check
-    // means a second, concurrent `pump()` can never reach a second `adapter.start()` call even
-    // without the single-flight guard here -- so `startCallCount` alone cannot tell the two apart.
-    // What the guard alone is responsible for is the bookkeeping: without it, the extra `wake()`
-    // calls above start their own `pump()` runs that finish almost immediately (the dispatch they
-    // find is already spoken for) and reach their own `finally` block while the *first* pump is
-    // still gated on the adapter -- settling every idle waiter early. Catching that requires
-    // observing `whenIdle()` before the gate opens, not just counting provider starts.
+    // Mid-flight wakes neither create a fourth slot nor settle idle waiters while three provider
+    // sessions still own their durable reservations.
     let settled = false;
     void worker.whenIdle().then(() => {
       settled = true;
@@ -294,6 +295,56 @@ describe("session worker", () => {
     adapter.release();
     await awaitIdle(worker);
     expect(settled).toBe(true);
+  }, 20_000);
+
+  it("applies Project and provider limits without blocking an independent scope", async () => {
+    const localState = state();
+    const codex = gatedAdapter(200_000, { provider: "CODEX" });
+    const mock = gatedAdapter(200_000, { provider: "MOCK" });
+    const projectOne = "project-one";
+    const projectTwo = "project-two";
+    const projectThree = "project-three";
+    const first = seedQueuedAttemptFixture(localState, createCommandId, temporaryDirectory, projectOne);
+    const sameProject = seedQueuedAttemptFixture(localState, createCommandId, temporaryDirectory, projectOne);
+    const independent = seedQueuedAttemptFixture(localState, createCommandId, temporaryDirectory, projectTwo);
+    const sameProvider = seedQueuedAttemptFixture(
+      localState,
+      createCommandId,
+      temporaryDirectory,
+      projectThree,
+    );
+    const worker = createSessionWorker({
+      state: localState,
+      resolveAdapter: (projectId) => (projectId === projectTwo ? mock : codex),
+      template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
+      createCommandId,
+      logger: createRecordingLogger(),
+      schedulingLimits: {
+        global: 3,
+        projects: { [projectOne]: 1 },
+        providers: { CODEX: 1 },
+      },
+    });
+
+    worker.wake();
+    await Promise.all([codex.whenStarted(1), mock.whenStarted(1)]);
+
+    expect(codex.startCallCount).toBe(1);
+    expect(mock.startCallCount).toBe(1);
+    const active = localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" });
+    if (active.type !== "AGENT_RUNS") throw new Error("Expected active AgentRuns");
+    expect(active.runs.map(({ stageAttemptId }) => stageAttemptId)).toHaveLength(2);
+    expect(active.runs.map(({ stageAttemptId }) => stageAttemptId)).toEqual(
+      expect.arrayContaining([first.stageAttemptId, independent.stageAttemptId]),
+    );
+    expect(pendingDispatchIds(localState)).toEqual(
+      expect.arrayContaining([sameProject.dispatch.id, sameProvider.dispatch.id]),
+    );
+
+    codex.release();
+    mock.release();
+    await awaitIdle(worker);
   }, 20_000);
 
   // Spec §4, «сигнал не теряется»: the wake that arrived mid-attempt has to be honoured after it,
@@ -742,12 +793,14 @@ describe("session worker", () => {
       logger: createRecordingLogger(),
     });
     seedQueuedAttempt(localState);
+    seedQueuedAttempt(localState);
+    seedQueuedAttempt(localState);
     worker.wake();
-    await adapter.started;
+    await adapter.whenStarted(3);
 
     await worker.stop();
 
-    expect(adapter.abortedSessions).toHaveLength(1);
+    expect(adapter.abortedSessions).toHaveLength(3);
     adapter.release();
   }, 20_000);
 
@@ -804,10 +857,9 @@ describe("session worker", () => {
     adapter.release();
   }, 20_000);
 
-  // `stop()` only sets a flag and aborts the *live* session -- it cannot unwind an
-  // `await runStageAttempt(...)` already in flight. Without a check inside `runOnce`'s own cycle
-  // loop, the cycle that resumes once that await settles would carry straight on to the next
-  // pending dispatch and open a brand-new provider session on a daemon that was just told to stop.
+  // `stop()` only sets a flag and aborts the live sessions -- it cannot unwind the provider calls
+  // already in flight. Without a check inside `runOnce`'s own cycle loop, the cycle that resumes
+  // once those calls settle would fill the newly empty slot on a daemon that was just told to stop.
   it("does not open a new session in the same pass once stopped", async () => {
     const localState = state();
     const adapter = gatedAdapter();
@@ -821,8 +873,11 @@ describe("session worker", () => {
     });
     seedQueuedAttempt(localState);
     seedQueuedAttempt(localState);
+    seedQueuedAttempt(localState);
+    seedQueuedAttempt(localState);
     worker.wake();
-    await adapter.started;
+    await adapter.whenStarted(3);
+    const startedBeforeStop = adapter.startCallCount;
 
     await worker.stop();
     adapter.release();
@@ -839,6 +894,6 @@ describe("session worker", () => {
 
     // The gated adapter's own count of `start()` invocations -- a real number, not a log line. The
     // second seeded dispatch must never reach it.
-    expect(adapter.startCallCount).toBe(1);
+    expect(adapter.startCallCount).toBe(startedBeforeStop);
   }, 20_000);
 });

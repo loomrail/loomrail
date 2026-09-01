@@ -22,13 +22,14 @@ export const FIXTURE_PROJECT_ID = "project-web";
  * treats a second `REGISTER_PROJECT` for the same id as `PROJECT_ALREADY_REGISTERED`, not as
  * a no-op.
  */
-const registerFixtureProject = (
+const registerProject = (
   localState: LocalState,
   createCommandId: () => string,
   temporaryDirectory: string,
+  projectId: string,
 ): void => {
   const existing = localState.query({ type: "LIST_PROJECTS" });
-  if (existing.type === "PROJECTS" && existing.projects.some(({ id }) => id === FIXTURE_PROJECT_ID)) {
+  if (existing.type === "PROJECTS" && existing.projects.some(({ id }) => id === projectId)) {
     return;
   }
   localState.execute({
@@ -38,10 +39,10 @@ const registerFixtureProject = (
     actor: { type: "HUMAN", id: "local-owner" },
     type: "REGISTER_PROJECT",
     payload: {
-      id: FIXTURE_PROJECT_ID,
-      fixtureId: "web-app-a",
-      name: "Web fixture",
-      repositoryPath: join(temporaryDirectory, "project-web"),
+      id: projectId,
+      fixtureId: projectId === FIXTURE_PROJECT_ID ? "web-app-a" : null,
+      name: projectId === FIXTURE_PROJECT_ID ? "Web fixture" : `Fixture ${projectId}`,
+      repositoryPath: join(temporaryDirectory, projectId),
     },
   });
 };
@@ -51,6 +52,7 @@ const registerFixtureProject = (
 const seedReadyWorkItem = (
   localState: LocalState,
   createCommandId: () => string,
+  projectId: string,
   title = "Carry a stage attempt across provider sessions",
 ): string => {
   const created = localState.execute({
@@ -60,7 +62,7 @@ const seedReadyWorkItem = (
     actor: { type: "HUMAN", id: "local-owner" },
     type: "CREATE_WORK_ITEM",
     payload: {
-      projectId: FIXTURE_PROJECT_ID,
+      projectId,
       parentId: null,
       type: "TASK",
       title,
@@ -86,9 +88,10 @@ export const seedQueuedAttempt = (
   localState: LocalState,
   createCommandId: () => string,
   temporaryDirectory: string,
+  projectId = FIXTURE_PROJECT_ID,
 ): SeededAttempt => {
-  registerFixtureProject(localState, createCommandId, temporaryDirectory);
-  const workItemId = seedReadyWorkItem(localState, createCommandId);
+  registerProject(localState, createCommandId, temporaryDirectory, projectId);
+  const workItemId = seedReadyWorkItem(localState, createCommandId, projectId);
   const started = localState.execute({
     schemaVersion: 1,
     commandId: createCommandId(),

@@ -167,7 +167,10 @@ mock-маршруте», а D2 всё равно ждёт E1.5.
   подходе к D3;
 - где живут примеры из D2 — в этом репозитории рядом с fixture-проектами или отдельным репозиторием — там же.
 
-Текущий checkpoint: C1, C3, C2, B4 и A4 реализованы. Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
+Текущий checkpoint: C1, C3, C2, B4 и A4 реализованы; A3 локально завершён: scheduler kernel, durable AgentRun
+lifecycle, transactional limits/workspace claim, bounded daemon pool и Agent Fleet projection/UI. Следующий gate
+A3 — полная release verification и cross-platform CI.
+Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах
 в [GitHub Actions run 33512453361](https://github.com/loomrail/loomrail/actions/runs/33512453361). Контракты находятся в

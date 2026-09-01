@@ -24,7 +24,7 @@ For a disposable repository and exact live-provider task, use the
 - [Component system](design/COMPONENT-SYSTEM.md)
 - [Localization contract](design/LOCALIZATION.md)
 - [Release procedure](RELEASE.md)
-- [Current release candidate notes](releases/0.1.0-alpha.4.md)
+- [Current release candidate notes](releases/0.1.0-alpha.5.md)
 
 Files under [`plans/`](plans/) are versioned implementation records. They explain why a slice was built and how it
 was verified, but they are not an installation guide or public roadmap.

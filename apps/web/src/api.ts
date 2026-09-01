@@ -1,5 +1,6 @@
 import {
   attentionInboxResponseSchema,
+  agentFleetResponseSchema,
   apiErrorResponseSchema,
   constitutionPresetsResponseSchema,
   eventsResponseSchema,
@@ -499,6 +500,8 @@ export const listOpenHumanRequests = async (projectId: string) => {
 
 export const getAttentionInbox = async () =>
   requestLocalApi("/api/v1/attention", attentionInboxResponseSchema);
+
+export const getAgentFleet = async () => requestLocalApi("/api/v1/agent-fleet", agentFleetResponseSchema);
 
 export const registerFixtureProject = async (fixtureId: FixtureProjectId): Promise<void> => {
   await requestLocalApi("/api/v1/projects/fixtures/register", stateCommandResultSchema, {
