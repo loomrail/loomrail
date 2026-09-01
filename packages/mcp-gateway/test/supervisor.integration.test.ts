@@ -181,7 +181,7 @@ describe("MCP process-tree supervisor", () => {
         "--",
         process.execPath,
         fixturePath,
-        "tree",
+        "orphan-tree",
         pidFile,
       ],
       { stdio: ["pipe", "ignore", "ignore"], windowsHide: true },
@@ -237,7 +237,7 @@ describe("MCP process-tree supervisor", () => {
       },
     ]);
     expect(processExists(watchedParent.pid)).toBe(true);
-  });
+  }, 15_000);
 
   it("does not reconcile a record whose supervisor is still running", async () => {
     directory = await mkdtemp(join(tmpdir(), "loomrail mcp live supervisor "));

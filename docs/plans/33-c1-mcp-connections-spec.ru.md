@@ -101,6 +101,8 @@ Challenge живёт только в памяти, истекает через 5
 Candidate проходит runtime schema и policy:
 
 - executable — абсолютный path к обычному executable file;
+- на Windows canonical executable должен оканчиваться на `.exe` или `.com`; `.cmd`, `.bat` и произвольные обычные
+  файлы не проходят closed preflight и не передаются в `spawn({ shell: false })`;
 - максимум 32 args, каждый не пустой, не длиннее 2 KiB; общий rendered launch не длиннее 16 KiB;
 - profile name и tool names имеют bounded Unicode/ASCII-safe формы;
 - executable basename `npx`, `npm`, `pnpm`, `yarn`, `bunx`, shell, PowerShell, `cmd`, `sudo`, `doas` и известные

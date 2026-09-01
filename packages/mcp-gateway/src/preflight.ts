@@ -1,5 +1,6 @@
 import { access, constants, realpath, stat } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, extname } from "node:path";
+import process from "node:process";
 
 import type { McpProfileCandidate, McpProfileRevision } from "@loomrail/contracts";
 import { validateMcpProfileCandidatePolicy } from "@loomrail/domain";
@@ -34,6 +35,7 @@ export class McpGatewayError extends Error {
 }
 
 const scriptRuntimeNames = new Set(["node", "nodejs", "python", "python3"]);
+const windowsExecutableExtensions = new Set([".com", ".exe"]);
 const executableName = (path: string): string =>
   basename(path)
     .toLowerCase()
@@ -68,6 +70,7 @@ const resolveRegularFile = async (
  */
 export const resolveMcpProfileCandidate = async (
   candidate: McpProfileCandidate,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<McpProfileCandidate> => {
   const policyChecked = validateMcpProfileCandidatePolicy(candidate);
   const executable = await resolveRegularFile(
@@ -75,6 +78,12 @@ export const resolveMcpProfileCandidate = async (
     "EXECUTABLE_NOT_FOUND",
     "EXECUTABLE_NOT_FILE",
   );
+  if (platform === "win32" && !windowsExecutableExtensions.has(extname(executable).toLowerCase())) {
+    throw new McpGatewayError(
+      "EXECUTABLE_NOT_ALLOWED",
+      "The local MCP executable is not a Windows executable image",
+    );
+  }
   try {
     await access(executable, constants.X_OK);
   } catch (error: unknown) {

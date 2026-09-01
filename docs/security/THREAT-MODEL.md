@@ -709,6 +709,8 @@ Origin/CSRF/session controls, but compromised bundled UI or a stolen local sessi
 into `spawn(arbitraryText)`. Proposal never executes or persists active authority; Consent is a separate one-time,
 expiring challenge over a canonical digest and exact argv display. Only absolute executables and bounded argv arrays
 are accepted; shell/download/elevation launchers, URL/env/secret/cwd and on-the-fly probe/session payloads are refused.
+Windows preflight additionally requires a canonical `.exe` or `.com` image. Node does not enforce POSIX execute bits
+on Windows, and `.cmd`/`.bat` shims would require a shell that the gateway deliberately never enables.
 The refused set covers command-dispatch wrappers (`env`, `xargs`, `nohup`, `setsid`, `osascript`, `wsl`, …) as well as
 shells themselves: a wrapper executes its own first argument, so a list that knew only shells by name would have let
 `/usr/bin/env bash -c …` through as an "exact command" the owner had approved. The canonical digest covers the launch

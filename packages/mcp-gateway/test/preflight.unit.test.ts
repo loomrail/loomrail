@@ -1,6 +1,7 @@
 import { chmod, mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -28,10 +29,12 @@ describe("MCP profile preflight", () => {
     args,
     declaredTools: ["search_docs", "read_doc"],
   });
+  const executableFixtureName = (name: string): string =>
+    process.platform === "win32" ? `${name}.exe` : name;
 
   it("canonicalizes executable and script symlinks before consent", async () => {
     const runtimeDirectory = join(directory, "runtime with spaces");
-    const executable = join(runtimeDirectory, "node");
+    const executable = join(runtimeDirectory, executableFixtureName("node"));
     const executableLink = join(directory, "node-link");
     const scriptDirectory = join(directory, "папка со скриптом");
     const script = join(scriptDirectory, "server.mjs");
@@ -65,9 +68,19 @@ describe("MCP profile preflight", () => {
     } satisfies Partial<McpGatewayError>);
   });
 
+  it("rejects a non-executable file suffix on Windows", async () => {
+    const executable = join(directory, "not-an-executable.txt");
+    await writeFile(executable, "not a Windows executable", "utf8");
+    await chmod(executable, 0o755);
+
+    await expect(resolveMcpProfileCandidate(candidate(executable), "win32")).rejects.toMatchObject({
+      code: "EXECUTABLE_NOT_ALLOWED",
+    } satisfies Partial<McpGatewayError>);
+  });
+
   it("detects path drift when the consented executable path is replaced with a symlink", async () => {
-    const first = join(directory, "first-server");
-    const second = join(directory, "second-server");
+    const first = join(directory, executableFixtureName("first-server"));
+    const second = join(directory, executableFixtureName("second-server"));
     await Promise.all([writeFile(first, "#!/bin/sh\n", "utf8"), writeFile(second, "#!/bin/sh\n", "utf8")]);
     await Promise.all([chmod(first, 0o755), chmod(second, 0o755)]);
     const resolved = await resolveMcpProfileCandidate(candidate(first));

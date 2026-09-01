@@ -3,13 +3,14 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import process from "node:process";
+import { setInterval } from "node:timers";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
 import { z } from "zod";
 
 const mode = process.argv[2] ?? "ready";
 
-if (mode === "tree") {
+if (mode === "tree" || mode === "orphan-tree") {
   const pidFile = process.argv[3];
   if (pidFile === undefined) throw new Error("tree mode requires a pid file");
   const helper = spawn(
@@ -21,7 +22,9 @@ if (mode === "tree") {
   writeFileSync(pidFile, JSON.stringify({ serverPid: process.pid, helperPid: helper.pid }));
 }
 
-if (mode === "stalled") {
+if (mode === "orphan-tree") {
+  setInterval(() => undefined, 1_000);
+} else if (mode === "stalled") {
   process.stdin.resume();
 } else {
   serveStdio(() => {
