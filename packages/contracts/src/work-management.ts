@@ -91,9 +91,50 @@ import {
   requestProjectConstitutionAdoptionCommandSchema,
   retryProjectConstitutionPublicationCommandSchema,
 } from "./constitution.js";
+import {
+  attestProjectReadinessCheckCommandSchema,
+  projectReadinessAssessedEventSchema,
+  projectReadinessAssessedResultSchema,
+  projectReadinessAttestedEventSchema,
+  projectReadinessAttestedResultSchema,
+  recordProjectReadinessAssessmentCommandSchema,
+} from "./readiness.js";
+import {
+  confirmMcpProfileCommandSchema,
+  mcpGrantChangedEventSchema,
+  mcpGrantChangedResultSchema,
+  mcpCapabilityRecordedResultSchema,
+  finishMcpToolCallCommandSchema,
+  mcpToolCallChangedResultSchema,
+  mcpProfileConsentedEventSchema,
+  mcpProfileConsentedResultSchema,
+  revokeMcpProfileGrantCommandSchema,
+  recordMcpCapabilitySnapshotCommandSchema,
+  startMcpToolCallCommandSchema,
+  setMcpProfileGrantCommandSchema,
+} from "./mcp.js";
+import {
+  projectProviderPreferenceChangedEventSchema,
+  projectProviderPreferenceChangedResultSchema,
+  providerPreferenceSchema,
+  setProjectProviderPreferenceCommandSchema,
+} from "./provider-selection.js";
+import {
+  completeProjectScaffoldCommandSchema,
+  failProjectScaffoldCommandSchema,
+  projectScaffoldCompletedEventSchema,
+  projectScaffoldCompletedResultSchema,
+  projectScaffoldFailedEventSchema,
+  projectScaffoldFailedResultSchema,
+  projectScaffoldRequestedEventSchema,
+  projectScaffoldRequestedResultSchema,
+  projectScaffoldRetriedResultSchema,
+  requestProjectScaffoldCommandSchema,
+  retryProjectScaffoldCommandSchema,
+} from "./scaffolding.js";
 
 export const fixtureProjectIdSchema = z.enum(["web-app-a", "api-service-b"]);
-export const projectStatusSchema = z.enum(["ACTIVE", "ARCHIVED"]);
+export const projectStatusSchema = z.enum(["PROVISIONING", "ACTIVE", "ARCHIVED"]);
 export const workItemTypeSchema = z.enum(["EPIC", "FEATURE", "TASK", "BUG", "SPIKE", "SUBTASK"]);
 export const workItemStateSchema = z.enum([
   "BACKLOG",
@@ -156,6 +197,7 @@ export const projectSchema = z
     fixtureId: fixtureProjectIdSchema.nullable(),
     name: titleSchema,
     repositoryPath: repositoryPathSchema,
+    providerPreference: providerPreferenceSchema.default("AUTO"),
     status: projectStatusSchema,
     version: z.number().int().positive(),
     createdAt: utcTimestampSchema,
@@ -250,10 +292,18 @@ export const workItemStateChangedEventSchema = eventBaseSchema.extend({
 
 export const domainEventSchema = z.discriminatedUnion("type", [
   projectRegisteredEventSchema,
+  projectScaffoldRequestedEventSchema,
+  projectScaffoldCompletedEventSchema,
+  projectScaffoldFailedEventSchema,
   projectConstitutionProposedEventSchema,
   projectConstitutionPublicationRequestedEventSchema,
   projectConstitutionActivatedEventSchema,
   projectConstitutionPublicationFailedEventSchema,
+  projectReadinessAssessedEventSchema,
+  projectReadinessAttestedEventSchema,
+  projectProviderPreferenceChangedEventSchema,
+  mcpProfileConsentedEventSchema,
+  mcpGrantChangedEventSchema,
   workItemCreatedEventSchema,
   workItemUpdatedEventSchema,
   workItemStateChangedEventSchema,
@@ -399,11 +449,24 @@ export const moveWorkItemCommandSchema = commandBaseSchema.extend({
 export const stateCommandSchema = z.discriminatedUnion("type", [
   registerProjectCommandSchema,
   repointFixtureProjectCommandSchema,
+  requestProjectScaffoldCommandSchema,
+  completeProjectScaffoldCommandSchema,
+  failProjectScaffoldCommandSchema,
+  retryProjectScaffoldCommandSchema,
   proposeProjectConstitutionCommandSchema,
   requestProjectConstitutionAdoptionCommandSchema,
   completeProjectConstitutionPublicationCommandSchema,
   failProjectConstitutionPublicationCommandSchema,
   retryProjectConstitutionPublicationCommandSchema,
+  recordProjectReadinessAssessmentCommandSchema,
+  attestProjectReadinessCheckCommandSchema,
+  setProjectProviderPreferenceCommandSchema,
+  confirmMcpProfileCommandSchema,
+  setMcpProfileGrantCommandSchema,
+  revokeMcpProfileGrantCommandSchema,
+  recordMcpCapabilitySnapshotCommandSchema,
+  startMcpToolCallCommandSchema,
+  finishMcpToolCallCommandSchema,
   createWorkItemCommandSchema,
   updateWorkItemCommandSchema,
   moveWorkItemCommandSchema,
@@ -464,11 +527,22 @@ export const workItemMovedResultSchema = commandResultBaseSchema.extend({
 
 export const stateCommandResultSchema = z.discriminatedUnion("type", [
   projectRegisteredResultSchema,
+  projectScaffoldRequestedResultSchema,
+  projectScaffoldCompletedResultSchema,
+  projectScaffoldFailedResultSchema,
+  projectScaffoldRetriedResultSchema,
   projectConstitutionProposedResultSchema,
   projectConstitutionPublicationRequestedResultSchema,
   projectConstitutionActivatedResultSchema,
   projectConstitutionPublicationFailedResultSchema,
   projectConstitutionPublicationRetriedResultSchema,
+  projectReadinessAssessedResultSchema,
+  projectReadinessAttestedResultSchema,
+  projectProviderPreferenceChangedResultSchema,
+  mcpProfileConsentedResultSchema,
+  mcpGrantChangedResultSchema,
+  mcpCapabilityRecordedResultSchema,
+  mcpToolCallChangedResultSchema,
   workItemCreatedResultSchema,
   workItemUpdatedResultSchema,
   workItemMovedResultSchema,

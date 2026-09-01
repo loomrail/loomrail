@@ -39,6 +39,7 @@ const invocation = (
     },
     contextPack: contextPack(),
     humanRequests: "ALLOWED",
+    mcpConnections: [],
   };
 };
 

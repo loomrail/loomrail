@@ -14,6 +14,7 @@ import {
   type HumanRequest,
   type PipelineRun,
   type ProviderSession,
+  type ReadinessCheck,
   type SessionPauseFailureCode,
   type StageAttempt,
   type StageAttemptStatus,
@@ -451,6 +452,24 @@ const changedFieldLabelKeys: Record<WorkItemChangedField, TranslationKey> = {
   acceptanceCriteria: "field.acceptanceCriteria",
 };
 
+const readinessCheckKeys: Record<ReadinessCheck["key"], TranslationKey> = {
+  SECURITY_ACTIVE_CONSTITUTION: "settings.readiness.check.activeConstitution",
+  SECURITY_SECRET_PATHS: "settings.readiness.check.secretPaths",
+  SECURITY_ENV_IGNORED: "settings.readiness.check.envIgnored",
+  SECURITY_CI_HARDENING: "settings.readiness.check.ciHardening",
+  LEGAL_LICENSE: "settings.readiness.check.license",
+  LEGAL_OWNER_REVIEW: "settings.readiness.check.legalOwner",
+  PAYMENTS_OWNER_REVIEW: "settings.readiness.check.paymentsOwner",
+  ANALYTICS_OWNER_REVIEW: "settings.readiness.check.analyticsOwner",
+};
+
+const readinessStatusKeys: Record<ReadinessCheck["status"], TranslationKey> = {
+  PASSED: "settings.readiness.status.passed",
+  ACTION_REQUIRED: "settings.readiness.status.action",
+  CONFIRMED: "settings.readiness.status.confirmed",
+  NOT_APPLICABLE: "settings.readiness.status.na",
+};
+
 // A total Record over the contract's own union, so a new quality cannot arrive without this file
 // failing to compile -- the same discipline `hardPauseLabelKeys` below is written under. Its codes
 // come from @loomrail/contracts rather than a local copy, so the cockpit's reading of "is this a
@@ -579,6 +598,54 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
       };
     case "PROJECT_REGISTERED":
       return { detail: event.data.project.name, icon: "projects", label: t("event.projectRegistered") };
+    case "PROJECT_SCAFFOLD_REQUESTED":
+      return {
+        detail: event.data.operation.proposal.projectName,
+        icon: "clock",
+        label: t("event.projectScaffoldRequested"),
+      };
+    case "PROJECT_SCAFFOLD_COMPLETED":
+      return {
+        detail: event.data.operation.proposal.projectName,
+        icon: "check",
+        label: t("event.projectScaffoldCompleted"),
+        tone: "success",
+      };
+    case "PROJECT_SCAFFOLD_FAILED":
+      return {
+        detail: event.data.operation.lastErrorCode ?? t("error.unknown"),
+        icon: "warning",
+        label: t("event.projectScaffoldFailed"),
+        tone: "warning",
+      };
+    case "PROJECT_PROVIDER_PREFERENCE_CHANGED":
+      return {
+        detail: t("event.providerPreferenceChangedDetail", {
+          from: event.data.previousPreference,
+          to: event.data.selection.preference,
+        }),
+        icon: "settings",
+        label: t("event.providerPreferenceChanged"),
+      };
+    case "MCP_PROFILE_CONSENTED":
+      return {
+        detail: t("event.mcpProfileConsentedDetail", {
+          name: event.data.revision.name,
+          revision: event.data.revision.revision,
+        }),
+        icon: "settings",
+        label: t("event.mcpProfileConsented"),
+      };
+    case "MCP_GRANT_CHANGED":
+      return {
+        detail: t("event.mcpGrantChangedDetail", {
+          count: event.data.grant.tools.length,
+          state: t(event.data.grant.enabled ? "event.mcpGrant.enabled" : "event.mcpGrant.revoked"),
+        }),
+        icon: event.data.grant.enabled ? "check" : "pause",
+        label: t("event.mcpGrantChanged"),
+        tone: event.data.grant.enabled ? "success" : "warning",
+      };
     case "PROJECT_CONSTITUTION_PROPOSED":
       return {
         detail: t("event.constitutionProposedDetail", { preset: event.data.proposal.presetId }),
@@ -609,6 +676,25 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         icon: "pause",
         label: t("event.constitutionPublicationFailed"),
         tone: "warning",
+      };
+    case "PROJECT_READINESS_ASSESSED":
+      return {
+        detail: t("event.readinessAssessedDetail", {
+          count: event.data.checks.filter((check) => check.status === "ACTION_REQUIRED").length,
+        }),
+        icon: event.data.run.status === "READY" ? "check" : "warning",
+        label: t("event.readinessAssessed"),
+        tone: event.data.run.status === "READY" ? "success" : "warning",
+      };
+    case "PROJECT_READINESS_ATTESTED":
+      return {
+        detail: t("event.readinessAttestedDetail", {
+          check: t(readinessCheckKeys[event.data.check.key]),
+          outcome: t(readinessStatusKeys[event.data.check.status]),
+        }),
+        icon: "check",
+        label: t("event.readinessAttested"),
+        tone: "success",
       };
     case "PIPELINE_STARTED":
       return {

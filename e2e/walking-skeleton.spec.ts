@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -8,6 +8,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { gatedAdapter } from "../apps/daemon/test/gated-adapter.js";
 import { materialiseFixtureRepository, resolveBundledFixture } from "../apps/daemon/dist/fixtures.js";
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
+import { createProviderRegistry } from "../apps/daemon/dist/provider-selection.js";
 import { openLocalState, type LocalState } from "../packages/persistence-sqlite/dist/index.js";
 import { mockDeliveryTemplate } from "../packages/workflow-engine/dist/index.js";
 import { addWorktree, inspectRepository } from "../packages/workspace/dist/index.js";
@@ -804,6 +805,19 @@ const chooseInSettings = async (page: Page, control: string, option: string): Pr
 
 test.describe("authenticated walking skeleton", () => {
   let daemon: RunningDaemon | undefined;
+  const originalProvider = process.env["LOOMRAIL_PROVIDER"];
+
+  test.beforeAll(() => {
+    // This suite exercises the deterministic workflow unless a test injects its own registry.
+    // AUTO is production's default now; letting the test runner discover a developer's signed-in
+    // CLI would spend money and make outcomes depend on the machine running Playwright.
+    process.env["LOOMRAIL_PROVIDER"] = "MOCK";
+  });
+
+  test.afterAll(() => {
+    if (originalProvider === undefined) Reflect.deleteProperty(process.env, "LOOMRAIL_PROVIDER");
+    else process.env["LOOMRAIL_PROVIDER"] = originalProvider;
+  });
 
   test.afterEach(async () => {
     await daemon?.close();
@@ -1096,6 +1110,127 @@ test.describe("authenticated walking skeleton", () => {
       await expect(project).toContainText("web-app-a");
       // A Project like any other: the board is live and a task can be filed against it.
       await createTask(page, "Task in my own repository");
+    } finally {
+      await daemon?.close();
+      daemon = undefined;
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("reviews and creates a new project with recovery-safe bilingual controls", async ({ page }) => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail scaffold e2e кириллица "));
+    const targetPath = join(temporaryDirectory, "new-project");
+    const canonicalTargetPath = join(await realpath(temporaryDirectory), "new-project");
+    try {
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        stateDatabasePath: join(temporaryDirectory, "local-state.sqlite"),
+        webRoot: resolve("apps/web/dist"),
+      });
+
+      await page.goto(daemon.bootstrapUrl);
+      await page.getByRole("button", { name: "Open settings" }).click();
+      const settings = page.getByRole("dialog", { name: "Settings" });
+      const scaffold = settings.locator(".project-scaffold");
+
+      await settings
+        .getByRole("group", { name: "Change color theme" })
+        .getByRole("button", { name: "Light" })
+        .click();
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+
+      const path = scaffold.getByLabel("New project path");
+      await path.fill(targetPath);
+      await path.press("Enter");
+      await expect(scaffold.getByText(canonicalTargetPath, { exact: true })).toBeVisible();
+      await expect(scaffold.getByText("package.json", { exact: true })).toBeVisible();
+      await expect(scaffold.getByText(".loomrail/scaffold.json", { exact: true })).toBeVisible();
+      await expect(scaffold).toContainText("does not install dependencies");
+      await expect(scaffold.locator(".project-scaffold__digest code")).toHaveText(/^[0-9a-f]{64}$/);
+
+      await settings
+        .getByRole("group", { name: "Change color theme" })
+        .getByRole("button", { name: "Dark" })
+        .click();
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+      await settings
+        .getByRole("group", { name: "Change language" })
+        .getByRole("button", { name: "Русский" })
+        .click();
+
+      const translated = page.getByRole("dialog", { name: "Настройки" }).locator(".project-scaffold");
+      await expect(translated.getByRole("heading", { name: "Создать новый проект" })).toBeVisible();
+      const confirm = translated.getByRole("button", { name: "Создать этот проект" });
+      await confirm.focus();
+      await page.keyboard.press("Enter");
+      await expect(translated.getByText("Проект создан", { exact: true })).toBeVisible();
+      await expect(translated).toContainText("pnpm install");
+      await expect(translated).toContainText("pnpm test");
+
+      expect((await inspectRepository(canonicalTargetPath))?.topLevel).toBe(canonicalTargetPath);
+      expect(await readFile(join(canonicalTargetPath, "package.json"), "utf8")).toContain('"private": true');
+      await expect(readFile(join(canonicalTargetPath, "node_modules"), "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(
+        page
+          .getByRole("dialog", { name: "Настройки" })
+          .locator(".settings__projects")
+          .getByRole("button", { name: /new-project/ }),
+      ).toHaveAttribute("aria-pressed", "true");
+    } finally {
+      await daemon?.close();
+      daemon = undefined;
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("restores a failed project creation after reload and retries only on request", async ({ page }) => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail scaffold recovery "));
+    const databasePath = join(temporaryDirectory, "local-state.sqlite");
+    const targetPath = join(temporaryDirectory, "recovered-project");
+    const canonicalTargetPath = join(await realpath(temporaryDirectory), "recovered-project");
+    try {
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        scaffoldPublisher: () => Promise.reject(new Error("deterministic browser failure")),
+        stateDatabasePath: databasePath,
+        webRoot: resolve("apps/web/dist"),
+      });
+
+      await page.goto(daemon.bootstrapUrl);
+      await page.getByRole("button", { name: "Open settings" }).click();
+      let scaffold = page.getByRole("dialog", { name: "Settings" }).locator(".project-scaffold");
+      await scaffold.getByLabel("New project path").fill(targetPath);
+      await scaffold.getByRole("button", { name: "Review exact files" }).click();
+      await scaffold.getByRole("button", { name: "Create this project" }).click();
+      await expect(scaffold.getByText("Creation stopped safely", { exact: true })).toBeVisible();
+      await expect(readFile(targetPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+      await page.reload();
+      await page.getByRole("button", { name: "Open settings" }).click();
+      scaffold = page.getByRole("dialog", { name: "Settings" }).locator(".project-scaffold");
+      await expect(scaffold.getByText("Creation stopped safely", { exact: true })).toBeVisible();
+      await expect(scaffold.getByText(canonicalTargetPath, { exact: true })).toBeVisible();
+
+      await daemon.close();
+      daemon = undefined;
+      const retryToken = randomBytes(32).toString("base64url");
+      daemon = await startDaemon({
+        bootstrapToken: retryToken,
+        logger: false,
+        stateDatabasePath: databasePath,
+        webRoot: resolve("apps/web/dist"),
+      });
+      await page.goto(daemon.bootstrapUrl);
+      await page.getByRole("button", { name: "Open settings" }).click();
+      scaffold = page.getByRole("dialog", { name: "Settings" }).locator(".project-scaffold");
+      await expect(scaffold.getByText("Creation stopped safely", { exact: true })).toBeVisible();
+      await scaffold.getByRole("button", { name: "Retry safely" }).click();
+      await expect(scaffold.getByText("Project created", { exact: true })).toBeVisible();
+      expect((await inspectRepository(canonicalTargetPath))?.topLevel).toBe(canonicalTargetPath);
     } finally {
       await daemon?.close();
       daemon = undefined;
@@ -2550,6 +2685,228 @@ test.describe("authenticated walking skeleton", () => {
     // The preference belongs to this browser, so it has to survive a reload.
     await page.reload();
     await expect(page.locator(".lr-task-card").first()).toHaveCSS("padding", "8px");
+  });
+
+  test("selects and persists the Project AI provider from Settings", async ({ page }) => {
+    const providerRegistry = createProviderRegistry({
+      env: {},
+      executableAvailable: (provider) => provider === "CODEX",
+      probeAuthentication: (provider) => Promise.resolve(provider === "CODEX" ? "AUTHENTICATED" : "UNKNOWN"),
+    });
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      providerRegistry,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    const provider = settings.locator(".provider-settings");
+    await expect(provider.getByText("New sessions use Codex.", { exact: true })).toBeVisible();
+    await expect(provider.getByText("Ready", { exact: true })).toBeVisible();
+
+    const selector = provider.getByRole("combobox", { name: "Provider for new sessions" });
+    await selector.focus();
+    await page.keyboard.press("Enter");
+    const mockOption = page.getByRole("option", { name: /^Mock/ });
+    await expect(mockOption).toBeVisible();
+    await page.keyboard.press("End");
+    await expect(mockOption).toHaveAttribute("data-highlighted");
+    await page.keyboard.press("Enter");
+    await expect(selector).toContainText("Mock");
+    await expect(provider.getByText("New sessions use Mock.", { exact: true })).toBeVisible();
+
+    await settings
+      .getByRole("group", { name: "Change color theme" })
+      .getByRole("button", { name: "Dark" })
+      .click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await settings.getByRole("button", { name: "Close dialog" }).click();
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const reopened = page.getByRole("dialog", { name: "Settings" }).locator(".provider-settings");
+    await expect(reopened.getByRole("combobox", { name: "Provider for new sessions" })).toContainText("Mock");
+
+    await page
+      .getByRole("dialog", { name: "Settings" })
+      .getByRole("group", { name: "Change language" })
+      .getByRole("button", { name: "Русский" })
+      .click();
+    await expect(
+      page.locator(".provider-settings").getByRole("heading", { name: "ИИ-провайдер" }),
+    ).toBeVisible();
+  });
+
+  test("approves, probes, grants, persists and revokes an MCP connection in Settings", async ({ page }) => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail mcp settings "));
+    const databasePath = join(temporaryDirectory, "local-state.sqlite");
+    const mcpServerPath = resolve("packages/mcp-gateway/test/fixtures/modern-server.mjs");
+
+    try {
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        stateDatabasePath: databasePath,
+        webRoot: resolve("apps/web/dist"),
+      });
+
+      await page.goto(daemon.bootstrapUrl);
+      await initializeWorkspace(page);
+      await page.getByRole("button", { name: "Open settings" }).click();
+
+      const settings = page.getByRole("dialog", { name: "Settings" });
+      const mcp = settings.locator(".mcp-settings");
+      await mcp.getByRole("textbox", { name: "Connection name" }).fill("Local read tools");
+      await mcp.getByRole("textbox", { name: "Executable" }).fill(process.execPath);
+      await mcp.getByRole("textbox", { name: "Arguments" }).fill(mcpServerPath);
+      await mcp.getByRole("textbox", { name: "Declared read-only tools" }).fill("tool_00");
+      await mcp.getByRole("button", { name: "Review exact command" }).click();
+
+      const consent = mcp.locator(".mcp-consent");
+      await expect(consent.getByText(process.execPath, { exact: true })).toBeVisible();
+      await expect(consent.getByText(mcpServerPath, { exact: true })).toBeVisible();
+      const confirm = consent.getByRole("button", { name: "Approve exact command" });
+      await expect(confirm).toBeDisabled();
+      await consent
+        .getByRole("checkbox", { name: "I checked this exact executable and every argument" })
+        .check();
+      await confirm.click();
+
+      const profile = mcp.locator(".mcp-profile").filter({ hasText: "Local read tools" });
+      await expect(profile.getByText("No tool access", { exact: true })).toBeVisible();
+      await profile.getByRole("button", { name: "Probe capabilities" }).click();
+      await expect(profile.getByText("Ready", { exact: true })).toBeVisible();
+      await expect(profile.getByText("tool_00, tool_01", { exact: true })).toBeVisible();
+
+      await profile.getByRole("checkbox", { name: "tool_00", exact: true }).check();
+      await profile.getByRole("checkbox", { name: "These selected tools are read-only" }).check();
+      await profile.getByRole("button", { name: "Grant selected tools" }).click();
+      await expect(profile.getByText("Enabled for new sessions", { exact: true })).toBeVisible();
+
+      // The grant is durable rather than a browser preference: a fresh daemon reads it from SQLite.
+      await daemon.close();
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        stateDatabasePath: databasePath,
+        webRoot: resolve("apps/web/dist"),
+      });
+      await page.goto(daemon.bootstrapUrl);
+      await page.getByRole("button", { name: "Open settings" }).click();
+
+      const restoredProfile = page
+        .getByRole("dialog", { name: "Settings" })
+        .locator(".mcp-profile")
+        .filter({ hasText: "Local read tools" });
+      await expect(restoredProfile.getByText("Enabled for new sessions", { exact: true })).toBeVisible();
+      await restoredProfile.getByRole("button", { name: "Revoke access" }).click();
+      await expect(restoredProfile.getByText("Access revoked", { exact: true })).toBeVisible();
+    } finally {
+      await daemon?.close();
+      daemon = undefined;
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("configures the bundled Context7 preset without a terminal install", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    const mcp = settings.locator(".mcp-settings");
+    const preset = mcp.locator(".mcp-preset");
+    await expect(preset.getByText("Context7 documentation", { exact: true })).toBeVisible();
+    await expect(preset).toContainText("No terminal command, global install or npx download");
+    await expect(preset).toContainText("Never include secrets, personal data or proprietary code");
+
+    const review = preset.getByRole("button", { name: "Review bundled Context7" });
+    await review.focus();
+    await page.keyboard.press("Enter");
+    const consent = mcp.locator(".mcp-consent");
+    await expect(consent).toContainText(process.execPath);
+    await expect(consent).toContainText("@upstash/context7-mcp");
+    await expect(consent).toContainText("--transport");
+    await expect(consent).toContainText("stdio");
+    await expect(consent).not.toContainText("npx -y");
+    await consent
+      .getByRole("checkbox", { name: "I checked this exact executable and every argument" })
+      .check();
+    await consent.getByRole("button", { name: "Approve exact command" }).click();
+
+    const profile = mcp.locator(".mcp-profile").filter({ hasText: "Context7" });
+    await expect(profile).toBeVisible();
+    await expect(preset.getByText("Configured below", { exact: true })).toBeVisible();
+    await profile.getByRole("button", { name: "Probe capabilities" }).click();
+    await expect(profile.getByText("Ready", { exact: true })).toBeVisible();
+    await expect(profile).toContainText("query-docs, resolve-library-id");
+
+    // A later Loomrail release can move the bundled entrypoint, so the control has to survive the
+    // first approval -- otherwise the revision path the daemon already supports is unreachable. With
+    // nothing changed, pressing it is a plain "already current" answer rather than an error.
+    await preset.getByRole("button", { name: "Check bundled Context7 for changes" }).click();
+    await expect(mcp).toContainText("The approved revision already matches the bundled server.");
+    await expect(mcp.locator(".mcp-settings__error")).toHaveCount(0);
+
+    await settings
+      .getByRole("group", { name: "Change color theme" })
+      .getByRole("button", { name: "Dark" })
+      .click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await settings
+      .getByRole("group", { name: "Change language" })
+      .getByRole("button", { name: "Русский" })
+      .click();
+    const translatedPreset = page.getByRole("dialog", { name: "Настройки" }).locator(".mcp-preset");
+    await expect(translatedPreset.getByText("Документация Context7", { exact: true })).toBeVisible();
+    await expect(translatedPreset).toContainText("Не нужны команды в терминале");
+  });
+
+  test("runs project readiness and persists an explicit owner decision", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    const readiness = settings.locator(".readiness-settings");
+    await readiness.getByRole("button", { name: "Run readiness check" }).click();
+
+    await expect(readiness.getByText("Action required", { exact: true })).toBeVisible();
+    await expect(readiness.locator(".readiness-check")).toHaveCount(8);
+    await expect(readiness.getByText("Passed automatically", { exact: true })).toHaveCount(2);
+
+    const legalOwnerCheck = readiness.locator(".readiness-check").filter({
+      hasText: "Legal and privacy review",
+    });
+    await legalOwnerCheck
+      .getByRole("textbox", { name: "Decision note" })
+      .fill("The fixture processes no personal data.");
+    await legalOwnerCheck.getByRole("button", { name: "Not applicable" }).click();
+    await expect(legalOwnerCheck.getByText("Not applicable", { exact: true })).toBeVisible();
+    await expect(legalOwnerCheck.getByText("The fixture processes no personal data.")).toBeVisible();
+
+    await settings.getByRole("button", { name: "Close dialog" }).click();
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const reopenedReadiness = page.getByRole("dialog", { name: "Settings" }).locator(".readiness-settings");
+    const persistedLegalDecision = reopenedReadiness.locator(".readiness-check").filter({
+      hasText: "Legal and privacy review",
+    });
+    await expect(persistedLegalDecision.getByText("Not applicable", { exact: true })).toBeVisible();
+    await expect(persistedLegalDecision.getByText("The fixture processes no personal data.")).toBeVisible();
   });
 
   test("keeps a resized panel across a reload without the loading shell jumping", async ({ page }) => {

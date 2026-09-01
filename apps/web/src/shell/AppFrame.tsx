@@ -4,8 +4,12 @@ import type { SyntheticEvent } from "react";
 import {
   constitutionPresetIdSchema,
   prioritySchema,
+  providerPreferenceSchema,
   type ConstitutionPresetId,
   type ListedProject,
+  type ReadinessCheck,
+  type SecurityFinding,
+  type ProviderId,
   type WorkItem,
 } from "@loomrail/contracts";
 import {
@@ -26,7 +30,9 @@ import {
 import { BrandMark } from "../components/BrandMark";
 import { PanelResizer } from "../components/PanelResizer";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
-import { useI18n } from "../i18n";
+import { McpSettingsPanel } from "../components/McpSettingsPanel";
+import { ProjectScaffoldPanel } from "../components/ProjectScaffoldPanel";
+import { useI18n, type TranslationKey } from "../i18n";
 import type { WorkbenchSearch } from "../router";
 import { hasCustomPanelWidths, resetPanelWidths } from "../layout";
 import { applyDensityPreference, readDensityPreference, type DensityPreference } from "../density";
@@ -34,13 +40,19 @@ import { applyThemePreference, readThemePreference, type ThemePreference } from 
 import {
   useCreateWorkItem,
   useAdoptProjectConstitution,
+  useAttestProjectReadiness,
   useConstitutionPresets,
   useProjectConstitution,
+  useProjectReadiness,
+  useProjectProviderSelection,
   useProjectHumanRequests,
   useRegisterRepositoryProject,
   useRepairFixtureProject,
   useRetryProjectConstitutionPublication,
+  useRunProjectReadiness,
+  useRefreshProjectProviderAvailability,
   useScanProjectConstitution,
+  useSetProjectProviderPreference,
   useWorkspace,
 } from "../workspace";
 
@@ -351,6 +363,116 @@ const RegisterRepositoryField = (): React.JSX.Element => {
   );
 };
 
+const providerNames: Record<ProviderId, string> = {
+  MOCK: "Mock",
+  CODEX: "Codex",
+  CLAUDE_CODE: "Claude Code",
+};
+
+const ProjectProviderPanel = ({ project }: { project: ListedProject }): React.JSX.Element => {
+  const { t } = useI18n();
+  const selectionQuery = useProjectProviderSelection(project.id);
+  const setPreference = useSetProjectProviderPreference();
+  const refreshAvailability = useRefreshProjectProviderAvailability();
+  const selection = selectionQuery.data;
+  const effective = selection?.providers.find(({ provider }) => provider === selection.effectiveProvider);
+  const operationError =
+    setPreference.error instanceof Error
+      ? setPreference.error
+      : refreshAvailability.error instanceof Error
+        ? refreshAvailability.error
+        : selectionQuery.error instanceof Error
+          ? selectionQuery.error
+          : null;
+  const statusKey =
+    effective?.ready === true
+      ? "settings.provider.status.ready"
+      : effective?.installed === false
+        ? "settings.provider.status.notInstalled"
+        : effective?.authentication === "REQUIRED"
+          ? "settings.provider.status.authRequired"
+          : "settings.provider.status.unknown";
+
+  return (
+    <div className="provider-settings">
+      <div className="provider-settings__heading">
+        <div>
+          <h4>{t("settings.provider.title")}</h4>
+          <p>{t("settings.provider.description")}</p>
+        </div>
+        {selection === undefined ? null : (
+          <span className={effective?.ready === true ? "is-ready" : "is-attention"}>{t(statusKey)}</span>
+        )}
+      </div>
+
+      <Field htmlFor="project-provider-preference" label={t("settings.provider.label")}>
+        <SelectControl
+          ariaLabel={t("settings.provider.label")}
+          disabled={selection === undefined || selection.environmentOverrideLocked || setPreference.isPending}
+          id="project-provider-preference"
+          onValueChange={(value) => {
+            setPreference.mutate({ project, preference: providerPreferenceSchema.parse(value) });
+          }}
+          options={[
+            {
+              label: t("settings.provider.option.auto"),
+              description: t("settings.provider.option.auto.description"),
+              value: "AUTO",
+            },
+            { label: "Codex", value: "CODEX" },
+            { label: "Claude Code", value: "CLAUDE_CODE" },
+            {
+              label: "Mock",
+              description: t("settings.provider.option.mock.description"),
+              value: "MOCK",
+            },
+          ]}
+          value={selection?.selection.preference ?? project.providerPreference}
+        />
+      </Field>
+
+      {selection === undefined ? (
+        <p className="settings__note">{t("settings.provider.loading")}</p>
+      ) : (
+        <div className="provider-settings__summary">
+          <p>
+            {t("settings.provider.effective", {
+              provider: providerNames[selection.effectiveProvider],
+            })}
+          </p>
+          {selection.fallbackReason === "NO_AUTHENTICATED_LIVE_PROVIDER" ? (
+            <p>{t("settings.provider.fallback")}</p>
+          ) : null}
+          {selection.environmentOverrideLocked ? (
+            <p role="note">
+              {selection.environmentOverrideInvalid
+                ? t("settings.provider.overrideInvalid")
+                : t("settings.provider.override", {
+                    provider: providerNames[selection.environmentOverride ?? "MOCK"],
+                  })}
+            </p>
+          ) : null}
+        </div>
+      )}
+
+      <Button
+        loading={refreshAvailability.isPending}
+        onClick={() => {
+          refreshAvailability.mutate(project.id);
+        }}
+        size="sm"
+      >
+        {t("settings.provider.refresh")}
+      </Button>
+      {operationError === null ? null : (
+        <p className="provider-settings__error" role="alert">
+          {operationError.message}
+        </p>
+      )}
+    </div>
+  );
+};
+
 type PresetSelection = "AUTO" | ConstitutionPresetId;
 
 const ProjectConstitutionPanel = ({ project }: { project: ListedProject }): React.JSX.Element => {
@@ -507,6 +629,227 @@ const ProjectConstitutionPanel = ({ project }: { project: ListedProject }): Reac
   );
 };
 
+const readinessCategoryKeys = {
+  SECURITY: "settings.readiness.category.security",
+  LEGAL: "settings.readiness.category.legal",
+  PAYMENTS: "settings.readiness.category.payments",
+  ANALYTICS: "settings.readiness.category.analytics",
+} as const satisfies Record<ReadinessCheck["category"], TranslationKey>;
+
+const readinessCheckKeys = {
+  SECURITY_ACTIVE_CONSTITUTION: "settings.readiness.check.activeConstitution",
+  SECURITY_SECRET_PATHS: "settings.readiness.check.secretPaths",
+  SECURITY_ENV_IGNORED: "settings.readiness.check.envIgnored",
+  SECURITY_CI_HARDENING: "settings.readiness.check.ciHardening",
+  LEGAL_LICENSE: "settings.readiness.check.license",
+  LEGAL_OWNER_REVIEW: "settings.readiness.check.legalOwner",
+  PAYMENTS_OWNER_REVIEW: "settings.readiness.check.paymentsOwner",
+  ANALYTICS_OWNER_REVIEW: "settings.readiness.check.analyticsOwner",
+} as const satisfies Record<ReadinessCheck["key"], TranslationKey>;
+
+const readinessStatusKeys = {
+  PASSED: "settings.readiness.status.passed",
+  ACTION_REQUIRED: "settings.readiness.status.action",
+  CONFIRMED: "settings.readiness.status.confirmed",
+  NOT_APPLICABLE: "settings.readiness.status.na",
+} as const satisfies Record<ReadinessCheck["status"], TranslationKey>;
+
+const readinessFindingKeys = {
+  ACTIVE_CONSTITUTION_MISSING: "settings.readiness.finding.activeConstitution",
+  TRACKED_SECRET_PATH: "settings.readiness.finding.secretPath",
+  ENV_NOT_IGNORED: "settings.readiness.finding.envIgnored",
+  CI_PULL_REQUEST_TARGET: "settings.readiness.finding.pullRequestTarget",
+  CI_WRITE_ALL_PERMISSIONS: "settings.readiness.finding.writeAll",
+  CI_ACTION_NOT_PINNED: "settings.readiness.finding.actionPinned",
+  CI_INPUT_UNVERIFIABLE: "settings.readiness.finding.ciUnverifiable",
+  LICENSE_MISSING: "settings.readiness.finding.license",
+} as const satisfies Record<SecurityFinding["code"], TranslationKey>;
+
+const ProjectReadinessPanel = ({ project }: { project: ListedProject }): React.JSX.Element => {
+  const { locale, t } = useI18n();
+  const snapshotQuery = useProjectReadiness(project.id);
+  const runMutation = useRunProjectReadiness();
+  const attestMutation = useAttestProjectReadiness();
+  const [rationales, setRationales] = useState<Readonly<Record<string, string>>>({});
+  const snapshot = snapshotQuery.data;
+  const run = snapshot?.run ?? null;
+  const operationError =
+    runMutation.error instanceof Error
+      ? runMutation.error
+      : attestMutation.error instanceof Error
+        ? attestMutation.error
+        : snapshotQuery.error instanceof Error
+          ? snapshotQuery.error
+          : null;
+
+  return (
+    <div className="readiness-settings">
+      <div className="readiness-settings__heading">
+        <div>
+          <h4>{t("settings.readiness.title")}</h4>
+          <p>{t("settings.readiness.description")}</p>
+        </div>
+        {run === null ? null : (
+          <span className={cn("readiness-settings__state", run.status === "READY" && "is-ready")}>
+            <Icon name={run.status === "READY" ? "check" : "warning"} size={13} />
+            {t(run.status === "READY" ? "settings.readiness.ready" : "settings.readiness.actionRequired")}
+          </span>
+        )}
+      </div>
+
+      <div className="readiness-settings__run">
+        <Button
+          disabled={project.repositoryStatus !== "READY"}
+          loading={runMutation.isPending}
+          onClick={() => {
+            runMutation.mutate(project);
+          }}
+          variant="primary"
+        >
+          {run === null ? t("settings.readiness.run") : t("settings.readiness.rerun")}
+        </Button>
+        {run === null ? null : (
+          <div className="readiness-settings__meta">
+            <span>
+              {t("settings.readiness.checkedAt", {
+                date: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(
+                  new Date(run.createdAt),
+                ),
+              })}
+            </span>
+            <span>
+              {run.repositoryHead === null
+                ? t("settings.readiness.noHead")
+                : t("settings.readiness.head", { head: run.repositoryHead.slice(0, 8) })}
+            </span>
+            <span>{t(run.workingTreeDirty ? "settings.readiness.dirty" : "settings.readiness.clean")}</span>
+          </div>
+        )}
+      </div>
+
+      {run === null || snapshot === undefined ? (
+        <p className="settings__note">{t("settings.readiness.empty")}</p>
+      ) : (
+        <div className="readiness-checklist">
+          {(["SECURITY", "LEGAL", "PAYMENTS", "ANALYTICS"] as const).map((category) => {
+            const categoryChecks = snapshot.checks.filter((check) => check.category === category);
+            return (
+              <section className="readiness-group" key={category}>
+                <h5>{t(readinessCategoryKeys[category])}</h5>
+                <div className="readiness-group__checks">
+                  {categoryChecks.map((check) => {
+                    const findings = snapshot.findings.filter((finding) => finding.checkId === check.id);
+                    const rationale = rationales[check.id] ?? "";
+                    const latestAttestation = snapshot.attestations
+                      .filter((attestation) => attestation.checkId === check.id)
+                      .at(-1);
+                    return (
+                      <article className="readiness-check" key={check.id}>
+                        <div
+                          className={cn(
+                            "readiness-check__summary",
+                            check.status !== "ACTION_REQUIRED" && "is-passed",
+                          )}
+                        >
+                          <Icon name={check.status === "ACTION_REQUIRED" ? "warning" : "check"} size={15} />
+                          <div>
+                            <strong>{t(readinessCheckKeys[check.key])}</strong>
+                            <span>{t(readinessStatusKeys[check.status])}</span>
+                          </div>
+                        </div>
+                        {findings.length === 0 ? null : (
+                          <details className="readiness-check__evidence">
+                            <summary>
+                              {t("settings.readiness.evidence")} · {findings.length.toString()}
+                            </summary>
+                            <ul>
+                              {findings.map((finding) => (
+                                <li key={finding.id}>
+                                  <span>{t(readinessFindingKeys[finding.code])}</span>
+                                  {finding.path === null ? null : <code>{finding.path}</code>}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
+                        {check.mode === "OWNER" && check.status === "ACTION_REQUIRED" ? (
+                          <div className="readiness-check__attest">
+                            <Field
+                              htmlFor={`readiness-rationale-${check.id}`}
+                              label={t("settings.readiness.rationale")}
+                            >
+                              <Textarea
+                                id={`readiness-rationale-${check.id}`}
+                                onChange={(event) => {
+                                  setRationales((current) => ({
+                                    ...current,
+                                    [check.id]: event.target.value,
+                                  }));
+                                }}
+                                placeholder={t("settings.readiness.rationalePlaceholder")}
+                                rows={2}
+                                value={rationale}
+                              />
+                            </Field>
+                            <div className="readiness-check__actions">
+                              <Button
+                                disabled={rationale.trim() === "" || attestMutation.isPending}
+                                onClick={() => {
+                                  attestMutation.mutate({
+                                    check,
+                                    outcome: "CONFIRMED",
+                                    projectId: project.id,
+                                    rationale: rationale.trim(),
+                                    run,
+                                  });
+                                }}
+                                size="sm"
+                              >
+                                {t("settings.readiness.confirm")}
+                              </Button>
+                              <Button
+                                disabled={rationale.trim() === "" || attestMutation.isPending}
+                                onClick={() => {
+                                  attestMutation.mutate({
+                                    check,
+                                    outcome: "NOT_APPLICABLE",
+                                    projectId: project.id,
+                                    rationale: rationale.trim(),
+                                    run,
+                                  });
+                                }}
+                                size="sm"
+                              >
+                                {t("settings.readiness.notApplicable")}
+                              </Button>
+                            </div>
+                          </div>
+                        ) : latestAttestation === undefined ? null : (
+                          <p className="readiness-check__rationale">{latestAttestation.rationale}</p>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
+
+      <p className="readiness-settings__limit">
+        <Icon name="info" size={14} />
+        <span>{t("settings.readiness.limit")}</span>
+      </p>
+      {operationError === null ? null : (
+        <p className="readiness-settings__error" role="alert">
+          {operationError.message}
+        </p>
+      )}
+    </div>
+  );
+};
+
 /**
  * Gathers the preferences that belong to this browser.
  *
@@ -623,8 +966,12 @@ const SettingsDialog = ({ onOpenChange, open }: SettingsDialogProps): React.JSX.
           ) : (
             <p className="settings__note">{t("project.none")}</p>
           )}
+          <ProjectScaffoldPanel />
           <RegisterRepositoryField />
+          {selectedProject === null ? null : <ProjectProviderPanel project={selectedProject} />}
+          {selectedProject === null ? null : <McpSettingsPanel project={selectedProject} />}
           {selectedProject === null ? null : <ProjectConstitutionPanel project={selectedProject} />}
+          {selectedProject === null ? null : <ProjectReadinessPanel project={selectedProject} />}
         </section>
       </div>
     </DialogSurface>

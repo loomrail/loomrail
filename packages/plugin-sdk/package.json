@@ -1,0 +1,28 @@
+{
+  "name": "@loomrail/plugin-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm --filter @loomrail/mcp-gateway build && pnpm build && vitest run",
+    "test:unit": "vitest run test/plugin-sdk.unit.test.ts",
+    "test:integration": "pnpm --filter @loomrail/mcp-gateway build && pnpm build && vitest run test/plugin-sdk.integration.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@loomrail/contracts": "workspace:*",
+    "@loomrail/mcp-gateway": "workspace:*",
+    "@modelcontextprotocol/client": "2.0.0"
+  }
+}

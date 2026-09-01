@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type {
@@ -13,6 +13,7 @@ import type {
 import type {
   ProviderAdapter,
   ProviderInvocation,
+  ProviderMcpConnection,
   ProviderSessionListener,
   ProviderWorkspace,
 } from "@loomrail/provider-core";
@@ -52,7 +53,7 @@ const createFakeCodexProvider = (options: { contextWindowTokens?: number } = {})
 //   `--settings` and `--tools` (Claude) are the equivalent widening levers on that side.
 //
 // `-c` is deliberately NOT on the list any more, and is guarded harder instead: see
-// ALLOWED_CONFIG_ASSIGNMENTS below.
+// `isAllowedConfigAssignment` below.
 //
 // What a name list can never cover is a VALUE-shaped relaxation: `-s danger-full-access` and
 // `--permission-mode dontAsk` are legitimate flags carrying dangerous values, and a name check would
@@ -80,18 +81,35 @@ const FORBIDDEN_FLAG_VALUES: readonly (readonly [string, string])[] = [
   ["--permission-mode", "bypassPermissions"],
 ];
 
-// Spec D6: no MCP connection before milestone C1. Nothing enforced that -- it was a property of the
-// argv nobody asserted. Named separately from the bypass list because it is a different rule.
+// Codex has no dedicated MCP-config flag in the locally verified CLI. C1 uses only the closed `-c`
+// assignments below, so these remain forbidden routes around that allowlist.
 const FORBIDDEN_MCP_FLAGS: readonly string[] = ["--mcp-config", "--strict-mcp-config"];
 
-// The E1 exception to the rule above, and the reason `-c` left the spelling list. Given a workspace
-// this adapter opens exactly one config key -- `workspace-write` denies network access by default,
-// and an IMPLEMENT or QA session that cannot fetch cannot install a dependency or run a suite that
-// does. Forbidding the spelling outright would forbid the launch this milestone exists for, and
-// allowing the spelling would allow every other key with it, `sandbox_permissions` included. So the
-// guard becomes a closed list of VALUES: every `-c` in the argv must carry one of these, and adding
-// a second key is then a decision someone makes here rather than something that quietly happens.
-const ALLOWED_CONFIG_ASSIGNMENTS: readonly string[] = ["sandbox_workspace_write.network_access=true"];
+// E1 first required one fixed workspace-network value; C1 adds a typed three-field grammar for each
+// Loomrail proxy connector. Those are the reasons `-c` cannot stay on the spelling list. Allowing the
+// spelling without validating its value would also allow `sandbox_permissions`, so every assignment
+// is checked against the fixed value or the closed MCP key/value shapes below.
+const isAllowedConfigAssignment = (assignment: string): boolean => {
+  if (assignment === "sandbox_workspace_write.network_access=true") return true;
+  const match = /^mcp_servers\.([a-z0-9_]{1,64})\.(command|args|enabled_tools)=(.+)$/u.exec(assignment);
+  if (match === null) return false;
+  const [, , field, encoded] = match;
+  try {
+    const value: unknown = JSON.parse(encoded ?? "");
+    if (field === "command") return typeof value === "string" && isAbsolute(value);
+    if (field === "args") {
+      return Array.isArray(value) && value.length <= 8 && value.every((arg) => typeof arg === "string");
+    }
+    return (
+      Array.isArray(value) &&
+      value.length >= 1 &&
+      value.length <= 64 &&
+      value.every((tool) => typeof tool === "string" && tool.length > 0)
+    );
+  } catch {
+    return false;
+  }
+};
 
 // Whether one argv token carries `flag`, in every spelling a clap-based CLI (both of these are)
 // accepts for it: the bare token, the long attached form `--flag=value`, and -- for a one-letter
@@ -134,7 +152,7 @@ const expectNoForbiddenArguments = (args: readonly string[]): void => {
     expect(args.filter((arg) => flagSpelling(arg, flag) !== null)).toEqual([]);
   }
   for (const assignment of configAssignments(args)) {
-    expect(ALLOWED_CONFIG_ASSIGNMENTS).toContain(assignment);
+    expect(isAllowedConfigAssignment(assignment)).toBe(true);
   }
   for (const [flag, value] of FORBIDDEN_FLAG_VALUES) {
     for (const [index, arg] of args.entries()) {
@@ -200,6 +218,7 @@ const fixtureInvocation = (
   workspace?: ProviderWorkspace,
   stage: ProviderInvocation["session"]["stage"] = "DISCOVERY",
   humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
+  mcpConnections: readonly ProviderMcpConnection[] = [],
 ): ProviderInvocation => ({
   dispatch: {
     schemaVersion: 1,
@@ -226,6 +245,7 @@ const fixtureInvocation = (
     contentHash: `sha256:${"0".repeat(64)}`,
   },
   humanRequests,
+  mcpConnections,
   // Omitted rather than set to undefined: `exactOptionalPropertyTypes` makes those different
   // things, and the adapter reads absence as "this session was never meant to change anything".
   ...(workspace === undefined ? {} : { workspace }),
@@ -244,9 +264,13 @@ const startWith = async (
   adapter: ProviderAdapter,
   workspace?: ProviderWorkspace,
   humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
+  mcpConnections: readonly ProviderMcpConnection[] = [],
 ): Promise<ProviderOutcome> => {
   const outcome = await withEnv("FAKE_CODEX_RECORD_PATH", spawned.recordPath, () =>
-    adapter.start(fixtureInvocation("session-1", workspace, "DISCOVERY", humanRequests), noopListener()),
+    adapter.start(
+      fixtureInvocation("session-1", workspace, "DISCOVERY", humanRequests, mcpConnections),
+      noopListener(),
+    ),
   );
   const recorded = JSON.parse(readFileSync(spawned.recordPath, "utf8")) as {
     args: string[];
@@ -558,17 +582,30 @@ describe("createCodexProvider", () => {
     }).toThrow();
   });
 
-  // Spec D6 forbids MCP before milestone C1, and nothing enforced it -- an adapter that connected a
-  // server would have broken the rule silently. `--mcp-config` also reaches straight past the empty
-  // temporary directory that is this milestone's whole containment story.
-  it("never connects an MCP server (D6)", async () => {
+  it("adds no MCP config assignments when the session connector set is empty", async () => {
     const spawned = recordSpawn();
     await startWith(spawned, createFakeCodexProvider());
-    // Matched by spelling rather than by exact token, for the same reason the config guard is:
-    // `--mcp-config=<path>` is one token, and `not.toContain` would never see it.
-    for (const forbidden of FORBIDDEN_MCP_FLAGS) {
-      expect(spawned.args.filter((arg) => flagSpelling(arg, forbidden) !== null)).toEqual([]);
-    }
+    expect(configAssignments(spawned.args).filter((value) => value.startsWith("mcp_servers."))).toEqual([]);
+  });
+
+  it("injects only the closed Loomrail proxy connector and its granted tools", async () => {
+    const spawned = recordSpawn();
+    const connector: ProviderMcpConnection = {
+      id: "loomrail_profile_1",
+      proxyCommand: "/opt/loomrail/bin/mcp-proxy",
+      proxyArgs: ["connect", "session-token"],
+      enabledTools: ["fetch", "search"],
+    };
+    await startWith(spawned, createFakeCodexProvider(), undefined, "ALLOWED", [connector]);
+
+    expect(spawned.args).toContain("--ignore-user-config");
+    expect(configAssignments(spawned.args)).toEqual([
+      'mcp_servers.loomrail_profile_1.command="/opt/loomrail/bin/mcp-proxy"',
+      'mcp_servers.loomrail_profile_1.args=["connect","session-token"]',
+      'mcp_servers.loomrail_profile_1.enabled_tools=["fetch","search"]',
+    ]);
+    expect(spawned.args.join("\n")).not.toContain("real-server.mjs");
+    expectNoForbiddenArguments(spawned.args);
   });
 
   // `codex exec` launched without this flag inherits the OWNER'S OWN `~/.codex/config.toml` --
@@ -582,11 +619,9 @@ describe("createCodexProvider", () => {
     expect(spawned.args).toContain("--ignore-user-config");
   });
 
-  // Spec D6 forbids MCP before milestone C1. `--ignore-user-config` is the flag this adapter sends
-  // to ask the CLI not to read the owner's `~/.codex/config.toml`. This test establishes only that:
-  // this adapter's own argv never asks the CLI to read the machine's config file. Whether the CLI
-  // then actually honours that flag -- rather than, say, connecting an MCP server from it anyway --
-  // is the CLI's own behaviour, which no test in this file observes.
+  // C1 permits only the session-scoped Loomrail proxy. `--ignore-user-config` asks the CLI not to
+  // add MCP servers from the owner's `~/.codex/config.toml`. This test establishes the argv Loomrail
+  // builds; whether the CLI honours its documented flag remains the CLI's own behaviour.
   it("cannot pick up an MCP server from the machine it runs on", async () => {
     const spawned = await runAdapterAgainstRecording("hello.jsonl");
     expect(spawned.args).toContain("--ignore-user-config");

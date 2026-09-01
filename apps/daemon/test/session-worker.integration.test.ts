@@ -751,6 +751,31 @@ describe("session worker", () => {
     adapter.release();
   }, 20_000);
 
+  it("aborts through the adapter captured by the live session after selection changes", async () => {
+    const localState = state();
+    const first = gatedAdapter();
+    const second = gatedAdapter();
+    let selected: ProviderAdapter = first;
+    const worker = createSessionWorker({
+      state: localState,
+      resolveAdapter: () => selected,
+      template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
+      createCommandId,
+      logger: createRecordingLogger(),
+    });
+    seedQueuedAttempt(localState);
+    worker.wake();
+    await first.started;
+
+    selected = second;
+    await worker.stop();
+
+    expect(first.abortedSessions).toHaveLength(1);
+    expect(second.abortedSessions).toHaveLength(0);
+    first.release();
+  }, 20_000);
+
   // Before the fix, `whenIdle()` called after `stop()` still took the "register a waiter" branch
   // whenever a pass was in flight, and only `pump`'s own `finally` -- reached when the gated session
   // actually finishes -- could resolve it. `stopping` is never reset and `wake()` is a permanent

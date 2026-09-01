@@ -1,5 +1,5 @@
 import { accessSync, constants as fsConstants } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, sep } from "node:path";
 
@@ -8,6 +8,7 @@ import {
   decodeProviderStageResult,
   describeUnproductiveSession,
   providerStageResultSchemaFor,
+  providerMcpConnectionSchema,
   providerCapabilitiesSchema,
   runProcess,
   ProcessSpawnError,
@@ -209,6 +210,24 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
       // whatever the agent wrote into it.
       const workingDir = await mkdtemp(join(tmpdir(), "loomrail-claude-"));
       try {
+        const mcpConnections = providerMcpConnectionSchema.array().max(64).parse(invocation.mcpConnections);
+        const mcpConfigPath = join(workingDir, "mcp-config.json");
+        await writeFile(
+          mcpConfigPath,
+          JSON.stringify({
+            mcpServers: Object.fromEntries(
+              mcpConnections.map((connection) => [
+                connection.id,
+                {
+                  type: "stdio",
+                  command: connection.proxyCommand,
+                  args: connection.proxyArgs,
+                },
+              ]),
+            ),
+          }),
+          { encoding: "utf8", mode: 0o600 },
+        );
         // Inline JSON text, not a path -- see the doc comment on `tryParseStructuredResult`
         // above for why. Nothing writes this to `workingDir`: there is no reader left for a file
         // version of it, and a file created for no reader is one more thing to leak.
@@ -241,6 +260,9 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
           "--output-format",
           "stream-json",
           "--verbose",
+          "--mcp-config",
+          mcpConfigPath,
+          "--strict-mcp-config",
           "--permission-mode",
           "plan",
           "--no-session-persistence",

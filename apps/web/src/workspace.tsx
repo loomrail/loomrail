@@ -12,6 +12,15 @@ import type {
   FixtureProjectId,
   HumanRequestAnswer,
   ListedProject,
+  McpProfileCandidate,
+  McpProfileProposal,
+  McpProfileRevision,
+  ProjectReadinessRun,
+  ProviderPreference,
+  ReadinessAttestationOutcome,
+  ReadinessCheck,
+  ScaffoldOperation,
+  ScaffoldProposal,
   PipelineRun,
   WorkItem,
   WorkItemState,
@@ -20,28 +29,45 @@ import type {
 import {
   approveBudgetOverride,
   adoptProjectConstitution,
+  attestProjectReadiness,
   answerHumanRequest,
   controlPipeline,
   createWorkItem,
   getProviderCapabilities,
+  getProjectProviderSelection,
+  getProjectMcpProfiles,
   getProjectConstitution,
+  getProjectReadiness,
   getWorkItemChanges,
   getWorkItemFileDiff,
   getWorkItemWorkflow,
   getWorkItemWorkspace,
   listOpenHumanRequests,
+  listOpenProjectScaffolds,
   listConstitutionPresets,
   listProjects,
   listProjectWorkItems,
   listProviderSessions,
   listWorkItemEvents,
+  confirmMcpProfile,
+  grantMcpProfile,
   moveWorkItem,
+  publishNewProjectScaffold,
   registerFixtureProject,
   registerRepositoryProject,
+  refreshProjectProviderAvailability,
+  probeMcpProfile,
+  proposeContext7Preset,
+  proposeMcpProfile,
+  proposeNewProjectScaffold,
+  retryNewProjectScaffold,
   retryProjectConstitutionPublication,
+  runProjectReadiness,
   resolveAcceptance,
   startMockPipeline,
   scanProjectConstitution,
+  setProjectProviderPreference,
+  revokeMcpProfile,
   updateWorkItem,
   type CreateWorkItemInput,
   type PipelineControlAction,
@@ -53,6 +79,7 @@ import { useEventStream } from "./useEventStream";
 const projectsKey = ["projects"] as const;
 const constitutionPresetsKey = ["constitution-presets"] as const;
 const projectConstitutionKey = (projectId: string) => ["projects", projectId, "constitution"] as const;
+const projectReadinessKey = (projectId: string) => ["projects", projectId, "readiness"] as const;
 const projectWorkItemsKey = (projectId: string) => ["projects", projectId, "work-items"] as const;
 const workItemEventsKey = (projectId: string, workItemId: string) =>
   ["projects", projectId, "work-items", workItemId, "events"] as const;
@@ -74,6 +101,10 @@ const projectHumanRequestsKey = (projectId: string) =>
 const stageAttemptSessionsKey = (stageAttemptId: string) =>
   ["stage-attempts", stageAttemptId, "sessions"] as const;
 const providerCapabilitiesKey = ["provider", "capabilities"] as const;
+const projectProviderSelectionKey = (projectId: string) =>
+  ["projects", projectId, "provider-selection"] as const;
+const projectMcpProfilesKey = (projectId: string) => ["projects", projectId, "mcp-profiles"] as const;
+const openProjectScaffoldsKey = ["project-scaffolds", "open"] as const;
 
 type WorkspaceContextValue = {
   connection: ConnectionResult | undefined;
@@ -255,6 +286,109 @@ export const useStageAttemptSessions = (stageAttemptId: string | undefined) =>
 export const useProviderCapabilities = () =>
   useQuery({ queryKey: providerCapabilitiesKey, queryFn: getProviderCapabilities });
 
+export const useProjectProviderSelection = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: projectId ? projectProviderSelectionKey(projectId) : ["projects", "none", "provider-selection"],
+    queryFn: () => {
+      if (!projectId) throw new Error("A Project is required to load provider settings");
+      return getProjectProviderSelection(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+
+export const useSetProjectProviderPreference = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ project, preference }: { project: ListedProject; preference: ProviderPreference }) =>
+      setProjectProviderPreference(project, preference),
+    onSuccess: async (selection) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectsKey }),
+        queryClient.setQueryData(projectProviderSelectionKey(selection.selection.projectId), selection),
+        queryClient.invalidateQueries({ queryKey: providerCapabilitiesKey }),
+      ]);
+    },
+  });
+};
+
+export const useRefreshProjectProviderAvailability = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId: string) => refreshProjectProviderAvailability(projectId),
+    onSuccess: (selection) => {
+      queryClient.setQueryData(projectProviderSelectionKey(selection.selection.projectId), selection);
+    },
+  });
+};
+
+export const useProjectMcpProfiles = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: projectId ? projectMcpProfilesKey(projectId) : ["projects", "none", "mcp-profiles"],
+    queryFn: () => {
+      if (!projectId) throw new Error("A Project is required to load MCP profiles");
+      return getProjectMcpProfiles(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+
+export const useProposeMcpProfile = () =>
+  useMutation({
+    mutationFn: (input: {
+      projectId: string;
+      expectedProjectVersion: number;
+      candidate: McpProfileCandidate;
+    }) => proposeMcpProfile(input.projectId, input.expectedProjectVersion, input.candidate),
+  });
+
+export const useProposeContext7Preset = () =>
+  useMutation({
+    mutationFn: (input: { projectId: string; expectedProjectVersion: number }) =>
+      proposeContext7Preset(input.projectId, input.expectedProjectVersion),
+  });
+
+const useMcpMutationInvalidation = () => {
+  const queryClient = useQueryClient();
+  return async (projectId: string): Promise<void> => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: projectsKey }),
+      queryClient.invalidateQueries({ queryKey: projectMcpProfilesKey(projectId) }),
+    ]);
+  };
+};
+
+export const useConfirmMcpProfile = () => {
+  const invalidate = useMcpMutationInvalidation();
+  return useMutation({
+    mutationFn: (proposal: McpProfileProposal) => confirmMcpProfile(proposal),
+    onSuccess: async (_, proposal) => invalidate(proposal.projectId),
+  });
+};
+
+export const useProbeMcpProfile = () => {
+  const invalidate = useMcpMutationInvalidation();
+  return useMutation({
+    mutationFn: (input: { projectId: string; revision: McpProfileRevision }) =>
+      probeMcpProfile(input.projectId, input.revision),
+    onSuccess: async (_, input) => invalidate(input.projectId),
+  });
+};
+
+export const useGrantMcpProfile = () => {
+  const invalidate = useMcpMutationInvalidation();
+  return useMutation({
+    mutationFn: grantMcpProfile,
+    onSuccess: async (_, input) => invalidate(input.projectId),
+  });
+};
+
+export const useRevokeMcpProfile = () => {
+  const invalidate = useMcpMutationInvalidation();
+  return useMutation({
+    mutationFn: revokeMcpProfile,
+    onSuccess: async (_, input) => invalidate(input.projectId),
+  });
+};
+
 export const useProjectHumanRequests = (projectId: string | undefined) =>
   useQuery({
     queryKey: projectId ? projectHumanRequestsKey(projectId) : ["projects", "none", "human-requests", "OPEN"],
@@ -324,6 +458,38 @@ export const useRegisterRepositoryProject = () => {
   });
 };
 
+export const useProposeProjectScaffold = () =>
+  useMutation({ mutationFn: (targetPath: string) => proposeNewProjectScaffold(targetPath) });
+
+export const useOpenProjectScaffolds = () =>
+  useQuery({ queryKey: openProjectScaffoldsKey, queryFn: listOpenProjectScaffolds });
+
+export const usePublishProjectScaffold = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (proposal: ScaffoldProposal) => publishNewProjectScaffold(proposal),
+    onSuccess: async (operation) => {
+      await queryClient.invalidateQueries({ queryKey: openProjectScaffoldsKey });
+      if (operation.status === "COMPLETED") {
+        await queryClient.invalidateQueries({ queryKey: projectsKey });
+      }
+    },
+  });
+};
+
+export const useRetryProjectScaffold = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (operation: ScaffoldOperation) => retryNewProjectScaffold(operation),
+    onSuccess: async (operation) => {
+      await queryClient.invalidateQueries({ queryKey: openProjectScaffoldsKey });
+      if (operation.status === "COMPLETED") {
+        await queryClient.invalidateQueries({ queryKey: projectsKey });
+      }
+    },
+  });
+};
+
 export const useConstitutionPresets = () =>
   useQuery({ queryKey: constitutionPresetsKey, queryFn: listConstitutionPresets });
 
@@ -366,6 +532,48 @@ export const useRetryProjectConstitutionPublication = () => {
       retryProjectConstitutionPublication(projectId, publication),
     onSuccess: async (_, { projectId }) => {
       await queryClient.invalidateQueries({ queryKey: projectConstitutionKey(projectId) });
+    },
+  });
+};
+
+export const useProjectReadiness = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: projectId ? projectReadinessKey(projectId) : ["projects", "none", "readiness"],
+    queryFn: () => {
+      if (!projectId) throw new Error("A project is required to load readiness");
+      return getProjectReadiness(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+
+export const useRunProjectReadiness = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (project: ListedProject) => runProjectReadiness(project),
+    onSuccess: async (_, project) => {
+      await queryClient.invalidateQueries({ queryKey: projectReadinessKey(project.id) });
+    },
+  });
+};
+
+export const useAttestProjectReadiness = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      check,
+      outcome,
+      projectId,
+      rationale,
+      run,
+    }: {
+      check: ReadinessCheck;
+      outcome: ReadinessAttestationOutcome;
+      projectId: string;
+      rationale: string;
+      run: ProjectReadinessRun;
+    }) => attestProjectReadiness(projectId, run, check, outcome, rationale),
+    onSuccess: async (_, { projectId }) => {
+      await queryClient.invalidateQueries({ queryKey: projectReadinessKey(projectId) });
     },
   });
 };

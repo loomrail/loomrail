@@ -38,6 +38,50 @@ _Не означает_: отдельный источник истины.
 Capability-checked граница start/resume/interrupt/events/usage для конкретного provider.
 _Не означает_: прямая shell-интеграция из браузера.
 
+**Provider Preference**:
+Versioned выбор Project: `AUTO`, конкретный live provider либо явный `MOCK` demo mode.
+_Не означает_: provider уже запущенной ProviderSession или разрешение ослабить permission policy.
+
+**Provider Availability**:
+Короткоживущее локальное наблюдение, найден ли provider CLI и подтверждает ли его read-only status command
+авторизацию.
+_Не означает_: provider credential, account profile или durable domain state.
+
+**Effective Provider**:
+Provider, который resolver назначит следующей ProviderSession с учётом Project preference, текущей availability и
+видимого environment override.
+_Не означает_: автоматическую миграцию уже запущенной session.
+
+## MCP connections
+
+**MCP Profile Proposal**:
+Невыполняемый candidate точной локальной stdio-команды, показанный владельцу перед Consent.
+_Не означает_: сохранённый profile, permission или право spawn.
+
+**MCP Connection Profile Revision**:
+Неизменяемая project-scoped ревизия exact stdio launch с canonical digest.
+_Не означает_: ambient provider config, remote URL или автоматически установленный server.
+
+**MCP Consent**:
+Неизменяемое решение владельца, подтверждающее точный launch одной Profile Revision.
+_Не означает_: разрешение любого tool или доверие server output.
+
+**MCP Capability Snapshot**:
+Ограниченное наблюдение protocol version и surface конкретного consented server.
+_Не означает_: permission policy или автоматически принятые новые capabilities.
+
+**MCP Grant**:
+Versioned разрешение Project на закрытый набор tool names одной consented Profile Revision.
+_Не означает_: доказательство read-only semantics или permission bypass.
+
+**MCP Session Snapshot**:
+Неизменяемая копия revision digest и Grant, назначенная одной ProviderSession.
+_Не означает_: lookup текущих Project Settings во время уже запущенной session.
+
+**MCP Tool Call Record**:
+Redacted audit попытки вызвать один granted tool с typed outcome и input digest.
+_Не означает_: raw payload, provider transcript или workflow state.
+
 ## Project rules
 
 **Repository Scan**:
@@ -59,6 +103,40 @@ _Не означает_: найденный `AGENTS.md`, provider output или 
 **Constitution Publication**:
 Durable compare-and-set запись утверждённой версии в `.loomrail/constitution.md`.
 _Не означает_: Git commit, push или самостоятельное approval сканером.
+
+**Project Readiness Run**:
+Versioned снимок одной проверки готовности Project, привязанный к наблюдаемому состоянию repository.
+_Не означает_: бессрочную гарантию безопасности или production readiness.
+
+**Readiness Check**:
+Один пункт закрытого catalog с категорией, способом проверки, состоянием и evidence.
+_Не означает_: свободный совет provider или автоматически выполненную repository command.
+
+**Security Finding**:
+Локально наблюдаемый факт риска с кодом, severity и безопасной ссылкой на относительный path.
+_Не означает_: содержимое секрета, полный security audit или доказанную эксплуатацию.
+
+**Owner Attestation**:
+Неизменяемое versioned решение владельца `Confirmed` либо обоснованное `Not applicable` для owner check.
+_Не означает_: автоматический вывод сканера, юридическую консультацию или канал передачи секретов.
+
+## Project scaffolding
+
+**Scaffold Recipe**:
+Встроенный immutable набор файлов и проектных defaults с собственными id и version.
+_Не означает_: удалённый template, package installer или выполняемый repository instruction.
+
+**Scaffold Proposal**:
+Невыполняемый preview точного target, Recipe version, файлов и canonical digest перед решением владельца.
+_Не означает_: созданный каталог, зарегистрированный Project или разрешение изменить похожий proposal.
+
+**Scaffold Operation**:
+Durable одноразовое намерение опубликовать один подтверждённый Scaffold Proposal.
+_Не означает_: повторяемый generator, право перезаписать target или Git commit/push.
+
+**Scaffold Publication**:
+Fail-closed создание файлов в эксклюзивно захваченном ранее не существовавшем target с recovery по marker.
+_Не означает_: атомарный filesystem transaction, rollback через удаление каталога или успешную регистрацию Project.
 
 ## M6 relationship
 

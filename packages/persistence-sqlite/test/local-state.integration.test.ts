@@ -702,7 +702,9 @@ describe("SQLite local state", () => {
     legacy.close();
 
     const localState = await open();
-    expect(localState.startup.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    expect(localState.startup.appliedMigrations).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
     await access(localState.startup.backupPath);
@@ -1588,10 +1590,18 @@ describe("SQLite local state", () => {
         updated_at TEXT NOT NULL
       ) STRICT;
     `);
-    raw.exec("INSERT INTO projects_v11 SELECT * FROM projects");
+    raw.exec(`
+      INSERT INTO projects_v11 (
+        id, workspace_id, fixture_id, name, repository_path, status, version, created_at, updated_at
+      )
+      SELECT
+        id, workspace_id, fixture_id, name, repository_path, status, version, created_at, updated_at
+      FROM projects
+    `);
     raw.exec("DROP TABLE projects");
     raw.exec("ALTER TABLE projects_v11 RENAME TO projects");
     raw.prepare("DELETE FROM schema_migrations WHERE version = 12").run();
+    raw.prepare("DELETE FROM schema_migrations WHERE version = 17").run();
     // Asserted before the migration runs, so this test cannot pass by starting from a database that
     // never carried the constraint: the reconstructed schema really does refuse a Project with no
     // fixture, which is the whole thing 0012 exists to change.
@@ -1604,7 +1614,7 @@ describe("SQLite local state", () => {
     raw.close();
 
     const migrated = await open();
-    expect(migrated.startup.appliedMigrations).toEqual([12]);
+    expect(migrated.startup.appliedMigrations).toEqual([12, 17]);
 
     // Every row carried across, byte for byte. The owner's real database has Projects in it.
     const after = migrated.query({ type: "LIST_PROJECTS" });

@@ -1,13 +1,16 @@
+import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import type {
+  McpSessionSnapshot,
   ProviderOutcome,
   WorkflowDispatch,
   WorkflowTemplate,
   WorkItemWorkspace,
 } from "@loomrail/contracts";
+import { canonicalMcpProfileSource } from "@loomrail/domain";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import {
   providerCapabilitiesSchema,
@@ -436,6 +439,115 @@ describe("session loop workspace provisioning", () => {
       // workspace is refused to the owner instead, so a run that asked no question is what tells
       // these two assertions apart from a passing test that never dispatched at all.
       expect(snapshotOf(localState, seeded.workItemId).humanRequests).toHaveLength(0);
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "opens the exact MCP session snapshots before provider start and closes their connector lease",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      const candidate = {
+        profileId: null,
+        name: "Local docs",
+        executable: join(temporaryDirectory, "mcp server"),
+        args: ["--read-only"],
+        declaredTools: ["search_docs"],
+      };
+      const canonicalDigest = createHash("sha256").update(canonicalMcpProfileSource(candidate)).digest("hex");
+      const consented = localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-mcp-consent",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "CONFIRM_MCP_PROFILE",
+        payload: {
+          projectId: PROJECT_ID,
+          expectedProjectVersion: 1,
+          candidate,
+          canonicalDigest,
+        },
+      });
+      if (consented.type !== "MCP_PROFILE_CONSENTED") throw new Error("Expected an MCP profile");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-mcp-probe",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "RECORD_MCP_CAPABILITY_SNAPSHOT",
+        payload: {
+          projectId: PROJECT_ID,
+          profileRevisionId: consented.revision.id,
+          state: "READY",
+          protocolVersion: "2026-07-28",
+          tools: ["search_docs"],
+          resources: [],
+          prompts: [],
+        },
+      });
+      const granted = localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-mcp-grant",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "SET_MCP_PROFILE_GRANT",
+        payload: {
+          projectId: PROJECT_ID,
+          expectedProjectVersion: 2,
+          profileRevisionId: consented.revision.id,
+          expectedGrantVersion: null,
+          tools: ["search_docs"],
+          ownerAttestsReadOnly: true,
+        },
+      });
+      if (granted.type !== "MCP_GRANT_CHANGED") throw new Error("Expected an MCP grant");
+
+      let openedSnapshots: readonly McpSessionSnapshot[] = [];
+      let leaseClosed = false;
+      let received: ProviderInvocation | undefined;
+      const adapter = completingAdapter((_count, invocation) => {
+        received = invocation;
+      });
+      await runStageAttempt({
+        ...depsFor(localState, seeded, adapter),
+        openMcpConnections: (snapshots) => {
+          openedSnapshots = snapshots;
+          return Promise.resolve({
+            connections: [
+              {
+                id: "loomrail_01",
+                proxyCommand: "/opt/loomrail/bin/mcp-proxy",
+                proxyArgs: ["connect", "opaque-token"],
+                enabledTools: ["search_docs"],
+              },
+            ],
+            close: () => {
+              leaseClosed = true;
+              return Promise.resolve();
+            },
+          });
+        },
+      });
+
+      expect(openedSnapshots).toHaveLength(1);
+      expect(openedSnapshots[0]).toMatchObject({
+        providerSessionId: received?.session.id,
+        profileRevisionId: consented.revision.id,
+        profileDigest: canonicalDigest,
+        grantId: granted.grant.id,
+        tools: ["search_docs"],
+      });
+      expect(received?.mcpConnections).toEqual([
+        {
+          id: "loomrail_01",
+          proxyCommand: "/opt/loomrail/bin/mcp-proxy",
+          proxyArgs: ["connect", "opaque-token"],
+          enabledTools: ["search_docs"],
+        },
+      ]);
+      expect(leaseClosed).toBe(true);
     },
     GIT_TIMEOUT_MS,
   );

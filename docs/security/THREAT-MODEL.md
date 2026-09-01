@@ -1,7 +1,7 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-08-30
+**Updated:** 2026-08-31
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
@@ -14,8 +14,9 @@ The sentence "it does not execute shell/Git/provider/browser actions" stood here
 true of two of the four**. A2 made Loomrail spawn real provider CLIs as child processes of the daemon, and E1 made it
 run `git` and hand one of those CLIs a writable worktree for every stage it serves but the owner's own
 acceptance decision. Both are covered by their deltas in §6 rather than by this
-paragraph. Browser actions are still not executed, and the mock provider still runs by default (`LOOMRAIL_PROVIDER`
-unset).
+paragraph. Browser actions are still not executed. New Projects default to `AUTO`: the daemon may select an installed,
+authenticated live CLI, while an owner can choose Mock explicitly for a zero-quota run. The provider-selection controls
+and probe boundaries are specified in T26.
 
 ## 2. Security objectives
 
@@ -72,30 +73,32 @@ data. A Git worktree is collision isolation, not a security sandbox.
 
 ## 6. Phase 0 threats and controls
 
-| ID  | Threat                                                         | Risk     | Required controls                                                                                                                                                                            | Verification / gate                                         |
-| --- | -------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| T01 | Host binds to LAN/all interfaces                               | Critical | explicit loopback bind and startup assertion                                                                                                                                                 | M1/M2 integration asserts the listener address              |
-| T02 | Malicious site sends localhost commands                        | Critical | one-time bootstrap, HttpOnly SameSite session, exact Origin, CSRF header, no wildcard CORS                                                                                                   | M1/M2 foreign-Origin, session and CSRF integration tests    |
-| T03 | Unauthorized or persistent access to the event stream          | High     | `requireSession` on the SSE route, same as every other GET; `Origin` compared when sent, `SameSite=Strict` otherwise; heartbeat closes the stream on session expiry; open-stream limit       | see A1.5 event-channel delta below                          |
-| T04 | Bootstrap token leaks in URL/log/referrer                      | High     | URL fragment, one-minute TTL, hash storage, atomic consume, log redaction                                                                                                                    | M1/M2 replay, request-URL, fragment, referrer and log tests |
-| T05 | Stored XSS through WorkItem/artifact                           | High     | output escaping, no raw HTML Markdown, CSP, size limits                                                                                                                                      | M3 persisted-text browser test and CSP                      |
-| T06 | Path traversal in fixture project                              | High     | canonical path containment and no symlink escape                                                                                                                                             | M2 HTTP traversal plus directory/manifest symlink tests     |
-| T07 | Duplicate command/dispatch                                     | High     | command ID idempotency, transaction + unique constraints                                                                                                                                     | M2 concurrent retry and command-reuse tests                 |
-| T08 | False Done/approval tampering                                  | High     | state-machine gate, append-only Event/Decision/evidence, optimistic version                                                                                                                  | M2 transition tests; M6 Scenario D and acceptance replay    |
-| T09 | SQLite corruption/migration failure                            | High     | WAL, short transactions, backup before migration, fail closed                                                                                                                                | M2 backup/checksum/reopen tests; full restore drill in M7   |
-| T10 | Sensitive values in logs/errors                                | High     | structured allowlisted fields and pre-persistence redaction                                                                                                                                  | M2 bootstrap/session canary redaction test                  |
-| T11 | Event/resource exhaustion                                      | Medium   | payload limits, pagination, queue bounds, open-stream cap; event-stream frames are three opaque identifiers and are not queued per subscriber (no slow-consumer policy — see the A1.5 delta) | M2 body/query bounds; A1.5 open-stream limit tests          |
-| T12 | Dependency/supply-chain compromise                             | High     | lockfile, trusted registry, minimum release age, audit, reviewed updates                                                                                                                     | pinned CI install, production audit and reviewed updates    |
-| T13 | Private data committed publicly                                | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                                                                                                                          | automated public-tree scan; full history scan in M7         |
-| T14 | Theme/UI hides critical state                                  | Medium   | text/icon semantics, contrast, no color-only gates                                                                                                                                           | M1–M3 light/dark, keyboard and state browser checks         |
-| T15 | Checkpoint steers the next provider session across a swap      | High     | schema-validated checkpoint, explicit untrusted-data delimiters in the pack, full text visible to owner (see A1 delta below)                                                                 | see A1 delta below                                          |
-| T16 | Live adapter spawns an owner-privileged child process          | High     | argv array to `child_process.spawn`, no shell interpolation; never enable a provider's permission-bypass flag automatically (SD-001)                                                         | see A2 delta below                                          |
-| T17 | Child process orphaned by a dead daemon outlives it            | Medium   | pid recorded on the `ProviderSession`; startup reconciliation kills it before the session is marked ended                                                                                    | see A2 delta below                                          |
-| T18 | Untrusted provider stream carries the owner's own hook output  | High     | only typed fields cross the adapter boundary; no raw wire line is retained anywhere a caller can observe                                                                                     | see A2 delta below                                          |
-| T21 | Client path expands a diff read or exhausts the daemon         | Medium   | authenticated route; canonical worktree boundary; literal Git pathspec plus exact name match; file-count and byte limits; summary debounce                                                   | see E1.5 change-visibility delta below                      |
-| T22 | Live provider bypasses typed evidence or owner acceptance      | High     | stage-specific strict result schema; daemon-owned provider attribution; Review/QA typed artifacts; domain rejects ordinary Acceptance completion                                             | see D2 live-route delta below                               |
-| T23 | Public landing leaks private data or executes third-party code | High     | static build from reviewed assets; no forms, analytics or external runtime resources; self-only CSP; pinned Pages actions; build and deploy permissions separated                            | landing public-contract test, public-tree scan and Pages CI |
-| T24 | Repository onboarding leaks data or overwrites owner policy    | High     | bounded allowlist scan; no source/env/lock contents; no command execution; untrusted provenance; explicit owner adoption; compare-and-set digest; atomic publication; durable recovery       | see B5+B1 Constitution delta below                          |
+| ID  | Threat                                                                | Risk     | Required controls                                                                                                                                                                            | Verification / gate                                         |
+| --- | --------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| T01 | Host binds to LAN/all interfaces                                      | Critical | explicit loopback bind and startup assertion                                                                                                                                                 | M1/M2 integration asserts the listener address              |
+| T02 | Malicious site sends localhost commands                               | Critical | one-time bootstrap, HttpOnly SameSite session, exact Origin, CSRF header, no wildcard CORS                                                                                                   | M1/M2 foreign-Origin, session and CSRF integration tests    |
+| T03 | Unauthorized or persistent access to the event stream                 | High     | `requireSession` on the SSE route, same as every other GET; `Origin` compared when sent, `SameSite=Strict` otherwise; heartbeat closes the stream on session expiry; open-stream limit       | see A1.5 event-channel delta below                          |
+| T04 | Bootstrap token leaks in URL/log/referrer                             | High     | URL fragment, one-minute TTL, hash storage, atomic consume, log redaction                                                                                                                    | M1/M2 replay, request-URL, fragment, referrer and log tests |
+| T05 | Stored XSS through WorkItem/artifact                                  | High     | output escaping, no raw HTML Markdown, CSP, size limits                                                                                                                                      | M3 persisted-text browser test and CSP                      |
+| T06 | Path traversal in fixture project                                     | High     | canonical path containment and no symlink escape                                                                                                                                             | M2 HTTP traversal plus directory/manifest symlink tests     |
+| T07 | Duplicate command/dispatch                                            | High     | command ID idempotency, transaction + unique constraints                                                                                                                                     | M2 concurrent retry and command-reuse tests                 |
+| T08 | False Done/approval tampering                                         | High     | state-machine gate, append-only Event/Decision/evidence, optimistic version                                                                                                                  | M2 transition tests; M6 Scenario D and acceptance replay    |
+| T09 | SQLite corruption/migration failure                                   | High     | WAL, short transactions, backup before migration, fail closed                                                                                                                                | M2 backup/checksum/reopen tests; full restore drill in M7   |
+| T10 | Sensitive values in logs/errors                                       | High     | structured allowlisted fields and pre-persistence redaction                                                                                                                                  | M2 bootstrap/session canary redaction test                  |
+| T11 | Event/resource exhaustion                                             | Medium   | payload limits, pagination, queue bounds, open-stream cap; event-stream frames are three opaque identifiers and are not queued per subscriber (no slow-consumer policy — see the A1.5 delta) | M2 body/query bounds; A1.5 open-stream limit tests          |
+| T12 | Dependency/supply-chain compromise                                    | High     | lockfile, trusted registry, minimum release age, audit, reviewed updates                                                                                                                     | pinned CI install, production audit and reviewed updates    |
+| T13 | Private data committed publicly                                       | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                                                                                                                          | automated public-tree scan; full history scan in M7         |
+| T14 | Theme/UI hides critical state                                         | Medium   | text/icon semantics, contrast, no color-only gates                                                                                                                                           | M1–M3 light/dark, keyboard and state browser checks         |
+| T15 | Checkpoint steers the next provider session across a swap             | High     | schema-validated checkpoint, explicit untrusted-data delimiters in the pack, full text visible to owner (see A1 delta below)                                                                 | see A1 delta below                                          |
+| T16 | Live adapter spawns an owner-privileged child process                 | High     | argv array to `child_process.spawn`, no shell interpolation; never enable a provider's permission-bypass flag automatically (SD-001)                                                         | see A2 delta below                                          |
+| T17 | Child process orphaned by a dead daemon outlives it                   | Medium   | pid recorded on the `ProviderSession`; startup reconciliation kills it before the session is marked ended                                                                                    | see A2 delta below                                          |
+| T18 | Untrusted provider stream carries the owner's own hook output         | High     | only typed fields cross the adapter boundary; no raw wire line is retained anywhere a caller can observe                                                                                     | see A2 delta below                                          |
+| T21 | Client path expands a diff read or exhausts the daemon                | Medium   | authenticated route; canonical worktree boundary; literal Git pathspec plus exact name match; file-count and byte limits; summary debounce                                                   | see E1.5 change-visibility delta below                      |
+| T22 | Live provider bypasses typed evidence or owner acceptance             | High     | stage-specific strict result schema; daemon-owned provider attribution; Review/QA typed artifacts; domain rejects ordinary Acceptance completion                                             | see D2 live-route delta below                               |
+| T23 | Public landing leaks private data or executes third-party code        | High     | static build from reviewed assets; no forms, analytics or external runtime resources; self-only CSP; pinned Pages actions; build and deploy permissions separated                            | landing public-contract test, public-tree scan and Pages CI |
+| T24 | Repository onboarding leaks data or overwrites owner policy           | High     | bounded allowlist scan; no source/env/lock contents; no command execution; untrusted provenance; explicit owner adoption; compare-and-set digest; atomic publication; durable recovery       | see B5+B1 Constitution delta below                          |
+| T33 | Plugin manifest is mistaken for a sandbox or gains workflow authority | High     | separate process; closed read-only SDK; no domain hooks; ordinary C1 Consent/probe/Grant; manifest claims are labelled unverified                                                            | see C2 Plugin SDK delta below                               |
+| T34 | New-project scaffold overwrites a path or executes a template payload | Critical | built-in immutable recipes only; nonexistent target; exclusive directory claim; create-new writes; no package install/hooks/commit/push; durable marker-bound recovery                       | see B4 scaffolding delta below                              |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -230,9 +233,11 @@ Mitigations, verified in code:
   list. In `packages/provider-claude-code` both spellings remain banned outright, because that adapter sends no
   config override at all. See T19 below for the exception and the guard that replaced the ban.
 
-- **neither adapter connects an MCP server.** Spec D6 forbids MCP before milestone C1, and nothing enforced
-  that: it was a property of the argv nobody asserted. `--mcp-config` and `--strict-mcp-config` are now checked
-  for their absence by name, by both adapters' "never connects an MCP server (D6)" test;
+- **C1 replaces the blanket MCP ban with a closed session-scoped exception.** Codex still sends
+  `--ignore-user-config` and may add only schema-validated `mcp_servers.loomrail_*.(command|args|enabled_tools)`
+  assignments for the Loomrail proxy. Claude always sends a generated `--mcp-config` together with
+  `--strict-mcp-config`; an empty connector set produces an explicit empty config. Adapter tests assert both the
+  empty and connected shapes and that the real server launch recipe never reaches provider argv/config;
 - before E1 there is nothing on disk for a bypassed permission to reach anyway: both adapters run their CLI in
   a fresh, empty temporary directory (spec §6/§7, D1), bounding the blast radius independently of the flag
   check above. **E1 ends this for Codex** — it runs in a real Git worktree with write access, for every stage
@@ -392,7 +397,7 @@ and it is written here so that the `.env` control listed under §7 "Secrets" is 
 **T20 — the machine's own Codex config decides what the agent may do.** Rated High, and this weakening existed
 _before_ E1: `codex exec` launched without `--ignore-user-config` inherits the owner's entire
 `~/.codex/config.toml` — `approval_policy`, `sandbox_mode`, hooks, plugins, model providers **and MCP
-servers** — while A2's D6 forbids MCP outright and nothing enforced it. `-s` overrides `sandbox_mode` for the
+servers** — while Loomrail permits only its C1 session proxy. `-s` overrides `sandbox_mode` for the
 sandbox itself, but hooks, plugins and MCP servers are not sandboxed at all. Mitigations, verified in code:
 
 - **`--ignore-user-config` is sent on every launch**, read-only and workspace-write alike
@@ -400,12 +405,12 @@ sandbox itself, but hooks, plugins and MCP servers are not sandboxed at all. Mit
   "does not let the owner's own codex config decide what the agent may do". Authentication is unaffected: it
   lives in `CODEX_HOME`, not in `config.toml`. What the CLI does with a flag it documents is the CLI's
   behaviour, not something this repository can prove — the assertion here is over the argv Loomrail builds;
-- **the `-c` exception is exactly one key, and it is guarded by value rather than by spelling.** Given a
-  workspace the adapter sends `-c sandbox_workspace_write.network_access=true` and nothing else. Banning the
-  spelling would ban this launch; permitting the spelling would permit `sandbox_permissions` with it. So `-c`
-  left the forbidden-spelling list in that package and the test now enumerates the permitted _assignments_
-  (`ALLOWED_CONFIG_ASSIGNMENTS`), asserting that **every** `-c` in the argv carries one of them. Adding a
-  second key is then a decision someone makes in that list;
+- **the `-c` exception is a closed assignment grammar, guarded by value rather than by spelling.** A writable
+  workspace may add the fixed `sandbox_workspace_write.network_access=true` value. C1 may add only the three
+  `mcp_servers.<safe-id>.command|args|enabled_tools` values generated from a typed Loomrail proxy connector.
+  Banning the spelling would ban these launches; permitting it without checking values would permit
+  `sandbox_permissions` with it. The adapter test therefore validates **every** `-c` assignment, including
+  attached short-flag spellings, against that closed grammar;
 - **the guard matches by prefix as well as by exact token.** A clap-based CLI accepts `-cKEY=VALUE` and
   `--config=KEY=VALUE` as single argv tokens, and the first version of this guard — `not.toContain("-c")`,
   plus a reader that only inspected the token _after_ an exact `-c` — let both through untouched. That is the
@@ -633,6 +638,39 @@ restart recovery; `apps/daemon/test/constitution.integration.test.ts` covers the
 `.env`, instruction and script-body canaries in the response, no write before owner adoption, and preservation of an
 owner edit made between scan and adoption.
 
+### B3+B2 Project Readiness delta (T25)
+
+B3+B2 adds a one-action local preflight over a registered repository and lets the owner attest launch decisions.
+The tempting unsafe implementation would execute discovered build/security scripts, search every file for secret
+values, follow workflow symlinks or turn an unverifiable input into a green result. The combined threat is rated
+**High**: the operation is owner-triggered but runs over attacker-controlled repository state, and a false `READY`
+could be treated as permission to launch.
+
+- `packages/project-readiness` owns one bounded read-only interface. It accepts only the Project's stored top-level
+  repository path and uses closed internal Git argv for `rev-parse`, `status`, `ls-files` and `check-ignore`; no shell,
+  package manager, project script, hook or network operation is invoked;
+- each Git child has a ten-second timeout and a 2 MiB output ceiling, disables optional locks and repository hooks,
+  and fails closed. The tracked-secret check reads path names only. It never opens `.env`, `.npmrc`, key or credential
+  files and never persists their values;
+- CI inspection is restricted to regular `.github/workflows/*.yml|yaml` files: at most 32, 256 KiB each and 1 MiB
+  total. Symlink, unreadable and over-bound inputs become `CI_INPUT_UNVERIFIABLE`, never `PASSED`;
+- automatic checks are a closed catalog. Their status is derived from findings, while legal/payments/analytics
+  owner checks begin unresolved. The domain rejects missing/duplicated/misclassified catalog entries and refuses an
+  attestation against an automated check, another Project, a stale version or a non-latest Run;
+- assessment rows, checks, findings, Event and command receipt share one SQLite transaction. Attestation, projected
+  check/run status, append-only decision, Event and receipt share another. `READY` is computed only when no check is
+  `ACTION_REQUIRED`; it remains explicitly tied to HEAD, dirty state, source digest and check time;
+- all HTTP mutations require the existing local session, exact Origin, JSON content type and session CSRF token. The
+  client cannot supply a filesystem path or claim an active Constitution; both facts are read from durable Project
+  state by the daemon.
+
+Verification: `packages/project-readiness/test/scanner.integration.test.ts` uses non-ASCII/space paths, a tracked
+secret-value canary, a malicious package script, risky CI and a symlink/non-top-level path; it proves no command or
+secret value escapes and every unverifiable input fails closed. `packages/persistence-sqlite/test/readiness-state.integration.test.ts`
+covers the closed catalog, command replay, owner/automated boundaries, stale/latest-run checks, aggregate `READY` and
+restart durability. `apps/daemon/test/readiness.integration.test.ts` drives registration, owner-approved Constitution,
+session/CSRF-protected assessment, three owner attestations and the persisted final snapshot through HTTP.
+
 ### Provider CLI
 
 - scrub inherited environment;
@@ -642,6 +680,115 @@ owner edit made between scan and adoption.
 - raw events quarantined and normalized;
 - output size/rate bounds;
 - never enable permission bypass automatically.
+
+### Provider Selection delta (T26)
+
+AUTO selection adds two child-process probes and lets an authenticated browser mutation choose which live CLI a
+Project will launch next. The High-rated failure is a poisoned executable/config or a stale selector silently routing
+work to a different provider while the owner believes the chosen one ran.
+
+- executable and auth status are separate observations; a PATH hit alone never proves readiness;
+- probes use fixed argv arrays, no shell, closed stdin, a short deadline and discarded stdout/stderr. Only provider
+  id, installed/auth state and time are kept in memory; credential/account output is never parsed, persisted or logged;
+- preference changes use Project optimistic version, CSRF/Origin/session enforcement and one transaction containing
+  state, append-only Event and idempotent command receipt;
+- explicit live preference never falls through to another live adapter or a successful mock result;
+- daemon owns a stable adapter registry. The worker captures the exact adapter serving the live ProviderSession, so
+  a concurrent Settings change cannot redirect abort/handoff;
+- `LOOMRAIL_PROVIDER` override is reported to UI and disables mutation rather than secretly defeating the selector;
+- no probe or selector adds a permission-bypass argument or inherits user MCP/plugin configuration.
+
+Verification: domain tests cover no-op and version conflict; persistence covers atomic replay and restart;
+daemon integration covers probe output canaries, missing/auth-required states, AUTO and environment precedence, and
+adapter capture across a concurrent preference change; browser E2E covers RU/EN, keyboard and both themes.
+
+### MCP Connections delta (T27–T31)
+
+**T27 — authenticated browser configuration becomes local code execution. Critical.** A hostile page cannot pass
+Origin/CSRF/session controls, but compromised bundled UI or a stolen local session could try to turn profile creation
+into `spawn(arbitraryText)`. Proposal never executes or persists active authority; Consent is a separate one-time,
+expiring challenge over a canonical digest and exact argv display. Only absolute executables and bounded argv arrays
+are accepted; shell/download/elevation launchers, URL/env/secret/cwd and on-the-fly probe/session payloads are refused.
+The refused set covers command-dispatch wrappers (`env`, `xargs`, `nohup`, `setsid`, `osascript`, `wsl`, …) as well as
+shells themselves: a wrapper executes its own first argument, so a list that knew only shells by name would have let
+`/usr/bin/env bash -c …` through as an "exact command" the owner had approved. The canonical digest covers the launch
+and the declared tools, not the profile identifier, so re-approving an unchanged recipe is recognised as unchanged
+instead of being filed as a second, identical revision.
+
+**T28 — malicious local server escapes lifecycle or floods daemon. High.** Provider never launches the real server.
+Daemon-owned gateway owns the SDK transport and closes it on session end; probe and private proxy paths bound message,
+aggregate output, argument depth/size and capability counts. A Loomrail supervisor pre-validates each stdout message,
+uses a detached POSIX process group or Windows `taskkill /T`, and applies EOF then TERM/grace/KILL to the full tree.
+It also watches daemon liveness and performs the same cleanup immediately if the daemon disappears; integration tests
+use a server with a signal-resistant descendant. Before exposure, supervisor atomically writes a mode-`0600` process
+record beside durable local state. Startup validates the bounded non-symlink record and compares the current OS process
+start time before killing a tree that survived both daemon and supervisor; a reused pid is left alone. The remaining
+release gate is a real green Windows CI run for the `taskkill /T` branch. A platform adapter test fixes the exact
+`taskkill.exe /PID <pid> /T [/F]` argument vector without shell interpolation, and CI exposes the Windows MCP lifecycle
+suite as a dedicated step. A fully compromised same-user account remains outside the local-mode boundary.
+
+**T29 — capability drift or provider ambient config widens authority. High.** Consent binds immutable revision digest;
+Grant is a separate closed tool allowlist; capability snapshot is observation only. Codex keeps
+`--ignore-user-config` and accepts only closed Loomrail proxy `mcp_servers.*` overrides. Claude uses generated config
+with `--strict-mcp-config`. New tools remain hidden until a versioned Grant command.
+
+**T30 — MCP content injects workflow instructions, paths or secrets. High.** Descriptions, prompts, resources,
+structured content, errors and links are untrusted provider input. Roots are not ACL. C1 exposes no env/secret fields,
+validates schemes/paths/sizes at gateway and never treats server text as command, approval, Decision or workflow state.
+Audit stores ids/digests/counts and typed outcomes, not raw sensitive payload.
+
+**T31 — lost tool response is retried and duplicates a side effect. High.** Gateway records `STARTED` before forward.
+Disconnect/crash after forward produces durable `UNKNOWN_OUTCOME`; no automatic retry occurs, including for a tool the
+owner labelled read-only. Explicit recovery requires checking external state and creating a new StageAttempt. C1 does
+not auto-approve side-effect tools and does not spend the provider-authored HumanRequest gate on per-call prompts.
+
+**T32 — bundled Context7 becomes a silent supply-chain install or exfiltration path. High.** C3 adds one external
+server to Loomrail's production dependency tree and its two tools send user-authored queries to an open-world remote
+documentation service. The package is exact-pinned in the lockfile/release manifest and installed only when Loomrail
+itself is installed; runtime never invokes `npx`, `latest`, PATH discovery or a download fallback. The authenticated
+preset endpoint accepts only expected Project version and builds executable, argv and tool names inside daemon. Normal
+C1 exact Consent, realpath recheck, probe, allowlist, proxy, audit and revoke remain mandatory; newly discovered tools
+receive no authority. C3 passes no API key or secret env and writes no provider/repository auto-invoke rule. UI states
+that queries leave the machine and must exclude secrets, personal data and proprietary code. A compromised signed
+Loomrail/Context7 release remains part of the software-update trust boundary; C3 does not claim to sandbox it.
+
+**T33 — plugin manifest is mistaken for a sandbox or gains workflow authority. High.** C2 executes no plugin inside
+the daemon and exposes no Project, WorkItem, StageAttempt, HumanRequest, Decision, budget, permission or acceptance
+method. The SDK serves only MCP tools in a separate stdio process and owns the annotations
+`readOnlyHint=true`/`destructiveHint=false`; authors cannot override them. A strict manifest rejects command, argv,
+cwd, env, secret, workflow-hook and arbitrary-permission fields. Tool names are derived from the actual definitions
+and checked again before the transport opens. Handler inputs and outputs are runtime-validated and bounded; thrown
+errors become a generic result without raw message or stack. The manifest's network hosts remain an unverified claim,
+not an OS allowlist: UI/docs must still describe a third-party process as having the user's account authority. Actual
+provider exposure continues to require exact C1 owner Consent, a successful probe and a separate closed tool Grant;
+capability discovery cannot self-authorize. Marketplace, download/install, signatures, secrets and side-effect tools
+remain outside C2.
+
+Verification required by C2: strict manifest rejection and canonicalization; exact tool/manifest equality; fixed MCP
+annotations; invalid-input and redacted-failure tests; real C1 probe against a synthetic SDK plugin; clean npm subpath
+resolution on macOS and Windows.
+
+**T34 — new-project scaffold overwrites a path or executes a template payload. Critical.** B4 is the first Loomrail
+flow whose purpose is to create a repository tree, so a path race, traversal, symlink or executable template could
+turn one confirmation into arbitrary filesystem mutation. B4 accepts no remote/local arbitrary template: only a
+built-in immutable Recipe can render files, with strict bounded portable paths, UTF-8 content and no lifecycle
+scripts. Proposal is read-only and binds canonical target, recipe version and every file digest; publish recomputes
+it and requires the owner's exact digest. Target must not exist and is claimed with non-recursive `mkdir`; all files
+use create-new writes. Portable Node APIs do not provide directory rename-without-replacement, so recovery is explicit
+rather than hidden behind a false atomicity claim: a durable Operation is stored before mutation, and an existing
+target is resumable only when its regular-file marker exactly matches that Operation and proposal. Unknown marker,
+changed file, symlink or special file fails closed and is never deleted. Git uses argv without shell and disables
+owner/system config, ambient `GIT_*`, template/hooks/signing and terminal prompts; an unexpected recovery-tree path
+also fails closed. Dependency install, generated commands, commit, push and remote creation are excluded.
+
+Verification required by B4: traversal/root/nested-repository/symlink and target-race tests; recipe lifecycle-script
+rejection; create-new conflict tests; restart after each publication step; mismatched marker/file preservation;
+idempotent publish and Project registration; HTTP Origin/session/CSRF bounds; redaction canaries; RU/EN, keyboard and
+light/dark browser coverage on macOS and Windows.
+
+Verification required by C1: proposal replay/digest/expiry; CSRF/Origin; shell/download denial; ambient-config canary;
+ungranted call never reaches fake server; revoke race; flood/invalid JSON; process orphan cleanup; unknown outcome/no
+retry; redaction canaries; RU/EN, keyboard, light/dark E2E.
 
 ### Filesystem, shell and Git
 

@@ -13,6 +13,7 @@ import {
   type ContextPackSpec,
   type EndProviderSessionCommand,
   type HumanRequestDraft,
+  type McpSessionSnapshot,
   type ProviderOutcome,
   type ProviderSessionEndReason,
   type StageAttempt,
@@ -38,6 +39,7 @@ import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
 import {
   ProviderPackTooLargeError,
   type ProviderAdapter,
+  type ProviderMcpConnection,
   type ProviderSessionListener,
   type ProviderSessionRef,
   type ProviderStageResultPolicy,
@@ -112,6 +114,13 @@ export type HandoffDeadline = { cancel: () => void };
  */
 export type ScheduleHandoffDeadline = (delayMs: number, onDeadline: () => void) => HandoffDeadline;
 
+export type McpConnectionLease = {
+  connections: readonly ProviderMcpConnection[];
+  close: () => Promise<void>;
+};
+
+export type OpenMcpConnections = (snapshots: readonly McpSessionSnapshot[]) => Promise<McpConnectionLease>;
+
 export type RunStageAttemptDeps = {
   state: LocalState;
   adapter: ProviderAdapter;
@@ -133,6 +142,8 @@ export type RunStageAttemptDeps = {
   correlationId: string;
   logger: SessionLoopLogger;
   scheduleHandoffDeadline?: ScheduleHandoffDeadline;
+  /** Opens daemon-owned MCP servers for the immutable snapshots captured at session start. */
+  openMcpConnections?: OpenMcpConnections;
   /**
    * Called with the live session's id when one opens and with `null` when it closes.
    *
@@ -1337,13 +1348,25 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     // longer live for a later `stop()` to mis-abort. `await` inside a try/catch converts either
     // failure mode into the same FAILED outcome the reject path already produces.
     const startSession = async (): Promise<SessionOutcome> => {
+      let mcpLease: McpConnectionLease | null = null;
       try {
+        if (started.mcpSnapshots.length === 0) {
+          mcpLease = { connections: [], close: () => Promise.resolve() };
+        } else {
+          const openMcpConnections = deps.openMcpConnections;
+          if (openMcpConnections === undefined) {
+            throw new Error("The MCP gateway connector opener is missing");
+          }
+          mcpLease = await openMcpConnections(started.mcpSnapshots);
+        }
+        const mcpConnections = mcpLease.connections;
         const outcome = await deps.adapter.start(
           {
             dispatch: deps.dispatch,
             session: providerSessionRef(providerSession, attempt),
             contextPack: assembled.pack,
             humanRequests,
+            mcpConnections,
             ...invocationWorkspace,
           },
           listener,
@@ -1351,6 +1374,18 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         return { type: "OUTCOME", outcome };
       } catch (error: unknown) {
         return { type: "FAILED", error };
+      } finally {
+        if (mcpLease !== null) {
+          await mcpLease.close().catch((error: unknown) => {
+            deps.logger.warn(
+              {
+                providerSessionId: providerSession.id,
+                errorName: errorName(error),
+              },
+              "Could not close the MCP gateway connector lease",
+            );
+          });
+        }
       }
     };
 

@@ -1,0 +1,27 @@
+{
+  "name": "@loomrail/mcp-gateway",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm build && vitest run",
+    "test:unit": "vitest run"
+  },
+  "dependencies": {
+    "@loomrail/contracts": "workspace:*",
+    "@loomrail/domain": "workspace:*",
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/core": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {}
+}

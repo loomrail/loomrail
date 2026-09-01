@@ -402,6 +402,79 @@ Handoff — это **не перенос истории диалога**. Это
 Отсюда следует, что A1 проектируется **до** A2: иначе адаптеры придётся переделывать под контракт, которого на момент
 их написания не существовало.
 
+### PD-009 — Provider выбирается в Project, AUTO является обычным путём
+
+`LOOMRAIL_PROVIDER` не является обязательным шагом установки. Новый Project получает `AUTO`: daemon безопасно
+проверяет наличие и авторизацию официальных Codex/Claude Code CLI и выбирает готовый адаптер для новой
+ProviderSession. В Project Settings владелец может закрепить Codex, Claude Code либо явный Mock demo mode.
+
+Выбор versioned и durable, но не меняет provider уже запущенной ProviderSession. Environment variable остаётся
+только видимым startup override для automation/debugging. Loomrail не хранит provider credentials, не читает вывод
+auth-status глубже exit outcome и никогда не включает permission bypass. Полный контракт —
+[`docs/plans/31-provider-selection-auto-detection-spec.ru.md`](../plans/31-provider-selection-auto-detection-spec.ru.md).
+
+### PD-010 — MCP проходит через daemon-owned gateway
+
+Project хранит immutable MCP Connection Profile Revisions, owner Consent и versioned tool Grant. ProviderSession
+получает snapshot конкретных revisions/grants, но provider adapter не запускает реальные MCP servers напрямую:
+provider подключается только к scoped Loomrail proxy, daemon владеет stdio process, policy, bounded audit, revoke и
+recovery.
+
+C1 поддерживает только local stdio и owner-granted read-only tools. Remote HTTP/OAuth, env/secrets, Registry install,
+ambient provider MCP config и автоматические side-effect approvals не входят. Полный контракт —
+[`docs/plans/33-c1-mcp-connections-spec.ru.md`](../plans/33-c1-mcp-connections-spec.ru.md), причина gateway seam —
+ADR-0005.
+
+### PD-011 — Context7 поставляется как встроенный MCP preset, а не скрытая интеграция
+
+Loomrail включает exact-pinned `@upstash/context7-mcp` в собственную runtime-дистрибуцию и строит из него
+project-scoped C1 Profile Proposal. Пользователю не нужны глобальная установка, `npx` или ручной поиск executable.
+Preset использует только bundled Node runtime, local stdio и два заявленных read-only tool:
+`resolve-library-id` и `query-docs`.
+
+«По умолчанию» означает, что безопасный preset доступен в каждом Project без подготовки машины, но не означает
+автоматический запуск или grant. Owner всё равно подтверждает точный executable/argv, запускает capability probe и
+отдельно выдаёт tool allowlist. Loomrail не записывает auto-invoke rule в repository/provider config и не передаёт
+Context7 API key: запросы идут в anonymous tier, а credentials/env остаются за границей C1/C3.
+
+Context7 обращается к внешнему API, поэтому UI явно сообщает, что query покидает машину и не должен содержать secrets,
+персональные данные или proprietary code. Полный контракт —
+[`docs/plans/35-c3-context7-preset-spec.ru.md`](../plans/35-c3-context7-preset-spec.ru.md).
+
+### PD-012 — Plugin SDK v1 расширяет tool surface, но не workflow authority
+
+Первый Plugin SDK предназначен только для локальных read-only tool plugins. Автор описывает плагин строгим
+versioned manifest и запускает отдельный MCP stdio process через helper из `loomrail/plugin-sdk`; Loomrail проверяет
+его обычным C1 probe и применяет owner Grant через daemon-owned gateway. Плагин не получает интерфейса для изменения
+WorkItem, StageAttempt, HumanRequest, Decision, budgets, acceptance или permission state.
+
+Manifest не является security sandbox и не превращает утверждения стороннего кода в доказательство. Он фиксирует
+identity, exact tool surface, entrypoint, license и заявленные outbound hosts, а SDK принудительно выставляет MCP
+annotations read-only/destructive-false. Запуск стороннего executable по-прежнему требует отдельного owner Consent к
+точной C1 launch revision; capability probe и tool Grant не заменяют это доверие.
+
+C2 не включает registry/marketplace, package download/install, signatures, secrets/env, filesystem write, shell/Git,
+workflow hooks, UI installer или side-effect tools. SDK поставляется как публичный subpath export основного npm-пакета,
+а локальный fixture и C1 conformance test являются его первым совместимым consumer. Полный контракт —
+[`docs/plans/37-c2-plugin-sdk-spec.ru.md`](../plans/37-c2-plugin-sdk-spec.ru.md), причина seam — ADR-0006.
+
+### PD-013 — Новый Project создаётся из versioned recipe без installer side effects
+
+B4 создаёт новый Git repository только из встроенного immutable Scaffold Recipe. Первый recipe — небольшой
+TypeScript/Node baseline с обычными файлами, понятными без Loomrail. Владелец до записи видит canonical target,
+точную версию recipe, список файлов и digest, а затем подтверждает именно этот Scaffold Proposal.
+
+Loomrail не скачивает template, не запускает package manager, install script, hook или найденную в файлах команду,
+не делает commit/push и не создаёт remote. Target должен не существовать; daemon захватывает его эксклюзивным
+`mkdir` и пишет только новые файлы. Из-за отсутствия portable `rename-no-replace` для каталогов публикация не
+выдаётся за filesystem transaction: durable Scaffold Operation и marker позволяют продолжить ровно свою
+незавершённую публикацию после restart. Каталог с чужим или несовпадающим marker никогда не очищается и не
+перезаписывается автоматически.
+
+Успешная публикация завершается обычным зарегистрированным Project. Сгенерированный код остаётся полностью
+пользовательским: recipe не добавляет runtime dependency на Loomrail и не требует собственного формата для сборки
+или запуска. Полный контракт — [`docs/plans/39-b4-new-project-scaffolding-spec.ru.md`](../plans/39-b4-new-project-scaffolding-spec.ru.md).
+
 ## 14. Отложенные решения
 
 Следующие решения намеренно принимаются отдельным spike/ADR после Phase 0, а не угадываются заранее:

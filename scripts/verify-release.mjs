@@ -2,8 +2,10 @@ import { spawn } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import process from "node:process";
 
 import {
@@ -22,6 +24,35 @@ import {
  * a contributor's first `npx loomrail`.
  */
 const readyTimeoutMs = 90_000;
+
+const assertEntrypointRejectsInvalidInvocation = async (entrypoint, expectedError) =>
+  new Promise((resolveWith, rejectWith) => {
+    const child = spawn(process.execPath, [entrypoint], { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      rejectWith(new Error(`the packaged entrypoint did not exit: ${entrypoint}`));
+    }, 10_000);
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      rejectWith(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      if (code !== 2 || !stderr.includes(expectedError)) {
+        rejectWith(
+          new Error(
+            `the packaged entrypoint did not reject an invalid invocation as expected: ${entrypoint}\n${stderr}`,
+          ),
+        );
+        return;
+      }
+      resolveWith();
+    });
+  });
 
 const freePort = async () =>
   new Promise((resolveWith, rejectWith) => {
@@ -86,6 +117,40 @@ const run = async () => {
       );
     }
     const binaryPath = join(installedRoot, installedManifest.bin.loomrail);
+    if (installedManifest.dependencies?.["@upstash/context7-mcp"] !== "3.2.5") {
+      throw new Error("the packaged launcher does not pin its bundled Context7 server");
+    }
+    const installedRequire = createRequire(binaryPath);
+    const context7Entrypoint = installedRequire.resolve("@upstash/context7-mcp/dist/index.js");
+    await readFile(context7Entrypoint, "utf8");
+    const consumerRequire = createRequire(join(installDirectory, "package.json"));
+    const pluginSdkEntrypoint = consumerRequire.resolve(`${releaseName}/plugin-sdk`);
+    const pluginSdk = await import(pathToFileURL(pluginSdkEntrypoint).href);
+    const pluginManifest = pluginSdk.readonlyPluginManifestSchema.parse({
+      schemaVersion: 1,
+      protocol: "loomrail.readonly-tools.v1",
+      id: "dev.loomrail.release-check",
+      name: "Release check",
+      version: "1.0.0",
+      description: "Verifies the installed Plugin SDK subpath.",
+      license: "Apache-2.0",
+      entrypoint: "dist/plugin.mjs",
+      permissions: { network: { mode: "NONE" } },
+      tools: [{ name: "check", description: "Checks the installed SDK." }],
+    });
+    if (pluginManifest.id !== "dev.loomrail.release-check") {
+      throw new Error("the packaged Plugin SDK did not validate its public manifest contract");
+    }
+    const mcpProxyPath = join(installedRoot, "apps", "cli", "dist", "proxy.js");
+    const mcpSupervisorPath = join(installedRoot, "apps", "cli", "dist", "supervisor.js");
+    await assertEntrypointRejectsInvalidInvocation(
+      mcpProxyPath,
+      "The Loomrail MCP proxy arguments are invalid.",
+    );
+    await assertEntrypointRejectsInvalidInvocation(
+      mcpSupervisorPath,
+      "Invalid Loomrail MCP supervisor invocation",
+    );
     launcher = spawn(process.execPath, [binaryPath, "--no-open", "--port", String(port)], {
       cwd: installDirectory,
       env: { ...process.env, LOOMRAIL_DATA_DIR: dataDirectory },

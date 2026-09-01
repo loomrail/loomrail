@@ -1,59 +1,324 @@
-import type { ProviderAdapter, ProviderId } from "@loomrail/provider-core";
+import { spawn } from "node:child_process";
+import { accessSync, constants as fsConstants } from "node:fs";
+import { delimiter, isAbsolute, join, sep } from "node:path";
+
+import {
+  projectProviderSelectionResponseSchema,
+  type Project,
+  type ProjectProviderSelectionResponse,
+  type ProviderAuthentication,
+  type ProviderAvailability,
+  type ProviderId,
+  type ProviderPreference,
+} from "@loomrail/contracts";
+import type { ProviderAdapter } from "@loomrail/provider-core";
 import { createClaudeCodeProvider } from "@loomrail/provider-claude-code";
 import { createCodexProvider } from "@loomrail/provider-codex";
 import { createMockProvider } from "@loomrail/provider-mock";
 
-// Milestone A2 built two live adapters, but deliberately did not build a way to route different
-// WorkflowStages of one run to different adapters -- one adapter serves every stage this daemon
-// instance dispatches, for the life of the process. A stage the chosen adapter cannot serve
-// (undeclared in `capabilities().stages`, or `start: false` because its CLI is not installed) is
-// refused to the owner as a blocking HumanRequest by `decideDispatchStage` (`@loomrail/domain`),
-// never silently retried against a different provider -- see
-// docs/plans/11-a2-live-provider-adapters-spec.ru.md §4.
-//
-// This is the one environment variable that picks which adapter that is, read once at startup.
 export const LOOMRAIL_PROVIDER_ENV_VAR = "LOOMRAIL_PROVIDER";
-
-// The spellings this daemon accepts, in the exact case it accepts them. Exported so the warning
-// below, the README and any future `--help` all name the same list rather than three copies of it
-// that can drift.
 export const LOOMRAIL_PROVIDER_VALUES = ["MOCK", "CODEX", "CLAUDE_CODE"] as const;
 
+const AUTH_PROBE_DEADLINE_MS = 3_000;
+const LIVE_PROVIDER_IDS = ["CODEX", "CLAUDE_CODE"] as const;
+
+type LiveProviderId = (typeof LIVE_PROVIDER_IDS)[number];
+type ProviderAdapters = Readonly<Record<ProviderId, ProviderAdapter>>;
+
+export type ProviderAuthProbe = (provider: LiveProviderId) => Promise<ProviderAuthentication>;
+
 export type ProviderResolution = {
-  /** Which adapter this daemon will run for its whole lifetime. */
   provider: ProviderId;
   adapter: ProviderAdapter;
-  /**
-   * `false` when the environment named a provider this daemon does not know. The daemon still
-   * starts (on the mock), because a typo in the environment must not stop it -- but the caller has
-   * to be able to say so out loud, which is the whole reason this is a value rather than a log
-   * line buried in here.
-   */
   recognised: boolean;
-  /** The raw value that was read, so a warning can quote it back. `null` when it was unset. */
   requested: string | null;
 };
 
-// Running a live adapter must be something the owner did on purpose -- never a side effect of
-// which CLIs happen to be on this machine's PATH -- so the default, and the fallback for any value
-// this daemon does not recognise, is the mock adapter it has always run. A typo in the environment
-// must not stop the daemon from starting, so an unrecognised value falls back to mock rather than
-// throwing.
-//
-// It must not fall back SILENTLY, though, and it used to. `LOOMRAIL_PROVIDER=codex` -- the near
-// certain typo, since the CLI itself is spelled lowercase -- started the mock, which then completed
-// stages successfully, and the owner watched a full delivery run believing a live agent had done
-// it. Hence `recognised`: the resolution is a value the caller reports, not a side effect nobody
-// sees.
+export type ProjectProviderResolution = {
+  adapter: ProviderAdapter;
+  response: ProjectProviderSelectionResponse;
+};
+
+export type ProviderRegistry = {
+  refresh: () => Promise<void>;
+  resolve: (project: Project) => ProjectProviderResolution;
+  environment: {
+    override: ProviderId | null;
+    invalid: boolean;
+    requested: string | null;
+  };
+};
+
+const isProviderId = (value: string): value is ProviderId =>
+  LOOMRAIL_PROVIDER_VALUES.some((provider) => provider === value);
+
+const requestedEnvironmentProvider = (
+  env: Readonly<Record<string, string | undefined>>,
+): { override: ProviderId | null; invalid: boolean; requested: string | null } => {
+  const raw = env[LOOMRAIL_PROVIDER_ENV_VAR];
+  const requested = raw === undefined || raw.trim().length === 0 ? null : raw;
+  if (requested === null) return { override: null, invalid: false, requested: null };
+  return isProviderId(requested)
+    ? { override: requested, invalid: false, requested }
+    : { override: null, invalid: true, requested };
+};
+
+// Windows installs `codex` and `claude` as `codex.cmd`/`claude.cmd` (or `.exe`), and the file
+// carrying the bare name usually does not exist at all, so probing the name alone reports every
+// Windows machine as "not installed". `PATHEXT` is what the shell and `child_process.spawn`
+// themselves append, so it is what a lookup that claims to answer "would this launch" must append
+// too. The empty extension stays first for the POSIX case and for a name the owner already spelled
+// with its extension.
+const pathExtensions = (env: Readonly<Record<string, string | undefined>>): readonly string[] =>
+  process.platform === "win32"
+    ? [
+        "",
+        ...(env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD")
+          .split(";")
+          .map((extension) => extension.trim())
+          .filter((extension) => extension.length > 0),
+      ]
+    : [""];
+
+const isExecutableOnDisk = (
+  command: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean => {
+  const bases =
+    isAbsolute(command) || command.includes(sep)
+      ? [command]
+      : (env["PATH"] ?? "")
+          .split(delimiter)
+          .filter((directory) => directory.length > 0)
+          .map((directory) => join(directory, command));
+  const extensions = pathExtensions(env);
+  return bases.some((base) =>
+    extensions.some((extension) => {
+      try {
+        accessSync(`${base}${extension}`, fsConstants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    }),
+  );
+};
+
+// Only filesystem/auth locations needed by an official status command cross into the probe.
+// API keys and arbitrary project environment never do. stdout/stderr are ignored below, so the
+// daemon learns only the exit outcome and cannot accidentally retain account metadata.
+const probeEnvironment = (
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): NodeJS.ProcessEnv => {
+  const allowed = [
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "XDG_CONFIG_HOME",
+    "CODEX_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+  ] as const;
+  return Object.fromEntries(
+    allowed.flatMap((key) => {
+      const value = env[key];
+      return value === undefined ? [] : [[key, value]];
+    }),
+  );
+};
+
+const statusCommand: Readonly<Record<LiveProviderId, { command: string; args: readonly string[] }>> = {
+  CODEX: { command: "codex", args: ["login", "status"] },
+  CLAUDE_CODE: { command: "claude", args: ["auth", "status"] },
+};
+
+export const probeProviderAuthentication: ProviderAuthProbe = (provider) =>
+  new Promise((resolve) => {
+    const command = statusCommand[provider];
+    const child = spawn(command.command, command.args, {
+      env: probeEnvironment(),
+      shell: false,
+      stdio: "ignore",
+    });
+    let settled = false;
+    const finish = (result: ProviderAuthentication): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish("UNKNOWN");
+    }, AUTH_PROBE_DEADLINE_MS);
+    timer.unref();
+    child.once("error", () => {
+      finish("UNKNOWN");
+    });
+    child.once("exit", (code) => {
+      finish(code === 0 ? "AUTHENTICATED" : code === 1 ? "REQUIRED" : "UNKNOWN");
+    });
+  });
+
+// One process may open many in-memory daemons in integration tests. Re-running two real CLI probes
+// for every instance would make unrelated suites depend on local login latency. Production opens
+// one daemon; an explicit Settings refresh bypasses this startup cache below.
+const startupProbeCache = new Map<LiveProviderId, Promise<ProviderAuthentication>>();
+const cachedStartupProbe: ProviderAuthProbe = (provider) => {
+  const existing = startupProbeCache.get(provider);
+  if (existing !== undefined) return existing;
+  const pending = probeProviderAuthentication(provider);
+  startupProbeCache.set(provider, pending);
+  return pending;
+};
+
+const adapterWithStart = (adapter: ProviderAdapter, start: boolean): ProviderAdapter => ({
+  capabilities: () => ({ ...adapter.capabilities(), start }),
+  start: (invocation, listener) => adapter.start(invocation, listener),
+  requestHandoff: (sessionId) => adapter.requestHandoff(sessionId),
+  abortSession: (sessionId) => adapter.abortSession(sessionId),
+});
+
+const availabilityFor = (
+  provider: ProviderId,
+  adapter: ProviderAdapter,
+  installed: boolean,
+  authentication: ProviderAuthentication,
+): ProviderAvailability => {
+  const capabilities = adapter.capabilities();
+  const ready = provider === "MOCK" || (installed && authentication === "AUTHENTICATED");
+  return {
+    provider,
+    installed,
+    authentication,
+    ready,
+    stages: capabilities.stages,
+    checkpointOnRequest: capabilities.checkpointOnRequest,
+    contextWindowReporting: capabilities.contextWindowReporting,
+    costReporting: capabilities.costReporting,
+  };
+};
+
+const selectionProjection = (project: Project) => ({
+  schemaVersion: 1 as const,
+  projectId: project.id,
+  preference: project.providerPreference,
+  projectVersion: project.version,
+  updatedAt: project.updatedAt,
+});
+
+const preferenceProvider = (preference: ProviderPreference): ProviderId | null =>
+  preference === "AUTO" ? null : preference;
+
+export const createProviderRegistry = (
+  options: {
+    env?: Readonly<Record<string, string | undefined>>;
+    adapters?: Partial<ProviderAdapters>;
+    probeAuthentication?: ProviderAuthProbe;
+    executableAvailable?: (provider: LiveProviderId) => boolean;
+  } = {},
+): ProviderRegistry => {
+  const env = options.env ?? process.env;
+  const environment = requestedEnvironmentProvider(env);
+  const adapters: ProviderAdapters = {
+    MOCK: options.adapters?.MOCK ?? createMockProvider(),
+    CODEX: options.adapters?.CODEX ?? createCodexProvider(),
+    CLAUDE_CODE: options.adapters?.CLAUDE_CODE ?? createClaudeCodeProvider(),
+  };
+  const customAuthProbe = options.probeAuthentication;
+  const executableAvailable =
+    options.executableAvailable ??
+    ((provider: LiveProviderId): boolean => isExecutableOnDisk(statusCommand[provider].command, env));
+  let firstRefresh = true;
+  let availability: Readonly<Record<ProviderId, ProviderAvailability>> = {
+    MOCK: availabilityFor("MOCK", adapters.MOCK, true, "AUTHENTICATED"),
+    CODEX: availabilityFor("CODEX", adapters.CODEX, false, "UNKNOWN"),
+    CLAUDE_CODE: availabilityFor("CLAUDE_CODE", adapters.CLAUDE_CODE, false, "UNKNOWN"),
+  };
+
+  const refresh = async (): Promise<void> => {
+    const authProbe = customAuthProbe ?? (firstRefresh ? cachedStartupProbe : probeProviderAuthentication);
+    const installed = {
+      CODEX: executableAvailable("CODEX"),
+      CLAUDE_CODE: executableAvailable("CLAUDE_CODE"),
+    } as const;
+    const [codexAuthentication, claudeAuthentication] = await Promise.all([
+      installed.CODEX ? authProbe("CODEX") : Promise.resolve<ProviderAuthentication>("UNKNOWN"),
+      installed.CLAUDE_CODE ? authProbe("CLAUDE_CODE") : Promise.resolve<ProviderAuthentication>("UNKNOWN"),
+    ]);
+    availability = {
+      MOCK: availabilityFor("MOCK", adapters.MOCK, true, "AUTHENTICATED"),
+      CODEX: availabilityFor("CODEX", adapters.CODEX, installed.CODEX, codexAuthentication),
+      CLAUDE_CODE: availabilityFor(
+        "CLAUDE_CODE",
+        adapters.CLAUDE_CODE,
+        installed.CLAUDE_CODE,
+        claudeAuthentication,
+      ),
+    };
+    firstRefresh = false;
+  };
+
+  const resolve = (project: Project): ProjectProviderResolution => {
+    const preferred = environment.invalid
+      ? "MOCK"
+      : (environment.override ?? preferenceProvider(project.providerPreference));
+    const source =
+      environment.override || environment.invalid
+        ? "ENVIRONMENT_OVERRIDE"
+        : preferred === null
+          ? "AUTO"
+          : "PROJECT_PREFERENCE";
+    const autoCandidates = LIVE_PROVIDER_IDS.map((provider) => availability[provider])
+      .filter((candidate) => candidate.ready)
+      .sort(
+        (left, right) =>
+          right.stages.length - left.stages.length || left.provider.localeCompare(right.provider),
+      );
+    const effectiveProvider = preferred ?? autoCandidates[0]?.provider ?? "MOCK";
+    const effectiveAvailability = availability[effectiveProvider];
+    const fallbackReason =
+      preferred === null && effectiveProvider === "MOCK"
+        ? "NO_AUTHENTICATED_LIVE_PROVIDER"
+        : preferred !== null && !effectiveAvailability.ready
+          ? "LIVE_PROVIDER_UNAVAILABLE"
+          : null;
+    const response = projectProviderSelectionResponseSchema.parse({
+      schemaVersion: 1,
+      selection: selectionProjection(project),
+      effectiveProvider,
+      source,
+      fallbackReason,
+      environmentOverride: environment.override,
+      environmentOverrideLocked: environment.override !== null || environment.invalid,
+      environmentOverrideInvalid: environment.invalid,
+      providers: [availability.MOCK, availability.CODEX, availability.CLAUDE_CODE],
+    });
+    return {
+      response,
+      adapter: adapterWithStart(adapters[effectiveProvider], effectiveAvailability.ready),
+    };
+  };
+
+  return { refresh, resolve, environment };
+};
+
+// Compatibility projection for launchers/tests that still ask for the startup environment alone.
+// Production dispatch uses createProviderRegistry().resolve(project), never this process-wide value.
 export const resolveDefaultProviderAdapter = (
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): ProviderResolution => {
-  const raw = env[LOOMRAIL_PROVIDER_ENV_VAR];
-  const requested = raw === undefined || raw.trim().length === 0 ? null : raw;
-  if (requested === "CODEX") {
+  const environment = requestedEnvironmentProvider(env);
+  const requested = environment.requested;
+  if (environment.override === "CODEX") {
     return { provider: "CODEX", adapter: createCodexProvider(), recognised: true, requested };
   }
-  if (requested === "CLAUDE_CODE") {
+  if (environment.override === "CLAUDE_CODE") {
     return {
       provider: "CLAUDE_CODE",
       adapter: createClaudeCodeProvider(),
@@ -64,8 +329,7 @@ export const resolveDefaultProviderAdapter = (
   return {
     provider: "MOCK",
     adapter: createMockProvider(),
-    // An unset variable is not a mistake; a value this daemon cannot read is.
-    recognised: requested === null || requested === "MOCK",
+    recognised: !environment.invalid,
     requested,
   };
 };

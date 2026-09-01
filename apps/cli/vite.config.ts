@@ -24,8 +24,12 @@ export default defineConfig({
     minify: false,
     outDir: "bundle/apps/cli/dist",
     rollupOptions: {
-      input: "src/index.ts",
-      output: { entryFileNames: "index.js", format: "esm" },
+      input: {
+        index: "src/index.ts",
+        proxy: "../../packages/mcp-gateway/src/proxy.ts",
+        supervisor: "../../packages/mcp-gateway/src/supervisor.ts",
+      },
+      output: { entryFileNames: "[name].js", format: "esm" },
     },
     ssr: true,
     target: "node24",

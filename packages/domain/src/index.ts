@@ -1,4 +1,8 @@
 export * from "./constitution.js";
+export * from "./mcp.js";
+export * from "./readiness.js";
+export * from "./scaffolding.js";
+export * from "./provider-selection.js";
 
 import type {
   CreateWorkItemCommand,

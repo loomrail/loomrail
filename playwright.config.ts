@@ -1,5 +1,9 @@
 import { defineConfig } from "@playwright/test";
 
+// End-to-end tests must never discover or launch a developer's authenticated live CLI.
+// Tests that exercise provider selection inject their own deterministic registry explicitly.
+process.env["LOOMRAIL_PROVIDER"] = "MOCK";
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,

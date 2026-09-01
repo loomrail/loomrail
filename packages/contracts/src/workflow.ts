@@ -7,6 +7,7 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
+import { mcpSessionSnapshotSchema } from "./mcp.js";
 import { workItemWorkspaceOrphanedEventSchema, workItemWorkspaceSchema } from "./workspace.js";
 
 // A Git TREE object id, not a commit one. Same forty lowercase hex characters as
@@ -833,7 +834,13 @@ export const pipelineCompletedEventSchema = eventBaseSchema.extend({
 export const providerSessionStartedEventSchema = eventBaseSchema.extend({
   type: z.literal("PROVIDER_SESSION_STARTED"),
   aggregateType: z.literal("WORK_ITEM"),
-  data: z.object({ session: providerSessionSchema, recipe: contextPackRecipeSchema }).strict(),
+  data: z
+    .object({
+      session: providerSessionSchema,
+      recipe: contextPackRecipeSchema,
+      mcpSnapshots: z.array(mcpSessionSnapshotSchema).max(64).default([]),
+    })
+    .strict(),
 });
 
 export const checkpointPublishedEventSchema = eventBaseSchema.extend({
@@ -1327,6 +1334,7 @@ export const providerSessionStartedResultSchema = z
     workItemId: opaqueIdSchema,
     session: providerSessionSchema,
     recipe: contextPackRecipeSchema,
+    mcpSnapshots: z.array(mcpSessionSnapshotSchema).max(64).default([]),
     events: z.array(providerSessionStartedEventSchema),
   })
   .strict();

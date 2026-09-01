@@ -22,7 +22,7 @@
 // Mirrors provider-codex's fake-codex.mjs (same shape, same reasoning): the hang mode aside, this
 // never hangs on its own -- a bug in the adapter under test must fail that test's assertion, not
 // the whole suite via a runner timeout.
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 
 const hangMarkerPath = process.env.FAKE_CLAUDE_HANG_MARKER_PATH;
 
@@ -37,7 +37,12 @@ if (hangMarkerPath !== undefined) {
   // under test depends on when (or whether) this process's stdin closes, so there is no event to
   // defer to -- writing the record/output and exiting can happen synchronously, right here.
   if (recordPath !== undefined) {
-    writeFileSync(recordPath, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }));
+    const args = process.argv.slice(2);
+    const mcpConfigIndex = args.indexOf("--mcp-config");
+    const mcpConfigPath = mcpConfigIndex === -1 ? undefined : args[mcpConfigIndex + 1];
+    const mcpConfig = mcpConfigPath === undefined ? null : JSON.parse(readFileSync(mcpConfigPath, "utf8"));
+    const mcpConfigMode = mcpConfigPath === undefined ? null : statSync(mcpConfigPath).mode & 0o777;
+    writeFileSync(recordPath, JSON.stringify({ args, cwd: process.cwd(), mcpConfig, mcpConfigMode }));
   }
   if (outputFile !== undefined) {
     process.stdout.write(readFileSync(outputFile, "utf8"));

@@ -52,8 +52,12 @@ const detectInProgressOperation = async (gitDir: string): Promise<InProgressOper
 // clear, because a false "nothing in progress" is the one wrong answer worth refusing to give:
 // it would let a caller base a workspace on a rebase's scratch commit without anyone deciding
 // that on purpose.
-export const inspectRepository = async (path: string): Promise<RepositoryState | null> => {
-  const topLevelResult = await runGit(["rev-parse", "--show-toplevel"], { cwd: path });
+export const inspectRepository = async (
+  path: string,
+  options: { env?: Readonly<Record<string, string>> } = {},
+): Promise<RepositoryState | null> => {
+  const gitOptions = options.env === undefined ? { cwd: path } : { cwd: path, env: options.env };
+  const topLevelResult = await runGit(["rev-parse", "--show-toplevel"], gitOptions);
   if (topLevelResult.exitCode !== 0) {
     return null;
   }
@@ -62,10 +66,10 @@ export const inspectRepository = async (path: string): Promise<RepositoryState |
   // from this module so a repository is not mistaken for a subdirectory of itself.
   const topLevel = normalize(topLevelResult.stdout.trim());
 
-  const headResult = await runGit(["rev-parse", "HEAD"], { cwd: path });
+  const headResult = await runGit(["rev-parse", "HEAD"], gitOptions);
   const headCommit = headResult.exitCode === 0 ? headResult.stdout.trim() : null;
 
-  const gitDirResult = await runGit(["rev-parse", "--git-dir"], { cwd: path });
+  const gitDirResult = await runGit(["rev-parse", "--git-dir"], gitOptions);
   if (gitDirResult.exitCode !== 0) {
     // --show-toplevel already succeeded above, so git-dir resolution failing here is an
     // unexpected environment change mid-inspection (e.g. the repository vanishing or losing

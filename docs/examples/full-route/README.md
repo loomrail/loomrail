@@ -41,8 +41,10 @@ repository**.
 
 ## 2. Start Loomrail with Codex
 
-Authenticate the Codex CLI yourself, then start the same Loomrail installation you used in the user guide with
-`LOOMRAIL_PROVIDER=CODEX`. Confirm the launcher reports all three facts before creating the task:
+Authenticate the Codex CLI yourself. This reproducible route deliberately pins the whole test process with
+`LOOMRAIL_PROVIDER=CODEX`; ordinary use can select Codex per project in **Settings → AI provider** without restarting.
+Start the same Loomrail installation you used in the user guide and confirm the launcher reports all three facts before
+creating the task:
 
 ```text
 Provider: CODEX

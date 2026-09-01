@@ -10,6 +10,7 @@ import helmet from "@fastify/helmet";
 import fastifyStatic from "@fastify/static";
 import {
   answerHumanRequestRequestSchema,
+  attestProjectReadinessRequestSchema,
   adoptProjectConstitutionRequestSchema,
   apiErrorResponseSchema,
   budgetOverrideRequestSchema,
@@ -23,17 +24,37 @@ import {
   humanRequestStatusSchema,
   humanRequestsResponseSchema,
   moveWorkItemRequestSchema,
+  mcpProfilesResponseSchema,
+  mcpProfileProposalSchema,
   opaqueIdSchema,
   pipelineControlRequestSchema,
   projectConstitutionSnapshotSchema,
+  projectProviderSelectionResponseSchema,
+  projectReadinessSnapshotSchema,
+  proposeProjectScaffoldRequestSchema,
+  proposeProjectScaffoldResponseSchema,
   projectsResponseSchema,
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
+  proposeContext7PresetRequestSchema,
+  proposeMcpProfileRequestSchema,
+  confirmMcpProfileRequestSchema,
+  probeMcpProfileRequestSchema,
   registerFixtureProjectRequestSchema,
   registerRepositoryProjectRequestSchema,
+  refreshProviderAvailabilityRequestSchema,
   resolveAcceptanceRequestSchema,
+  revokeMcpProfileGrantRequestSchema,
   retryProjectConstitutionPublicationRequestSchema,
+  retryProjectScaffoldRequestSchema,
+  scaffoldProposalSchema,
+  runProjectReadinessRequestSchema,
   scanProjectConstitutionRequestSchema,
+  scaffoldOperationResponseSchema,
+  scaffoldOperationsResponseSchema,
+  publishProjectScaffoldRequestSchema,
+  setProjectProviderPreferenceRequestSchema,
+  setMcpProfileGrantRequestSchema,
   sessionExchangeRequestSchema,
   sessionExchangeResponseSchema,
   startMockPipelineRequestSchema,
@@ -47,15 +68,23 @@ import {
   workflowSnapshotSchema,
   type ApiErrorResponse,
   type PublishedWorkItemWorkspace,
+  type Project,
+  type ScaffoldOperationErrorCode,
   type WorkflowStage,
   type WorkItemWorkspace,
 } from "@loomrail/contracts";
 import {
   adapterWorksInWorkspace,
   ConstitutionDomainError,
+  McpDomainError,
+  ProviderSelectionDomainError,
+  ReadinessDomainError,
+  ScaffoldDomainError,
   WorkflowDomainError,
   WorkItemDomainError,
 } from "@loomrail/domain";
+import { canonicalMcpProfileSource } from "@loomrail/domain";
+import { createMcpGateway, McpGatewayError, type McpGateway } from "@loomrail/mcp-gateway";
 import {
   openLocalState,
   StateStoreError,
@@ -70,6 +99,12 @@ import {
   RepositoryScanError,
   scanProjectRepository,
 } from "@loomrail/project-constitution";
+import { assessProjectReadiness, ProjectReadinessScanError } from "@loomrail/project-readiness";
+import {
+  ProjectScaffoldingError,
+  proposeProjectScaffold,
+  publishProjectScaffold,
+} from "@loomrail/project-scaffolding";
 import type { ProviderAdapter, ProviderId } from "@loomrail/provider-core";
 import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import {
@@ -84,11 +119,19 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { z, ZodError } from "zod";
 
 import { broadcastingState } from "./broadcasting-state.js";
+import {
+  CONTEXT7_PRESET_NAME,
+  CONTEXT7_PRESET_TOOLS,
+  Context7PresetError,
+  resolveBundledContext7Candidate,
+} from "./context7-preset.js";
 import { createEventStreamRegistry } from "./event-stream.js";
 import {
+  createProviderRegistry,
   LOOMRAIL_PROVIDER_ENV_VAR,
   LOOMRAIL_PROVIDER_VALUES,
   resolveDefaultProviderAdapter,
+  type ProviderRegistry,
 } from "./provider-selection.js";
 import {
   describeRegisteredRepository,
@@ -101,6 +144,8 @@ import {
   resolveRegisteredRepository,
 } from "./fixtures.js";
 import { createSessionWorker } from "./session-worker.js";
+import { createMcpProposalChallengeStore, McpProposalError } from "./mcp-proposals.js";
+import { createMcpConnectionOpener } from "./mcp-sessions.js";
 import { changeBaselineOf, MAX_PATCH_BYTES, MAX_SUMMARY_FILES } from "./workspace-changes.js";
 
 const API_VERSION = "v1" as const;
@@ -159,8 +204,12 @@ export type StartDaemonOptions = {
   // stalls, or runs into a wall. Without it the session-handoff paths are only ever reachable by
   // calling `runStageAttempt` directly, which is how a jam in the drain around those paths stayed
   // invisible. Production leaves this unset and gets whatever `resolveDefaultProviderAdapter`
-  // resolves from `LOOMRAIL_PROVIDER` -- mock unless the owner opted into a live adapter.
+  // resolves from the Project preference and safe CLI availability probes; an environment override is optional.
   providerAdapter?: ProviderAdapter;
+  /** Injected availability/routing seam for deterministic provider-selection integration tests. */
+  providerRegistry?: ProviderRegistry;
+  /** Injected only for daemon route tests; production owns the real bounded stdio gateway. */
+  mcpGateway?: McpGateway;
   // Injected for the same reason as `providerAdapter` above, and only for it: the heartbeat is the
   // one mechanism here that is driven by wall-clock time rather than by a request, so without a
   // shorter interval the only way to observe it end a stream is to wait out the real fifteen
@@ -168,6 +217,8 @@ export type StartDaemonOptions = {
   // covered only in its middle link. Production always gets HEARTBEAT_INTERVAL_MS.
   heartbeatIntervalMs?: number;
   constitutionPublisher?: typeof publishProjectConstitution;
+  /** Injected only for crash/failure integration tests; production uses the marker-bound publisher. */
+  scaffoldPublisher?: typeof publishProjectScaffold;
 };
 
 // One message per ending, so a reader grepping the daemon log finds all three. `FAILED` is the
@@ -232,6 +283,9 @@ type BootstrapGrant = {
 };
 
 const projectParamsSchema = z.object({ projectId: opaqueIdSchema }).strict();
+const scaffoldParamsSchema = z.object({ operationId: opaqueIdSchema }).strict();
+const mcpProposalParamsSchema = z.object({ projectId: opaqueIdSchema, challengeId: opaqueIdSchema }).strict();
+const mcpRevisionParamsSchema = z.object({ projectId: opaqueIdSchema, revisionId: opaqueIdSchema }).strict();
 const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
 const stageAttemptParamsSchema = z.object({ stageAttemptId: opaqueIdSchema }).strict();
 const humanRequestParamsSchema = z.object({ humanRequestId: opaqueIdSchema }).strict();
@@ -368,6 +422,22 @@ const sendOperationError = (
   if (error instanceof RepositoryScanError) {
     return reply.code(409).send(createError(error.code, error.message, correlationId));
   }
+  if (error instanceof ProjectReadinessScanError) {
+    const status = error.code === "GIT_UNAVAILABLE" ? 500 : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId));
+  }
+  if (error instanceof ProjectScaffoldingError) {
+    const status =
+      error.code === "INVALID_OPERATION_ID" ||
+      error.code === "INVALID_TARGET_PATH" ||
+      error.code === "TARGET_NAME_UNSUPPORTED" ||
+      error.code === "RECIPE_UNAVAILABLE"
+        ? 400
+        : error.code === "GIT_INIT_FAILED" || error.code === "REPOSITORY_INVALID"
+          ? 500
+          : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId));
+  }
   if (error instanceof ConstitutionPublicationError) {
     return reply.code(409).send(createError(error.code, error.message, correlationId));
   }
@@ -379,6 +449,48 @@ const sendOperationError = (
       error.code === "PUBLICATION_NOT_FOUND"
         ? 404
         : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof ReadinessDomainError) {
+    const status =
+      error.code === "PROJECT_NOT_FOUND" ||
+      error.code === "READINESS_RUN_NOT_FOUND" ||
+      error.code === "READINESS_CHECK_NOT_FOUND"
+        ? 404
+        : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof ScaffoldDomainError) {
+    const status =
+      error.code === "PROJECT_NOT_FOUND" || error.code === "SCAFFOLD_OPERATION_NOT_FOUND" ? 404 : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof ProviderSelectionDomainError) {
+    const status = error.code === "PROJECT_NOT_FOUND" ? 404 : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof McpProposalError) {
+    const status =
+      error.code === "MCP_PROPOSAL_NOT_FOUND" ? 404 : error.code === "MCP_PROPOSAL_LIMIT_REACHED" ? 429 : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId));
+  }
+  if (error instanceof Context7PresetError) {
+    return reply.code(503).send(createError(error.code, error.message, correlationId));
+  }
+  if (error instanceof McpGatewayError) {
+    const status = error.code === "CONSENT_MISMATCH" || error.code === "PROBE_ALREADY_RUNNING" ? 409 : 400;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof McpDomainError) {
+    const status =
+      error.code === "PROJECT_NOT_FOUND" ||
+      error.code === "PROFILE_NOT_FOUND" ||
+      error.code === "CONSENT_NOT_FOUND" ||
+      error.code === "GRANT_NOT_FOUND"
+        ? 404
+        : error.code === "EXECUTABLE_FORBIDDEN" || error.code === "SCRIPT_PATH_REQUIRED"
+          ? 400
+          : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
   // Spec §7's three path rows, including the two the last fix round added ("path names no file"
@@ -464,13 +576,33 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     used: false,
   };
   const sessions = new Map<string, Session>();
+  const databasePath = options.stateDatabasePath ?? ":memory:";
+  const mcpGateway =
+    options.mcpGateway ??
+    createMcpGateway({
+      ...(databasePath === ":memory:"
+        ? {}
+        : { registryDirectory: join(dirname(resolve(databasePath)), "mcp-processes") }),
+    });
+  const mcpProposals = createMcpProposalChallengeStore({
+    now,
+    createId: () => randomUUID(),
+  });
   // Resolved as a value, not only as a constructed adapter: which provider a daemon is running --
   // and whether the environment asked for one this daemon does not know -- is something the owner
   // has to be able to see, in the log and in the launcher's startup report, before watching a
   // delivery run and drawing conclusions about who did the work.
   const providerResolution = resolveDefaultProviderAdapter();
-  const providerAdapter = options.providerAdapter ?? providerResolution.adapter;
-  const providerCapabilities = providerAdapter.capabilities();
+  // Existing integration tests deliberately exercise deterministic workflows and historically
+  // relied on an unset environment meaning Mock. Keep that harness deterministic unless the test
+  // explicitly supplies a provider env/registry; production never runs with NODE_ENV=test.
+  const registryEnvironment =
+    process.env["NODE_ENV"] === "test" && process.env[LOOMRAIL_PROVIDER_ENV_VAR] === undefined
+      ? { ...process.env, [LOOMRAIL_PROVIDER_ENV_VAR]: "MOCK" }
+      : process.env;
+  const providerRegistry = options.providerRegistry ?? createProviderRegistry({ env: registryEnvironment });
+  await providerRegistry.refresh();
+  const fixedProviderAdapter = options.providerAdapter;
 
   let allowedOrigin = "";
   let closing = false;
@@ -502,7 +634,18 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     ...(options.heartbeatIntervalMs === undefined ? {} : { intervalMs: options.heartbeatIntervalMs }),
   });
 
-  const databasePath = options.stateDatabasePath ?? ":memory:";
+  for (const report of await mcpGateway.recoverOrphans()) {
+    app.log.warn(
+      {
+        action: report.action,
+        processRecord: report.recordFile,
+        reason: report.reason,
+        serverPid: report.serverPid,
+      },
+      "MCP orphan process reconciliation completed",
+    );
+  }
+
   // Beside the state database, which is where the launcher's data directory is; see the option's
   // own comment for what an in-memory database gets instead. Resolved once, at startup, so a later
   // change of working directory cannot move where an already-recorded workspace is looked for.
@@ -555,6 +698,39 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     eventStreams.publish,
     app.log,
   );
+
+  const resolveProjectProvider = (projectId: string) => {
+    if (fixedProviderAdapter !== undefined) return fixedProviderAdapter;
+    const result = localState.query({ type: "GET_PROJECT", projectId });
+    if (result.type !== "PROJECT" || result.project === null) {
+      throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+    }
+    return providerRegistry.resolve(result.project).adapter;
+  };
+
+  // Startup has to report what AUTO means even before the first Project is registered. This value
+  // is never persisted or returned as a Project; it only supplies the preference fields the same
+  // resolver requires for an ordinary Project.
+  const startupProjectionProject: Project = {
+    schemaVersion: 1,
+    id: "provider-startup-projection",
+    workspaceId: "workspace-local",
+    fixtureId: null,
+    name: "Provider startup projection",
+    repositoryPath: resolve("/"),
+    providerPreference: "AUTO",
+    status: "ACTIVE",
+    version: 1,
+    createdAt: startedAt.toISOString(),
+    updatedAt: startedAt.toISOString(),
+  };
+  const listedProjects = localState.query({ type: "LIST_PROJECTS" });
+  const startupProject =
+    listedProjects.type === "PROJECTS"
+      ? (listedProjects.projects[0] ?? startupProjectionProject)
+      : startupProjectionProject;
+  const startupProviderAdapter = fixedProviderAdapter ?? providerRegistry.resolve(startupProject).adapter;
+  const providerCapabilities = startupProviderAdapter.capabilities();
 
   const constitutionPublisher = options.constitutionPublisher ?? publishProjectConstitution;
   const publicationCommandId = (
@@ -637,6 +813,85 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     }
   };
 
+  const scaffoldPublisher = options.scaffoldPublisher ?? publishProjectScaffold;
+  const scaffoldCommandId = (action: "complete" | "fail", operationId: string, version: number): string =>
+    `scaffold-${action}-${createHash("sha256")
+      .update(`${operationId}\0${version.toString()}`)
+      .digest("hex")}`;
+
+  const scaffoldFailureCode = (error: unknown): ScaffoldOperationErrorCode => {
+    if (error instanceof GitMissingError) return "GIT_UNAVAILABLE";
+    if (!(error instanceof ProjectScaffoldingError)) return "SCAFFOLD_WRITE_FAILED";
+    switch (error.code) {
+      case "TARGET_EXISTS":
+      case "MARKER_MISMATCH":
+        return "TARGET_CONFLICT";
+      case "TARGET_PARENT_UNAVAILABLE":
+        return "TARGET_PARENT_UNAVAILABLE";
+      case "PROPOSAL_CHANGED":
+      case "RECIPE_UNAVAILABLE":
+      case "INVALID_TARGET_PATH":
+      case "TARGET_NAME_UNSUPPORTED":
+      case "INVALID_OPERATION_ID":
+        return "RECIPE_CHANGED";
+      case "FILE_CONFLICT":
+        return "SCAFFOLD_FILE_CONFLICT";
+      case "GIT_INIT_FAILED":
+        return "GIT_INIT_FAILED";
+      case "REPOSITORY_INVALID":
+        return "REPOSITORY_INVALID";
+      case "TARGET_INSIDE_REPOSITORY":
+        return "TARGET_CONFLICT";
+    }
+  };
+
+  const drainScaffoldOperations = async (): Promise<void> => {
+    const result = localState.query({ type: "LIST_PENDING_SCAFFOLD_OPERATIONS" });
+    if (result.type !== "SCAFFOLD_OPERATIONS") return;
+    for (const operation of result.operations) {
+      try {
+        await scaffoldPublisher({ operationId: operation.id, proposal: operation.proposal });
+        localState.execute({
+          schemaVersion: 1,
+          commandId: scaffoldCommandId("complete", operation.id, operation.version),
+          correlationId: `scaffold-operation-${operation.id}`,
+          actor: { type: "SYSTEM", id: "scaffold-publisher" },
+          type: "COMPLETE_PROJECT_SCAFFOLD",
+          payload: { operationId: operation.id, expectedVersion: operation.version },
+        });
+      } catch (error: unknown) {
+        const errorCode = scaffoldFailureCode(error);
+        app.log.error(
+          {
+            operationId: operation.id,
+            projectId: operation.projectId,
+            errorCode,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+          },
+          "Project scaffold publication failed",
+        );
+        try {
+          localState.execute({
+            schemaVersion: 1,
+            commandId: scaffoldCommandId("fail", operation.id, operation.version),
+            correlationId: `scaffold-operation-${operation.id}`,
+            actor: { type: "SYSTEM", id: "scaffold-publisher" },
+            type: "FAIL_PROJECT_SCAFFOLD",
+            payload: { operationId: operation.id, expectedVersion: operation.version, errorCode },
+          });
+        } catch (recordError: unknown) {
+          app.log.error(
+            {
+              operationId: operation.id,
+              errorName: recordError instanceof Error ? recordError.name : "UnknownError",
+            },
+            "Project scaffold failure could not be recorded",
+          );
+        }
+      }
+    }
+  };
+
   /**
    * Connections a client opened without ever sending a request on them.
    *
@@ -669,11 +924,16 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   // `runStageAttempt` still owns everything inside one attempt.
   const worker = createSessionWorker({
     state: localState,
-    adapter: providerAdapter,
+    resolveAdapter: resolveProjectProvider,
     template: mockDeliveryTemplate,
     workspacesRoot,
     createCommandId: () => `session-${randomUUID()}`,
     logger: app.log,
+    openMcpConnections: createMcpConnectionOpener({
+      state: localState,
+      gateway: mcpGateway,
+      createCommandId: (kind) => `mcp-call-${kind.toLowerCase()}-${randomUUID()}`,
+    }),
   });
 
   localState.execute({
@@ -889,6 +1149,263 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
+    app.get("/api/v1/projects/:projectId/mcp-profiles", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const result = localState.query({
+          type: "GET_PROJECT_MCP_PROFILES",
+          projectId: params.projectId,
+        });
+        if (result.type !== "PROJECT_MCP_PROFILES") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "MCP profiles could not be loaded");
+        }
+        return mcpProfilesResponseSchema.parse({
+          schemaVersion: 1,
+          projectId: result.project.id,
+          projectVersion: result.project.version,
+          profiles: result.profiles,
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/mcp-profile-proposals", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = proposeMcpProfileRequestSchema.parse(request.body);
+        const projectResult = localState.query({ type: "GET_PROJECT", projectId: params.projectId });
+        if (projectResult.type !== "PROJECT" || projectResult.project === null) {
+          throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+        if (projectResult.project.version !== body.expectedProjectVersion) {
+          throw new McpDomainError(
+            "PROJECT_VERSION_CONFLICT",
+            "The Project changed after MCP settings were loaded",
+            {
+              expectedVersion: body.expectedProjectVersion,
+              actualVersion: projectResult.project.version,
+            },
+          );
+        }
+        if (body.candidate.profileId !== null) {
+          const profileResult = localState.query({
+            type: "GET_PROJECT_MCP_PROFILES",
+            projectId: params.projectId,
+          });
+          const found =
+            profileResult.type === "PROJECT_MCP_PROFILES" &&
+            profileResult.profiles.some(({ revision }) => revision.profileId === body.candidate.profileId);
+          if (!found) {
+            throw new McpDomainError(
+              "PROFILE_NOT_FOUND",
+              "The MCP profile being revised does not exist in this Project",
+            );
+          }
+        }
+        const candidate = await mcpGateway.resolveCandidate(body.candidate);
+        const canonicalDigest = createHash("sha256")
+          .update(canonicalMcpProfileSource(candidate))
+          .digest("hex");
+        return mcpProfileProposalSchema.parse(
+          mcpProposals.issue({
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            candidate,
+            canonicalDigest,
+          }),
+        );
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/mcp-presets/context7/proposal", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = proposeContext7PresetRequestSchema.parse(request.body);
+        const profileResult = localState.query({
+          type: "GET_PROJECT_MCP_PROFILES",
+          projectId: params.projectId,
+        });
+        if (profileResult.type !== "PROJECT_MCP_PROFILES") {
+          throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+        if (profileResult.project.version !== body.expectedProjectVersion) {
+          throw new McpDomainError(
+            "PROJECT_VERSION_CONFLICT",
+            "The Project changed after MCP settings were loaded",
+            {
+              expectedVersion: body.expectedProjectVersion,
+              actualVersion: profileResult.project.version,
+            },
+          );
+        }
+
+        const bundled = resolveBundledContext7Candidate();
+        const existing = profileResult.profiles.find(
+          ({ revision }) =>
+            revision.name === CONTEXT7_PRESET_NAME &&
+            CONTEXT7_PRESET_TOOLS.every((tool) => revision.declaredTools.includes(tool)),
+        );
+        const candidate = await mcpGateway.resolveCandidate({
+          ...bundled,
+          profileId: existing?.revision.profileId ?? null,
+        });
+        const canonicalDigest = createHash("sha256")
+          .update(canonicalMcpProfileSource(candidate))
+          .digest("hex");
+        if (existing?.revision.canonicalDigest === canonicalDigest) {
+          throw new McpDomainError("PROFILE_UNCHANGED", "The bundled Context7 profile is already current");
+        }
+        return mcpProfileProposalSchema.parse(
+          mcpProposals.issue({
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            candidate,
+            canonicalDigest,
+          }),
+        );
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/mcp-profile-proposals/:challengeId/confirm", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = mcpProposalParamsSchema.parse(request.params);
+        const body = confirmMcpProfileRequestSchema.parse(request.body);
+        if (body.challengeId !== params.challengeId) {
+          throw new McpProposalError(
+            "MCP_PROPOSAL_MISMATCH",
+            "The confirmation body and route name different MCP proposals",
+          );
+        }
+        const proposal = mcpProposals.consume({
+          projectId: params.projectId,
+          expectedProjectVersion: body.expectedProjectVersion,
+          challengeId: params.challengeId,
+          canonicalDigest: body.canonicalDigest,
+        });
+        return localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "CONFIRM_MCP_PROFILE",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            candidate: proposal.candidate,
+            canonicalDigest: proposal.canonicalDigest,
+          },
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/mcp-profiles/:revisionId/probe", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = mcpRevisionParamsSchema.parse(request.params);
+        const body = probeMcpProfileRequestSchema.parse(request.body);
+        const profileResult = localState.query({
+          type: "GET_PROJECT_MCP_PROFILES",
+          projectId: params.projectId,
+        });
+        const profile =
+          profileResult.type === "PROJECT_MCP_PROFILES"
+            ? profileResult.profiles.find(({ revision }) => revision.id === params.revisionId)
+            : undefined;
+        if (!profile) {
+          throw new McpDomainError(
+            "PROFILE_NOT_FOUND",
+            "The MCP profile revision does not exist in this Project",
+          );
+        }
+        const observation = await mcpGateway.probe(profile.revision, profile.consent);
+        return localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "SYSTEM", id: "local-daemon" },
+          type: "RECORD_MCP_CAPABILITY_SNAPSHOT",
+          payload: {
+            projectId: params.projectId,
+            profileRevisionId: params.revisionId,
+            ...observation,
+          },
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.put("/api/v1/projects/:projectId/mcp-profiles/:revisionId/grant", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = mcpRevisionParamsSchema.parse(request.params);
+        const body = setMcpProfileGrantRequestSchema.parse(request.body);
+        return localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "SET_MCP_PROFILE_GRANT",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            profileRevisionId: params.revisionId,
+            expectedGrantVersion: body.expectedGrantVersion,
+            tools: body.tools,
+            ownerAttestsReadOnly: body.ownerAttestsReadOnly,
+          },
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.delete("/api/v1/projects/:projectId/mcp-profiles/:revisionId/grant", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = mcpRevisionParamsSchema.parse(request.params);
+        const body = revokeMcpProfileGrantRequestSchema.parse(request.body);
+        const result = localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "REVOKE_MCP_PROFILE_GRANT",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            profileRevisionId: params.revisionId,
+            expectedGrantVersion: body.expectedGrantVersion,
+          },
+        });
+        if (result.type !== "MCP_GRANT_CHANGED") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The MCP grant was not revoked");
+        }
+        mcpGateway.revoke(result.grant.id);
+        return result;
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
     app.post("/api/v1/projects/fixtures/register", async (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!authorizeMutation(request, reply, correlationId)) return;
@@ -1011,6 +1528,151 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             repositoryPath,
           },
         });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/scaffolds/propose", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const body = proposeProjectScaffoldRequestSchema.parse(request.body);
+        const proposal = await proposeProjectScaffold({
+          recipeId: body.recipeId,
+          targetPath: body.targetPath,
+        });
+        return proposeProjectScaffoldResponseSchema.parse({ schemaVersion: 1, proposal });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/scaffolds/publish", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const body = publishProjectScaffoldRequestSchema.parse(request.body);
+        // The proposal arrives from the browser, and REQUEST_PROJECT_SCAFFOLD below writes a durable
+        // Project for its `targetPath` -- a row that carries the UNIQUE `repository_path`, that
+        // REGISTER_PROJECT then refuses to duplicate, and that nothing in Loomrail ever deletes.
+        // Publishing an unverified proposal therefore does not merely fail: it takes the path with
+        // it, permanently, for an operation whose retry can never succeed either. So both halves of
+        // the preview are re-established here, before anything durable is written.
+        //
+        // The Project lookup runs first and reads PROVISIONING rows too, so a second publish of an
+        // already-claimed target still answers "a Project owns this" rather than the weaker "the
+        // directory exists", and so a row left by an earlier failure is visible rather than silent.
+        const ownerOfTarget = localState.query({
+          type: "GET_PROJECT_BY_REPOSITORY_PATH",
+          repositoryPath: body.proposal.targetPath,
+        });
+        if (ownerOfTarget.type === "PROJECT" && ownerOfTarget.project !== null) {
+          throw new ScaffoldDomainError(
+            "PROJECT_ALREADY_EXISTS",
+            "A Project already owns this scaffold target",
+          );
+        }
+        // Compared whole rather than by digest alone: the digest travels inside the same untrusted
+        // body, so a request that keeps a valid digest and edits any other field would otherwise be
+        // taken at its word. Both sides go through the same schema first, which fixes key order, so
+        // this comparison is over normalised values and not over however the request happened to be
+        // serialised.
+        const authoritative = scaffoldProposalSchema.parse(
+          await proposeProjectScaffold({
+            recipeId: body.proposal.recipeId,
+            targetPath: body.proposal.targetPath,
+          }),
+        );
+        if (JSON.stringify(authoritative) !== JSON.stringify(scaffoldProposalSchema.parse(body.proposal))) {
+          throw new ProjectScaffoldingError(
+            "PROPOSAL_CHANGED",
+            "The scaffold proposal changed before publication",
+          );
+        }
+        const requested = localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "REQUEST_PROJECT_SCAFFOLD",
+          payload: { proposal: authoritative },
+        });
+        if (requested.type !== "PROJECT_SCAFFOLD_REQUESTED") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The scaffold operation was not created");
+        }
+        await drainScaffoldOperations();
+        const result = localState.query({
+          type: "GET_SCAFFOLD_OPERATION",
+          operationId: requested.operation.id,
+        });
+        if (result.type !== "SCAFFOLD_OPERATION") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The scaffold operation is unavailable");
+        }
+        return scaffoldOperationResponseSchema.parse({ schemaVersion: 1, operation: result.operation });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/scaffolds/:operationId", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = scaffoldParamsSchema.parse(request.params);
+        const result = localState.query({
+          type: "GET_SCAFFOLD_OPERATION",
+          operationId: params.operationId,
+        });
+        if (result.type !== "SCAFFOLD_OPERATION") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The scaffold operation is unavailable");
+        }
+        return scaffoldOperationResponseSchema.parse({ schemaVersion: 1, operation: result.operation });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/scaffolds", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const result = localState.query({ type: "LIST_OPEN_SCAFFOLD_OPERATIONS" });
+        if (result.type !== "SCAFFOLD_OPERATIONS") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "Scaffold operations are unavailable");
+        }
+        return scaffoldOperationsResponseSchema.parse({
+          schemaVersion: 1,
+          operations: result.operations,
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/scaffolds/:operationId/retry", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = scaffoldParamsSchema.parse(request.params);
+        const body = retryProjectScaffoldRequestSchema.parse(request.body);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "RETRY_PROJECT_SCAFFOLD",
+          payload: { operationId: params.operationId, expectedVersion: body.expectedVersion },
+        });
+        await drainScaffoldOperations();
+        const result = localState.query({
+          type: "GET_SCAFFOLD_OPERATION",
+          operationId: params.operationId,
+        });
+        if (result.type !== "SCAFFOLD_OPERATION") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The scaffold operation is unavailable");
+        }
+        return scaffoldOperationResponseSchema.parse({ schemaVersion: 1, operation: result.operation });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }
@@ -1177,6 +1839,103 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           throw new StateStoreError("PERSISTENCE_FAILURE", "The Constitution snapshot is unavailable");
         }
         return projectConstitutionSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/projects/:projectId/readiness", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const result = localState.query({
+          type: "GET_PROJECT_READINESS_SNAPSHOT",
+          projectId: params.projectId,
+        });
+        if (result.type !== "PROJECT_READINESS_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The Project Readiness snapshot is unavailable");
+        }
+        return projectReadinessSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/readiness/run", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = runProjectReadinessRequestSchema.parse(request.body);
+        const projectResult = localState.query({ type: "GET_PROJECT", projectId: params.projectId });
+        const project = projectResult.type === "PROJECT" ? projectResult.project : null;
+        if (project === null) throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+        const constitutionResult = localState.query({
+          type: "GET_PROJECT_CONSTITUTION_SNAPSHOT",
+          projectId: params.projectId,
+        });
+        if (constitutionResult.type !== "PROJECT_CONSTITUTION_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The Constitution snapshot is unavailable");
+        }
+        const assessment = await assessProjectReadiness(project.repositoryPath, {
+          activeConstitution: constitutionResult.snapshot.activeConstitution !== null,
+        });
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "RECORD_PROJECT_READINESS_ASSESSMENT",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            ...assessment,
+            checks: [...assessment.checks],
+          },
+        });
+        const result = localState.query({
+          type: "GET_PROJECT_READINESS_SNAPSHOT",
+          projectId: params.projectId,
+        });
+        if (result.type !== "PROJECT_READINESS_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The Project Readiness snapshot is unavailable");
+        }
+        return projectReadinessSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/readiness/attest", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = attestProjectReadinessRequestSchema.parse(request.body);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "ATTEST_PROJECT_READINESS_CHECK",
+          payload: {
+            projectId: params.projectId,
+            runId: body.runId,
+            checkId: body.checkId,
+            expectedRunVersion: body.expectedRunVersion,
+            outcome: body.outcome,
+            rationale: body.rationale,
+          },
+        });
+        const result = localState.query({
+          type: "GET_PROJECT_READINESS_SNAPSHOT",
+          projectId: params.projectId,
+        });
+        if (result.type !== "PROJECT_READINESS_SNAPSHOT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The Project Readiness snapshot is unavailable");
+        }
+        return projectReadinessSnapshotSchema.parse(result.snapshot);
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }
@@ -1504,13 +2263,99 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
-    // The daemon runs one provider adapter for its whole process lifetime, so this is workspace-
-    // wide rather than per work item: it answers "what would a session started right now run on".
+    app.get("/api/v1/projects/:projectId/provider-selection", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const result = localState.query({ type: "GET_PROJECT", projectId: params.projectId });
+        if (result.type !== "PROJECT" || result.project === null) {
+          throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+        return projectProviderSelectionResponseSchema.parse(
+          providerRegistry.resolve(result.project).response,
+        );
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.put("/api/v1/projects/:projectId/provider-selection", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = setProjectProviderPreferenceRequestSchema.parse(request.body);
+        if (providerRegistry.environment.override !== null || providerRegistry.environment.invalid) {
+          return reply
+            .code(409)
+            .send(
+              createError(
+                "PROVIDER_OVERRIDE_ACTIVE",
+                `${LOOMRAIL_PROVIDER_ENV_VAR} overrides Project provider settings until the daemon restarts`,
+                correlationId,
+              ),
+            );
+        }
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "SET_PROJECT_PROVIDER_PREFERENCE",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            preference: body.preference,
+          },
+        });
+        const result = localState.query({ type: "GET_PROJECT", projectId: params.projectId });
+        if (result.type !== "PROJECT" || result.project === null) {
+          throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+        worker.wake();
+        return projectProviderSelectionResponseSchema.parse(
+          providerRegistry.resolve(result.project).response,
+        );
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/provider-selection/refresh", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        refreshProviderAvailabilityRequestSchema.parse(request.body);
+        const before = localState.query({ type: "GET_PROJECT", projectId: params.projectId });
+        if (before.type !== "PROJECT" || before.project === null) {
+          throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+        await providerRegistry.refresh();
+        worker.wake();
+        return projectProviderSelectionResponseSchema.parse(
+          providerRegistry.resolve(before.project).response,
+        );
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    // Compatibility projection for clients that predate per-Project selection. New clients use
+    // the route above so the answer follows the Project they are actually showing.
     app.get("/api/v1/provider/capabilities", (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!requireSession(request, reply, correlationId)) return;
       try {
-        const capabilities = providerAdapter.capabilities();
+        const projectsResult = localState.query({ type: "LIST_PROJECTS" });
+        const project =
+          projectsResult.type === "PROJECTS"
+            ? (projectsResult.projects[0] ?? startupProjectionProject)
+            : startupProjectionProject;
+        const capabilities = (
+          fixedProviderAdapter ?? providerRegistry.resolve(project).adapter
+        ).capabilities();
         return providerCapabilitiesResponseSchema.parse({
           schemaVersion: 1,
           provider: capabilities.provider,
@@ -1969,6 +2814,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       });
     }
 
+    await drainScaffoldOperations();
     await drainConstitutionPublications();
 
     // Said out loud at startup, both of them. An unrecognised value falls back to the mock rather
@@ -2015,6 +2861,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         try {
           // The live session must be asked to stop before the server starts closing connections.
           await worker.stop();
+          await mcpGateway.shutdown();
           await app.close();
         } finally {
           localState.close();
@@ -2022,6 +2869,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       },
     };
   } catch (error: unknown) {
+    await mcpGateway.shutdown().catch(() => undefined);
     localState.close();
     await app.close();
     throw error;

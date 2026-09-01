@@ -1,7 +1,7 @@
 # Releasing the Loomrail launcher
 
-**Status:** alpha.2 release procedure
-**Updated:** 2026-08-30
+**Status:** alpha.3 release candidate procedure
+**Updated:** 2026-09-01
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
 the SQLite migrations and the bundled fixture projects. Consumers install one package and run one binary; they never
@@ -74,16 +74,16 @@ Publishing is a deliberate, human action and is not automated. Nothing in CI run
 
 ### Pre-alpha channel
 
-The release candidate version is `0.1.0-alpha.2`. Pre-alpha releases are published under the explicit `next`
+The release candidate version is `0.1.0-alpha.3`. Pre-alpha releases are published under the explicit `next`
 dist-tag. Check the registry before publishing; a prepared repository version is not evidence that the registry has
 already advanced.
 
 ```bash
-npm publish ./dist-release/loomrail-0.1.0-alpha.2.tgz --tag next --access public
+npm publish ./dist-release/loomrail-0.1.0-alpha.3.tgz --tag next --access public
 ```
 
 Before running that command, authenticate the local npm CLI, satisfy the account's current 2FA requirements and
-review the [release notes](releases/0.1.0-alpha.2.md). After publishing, verify the registry rather than the local
+review the [release notes](releases/0.1.0-alpha.3.md). After publishing, verify the registry rather than the local
 tarball:
 
 ```bash

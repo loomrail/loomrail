@@ -135,7 +135,9 @@ describe("landing reveal", () => {
             this as unknown as IntersectionObserver,
           );
         }
-        unobserve(): void {}
+        unobserve(): void {
+          // The reveal stub fires once on observe; nothing ever needs to be detached.
+        }
       },
     });
   }

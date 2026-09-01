@@ -9,6 +9,7 @@ import {
   describeUnproductiveSession,
   providerStageResultSchemaFor,
   providerCapabilitiesSchema,
+  providerMcpConnectionSchema,
   runProcess,
   ProcessSpawnError,
   type DecodedProviderStageResult,
@@ -312,6 +313,16 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
                   // agent may do.
                 ];
 
+        const mcpConnections = providerMcpConnectionSchema.array().max(64).parse(invocation.mcpConnections);
+        const mcpArgs = mcpConnections.flatMap((connection) => [
+          "-c",
+          `mcp_servers.${connection.id}.command=${JSON.stringify(connection.proxyCommand)}`,
+          "-c",
+          `mcp_servers.${connection.id}.args=${JSON.stringify(connection.proxyArgs)}`,
+          "-c",
+          `mcp_servers.${connection.id}.enabled_tools=${JSON.stringify(connection.enabledTools)}`,
+        ]);
+
         const args = [
           "exec",
           "--json",
@@ -320,10 +331,11 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
           // hooks, plugins, model providers, and MCP servers all arrive from that file. `-s` below
           // does override `sandbox_mode` for the sandbox itself, so there is no "the agent could
           // write somewhere it should not" hole even without this flag -- but hooks, plugins and
-          // MCP servers are not sandboxed at all, and spec D6 (this milestone's predecessor)
-          // forbids MCP outright. Authentication lives in `CODEX_HOME`, not `config.toml`, so this
-          // flag does not touch login.
+          // MCP servers are not sandboxed at all, while C1 permits only the typed session-scoped
+          // Loomrail proxy assignments assembled above. Authentication lives in `CODEX_HOME`, not
+          // in `config.toml`, so this flag does not touch login.
           "--ignore-user-config",
+          ...mcpArgs,
           ...sandboxArgs,
           "-C",
           workingDir,

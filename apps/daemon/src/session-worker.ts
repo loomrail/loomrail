@@ -3,7 +3,7 @@ import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter } from "@loomrail/provider-core";
 import type { FastifyBaseLogger } from "fastify";
 
-import { runStageAttempt } from "./session-loop.js";
+import { runStageAttempt, type OpenMcpConnections } from "./session-loop.js";
 
 /**
  * The bound on how many pending dispatches one pass through the queue may hand to `runStageAttempt`
@@ -19,12 +19,16 @@ export type SessionWorker = {
 
 export type SessionWorkerDeps = {
   state: LocalState;
-  adapter: ProviderAdapter;
+  /** Resolve once per dispatch. The returned instance is captured for that live ProviderSession. */
+  resolveAdapter?: (projectId: string) => ProviderAdapter;
+  /** Compatibility injection for focused worker tests that intentionally exercise one adapter. */
+  adapter?: ProviderAdapter;
   template: WorkflowTemplate;
   /** Where a WorkItem's worktree is cut; handed straight to `runStageAttempt` (spec D2). */
   workspacesRoot: string;
   createCommandId: () => string;
   logger: FastifyBaseLogger;
+  openMcpConnections?: OpenMcpConnections;
 };
 
 /**
@@ -40,10 +44,19 @@ export type SessionWorkerDeps = {
  * which `runOnce` below is a straight copy of.
  */
 export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
+  const fixedAdapter = deps.adapter;
+  const resolveAdapter =
+    deps.resolveAdapter ??
+    (fixedAdapter === undefined
+      ? (): ProviderAdapter => {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The provider adapter resolver is missing");
+        }
+      : (): ProviderAdapter => fixedAdapter);
   let running = false;
   let pending = false;
   let stopping = false;
   let liveSessionId: string | null = null;
+  let liveAdapter: ProviderAdapter | null = null;
   const idleWaiters: (() => void)[] = [];
 
   const settleIdle = (): void => {
@@ -166,19 +179,27 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         }
       }
 
-      await runStageAttempt({
-        state: deps.state,
-        adapter: deps.adapter,
-        dispatch,
-        template: deps.template,
-        workspacesRoot: deps.workspacesRoot,
-        createCommandId: deps.createCommandId,
-        correlationId: `dispatch-${dispatch.id}`,
-        logger: deps.logger,
-        onSessionLive: (providerSessionId) => {
-          liveSessionId = providerSessionId;
-        },
-      });
+      const adapter = resolveAdapter(dispatch.projectId);
+      try {
+        await runStageAttempt({
+          state: deps.state,
+          adapter,
+          dispatch,
+          template: deps.template,
+          workspacesRoot: deps.workspacesRoot,
+          createCommandId: deps.createCommandId,
+          correlationId: `dispatch-${dispatch.id}`,
+          logger: deps.logger,
+          ...(deps.openMcpConnections === undefined ? {} : { openMcpConnections: deps.openMcpConnections }),
+          onSessionLive: (providerSessionId) => {
+            liveSessionId = providerSessionId;
+            liveAdapter = adapter;
+          },
+        });
+      } finally {
+        liveSessionId = null;
+        liveAdapter = null;
+      }
     }
     // There is no HTTP caller left to turn this into a 500 for: the worker has no caller at all.
     // Logging and returning leaves the dispatch exactly where a request-driven drain would have left
@@ -245,8 +266,8 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
       // Spec D5: the provider is told to stop, and we do not wait to be told it did. `abortSession`
       // resolving is not proof the run ended -- that gap is the next milestone's, where there will
       // finally be an adapter capable of failing to stop.
-      if (liveSessionId !== null) {
-        await deps.adapter.abortSession(liveSessionId).catch(() => undefined);
+      if (liveSessionId !== null && liveAdapter !== null) {
+        await liveAdapter.abortSession(liveSessionId).catch(() => undefined);
       }
       settleIdle();
     },

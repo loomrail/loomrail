@@ -26,9 +26,11 @@ the source of truth.
 </picture>
 
 > [!IMPORTANT]
-> Loomrail is public pre-alpha software. The recommended first run uses a deterministic mock: it starts no external
-> agent and spends no provider quota. Live providers are opt-in. Loomrail never commits, pushes, merges, or deploys
-> agent changes for you, and a task worktree is not an operating-system sandbox.
+> Loomrail is public pre-alpha software. New projects use **Auto**: an installed, authenticated Codex or Claude Code
+> CLI can be selected for new sessions and spend provider quota. To guarantee a zero-quota first run, choose **Mock**
+> in **Settings → AI provider** before starting the workflow. Loomrail never installs or signs into a provider,
+> enables permission-bypass flags, commits, pushes, merges, or deploys for you. A task worktree is not an
+> operating-system sandbox.
 
 ## Install and run safely
 
@@ -60,11 +62,11 @@ recommended for evaluation because it keeps the selected pre-alpha channel visib
 ## First run
 
 1. Choose **Initialize demo workspace**.
-2. Create a task with a concrete outcome and observable acceptance criteria.
-3. Move it to **Ready** and start the workflow.
-4. Answer the blocking Human Request and approve the explicit mock budget increase.
-5. Inspect Review and QA evidence.
-6. Accept the delivery or return it to work as the owner.
+2. Open **Settings → AI provider** and choose **Mock** for the zero-quota walkthrough.
+3. Create a task with a concrete outcome and observable acceptance criteria.
+4. Move it to **Ready** and start the workflow.
+5. Answer the blocking Human Request and approve the explicit mock budget increase.
+6. Inspect Review and QA evidence, then accept the delivery or return it to work as the owner.
 
 The task, request, budget, evidence, and decision survive page reloads and Loomrail restarts. The
 [quick start](docs/guides/GETTING-STARTED.md) walks through the route in detail.
@@ -79,15 +81,27 @@ worktrees, change inspection, backup, and recovery:
 - [Reproducible full-route example](docs/examples/full-route/README.md)
 - [Security and trust boundaries](docs/security/THREAT-MODEL.md)
 
-Live providers are explicit. Install and authenticate the provider CLI yourself, then start the same Loomrail
-installation with `LOOMRAIL_PROVIDER=CODEX` or `LOOMRAIL_PROVIDER=CLAUDE_CODE`. Read the owner guide and threat model
-before exposing a repository to either CLI.
+Install and authenticate the provider CLI yourself, then start Loomrail normally. In **Settings → AI provider**, keep
+**Auto** to use an available signed-in CLI or choose Codex, Claude Code, or Mock explicitly for that project. Use
+**Check again** after installing or signing in; no extra launch command is required. `LOOMRAIL_PROVIDER` remains an
+optional process-wide override for automation and troubleshooting. Read the owner guide and threat model before
+exposing a repository to either live CLI.
+
+Context7 is different from an AI provider: its exact-pinned MCP server ships with Loomrail. In **Settings → MCP
+connections**, choose **Review bundled Context7**; no global install or `npx` command is needed. Loomrail still requires
+you to approve the exact local process and grant its two read-only tools. Context7 documentation queries leave your
+machine, so never include secrets, personal data, or proprietary code.
 
 ## Current boundary
 
 - Local browser UI, loopback daemon, and local SQLite state.
-- Deterministic mock-first workflow with durable Human Requests, budgets, evidence, recovery, and owner Decisions.
-- Local Git repository registration, per-task worktrees, change inspection, and owner-approved Project Constitution.
+- Auto-discovered or explicitly selected providers, plus a deterministic Mock route with no provider quota.
+- Project-scoped local MCP connections and a bundled, owner-approved Context7 preset.
+- A typed read-only tool SDK at `loomrail/plugin-sdk`; local registration still uses explicit C1 consent and grant.
+- Existing-repository registration, readiness checks, per-task worktrees, change inspection, and owner-approved
+  Project Constitution.
+- Explicit new-project creation from a fixed local recipe, with exact file review, durable recovery, and local Git
+  initialization. Loomrail does not install dependencies or create a commit.
 - No desktop installer, remote access, cloud sync, team accounts, automatic Git publishing, or complete OS sandbox.
 
 The versioned product scope lives in [Product decisions](docs/product/PRODUCT-DECISIONS.ru.md) and the
@@ -116,7 +130,8 @@ pnpm test:e2e
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), the [architecture overview](docs/architecture/OVERVIEW.md), and the
-[release guide](docs/RELEASE.md).
+[release guide](docs/RELEASE.md). Plugin authors should start with the
+[Plugin SDK guide](docs/guides/PLUGIN-SDK.md) or its [Russian version](docs/guides/PLUGIN-SDK.ru.md).
 
 ## License
 

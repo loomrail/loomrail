@@ -41,6 +41,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Keep the Windows process-tree release gate visible even if a later repository-wide check fails.
+      # The trailing `...` selects the gateway *and its workspace dependencies*: their `dist` is
+      # gitignored, so without building them first `tsc` cannot resolve `@loomrail/contracts`.
+      - name: Verify Windows MCP process-tree lifecycle
+        if: runner.os == 'Windows'
+        run: |
+          pnpm --filter "@loomrail/mcp-gateway..." build
+          pnpm --filter @loomrail/mcp-gateway test
+
       - name: Verify source and SQLite portability
         run: pnpm verify
 

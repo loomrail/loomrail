@@ -79,6 +79,27 @@ const migrations: readonly Migration[] = [
     name: "project_constitutions",
     filename: "0015_project_constitutions.sql",
   },
+  {
+    version: 16,
+    name: "project_readiness",
+    filename: "0016_project_readiness.sql",
+  },
+  {
+    version: 17,
+    name: "project_provider_preference",
+    filename: "0017_project_provider_preference.sql",
+  },
+  {
+    version: 18,
+    name: "mcp_connections",
+    filename: "0018_mcp_connections.sql",
+  },
+  {
+    version: 19,
+    name: "project_scaffolding",
+    filename: "0019_project_scaffolding.sql",
+    rebuildsAReferencedTable: true,
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

@@ -37,6 +37,7 @@ const run = async () => {
 
   await copyInto("apps/cli/bundle/apps/cli/dist", "apps/cli/dist");
   await copyInto("apps/web/dist", "apps/web/dist");
+  await copyInto("packages/plugin-sdk/dist", "packages/plugin-sdk/dist");
   await copyInto("fixtures/projects", "fixtures/projects");
   // The bundled code keeps the persistence package's `../migrations` lookup, which now resolves
   // beside the launcher instead of beside that package.
@@ -45,6 +46,7 @@ const run = async () => {
 
   await assertNotEmpty("apps/cli/dist", "run `pnpm bundle` first");
   await assertNotEmpty("apps/web/dist", "run `pnpm build` first");
+  await assertNotEmpty("packages/plugin-sdk/dist", "the Plugin SDK build is missing");
   await assertNotEmpty("apps/cli/migrations", "the SQLite migrations are missing");
   await assertNotEmpty("fixtures/projects", "the bundled fixture projects are missing");
 
@@ -59,12 +61,19 @@ const run = async () => {
     repository: { type: "git", url: "git+https://github.com/loomrail/loomrail.git" },
     type: "module",
     bin: { loomrail: "apps/cli/dist/index.js" },
+    exports: {
+      "./plugin-sdk": {
+        types: "./packages/plugin-sdk/dist/index.d.ts",
+        default: "./packages/plugin-sdk/dist/index.js",
+      },
+    },
     engines: { node: ">=24.19 <25" },
     dependencies: releaseDependencies(),
     files: [
       "apps/cli/dist",
       "apps/cli/migrations",
       "apps/web/dist",
+      "packages/plugin-sdk/dist",
       "fixtures/projects",
       "README.md",
       "LICENSE",

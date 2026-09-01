@@ -3,10 +3,17 @@ import {
   constitutionPresetsResponseSchema,
   eventsResponseSchema,
   humanRequestsResponseSchema,
+  mcpProfileProposalSchema,
+  mcpProfilesResponseSchema,
   projectsResponseSchema,
+  projectProviderSelectionResponseSchema,
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
   projectConstitutionSnapshotSchema,
+  projectReadinessSnapshotSchema,
+  proposeProjectScaffoldResponseSchema,
+  scaffoldOperationResponseSchema,
+  scaffoldOperationsResponseSchema,
   stateCommandResultSchema,
   workItemChangesResponseSchema,
   workItemFileDiffResponseSchema,
@@ -18,10 +25,19 @@ import {
   type AcceptancePackage,
   type HumanRequest,
   type HumanRequestAnswer,
+  type McpProfileCandidate,
+  type McpProfileProposal,
+  type McpProfileRevision,
   type ConstitutionPresetId,
   type ConstitutionProposal,
   type ConstitutionPublication,
   type ListedProject,
+  type ProjectReadinessRun,
+  type ScaffoldOperation,
+  type ScaffoldProposal,
+  type ProviderPreference,
+  type ReadinessAttestationOutcome,
+  type ReadinessCheck,
   type PipelineRun,
   type WorkItem,
   type WorkItemState,
@@ -212,6 +228,50 @@ export const retryProjectConstitutionPublication = async (
     },
   );
 
+export const getProjectReadiness = async (projectId: string) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/readiness`,
+    projectReadinessSnapshotSchema,
+  );
+
+export const runProjectReadiness = async (project: ListedProject) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(project.id)}/readiness/run`,
+    projectReadinessSnapshotSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: project.version,
+      }),
+    },
+  );
+
+export const attestProjectReadiness = async (
+  projectId: string,
+  run: ProjectReadinessRun,
+  check: ReadinessCheck,
+  outcome: ReadinessAttestationOutcome,
+  rationale: string,
+) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/readiness/attest`,
+    projectReadinessSnapshotSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        runId: run.id,
+        checkId: check.id,
+        expectedRunVersion: run.version,
+        outcome,
+        rationale,
+      }),
+    },
+  );
+
 export const listProjectWorkItems = async (projectId: string) =>
   requestLocalApi(`/api/v1/projects/${encodeURIComponent(projectId)}/work-items`, workItemsResponseSchema);
 
@@ -280,6 +340,157 @@ export const listProviderSessions = async (stageAttemptId: string) =>
 export const getProviderCapabilities = async () =>
   requestLocalApi("/api/v1/provider/capabilities", providerCapabilitiesResponseSchema);
 
+export const getProjectProviderSelection = async (projectId: string) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/provider-selection`,
+    projectProviderSelectionResponseSchema,
+  );
+
+export const setProjectProviderPreference = async (project: ListedProject, preference: ProviderPreference) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(project.id)}/provider-selection`,
+    projectProviderSelectionResponseSchema,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: project.version,
+        preference,
+      }),
+    },
+  );
+
+export const refreshProjectProviderAvailability = async (projectId: string) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/provider-selection/refresh`,
+    projectProviderSelectionResponseSchema,
+    { method: "POST", body: JSON.stringify({ schemaVersion: 1 }) },
+  );
+
+export const getProjectMcpProfiles = async (projectId: string) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/mcp-profiles`,
+    mcpProfilesResponseSchema,
+  );
+
+export const proposeMcpProfile = async (
+  projectId: string,
+  expectedProjectVersion: number,
+  candidate: McpProfileCandidate,
+) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/mcp-profile-proposals`,
+    mcpProfileProposalSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        expectedProjectVersion,
+        candidate,
+      }),
+    },
+  );
+
+export const proposeContext7Preset = async (projectId: string, expectedProjectVersion: number) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/mcp-presets/context7/proposal`,
+    mcpProfileProposalSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: 1, expectedProjectVersion }),
+    },
+  );
+
+export const confirmMcpProfile = async (proposal: McpProfileProposal) => {
+  const result = await requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(proposal.projectId)}/mcp-profile-proposals/${encodeURIComponent(proposal.challengeId)}/confirm`,
+    stateCommandResultSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: proposal.expectedProjectVersion,
+        challengeId: proposal.challengeId,
+        canonicalDigest: proposal.canonicalDigest,
+      }),
+    },
+  );
+  if (result.type !== "MCP_PROFILE_CONSENTED") {
+    throw new Error("The local daemon returned an unexpected MCP consent result");
+  }
+  return result;
+};
+
+export const probeMcpProfile = async (projectId: string, revision: McpProfileRevision) => {
+  const result = await requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/mcp-profiles/${encodeURIComponent(revision.id)}/probe`,
+    stateCommandResultSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: 1, commandId: crypto.randomUUID() }),
+    },
+  );
+  if (result.type !== "MCP_CAPABILITY_RECORDED") {
+    throw new Error("The local daemon returned an unexpected MCP probe result");
+  }
+  return result.snapshot;
+};
+
+export const grantMcpProfile = async (input: {
+  projectId: string;
+  expectedProjectVersion: number;
+  revision: McpProfileRevision;
+  expectedGrantVersion: number | null;
+  tools: string[];
+}) => {
+  const result = await requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(input.projectId)}/mcp-profiles/${encodeURIComponent(input.revision.id)}/grant`,
+    stateCommandResultSchema,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: input.expectedProjectVersion,
+        expectedGrantVersion: input.expectedGrantVersion,
+        tools: input.tools,
+        ownerAttestsReadOnly: true,
+      }),
+    },
+  );
+  if (result.type !== "MCP_GRANT_CHANGED") {
+    throw new Error("The local daemon returned an unexpected MCP grant result");
+  }
+  return result;
+};
+
+export const revokeMcpProfile = async (input: {
+  projectId: string;
+  expectedProjectVersion: number;
+  revision: McpProfileRevision;
+  expectedGrantVersion: number;
+}) => {
+  const result = await requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(input.projectId)}/mcp-profiles/${encodeURIComponent(input.revision.id)}/grant`,
+    stateCommandResultSchema,
+    {
+      method: "DELETE",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: input.expectedProjectVersion,
+        expectedGrantVersion: input.expectedGrantVersion,
+      }),
+    },
+  );
+  if (result.type !== "MCP_GRANT_CHANGED") {
+    throw new Error("The local daemon returned an unexpected MCP revoke result");
+  }
+  return result;
+};
+
 export const listOpenHumanRequests = async (projectId: string) => {
   const query = new URLSearchParams({ projectId, status: "OPEN" });
   return requestLocalApi(`/api/v1/human-requests?${query.toString()}`, humanRequestsResponseSchema);
@@ -306,6 +517,45 @@ export const registerRepositoryProject = async (repositoryPath: string): Promise
     method: "POST",
     body: JSON.stringify({ schemaVersion: 1, commandId: crypto.randomUUID(), repositoryPath }),
   });
+};
+
+export const proposeNewProjectScaffold = async (targetPath: string): Promise<ScaffoldProposal> => {
+  const result = await requestLocalApi("/api/v1/scaffolds/propose", proposeProjectScaffoldResponseSchema, {
+    method: "POST",
+    body: JSON.stringify({ schemaVersion: 1, recipeId: "typescript-node", targetPath }),
+  });
+  return result.proposal;
+};
+
+export const listOpenProjectScaffolds = async (): Promise<ScaffoldOperation[]> => {
+  const result = await requestLocalApi("/api/v1/scaffolds", scaffoldOperationsResponseSchema);
+  return result.operations;
+};
+
+export const publishNewProjectScaffold = async (proposal: ScaffoldProposal): Promise<ScaffoldOperation> => {
+  const result = await requestLocalApi("/api/v1/scaffolds/publish", scaffoldOperationResponseSchema, {
+    method: "POST",
+    body: JSON.stringify({ schemaVersion: 1, commandId: crypto.randomUUID(), proposal }),
+  });
+  if (result.operation === null) throw new Error("The local daemon did not return the scaffold operation");
+  return result.operation;
+};
+
+export const retryNewProjectScaffold = async (operation: ScaffoldOperation): Promise<ScaffoldOperation> => {
+  const result = await requestLocalApi(
+    `/api/v1/scaffolds/${encodeURIComponent(operation.id)}/retry`,
+    scaffoldOperationResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedVersion: operation.version,
+      }),
+    },
+  );
+  if (result.operation === null) throw new Error("The local daemon did not return the scaffold operation");
+  return result.operation;
 };
 
 export type CreateWorkItemInput = {

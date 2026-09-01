@@ -9,10 +9,15 @@ import type {
   EventPageDirection,
   HumanRequest,
   HumanRequestStatus,
+  McpProfileView,
+  McpSessionSnapshot,
+  McpToolCallRecord,
   Project,
   ProjectConstitutionSnapshot,
   ProjectConstitutionVersion,
+  ProjectReadinessSnapshot,
   ProviderSession,
+  ScaffoldOperation,
   StateCommand,
   StateCommandResult,
   WorkItem,
@@ -76,8 +81,19 @@ export class StateStoreError extends Error {
 export type StateQuery =
   | { type: "LIST_PROJECTS" }
   | { type: "GET_PROJECT"; projectId: string }
+  // Reads the raw `projects` row for a path, PROVISIONING included -- unlike LIST_PROJECTS, which
+  // hides a Project whose repository the scaffold publisher has not verified yet. A caller about to
+  // claim a path has to see exactly what the UNIQUE index and REGISTER_PROJECT see.
+  | { type: "GET_PROJECT_BY_REPOSITORY_PATH"; repositoryPath: string }
   | { type: "GET_PROJECT_CONSTITUTION_SNAPSHOT"; projectId: string }
+  | { type: "GET_PROJECT_READINESS_SNAPSHOT"; projectId: string }
+  | { type: "GET_PROJECT_MCP_PROFILES"; projectId: string }
+  | { type: "LIST_PROVIDER_SESSION_MCP_SNAPSHOTS"; providerSessionId: string }
+  | { type: "LIST_MCP_TOOL_CALLS"; providerSessionId: string }
   | { type: "LIST_PENDING_CONSTITUTION_PUBLICATIONS" }
+  | { type: "GET_SCAFFOLD_OPERATION"; operationId: string }
+  | { type: "LIST_PENDING_SCAFFOLD_OPERATIONS" }
+  | { type: "LIST_OPEN_SCAFFOLD_OPERATIONS" }
   | { type: "GET_WORK_ITEM"; workItemId: string }
   | { type: "GET_WORKFLOW_SNAPSHOT"; workItemId: string }
   | {
@@ -125,6 +141,12 @@ export type StateQueryResult =
   | { type: "PROJECTS"; projects: Project[] }
   | { type: "PROJECT"; project: Project | null }
   | { type: "PROJECT_CONSTITUTION_SNAPSHOT"; snapshot: ProjectConstitutionSnapshot }
+  | { type: "PROJECT_READINESS_SNAPSHOT"; snapshot: ProjectReadinessSnapshot }
+  | { type: "PROJECT_MCP_PROFILES"; project: Project; profiles: McpProfileView[] }
+  | { type: "MCP_SESSION_SNAPSHOTS"; snapshots: McpSessionSnapshot[] }
+  | { type: "MCP_TOOL_CALLS"; calls: McpToolCallRecord[] }
+  | { type: "SCAFFOLD_OPERATION"; operation: ScaffoldOperation | null }
+  | { type: "SCAFFOLD_OPERATIONS"; operations: ScaffoldOperation[] }
   | {
       type: "CONSTITUTION_PUBLICATIONS";
       publications: {
@@ -175,6 +197,8 @@ export type LocalState = {
 };
 
 export type LocalStateIdKind =
+  | "project"
+  | "projectScaffold"
   | "workItem"
   | "event"
   | "pipelineRun"
@@ -193,7 +217,18 @@ export type LocalStateIdKind =
   | "workItemWorkspace"
   | "constitutionProposal"
   | "projectConstitutionVersion"
-  | "constitutionPublication";
+  | "constitutionPublication"
+  | "projectReadinessRun"
+  | "readinessCheck"
+  | "securityFinding"
+  | "readinessAttestation"
+  | "mcpProfile"
+  | "mcpProfileRevision"
+  | "mcpConsent"
+  | "mcpCapabilitySnapshot"
+  | "mcpGrant"
+  | "mcpSessionSnapshot"
+  | "mcpToolCall";
 
 /**
  * What startup reconciliation did about the process an orphaned ProviderSession left behind.

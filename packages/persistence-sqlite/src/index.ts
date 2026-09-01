@@ -21,13 +21,26 @@ import {
   humanRequestSchema,
   humanRequestStatusSchema,
   maxContextPackRecipeSources,
+  mcpCapabilitySnapshotSchema,
+  mcpConsentSchema,
+  mcpGrantSchema,
+  mcpProfileRevisionSchema,
+  mcpSessionSnapshotSchema,
+  mcpToolCallRecordSchema,
   opaqueIdSchema,
   pipelineRunSchema,
   projectSchema,
   projectConstitutionSnapshotSchema,
   projectConstitutionVersionSchema,
+  projectReadinessRunSchema,
+  projectReadinessSnapshotSchema,
+  projectProviderSelectionSchema,
+  readinessAttestationSchema,
+  readinessCheckSchema,
   providerSessionSchema,
   recoveryReportSchema,
+  scaffoldOperationSchema,
+  securityFindingSchema,
   stageAttemptSchema,
   stateCommandResultSchema,
   stateCommandSchema,
@@ -50,11 +63,23 @@ import {
   type DomainEvent,
   type EvidenceArtifact,
   type HumanRequest,
+  type McpCapabilitySnapshot,
+  type McpConsent,
+  type McpGrant,
+  type McpProfileRevision,
+  type McpProfileView,
+  type McpSessionSnapshot,
+  type McpToolCallRecord,
   type PipelineRun,
   type Project,
   type ProjectConstitutionVersion,
+  type ProjectReadinessRun,
+  type ReadinessAttestation,
+  type ReadinessCheck,
   type ProviderSession,
   type RecoveryReport,
+  type ScaffoldOperation,
+  type SecurityFinding,
   type RegisterProjectCommand,
   type RepointFixtureProjectCommand,
   type StageAttempt,
@@ -69,6 +94,10 @@ import {
 } from "@loomrail/contracts";
 import {
   ConstitutionDomainError,
+  canonicalMcpProfileSource,
+  decideProjectReadinessAssessment,
+  decideProjectReadinessAttestation,
+  decideProjectProviderPreference,
   decideApproveBudgetOverride,
   decideAnswerHumanRequest,
   decideApplyProviderOutcome,
@@ -79,7 +108,18 @@ import {
   decideProjectConstitutionPublicationFailed,
   decideProjectConstitutionPublicationRetry,
   decideProjectConstitutionProposal,
+  decideProjectScaffoldCompleted,
+  decideProjectScaffoldFailed,
+  decideProjectScaffoldRequested,
+  decideProjectScaffoldRetry,
   decideMarkWorkflowDispatchStarted,
+  decideMcpCapabilitySnapshot,
+  decideMcpProfileConfirmation,
+  decideMcpProfileGrant,
+  decideMcpProfileGrantRevocation,
+  decideMcpSessionSnapshots,
+  decideMcpToolCallFinished,
+  decideMcpToolCallStart,
   decidePausePipeline,
   decideRecoverInterruptedWorkflow,
   decideResolveAcceptance,
@@ -90,16 +130,28 @@ import {
   decideWorkItemCommand,
   stageAttemptIsTerminal,
   WorkflowDomainError,
+  ReadinessDomainError,
+  McpDomainError,
+  ProviderSelectionDomainError,
+  ScaffoldDomainError,
   WorkItemDomainError,
   type BudgetOverrideDecision,
   type ConstitutionActivatedIntent,
   type ConstitutionProposedIntent,
   type ConstitutionPublicationFailedIntent,
   type ConstitutionPublicationRequestedIntent,
+  type ProjectReadinessAssessedIntent,
+  type ProjectReadinessAttestedIntent,
+  type ProjectProviderPreferenceChangedIntent,
+  type ScaffoldCompletedIntent,
+  type ScaffoldFailedIntent,
+  type ScaffoldRequestedIntent,
   type AcceptanceResolutionDecision,
   type AnswerHumanRequestDecision,
   type ApplyProviderOutcomeDecision,
   type MarkDispatchStartedDecision,
+  type McpGrantChangedIntent,
+  type McpProfileConsentedIntent,
   type PipelineControlDecision,
   type RecoveryDecision,
   type StageAttemptPauseDecision,
@@ -135,6 +187,7 @@ const projectRowSchema = z.object({
   fixture_id: z.string().nullable(),
   name: z.string(),
   repository_path: z.string(),
+  provider_preference: z.string(),
   status: z.string(),
   version: z.number().int(),
   created_at: z.string(),
@@ -227,6 +280,150 @@ const constitutionPublicationRowSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   applied_at: z.string().nullable(),
+});
+
+const scaffoldOperationRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  proposal_json: z.string(),
+  status: z.string(),
+  attempts: z.number().int(),
+  last_error_code: z.string().nullable(),
+  version: z.number().int(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  completed_at: z.string().nullable(),
+});
+
+const mcpProfileRevisionRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  profile_id: z.string(),
+  project_id: z.string(),
+  revision: z.number().int(),
+  name: z.string(),
+  executable: z.string(),
+  args_json: z.string(),
+  declared_tools_json: z.string(),
+  canonical_digest: z.string(),
+  created_at: z.string(),
+});
+
+const mcpConsentRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  profile_revision_id: z.string(),
+  canonical_digest: z.string(),
+  owner_id: z.string(),
+  consented_at: z.string(),
+});
+
+const mcpCapabilitySnapshotRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  profile_revision_id: z.string(),
+  state: z.string(),
+  protocol_version: z.string().nullable(),
+  tools_json: z.string(),
+  resources_json: z.string(),
+  prompts_json: z.string(),
+  observed_at: z.string(),
+});
+
+const mcpGrantRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  profile_revision_id: z.string(),
+  tools_json: z.string(),
+  enabled: z.number().int(),
+  version: z.number().int(),
+  granted_by: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  revoked_at: z.string().nullable(),
+});
+
+const mcpSessionSnapshotRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  provider_session_id: z.string(),
+  profile_revision_id: z.string(),
+  profile_digest: z.string(),
+  grant_id: z.string(),
+  grant_version: z.number().int(),
+  tools_json: z.string(),
+  created_at: z.string(),
+});
+
+const mcpToolCallRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  provider_session_id: z.string(),
+  session_snapshot_id: z.string(),
+  profile_revision_id: z.string(),
+  tool_name: z.string(),
+  input_digest: z.string(),
+  status: z.string(),
+  failure_code: z.string().nullable(),
+  started_at: z.string(),
+  finished_at: z.string().nullable(),
+});
+
+const projectReadinessRunRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  repository_head: z.string().nullable(),
+  source_digest: z.string(),
+  working_tree_dirty: z.number().int(),
+  status: z.string(),
+  version: z.number().int(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+const readinessCheckRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  run_id: z.string(),
+  project_id: z.string(),
+  check_key: z.string(),
+  category: z.string(),
+  mode: z.string(),
+  status: z.string(),
+  summary: z.string(),
+  version: z.number().int(),
+});
+
+const securityFindingRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  run_id: z.string(),
+  check_id: z.string(),
+  project_id: z.string(),
+  code: z.string(),
+  severity: z.string(),
+  path: z.string().nullable(),
+  message: z.string(),
+});
+
+const readinessAttestationRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  run_id: z.string(),
+  check_id: z.string(),
+  project_id: z.string(),
+  outcome: z.string(),
+  rationale: z.string(),
+  actor_type: z.string(),
+  actor_id: z.string(),
+  created_at: z.string(),
 });
 
 const eventRowSchema = z.object({
@@ -473,8 +670,26 @@ const workflowDispatchRowSchema = z.object({
 const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LIST_PROJECTS") }).strict(),
   z.object({ type: z.literal("GET_PROJECT"), projectId: opaqueIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal("GET_PROJECT_BY_REPOSITORY_PATH"),
+      repositoryPath: z.string().min(1).max(4_096),
+    })
+    .strict(),
   z.object({ type: z.literal("GET_PROJECT_CONSTITUTION_SNAPSHOT"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_PROJECT_READINESS_SNAPSHOT"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_PROJECT_MCP_PROFILES"), projectId: opaqueIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal("LIST_PROVIDER_SESSION_MCP_SNAPSHOTS"),
+      providerSessionId: opaqueIdSchema,
+    })
+    .strict(),
+  z.object({ type: z.literal("LIST_MCP_TOOL_CALLS"), providerSessionId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("LIST_PENDING_CONSTITUTION_PUBLICATIONS") }).strict(),
+  z.object({ type: z.literal("GET_SCAFFOLD_OPERATION"), operationId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("LIST_PENDING_SCAFFOLD_OPERATIONS") }).strict(),
+  z.object({ type: z.literal("LIST_OPEN_SCAFFOLD_OPERATIONS") }).strict(),
   z.object({ type: z.literal("GET_WORK_ITEM"), workItemId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_WORKFLOW_SNAPSHOT"), workItemId: opaqueIdSchema }).strict(),
   z
@@ -542,6 +757,7 @@ const projectFromRow = (value: unknown): Project => {
     fixtureId: row.fixture_id,
     name: row.name,
     repositoryPath: row.repository_path,
+    providerPreference: row.provider_preference,
     status: row.status,
     version: row.version,
     createdAt: row.created_at,
@@ -607,6 +823,182 @@ const constitutionPublicationFromRow = (value: unknown): ConstitutionPublication
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     appliedAt: row.applied_at,
+  });
+};
+
+const scaffoldOperationFromRow = (value: unknown): ScaffoldOperation => {
+  const row = scaffoldOperationRowSchema.parse(value);
+  return scaffoldOperationSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    proposal: parseJson(row.proposal_json),
+    status: row.status,
+    attempts: row.attempts,
+    lastErrorCode: row.last_error_code,
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  });
+};
+
+const mcpProfileRevisionFromRow = (value: unknown): McpProfileRevision => {
+  const row = mcpProfileRevisionRowSchema.parse(value);
+  return mcpProfileRevisionSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    profileId: row.profile_id,
+    projectId: row.project_id,
+    revision: row.revision,
+    name: row.name,
+    executable: row.executable,
+    args: parseJson(row.args_json),
+    declaredTools: parseJson(row.declared_tools_json),
+    canonicalDigest: row.canonical_digest,
+    createdAt: row.created_at,
+  });
+};
+
+const mcpConsentFromRow = (value: unknown): McpConsent => {
+  const row = mcpConsentRowSchema.parse(value);
+  return mcpConsentSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    profileRevisionId: row.profile_revision_id,
+    canonicalDigest: row.canonical_digest,
+    ownerId: row.owner_id,
+    consentedAt: row.consented_at,
+  });
+};
+
+const mcpCapabilitySnapshotFromRow = (value: unknown): McpCapabilitySnapshot => {
+  const row = mcpCapabilitySnapshotRowSchema.parse(value);
+  return mcpCapabilitySnapshotSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    profileRevisionId: row.profile_revision_id,
+    state: row.state,
+    protocolVersion: row.protocol_version,
+    tools: parseJson(row.tools_json),
+    resources: parseJson(row.resources_json),
+    prompts: parseJson(row.prompts_json),
+    observedAt: row.observed_at,
+  });
+};
+
+const mcpGrantFromRow = (value: unknown): McpGrant => {
+  const row = mcpGrantRowSchema.parse(value);
+  return mcpGrantSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    profileRevisionId: row.profile_revision_id,
+    tools: parseJson(row.tools_json),
+    enabled: row.enabled === 1,
+    version: row.version,
+    grantedBy: row.granted_by,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    revokedAt: row.revoked_at,
+  });
+};
+
+const mcpSessionSnapshotFromRow = (value: unknown): McpSessionSnapshot => {
+  const row = mcpSessionSnapshotRowSchema.parse(value);
+  return mcpSessionSnapshotSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    providerSessionId: row.provider_session_id,
+    profileRevisionId: row.profile_revision_id,
+    profileDigest: row.profile_digest,
+    grantId: row.grant_id,
+    grantVersion: row.grant_version,
+    tools: parseJson(row.tools_json),
+    createdAt: row.created_at,
+  });
+};
+
+const mcpToolCallFromRow = (value: unknown): McpToolCallRecord => {
+  const row = mcpToolCallRowSchema.parse(value);
+  return mcpToolCallRecordSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    providerSessionId: row.provider_session_id,
+    sessionSnapshotId: row.session_snapshot_id,
+    profileRevisionId: row.profile_revision_id,
+    toolName: row.tool_name,
+    inputDigest: row.input_digest,
+    status: row.status,
+    failureCode: row.failure_code,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+  });
+};
+
+const projectReadinessRunFromRow = (value: unknown): ProjectReadinessRun => {
+  const row = projectReadinessRunRowSchema.parse(value);
+  return projectReadinessRunSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    repositoryHead: row.repository_head,
+    sourceDigest: row.source_digest,
+    workingTreeDirty: row.working_tree_dirty === 1,
+    status: row.status,
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+};
+
+const readinessCheckFromRow = (value: unknown): ReadinessCheck => {
+  const row = readinessCheckRowSchema.parse(value);
+  return readinessCheckSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    runId: row.run_id,
+    projectId: row.project_id,
+    key: row.check_key,
+    category: row.category,
+    mode: row.mode,
+    status: row.status,
+    summary: row.summary,
+    version: row.version,
+  });
+};
+
+const securityFindingFromRow = (value: unknown): SecurityFinding => {
+  const row = securityFindingRowSchema.parse(value);
+  return securityFindingSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    runId: row.run_id,
+    checkId: row.check_id,
+    projectId: row.project_id,
+    code: row.code,
+    severity: row.severity,
+    path: row.path,
+    message: row.message,
+  });
+};
+
+const readinessAttestationFromRow = (value: unknown): ReadinessAttestation => {
+  const row = readinessAttestationRowSchema.parse(value);
+  return readinessAttestationSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    runId: row.run_id,
+    checkId: row.check_id,
+    projectId: row.project_id,
+    outcome: row.outcome,
+    rationale: row.rationale,
+    actor: { type: row.actor_type, id: row.actor_id },
+    createdAt: row.created_at,
   });
 };
 
@@ -1251,6 +1643,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       .run(DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACE_NAME, openedAt, openedAt);
 
     const selectProjectById = database.prepare("SELECT * FROM projects WHERE id = ?");
+    const selectProjectByRepositoryPath = database.prepare(
+      "SELECT * FROM projects WHERE repository_path = ? LIMIT 1",
+    );
     const selectConstitutionProposalById = database.prepare(
       "SELECT * FROM constitution_proposals WHERE id = ?",
     );
@@ -1318,6 +1713,167 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       `UPDATE constitution_publications SET
         status = ?, attempts = ?, last_error_code = ?, version = ?, updated_at = ?, applied_at = ?
        WHERE id = ? AND version = ?`,
+    );
+    const selectScaffoldOperationById = database.prepare("SELECT * FROM scaffold_operations WHERE id = ?");
+    const selectPendingScaffoldOperations = database.prepare(
+      "SELECT * FROM scaffold_operations WHERE status = 'PENDING' ORDER BY created_at, id",
+    );
+    const selectOpenScaffoldOperations = database.prepare(
+      "SELECT * FROM scaffold_operations WHERE status != 'COMPLETED' ORDER BY updated_at DESC, id",
+    );
+    const insertScaffoldOperation = database.prepare(
+      `INSERT INTO scaffold_operations (
+        id, schema_version, project_id, proposal_json, status, attempts, last_error_code,
+        version, created_at, updated_at, completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateScaffoldOperation = database.prepare(
+      `UPDATE scaffold_operations SET
+        status = ?, attempts = ?, last_error_code = ?, version = ?, updated_at = ?, completed_at = ?
+       WHERE id = ? AND version = ?`,
+    );
+    const selectProjectReadinessRunById = database.prepare(
+      "SELECT * FROM project_readiness_runs WHERE id = ?",
+    );
+    const selectLatestProjectReadinessRun = database.prepare(
+      `SELECT * FROM project_readiness_runs
+       WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+    );
+    const selectReadinessCheckById = database.prepare("SELECT * FROM project_readiness_checks WHERE id = ?");
+    const selectReadinessChecksForRun = database.prepare(
+      "SELECT * FROM project_readiness_checks WHERE run_id = ? ORDER BY check_key, id",
+    );
+    const selectReadinessFindingsForRun = database.prepare(
+      "SELECT * FROM project_readiness_findings WHERE run_id = ? ORDER BY check_id, id",
+    );
+    const selectReadinessAttestationsForRun = database.prepare(
+      `SELECT * FROM project_readiness_attestations
+       WHERE run_id = ? ORDER BY created_at, id`,
+    );
+    const insertProjectReadinessRun = database.prepare(
+      `INSERT INTO project_readiness_runs (
+        id, schema_version, project_id, repository_head, source_digest, working_tree_dirty,
+        status, version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateProjectReadinessRun = database.prepare(
+      `UPDATE project_readiness_runs SET status = ?, version = ?, updated_at = ?
+       WHERE id = ? AND version = ?`,
+    );
+    const insertReadinessCheck = database.prepare(
+      `INSERT INTO project_readiness_checks (
+        id, schema_version, run_id, project_id, check_key, category, mode, status, summary, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateReadinessCheck = database.prepare(
+      `UPDATE project_readiness_checks SET status = ?, version = ? WHERE id = ? AND version = ?`,
+    );
+    const insertSecurityFinding = database.prepare(
+      `INSERT INTO project_readiness_findings (
+        id, schema_version, run_id, check_id, project_id, code, severity, path, message
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertReadinessAttestation = database.prepare(
+      `INSERT INTO project_readiness_attestations (
+        id, schema_version, run_id, check_id, project_id, outcome, rationale,
+        actor_type, actor_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectMcpProfileRevisionById = database.prepare("SELECT * FROM mcp_profile_revisions WHERE id = ?");
+    const selectLatestMcpProfileRevision = database.prepare(
+      `SELECT * FROM mcp_profile_revisions
+       WHERE profile_id = ? ORDER BY revision DESC LIMIT 1`,
+    );
+    const selectLatestMcpProfileRevisionsForProject = database.prepare(
+      `SELECT revision.* FROM mcp_profile_revisions AS revision
+       WHERE revision.project_id = ?
+         AND revision.revision = (
+           SELECT MAX(latest.revision) FROM mcp_profile_revisions AS latest
+           WHERE latest.profile_id = revision.profile_id
+         )
+       ORDER BY revision.created_at, revision.profile_id`,
+    );
+    const selectMcpConsentByRevision = database.prepare(
+      "SELECT * FROM mcp_consents WHERE profile_revision_id = ?",
+    );
+    const selectLatestMcpCapabilityByRevision = database.prepare(
+      `SELECT * FROM mcp_capability_snapshots
+       WHERE profile_revision_id = ? ORDER BY observed_at DESC, id DESC LIMIT 1`,
+    );
+    const selectMcpGrantByRevision = database.prepare(
+      "SELECT * FROM mcp_grants WHERE profile_revision_id = ?",
+    );
+    const insertMcpProfileRevision = database.prepare(
+      `INSERT INTO mcp_profile_revisions (
+        id, schema_version, profile_id, project_id, revision, name, executable,
+        args_json, declared_tools_json, canonical_digest, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertMcpConsent = database.prepare(
+      `INSERT INTO mcp_consents (
+        id, schema_version, project_id, profile_revision_id, canonical_digest, owner_id, consented_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertMcpCapabilitySnapshot = database.prepare(
+      `INSERT INTO mcp_capability_snapshots (
+        id, schema_version, project_id, profile_revision_id, state, protocol_version,
+        tools_json, resources_json, prompts_json, observed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertMcpGrant = database.prepare(
+      `INSERT INTO mcp_grants (
+        id, schema_version, project_id, profile_revision_id, tools_json, enabled, version,
+        granted_by, created_at, updated_at, revoked_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateMcpGrant = database.prepare(
+      `UPDATE mcp_grants SET
+        tools_json = ?, enabled = ?, version = ?, granted_by = ?, updated_at = ?, revoked_at = ?
+       WHERE id = ? AND version = ?`,
+    );
+    const updateProjectForMcp = database.prepare(
+      "UPDATE projects SET version = ?, updated_at = ? WHERE id = ? AND version = ?",
+    );
+    const selectEnabledLatestMcpGrantsForProject = database.prepare(
+      `SELECT grant_row.* FROM mcp_grants AS grant_row
+       INNER JOIN mcp_profile_revisions AS revision
+         ON revision.id = grant_row.profile_revision_id
+       WHERE grant_row.project_id = ? AND grant_row.enabled = 1
+         AND revision.revision = (
+           SELECT MAX(latest.revision) FROM mcp_profile_revisions AS latest
+           WHERE latest.profile_id = revision.profile_id
+         )
+       ORDER BY revision.profile_id, grant_row.id`,
+    );
+    const insertMcpSessionSnapshot = database.prepare(
+      `INSERT INTO provider_session_mcp_snapshots (
+        id, schema_version, project_id, provider_session_id, profile_revision_id,
+        profile_digest, grant_id, grant_version, tools_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectMcpSessionSnapshotById = database.prepare(
+      "SELECT * FROM provider_session_mcp_snapshots WHERE id = ?",
+    );
+    const selectMcpSessionSnapshotsForSession = database.prepare(
+      `SELECT * FROM provider_session_mcp_snapshots
+       WHERE provider_session_id = ? ORDER BY created_at, id`,
+    );
+    const insertMcpToolCall = database.prepare(
+      `INSERT INTO mcp_tool_calls (
+        id, schema_version, project_id, provider_session_id, session_snapshot_id,
+        profile_revision_id, tool_name, input_digest, status, failure_code, started_at, finished_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectMcpToolCallById = database.prepare("SELECT * FROM mcp_tool_calls WHERE id = ?");
+    const selectMcpToolCallsForSession = database.prepare(
+      "SELECT * FROM mcp_tool_calls WHERE provider_session_id = ? ORDER BY started_at, id",
+    );
+    const selectStartedMcpToolCalls = database.prepare(
+      "SELECT * FROM mcp_tool_calls WHERE status = 'STARTED' ORDER BY started_at, id",
+    );
+    const updateMcpToolCall = database.prepare(
+      `UPDATE mcp_tool_calls SET status = ?, failure_code = ?, finished_at = ?
+       WHERE id = ? AND status = 'STARTED'`,
     );
     const selectWorkItemById = database.prepare("SELECT * FROM work_items WHERE id = ?");
     // Migration 0011. Named `WorkItemWorkspace`, not `Workspace`, throughout this file to keep it
@@ -1543,6 +2099,85 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const readConstitutionPublication = (id: string): ConstitutionPublication | null => {
       const row = selectConstitutionPublicationById.get(id);
       return row === undefined ? null : constitutionPublicationFromRow(row);
+    };
+
+    const readScaffoldOperation = (id: string): ScaffoldOperation | null => {
+      const row = selectScaffoldOperationById.get(id);
+      return row === undefined ? null : scaffoldOperationFromRow(row);
+    };
+
+    const readProjectReadinessRun = (id: string): ProjectReadinessRun | null => {
+      const row = selectProjectReadinessRunById.get(id);
+      return row === undefined ? null : projectReadinessRunFromRow(row);
+    };
+
+    const readLatestProjectReadinessRun = (projectId: string): ProjectReadinessRun | null => {
+      const row = selectLatestProjectReadinessRun.get(projectId);
+      return row === undefined ? null : projectReadinessRunFromRow(row);
+    };
+
+    const readReadinessCheck = (id: string): ReadinessCheck | null => {
+      const row = selectReadinessCheckById.get(id);
+      return row === undefined ? null : readinessCheckFromRow(row);
+    };
+
+    const readReadinessChecks = (runId: string): ReadinessCheck[] =>
+      selectReadinessChecksForRun.all(runId).map(readinessCheckFromRow);
+
+    const readMcpProfileRevision = (id: string): McpProfileRevision | null => {
+      const row = selectMcpProfileRevisionById.get(id);
+      return row === undefined ? null : mcpProfileRevisionFromRow(row);
+    };
+
+    const readLatestMcpProfileRevision = (profileId: string): McpProfileRevision | null => {
+      const row = selectLatestMcpProfileRevision.get(profileId);
+      return row === undefined ? null : mcpProfileRevisionFromRow(row);
+    };
+
+    const readMcpConsent = (profileRevisionId: string): McpConsent | null => {
+      const row = selectMcpConsentByRevision.get(profileRevisionId);
+      return row === undefined ? null : mcpConsentFromRow(row);
+    };
+
+    const readLatestMcpCapability = (profileRevisionId: string): McpCapabilitySnapshot | null => {
+      const row = selectLatestMcpCapabilityByRevision.get(profileRevisionId);
+      return row === undefined ? null : mcpCapabilitySnapshotFromRow(row);
+    };
+
+    const readMcpGrant = (profileRevisionId: string): McpGrant | null => {
+      const row = selectMcpGrantByRevision.get(profileRevisionId);
+      return row === undefined ? null : mcpGrantFromRow(row);
+    };
+
+    const readProjectMcpProfiles = (projectId: string): McpProfileView[] =>
+      selectLatestMcpProfileRevisionsForProject.all(projectId).map((row) => {
+        const revision = mcpProfileRevisionFromRow(row);
+        const consent = readMcpConsent(revision.id);
+        if (consent === null) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "An MCP profile revision exists without its owner consent",
+          );
+        }
+        return {
+          revision,
+          consent,
+          capability: readLatestMcpCapability(revision.id),
+          grant: readMcpGrant(revision.id),
+        };
+      });
+
+    const readMcpSessionSnapshot = (id: string): McpSessionSnapshot | null => {
+      const row = selectMcpSessionSnapshotById.get(id);
+      return row === undefined ? null : mcpSessionSnapshotFromRow(row);
+    };
+
+    const readMcpSessionSnapshots = (providerSessionId: string): McpSessionSnapshot[] =>
+      selectMcpSessionSnapshotsForSession.all(providerSessionId).map(mcpSessionSnapshotFromRow);
+
+    const readMcpToolCall = (id: string): McpToolCallRecord | null => {
+      const row = selectMcpToolCallById.get(id);
+      return row === undefined ? null : mcpToolCallFromRow(row);
     };
 
     const readWorkItemWorkspace = (id: string): WorkItemWorkspace | null => {
@@ -1983,6 +2618,257 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       }
     };
 
+    const insertScaffold = (operation: ScaffoldOperation): void => {
+      insertScaffoldOperation.run(
+        operation.id,
+        operation.schemaVersion,
+        operation.projectId,
+        JSON.stringify(operation.proposal),
+        operation.status,
+        operation.attempts,
+        operation.lastErrorCode,
+        operation.version,
+        operation.createdAt,
+        operation.updatedAt,
+        operation.completedAt,
+      );
+    };
+
+    const updateScaffold = (operation: ScaffoldOperation, expectedVersion: number): void => {
+      const result = updateScaffoldOperation.run(
+        operation.status,
+        operation.attempts,
+        operation.lastErrorCode,
+        operation.version,
+        operation.updatedAt,
+        operation.completedAt,
+        operation.id,
+        expectedVersion,
+      );
+      if (result.changes !== 1) {
+        throw new ScaffoldDomainError(
+          "SCAFFOLD_OPERATION_VERSION_CONFLICT",
+          "The scaffold operation changed while the command was applied",
+        );
+      }
+    };
+
+    const insertReadinessRun = (run: ProjectReadinessRun): void => {
+      insertProjectReadinessRun.run(
+        run.id,
+        run.schemaVersion,
+        run.projectId,
+        run.repositoryHead,
+        run.sourceDigest,
+        run.workingTreeDirty ? 1 : 0,
+        run.status,
+        run.version,
+        run.createdAt,
+        run.updatedAt,
+      );
+    };
+
+    const insertReadinessChecks = (checks: readonly ReadinessCheck[]): void => {
+      for (const check of checks) {
+        insertReadinessCheck.run(
+          check.id,
+          check.schemaVersion,
+          check.runId,
+          check.projectId,
+          check.key,
+          check.category,
+          check.mode,
+          check.status,
+          check.summary,
+          check.version,
+        );
+      }
+    };
+
+    const insertReadinessFindings = (findings: readonly SecurityFinding[]): void => {
+      for (const readinessFinding of findings) {
+        insertSecurityFinding.run(
+          readinessFinding.id,
+          readinessFinding.schemaVersion,
+          readinessFinding.runId,
+          readinessFinding.checkId,
+          readinessFinding.projectId,
+          readinessFinding.code,
+          readinessFinding.severity,
+          readinessFinding.path,
+          readinessFinding.message,
+        );
+      }
+    };
+
+    const updateReadinessProjection = (
+      run: ProjectReadinessRun,
+      expectedRunVersion: number,
+      check: ReadinessCheck,
+      expectedCheckVersion: number,
+    ): void => {
+      const checkResult = updateReadinessCheck.run(
+        check.status,
+        check.version,
+        check.id,
+        expectedCheckVersion,
+      );
+      const runResult = updateProjectReadinessRun.run(
+        run.status,
+        run.version,
+        run.updatedAt,
+        run.id,
+        expectedRunVersion,
+      );
+      if (checkResult.changes !== 1 || runResult.changes !== 1) {
+        throw new ReadinessDomainError(
+          "READINESS_RUN_VERSION_CONFLICT",
+          "Readiness state changed while the attestation was applied",
+        );
+      }
+    };
+
+    const persistReadinessAttestation = (attestation: ReadinessAttestation): void => {
+      insertReadinessAttestation.run(
+        attestation.id,
+        attestation.schemaVersion,
+        attestation.runId,
+        attestation.checkId,
+        attestation.projectId,
+        attestation.outcome,
+        attestation.rationale,
+        attestation.actor.type,
+        attestation.actor.id,
+        attestation.createdAt,
+      );
+    };
+
+    const persistMcpProfileConsent = (revision: McpProfileRevision, consent: McpConsent): void => {
+      insertMcpProfileRevision.run(
+        revision.id,
+        revision.schemaVersion,
+        revision.profileId,
+        revision.projectId,
+        revision.revision,
+        revision.name,
+        revision.executable,
+        JSON.stringify(revision.args),
+        JSON.stringify(revision.declaredTools),
+        revision.canonicalDigest,
+        revision.createdAt,
+      );
+      insertMcpConsent.run(
+        consent.id,
+        consent.schemaVersion,
+        consent.projectId,
+        consent.profileRevisionId,
+        consent.canonicalDigest,
+        consent.ownerId,
+        consent.consentedAt,
+      );
+    };
+
+    const persistMcpCapabilitySnapshot = (snapshot: McpCapabilitySnapshot): void => {
+      insertMcpCapabilitySnapshot.run(
+        snapshot.id,
+        snapshot.schemaVersion,
+        snapshot.projectId,
+        snapshot.profileRevisionId,
+        snapshot.state,
+        snapshot.protocolVersion,
+        JSON.stringify(snapshot.tools),
+        JSON.stringify(snapshot.resources),
+        JSON.stringify(snapshot.prompts),
+        snapshot.observedAt,
+      );
+    };
+
+    const persistMcpGrant = (grant: McpGrant, previousVersion: number | null): void => {
+      if (previousVersion === null) {
+        insertMcpGrant.run(
+          grant.id,
+          grant.schemaVersion,
+          grant.projectId,
+          grant.profileRevisionId,
+          JSON.stringify(grant.tools),
+          grant.enabled ? 1 : 0,
+          grant.version,
+          grant.grantedBy,
+          grant.createdAt,
+          grant.updatedAt,
+          grant.revokedAt,
+        );
+        return;
+      }
+      const updated = updateMcpGrant.run(
+        JSON.stringify(grant.tools),
+        grant.enabled ? 1 : 0,
+        grant.version,
+        grant.grantedBy,
+        grant.updatedAt,
+        grant.revokedAt,
+        grant.id,
+        previousVersion,
+      );
+      if (updated.changes !== 1) {
+        throw new McpDomainError(
+          "GRANT_VERSION_CONFLICT",
+          "The MCP grant changed while the command was being applied",
+        );
+      }
+    };
+
+    const persistMcpProjectVersion = (next: Project, previousVersion: number): void => {
+      const updated = updateProjectForMcp.run(next.version, next.updatedAt, next.id, previousVersion);
+      if (updated.changes !== 1) {
+        throw new McpDomainError(
+          "PROJECT_VERSION_CONFLICT",
+          "The Project changed while MCP settings were applied",
+        );
+      }
+    };
+
+    const persistMcpSessionSnapshots = (snapshots: readonly McpSessionSnapshot[]): void => {
+      snapshots.forEach((snapshot) => {
+        insertMcpSessionSnapshot.run(
+          snapshot.id,
+          snapshot.schemaVersion,
+          snapshot.projectId,
+          snapshot.providerSessionId,
+          snapshot.profileRevisionId,
+          snapshot.profileDigest,
+          snapshot.grantId,
+          snapshot.grantVersion,
+          JSON.stringify(snapshot.tools),
+          snapshot.createdAt,
+        );
+      });
+    };
+
+    const persistMcpToolCall = (call: McpToolCallRecord): void => {
+      insertMcpToolCall.run(
+        call.id,
+        call.schemaVersion,
+        call.projectId,
+        call.providerSessionId,
+        call.sessionSnapshotId,
+        call.profileRevisionId,
+        call.toolName,
+        call.inputDigest,
+        call.status,
+        call.failureCode,
+        call.startedAt,
+        call.finishedAt,
+      );
+    };
+
+    const persistFinishedMcpToolCall = (call: McpToolCallRecord): void => {
+      const updated = updateMcpToolCall.run(call.status, call.failureCode, call.finishedAt, call.id);
+      if (updated.changes !== 1) {
+        throw new McpDomainError("TOOL_CALL_NOT_STARTED", "The MCP tool call is no longer started");
+      }
+    };
+
     const appendEvent = (
       intent: WorkItemEventIntent,
       metadata: {
@@ -2105,6 +2991,160 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       });
     };
 
+    const appendScaffoldEvent = (
+      intent: ScaffoldRequestedIntent | ScaffoldCompletedIntent | ScaffoldFailedIntent,
+      metadata: {
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "PROJECT",
+        metadata.projectId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "PROJECT",
+        aggregateId: metadata.projectId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
+    type ReadinessEventIntent = ProjectReadinessAssessedIntent | ProjectReadinessAttestedIntent;
+
+    const appendReadinessEvent = (
+      intent: ReadinessEventIntent,
+      metadata: {
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "PROJECT",
+        metadata.projectId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "PROJECT",
+        aggregateId: metadata.projectId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
+    const appendProviderSelectionEvent = (
+      intent: ProjectProviderPreferenceChangedIntent,
+      metadata: {
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "PROJECT",
+        metadata.projectId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "PROJECT",
+        aggregateId: metadata.projectId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
+    const appendMcpEvent = (
+      intent: McpProfileConsentedIntent | McpGrantChangedIntent,
+      metadata: {
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "PROJECT",
+        metadata.projectId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "PROJECT",
+        aggregateId: metadata.projectId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
     type WorkflowEventIntent =
       | StartWorkflowDecision["events"][number]
       | MarkDispatchStartedDecision["events"][number]
@@ -2157,7 +3197,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       });
 
     type SessionEventIntent =
-      | { type: "PROVIDER_SESSION_STARTED"; data: { session: ProviderSession; recipe: ContextPackRecipe } }
+      | {
+          type: "PROVIDER_SESSION_STARTED";
+          data: {
+            session: ProviderSession;
+            recipe: ContextPackRecipe;
+            mcpSnapshots: McpSessionSnapshot[];
+          };
+        }
       | { type: "CHECKPOINT_PUBLISHED"; data: { checkpoint: Checkpoint } }
       | { type: "PROVIDER_SESSION_ENDED"; data: { session: ProviderSession } }
       | {
@@ -2731,6 +3778,139 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     };
 
     const executeFresh = (command: StateCommand, occurredAt: string): StateCommandResult => {
+      if (command.type === "REQUEST_PROJECT_SCAFFOLD") {
+        const existingRow = selectProjectByRepositoryPath.get(command.payload.proposal.targetPath);
+        const decision = decideProjectScaffoldRequested(command, {
+          now: occurredAt,
+          newOperationId: createId("projectScaffold"),
+          newProjectId: createId("project"),
+          ...(existingRow === undefined ? {} : { existingProject: projectFromRow(existingRow) }),
+        });
+        database
+          .prepare(
+            `INSERT INTO projects (
+              id, workspace_id, fixture_id, name, repository_path, provider_preference,
+              status, version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            decision.project.id,
+            decision.project.workspaceId,
+            decision.project.fixtureId,
+            decision.project.name,
+            decision.project.repositoryPath,
+            decision.project.providerPreference,
+            decision.project.status,
+            decision.project.version,
+            decision.project.createdAt,
+            decision.project.updatedAt,
+          );
+        insertScaffold(decision.operation);
+        const event = appendScaffoldEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_SCAFFOLD_REQUESTED",
+          replayed: false,
+          operation: decision.operation,
+          event,
+        });
+      }
+
+      if (command.type === "COMPLETE_PROJECT_SCAFFOLD") {
+        const currentOperation = readScaffoldOperation(command.payload.operationId);
+        const currentProject = currentOperation === null ? null : readProject(currentOperation.projectId);
+        const decision = decideProjectScaffoldCompleted(command, {
+          now: occurredAt,
+          ...(currentOperation === null ? {} : { operation: currentOperation }),
+          ...(currentProject === null ? {} : { project: currentProject }),
+        });
+        updateScaffold(decision.operation, command.payload.expectedVersion);
+        const projectUpdate = database
+          .prepare(
+            `UPDATE projects SET status = ?, version = ?, updated_at = ?
+             WHERE id = ? AND version = ? AND status = 'PROVISIONING'`,
+          )
+          .run(
+            decision.project.status,
+            decision.project.version,
+            decision.project.updatedAt,
+            decision.project.id,
+            decision.project.version - 1,
+          );
+        if (projectUpdate.changes !== 1) {
+          throw new ScaffoldDomainError(
+            "PROJECT_STATUS_INVALID",
+            "The provisioning Project changed while the scaffold completed",
+          );
+        }
+        const event = appendScaffoldEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_SCAFFOLD_COMPLETED",
+          replayed: false,
+          operation: decision.operation,
+          event,
+        });
+      }
+
+      if (command.type === "FAIL_PROJECT_SCAFFOLD") {
+        const currentOperation = readScaffoldOperation(command.payload.operationId);
+        const currentProject = currentOperation === null ? null : readProject(currentOperation.projectId);
+        const decision = decideProjectScaffoldFailed(command, {
+          now: occurredAt,
+          ...(currentOperation === null ? {} : { operation: currentOperation }),
+          ...(currentProject === null ? {} : { project: currentProject }),
+        });
+        updateScaffold(decision.operation, command.payload.expectedVersion);
+        const event = appendScaffoldEvent(decision.event, {
+          projectId: decision.operation.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_SCAFFOLD_FAILED",
+          replayed: false,
+          operation: decision.operation,
+          event,
+        });
+      }
+
+      if (command.type === "RETRY_PROJECT_SCAFFOLD") {
+        const currentOperation = readScaffoldOperation(command.payload.operationId);
+        const currentProject = currentOperation === null ? null : readProject(currentOperation.projectId);
+        const decision = decideProjectScaffoldRetry(command, {
+          now: occurredAt,
+          ...(currentOperation === null ? {} : { operation: currentOperation }),
+          ...(currentProject === null ? {} : { project: currentProject }),
+        });
+        updateScaffold(decision.operation, command.payload.expectedVersion);
+        const event = appendScaffoldEvent(decision.event, {
+          projectId: decision.operation.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_SCAFFOLD_RETRIED",
+          replayed: false,
+          operation: decision.operation,
+          event,
+        });
+      }
+
       if (command.type === "REGISTER_PROJECT") {
         // `fixture_id = ?` with a null `fixtureId` is never true -- SQL's three-valued logic -- so a
         // Project registered by path is deduplicated on its id and its repository path alone, which
@@ -2873,6 +4053,213 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           replayed: false,
           project: repointed,
           event,
+        });
+      }
+
+      if (command.type === "SET_PROJECT_PROVIDER_PREFERENCE") {
+        const current = readProject(command.payload.projectId);
+        const decision = decideProjectProviderPreference(command, {
+          now: occurredAt,
+          ...(current === null ? {} : { project: current }),
+        });
+        const update = database
+          .prepare(
+            `UPDATE projects SET provider_preference = ?, version = ?, updated_at = ?
+             WHERE id = ? AND version = ?`,
+          )
+          .run(
+            decision.project.providerPreference,
+            decision.project.version,
+            decision.project.updatedAt,
+            decision.project.id,
+            decision.project.version - 1,
+          );
+        if (update.changes !== 1) {
+          throw new ProviderSelectionDomainError(
+            "PROJECT_VERSION_CONFLICT",
+            "The Project changed while provider settings were applied",
+          );
+        }
+        const selection = projectProviderSelectionSchema.parse(decision.selection);
+        const event = appendProviderSelectionEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_PROVIDER_PREFERENCE_CHANGED",
+          replayed: false,
+          selection,
+          event,
+        });
+      }
+
+      if (command.type === "CONFIRM_MCP_PROFILE") {
+        const current = readProject(command.payload.projectId);
+        const latestRevision =
+          command.payload.candidate.profileId === null
+            ? null
+            : readLatestMcpProfileRevision(command.payload.candidate.profileId);
+        const canonicalDigest = createHash("sha256")
+          .update(canonicalMcpProfileSource(command.payload.candidate))
+          .digest("hex");
+        const decision = decideMcpProfileConfirmation(command, {
+          now: occurredAt,
+          canonicalDigest,
+          newProfileId: createId("mcpProfile"),
+          newRevisionId: createId("mcpProfileRevision"),
+          newConsentId: createId("mcpConsent"),
+          ...(current === null ? {} : { project: current }),
+          ...(latestRevision === null ? {} : { latestRevision }),
+        });
+        persistMcpProjectVersion(decision.project, current?.version ?? 0);
+        persistMcpProfileConsent(decision.revision, decision.consent);
+        const event = appendMcpEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "MCP_PROFILE_CONSENTED",
+          replayed: false,
+          revision: decision.revision,
+          consent: decision.consent,
+          projectVersion: decision.project.version,
+          event,
+        });
+      }
+
+      if (command.type === "RECORD_MCP_CAPABILITY_SNAPSHOT") {
+        const current = readProject(command.payload.projectId);
+        const revision = readMcpProfileRevision(command.payload.profileRevisionId);
+        const consent = readMcpConsent(command.payload.profileRevisionId);
+        const snapshot = decideMcpCapabilitySnapshot(command, {
+          now: occurredAt,
+          newSnapshotId: createId("mcpCapabilitySnapshot"),
+          ...(current === null ? {} : { project: current }),
+          ...(revision === null ? {} : { revision }),
+          ...(consent === null ? {} : { consent }),
+        });
+        persistMcpCapabilitySnapshot(snapshot);
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "MCP_CAPABILITY_RECORDED",
+          replayed: false,
+          snapshot,
+        });
+      }
+
+      if (command.type === "SET_MCP_PROFILE_GRANT") {
+        const current = readProject(command.payload.projectId);
+        const revision = readMcpProfileRevision(command.payload.profileRevisionId);
+        const consent = readMcpConsent(command.payload.profileRevisionId);
+        const capability = readLatestMcpCapability(command.payload.profileRevisionId);
+        const currentGrant = readMcpGrant(command.payload.profileRevisionId);
+        const decision = decideMcpProfileGrant(command, {
+          now: occurredAt,
+          newGrantId: createId("mcpGrant"),
+          ...(current === null ? {} : { project: current }),
+          ...(revision === null ? {} : { revision }),
+          ...(consent === null ? {} : { consent }),
+          ...(capability === null ? {} : { capability }),
+          ...(currentGrant === null ? {} : { currentGrant }),
+        });
+        persistMcpProjectVersion(decision.project, current?.version ?? 0);
+        persistMcpGrant(decision.grant, currentGrant?.version ?? null);
+        const event = appendMcpEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "MCP_GRANT_CHANGED",
+          replayed: false,
+          grant: decision.grant,
+          projectVersion: decision.project.version,
+          event,
+        });
+      }
+
+      if (command.type === "REVOKE_MCP_PROFILE_GRANT") {
+        const current = readProject(command.payload.projectId);
+        const revision = readMcpProfileRevision(command.payload.profileRevisionId);
+        const consent = readMcpConsent(command.payload.profileRevisionId);
+        const currentGrant = readMcpGrant(command.payload.profileRevisionId);
+        const decision = decideMcpProfileGrantRevocation(command, {
+          now: occurredAt,
+          ...(current === null ? {} : { project: current }),
+          ...(revision === null ? {} : { revision }),
+          ...(consent === null ? {} : { consent }),
+          ...(currentGrant === null ? {} : { currentGrant }),
+        });
+        persistMcpProjectVersion(decision.project, current?.version ?? 0);
+        persistMcpGrant(decision.grant, currentGrant?.version ?? null);
+        const event = appendMcpEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "MCP_GRANT_CHANGED",
+          replayed: false,
+          grant: decision.grant,
+          projectVersion: decision.project.version,
+          event,
+        });
+      }
+
+      if (command.type === "START_MCP_TOOL_CALL") {
+        if (command.actor.type !== "SYSTEM") {
+          throw new McpDomainError("SYSTEM_REQUIRED", "Only the MCP gateway can start a tool call");
+        }
+        const snapshot = readMcpSessionSnapshot(command.payload.sessionSnapshotId);
+        if (!snapshot) {
+          throw new McpDomainError("SESSION_SNAPSHOT_MISMATCH", "The MCP session snapshot does not exist");
+        }
+        const sessionValue = selectProviderSessionById.get(snapshot.providerSessionId);
+        const session = sessionValue === undefined ? null : providerSessionFromRow(sessionValue);
+        const currentGrant = readMcpGrant(snapshot.profileRevisionId);
+        const call = decideMcpToolCallStart({
+          now: occurredAt,
+          newCallId: createId("mcpToolCall"),
+          inputDigest: command.payload.inputDigest,
+          toolName: command.payload.toolName,
+          snapshot,
+          sessionRunning: session?.status === "RUNNING",
+          ...(currentGrant === null ? {} : { currentGrant }),
+        });
+        persistMcpToolCall(call);
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "MCP_TOOL_CALL_CHANGED",
+          replayed: false,
+          call,
+        });
+      }
+
+      if (command.type === "FINISH_MCP_TOOL_CALL") {
+        if (command.actor.type !== "SYSTEM") {
+          throw new McpDomainError("SYSTEM_REQUIRED", "Only the MCP gateway can finish a tool call");
+        }
+        const current = readMcpToolCall(command.payload.callId);
+        if (!current) {
+          throw new McpDomainError("TOOL_CALL_NOT_STARTED", "The MCP tool call does not exist");
+        }
+        const call = decideMcpToolCallFinished(current, command.payload.outcome, occurredAt);
+        persistFinishedMcpToolCall(call);
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "MCP_TOOL_CALL_CHANGED",
+          replayed: false,
+          call,
         });
       }
 
@@ -3040,6 +4427,74 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           constitution: decision.constitution,
           publication: decision.publication,
           event,
+        });
+      }
+
+      if (command.type === "RECORD_PROJECT_READINESS_ASSESSMENT") {
+        const project = readProject(command.payload.projectId);
+        const findingCount = command.payload.checks.reduce(
+          (count, readinessCheck) => count + readinessCheck.findings.length,
+          0,
+        );
+        const decision = decideProjectReadinessAssessment(command, {
+          now: occurredAt,
+          newRunId: createId("projectReadinessRun"),
+          newCheckIds: Array.from({ length: 8 }, () => createId("readinessCheck")),
+          newFindingIds: Array.from({ length: findingCount }, () => createId("securityFinding")),
+          ...(project === null ? {} : { project }),
+        });
+        insertReadinessRun(decision.run);
+        insertReadinessChecks(decision.checks);
+        insertReadinessFindings(decision.findings);
+        appendReadinessEvent(decision.event, {
+          projectId: decision.run.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_READINESS_ASSESSED",
+          replayed: false,
+          run: decision.run,
+          checks: decision.checks,
+          findings: decision.findings,
+        });
+      }
+
+      if (command.type === "ATTEST_PROJECT_READINESS_CHECK") {
+        const currentRun = readProjectReadinessRun(command.payload.runId);
+        const latestRun = readLatestProjectReadinessRun(command.payload.projectId);
+        const currentCheck = readReadinessCheck(command.payload.checkId);
+        const checks = currentRun === null ? [] : readReadinessChecks(currentRun.id);
+        const decision = decideProjectReadinessAttestation(command, {
+          now: occurredAt,
+          newAttestationId: createId("readinessAttestation"),
+          ...(currentRun === null ? {} : { run: currentRun }),
+          ...(latestRun === null ? {} : { latestRunId: latestRun.id }),
+          ...(currentCheck === null ? {} : { check: currentCheck }),
+          checks,
+        });
+        updateReadinessProjection(
+          decision.run,
+          currentRun?.version ?? 0,
+          decision.check,
+          currentCheck?.version ?? 0,
+        );
+        persistReadinessAttestation(decision.attestation);
+        appendReadinessEvent(decision.event, {
+          projectId: decision.run.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_READINESS_ATTESTED",
+          replayed: false,
+          run: decision.run,
+          check: decision.check,
+          attestation: decision.attestation,
         });
       }
 
@@ -3422,6 +4877,17 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
       if (command.type === "RECONCILE_WORKFLOWS") {
         const interruptedSessions: ProviderSession[] = [];
+        // A STARTED record means the request may already have crossed the stdio boundary. Recovery
+        // records uncertainty before dispatch resumes and never retries it automatically.
+        for (const callRow of selectStartedMcpToolCalls.all()) {
+          const current = mcpToolCallFromRow(callRow);
+          const uncertain = decideMcpToolCallFinished(
+            current,
+            { status: "UNKNOWN_OUTCOME", failureCode: "CONNECTION_LOST" },
+            occurredAt,
+          );
+          persistFinishedMcpToolCall(uncertain);
+        }
         const orphanedDispatches = database
           .prepare(
             `SELECT workflow_dispatches.* FROM workflow_dispatches
@@ -3772,8 +5238,27 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             "The StageAttempt disappeared after its ProviderSession was inserted",
           );
         }
+        const enabledGrants = selectEnabledLatestMcpGrantsForProject
+          .all(stageAttempt.projectId)
+          .map(mcpGrantFromRow);
+        const revisions = enabledGrants.map((grant) => {
+          const revision = readMcpProfileRevision(grant.profileRevisionId);
+          if (!revision) {
+            throw new StateStoreError("PERSISTENCE_FAILURE", "An enabled MCP grant has no profile revision");
+          }
+          return revision;
+        });
+        const mcpSnapshots = decideMcpSessionSnapshots({
+          now: occurredAt,
+          projectId: stageAttempt.projectId,
+          providerSessionId: session.id,
+          revisions,
+          grants: enabledGrants,
+          newSnapshotIds: enabledGrants.map(() => createId("mcpSessionSnapshot")),
+        });
+        persistMcpSessionSnapshots(mcpSnapshots);
         const event = appendSessionEvent(
-          { type: "PROVIDER_SESSION_STARTED", data: { session, recipe } },
+          { type: "PROVIDER_SESSION_STARTED", data: { session, recipe, mcpSnapshots } },
           {
             workItemId: stageAttempt.workItemId,
             projectId: stageAttempt.projectId,
@@ -3789,6 +5274,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           workItemId: stageAttempt.workItemId,
           session,
           recipe,
+          mcpSnapshots,
           events: [event],
         });
       }
@@ -4552,6 +6038,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (transactionStarted) database.exec("ROLLBACK");
         if (
           error instanceof ConstitutionDomainError ||
+          error instanceof McpDomainError ||
+          error instanceof ReadinessDomainError ||
+          error instanceof ProviderSelectionDomainError ||
+          error instanceof ScaffoldDomainError ||
           error instanceof WorkItemDomainError ||
           error instanceof WorkflowDomainError ||
           error instanceof StateStoreError
@@ -4572,12 +6062,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           return {
             type: "PROJECTS",
             projects: database
-              .prepare("SELECT * FROM projects ORDER BY created_at, id")
+              .prepare("SELECT * FROM projects WHERE status <> 'PROVISIONING' ORDER BY created_at, id")
               .all()
               .map(projectFromRow),
           };
         case "GET_PROJECT":
           return { type: "PROJECT", project: readProject(queryValue.projectId) };
+        case "GET_PROJECT_BY_REPOSITORY_PATH": {
+          const row = selectProjectByRepositoryPath.get(queryValue.repositoryPath);
+          return { type: "PROJECT", project: row === undefined ? null : projectFromRow(row) };
+        }
         case "GET_PROJECT_CONSTITUTION_SNAPSHOT": {
           if (!readProject(queryValue.projectId)) {
             throw new ConstitutionDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
@@ -4595,6 +6089,41 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             }),
           };
         }
+        case "GET_PROJECT_READINESS_SNAPSHOT": {
+          if (!readProject(queryValue.projectId)) {
+            throw new ReadinessDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+          }
+          const run = readLatestProjectReadinessRun(queryValue.projectId);
+          return {
+            type: "PROJECT_READINESS_SNAPSHOT",
+            snapshot: projectReadinessSnapshotSchema.parse({
+              schemaVersion: 1,
+              run,
+              checks: run === null ? [] : readReadinessChecks(run.id),
+              findings:
+                run === null ? [] : selectReadinessFindingsForRun.all(run.id).map(securityFindingFromRow),
+              attestations:
+                run === null
+                  ? []
+                  : selectReadinessAttestationsForRun.all(run.id).map(readinessAttestationFromRow),
+            }),
+          };
+        }
+        case "GET_PROJECT_MCP_PROFILES": {
+          const project = readProject(queryValue.projectId);
+          if (!project) throw new McpDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+          return { type: "PROJECT_MCP_PROFILES", project, profiles: readProjectMcpProfiles(project.id) };
+        }
+        case "LIST_PROVIDER_SESSION_MCP_SNAPSHOTS":
+          return {
+            type: "MCP_SESSION_SNAPSHOTS",
+            snapshots: readMcpSessionSnapshots(queryValue.providerSessionId),
+          };
+        case "LIST_MCP_TOOL_CALLS":
+          return {
+            type: "MCP_TOOL_CALLS",
+            calls: selectMcpToolCallsForSession.all(queryValue.providerSessionId).map(mcpToolCallFromRow),
+          };
         case "LIST_PENDING_CONSTITUTION_PUBLICATIONS":
           return {
             type: "CONSTITUTION_PUBLICATIONS",
@@ -4610,6 +6139,21 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               }
               return { proposal, constitution, publication };
             }),
+          };
+        case "GET_SCAFFOLD_OPERATION":
+          return {
+            type: "SCAFFOLD_OPERATION",
+            operation: readScaffoldOperation(queryValue.operationId),
+          };
+        case "LIST_PENDING_SCAFFOLD_OPERATIONS":
+          return {
+            type: "SCAFFOLD_OPERATIONS",
+            operations: selectPendingScaffoldOperations.all().map(scaffoldOperationFromRow),
+          };
+        case "LIST_OPEN_SCAFFOLD_OPERATIONS":
+          return {
+            type: "SCAFFOLD_OPERATIONS",
+            operations: selectOpenScaffoldOperations.all().map(scaffoldOperationFromRow),
           };
         case "GET_WORK_ITEM":
           return { type: "WORK_ITEM", workItem: readWorkItem(queryValue.workItemId) };
@@ -4760,6 +6304,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         return runQuery(queryValue);
       } catch (error: unknown) {
         if (
+          error instanceof ReadinessDomainError ||
           error instanceof WorkItemDomainError ||
           error instanceof WorkflowDomainError ||
           error instanceof StateStoreError

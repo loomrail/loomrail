@@ -48,35 +48,28 @@ a graceful shutdown and wait for the command to exit.
 
 ## 2. Know which provider is running
 
-The launcher names the provider before it opens the Workbench. The default is safe for a first pass:
+Provider choice belongs to a Project. Open **Settings → AI provider** after selecting the project:
 
-| Value           | What happens                                                                                         |
-| --------------- | ---------------------------------------------------------------------------------------------------- |
-| unset or `MOCK` | Deterministic test double. No external agent runs; all six stages are available.                     |
-| `CODEX`         | The real `codex` CLI runs in the task's Git worktree for all six stages.                             |
-| `CLAUDE_CODE`   | The real `claude` CLI serves Discovery, Plan, and Review only. Other stages stop as a Human Request. |
+| Choice      | What happens                                                                                                    |
+| ----------- | --------------------------------------------------------------------------------------------------------------- |
+| Auto        | Uses an installed, authenticated live CLI. If none is ready, new sessions use the clearly marked Mock fallback. |
+| Mock        | Deterministic test double. No external agent runs; all six stages are available.                                |
+| Codex       | The real `codex` CLI runs in the task's Git worktree for all six stages.                                        |
+| Claude Code | The real `claude` CLI serves Discovery, Plan, and Review. Unsupported stages stop as a Human Request.           |
 
-Values are case-sensitive. An unknown value falls back to `MOCK`; the launcher prints a warning so a successful mock
-run cannot be mistaken for live work.
+Install and authenticate Codex or Claude Code with that provider's own CLI, then start Loomrail normally. Choose
+**Check again** after installing or signing in. Loomrail checks only whether the executable exists and whether the
+provider's status command succeeds; it does not capture credentials or status output. When both live CLIs are ready,
+Auto prefers the one with broader stage coverage. A change applies to new provider sessions; a running session keeps
+the adapter it started with.
 
-For Codex on macOS or another POSIX shell:
+An explicit live choice that is not installed or authenticated is refused visibly rather than silently replaced by
+Mock. Start with **Mock** even if you plan to use Codex: it confirms installation, browser authentication,
+persistence, Human Requests, budgets, and acceptance without spending provider quota.
 
-```bash
-LOOMRAIL_PROVIDER=CODEX npx loomrail
-```
-
-For Codex in Windows PowerShell:
-
-```powershell
-$env:LOOMRAIL_PROVIDER = "CODEX"
-npx loomrail
-```
-
-Replace `CODEX` with `CLAUDE_CODE` to use Claude Code. Install and authenticate that provider's CLI yourself before
-starting Loomrail. Loomrail does not collect, store, or add provider credentials to the child process.
-
-Start with `MOCK` even if you plan to use Codex. It confirms that installation, browser authentication, persistence,
-Human Requests, budgets, and acceptance all work without spending provider quota.
+`LOOMRAIL_PROVIDER=MOCK|CODEX|CLAUDE_CODE` remains an optional, case-sensitive process-wide override for automation
+or troubleshooting. It locks the Project selector until restart. An unknown value is reported and keeps the process
+in Mock mode. Ordinary use does not require this variable.
 
 ## 3. Complete the first mock delivery
 
@@ -126,7 +119,22 @@ those records and choose one owner action:
 Accepted tasks leave the Active view. Use **All issues** to see them again. Loomrail records the decision, but still
 does not commit or publish any repository content.
 
-## 4. Register your own repository
+## 4. Create or register a repository
+
+### Create a new project
+
+Open **Settings → Projects → Create a new project** and enter an absolute path whose parent exists and final directory
+does not. Choose **Review exact files** before approving anything. The review binds the canonical target, built-in
+`typescript-node` recipe version, every file digest, and the full proposal digest. **Create this project** then writes
+only those files with create-new semantics, adds `.loomrail/scaffold.json`, initializes Git without user templates or
+hooks, verifies the result, and selects the Project.
+
+Loomrail does not download a template, install dependencies, execute generated code, create a commit, add a remote,
+or push. Open the resulting directory in a terminal and run `pnpm install` and `pnpm test` yourself. A stopped
+publication remains a durable operation: after reload or restart, Settings shows it again. Resolve the local conflict
+and choose **Retry safely**; Loomrail does not overwrite conflicting files or delete the target automatically.
+
+### Register an existing repository
 
 Open **Settings → Projects → Register a local repository** and enter an absolute path to the repository's top-level
 directory. A subdirectory, relative path, non-Git directory, or repository without a first commit is refused rather
@@ -165,8 +173,10 @@ the earlier decision in the audit history.
 
 ## 5. Run and inspect live work
 
-Restart Loomrail with `LOOMRAIL_PROVIDER=CODEX`, confirm that the launcher says `Provider: CODEX`, and create a task in
-the registered project. The brief and acceptance criteria are the durable instructions each session receives.
+Install and sign into the provider CLI, open **Settings → AI provider**, choose **Auto** or the provider explicitly,
+and use **Check again**. Confirm that the panel names the effective live provider and shows **Ready**, then create a
+task in the registered project. No Loomrail restart or extra launch command is required. The brief and acceptance
+criteria are the durable instructions each session receives.
 
 For a bounded repository and exact brief you can safely discard afterwards, use the
 [reproducible Codex route](../examples/full-route/README.md).
@@ -189,7 +199,22 @@ Claude Code currently cannot complete the same live route: it serves Discovery, 
 or QA. When the workflow reaches an unsupported stage, Loomrail refuses dispatch through a blocking Human Request
 instead of silently switching providers.
 
-## 6. Restart and recovery
+## 6. Add Context7 or another MCP connection
+
+Open **Settings → MCP connections**. Context7 is bundled with Loomrail, so choose **Review bundled Context7**; do not
+run an installation command. Review the absolute Node executable and package entrypoint, check the exact-command
+confirmation, then approve it. This consent permits only a bounded capability probe. Choose **Probe capabilities**,
+verify `resolve-library-id` and `query-docs`, select the tools, attest that they are read-only, and grant them. New
+provider sessions receive the connection through Loomrail's local proxy; an already running session is unchanged.
+
+Context7 calls an external documentation service. Do not put secrets, personal data, proprietary source code, or
+private business context in its queries. Loomrail ships no Context7 API key and uses the anonymous tier.
+
+The manual form below the preset is for an already installed local stdio MCP server. Enter one absolute executable,
+one argv element per line, and the exact read-only tool names. Loomrail rejects shell/package launchers, URLs, env and
+secret fields. It never downloads a package from this form. Consent, probe, and tool Grant remain separate steps.
+
+## 7. Restart and recovery
 
 Every launch creates a new browser bootstrap; an old authenticated tab may show that its local session ended. Start
 Loomrail again and use the new tab or printed link.
@@ -202,7 +227,7 @@ a **Recovery report** and **Resume** action for owner intervention.
 The task's worktree is checked again at startup. If its directory vanished, Loomrail marks the workspace gone and does
 not silently cut a replacement: a new tree could overwrite the meaning of the recorded branch and baseline.
 
-## 7. Preserve or restore local state
+## 8. Preserve or restore local state
 
 The default data directory is:
 
@@ -237,18 +262,27 @@ For the least surprising restore, stop Loomrail, restore the whole data director
 repositories to their original paths, and start Loomrail normally. Linked worktrees store connections in both the data
 directory and the source repository's Git metadata; moving only one side can make the workspace appear orphaned.
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 **The page says the local session ended.** The daemon stopped or the one-time session is no longer valid. Restart
 Loomrail and use the new authenticated tab. Refreshing an old tab cannot mint a new session.
 
-**The launcher says the provider CLI was not found.** Install that CLI, authenticate it using its own instructions, and
-restart Loomrail. Dispatch is refused until the selected adapter can start; it does not fall back to another provider.
+**The selected provider CLI was not found.** Install and authenticate that CLI using its own instructions, then choose
+**Settings → AI provider → Check again**. No extra Loomrail launch command is required. An explicit unavailable
+provider is refused rather than silently replaced by Mock; Auto may use the clearly labelled Mock fallback.
 
 **The launcher fell back to mock.** Check the exact case-sensitive value: `MOCK`, `CODEX`, or `CLAUDE_CODE`.
 
+**Context7 reaches an anonymous limit or reports authentication.** The bundled preset deliberately carries no secret.
+Disable or revoke it if the anonymous service is unsuitable; API-key storage is not supported in this release. Do not
+paste a key into the MCP arguments.
+
 **A project is unusable.** Restore the repository at its registered absolute path. For a bundled demo, Settings can
 offer **Repair demo repository**. Loomrail does not silently point an owner-registered Project somewhere else.
+
+**New-project creation stopped safely.** Open Settings to recover the same operation, inspect its closed error code,
+and resolve the local path, marker, file, or Git conflict. Choose **Retry safely** only afterward. Do not delete a
+marker-bound directory unless you have inspected and intentionally backed up any files in it.
 
 **A worktree is gone or unreadable.** Use the path, branch, and refusal shown in the task. Loomrail will not claim that
 unmeasured work is intact, and it will not create a replacement worktree for the same task.
@@ -261,7 +295,7 @@ instead of masquerading as an empty list.
 
 - The npm package is pre-alpha and there is no desktop installer.
 - The daemon is local-only; there is no remote or multi-user mode.
-- One provider is selected for the daemon's whole lifetime.
+- Provider preference is saved per Project; an optional process-wide environment override locks it until restart.
 - Claude Code has no validated write path for Implementation or QA.
 - Loomrail does not commit, squash, push, merge, or clean up the owner's result.
 - There is no supported online state export, retention UI, or portable workspace restore.

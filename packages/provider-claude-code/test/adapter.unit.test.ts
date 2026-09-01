@@ -9,7 +9,12 @@ import type {
   ProviderOutcome,
   ProviderUsage,
 } from "@loomrail/contracts";
-import type { ProviderAdapter, ProviderInvocation, ProviderSessionListener } from "@loomrail/provider-core";
+import type {
+  ProviderAdapter,
+  ProviderInvocation,
+  ProviderMcpConnection,
+  ProviderSessionListener,
+} from "@loomrail/provider-core";
 import { contextWindowUsageSchema } from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -79,10 +84,6 @@ const FORBIDDEN_FLAG_VALUES: readonly (readonly [string, string])[] = [
   ["--permission-mode", "bypassPermissions"],
 ];
 
-// Spec D6: no MCP connection before milestone C1. Nothing enforced that -- it was a property of the
-// argv nobody asserted. Named separately from the bypass list because it is a different rule.
-const FORBIDDEN_MCP_FLAGS: readonly string[] = ["--mcp-config", "--strict-mcp-config"];
-
 // Whether one argv token carries `flag`, in every spelling a clap-based CLI (both of these are)
 // accepts for it: the bare token, the long attached form `--flag=value`, and -- for a one-letter
 // short flag -- the attached form `-cvalue` with no separator at all. Mirrors provider-codex's
@@ -90,10 +91,8 @@ const FORBIDDEN_MCP_FLAGS: readonly string[] = ["--mcp-config", "--strict-mcp-co
 // only `args.indexOf(flag)` and `not.toContain(flag)` let `--mcp-config=<path>` and
 // `--add-dir=<path>` through as single tokens, because an exact element match never sees them.
 //
-// There is no allow-list hole to close on this side -- this adapter builds no config override and
-// no MCP flag on any path -- so this is a negative assertion tightened, not a defect fixed. It is
-// tightened anyway because the value of these guards is entirely in what they would catch in a
-// future argv, and one that a single `=` slips past catches nothing.
+// There is no allow-list hole to close on this side -- MCP configuration is generated as a file,
+// while arbitrary provider config flags remain forbidden here.
 //
 // Still read off the argv ARRAY, never `args.join(" ")`: the context pack is a positional
 // argument, so a joined-line check would pass or fail on prompt text containing a flag.
@@ -110,7 +109,7 @@ const attachedValue = (arg: string, flag: string): string =>
   arg.startsWith(`${flag}=`) ? arg.slice(flag.length + 1) : arg.slice(flag.length);
 
 const expectNoForbiddenArguments = (args: readonly string[]): void => {
-  for (const flag of [...FORBIDDEN_PERMISSION_BYPASS_FLAGS, ...FORBIDDEN_MCP_FLAGS]) {
+  for (const flag of FORBIDDEN_PERMISSION_BYPASS_FLAGS) {
     expect(args.filter((arg) => flagSpelling(arg, flag) !== null)).toEqual([]);
   }
   for (const [flag, value] of FORBIDDEN_FLAG_VALUES) {
@@ -131,11 +130,23 @@ const expectNoForbiddenArguments = (args: readonly string[]): void => {
 // this adapter depends on stdin being closed the way provider-codex's does), and a later task that
 // needs the same thing reuses this module rather than copying it again.
 
-type Spawned = { args: string[]; cwd: string; readonly recordPath: string };
+type Spawned = {
+  args: string[];
+  cwd: string;
+  mcpConfig: unknown;
+  mcpConfigMode: number | null;
+  readonly recordPath: string;
+};
 
 const recordSpawn = (): Spawned => {
   const dir = mkdtempSync(join(tmpdir(), "loomrail-claude-test-"));
-  return { args: [], cwd: "", recordPath: join(dir, "spawn-record.json") };
+  return {
+    args: [],
+    cwd: "",
+    mcpConfig: null,
+    mcpConfigMode: null,
+    recordPath: join(dir, "spawn-record.json"),
+  };
 };
 
 const withEnv = async <T>(name: string, value: string, run: () => Promise<T>): Promise<T> => {
@@ -153,6 +164,7 @@ const fixtureInvocation = (
   sessionId = "session-1",
   stage: ProviderInvocation["session"]["stage"] = "DISCOVERY",
   humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
+  mcpConnections: readonly ProviderMcpConnection[] = [],
 ): ProviderInvocation => ({
   dispatch: {
     schemaVersion: 1,
@@ -179,6 +191,7 @@ const fixtureInvocation = (
     contentHash: `sha256:${"0".repeat(64)}`,
   },
   humanRequests,
+  mcpConnections,
 });
 
 const noopListener = (): ProviderSessionListener => ({
@@ -193,13 +206,21 @@ const startWith = async (
   spawned: Spawned,
   adapter: ProviderAdapter,
   humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
+  mcpConnections: readonly ProviderMcpConnection[] = [],
 ): Promise<ProviderOutcome> => {
   const outcome = await withEnv("FAKE_CLAUDE_RECORD_PATH", spawned.recordPath, () =>
-    adapter.start(fixtureInvocation("session-1", "DISCOVERY", humanRequests), noopListener()),
+    adapter.start(fixtureInvocation("session-1", "DISCOVERY", humanRequests, mcpConnections), noopListener()),
   );
-  const recorded = JSON.parse(readFileSync(spawned.recordPath, "utf8")) as { args: string[]; cwd: string };
+  const recorded = JSON.parse(readFileSync(spawned.recordPath, "utf8")) as {
+    args: string[];
+    cwd: string;
+    mcpConfig: unknown;
+    mcpConfigMode: number | null;
+  };
   spawned.args = recorded.args;
   spawned.cwd = recorded.cwd;
+  spawned.mcpConfig = recorded.mcpConfig;
+  spawned.mcpConfigMode = recorded.mcpConfigMode;
   return outcome;
 };
 
@@ -307,17 +328,36 @@ describe("createClaudeCodeProvider", () => {
     expectNoForbiddenArguments(spawned.args);
   });
 
-  // Spec D6 forbids MCP before milestone C1, and nothing enforced it -- an adapter that connected a
-  // server would have broken the rule silently. `--mcp-config` also reaches straight past the empty
-  // temporary directory that is this milestone's whole containment story.
-  it("never connects an MCP server (D6)", async () => {
+  it("always replaces ambient MCP config with an empty strict generated config", async () => {
     const spawned = recordSpawn();
     await startWith(spawned, createFakeClaudeProvider());
-    // Matched by spelling rather than by exact token, for the same reason the bypass guard is:
-    // `--mcp-config=<path>` is one argv token, and `not.toContain` would never see it.
-    for (const forbidden of FORBIDDEN_MCP_FLAGS) {
-      expect(spawned.args.filter((arg) => flagSpelling(arg, forbidden) !== null)).toEqual([]);
-    }
+    expect(spawned.args).toContain("--mcp-config");
+    expect(spawned.args).toContain("--strict-mcp-config");
+    expect(spawned.mcpConfig).toEqual({ mcpServers: {} });
+    if (process.platform !== "win32") expect(spawned.mcpConfigMode).toBe(0o600);
+  });
+
+  it("writes only the Loomrail proxy connector into the strict MCP config", async () => {
+    const spawned = recordSpawn();
+    const connector: ProviderMcpConnection = {
+      id: "loomrail_profile_1",
+      proxyCommand: "/opt/loomrail/bin/mcp-proxy",
+      proxyArgs: ["connect", "session-token"],
+      enabledTools: ["fetch", "search"],
+    };
+    await startWith(spawned, createFakeClaudeProvider(), "ALLOWED", [connector]);
+
+    expect(spawned.mcpConfig).toEqual({
+      mcpServers: {
+        loomrail_profile_1: {
+          type: "stdio",
+          command: "/opt/loomrail/bin/mcp-proxy",
+          args: ["connect", "session-token"],
+        },
+      },
+    });
+    expect(JSON.stringify(spawned.mcpConfig)).not.toContain("real-server.mjs");
+    expectNoForbiddenArguments(spawned.args);
   });
 
   // `expectNoForbiddenArguments` is now logic with a failure mode of its own, so it is tested
@@ -345,7 +385,6 @@ describe("createClaudeCodeProvider", () => {
     }).not.toThrow();
 
     for (const smuggled of [
-      "--mcp-config=/tmp/servers.json",
       "--add-dir=/tmp/somewhere-else",
       "--settings=/tmp/settings.json",
       '--config=sandbox_permissions=["disk-full-read-access"]',

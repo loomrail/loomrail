@@ -85,6 +85,29 @@ export type ProviderSessionRef = {
   attempt: number;
 };
 
+const absolutePathPattern = /^(?:[/\\]|[A-Za-z]:[/\\])/;
+
+/**
+ * A provider can only see the session-scoped Loomrail connector, never the real MCP server launch
+ * recipe. The gateway owns the token in `args`, applies the grant again and closes the connector
+ * with the ProviderSession.
+ */
+export const providerMcpConnectionSchema = z
+  .object({
+    id: z.string().regex(/^[a-z0-9_]{1,64}$/),
+    proxyCommand: z.string().min(1).max(4_096).regex(absolutePathPattern),
+    proxyArgs: z.array(z.string().min(1).max(2_048)).max(8),
+    enabledTools: z.array(z.string().min(1).max(128)).min(1).max(64),
+  })
+  .strict()
+  .superRefine((connection, context) => {
+    if (new Set(connection.enabledTools).size !== connection.enabledTools.length) {
+      context.addIssue({ code: "custom", message: "MCP connector tool names must be unique" });
+    }
+  });
+
+export type ProviderMcpConnection = z.infer<typeof providerMcpConnectionSchema>;
+
 // Decisions and the brief are now sections of `contextPack`, not separate fields: the adapter's
 // input surface shrinks to "the pack plus identifiers for correlation". An adapter that cannot
 // see the raw state cannot assemble context its own way, and therefore cannot diverge from what
@@ -102,6 +125,8 @@ export type ProviderInvocation = {
    * owner gate has been used.
    */
   humanRequests: ProviderStageResultPolicy["humanRequests"];
+  /** Required closed set. An empty array means this session has no MCP connections. */
+  mcpConnections: readonly ProviderMcpConnection[];
   // The Git worktree this session may write in (spec E1 D8), or absent when there is none.
   //
   // Absent means the read-only path every session took before this milestone: the adapter runs its
