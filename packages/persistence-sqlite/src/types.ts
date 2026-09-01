@@ -1,5 +1,6 @@
 import type { ContextSources } from "@loomrail/context-assembly";
 import type {
+  AttentionInboxResponse,
   Checkpoint,
   ConstitutionProposal,
   ConstitutionPublication,
@@ -96,6 +97,7 @@ export type StateQuery =
   | { type: "LIST_OPEN_SCAFFOLD_OPERATIONS" }
   | { type: "GET_WORK_ITEM"; workItemId: string }
   | { type: "GET_WORKFLOW_SNAPSHOT"; workItemId: string }
+  | { type: "GET_ATTENTION_INBOX" }
   | {
       type: "LIST_HUMAN_REQUESTS";
       projectId?: string;
@@ -157,6 +159,7 @@ export type StateQueryResult =
     }
   | { type: "WORK_ITEM"; workItem: WorkItem | null }
   | { type: "WORKFLOW_SNAPSHOT"; snapshot: WorkflowSnapshot }
+  | { type: "ATTENTION_INBOX"; inbox: AttentionInboxResponse }
   | { type: "HUMAN_REQUESTS"; humanRequests: HumanRequest[] }
   | { type: "WORKFLOW_DISPATCHES"; dispatches: WorkflowDispatch[] }
   | { type: "WORK_ITEMS"; workItems: WorkItem[] }

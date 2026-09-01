@@ -53,7 +53,7 @@ Loomrail. Спека — [`15-e1-5-change-visibility-spec.ru.md`](15-e1-5-change
 | A1.5 | Фоновое исполнение и канал доставки событий (SSE)                                  | A1                |
 | A2   | Живые адаптеры Codex и Claude Code (сделано, до E1 — только DISCOVERY/PLAN/REVIEW) | provider contract |
 | A3   | Параллельные агенты и squads (§7.2)                                                | A2                |
-| A4   | Attention Inbox                                                                    | —                 |
+| A4   | Global bounded Attention Inbox (реализовано)                                       | —                 |
 
 ## 4. Трек B — guardrails для второй persona
 
@@ -155,7 +155,8 @@ ProviderSession. Необслуживаемая стадия по-прежнем
 присутствие понадобится раньше, трек можно взять и до E1.5, но тогда честный объём сжимается до «pre-alpha на
 mock-маршруте», а D2 всё равно ждёт E1.5.
 
-**A4 не имеет зависимостей и может быть взят между любыми пунктами**, если понадобится разгрузить внимание раньше.
+**A4 не имел зависимостей и реализован после B4** как глобальная bounded-проекция. Контракт —
+[`41-a4-attention-inbox-spec.ru.md`](41-a4-attention-inbox-spec.ru.md).
 
 ## 8. Что этот документ не решает
 
@@ -166,8 +167,9 @@ mock-маршруте», а D2 всё равно ждёт E1.5.
   подходе к D3;
 - где живут примеры из D2 — в этом репозитории рядом с fixture-проектами или отдельным репозиторием — там же.
 
-Текущий checkpoint: C1, C3, C2 и B4 реализованы. Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK
-и marker-bound scaffolding проверены в clean npm tarball на macOS и Windows; полный `verify`, production audit и
+Текущий checkpoint: C1, C3, C2, B4 и A4 реализованы. Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
+marker-bound scaffolding и global Attention Inbox проверены локальными gates; B4 release candidate был проверен в
+clean npm tarball на macOS и Windows, полный `verify`, production audit и
 браузерный smoke также прошли на обеих платформах в
 [GitHub Actions run 33502010465](https://github.com/loomrail/loomrail/actions/runs/33502010465). Контракты находятся в
 [`33-c1-mcp-connections-spec.ru.md`](33-c1-mcp-connections-spec.ru.md),

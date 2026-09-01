@@ -475,6 +475,18 @@ Loomrail не скачивает template, не запускает package manag
 пользовательским: recipe не добавляет runtime dependency на Loomrail и не требует собственного формата для сборки
 или запуска. Полный контракт — [`docs/plans/39-b4-new-project-scaffolding-spec.ru.md`](../plans/39-b4-new-project-scaffolding-spec.ru.md).
 
+### PD-014 — Attention Inbox является глобальной bounded-проекцией HumanRequest
+
+Attention Inbox не хранит собственную копию workflow state. Он вычисляется из durable HumanRequest и связанных
+Project, WorkItem, StageAttempt и AcceptancePackage через один deterministic domain module. Глобальный read ограничен
+200 открытыми items и сообщает `hasMore`; текст запроса не используется для скрытой классификации.
+
+Обычный item использует существующий optimistic-versioned `Answer & resume`. Final acceptance остаётся отдельным
+owner gate и из Inbox только открывается в exact Task Cockpit. Первый A4 slice не добавляет OS notifications,
+claim/snooze/expiry или readiness attestations: у продукта ещё нет non-blocking producer, на котором эти состояния
+можно проверить end to end. Полный контракт —
+[`docs/plans/41-a4-attention-inbox-spec.ru.md`](../plans/41-a4-attention-inbox-spec.ru.md).
+
 ## 14. Отложенные решения
 
 Следующие решения намеренно принимаются отдельным spike/ADR после Phase 0, а не угадываются заранее:

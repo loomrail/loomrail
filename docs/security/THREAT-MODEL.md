@@ -1,7 +1,7 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-08-31
+**Updated:** 2026-09-01
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
@@ -99,10 +99,43 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T24 | Repository onboarding leaks data or overwrites owner policy           | High     | bounded allowlist scan; no source/env/lock contents; no command execution; untrusted provenance; explicit owner adoption; compare-and-set digest; atomic publication; durable recovery       | see B5+B1 Constitution delta below                          |
 | T33 | Plugin manifest is mistaken for a sandbox or gains workflow authority | High     | separate process; closed read-only SDK; no domain hooks; ordinary C1 Consent/probe/Grant; manifest claims are labelled unverified                                                            | see C2 Plugin SDK delta below                               |
 | T34 | New-project scaffold overwrites a path or executes a template payload | Critical | built-in immutable recipes only; nonexistent target; exclusive directory claim; create-new writes; no package install/hooks/commit/push; durable marker-bound recovery                       | see B4 scaffolding delta below                              |
+| T35 | Global Attention read leaks cross-Project text or weakens acceptance  | High     | authenticated bounded projection; closed schemas; referential validation; React text rendering; acceptance only deep-links to its exact owner gate                                           | see A4 Attention delta below                                |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
 the delta below.
+
+### A4 Attention Inbox delta (T35)
+
+A4 adds one global owner read, `GET /api/v1/attention`. Unlike the earlier Project-filtered HumanRequest list, it
+returns open request text and related Project/WorkItem metadata from every local Project in the authenticated
+workspace. A stale or compromised browser session could therefore enumerate more local metadata in one request; a
+careless Inbox action could also turn the final acceptance HumanRequest into an ordinary answer and bypass the
+evidence gate. Rated **High** because the second failure would falsify owner acceptance, even though the read remains
+same-owner and loopback-only.
+
+Mitigations and verification:
+
+- the route uses the same HttpOnly SameSite session as all local reads, accepts no Project/path filter, and exposes no
+  mutation; the existing answer route retains exact Origin and CSRF checks. Daemon integration verifies
+  unauthenticated access returns 401;
+- SQLite reads at most 201 open rows, the public response returns at most 200 and reports `hasMore`; contract and
+  domain tests reject an oversized caller rather than permitting an unbounded in-memory projection;
+- one deterministic domain interface validates that HumanRequest, Project, WorkItem and current StageAttempt ids
+  agree before it classifies or orders anything. Missing/inconsistent relations fail closed, and request prose never
+  selects category or action;
+- both daemon output and browser input are parsed with closed runtime schemas. Project names, task titles and request
+  text render as React text nodes; the persisted-text browser XSS test remains applicable;
+- an AcceptancePackage produces only `REVIEW_ACCEPTANCE`. The Inbox never calls the generic answer endpoint for it;
+  it deep-links the exact Project and WorkItem to Task Cockpit, where optimistic-versioned `Accept`, `Return to work`
+  and `Reject` remain the only authority. Persistence/daemon tests cover the projection across restart and after
+  resolution; browser E2E compares the link ids to the authenticated projection itself;
+- browser coverage exercises two Projects, keyboard selection, reload, RU/EN, light/dark themes and
+  1280/768/375/320 px viewports.
+
+Residual risk is unchanged from the local session boundary: any party controlling the owner-authenticated browser or
+OS account can read local project metadata already available elsewhere. A4 adds aggregation, not a new remote or
+cross-account channel. HumanRequest remains forbidden for secrets.
 
 ### A1 session-handoff delta (T15)
 

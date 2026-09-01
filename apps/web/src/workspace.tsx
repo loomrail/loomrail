@@ -38,6 +38,7 @@ import {
   getProjectMcpProfiles,
   getProjectConstitution,
   getProjectReadiness,
+  getAttentionInbox,
   getWorkItemChanges,
   getWorkItemFileDiff,
   getWorkItemWorkflow,
@@ -77,6 +78,7 @@ import { localConnectionQuery, type ConnectionResult } from "./session";
 import { useEventStream } from "./useEventStream";
 
 const projectsKey = ["projects"] as const;
+const attentionKey = ["attention"] as const;
 const constitutionPresetsKey = ["constitution-presets"] as const;
 const projectConstitutionKey = (projectId: string) => ["projects", projectId, "constitution"] as const;
 const projectReadinessKey = (projectId: string) => ["projects", projectId, "readiness"] as const;
@@ -188,6 +190,12 @@ export const useProjectWorkItems = (projectId: string | undefined) =>
       return listProjectWorkItems(projectId);
     },
     enabled: projectId !== undefined,
+  });
+
+export const useAttentionInbox = () =>
+  useQuery({
+    queryKey: attentionKey,
+    queryFn: getAttentionInbox,
   });
 
 /**
@@ -583,7 +591,10 @@ export const useCreateWorkItem = () => {
   return useMutation({
     mutationFn: (input: CreateWorkItemInput) => createWorkItem(input),
     onSuccess: async (workItem) => {
-      await queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
+      ]);
     },
   });
 };
@@ -597,6 +608,7 @@ export const useMoveWorkItem = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
       ]);
     },
   });
@@ -611,6 +623,7 @@ export const useUpdateWorkItem = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
       ]);
     },
   });
@@ -626,6 +639,7 @@ export const useStartMockPipeline = () => {
         queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(workItem.id) }),
         queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
         queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(workItem.projectId) }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
       ]);
     },
   });
@@ -645,6 +659,7 @@ export const useAnswerHumanRequest = () => {
         }),
         queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(request.projectId) }),
         queryClient.invalidateQueries({ queryKey: stageAttemptSessionsKey(request.stageAttemptId) }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
       ]);
     },
   });
@@ -669,6 +684,7 @@ export const usePipelineControl = () => {
         queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
         queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: stageAttemptSessionsKey(run.currentStageAttemptId) }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
       ]);
     },
   });
@@ -693,6 +709,7 @@ export const useApproveBudgetOverride = () => {
         queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
         queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: stageAttemptSessionsKey(run.currentStageAttemptId) }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
       ]);
     },
   });
@@ -718,6 +735,7 @@ export const useResolveAcceptance = () => {
         queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(workItem.id) }),
         queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
         queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(workItem.projectId) }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
       ]);
     },
   });

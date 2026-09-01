@@ -9,6 +9,7 @@ import { gatedAdapter } from "../apps/daemon/test/gated-adapter.js";
 import { materialiseFixtureRepository, resolveBundledFixture } from "../apps/daemon/dist/fixtures.js";
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
 import { createProviderRegistry } from "../apps/daemon/dist/provider-selection.js";
+import { attentionInboxResponseSchema } from "../packages/contracts/dist/index.js";
 import { openLocalState, type LocalState } from "../packages/persistence-sqlite/dist/index.js";
 import { mockDeliveryTemplate } from "../packages/workflow-engine/dist/index.js";
 import { addWorktree, inspectRepository } from "../packages/workspace/dist/index.js";
@@ -780,6 +781,140 @@ const createTask = async (
   await expect(page.getByRole("button", { name: title })).toBeVisible();
 };
 
+const seedAttentionProjects = async (
+  databasePath: string,
+): Promise<{
+  first: { projectId: string; requestTitle: string; taskId: string; taskTitle: string };
+  second: { projectId: string; requestTitle: string; taskId: string; taskTitle: string };
+}> => {
+  const fixtures = [await resolveBundledFixture("web-app-a"), await resolveBundledFixture("api-service-b")];
+  let nextId = 0;
+  const localState = await openLocalState({
+    databasePath,
+    now: (() => {
+      let clock = Date.parse("2026-09-01T09:00:00.000Z");
+      return () => new Date((clock += 1000));
+    })(),
+    createId: (kind) => `${kind}-attention-${(nextId += 1).toString()}`,
+  });
+  try {
+    const seeded: {
+      projectId: string;
+      requestTitle: string;
+      taskId: string;
+      taskTitle: string;
+    }[] = [];
+    for (const [index, fixture] of fixtures.entries()) {
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `attention-register-${index.toString()}`,
+        correlationId: `correlation-attention-register-${index.toString()}`,
+        actor: humanActor,
+        type: "REGISTER_PROJECT",
+        payload: {
+          id: fixture.projectId,
+          fixtureId: fixture.fixtureId,
+          name: fixture.name,
+          repositoryPath: fixture.templatePath,
+        },
+      });
+      const taskTitle = index === 0 ? "Choose web rollout" : "Choose API compatibility";
+      const requestTitle = index === 0 ? "Select the web rollout" : "Select the API compatibility mode";
+      const created = localState.execute({
+        schemaVersion: 1,
+        commandId: `attention-create-${index.toString()}`,
+        correlationId: `correlation-attention-create-${index.toString()}`,
+        actor: humanActor,
+        type: "CREATE_WORK_ITEM",
+        payload: {
+          projectId: fixture.projectId,
+          parentId: null,
+          type: "TASK",
+          title: taskTitle,
+          description: "Seeded for the global Attention Inbox browser contract.",
+          priority: index === 0 ? "URGENT" : "HIGH",
+          risk: "MEDIUM",
+          acceptanceCriteria: [],
+        },
+      });
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Attention task was not created");
+      const moved = localState.execute({
+        schemaVersion: 1,
+        commandId: `attention-ready-${index.toString()}`,
+        correlationId: `correlation-attention-ready-${index.toString()}`,
+        actor: humanActor,
+        type: "MOVE_WORK_ITEM",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedVersion: created.workItem.version,
+          targetState: "READY",
+        },
+      });
+      if (moved.type !== "WORK_ITEM_MOVED") throw new Error("Attention task was not moved");
+      const started = localState.execute({
+        schemaVersion: 1,
+        commandId: `attention-start-${index.toString()}`,
+        correlationId: `correlation-attention-start-${index.toString()}`,
+        actor: humanActor,
+        type: "START_MOCK_PIPELINE",
+        payload: {
+          workItemId: moved.workItem.id,
+          expectedVersion: moved.workItem.version,
+          template: mockDeliveryTemplate,
+          budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+        },
+      });
+      if (started.type !== "PIPELINE_STARTED") throw new Error("Attention pipeline was not started");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `attention-mark-${index.toString()}`,
+        correlationId: `correlation-attention-mark-${index.toString()}`,
+        actor: sessionLoopActor,
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: started.dispatch.id },
+      });
+      localState.execute({
+        schemaVersion: 1,
+        commandId: `attention-request-${index.toString()}`,
+        correlationId: `correlation-attention-request-${index.toString()}`,
+        actor: sessionLoopActor,
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: started.dispatch.id,
+          template: mockDeliveryTemplate,
+          resultTree: null,
+          outcome: {
+            type: "NEEDS_HUMAN",
+            request: {
+              kind: "SINGLE_CHOICE",
+              blocking: true,
+              title: requestTitle,
+              context: "The selected mode changes the next stage's bounded implementation plan.",
+              recommendation: "Use the compatible option.",
+              options: [
+                {
+                  id: `compatible-${index.toString()}`,
+                  label: "Compatible",
+                  consequence: "Resume with compatibility preserved.",
+                  recommended: true,
+                },
+              ],
+              allowOther: false,
+            },
+          },
+        },
+      });
+      seeded.push({ projectId: fixture.projectId, requestTitle, taskId: created.workItem.id, taskTitle });
+    }
+    const first = seeded[0];
+    const second = seeded[1];
+    if (!first || !second) throw new Error("Both Attention projects must be seeded");
+    return { first, second };
+  } finally {
+    localState.close();
+  }
+};
+
 /**
  * Changes one preference through the settings dialog.
  *
@@ -1336,7 +1471,7 @@ test.describe("authenticated walking skeleton", () => {
     }
   });
 
-  test("filters the board to blocking requests and back from the workspace navigation", async ({ page }) => {
+  test("opens the global Attention Inbox and returns to current work", async ({ page }) => {
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
       logger: false,
@@ -1347,22 +1482,79 @@ test.describe("authenticated walking skeleton", () => {
     await initializeWorkspace(page);
     await createTask(page, "Quick filter task");
 
-    // Human requests is the only quick filter the product still offers.
-    await page.getByRole("link", { name: "Human requests" }).click();
-    await expect(page).toHaveURL(/summary=needsYou/);
-
-    const appliedFilters = page.getByRole("region", { name: "Filter tasks" });
-    await expect(appliedFilters.getByText("Quick filter", { exact: true })).toBeVisible();
-    await expect(appliedFilters.getByText("Needs you", { exact: true })).toBeVisible();
-    // Nothing is blocking, so the task the test just created must be filtered out.
+    await page.getByRole("link", { name: "Attention" }).click();
+    await expect(page).toHaveURL(/\/attention$/);
+    await expect(page.getByText("Nothing needs you right now", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Quick filter task" })).toHaveCount(0);
 
     await page.reload();
-    await expect(appliedFilters.getByText("Needs you", { exact: true })).toBeVisible();
+    await expect(page.getByText("Nothing needs you right now", { exact: true })).toBeVisible();
 
-    await appliedFilters.getByRole("button", { name: "Clear quick filter" }).click();
-    await expect(page).not.toHaveURL(/summary=/);
+    await page.getByRole("link", { name: "Current work" }).click();
+    await expect(page).toHaveURL(/\/$/);
     await expect(page.getByRole("button", { name: "Quick filter task" })).toBeVisible();
+  });
+
+  test("keeps two projects in one keyboard-first Attention Inbox and opens the exact task", async ({
+    page,
+  }) => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail attention e2e "));
+    const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    try {
+      const seeded = await seedAttentionProjects(stateDatabasePath);
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        stateDatabasePath,
+        webRoot: resolve("apps/web/dist"),
+      });
+      await page.goto(daemon.bootstrapUrl);
+
+      const attentionLink = page.getByRole("link", { name: /Attention/ });
+      await expect(attentionLink.locator(".app-nav-link__count")).toHaveText("2");
+      await attentionLink.click();
+      await expect(page.locator(".attention-row")).toHaveCount(2);
+      await expect(page.locator(".attention-inbox__heading h1")).toHaveText("Attention");
+
+      const firstRow = page.locator(".attention-row").nth(0);
+      const secondRow = page.locator(".attention-row").nth(1);
+      await expect(firstRow).toContainText(seeded.first.requestTitle);
+      await expect(secondRow).toContainText(seeded.second.requestTitle);
+      await firstRow.focus();
+      await firstRow.press("ArrowDown");
+      await expect(secondRow).toHaveAttribute("aria-current", "true");
+      await expect(page.locator(".attention-detail h2")).toHaveText(seeded.second.requestTitle);
+
+      await page.reload();
+      await expect(page.locator(".attention-row")).toHaveCount(2);
+      await page.locator(".attention-row").nth(0).focus();
+      await page.locator(".attention-row").nth(0).press("End");
+      await expect(page.locator(".attention-detail h2")).toHaveText(seeded.second.requestTitle);
+      await page.getByRole("button", { name: "Open task context" }).click();
+      const taskUrl = new URL(page.url());
+      expect(taskUrl.pathname).toBe("/");
+      expect(taskUrl.searchParams.get("project")).toBe(seeded.second.projectId);
+      expect(taskUrl.searchParams.get("task")).toBe(seeded.second.taskId);
+      await expect(page.getByRole("complementary", { name: seeded.second.taskTitle })).toBeVisible();
+
+      await page.getByRole("link", { name: /Attention/ }).click();
+      await chooseInSettings(page, "Change color theme", "Light");
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+      await chooseInSettings(page, "Change color theme", "Dark");
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+      await chooseInSettings(page, "Change language", "Русский");
+      await expect(page.locator(".attention-inbox__heading h1")).toHaveText("Требует внимания");
+      for (const width of [768, 375, 320]) {
+        await page.setViewportSize({ width, height: 812 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+          true,
+        );
+      }
+    } finally {
+      await daemon?.close();
+      daemon = undefined;
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
   });
 
   test("searches values of every property from the main filter search", async ({ page }) => {
@@ -1522,14 +1714,16 @@ test.describe("authenticated walking skeleton", () => {
     await expect(page).not.toHaveURL(/filters=/);
     await expect(page.getByRole("complementary", { name: "Human decision workflow" })).toBeVisible();
 
+    await page.getByRole("link", { name: /Attention/ }).click();
+    await expect(page).toHaveURL(/\/attention$/);
+    await expect(page.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible();
     await page.reload();
+    await expect(page.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible();
+    await page.getByRole("radio", { name: /Focused pass/ }).click();
+    await page.getByRole("button", { name: "Answer & resume" }).click();
+    await expect(page.getByText("Nothing needs you right now", { exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "Current work" }).click();
     const restoredInspector = page.getByRole("complementary", { name: "Human decision workflow" });
-    await expect(
-      restoredInspector.getByRole("heading", { name: "Choose the discovery depth" }),
-    ).toBeVisible();
-
-    await restoredInspector.getByRole("radio", { name: /Focused pass/ }).click();
-    await restoredInspector.getByRole("button", { name: "Answer & resume" }).click();
     const workflowSection = restoredInspector
       .locator(".lr-inspector-section")
       .filter({ has: page.getByText("Workflow", { exact: true }) });
@@ -1545,6 +1739,20 @@ test.describe("authenticated walking skeleton", () => {
     await expect(workflowSection.getByText("QA report", { exact: true })).toBeVisible();
     await expect(workflowSection.getByText("Needs decision", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /Needs your decision/ })).toBeVisible();
+    await page.getByRole("link", { name: /Attention/ }).click();
+    await expect(page).toHaveURL(/\/attention$/);
+    await expect(page.getByRole("button", { name: "Answer & resume" })).toHaveCount(0);
+    const approvalInboxText = await page.evaluate(
+      async (): Promise<string> => await (await fetch("/api/v1/attention")).text(),
+    );
+    const approvalInbox = attentionInboxResponseSchema.parse(JSON.parse(approvalInboxText) as unknown);
+    const approvalItem = approvalInbox.items.find(({ action }) => action === "REVIEW_ACCEPTANCE");
+    if (!approvalItem) throw new Error("Expected the delivery approval in Attention");
+    await page.getByRole("button", { name: "Review acceptance" }).click();
+    const acceptanceUrl = new URL(page.url());
+    expect(acceptanceUrl.searchParams.get("project")).toBe(approvalItem.project.id);
+    expect(acceptanceUrl.searchParams.get("task")).toBe(approvalItem.workItem.id);
+    await expect(page.getByRole("complementary", { name: "Human decision workflow" })).toBeVisible();
     // Each stage attempt now records its ProviderSession as well (spec §6), so a full mock delivery
     // fills more than one page of activity and the discovery decision has moved off the newest one.
     await restoredInspector.getByRole("button", { name: "Show more" }).click();
@@ -2179,7 +2387,7 @@ test.describe("authenticated walking skeleton", () => {
     await initializeWorkspace(page);
 
     // Measure the very link that is hovered, not merely the first one in the sidebar.
-    const humanRequests = page.locator(".app-nav-link").filter({ hasText: "Human requests" });
+    const humanRequests = page.locator(".app-nav-link").filter({ hasText: "Attention" });
     const navBackground = async (): Promise<string> =>
       humanRequests.evaluate((element) => getComputedStyle(element).backgroundColor);
     const navBackgroundBefore = await navBackground();
@@ -2531,9 +2739,9 @@ test.describe("authenticated walking skeleton", () => {
     await expect(drawer.getByRole("button", { name: "Switch project" })).toBeVisible();
     await expect(drawer.getByRole("button", { name: "Open settings" })).toBeVisible();
 
-    await drawer.getByRole("link", { name: "Human requests" }).click();
+    await drawer.getByRole("link", { name: "Attention" }).click();
     await expect(drawer).toBeHidden();
-    await expect(page).toHaveURL(/summary=needsYou/);
+    await expect(page).toHaveURL(/\/attention$/);
   });
 
   test("offers no navigation entry that leads nowhere", async ({ page }) => {

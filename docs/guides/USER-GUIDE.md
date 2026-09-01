@@ -89,11 +89,15 @@ provider. With the default provider, the mock supplies deterministic stage resul
 
 ### Answer the Human Request
 
-The mock Discovery stage opens a blocking question and the task becomes **Waiting for you**. Open it from the task or
-the **Needs your decision** banner, choose an option, and select **Answer & resume**.
+The mock Discovery stage opens a blocking question and the task becomes **Waiting for you**. Open **Attention** in the
+sidebar: it lists open requests from every Project, with the affected task, stage, priority, and action. Use Arrow Up,
+Arrow Down, Home, or End to move through the list, choose an option, and select **Answer & resume**. The task and its
+banner remain alternate entry points to the same answer form.
 
 The request, your answer, and the resulting Decision are durable. Reloading the page or restarting Loomrail does not
-erase an unanswered request.
+erase an unanswered request. The global list is capped at 200 visible items and says when more remain. It is a
+projection of durable workflow state, not a second queue; answering in either place closes the same HumanRequest and
+records one Decision.
 
 ### Handle the budget pause
 
@@ -111,6 +115,9 @@ pause or an interrupted run. **Cancel run** is terminal for that run, so use it 
 
 After Review and QA, the task shows an **Acceptance package** containing typed evidence and a criterion matrix. Inspect
 those records and choose one owner action:
+
+Acceptance also appears in **Attention**, but it cannot be answered as an ordinary Human Request. Choose **Review
+acceptance** there to open the exact Project and task before deciding.
 
 - **Accept delivery** marks the task Done;
 - **Return to work** records that another pass is needed;

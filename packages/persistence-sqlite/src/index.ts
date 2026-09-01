@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { ContextSources } from "@loomrail/context-assembly";
 import {
   acceptancePackageSchema,
+  maxAttentionProjectionSources,
   budgetPolicySchema,
   checkpointSchema,
   constitutionProposalSchema,
@@ -37,6 +38,7 @@ import {
   projectProviderSelectionSchema,
   readinessAttestationSchema,
   readinessCheckSchema,
+  sessionPauseFailureCodes,
   providerSessionSchema,
   recoveryReportSchema,
   scaffoldOperationSchema,
@@ -94,6 +96,7 @@ import {
 } from "@loomrail/contracts";
 import {
   ConstitutionDomainError,
+  buildAttentionInbox,
   canonicalMcpProfileSource,
   decideProjectReadinessAssessment,
   decideProjectReadinessAttestation,
@@ -692,6 +695,7 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LIST_OPEN_SCAFFOLD_OPERATIONS") }).strict(),
   z.object({ type: z.literal("GET_WORK_ITEM"), workItemId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_WORKFLOW_SNAPSHOT"), workItemId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_ATTENTION_INBOX") }).strict(),
   z
     .object({
       type: z.literal("LIST_HUMAN_REQUESTS"),
@@ -1963,6 +1967,33 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       `SELECT id, label, consequence, recommended FROM human_request_options
        WHERE human_request_id = ? ORDER BY ordinal`,
     );
+    const selectOpenHumanRequestsForAttention = database.prepare(
+      `SELECT human_requests.*
+       FROM human_requests
+       LEFT JOIN work_items ON work_items.id = human_requests.work_item_id
+       LEFT JOIN stage_attempts ON stage_attempts.id = human_requests.stage_attempt_id
+       LEFT JOIN acceptance_packages
+         ON acceptance_packages.human_request_id = human_requests.id
+        AND acceptance_packages.status = 'PENDING'
+       WHERE human_requests.status = 'OPEN'
+       ORDER BY
+         CASE
+           WHEN human_requests.blocking = 1 THEN 0
+           WHEN acceptance_packages.id IS NOT NULL THEN 1
+           WHEN stage_attempts.status = 'HARD_PAUSED'
+             AND stage_attempts.failure_code IN (?, ?, ?, ?, ?) THEN 3
+           ELSE 2
+         END,
+         CASE work_items.priority
+           WHEN 'URGENT' THEN 0
+           WHEN 'HIGH' THEN 1
+           WHEN 'MEDIUM' THEN 2
+           ELSE 3
+         END,
+         human_requests.created_at,
+         human_requests.id
+       LIMIT ?`,
+    );
     const selectWorkflowDispatchById = database.prepare("SELECT * FROM workflow_dispatches WHERE id = ?");
     const selectPendingDispatchByStageAttempt = database.prepare(
       "SELECT * FROM workflow_dispatches WHERE stage_attempt_id = ? AND status = 'PENDING' ORDER BY created_at DESC, id DESC LIMIT 1",
@@ -1973,6 +2004,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectAcceptancePackageById = database.prepare("SELECT * FROM acceptance_packages WHERE id = ?");
     const selectAcceptancePackageByRun = database.prepare(
       "SELECT * FROM acceptance_packages WHERE pipeline_run_id = ?",
+    );
+    const selectPendingAcceptancePackageByHumanRequest = database.prepare(
+      `SELECT * FROM acceptance_packages
+       WHERE human_request_id = ? AND status = 'PENDING'
+       ORDER BY created_at, id
+       LIMIT 1`,
     );
     const selectProviderSessionById = database.prepare("SELECT * FROM provider_sessions WHERE id = ?");
     const selectRunningProviderSession = database.prepare(
@@ -6159,6 +6196,42 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           return { type: "WORK_ITEM", workItem: readWorkItem(queryValue.workItemId) };
         case "GET_WORKFLOW_SNAPSHOT":
           return { type: "WORKFLOW_SNAPSHOT", snapshot: readWorkflowSnapshot(queryValue.workItemId) };
+        case "GET_ATTENTION_INBOX": {
+          const sources = humanRequestRowSchema
+            .array()
+            .parse(
+              selectOpenHumanRequestsForAttention.all(
+                ...sessionPauseFailureCodes,
+                maxAttentionProjectionSources,
+              ),
+            )
+            .map((row) => {
+              const request = readHumanRequest(row.id);
+              const project = readProject(row.project_id);
+              const workItem = readWorkItem(row.work_item_id);
+              const stageAttempt = readStageAttempt(row.stage_attempt_id);
+              if (!request || !project || !workItem || !stageAttempt) {
+                throw new StateStoreError(
+                  "PERSISTENCE_FAILURE",
+                  "An Attention item has incomplete durable relations",
+                );
+              }
+              const acceptanceValue = selectPendingAcceptancePackageByHumanRequest.get(row.id);
+              const acceptancePackageId =
+                acceptanceValue === undefined ? null : acceptancePackageRowSchema.parse(acceptanceValue).id;
+              return {
+                request,
+                project,
+                workItem,
+                stageAttempt,
+                acceptancePackageId,
+              };
+            });
+          return {
+            type: "ATTENTION_INBOX",
+            inbox: buildAttentionInbox(sources),
+          };
+        }
         case "LIST_HUMAN_REQUESTS": {
           const rows = database
             .prepare(

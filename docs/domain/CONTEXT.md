@@ -31,8 +31,9 @@ _Не означает_: модалка, уведомление или кана�
 _Не означает_: свободный комментарий без workflow effect.
 
 **Attention Inbox**:
-Проекция открытых HumanRequest, требующих внимания человека.
-_Не означает_: отдельный источник истины.
+Глобальная bounded-проекция открытых HumanRequest и их Project/WorkItem/current StageAttempt. Один deterministic
+module проверяет связи, классифицирует action/category и сортирует максимум 200 items; `hasMore` сообщает о хвосте.
+_Не означает_: отдельный источник истины, копию workflow state или право обойти acceptance gate.
 
 **ProviderAdapter**:
 Capability-checked граница start/resume/interrupt/events/usage для конкретного provider.
@@ -161,3 +162,7 @@ fail-closed request не продвигает стадию и не считае�
 Acceptance — отдельный owner gate: обычный ответ на HumanRequest и generic pipeline controls его не обходят. Только
 versioned `Accept`, `Return to work` или `Reject` закрывают AcceptancePackage; лишь `Accept` переводит WorkItem в
 `DONE`. Review/QA evidence остаётся append-only, AcceptancePackage меняется только optimistic-versioned transition.
+
+Attention Inbox читает все Project одной локальной session, но state не меняет. `ANSWER_REQUEST` использует тот же
+атомарный `Answer & resume`; `REVIEW_ACCEPTANCE` только открывает exact Project/WorkItem в Task Cockpit. Project name,
+WorkItem title и HumanRequest text остаются untrusted data и не участвуют в machine-readable классификации.

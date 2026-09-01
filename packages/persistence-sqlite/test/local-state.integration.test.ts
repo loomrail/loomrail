@@ -24,7 +24,11 @@ import type {
   StartProviderSessionCommand,
   UpdateWorkItemCommand,
 } from "@loomrail/contracts";
-import { contextPackRecipeSectionSchema, maxContextPackRecipeSources } from "@loomrail/contracts";
+import {
+  contextPackRecipeSectionSchema,
+  maxAttentionItems,
+  maxContextPackRecipeSources,
+} from "@loomrail/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 
@@ -498,6 +502,21 @@ describe("SQLite local state", () => {
       ],
       acceptancePackage: { status: "PENDING" },
     });
+    const pendingAttention = localState.query({ type: "GET_ATTENTION_INBOX" });
+    expect(pendingAttention.type === "ATTENTION_INBOX" ? pendingAttention.inbox : null).toMatchObject({
+      items: [
+        {
+          project: { id: "project-web" },
+          workItem: { id: created.workItem.id },
+          stage: { name: "ACCEPTANCE" },
+          section: "BLOCKING_NOW",
+          category: "APPROVAL",
+          action: "REVIEW_ACCEPTANCE",
+          acceptancePackageId: pendingSnapshot.snapshot.acceptancePackage.id,
+        },
+      ],
+      hasMore: false,
+    });
     localState.close();
     state = undefined;
     const acceptanceState = await open();
@@ -513,6 +532,13 @@ describe("SQLite local state", () => {
       throw new Error("Expected the acceptance snapshot after restart");
     }
     expect(restored.snapshot.artifacts).toHaveLength(2);
+    expect(acceptanceState.query({ type: "GET_ATTENTION_INBOX" })).toMatchObject({
+      type: "ATTENTION_INBOX",
+      inbox: {
+        items: [{ acceptancePackageId: restored.snapshot.acceptancePackage.id }],
+        hasMore: false,
+      },
+    });
     const acceptancePackage = restored.snapshot.acceptancePackage;
     const acceptanceCommand = {
       schemaVersion: 1,
@@ -533,6 +559,10 @@ describe("SQLite local state", () => {
       type: "ACCEPTANCE_RESOLVED",
       acceptancePackage: { status: "ACCEPTED" },
       run: { status: "SUCCEEDED" },
+    });
+    expect(acceptanceState.query({ type: "GET_ATTENTION_INBOX" })).toMatchObject({
+      type: "ATTENTION_INBOX",
+      inbox: { items: [], hasMore: false },
     });
     expect(acceptanceState.query({ type: "GET_WORK_ITEM", workItemId: created.workItem.id })).toMatchObject({
       workItem: { state: "DONE" },
@@ -2050,12 +2080,34 @@ describe("SQLite local state", () => {
     });
     const request = waiting.snapshot.humanRequests[0];
     if (!request) throw new Error("Expected an open HumanRequest");
+    expect(localState.query({ type: "GET_ATTENTION_INBOX" })).toMatchObject({
+      type: "ATTENTION_INBOX",
+      inbox: {
+        items: [
+          {
+            id: request.id,
+            project: { id: "project-web" },
+            workItem: { id: created.workItem.id },
+            stage: { name: "DISCOVERY" },
+            section: "BLOCKING_NOW",
+            category: "QUESTION",
+            action: "ANSWER_REQUEST",
+            acceptancePackageId: null,
+          },
+        ],
+        hasMore: false,
+      },
+    });
 
     localState.close();
     state = undefined;
     const reopened = await open();
     const restored = reopened.query({ type: "LIST_HUMAN_REQUESTS", status: "OPEN" });
     expect(restored.type === "HUMAN_REQUESTS" ? restored.humanRequests : []).toHaveLength(1);
+    expect(reopened.query({ type: "GET_ATTENTION_INBOX" })).toMatchObject({
+      type: "ATTENTION_INBOX",
+      inbox: { items: [{ id: request.id }], hasMore: false },
+    });
 
     const answer: AnswerHumanRequestCommand = {
       schemaVersion: 1,
@@ -2070,6 +2122,10 @@ describe("SQLite local state", () => {
       },
     };
     reopened.execute(answer);
+    expect(reopened.query({ type: "GET_ATTENTION_INBOX" })).toMatchObject({
+      type: "ATTENTION_INBOX",
+      inbox: { items: [], hasMore: false },
+    });
     expect(() => reopened.execute({ ...answer, commandId: "answer-human-request-again" })).toThrow(
       expect.objectContaining({ code: "WORKFLOW_VERSION_CONFLICT" }),
     );
@@ -2120,6 +2176,71 @@ describe("SQLite local state", () => {
       { stage: "PLAN", status: "SUCCEEDED" },
     ]);
     expect(independentItem.type === "WORK_ITEM" ? independentItem.workItem?.state : null).toBe("READY");
+  });
+
+  it("bounds the Attention read before projection and fails closed on a missing relation", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-attention-overflow"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-attention-overflow", created.workItem.id, 1, "READY"));
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-attention-overflow",
+      correlationId: "correlation-attention-overflow",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: mockTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    localState.close();
+    state = undefined;
+
+    const raw = new DatabaseSync(databasePath);
+    const insertRequest = raw.prepare(
+      `INSERT INTO human_requests (
+        id, project_id, work_item_id, stage_attempt_id, kind, blocking, title, context,
+        recommendation, allow_other, status, version, created_at, resolved_at
+      ) VALUES (?, ?, ?, ?, 'FREE_TEXT', 1, ?, ?, NULL, 1, 'OPEN', 1, ?, NULL)`,
+    );
+    for (let index = 0; index < maxAttentionItems + 2; index += 1) {
+      const suffix = index.toString().padStart(3, "0");
+      insertRequest.run(
+        `request-overflow-${suffix}`,
+        "project-web",
+        created.workItem.id,
+        started.stageAttempt.id,
+        `Overflow request ${suffix}`,
+        "Synthetic bounded Attention fixture.",
+        timestamp,
+      );
+    }
+    raw.close();
+
+    const reopened = await open();
+    const attention = reopened.query({ type: "GET_ATTENTION_INBOX" });
+    if (attention.type !== "ATTENTION_INBOX") throw new Error("Expected Attention Inbox");
+    expect(attention.inbox.items).toHaveLength(maxAttentionItems);
+    expect(attention.inbox.hasMore).toBe(true);
+    expect(attention.inbox.items.at(0)?.id).toBe("request-overflow-000");
+    expect(attention.inbox.items.at(-1)?.id).toBe("request-overflow-199");
+    reopened.close();
+    state = undefined;
+
+    const corrupted = new DatabaseSync(databasePath);
+    corrupted.exec("PRAGMA foreign_keys = OFF");
+    corrupted.prepare("DELETE FROM stage_attempts WHERE id = ?").run(started.stageAttempt.id);
+    corrupted.close();
+
+    const corruptedState = await open();
+    expect(() => corruptedState.query({ type: "GET_ATTENTION_INBOX" })).toThrow(
+      expect.objectContaining({ code: "PERSISTENCE_FAILURE" }),
+    );
   });
 
   it("reconciles an orphaned running attempt once and persists its RecoveryReport", async () => {

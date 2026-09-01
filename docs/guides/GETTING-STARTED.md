@@ -53,11 +53,17 @@ it; configuration remains an explicit owner action in **Settings → MCP connect
 2. Open **Settings → AI provider**, choose **Mock**, and close Settings.
 3. Create a task with a concrete outcome and observable acceptance criteria.
 4. Move it to **Ready**, then choose **Start workflow**.
-5. Answer the blocking Human Request and approve the explicit mock budget increase when the run pauses.
-6. Inspect Review and QA evidence, then accept or return the delivery as the owner.
+5. Open **Attention**, answer the blocking Human Request, and approve the explicit mock budget increase when the run
+   pauses.
+6. When acceptance appears in **Attention**, open its task, inspect Review and QA evidence, then accept or return the
+   delivery as the owner.
 
 Reloading the page or restarting Loomrail does not erase the task, request, Decision, budget, evidence, or acceptance
 state. Stop Loomrail with `Ctrl+C` and wait for the command to exit.
+
+**Attention** is global: its badge and list include every Project, regardless of which Project is selected on the
+board. Arrow keys move through the list. Ordinary questions can be answered there; final acceptance always opens the
+exact Task Cockpit so its evidence and consequences remain visible.
 
 ## Optional: create a fresh project
 

@@ -129,9 +129,9 @@ D3 and ADR-0002.
 - human/budget/acceptance rules;
 - deterministic, clock/ID injected, infrastructure-free tests.
 
-The deterministic interfaces include `decideWorkItemCommand`, workflow lifecycle decisions, and
-`decideResolveAcceptance`. They own WorkItem/run transitions, budgets, recovery and the owner-only `DONE` gate without
-knowing SQLite or HTTP.
+The deterministic interfaces include `decideWorkItemCommand`, workflow lifecycle decisions,
+`decideResolveAcceptance`, and `buildAttentionInbox`. They own WorkItem/run transitions, budgets, recovery, the
+owner-only `DONE` gate, and the bounded global Attention classification without knowing SQLite or HTTP.
 
 ### `packages/contracts`
 

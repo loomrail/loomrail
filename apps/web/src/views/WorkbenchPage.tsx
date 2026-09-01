@@ -11,7 +11,6 @@ import {
   type ContextWindowUsage,
   type DomainEvent,
   type EvidenceArtifact,
-  type HumanRequest,
   type PipelineRun,
   type ProviderSession,
   type ReadinessCheck,
@@ -40,7 +39,6 @@ import {
   KanbanColumn,
   PopoverSurface,
   ProviderSessionTimeline,
-  RadioGroup,
   RunSummary,
   SelectControl,
   Skeleton,
@@ -73,6 +71,7 @@ import {
   type BoardView,
 } from "../boardView";
 import { PanelResizer } from "../components/PanelResizer";
+import { HumanRequestAnswerForm } from "../components/HumanRequestAnswerForm";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
 import type { SummaryFilter } from "../router";
@@ -80,7 +79,6 @@ import { moveShortcutsFor, transitionTargets } from "../taskMoves";
 import {
   useInitializeFixtureWorkspace,
   useApproveBudgetOverride,
-  useAnswerHumanRequest,
   useMoveWorkItem,
   usePipelineControl,
   useProjectHumanRequests,
@@ -1114,80 +1112,6 @@ const TaskEditDialog = ({ item }: { item: WorkItem }): React.JSX.Element => {
   );
 };
 
-const HumanRequestPanel = ({ request }: { request: HumanRequest }): React.JSX.Element => {
-  const { t } = useI18n();
-  const answerMutation = useAnswerHumanRequest();
-  const [selection, setSelection] = useState("");
-  const [otherText, setOtherText] = useState("");
-  const otherSelected = selection === "__other__";
-  const canSubmit = otherSelected ? otherText.trim().length > 0 : selection.length > 0;
-
-  const submit = (): void => {
-    if (!canSubmit) return;
-    answerMutation.mutate({
-      request,
-      answer: otherSelected
-        ? { type: "OTHER", text: otherText.trim() }
-        : { type: "OPTION", optionIds: [selection] },
-    });
-  };
-
-  return (
-    <div className="human-request-card">
-      <div className="human-request-card__eyebrow">
-        <Icon name="question" size={13} />
-        <span>{t("humanRequest.blocking")}</span>
-      </div>
-      <h3>{request.title}</h3>
-      <p>{request.context}</p>
-      {request.recommendation ? (
-        <div className="human-request-card__recommendation">
-          <strong>{t("humanRequest.recommendation")}</strong>
-          <span>{request.recommendation}</span>
-        </div>
-      ) : null}
-      <RadioGroup
-        aria-label={request.title}
-        onValueChange={setSelection}
-        options={[
-          ...request.options.map((option) => ({
-            value: option.id,
-            label: option.recommended ? `${option.label} · ${t("humanRequest.recommended")}` : option.label,
-            description: option.consequence,
-          })),
-          ...(request.allowOther ? [{ value: "__other__", label: t("humanRequest.other") }] : []),
-        ]}
-        value={selection}
-      />
-      {otherSelected ? (
-        <TextField
-          aria-label={t("humanRequest.other")}
-          autoFocus
-          maxLength={2_000}
-          onChange={(event) => {
-            setOtherText(event.currentTarget.value);
-          }}
-          placeholder={t("humanRequest.otherPlaceholder")}
-          value={otherText}
-        />
-      ) : null}
-      {!canSubmit && selection ? (
-        <span className="human-request-card__hint">{t("humanRequest.chooseAnswer")}</span>
-      ) : null}
-      {answerMutation.error ? (
-        <LocalConnectionRecovery
-          error={answerMutation.error}
-          onRetry={submit}
-          retrying={answerMutation.isPending}
-        />
-      ) : null}
-      <Button disabled={!canSubmit} loading={answerMutation.isPending} onClick={submit} variant="primary">
-        {t("humanRequest.answerResume")}
-      </Button>
-    </div>
-  );
-};
-
 const AcceptancePanel = ({
   acceptancePackage,
   artifacts,
@@ -1710,7 +1634,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
           <span>{t("acceptance.evidenceCount", { count: snapshot.artifacts.length })}</span>
         </div>
       ) : null}
-      {openRequest ? <HumanRequestPanel request={openRequest} /> : null}
+      {openRequest ? <HumanRequestAnswerForm request={openRequest} /> : null}
       {snapshot.recoveryReports.at(-1) ? (
         <div className="workflow-recovery" role="status">
           <strong>{t("workflow.recovery.title")}</strong>
@@ -2081,11 +2005,28 @@ export const WorkbenchPage = (): React.JSX.Element => {
   const { t } = useI18n();
   const navigate = useNavigate({ from: "/" });
   const search = useSearch({ from: "/" });
-  const { connectionPending, error, projectsPending, retryConnection, selectedProject } = useWorkspace();
+  const {
+    connectionPending,
+    error,
+    projects,
+    projectsPending,
+    retryConnection,
+    selectedProject,
+    selectProject,
+  } = useWorkspace();
   const workItemsQuery = useProjectWorkItems(selectedProject?.id);
   const humanRequestsQuery = useProjectHumanRequests(selectedProject?.id);
   const initializeMutation = useInitializeFixtureWorkspace();
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null);
+  useEffect(() => {
+    if (
+      search.project &&
+      search.project !== selectedProject?.id &&
+      projects.some(({ id }) => id === search.project)
+    ) {
+      selectProject(search.project);
+    }
+  }, [projects, search.project, selectProject, selectedProject?.id]);
   const filters = search.filters?.split(",") ?? [];
   const summaryFilter = search.summary ?? null;
   const setFilters = (value: readonly string[]): void => {
@@ -2163,8 +2104,20 @@ export const WorkbenchPage = (): React.JSX.Element => {
     summaryFilteredItems.filter((item) => matchesFilters(item, filters)),
     view,
   );
+  const selectWorkItem = (workItemId: string): void => {
+    setSelectedWorkItemId(workItemId);
+    if (!search.project && !search.task) return;
+    void navigate({
+      replace: true,
+      resetScroll: false,
+      search: (current) => ({ ...current, project: undefined, task: undefined }),
+    });
+  };
   const selectedItem =
-    visibleItems.find((item) => item.id === selectedWorkItemId) ?? visibleItems.at(0) ?? null;
+    (search.task ? workItems.find((item) => item.id === search.task) : undefined) ??
+    visibleItems.find((item) => item.id === selectedWorkItemId) ??
+    visibleItems.at(0) ??
+    null;
   const filterOptions = filterOptionsFor(scopedItems, columns, t);
 
   return (
@@ -2194,7 +2147,8 @@ export const WorkbenchPage = (): React.JSX.Element => {
             className="attention-banner"
             onClick={() => {
               clearFilters();
-              setSelectedWorkItemId(blockingRequests[0]?.workItemId ?? null);
+              const workItemId = blockingRequests[0]?.workItemId;
+              if (workItemId) selectWorkItem(workItemId);
             }}
             type="button"
           >
@@ -2298,7 +2252,7 @@ export const WorkbenchPage = (): React.JSX.Element => {
                         <WorkItemButton
                           item={item}
                           key={item.id}
-                          onSelect={setSelectedWorkItemId}
+                          onSelect={selectWorkItem}
                           selected={selectedItem?.id === item.id}
                         />
                       ))}

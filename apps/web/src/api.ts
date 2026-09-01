@@ -1,4 +1,5 @@
 import {
+  attentionInboxResponseSchema,
   apiErrorResponseSchema,
   constitutionPresetsResponseSchema,
   eventsResponseSchema,
@@ -495,6 +496,9 @@ export const listOpenHumanRequests = async (projectId: string) => {
   const query = new URLSearchParams({ projectId, status: "OPEN" });
   return requestLocalApi(`/api/v1/human-requests?${query.toString()}`, humanRequestsResponseSchema);
 };
+
+export const getAttentionInbox = async () =>
+  requestLocalApi("/api/v1/attention", attentionInboxResponseSchema);
 
 export const registerFixtureProject = async (fixtureId: FixtureProjectId): Promise<void> => {
   await requestLocalApi("/api/v1/projects/fixtures/register", stateCommandResultSchema, {

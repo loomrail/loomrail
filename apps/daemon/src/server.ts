@@ -9,6 +9,7 @@ import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import fastifyStatic from "@fastify/static";
 import {
+  attentionInboxResponseSchema,
   answerHumanRequestRequestSchema,
   attestProjectReadinessRequestSchema,
   adoptProjectConstitutionRequestSchema,
@@ -2384,6 +2385,23 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           schemaVersion: 1,
           humanRequests: result.type === "HUMAN_REQUESTS" ? result.humanRequests : [],
         });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/attention", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const result = localState.query({ type: "GET_ATTENTION_INBOX" });
+        if (result.type !== "ATTENTION_INBOX") {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The Attention query returned an unexpected result",
+          );
+        }
+        return attentionInboxResponseSchema.parse(result.inbox);
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }

@@ -22,9 +22,14 @@ type QueryScope = readonly string[];
 export const scopesForSignal = (signal: EventSignal): readonly QueryScope[] => {
   switch (signal.aggregateType) {
     case "WORK_ITEM":
-      return [["projects", signal.projectId], ["work-items", signal.aggregateId], ["stage-attempts"]];
+      return [
+        ["attention"],
+        ["projects", signal.projectId],
+        ["work-items", signal.aggregateId],
+        ["stage-attempts"],
+      ];
     case "PROJECT":
-      return [["projects", signal.projectId], ["projects"]];
+      return [["attention"], ["projects", signal.projectId], ["projects"]];
     default: {
       const unhandled: never = signal.aggregateType;
       throw new Error(`Unhandled event signal aggregate type: ${String(unhandled)}`);

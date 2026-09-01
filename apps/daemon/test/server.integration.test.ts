@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
+  attentionInboxResponseSchema,
   apiErrorResponseSchema,
   correlationIdSchema,
   eventsResponseSchema,
@@ -1106,6 +1107,7 @@ describe("local daemon session and state boundary", () => {
     const firstToken = bootstrapToken();
     const firstDaemon = await startDaemon({ bootstrapToken: firstToken, logger: false, stateDatabasePath });
     daemon = firstDaemon;
+    expect((await fetch(`${firstDaemon.baseUrl}/api/v1/attention`)).status).toBe(401);
     const firstSession = await authenticate(firstDaemon, firstToken);
 
     const registration = await fetch(`${firstDaemon.baseUrl}/api/v1/projects/fixtures/register`, {
@@ -1265,6 +1267,25 @@ describe("local daemon session and state boundary", () => {
     });
     const request = waiting.humanRequests[0];
     if (!request) throw new Error("Expected an open HumanRequest");
+    const firstAttention = attentionInboxResponseSchema.parse(
+      await (
+        await fetch(`${firstDaemon.baseUrl}/api/v1/attention`, {
+          headers: { cookie: firstSession.cookie },
+        })
+      ).json(),
+    );
+    expect(firstAttention).toMatchObject({
+      items: [
+        {
+          id: request.id,
+          workItem: { id: workItemId },
+          section: "BLOCKING_NOW",
+          category: "QUESTION",
+          action: "ANSWER_REQUEST",
+        },
+      ],
+      hasMore: false,
+    });
 
     await firstDaemon.close();
     daemon = undefined;
@@ -1276,6 +1297,15 @@ describe("local daemon session and state boundary", () => {
     });
     const restored = workflowSnapshotSchema.parse(await restoredResponse.json());
     expect(restored.humanRequests[0]).toMatchObject({ id: request.id, status: "OPEN", version: 1 });
+    expect(
+      attentionInboxResponseSchema.parse(
+        await (
+          await fetch(`${daemon.baseUrl}/api/v1/attention`, {
+            headers: { cookie: secondSession.cookie },
+          })
+        ).json(),
+      ),
+    ).toMatchObject({ items: [{ id: request.id }], hasMore: false });
 
     const answerBody = JSON.stringify({
       schemaVersion: 1,
@@ -1300,6 +1330,15 @@ describe("local daemon session and state boundary", () => {
     expect(hardPaused.usageRecords.map(({ amount }) => amount)).toEqual([50, 30, 15, 5]);
     expect(hardPaused.humanRequests[0]).toMatchObject({ status: "RESOLVED", version: 2 });
     expect(hardPaused.decisions).toHaveLength(1);
+    expect(
+      attentionInboxResponseSchema.parse(
+        await (
+          await fetch(`${daemon.baseUrl}/api/v1/attention`, {
+            headers: { cookie: secondSession.cookie },
+          })
+        ).json(),
+      ),
+    ).toMatchObject({ items: [], hasMore: false });
 
     const overrideResponse = await fetch(
       `${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/budget-override`,
@@ -1343,6 +1382,26 @@ describe("local daemon session and state boundary", () => {
     if (!acceptancePackage || !awaitingAcceptance.run) {
       throw new Error("Expected a pending AcceptancePackage");
     }
+    expect(
+      attentionInboxResponseSchema.parse(
+        await (
+          await fetch(`${daemon.baseUrl}/api/v1/attention`, {
+            headers: { cookie: secondSession.cookie },
+          })
+        ).json(),
+      ),
+    ).toMatchObject({
+      items: [
+        {
+          workItem: { id: workItemId },
+          section: "BLOCKING_NOW",
+          category: "APPROVAL",
+          action: "REVIEW_ACCEPTANCE",
+          acceptancePackageId: acceptancePackage.id,
+        },
+      ],
+      hasMore: false,
+    });
     const acceptanceResponse = await fetch(
       `${daemon.baseUrl}/api/v1/work-items/${workItemId}/acceptance/${acceptancePackage.id}/resolve`,
       {
@@ -1370,6 +1429,15 @@ describe("local daemon session and state boundary", () => {
       headers: { cookie: secondSession.cookie },
     });
     expect(await acceptedWorkItemResponse.json()).toMatchObject({ workItem: { state: "DONE" } });
+    expect(
+      attentionInboxResponseSchema.parse(
+        await (
+          await fetch(`${daemon.baseUrl}/api/v1/attention`, {
+            headers: { cookie: secondSession.cookie },
+          })
+        ).json(),
+      ),
+    ).toMatchObject({ items: [], hasMore: false });
 
     const repeated = await fetch(`${daemon.baseUrl}/api/v1/human-requests/${request.id}/answer`, {
       method: "POST",

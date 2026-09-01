@@ -17,6 +17,7 @@ const workItemSignal = {
 describe("scopesForSignal", () => {
   it("invalidates the project scope and the work item's own workflow", () => {
     expect(scopesForSignal(workItemSignal)).toEqual([
+      ["attention"],
       ["projects", "p1"],
       ["work-items", "w1"],
       ["stage-attempts"],
@@ -25,6 +26,7 @@ describe("scopesForSignal", () => {
 
   it("invalidates the project list for a project-scoped signal, without a work item scope", () => {
     expect(scopesForSignal({ projectId: "p1", aggregateType: "PROJECT", aggregateId: "p1" })).toEqual([
+      ["attention"],
       ["projects", "p1"],
       ["projects"],
     ]);
@@ -65,6 +67,7 @@ describe("createSignalCoalescer", () => {
     vi.advanceTimersByTime(50);
     expect(flush).toHaveBeenCalledTimes(1);
     expect(flush.mock.calls[0]?.[0]).toEqual([
+      ["attention"],
       ["projects", "p1"],
       ["work-items", "w1"],
       ["stage-attempts"],
@@ -150,6 +153,7 @@ describe("connectEventStream", () => {
     vi.advanceTimersByTime(50);
 
     expect(invalidateScopes).toHaveBeenCalledWith([
+      ["attention"],
       ["projects", "p1"],
       ["work-items", "w1"],
       ["stage-attempts"],

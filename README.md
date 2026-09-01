@@ -65,8 +65,9 @@ recommended for evaluation because it keeps the selected pre-alpha channel visib
 2. Open **Settings → AI provider** and choose **Mock** for the zero-quota walkthrough.
 3. Create a task with a concrete outcome and observable acceptance criteria.
 4. Move it to **Ready** and start the workflow.
-5. Answer the blocking Human Request and approve the explicit mock budget increase.
-6. Inspect Review and QA evidence, then accept the delivery or return it to work as the owner.
+5. Open **Attention**, answer the blocking Human Request, and approve the explicit mock budget increase.
+6. When acceptance appears in **Attention**, open its exact task, inspect Review and QA evidence, then accept the
+   delivery or return it to work as the owner.
 
 The task, request, budget, evidence, and decision survive page reloads and Loomrail restarts. The
 [quick start](docs/guides/GETTING-STARTED.md) walks through the route in detail.
@@ -97,6 +98,7 @@ machine, so never include secrets, personal data, or proprietary code.
 - Local browser UI, loopback daemon, and local SQLite state.
 - Auto-discovered or explicitly selected providers, plus a deterministic Mock route with no provider quota.
 - Project-scoped local MCP connections and a bundled, owner-approved Context7 preset.
+- A global, restart-safe Attention Inbox for Human Requests and acceptance deep-links across every Project.
 - A typed read-only tool SDK at `loomrail/plugin-sdk`; local registration still uses explicit C1 consent and grant.
 - Existing-repository registration, readiness checks, per-task worktrees, change inspection, and owner-approved
   Project Constitution.

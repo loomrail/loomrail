@@ -33,7 +33,6 @@ import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { McpSettingsPanel } from "../components/McpSettingsPanel";
 import { ProjectScaffoldPanel } from "../components/ProjectScaffoldPanel";
 import { useI18n, type TranslationKey } from "../i18n";
-import type { WorkbenchSearch } from "../router";
 import { hasCustomPanelWidths, resetPanelWidths } from "../layout";
 import { applyDensityPreference, readDensityPreference, type DensityPreference } from "../density";
 import { applyThemePreference, readThemePreference, type ThemePreference } from "../theme";
@@ -45,7 +44,7 @@ import {
   useProjectConstitution,
   useProjectReadiness,
   useProjectProviderSelection,
-  useProjectHumanRequests,
+  useAttentionInbox,
   useRegisterRepositoryProject,
   useRepairFixtureProject,
   useRetryProjectConstitutionPublication,
@@ -981,22 +980,38 @@ const SettingsDialog = ({ onOpenChange, open }: SettingsDialogProps): React.JSX.
 const SidebarLink = ({
   active,
   count,
+  countOverflow = false,
   icon,
   label,
-  search,
+  to,
 }: {
   active: boolean;
   count?: number;
+  countOverflow?: boolean;
   icon: IconName;
   label: string;
-  search: WorkbenchSearch;
-}): React.JSX.Element => (
-  <Link className={cn("app-nav-link", active && "is-active")} search={search} to="/">
-    <Icon name={icon} size={15} />
-    <span>{label}</span>
-    {count !== undefined && count > 0 ? <em className="app-nav-link__count">{count}</em> : null}
-  </Link>
-);
+  to: "/" | "/attention";
+}): React.JSX.Element => {
+  const content = (
+    <>
+      <Icon name={icon} size={15} />
+      <span>{label}</span>
+      {count !== undefined && count > 0 ? (
+        <em className="app-nav-link__count">{countOverflow ? `${count.toString()}+` : count}</em>
+      ) : null}
+    </>
+  );
+  const className = cn("app-nav-link", active && "is-active");
+  return to === "/" ? (
+    <Link className={className} search={{}} to="/">
+      {content}
+    </Link>
+  ) : (
+    <Link className={className} to="/attention">
+      {content}
+    </Link>
+  );
+};
 
 /**
  * Reports whether a single-line label is clipped by the width it was given.
@@ -1035,14 +1050,14 @@ const WorkspaceNavigation = ({
 }): React.JSX.Element => {
   const { t } = useI18n();
   const { connection, projects, selectedProject, selectProject } = useWorkspace();
-  const humanRequestsQuery = useProjectHumanRequests(selectedProject?.id);
-  const search = useLocation({ select: (location) => location.search });
+  const attentionQuery = useAttentionInbox();
+  const pathname = useLocation({ select: (location) => location.pathname });
   const connected = connection?.status === "connected";
   const projectInitial = selectedProject?.name.slice(0, 1).toUpperCase() ?? "–";
   const projectName = selectedProject?.name ?? "";
   const { clipped: projectNameClipped, ref: projectNameRef } = useClippedLabel(projectName);
-  const blockingCount = humanRequestsQuery.data?.humanRequests.filter(({ blocking }) => blocking).length ?? 0;
-  const onNeedsYou = search.summary === "needsYou";
+  const attentionCount = attentionQuery.data?.items.length ?? 0;
+  const onAttention = pathname === "/attention";
 
   return (
     <>
@@ -1081,13 +1096,14 @@ const WorkspaceNavigation = ({
           </div>
         )}
         <nav aria-label={t("nav.workspace")} className="app-nav app-nav--nested" onClick={onNavigate}>
-          <SidebarLink active={!onNeedsYou} icon="board" label={t("nav.currentWork")} search={{}} />
+          <SidebarLink active={!onAttention} icon="board" label={t("nav.currentWork")} to="/" />
           <SidebarLink
-            active={onNeedsYou}
-            count={blockingCount}
+            active={onAttention}
+            count={attentionCount}
+            countOverflow={attentionQuery.data?.hasMore ?? false}
             icon="question"
-            label={t("nav.humanRequests")}
-            search={{ summary: "needsYou" }}
+            label={t("nav.attention")}
+            to="/attention"
           />
         </nav>
       </div>
@@ -1114,6 +1130,7 @@ const WorkspaceNavigation = ({
 export const AppFrame = (): React.JSX.Element => {
   const { t } = useI18n();
   const { connectionPending, projectsPending, selectedProject } = useWorkspace();
+  const onAttention = useLocation({ select: (location) => location.pathname === "/attention" });
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const projectInitial = selectedProject?.name.slice(0, 1).toUpperCase() ?? "–";
@@ -1170,7 +1187,7 @@ export const AppFrame = (): React.JSX.Element => {
               {selectedProject?.name ?? t("project.noneSingle")}
             </span>
             <Icon name="chevronRight" size={12} />
-            <strong>{t("work.current")}</strong>
+            <strong>{t(onAttention ? "attention.inboxTitle" : "work.current")}</strong>
           </div>
           <div className="app-topbar__actions">
             <NewTaskDialog />

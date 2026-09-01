@@ -1,4 +1,5 @@
 import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { opaqueIdSchema } from "@loomrail/contracts";
 
 import {
   defaultBoardView,
@@ -11,10 +12,11 @@ import {
 } from "./boardView";
 import { AppFrame } from "./shell/AppFrame";
 import { WorkbenchPage } from "./views/WorkbenchPage";
+import { AttentionPage } from "./views/AttentionPage";
 
 const rootRoute = createRootRoute({ component: AppFrame });
 
-// The only quick filter on the board is the workspace navigation's Human requests destination.
+// The board retains one bounded summary filter for links shared before the global Inbox existed.
 const summaryFilters = new Set(["needsYou"]);
 const workItemFilters = new Set([
   "priority-high",
@@ -42,11 +44,15 @@ export type WorkbenchSearch = {
   order?: BoardOrdering;
   scope?: Exclude<BoardScope, "active">;
   summary?: SummaryFilter;
+  project?: string;
+  task?: string;
 };
 
 const validateWorkbenchSearch = (search: Record<string, unknown>): WorkbenchSearch => {
   const rawFilters = search["filters"];
   const rawSummary = search["summary"];
+  const project = opaqueIdSchema.safeParse(search["project"]);
+  const task = opaqueIdSchema.safeParse(search["task"]);
   const filters =
     typeof rawFilters === "string"
       ? rawFilters
@@ -75,6 +81,8 @@ const validateWorkbenchSearch = (search: Record<string, unknown>): WorkbenchSear
     ...(dir === undefined ? {} : { dir }),
     ...(hideEmpty === undefined ? {} : { hideEmpty }),
     ...(scope === undefined ? {} : { scope }),
+    ...(project.success ? { project: project.data } : {}),
+    ...(task.success ? { task: task.data } : {}),
   };
 };
 
@@ -85,7 +93,13 @@ const workbenchRoute = createRoute({
   validateSearch: validateWorkbenchSearch,
 });
 
-const routeTree = rootRoute.addChildren([workbenchRoute]);
+const attentionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/attention",
+  component: AttentionPage,
+});
+
+const routeTree = rootRoute.addChildren([workbenchRoute, attentionRoute]);
 
 export const router = createRouter({
   routeTree,
