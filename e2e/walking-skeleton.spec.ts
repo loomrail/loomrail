@@ -2833,7 +2833,7 @@ test.describe("authenticated walking skeleton", () => {
     await page.keyboard.press("Enter");
     const consent = mcp.locator(".mcp-consent");
     await expect(consent).toContainText(process.execPath);
-    await expect(consent).toContainText("@upstash/context7-mcp");
+    await expect(consent).toContainText(/@upstash[\\/]+context7-mcp/u);
     await expect(consent).toContainText("--transport");
     await expect(consent).toContainText("stdio");
     await expect(consent).not.toContainText("npx -y");
