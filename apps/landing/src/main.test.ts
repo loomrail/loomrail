@@ -18,7 +18,7 @@ function renderControls(): void {
       <p data-i18n="heroTitle">Hero</p>
       <a data-doc-link="quick-start" href="https://example.test/start">Guide</a>
       <button data-theme-toggle><span data-theme-label></span></button>
-      <video data-product-demo poster="./demo/mock-route-light.png">
+      <video data-product-demo poster="./demo/mock-route-light.webp">
         <source data-demo-format="webm" src="./demo/mock-route-light.webm" type="video/webm" />
         <source data-demo-format="mp4" src="./demo/mock-route-light.mp4" type="video/mp4" />
       </video>
@@ -66,7 +66,7 @@ describe("landing interactions", () => {
     const poster = () => document.querySelector<HTMLVideoElement>("[data-product-demo]")?.poster ?? "";
     expect(document.documentElement.dataset["theme"]).toBe("light");
     expect(sources().every((source) => source.src.includes("mock-route-light"))).toBe(true);
-    expect(poster()).toContain("mock-route-light.png");
+    expect(poster()).toContain("mock-route-light.webp");
 
     toggle?.click();
 
@@ -74,7 +74,7 @@ describe("landing interactions", () => {
     expect(localStorage.getItem("loomrail-landing-theme")).toBe("dark");
     expect(toggle?.getAttribute("aria-label")).toBe("Switch to light theme");
     expect(sources().every((source) => source.src.includes("mock-route-dark"))).toBe(true);
-    expect(poster()).toContain("mock-route-dark.png");
+    expect(poster()).toContain("mock-route-dark.webp");
     expect(sources().map((source) => source.dataset["demoFormat"])).toEqual(["webm", "mp4"]);
   });
 
@@ -193,7 +193,7 @@ describe("landing public contract", () => {
     expect(demo[0]?.hasAttribute("muted")).toBe(true);
     expect(demo[0]?.hasAttribute("loop")).toBe(true);
     expect(demo[0]?.hasAttribute("playsinline")).toBe(true);
-    expect(demo[0]?.getAttribute("poster")).toBe("./demo/mock-route-light.png");
+    expect(demo[0]?.getAttribute("poster")).toBe("./demo/mock-route-light.webp");
     expect([...(demo[0]?.querySelectorAll("source") ?? [])].map((s) => s.getAttribute("type"))).toEqual([
       "video/webm",
       "video/mp4",

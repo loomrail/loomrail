@@ -480,7 +480,7 @@ function applyTheme(doc: Document, theme: Theme): void {
 function applyDemoTheme(doc: Document, theme: Theme): void {
   for (const video of doc.querySelectorAll<HTMLVideoElement>("[data-product-demo]")) {
     const wasPlaying = !video.paused;
-    video.poster = `./demo/mock-route-${theme}.png`;
+    video.poster = `./demo/mock-route-${theme}.webp`;
     for (const source of video.querySelectorAll<HTMLSourceElement>("source[data-demo-format]")) {
       source.src = `./demo/mock-route-${theme}.${source.dataset["demoFormat"] ?? "webm"}`;
     }

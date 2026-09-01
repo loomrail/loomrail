@@ -335,6 +335,9 @@ h3 {
 
 .hero-shot {
   margin-top: var(--space-2xl);
+  /* The recording is 1920px wide; holding the frame narrower than the shell keeps it
+   * oversampled on high-density screens instead of upscaled. */
+  max-width: calc(68rem + var(--page-gutter) * 2);
 }
 
 .frame {
