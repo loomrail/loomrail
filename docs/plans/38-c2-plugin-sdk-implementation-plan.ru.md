@@ -1,7 +1,7 @@
 # C2 Plugin SDK v1 — implementation plan
 
 **Дата:** 2026-08-31
-**Статус:** implemented locally; platform CI gate pending
+**Статус:** implemented; macOS and Windows CI gate passed
 **Спецификация:** [`37-c2-plugin-sdk-spec.ru.md`](37-c2-plugin-sdk-spec.ru.md)
 
 ## 1. Contract and authoring module
@@ -29,14 +29,15 @@
 
 - [x] Run format, non-landing lint, typecheck, unit/integration, browser regression and clean release checks.
 - [x] Confirm `apps/landing` has no diff from this work.
-- [ ] Close C2 only after macOS and Windows CI are green for the shared C1/C3/C2 release candidate.
+- [x] Close C2 after macOS and Windows CI are green for the shared C1/C3/C2 release candidate:
+      [run 33502010465](https://github.com/loomrail/loomrail/actions/runs/33502010465).
 
 ## 5. Local evidence
 
 - `@loomrail/plugin-sdk`: 11/11 tests, including the real C1 probe and redacted handler failure;
 - repository packages: 801/801 tests;
 - Playwright: 40/40 scenarios;
-- clean `loomrail-0.1.0-alpha.2.tgz`: CLI, Context7, MCP proxy/supervisor and `loomrail/plugin-sdk` verified outside
+- clean `loomrail-0.1.0-alpha.3.tgz`: CLI, Context7, MCP proxy/supervisor and `loomrail/plugin-sdk` verified outside
   the monorepo;
-- format, public tree, non-landing lint, strict typecheck and production audit green;
-- `apps/landing` source diff empty. Its independent lint ownership remains with the dedicated landing session.
+- format, public tree, repository lint, strict typecheck and production audit green;
+- Windows and macOS clean installs passed; `apps/landing` source was not changed as part of C2.

@@ -34,9 +34,10 @@ Gate: SQLite не хранит challenge, raw input/output, env values или cr
       group и Windows `taskkill /T`.
 - [x] Добавить durable mode-`0600` process registry и startup reconciliation для случая, когда вместе с daemon умер
       supervisor, а server tree пережил оба процесса; reused pid fail-safe проверяется отдельно.
-- [ ] Закрепить Windows CI evidence для `taskkill /T`: exact executable/argv и graceful/forced branches покрыты
+- [x] Закрепить Windows CI evidence для `taskkill /T`: exact executable/argv и graceful/forced branches покрыты
       platform-adapter unit tests, POSIX process group — real-process tests локально, а workflow содержит отдельный
-      Windows MCP process-tree step. Чекбокс закрывается только после реального зелёного GitHub Actions run.
+      Windows MCP process-tree step. Реальный Windows job, полный `verify`, audit, browser smoke и clean install
+      прошли в [run 33502010465](https://github.com/loomrail/loomrail/actions/runs/33502010465).
 
 Gate: deletion test возвращает всю MCP complexity в daemon/adapters; gateway interface остаётся provider-neutral.
 
@@ -81,10 +82,9 @@ Gate: UI не имеет поля env/secret/URL/cwd/shell и не может pr
 - [x] Browser E2E: propose → exact consent → real probe → grant → restart persistence → revoke; daemon integration
       отдельно проверяет exact ProviderSession snapshot и real proxy call.
 - [x] Manual browser QA RU/EN, light/dark, keyboard and narrow viewport.
-- [x] `pnpm format:check`, build, typecheck, affected/full tests, 39-test E2E и `git diff --check`; landing remains
-      untouched. Non-landing lint зелёный; repository-wide `pnpm lint` всё ещё останавливается на чужом
-      `apps/landing/src/main.test.ts:138` (`unobserve`), который эта сессия намеренно не меняет.
-- [x] Platform process-tree seam покрыт 5 unit tests; gateway suite — 24/24. Публичный gateway interface не получил
+- [x] `pnpm verify`, 42-test E2E, production audit, clean tarball install и `git diff --check` зелёные; landing source
+      не менялся в рамках C1.
+- [x] Platform process-tree seam покрыт 5 unit tests; gateway suite — 25/25. Публичный gateway interface не получил
       platform flags или process primitives.
 - [x] Release bundle включает gateway runtime dependencies и отдельные `proxy.js`/`supervisor.js`; clean-install
       tarball test запускает оба entrypoint вне monorepo перед проверкой daemon/Workbench.

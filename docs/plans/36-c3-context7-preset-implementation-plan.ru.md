@@ -26,7 +26,8 @@
 
 - [x] Обновить threat model для bundled supply chain и outbound query disclosure.
 - [x] Прогнать focused suites, non-landing lint/typecheck, 40-test E2E, production audit и clean tarball install.
-- [ ] Закрыть C3 только после реального Windows CI вместе с оставшимся C1 gate.
+- [x] Закрыть C3 после реального Windows CI вместе с C1 gate: Windows `verify`, browser smoke и clean tarball install
+      прошли в [run 33502010465](https://github.com/loomrail/loomrail/actions/runs/33502010465).
 
-Локальный итог: contracts 109/109, gateway 24/24, daemon 166/166, web 63/63, Playwright 40/40;
-`pnpm audit --prod --audit-level high` не нашёл известных уязвимостей. Landing source не изменялся.
+Итоговый release gate: локальные focused/full suites, Playwright 42/42 и
+`pnpm audit --prod --audit-level high` зелёные; macOS и Windows CI прошли. Landing source не изменялся в рамках C3.
