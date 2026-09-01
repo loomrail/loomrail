@@ -1,9 +1,11 @@
 import { randomBytes } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
 
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
+import type { ProviderAdapter } from "../packages/provider-core/dist/index.js";
 
 const initializeWorkspace = async (page: Page): Promise<void> => {
   const initialize = page.getByRole("button", { name: "Initialize demo workspace" });
@@ -31,6 +33,113 @@ const chooseInSettings = async (page: Page, control: string, option: string): Pr
   await settings.getByRole("group", { name: control }).getByRole("button", { name: option }).click();
   await settings.locator(".lr-dialog__header button").click();
   await expect(settings).toHaveCount(0);
+};
+
+const reviewRouteAdapter = (
+  passReviewRound: number | null,
+): { adapter: ProviderAdapter; seenStages: string[] } => {
+  const seenStages: string[] = [];
+  const adapter: ProviderAdapter = {
+    capabilities: () => ({
+      provider: "CODEX",
+      start: true,
+      interrupt: true,
+      eventStream: false,
+      usageReporting: false,
+      contextWindowReporting: false,
+      checkpointOnRequest: false,
+      contextWindowTokens: 128_000,
+      stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+      costReporting: false,
+    }),
+    start: async (invocation) => {
+      const { attempt, stage } = invocation.session;
+      seenStages.push(`${stage}:${attempt.toString()}`);
+      if (stage === "IMPLEMENT") {
+        if (!invocation.workspace) throw new Error("IMPLEMENT must receive its worktree");
+        await writeFile(
+          resolve(invocation.workspace.path, "review-loop-browser.txt"),
+          passReviewRound === attempt
+            ? "version-guarded update\n"
+            : `unsafe update round ${attempt.toString()}\n`,
+          "utf8",
+        );
+        return {
+          type: "COMPLETED",
+          summary:
+            passReviewRound === attempt
+              ? "Applied the requested version guard."
+              : `Implemented revision ${attempt.toString()} for independent review.`,
+        };
+      }
+      if (stage === "REVIEW") {
+        const passed = passReviewRound === attempt;
+        const title = passed ? "Independent re-review passed" : "Independent review found a defect";
+        const summary = passed
+          ? "The version guard now rejects the stale update."
+          : `Review round ${attempt.toString()} still accepts a stale update.`;
+        return {
+          type: "COMPLETED",
+          summary,
+          artifacts: [
+            {
+              kind: "REVIEW_REPORT",
+              title,
+              summary,
+              checks: ["Inspected the stable implementation tree", "Exercised the stale update path"],
+            },
+          ],
+          reviewReport: {
+            kind: "REVIEW_REPORT",
+            title,
+            summary,
+            checks: ["Inspected the stable implementation tree", "Exercised the stale update path"],
+            verdict: passed ? "PASSED" : "CHANGES_REQUESTED",
+            findings: passed
+              ? []
+              : [
+                  {
+                    severity: "HIGH",
+                    title: "Stale update is accepted",
+                    description: `Revision ${attempt.toString()} does not guard the aggregate version.`,
+                    path: "review-loop-browser.txt",
+                    startLine: 1,
+                    endLine: 1,
+                    reproduction: "Submit the previous version and observe the write succeed.",
+                    criterion: "Stale updates fail closed.",
+                    suggestedFix: "Guard the update by expected version.",
+                  },
+                ],
+          },
+        };
+      }
+      if (stage === "QA") {
+        return {
+          type: "COMPLETED",
+          summary: "QA verified the corrected revision.",
+          artifacts: [
+            {
+              kind: "QA_REPORT",
+              title: "R1 browser-route QA",
+              summary: "The corrected update path passed the bounded QA scenario.",
+              checks: ["Corrected file present", "Version guard scenario passed"],
+            },
+          ],
+        };
+      }
+      if (stage === "ACCEPTANCE") {
+        return {
+          type: "READY_FOR_ACCEPTANCE",
+          releaseNote: "The defect was fixed, independently re-reviewed, and verified by QA.",
+          verifyInstructions: ["Inspect the two review rounds and the QA evidence."],
+        };
+      }
+      return { type: "COMPLETED", summary: `${stage} completed for the R1 browser route.` };
+    },
+    requestHandoff: () => Promise.resolve(),
+    abortSession: () => Promise.resolve(),
+  };
+  return { adapter, seenStages };
 };
 
 test.describe("independent review cockpit", () => {
@@ -228,5 +337,95 @@ test.describe("independent review cockpit", () => {
     await page.reload();
     await expect(page.getByRole("region", { name: "Независимое ревью" })).toBeVisible();
     await expect(page.getByText("Риск принят", { exact: true })).toBeVisible();
+  });
+
+  test("drives a defect through a fix and independent re-review before QA", async ({ page }) => {
+    const { adapter, seenStages } = reviewRouteAdapter(2);
+
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      providerAdapter: adapter,
+      webRoot: resolve("apps/web/dist"),
+    });
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    const taskTitle = "R1 real review route";
+    await createTask(page, taskTitle);
+    const inspector = page.getByRole("complementary", { name: taskTitle });
+    await inspector.getByRole("button", { name: "Move to Ready" }).click();
+    await inspector.getByRole("button", { name: "Start workflow" }).click();
+
+    await expect(inspector.getByRole("heading", { name: "Acceptance package" })).toBeVisible({
+      timeout: 20_000,
+    });
+    const review = inspector.getByRole("region", { name: "Independent review" });
+    await expect(review.getByText("Review round 2", { exact: true })).toBeVisible();
+    await expect(review.getByText("Passed", { exact: true })).toBeVisible();
+    await expect(review.getByText("Separate run, same provider", { exact: true })).toBeVisible();
+    await expect(review.getByText("Stale update is accepted", { exact: true })).toBeVisible();
+    await expect(review.getByText("Resolved", { exact: true })).toBeVisible();
+    await expect(inspector.getByText("R1 browser-route QA", { exact: true })).toBeVisible();
+    expect(seenStages).toEqual([
+      "DISCOVERY:1",
+      "PLAN:1",
+      "IMPLEMENT:1",
+      "REVIEW:1",
+      "IMPLEMENT:2",
+      "REVIEW:2",
+      "QA:1",
+      "ACCEPTANCE:1",
+    ]);
+  });
+
+  test("bounds an exhausted loop to one owner-authorized round and cancellation", async ({ page }) => {
+    const { adapter, seenStages } = reviewRouteAdapter(null);
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      providerAdapter: adapter,
+      webRoot: resolve("apps/web/dist"),
+    });
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    const taskTitle = "R1 exhausted review route";
+    await createTask(page, taskTitle);
+    const inspector = page.getByRole("complementary", { name: taskTitle });
+    await inspector.getByRole("button", { name: "Move to Ready" }).click();
+    await inspector.getByRole("button", { name: "Start workflow" }).click();
+
+    await expect(inspector.getByRole("heading", { name: "Review loop needs a decision" })).toBeVisible({
+      timeout: 20_000,
+    });
+    await inspector.getByRole("radio", { name: /Authorize one final fix round/ }).click();
+    await inspector.getByRole("button", { name: "Answer & resume" }).click();
+
+    await expect(
+      inspector.getByText("The owner-authorized review round still left open findings.", { exact: true }),
+    ).toBeVisible({ timeout: 20_000 });
+    const review = inspector.getByRole("region", { name: "Independent review" });
+    await expect(review.getByText("Review round 3", { exact: true })).toBeVisible();
+    await expect(review.getByText("Changes requested", { exact: true })).toBeVisible();
+    await expect(inspector.getByRole("radio", { name: /Authorize one final fix round/ })).toHaveCount(0);
+    await inspector.getByRole("radio", { name: "Cancel the work" }).click();
+    await inspector.getByRole("button", { name: "Answer & resume" }).click();
+
+    await page.getByRole("button", { name: "All issues", exact: true }).click();
+    await page.getByRole("button", { name: taskTitle }).click();
+    const cancelledInspector = page.getByRole("complementary", { name: taskTitle });
+    await expect(
+      cancelledInspector.getByRole("heading", { name: "Review loop needs a decision" }),
+    ).toHaveCount(0);
+    await expect(cancelledInspector.getByText("Cancelled", { exact: true }).first()).toBeVisible();
+    expect(seenStages).toEqual([
+      "DISCOVERY:1",
+      "PLAN:1",
+      "IMPLEMENT:1",
+      "REVIEW:1",
+      "IMPLEMENT:2",
+      "REVIEW:2",
+      "IMPLEMENT:3",
+      "REVIEW:3",
+    ]);
   });
 });

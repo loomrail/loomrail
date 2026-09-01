@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implementation in progress
+**Статус:** implementation complete; release gate pending
 **Спецификация:** [`45-r1-independent-review-loop-spec.ru.md`](45-r1-independent-review-loop-spec.ru.md)
 
 ## 1. Contracts and pure decisions
@@ -32,10 +32,12 @@
 - [x] Добавить owner disposition actions с обязательной причиной и visible focus.
 - [x] Добавить RU/EN, light/dark, 320 px и reload/reconnect browser QA.
 - [x] Добавить явный browser QA для stale/conflict feedback.
-- [ ] Browser route: defect -> fix -> re-review -> QA и exhausted loop -> HumanRequest.
+- [x] Browser route: defect -> fix -> re-review -> QA.
+- [x] Browser route: exhausted loop -> HumanRequest -> owner-authorized final round / cancel.
 
 ## 5. Security, verification and release
 
 - [x] Обновить threat model, domain vocabulary, architecture и user guide.
-- [ ] Focused tests, затем full `pnpm verify`, audit, E2E и clean tarball.
+- [x] Focused tests, dependency audit и full browser E2E.
+- [ ] Full `pnpm verify` и clean tarball после зелёного landing lint gate.
 - [ ] macOS/Windows CI; tag/npm publish только на зелёном gate.
