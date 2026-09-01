@@ -727,7 +727,9 @@ record beside durable local state. Startup validates the bounded non-symlink rec
 start time before killing a tree that survived both daemon and supervisor; a reused pid is left alone. The remaining
 release gate is a real green Windows CI run for the `taskkill /T` branch. A platform adapter test fixes the exact
 `taskkill.exe /PID <pid> /T [/F]` argument vector without shell interpolation, and CI exposes the Windows MCP lifecycle
-suite as a dedicated step. A fully compromised same-user account remains outside the local-mode boundary.
+suite as a dedicated step. The Windows identity probe returns the process creation time as an absolute Unix timestamp;
+it does not combine a pre-spawn JavaScript clock with an elapsed duration measured after PowerShell startup. A fully
+compromised same-user account remains outside the local-mode boundary.
 
 **T29 — capability drift or provider ambient config widens authority. High.** Consent binds immutable revision digest;
 Grant is a separate closed tool allowlist; capability snapshot is observation only. Codex keeps

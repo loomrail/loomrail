@@ -103,19 +103,19 @@ const createWindowsOperations = (dependencies: ProcessTreeDependencies): Process
   treeExists: (rootPid) => signalExists(dependencies, rootPid, false),
   gracefulStop: (rootPid) => stopWindowsTree(dependencies, rootPid, false),
   forceStop: (rootPid) => stopWindowsTree(dependencies, rootPid, true),
-  startedAt: async (pid, now) => {
+  startedAt: async (pid, _now) => {
     const pidText = requirePid(pid);
     const output = await dependencies.execute("powershell.exe", [
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      `$candidate = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = ${pidText}' -Property CreationDate; if ($null -ne $candidate) { [int64](([DateTime]::UtcNow - $candidate.CreationDate.ToUniversalTime()).TotalMilliseconds) }`,
+      `$candidate = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = ${pidText}' -Property CreationDate; if ($null -ne $candidate) { [int64]([DateTimeOffset]$candidate.CreationDate).ToUnixTimeMilliseconds() }`,
     ]);
     if (!output.ok) return null;
-    const elapsedMilliseconds = Number(output.stdout.trim());
-    if (!Number.isSafeInteger(elapsedMilliseconds) || elapsedMilliseconds < 0) return null;
-    return new Date(now.getTime() - elapsedMilliseconds);
+    const startedAtMilliseconds = Number(output.stdout.trim());
+    if (!Number.isSafeInteger(startedAtMilliseconds) || startedAtMilliseconds < 0) return null;
+    return new Date(startedAtMilliseconds);
   },
 });
 

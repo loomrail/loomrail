@@ -80,12 +80,13 @@ describe("process-tree platform operations", () => {
     ]);
   });
 
-  it("reads Windows process age with a fixed executable and argument vector", async () => {
-    const fixture = dependencies({ stdout: "1250\r\n" });
+  it("reads the absolute Windows process start time with a fixed executable and argument vector", async () => {
+    const startedAt = new Date("2026-08-31T11:59:58.750Z");
+    const fixture = dependencies({ stdout: `${startedAt.getTime().toString()}\r\n` });
     const operations = createProcessTreeOperations("win32", fixture.value);
     const now = new Date("2026-08-31T12:00:00.000Z");
 
-    await expect(operations.startedAt(7301, now)).resolves.toEqual(new Date("2026-08-31T11:59:58.750Z"));
+    await expect(operations.startedAt(7301, now)).resolves.toEqual(startedAt);
     expect(fixture.executeCalls).toHaveLength(1);
     expect(fixture.executeCalls[0]?.file).toBe("powershell.exe");
     expect(fixture.executeCalls[0]?.args.slice(0, 4)).toEqual([
@@ -95,6 +96,7 @@ describe("process-tree platform operations", () => {
       "-Command",
     ]);
     expect(fixture.executeCalls[0]?.args[4]).toContain("ProcessId = 7301");
+    expect(fixture.executeCalls[0]?.args[4]).toContain("ToUnixTimeMilliseconds");
   });
 
   it("reports missing processes and failed start-time probes without throwing", async () => {
