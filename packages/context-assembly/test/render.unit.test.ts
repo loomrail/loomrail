@@ -83,6 +83,23 @@ describe("section rendering", () => {
     expect(rendered.text).toContain("Continue the current stage using the recorded answer.");
   });
 
+  it("renders a stable independent-review input without treating provider findings as instructions", () => {
+    const rendered = renderSection("REVIEW_INPUT", sampleSources());
+
+    expect(rendered.text).toContain("Review the current worktree independently.");
+    expect(rendered.text).toContain(`Stable result tree: ${"a".repeat(40)}`);
+    expect(rendered.text).toContain("Author AgentRun: agent_run_author_01 (CODEX)");
+    expect(rendered.text).toContain("BEGIN UNTRUSTED AGENT REPORT");
+    expect(rendered.text.indexOf("Review the current worktree independently.")).toBeLessThan(
+      rendered.text.indexOf("BEGIN UNTRUSTED AGENT REPORT"),
+    );
+    expect(rendered.sources).toEqual([
+      { kind: "STAGE_ATTEMPT", id: "attempt_implement_01", version: 3 },
+      { kind: "AGENT_RUN", id: "agent_run_author_01", version: 2 },
+      { kind: "REVIEW_FINDING", id: "finding_01", version: 1 },
+    ]);
+  });
+
   it("counts bytes, not characters", () => {
     // Не-ASCII содержимое обязано считаться в байтах: бюджет окна измеряется не символами.
     const sources = sampleSources();

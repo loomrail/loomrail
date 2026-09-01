@@ -60,6 +60,15 @@ const complete = (invocation: ProviderInvocation) =>
               checks: ["Requirements traced", "No blocking findings", "Regression scope recorded"],
             },
           ],
+          reviewReport: {
+            kind: "REVIEW_REPORT",
+            title: "Independent mock review",
+            summary:
+              "The synthetic reviewer found no blocking correctness, security, or maintainability issues.",
+            checks: ["Requirements traced", "No blocking findings", "Regression scope recorded"],
+            verdict: "PASSED",
+            findings: [],
+          },
         }
       : invocation.session.stage === "QA"
         ? {

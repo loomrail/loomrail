@@ -37,6 +37,29 @@ export const sampleSources = (): ContextSources => ({
     deadEnds: ["Tried streaming parse; the library does not support it"],
     openQuestions: ["Should the timeout be configurable per work item?"],
   },
+  reviewInput: {
+    implementationAttempt: {
+      id: "attempt_implement_01",
+      version: 3,
+      attempt: 2,
+      resultTree: "a".repeat(40),
+    },
+    authorAgentRun: { id: "agent_run_author_01", version: 2, provider: "CODEX" },
+    openFindings: [
+      {
+        id: "finding_01",
+        version: 1,
+        severity: "HIGH",
+        title: "Timeout is not applied",
+        description: "The retry branch skips the configured timeout.",
+        path: "packages/parser/src/retry.ts",
+        startLine: 20,
+        endLine: 24,
+        reproduction: "Submit a malformed PDF through the retry branch.",
+        criterion: "Parsing is bounded to a 5s timeout",
+      },
+    ],
+  },
   evidence: [
     {
       id: "ev_01",
@@ -56,7 +79,7 @@ export const sampleSources = (): ContextSources => ({
   ],
 });
 
-// A workflow-template-level declaration covering all six v1 sections. The two most important
+// A workflow-template-level declaration covering all seven v1 sections. The two most important
 // sections are required; the rest are optional and ordered so the least important (ACTIVITY)
 // is dropped first under a tight budget.
 export const specWithAllSections = (): ContextPackSpec => ({
@@ -66,7 +89,8 @@ export const specWithAllSections = (): ContextPackSpec => ({
     { id: "WORKFLOW_POSITION", ordinal: 1, required: true },
     { id: "DECISIONS", ordinal: 2, required: false },
     { id: "LATEST_CHECKPOINT", ordinal: 3, required: false },
-    { id: "EVIDENCE", ordinal: 4, required: false },
-    { id: "ACTIVITY", ordinal: 5, required: false },
+    { id: "REVIEW_INPUT", ordinal: 4, required: false },
+    { id: "EVIDENCE", ordinal: 5, required: false },
+    { id: "ACTIVITY", ordinal: 6, required: false },
   ],
 });

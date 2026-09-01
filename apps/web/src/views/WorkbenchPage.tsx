@@ -15,6 +15,9 @@ import {
   type PipelineRun,
   type ProviderSession,
   type ReadinessCheck,
+  type ReviewFinding,
+  type ReviewFindingOwnerDisposition,
+  type ReviewStateResponse,
   type SessionPauseFailureCode,
   type StageAttempt,
   type StageAttemptStatus,
@@ -27,6 +30,7 @@ import {
 import {
   ActionMenu,
   AppliedFilterBar,
+  Badge,
   Button,
   CascadingFilter,
   Checkbox,
@@ -80,6 +84,7 @@ import { moveShortcutsFor, transitionTargets } from "../taskMoves";
 import {
   useInitializeFixtureWorkspace,
   useApproveBudgetOverride,
+  useDisposeReviewFinding,
   useMoveWorkItem,
   usePipelineControl,
   useProjectHumanRequests,
@@ -92,6 +97,7 @@ import {
   useWorkspace,
   useWorkItemEvents,
   useWorkItemWorkflow,
+  useWorkItemReviews,
   useWorkItemWorkspace,
 } from "../workspace";
 
@@ -812,6 +818,37 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.evidenceRecorded"),
         tone: "success",
       };
+    case "REVIEW_REPORT_RECORDED":
+      return {
+        detail: t("event.reviewReportRecordedDetail", {
+          round: event.data.report.round,
+          verdict: t(`review.verdict.${event.data.report.verdict}`),
+        }),
+        icon: "check",
+        label: t("event.reviewReportRecorded"),
+        tone: event.data.report.verdict === "PASSED" ? "success" : "warning",
+      };
+    case "REVIEW_FINDING_RECORDED":
+      return {
+        detail: event.data.finding.title,
+        icon: "warning",
+        label: t("event.reviewFindingRecorded"),
+        tone: "warning",
+      };
+    case "REVIEW_FINDING_RESOLVED":
+      return {
+        detail: event.data.finding.title,
+        icon: "check",
+        label: t("event.reviewFindingResolved"),
+        tone: "success",
+      };
+    case "REVIEW_LOOP_EXHAUSTED":
+      return {
+        detail: t("event.reviewLoopExhaustedDetail", { round: event.data.report.round }),
+        icon: "pause",
+        label: t("event.reviewLoopExhausted"),
+        tone: "warning",
+      };
     case "ACCEPTANCE_REQUESTED":
       return {
         detail: t("event.acceptanceRequestedDetail"),
@@ -1147,6 +1184,210 @@ const TaskEditDialog = ({ item }: { item: WorkItem }): React.JSX.Element => {
         </Field>
       </form>
     </DialogSurface>
+  );
+};
+
+type ReviewReportView = ReviewStateResponse["reports"][number];
+
+const reviewSeverityTones: Record<ReviewFinding["severity"], BadgeTone> = {
+  LOW: "neutral",
+  MEDIUM: "info",
+  HIGH: "warning",
+  CRITICAL: "danger",
+};
+
+const reviewFindingStatusTones: Record<ReviewFinding["status"], BadgeTone> = {
+  OPEN: "danger",
+  RESOLVED: "success",
+  WAIVED: "warning",
+  FALSE_POSITIVE: "neutral",
+};
+
+const reviewLocation = (finding: ReviewFinding): string | null => {
+  if (finding.path === null) return null;
+  if (finding.startLine === null) return finding.path;
+  return `${finding.path}:${finding.startLine.toString()}-${(finding.endLine ?? finding.startLine).toString()}`;
+};
+
+const ReviewPanel = ({ item }: { item: WorkItem }): React.JSX.Element | null => {
+  const { t } = useI18n();
+  const reviewQuery = useWorkItemReviews(item.id);
+  const dispositionMutation = useDisposeReviewFinding();
+  const [selected, setSelected] = useState<{
+    finding: ReviewFinding;
+    disposition: ReviewFindingOwnerDisposition;
+  } | null>(null);
+  const [reason, setReason] = useState("");
+
+  if (reviewQuery.error) {
+    return (
+      <LocalConnectionRecovery
+        error={reviewQuery.error}
+        onRetry={() => {
+          void reviewQuery.refetch();
+        }}
+        retrying={reviewQuery.isFetching}
+      />
+    );
+  }
+  const review = reviewQuery.data;
+  const latest: ReviewReportView | undefined = review?.reports[0];
+  if (latest === undefined && (review?.findings.length ?? 0) === 0) return null;
+
+  const submitDisposition = (event: SyntheticEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    if (selected === null || reason.trim().length === 0) return;
+    dispositionMutation.mutate(
+      { ...selected, reason: reason.trim() },
+      {
+        onSuccess: () => {
+          setSelected(null);
+          setReason("");
+        },
+      },
+    );
+  };
+
+  return (
+    <section aria-label={t("review.title")} className="review-panel">
+      {latest ? (
+        <header className="review-panel__heading">
+          <div>
+            <span>{t("review.round", { round: latest.round })}</span>
+            <strong>{latest.title}</strong>
+          </div>
+          <Badge tone={latest.verdict === "PASSED" ? "success" : "danger"}>
+            {t(`review.verdict.${latest.verdict}`)}
+          </Badge>
+        </header>
+      ) : null}
+      {latest ? (
+        <div className="review-panel__summary">
+          <p>{latest.summary}</p>
+          <dl>
+            <div>
+              <dt>{t("review.reviewer")}</dt>
+              <dd>{latest.reviewerProvider}</dd>
+            </div>
+            <div>
+              <dt>{t("review.relation")}</dt>
+              <dd>{t(`review.relation.${latest.providerRelation}`)}</dd>
+            </div>
+            <div>
+              <dt>{t("review.tree")}</dt>
+              <dd>
+                <code title={latest.reviewedTree}>{latest.reviewedTree.slice(0, 8)}</code>
+              </dd>
+            </div>
+          </dl>
+        </div>
+      ) : null}
+      {review && review.findings.length > 0 ? (
+        <ol aria-label={t("review.findings")} className="review-finding-list">
+          {review.findings.map((finding) => {
+            const location = reviewLocation(finding);
+            return (
+              <li key={finding.id}>
+                <div className="review-finding__heading">
+                  <strong>{finding.title}</strong>
+                  <span>
+                    <Badge tone={reviewSeverityTones[finding.severity]}>
+                      {t(`review.severity.${finding.severity}`)}
+                    </Badge>
+                    <Badge tone={reviewFindingStatusTones[finding.status]}>
+                      {t(`review.findingStatus.${finding.status}`)}
+                    </Badge>
+                  </span>
+                </div>
+                <p>{finding.description}</p>
+                {location ? <code className="review-finding__location">{location}</code> : null}
+                <div className="review-finding__detail">
+                  <strong>{t("review.reproduction")}</strong>
+                  <span>{finding.reproduction}</span>
+                </div>
+                {finding.status === "OPEN" ? (
+                  <div className="review-finding__actions">
+                    <Button
+                      onClick={() => {
+                        dispositionMutation.reset();
+                        setReason("");
+                        setSelected({ finding, disposition: "WAIVED" });
+                      }}
+                      size="sm"
+                      variant="secondary"
+                    >
+                      {t("review.waive")}
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        dispositionMutation.reset();
+                        setReason("");
+                        setSelected({ finding, disposition: "FALSE_POSITIVE" });
+                      }}
+                      size="sm"
+                      variant="secondary"
+                    >
+                      {t("review.falsePositive")}
+                    </Button>
+                  </div>
+                ) : finding.resolutionReason ? (
+                  <p className="review-finding__resolution">{finding.resolutionReason}</p>
+                ) : null}
+                {selected?.finding.id === finding.id ? (
+                  <form className="review-disposition" onSubmit={submitDisposition}>
+                    <Field htmlFor={`review-disposition-${finding.id}`} label={t("review.reason")}>
+                      <Textarea
+                        autoFocus
+                        id={`review-disposition-${finding.id}`}
+                        maxLength={4_000}
+                        onChange={(event) => {
+                          setReason(event.currentTarget.value);
+                        }}
+                        placeholder={t("review.reasonPlaceholder")}
+                        rows={3}
+                        value={reason}
+                      />
+                    </Field>
+                    {dispositionMutation.error ? (
+                      <LocalConnectionRecovery error={dispositionMutation.error} />
+                    ) : null}
+                    <div>
+                      <Button
+                        disabled={reason.trim().length === 0}
+                        loading={dispositionMutation.isPending}
+                        size="sm"
+                        type="submit"
+                        variant="primary"
+                      >
+                        {t(
+                          selected.disposition === "WAIVED"
+                            ? "review.confirmWaive"
+                            : "review.confirmFalsePositive",
+                        )}
+                      </Button>
+                      <Button
+                        disabled={dispositionMutation.isPending}
+                        onClick={() => {
+                          setSelected(null);
+                          setReason("");
+                        }}
+                        size="sm"
+                        type="button"
+                        variant="secondary"
+                      >
+                        {t("action.cancel")}
+                      </Button>
+                    </div>
+                  </form>
+                ) : null}
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="review-panel__empty">{t("review.noFindings")}</p>
+      )}
+    </section>
   );
 };
 
@@ -1659,6 +1900,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
         ))}
       </ol>
       {currentAttempt ? <AttemptSessionsPanel attempt={currentAttempt} /> : null}
+      <ReviewPanel item={item} />
       {snapshot.acceptancePackage ? (
         <AcceptancePanel
           acceptancePackage={snapshot.acceptancePackage}

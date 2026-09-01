@@ -20,6 +20,7 @@ import {
   constitutionPresetsResponseSchema,
   createWorkItemRequestSchema,
   daemonStatusResponseSchema,
+  disposeReviewFindingRequestSchema,
   eventPageDirectionSchema,
   eventsResponseSchema,
   healthResponseSchema,
@@ -46,6 +47,8 @@ import {
   registerRepositoryProjectRequestSchema,
   refreshProviderAvailabilityRequestSchema,
   resolveAcceptanceRequestSchema,
+  reviewFindingDisposedResultSchema,
+  reviewStateResponseSchema,
   revokeMcpProfileGrantRequestSchema,
   retryProjectConstitutionPublicationRequestSchema,
   retryProjectScaffoldRequestSchema,
@@ -81,6 +84,7 @@ import {
   McpDomainError,
   ProviderSelectionDomainError,
   ReadinessDomainError,
+  ReviewFindingDispositionError,
   ScaffoldDomainError,
   WorkflowDomainError,
   WorkItemDomainError,
@@ -295,6 +299,7 @@ const mcpRevisionParamsSchema = z.object({ projectId: opaqueIdSchema, revisionId
 const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
 const stageAttemptParamsSchema = z.object({ stageAttemptId: opaqueIdSchema }).strict();
 const humanRequestParamsSchema = z.object({ humanRequestId: opaqueIdSchema }).strict();
+const reviewFindingParamsSchema = z.object({ findingId: opaqueIdSchema }).strict();
 const acceptanceParamsSchema = z
   .object({ workItemId: opaqueIdSchema, acceptancePackageId: opaqueIdSchema })
   .strict();
@@ -533,6 +538,10 @@ const sendOperationError = (
     const status = error.code === "WORK_ITEM_NOT_FOUND" || error.code === "PARENT_NOT_FOUND" ? 404 : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
+  if (error instanceof ReviewFindingDispositionError) {
+    const status = error.code === "REVIEW_FINDING_NOT_FOUND" ? 404 : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
   if (error instanceof WorkflowDomainError) {
     const status =
       error.code === "WORKFLOW_NOT_FOUND" ||
@@ -706,13 +715,17 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     app.log,
   );
 
-  const resolveProjectProvider = (projectId: string) => {
+  const resolveProjectProvider = (
+    projectId: string,
+    stage?: WorkflowStage,
+    avoidProvider?: ProviderId | null,
+  ) => {
     if (fixedProviderAdapter !== undefined) return fixedProviderAdapter;
     const result = localState.query({ type: "GET_PROJECT", projectId });
     if (result.type !== "PROJECT" || result.project === null) {
       throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
     }
-    return providerRegistry.resolve(result.project).adapter;
+    return providerRegistry.resolve(result.project, { stage, avoidProvider }).adapter;
   };
 
   // Startup has to report what AUTO means even before the first Project is registered. This value
@@ -2022,6 +2035,55 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
+    app.get("/api/v1/work-items/:workItemId/reviews", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const workItem = localState.query({ type: "GET_WORK_ITEM", workItemId: params.workItemId });
+        if (workItem.type !== "WORK_ITEM" || !workItem.workItem) {
+          throw new WorkItemDomainError("WORK_ITEM_NOT_FOUND", "The WorkItem does not exist");
+        }
+        const snapshot = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        const run = snapshot.type === "WORKFLOW_SNAPSHOT" ? snapshot.snapshot.run : null;
+        if (run === null) {
+          return reviewStateResponseSchema.parse({ schemaVersion: 1, reports: [], findings: [] });
+        }
+        const reports = localState.query({ type: "LIST_REVIEW_REPORTS", pipelineRunId: run.id });
+        const findings = localState.query({ type: "LIST_REVIEW_FINDINGS", pipelineRunId: run.id });
+        if (reports.type !== "REVIEW_REPORTS" || findings.type !== "REVIEW_FINDINGS") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The review state could not be loaded");
+        }
+        const enrichedReports = reports.reports.map((report) => {
+          const author = localState.query({ type: "GET_AGENT_RUN", agentRunId: report.authorAgentRunId });
+          const reviewer = localState.query({
+            type: "GET_AGENT_RUN",
+            agentRunId: report.reviewerAgentRunId,
+          });
+          const authorRun = author.type === "AGENT_RUNS" ? author.runs[0] : undefined;
+          const reviewerRun = reviewer.type === "AGENT_RUNS" ? reviewer.runs[0] : undefined;
+          if (authorRun === undefined || reviewerRun === undefined) {
+            throw new StateStoreError("PERSISTENCE_FAILURE", "A review AgentRun could not be loaded");
+          }
+          return {
+            ...report,
+            authorProvider: authorRun.provider,
+            reviewerProvider: reviewerRun.provider,
+          };
+        });
+        return reviewStateResponseSchema.parse({
+          schemaVersion: 1,
+          reports: enrichedReports,
+          findings: findings.findings,
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
     // Where this work item's agent writes: the repository branch and the worktree directory the
     // owner opens in their own editor (spec §4, "Что видно владельцу").
     //
@@ -2720,6 +2782,32 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow snapshot could not be loaded");
         }
         return workflowSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/review-findings/:findingId/disposition", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = reviewFindingParamsSchema.parse(request.params);
+        const body = disposeReviewFindingRequestSchema.parse(request.body);
+        return reviewFindingDisposedResultSchema.parse(
+          localState.execute({
+            schemaVersion: 1,
+            commandId: body.commandId,
+            correlationId,
+            actor: { type: "HUMAN", id: "local-owner" },
+            type: "DISPOSE_REVIEW_FINDING",
+            payload: {
+              findingId: params.findingId,
+              expectedVersion: body.expectedVersion,
+              disposition: body.disposition,
+              reason: body.reason,
+            },
+          }),
+        );
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }

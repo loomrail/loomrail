@@ -11,6 +11,7 @@ import {
   correlationIdSchema,
   eventsResponseSchema,
   projectsResponseSchema,
+  reviewStateResponseSchema,
   stateCommandResultSchema,
   workItemChangesResponseSchema,
   workItemFileDiffResponseSchema,
@@ -395,6 +396,56 @@ describe("local daemon session and state boundary", () => {
     expect(missing.status).toBe(403);
     expect(foreign.status).toBe(403);
     expect(wrong.status).toBe(403);
+  });
+
+  it("protects the bounded review projection and owner disposition route", async () => {
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, logger: false });
+    const session = await authenticate(daemon, token);
+    const workItemId = await createReadyWorkItem(daemon, session, "review-route-boundary");
+
+    const unauthenticated = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/reviews`);
+    expect(unauthenticated.status).toBe(401);
+
+    const response = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/reviews`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(response.status).toBe(200);
+    expect(reviewStateResponseSchema.parse(await response.json())).toEqual({
+      schemaVersion: 1,
+      reports: [],
+      findings: [],
+    });
+
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      commandId: "dispose-missing-review-finding",
+      expectedVersion: 1,
+      disposition: "WAIVED",
+      reason: "The owner accepts this bounded synthetic risk.",
+    });
+    const missingCsrf = await fetch(
+      `${daemon.baseUrl}/api/v1/review-findings/missing-review-finding/disposition`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: session.cookie,
+          origin: daemon.baseUrl,
+        },
+        body,
+      },
+    );
+    expect(missingCsrf.status).toBe(403);
+
+    const missingFinding = await fetch(
+      `${daemon.baseUrl}/api/v1/review-findings/missing-review-finding/disposition`,
+      { method: "POST", headers: mutationHeaders(daemon, session), body },
+    );
+    expect(missingFinding.status).toBe(404);
+    expect(apiErrorResponseSchema.parse(await missingFinding.json())).toMatchObject({
+      error: { code: "REVIEW_FINDING_NOT_FOUND" },
+    });
   });
 
   it("rejects a non-catalog fixture identifier at the HTTP boundary", async () => {

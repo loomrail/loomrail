@@ -13,6 +13,8 @@ import {
   providerSessionsResponseSchema,
   projectConstitutionSnapshotSchema,
   projectReadinessSnapshotSchema,
+  reviewFindingDisposedResultSchema,
+  reviewStateResponseSchema,
   proposeProjectScaffoldResponseSchema,
   scaffoldOperationResponseSchema,
   scaffoldOperationsResponseSchema,
@@ -40,6 +42,8 @@ import {
   type ProviderPreference,
   type ReadinessAttestationOutcome,
   type ReadinessCheck,
+  type ReviewFinding,
+  type ReviewFindingOwnerDisposition,
   type PipelineRun,
   type WorkItem,
   type WorkItemState,
@@ -503,6 +507,9 @@ export const getAttentionInbox = async () =>
 
 export const getAgentFleet = async () => requestLocalApi("/api/v1/agent-fleet", agentFleetResponseSchema);
 
+export const getWorkItemReviews = async (workItemId: string) =>
+  requestLocalApi(`/api/v1/work-items/${encodeURIComponent(workItemId)}/reviews`, reviewStateResponseSchema);
+
 export const registerFixtureProject = async (fixtureId: FixtureProjectId): Promise<void> => {
   await requestLocalApi("/api/v1/projects/fixtures/register", stateCommandResultSchema, {
     method: "POST",
@@ -667,6 +674,28 @@ export const answerHumanRequest = async (request: HumanRequest, answer: HumanReq
       answer,
     }),
   });
+
+export const disposeReviewFinding = async (
+  finding: ReviewFinding,
+  disposition: ReviewFindingOwnerDisposition,
+  reason: string,
+): Promise<ReviewFinding> => {
+  const result = await requestLocalApi(
+    `/api/v1/review-findings/${encodeURIComponent(finding.id)}/disposition`,
+    reviewFindingDisposedResultSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedVersion: finding.version,
+        disposition,
+        reason,
+      }),
+    },
+  );
+  return result.finding;
+};
 
 export type PipelineControlAction = "pause" | "resume" | "cancel";
 

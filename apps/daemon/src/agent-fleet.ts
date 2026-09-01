@@ -3,6 +3,8 @@ import {
   maxAgentFleetEntries,
   type AgentFleetEntry,
   type AgentFleetResponse,
+  type ProviderId,
+  type WorkflowStage,
 } from "@loomrail/contracts";
 import { standardAgentProfileForStage } from "@loomrail/domain";
 import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
@@ -29,7 +31,11 @@ const profileRefFor = (
 /** Builds the bounded browser projection from durable state and the same scheduler plan as worker claims. */
 export const buildAgentFleet = (input: {
   state: LocalState;
-  resolveAdapter: (projectId: string) => ProviderAdapter;
+  resolveAdapter: (
+    projectId: string,
+    stage?: WorkflowStage,
+    avoidProvider?: ProviderId | null,
+  ) => ProviderAdapter;
   schedulingLimits: ValidatedSchedulerLimits;
 }): AgentFleetResponse => {
   const scheduling = readAgentSchedulingSnapshot({

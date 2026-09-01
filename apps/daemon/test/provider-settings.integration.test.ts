@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   projectProviderSelectionResponseSchema,
   projectsResponseSchema,
+  type Project,
   type ProviderId,
   type WorkflowStage,
 } from "@loomrail/contracts";
@@ -59,6 +60,54 @@ describe("Project provider settings API", () => {
     expect(response.status).toBe(200);
     return session;
   };
+
+  it("prefers an alternate ready reviewer only while AUTO remains in control", async () => {
+    const codex = inertAdapter("CODEX", stages);
+    const claude = inertAdapter("CLAUDE_CODE", ["DISCOVERY", "PLAN", "REVIEW"]);
+    const registry = createProviderRegistry({
+      env: {},
+      adapters: { CODEX: codex, CLAUDE_CODE: claude },
+      executableAvailable: () => true,
+      probeAuthentication: () => Promise.resolve("AUTHENTICATED"),
+    });
+    await registry.refresh();
+    const project: Project = {
+      schemaVersion: 1,
+      id: "project-auto-review",
+      workspaceId: "workspace-local",
+      fixtureId: null,
+      name: "AUTO review",
+      repositoryPath: directory,
+      providerPreference: "AUTO",
+      status: "ACTIVE",
+      version: 1,
+      createdAt: "2026-09-02T00:00:00.000Z",
+      updatedAt: "2026-09-02T00:00:00.000Z",
+    };
+
+    expect(
+      registry.resolve(project, { stage: "REVIEW", avoidProvider: "CODEX" }).adapter.capabilities().provider,
+    ).toBe("CLAUDE_CODE");
+    expect(
+      registry.resolve(project, { stage: "REVIEW", avoidProvider: "CLAUDE_CODE" }).adapter.capabilities()
+        .provider,
+    ).toBe("CODEX");
+    expect(
+      registry.resolve(project, { stage: "IMPLEMENT", avoidProvider: "CODEX" }).adapter.capabilities()
+        .provider,
+    ).toBe("CODEX");
+    expect(
+      registry
+        .resolve(
+          { ...project, providerPreference: "CODEX" },
+          {
+            stage: "REVIEW",
+            avoidProvider: "CODEX",
+          },
+        )
+        .adapter.capabilities().provider,
+    ).toBe("CODEX");
+  });
 
   it("auto-selects the one authenticated live CLI and persists an explicit choice", async () => {
     let claudeAuthenticated = false;

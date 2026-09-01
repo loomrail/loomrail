@@ -3,6 +3,7 @@ export * from "./agents.js";
 export * from "./constitution.js";
 export * from "./mcp.js";
 export * from "./readiness.js";
+export * from "./review.js";
 export * from "./scaffolding.js";
 export * from "./provider-selection.js";
 

@@ -76,13 +76,10 @@ export const gatedAdapter = (
         }
       }
       await gate;
-      // `providerOutcomeSchema`'s COMPLETED variant is just `{ type, summary, artifacts? }` -- no
-      // session id or checkpoint travels on it, those are session-level outcomes (HANDED_OFF,
-      // CONTEXT_EXHAUSTED). REVIEW and QA are the two stages `decideApplyProviderOutcome`
-      // (packages/domain/src/workflow.ts) refuses to complete without their typed evidence
-      // artifact; a caller that lets a queued attempt run to completion through the real workflow
-      // template needs those or the drain stalls on REVIEW for a reason that has nothing to do with
-      // whatever the caller's test is actually about.
+      // No session id or checkpoint travels on COMPLETED; those are session-level outcomes
+      // (HANDED_OFF, CONTEXT_EXHAUSTED). REVIEW and QA need typed evidence, and a scheduled REVIEW
+      // also needs the structured independent-review report. A caller that drains the real workflow
+      // needs those fixtures or it would stall for a reason unrelated to the test's actual subject.
       const { stage } = invocation.session;
       if (stage === "ACCEPTANCE") {
         return {
@@ -115,6 +112,17 @@ export const gatedAdapter = (
         type: "COMPLETED",
         summary: "Held until the test released it, then completed the stage.",
         artifacts,
+        reviewReport:
+          stage === "REVIEW"
+            ? {
+                kind: "REVIEW_REPORT",
+                title: "Gated review",
+                summary: "Held until the test released it, then reviewed.",
+                checks: ["Reviewed once the gate opened"],
+                verdict: "PASSED",
+                findings: [],
+              }
+            : undefined,
       };
     },
     requestHandoff: () => Promise.resolve(undefined),

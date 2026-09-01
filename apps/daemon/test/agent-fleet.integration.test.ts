@@ -3,12 +3,19 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { agentFleetResponseSchema } from "@loomrail/contracts";
+import {
+  agentFleetResponseSchema,
+  type ProviderId,
+  type WorkflowStage,
+  type WorkflowTemplate,
+} from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import { validateSchedulerLimits } from "@loomrail/scheduler";
+import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { buildAgentFleet } from "../src/agent-fleet.js";
+import { readAgentSchedulingSnapshot } from "../src/agent-scheduling.js";
 import { startDaemon, type RunningDaemon } from "../src/server.js";
 import { gatedAdapter } from "./gated-adapter.js";
 import { seedQueuedAttempt } from "./state-fixtures.js";
@@ -118,6 +125,117 @@ describe("Agent Fleet projection", () => {
       capacity: { active: 1, globalLimit: 1 },
       entries: [{ status: "RUNNING" }, { status: "WAITING", waitReason: "GLOBAL_LIMIT" }],
     });
+  });
+
+  it("routes an AUTO review away from the latest implementation author provider", async () => {
+    const localState = await open();
+    localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "review-routing-project",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "REGISTER_PROJECT",
+      payload: {
+        id: "project-review-routing",
+        fixtureId: null,
+        name: "Review routing",
+        repositoryPath: temporaryDirectory,
+      },
+    });
+    const created = localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "review-routing-item",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CREATE_WORK_ITEM",
+      payload: {
+        projectId: "project-review-routing",
+        parentId: null,
+        type: "TASK",
+        title: "Route an independent review",
+        description: "Synthetic scheduler fixture",
+        priority: "HIGH",
+        risk: "MEDIUM",
+        acceptanceCriteria: ["The reviewer uses another ready provider"],
+      },
+    });
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "review-routing-ready",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "MOVE_WORK_ITEM",
+      payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
+    });
+    const stages = mockDeliveryTemplate.stages.filter(
+      ({ stage }) => stage === "IMPLEMENT" || stage === "REVIEW",
+    );
+    const template: WorkflowTemplate = {
+      ...mockDeliveryTemplate,
+      id: "review-routing-v1",
+      version: 1,
+      name: "Review routing",
+      stages: stages.map((stage, ordinal) => ({ ...stage, ordinal })),
+    };
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "review-routing-pipeline",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (started.type !== "PIPELINE_STARTED") throw new Error("Expected PipelineRun");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "review-routing-author",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: started.dispatch.id,
+        provider: "CODEX",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "review-routing-implemented",
+      actor: { type: "SYSTEM", id: "codex-provider" },
+      type: "APPLY_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId: started.dispatch.id,
+        provider: "CODEX",
+        template,
+        outcome: { type: "COMPLETED", summary: "Implementation ready for review." },
+        resultTree: "a".repeat(40),
+      },
+    });
+    const codex = gatedAdapter(200_000, { provider: "CODEX" });
+    const claude = gatedAdapter(200_000, { provider: "CLAUDE_CODE" });
+    const calls: {
+      projectId: string;
+      stage: WorkflowStage | undefined;
+      avoidProvider: ProviderId | null | undefined;
+    }[] = [];
+    const scheduling = readAgentSchedulingSnapshot({
+      state: localState,
+      resolveAdapter: (projectId, stage, avoidProvider) => {
+        calls.push({ projectId, stage, avoidProvider });
+        return avoidProvider === "CODEX" ? claude : codex;
+      },
+    });
+
+    expect(calls).toEqual([{ projectId: "project-review-routing", stage: "REVIEW", avoidProvider: "CODEX" }]);
+    expect(scheduling.candidates).toMatchObject([{ provider: "CLAUDE_CODE" }]);
+    expect([...scheduling.contexts.values()][0]?.adapter).toBe(claude);
   });
 
   it("keeps the Fleet endpoint authenticated and returns its bounded wire contract", async () => {

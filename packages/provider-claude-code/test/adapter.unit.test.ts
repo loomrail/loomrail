@@ -604,6 +604,8 @@ describe("createClaudeCodeProvider", () => {
           title: "Independent review",
           summary: "No blocking findings remain.",
           checks: ["Requirements traced to the diff"],
+          verdict: "PASSED",
+          findings: [],
         },
       },
     });
@@ -624,6 +626,7 @@ describe("createClaudeCodeProvider", () => {
     expect(outcome).toMatchObject({
       type: "COMPLETED",
       artifacts: [{ kind: "REVIEW_REPORT" }],
+      reviewReport: { verdict: "PASSED", findings: [] },
     });
   });
 

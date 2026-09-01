@@ -1,7 +1,7 @@
 # A3 Parallel agents and dynamic squads — implementation plan
 
 **Дата:** 2026-09-01
-**Статус:** implementation complete; release verification in progress
+**Статус:** implementation complete; release candidate pushed, shared landing gate pending
 **Спецификация:** [`43-a3-parallel-squads-spec.ru.md`](43-a3-parallel-squads-spec.ru.md)
 
 ## 1. Scheduler kernel
@@ -41,6 +41,8 @@
 - [x] Full E2E, `pnpm audit --prod` и clean `0.1.0-alpha.5` release tarball.
 - [ ] `pnpm verify`: A3 проходит ESLint отдельно; общий gate ждёт три lint-исправления в отдельно разрабатываемом
       `apps/landing/src/main.ts`.
-- [ ] macOS/Windows CI gate.
+- [ ] macOS/Windows CI gate: clean tarball install прошёл на обеих платформах в
+      [run 33565207841](https://github.com/loomrail/loomrail/actions/runs/33565207841); общий source verify на обеих
+      остановлен только тремя lint findings в отдельно разрабатываемом `apps/landing/src/main.ts`.
 - [x] Исходники release candidate `0.1.0-alpha.5` готовы к commit/push без изменений `apps/landing/**`.
 - [ ] Tag и npm-публикация `0.1.0-alpha.5` только после всех gates.

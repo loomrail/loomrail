@@ -4,11 +4,13 @@ import {
   actorSchema,
   correlationIdSchema,
   opaqueIdSchema,
+  providerIdSchema,
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
 import { mcpSessionSnapshotSchema } from "./mcp.js";
 import { workItemWorkspaceOrphanedEventSchema, workItemWorkspaceSchema } from "./workspace.js";
+import { reviewFindingSchema, reviewReportDraftSchema, reviewReportSchema } from "./review.js";
 
 // A Git TREE object id, not a commit one. Same forty lowercase hex characters as
 // `commitShaSchema` in workspace.ts and deliberately a separate declaration: what this names is the
@@ -22,7 +24,8 @@ export const workflowStageSchema = z.enum(["DISCOVERY", "PLAN", "IMPLEMENT", "RE
 // Provider identity belongs to the durable contract, not to an adapter implementation: commands,
 // EvidenceArtifacts and provider capabilities must all use the same closed vocabulary without
 // making @loomrail/contracts depend back on @loomrail/provider-core.
-export const providerIdSchema = z.enum(["MOCK", "CODEX", "CLAUDE_CODE"]);
+export { providerIdSchema } from "./shared.js";
+export type { ProviderId } from "./shared.js";
 export const pipelineRunStatusSchema = z.enum([
   "RUNNING",
   "WAITING_HUMAN",
@@ -88,6 +91,9 @@ export const contextSourceKindSchema = z.enum([
   "CHECKPOINT",
   "EVIDENCE",
   "ACTIVITY",
+  "STAGE_ATTEMPT",
+  "AGENT_RUN",
+  "REVIEW_FINDING",
 ]);
 export const contextPackSpecSourceSchema = z.literal("WORKFLOW_TEMPLATE"); // A3 adds ROLE_PLAYBOOK
 export const contextPackOmittedReasonSchema = z.literal("CONTEXT_BUDGET");
@@ -101,6 +107,7 @@ export const contextSectionIdSchema = z.enum([
   "WORKFLOW_POSITION",
   "DECISIONS",
   "LATEST_CHECKPOINT",
+  "REVIEW_INPUT",
   "EVIDENCE",
   "ACTIVITY",
 ]);
@@ -646,6 +653,10 @@ export const providerOutcomeSchema = z.discriminatedUnion("type", [
       type: z.literal("COMPLETED"),
       summary: z.string().trim().min(1).max(4_000),
       artifacts: z.array(providerArtifactDraftSchema).max(5).optional(),
+      // R1 keeps the richer reviewer result beside the legacy acceptance-evidence summary while
+      // the durable review tables own IDs, attribution and lifecycle. Other stages must not set it;
+      // that stage check belongs to the deterministic workflow decision.
+      reviewReport: reviewReportDraftSchema.optional(),
     })
     .strict(),
   z
@@ -794,6 +805,37 @@ export const evidenceArtifactRecordedEventSchema = eventBaseSchema.extend({
   type: z.literal("EVIDENCE_ARTIFACT_RECORDED"),
   aggregateType: z.literal("WORK_ITEM"),
   data: z.object({ artifact: evidenceArtifactSchema }).strict(),
+});
+
+export const reviewReportRecordedEventSchema = eventBaseSchema.extend({
+  type: z.literal("REVIEW_REPORT_RECORDED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z.object({ report: reviewReportSchema }).strict(),
+});
+
+export const reviewFindingRecordedEventSchema = eventBaseSchema.extend({
+  type: z.literal("REVIEW_FINDING_RECORDED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z.object({ finding: reviewFindingSchema }).strict(),
+});
+
+export const reviewFindingResolvedEventSchema = eventBaseSchema.extend({
+  type: z.literal("REVIEW_FINDING_RESOLVED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z.object({ finding: reviewFindingSchema }).strict(),
+});
+
+export const reviewLoopExhaustedEventSchema = eventBaseSchema.extend({
+  type: z.literal("REVIEW_LOOP_EXHAUSTED"),
+  aggregateType: z.literal("WORK_ITEM"),
+  data: z
+    .object({
+      report: reviewReportSchema,
+      run: pipelineRunSchema,
+      stageAttempt: stageAttemptSchema,
+      request: humanRequestSchema,
+    })
+    .strict(),
 });
 
 export const acceptanceRequestedEventSchema = eventBaseSchema.extend({
@@ -1217,6 +1259,10 @@ const providerOutcomeEventSchema = z.discriminatedUnion("type", [
   budgetThresholdReachedEventSchema,
   pipelinePausedEventSchema,
   evidenceArtifactRecordedEventSchema,
+  reviewReportRecordedEventSchema,
+  reviewFindingRecordedEventSchema,
+  reviewFindingResolvedEventSchema,
+  reviewLoopExhaustedEventSchema,
   acceptanceRequestedEventSchema,
   pipelineCompletedEventSchema,
 ]);
@@ -1244,8 +1290,14 @@ export const humanRequestAnsweredResultSchema = z
     workItemId: opaqueIdSchema,
     request: humanRequestSchema,
     decision: decisionSchema,
-    dispatch: workflowDispatchSchema,
-    events: z.array(humanRequestResolvedEventSchema),
+    dispatch: workflowDispatchSchema.nullable(),
+    events: z.array(
+      z.discriminatedUnion("type", [
+        humanRequestResolvedEventSchema,
+        stageAttemptChangedEventSchema,
+        pipelineCancelledEventSchema,
+      ]),
+    ),
   })
   .strict();
 
@@ -1552,7 +1604,6 @@ export type BudgetPolicy = z.infer<typeof budgetPolicySchema>;
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
 export type RecoveryReport = z.infer<typeof recoveryReportSchema>;
 export type EvidenceArtifact = z.infer<typeof evidenceArtifactSchema>;
-export type ProviderId = z.infer<typeof providerIdSchema>;
 export type ProviderArtifactDraft = z.infer<typeof providerArtifactDraftSchema>;
 export type AcceptancePackage = z.infer<typeof acceptancePackageSchema>;
 export type AcceptanceAction = z.infer<typeof acceptanceActionSchema>;
@@ -1575,6 +1626,10 @@ export type PipelineCancelledEvent = z.infer<typeof pipelineCancelledEventSchema
 export type BudgetOverrideApprovedEvent = z.infer<typeof budgetOverrideApprovedEventSchema>;
 export type RecoveryReportCreatedEvent = z.infer<typeof recoveryReportCreatedEventSchema>;
 export type EvidenceArtifactRecordedEvent = z.infer<typeof evidenceArtifactRecordedEventSchema>;
+export type ReviewReportRecordedEvent = z.infer<typeof reviewReportRecordedEventSchema>;
+export type ReviewFindingRecordedEvent = z.infer<typeof reviewFindingRecordedEventSchema>;
+export type ReviewFindingResolvedEvent = z.infer<typeof reviewFindingResolvedEventSchema>;
+export type ReviewLoopExhaustedEvent = z.infer<typeof reviewLoopExhaustedEventSchema>;
 export type AcceptanceRequestedEvent = z.infer<typeof acceptanceRequestedEventSchema>;
 export type AcceptanceResolvedEvent = z.infer<typeof acceptanceResolvedEventSchema>;
 export type PipelineCompletedEvent = z.infer<typeof pipelineCompletedEventSchema>;

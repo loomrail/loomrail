@@ -6,6 +6,7 @@ export * from "./scaffolding.js";
 export * from "./event-stream.js";
 export * from "./mcp.js";
 export * from "./provider-selection.js";
+export * from "./review.js";
 export * from "./session.js";
 export * from "./shared.js";
 export * from "./work-management.js";

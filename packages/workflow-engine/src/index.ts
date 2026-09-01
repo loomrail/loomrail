@@ -80,6 +80,16 @@ const contextPackWithOptionalEvidence: ContextPackSpec = {
   ],
 };
 
+const contextPackForReview: ContextPackSpec = {
+  schemaVersion: 1,
+  sections: [
+    ...coreSections,
+    { id: "REVIEW_INPUT", ordinal: 4, required: true },
+    { id: "EVIDENCE", ordinal: 5, required: false },
+    { id: "ACTIVITY", ordinal: 6, required: false },
+  ],
+};
+
 // ACCEPTANCE has nothing to accept without evidence, so EVIDENCE is required.
 const contextPackWithRequiredEvidence: ContextPackSpec = {
   schemaVersion: 1,
@@ -93,13 +103,13 @@ const contextPackWithRequiredEvidence: ContextPackSpec = {
 export const mockDeliveryTemplate = validateWorkflowTemplate({
   schemaVersion: 1,
   id: "mock-delivery-v1",
-  version: 3,
+  version: 4,
   name: "Mock delivery",
   stages: [
     { stage: "DISCOVERY", ordinal: 0, contextPack: contextPackWithoutEvidence },
     { stage: "PLAN", ordinal: 1, contextPack: contextPackWithoutEvidence },
     { stage: "IMPLEMENT", ordinal: 2, contextPack: contextPackWithOptionalEvidence },
-    { stage: "REVIEW", ordinal: 3, contextPack: contextPackWithOptionalEvidence },
+    { stage: "REVIEW", ordinal: 3, contextPack: contextPackForReview },
     { stage: "QA", ordinal: 4, contextPack: contextPackWithOptionalEvidence },
     { stage: "ACCEPTANCE", ordinal: 5, contextPack: contextPackWithRequiredEvidence },
   ],

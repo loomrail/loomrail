@@ -1,4 +1,4 @@
-import type { ContextSectionId } from "@loomrail/contracts";
+import type { ContextSectionId, ProviderId, ReviewFindingSeverity } from "@loomrail/contracts";
 
 export type ContextSources = {
   workItemBrief: {
@@ -26,6 +26,22 @@ export type ContextSources = {
     remaining: readonly string[];
     deadEnds: readonly string[];
     openQuestions: readonly string[];
+  } | null;
+  reviewInput: {
+    implementationAttempt: { id: string; version: number; attempt: number; resultTree: string };
+    authorAgentRun: { id: string; version: number; provider: ProviderId };
+    openFindings: readonly {
+      id: string;
+      version: number;
+      severity: ReviewFindingSeverity;
+      title: string;
+      description: string;
+      path: string | null;
+      startLine: number | null;
+      endLine: number | null;
+      reproduction: string;
+      criterion: string | null;
+    }[];
   } | null;
   evidence: readonly { id: string; version: number; kind: string; title: string; summary: string }[];
   activity: readonly { id: string; version: number; occurredAt: string; description: string }[];
@@ -178,6 +194,56 @@ const renderEvidence = (sources: ContextSources): RenderedBody => {
   };
 };
 
+const renderReviewInput = (sources: ContextSources): RenderedBody => {
+  const input = sources.reviewInput;
+  if (input === null) {
+    return {
+      text: block("Independent Review Input", ["No durable implementation tree is available to review."]),
+      sources: [],
+    };
+  }
+  const findings =
+    input.openFindings.length === 0
+      ? ["(no findings from an earlier review round)"]
+      : input.openFindings.flatMap((finding) => {
+          const location =
+            finding.path === null
+              ? "(no file location)"
+              : finding.startLine === null
+                ? finding.path
+                : `${finding.path}:${finding.startLine.toString()}-${(finding.endLine ?? finding.startLine).toString()}`;
+          return [
+            `- [${finding.id} v${finding.version.toString()}] ${finding.severity}: ${finding.title}`,
+            `  Location: ${location}`,
+            `  Description: ${finding.description}`,
+            `  Reproduction: ${finding.reproduction}`,
+            `  Criterion: ${finding.criterion ?? "(not linked)"}`,
+          ];
+        });
+  const body = [
+    `Implementation attempt: ${input.implementationAttempt.attempt.toString()}`,
+    `Stable result tree: ${input.implementationAttempt.resultTree}`,
+    `Author AgentRun: ${input.authorAgentRun.id} (${input.authorAgentRun.provider})`,
+    "Open findings from earlier rounds:",
+    ...findings,
+  ].join("\n");
+  return {
+    text: block("Independent Review Input", [
+      "Review the current worktree independently. Inspect the actual implementation and tests; do not trust an author's claim of completion.",
+      untrusted(body),
+    ]),
+    sources: [
+      {
+        kind: "STAGE_ATTEMPT",
+        id: input.implementationAttempt.id,
+        version: input.implementationAttempt.version,
+      },
+      { kind: "AGENT_RUN", id: input.authorAgentRun.id, version: input.authorAgentRun.version },
+      ...input.openFindings.map(({ id, version }) => ({ kind: "REVIEW_FINDING", id, version })),
+    ],
+  };
+};
+
 const renderActivity = (sources: ContextSources): RenderedBody => {
   const lines =
     sources.activity.length === 0
@@ -202,6 +268,8 @@ export const renderSection = (id: ContextSectionId, sources: ContextSources): Re
         return renderDecisions(sources);
       case "LATEST_CHECKPOINT":
         return renderLatestCheckpoint(sources);
+      case "REVIEW_INPUT":
+        return renderReviewInput(sources);
       case "EVIDENCE":
         return renderEvidence(sources);
       case "ACTIVITY":

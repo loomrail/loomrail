@@ -1,4 +1,4 @@
-import type { WorkflowDispatch, WorkflowTemplate } from "@loomrail/contracts";
+import type { ProviderId, WorkflowDispatch, WorkflowStage, WorkflowTemplate } from "@loomrail/contracts";
 import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter } from "@loomrail/provider-core";
 import {
@@ -27,7 +27,11 @@ export type SessionWorker = {
 export type SessionWorkerDeps = {
   state: LocalState;
   /** Resolve once per dispatch. The returned instance is captured for that live ProviderSession. */
-  resolveAdapter?: (projectId: string) => ProviderAdapter;
+  resolveAdapter?: (
+    projectId: string,
+    stage?: WorkflowStage,
+    avoidProvider?: ProviderId | null,
+  ) => ProviderAdapter;
   /** Compatibility injection for focused worker tests that intentionally exercise one adapter. */
   adapter?: ProviderAdapter;
   template: WorkflowTemplate;

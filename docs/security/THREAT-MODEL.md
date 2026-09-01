@@ -101,6 +101,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T34 | New-project scaffold overwrites a path or executes a template payload      | Critical | built-in immutable recipes only; nonexistent target; exclusive directory claim; create-new writes; no package install/hooks/commit/push; durable marker-bound recovery                       | see B4 scaffolding delta below                              |
 | T35 | Global Attention read leaks cross-Project text or weakens acceptance       | High     | authenticated bounded projection; closed schemas; referential validation; React text rendering; acceptance only deep-links to its exact owner gate                                           | see A4 Attention delta below                                |
 | T36 | Parallel scheduling oversubscribes capacity or crosses workspace authority | High     | bounded deterministic plan; transactional AgentRun/limit/lease claim; stable checkpoint; exact profile/provider snapshot; no automatic interrupted-run retry                                 | see A3 scheduling delta below                               |
+| T37 | Reviewer forges independence, closes findings, or reviews a stale tree     | High     | distinct durable AgentRuns; daemon-owned relation/IDs; exact tree compare; closed reports; owner-only dispositions; bounded rounds                                                           | see R1 independent-review delta below                       |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -144,6 +145,37 @@ terminal release, restart recovery, the bounded daemon pool and all-live-session
 covered together. The authenticated Fleet projection is bounded, reconstructs its running and waiting rows from
 durable state, and exposes closed wait reasons rather than raw provider output. A3 still must not be presented as a
 published release until the cross-platform release gate passes.
+
+### R1 independent-review delta (T37)
+
+R1 makes provider output capable of creating findings and moving an implementation toward QA. A compromised reviewer
+could claim to be independent, submit a report for an earlier tree, choose its own durable identities, close earlier
+findings, or keep an automatic fix loop alive indefinitely. Rated **High** because any of those failures can turn an
+unreviewed change into acceptance evidence or multiply write-enabled execution.
+
+Required controls and verification:
+
+- author and reviewer are read from durable AgentRuns in the same PipelineRun; their IDs must differ, the reviewer
+  role must be `CODE_REVIEWER`, and provider relation is derived by the daemon rather than accepted from output;
+- the report names the exact result tree and is rejected when it differs from the latest successful IMPLEMENT tree.
+  A REVIEW first session receives a fresh bounded pack with that tree, author handoff and OPEN findings, but never the
+  author's checkpoint or transcript;
+- report and finding drafts use closed runtime schemas and bounded text/counts. IDs, lifecycle status, attribution and
+  resolution time are created by Loomrail; relative paths remain display data and are never used as read authority;
+- a passing later review may resolve OPEN findings. `WAIVED` and `FALSE_POSITIVE` require an authenticated HUMAN
+  command, exact Origin, CSRF, reason and expected version; provider actors fail closed;
+- AUTO prefers a ready alternate provider for REVIEW. An explicit Project preference or environment override remains
+  a lock, and the UI labels the resulting separate run `same provider` rather than overstating independence;
+- report/findings, AgentRun completion, next StageAttempt/dispatch or HumanRequest, events and command receipt commit
+  in one SQLite transaction. Restart tests verify no duplicate dispatch;
+- one failed first review queues round 2. A failed round 2 creates a HumanRequest; only the owner may authorize the
+  single final round 3. A failed round 3 offers cancellation and cannot create round 4;
+- the authenticated review projection is bounded, React renders finding text as text, and owner mutations use the
+  existing session/Origin/CSRF boundary. Task Cockpit presents severity/status as text as well as color.
+
+Residual risk: two separate runs of the same provider are weaker independence than cross-provider review, and an LLM
+review remains fallible. Loomrail records this relation explicitly; it does not claim reviewer consensus or a complete
+security audit.
 
 ### A4 Attention Inbox delta (T35)
 

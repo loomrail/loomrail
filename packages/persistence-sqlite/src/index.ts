@@ -43,6 +43,9 @@ import {
   sessionPauseFailureCodes,
   providerSessionSchema,
   recoveryReportSchema,
+  reviewFindingSchema,
+  reviewFindingStatusSchema,
+  reviewReportSchema,
   scaffoldOperationSchema,
   securityFindingSchema,
   stageAttemptSchema,
@@ -85,6 +88,8 @@ import {
   type ReadinessCheck,
   type ProviderSession,
   type RecoveryReport,
+  type ReviewFinding,
+  type ReviewReport,
   type ScaffoldOperation,
   type SecurityFinding,
   type RegisterProjectCommand,
@@ -107,6 +112,7 @@ import {
   canonicalMcpProfileSource,
   decideProjectReadinessAssessment,
   decideProjectReadinessAttestation,
+  decideReviewFindingDisposition,
   decideProjectProviderPreference,
   decideApproveBudgetOverride,
   decideAnswerHumanRequest,
@@ -146,6 +152,7 @@ import {
   ReadinessDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
+  ReviewFindingDispositionError,
   ScaffoldDomainError,
   WorkItemDomainError,
   type BudgetOverrideDecision,
@@ -167,6 +174,7 @@ import {
   type McpProfileConsentedIntent,
   type PipelineControlDecision,
   type RecoveryDecision,
+  type ReviewFindingDispositionDecision,
   type StageAttemptPauseDecision,
   type StartWorkflowDecision,
   type WorkItemCommand,
@@ -564,6 +572,54 @@ const evidenceArtifactRowSchema = z.object({
   created_at: z.string(),
 });
 
+const reviewReportRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  stage_attempt_id: z.string(),
+  author_agent_run_id: z.string(),
+  reviewer_agent_run_id: z.string(),
+  provider_relation: z.string(),
+  reviewed_tree: z.string(),
+  round: z.number().int(),
+  title: z.string(),
+  summary: z.string(),
+  checks_json: z.string(),
+  verdict: z.string(),
+  finding_ids_json: z.string(),
+  created_at: z.string(),
+});
+
+const reviewFindingRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  stage_attempt_id: z.string(),
+  review_artifact_id: z.string(),
+  reviewed_tree: z.string(),
+  ordinal: z.number().int(),
+  severity: z.string(),
+  status: z.string(),
+  title: z.string(),
+  description: z.string(),
+  path: z.string().nullable(),
+  start_line: z.number().int().nullable(),
+  end_line: z.number().int().nullable(),
+  reproduction: z.string(),
+  criterion: z.string().nullable(),
+  suggested_fix: z.string().nullable(),
+  resolution_reason: z.string().nullable(),
+  resolved_by_type: z.string().nullable(),
+  resolved_by_id: z.string().nullable(),
+  created_at: z.string(),
+  resolved_at: z.string().nullable(),
+  version: z.number().int(),
+});
+
 const acceptancePackageRowSchema = z.object({
   id: z.string(),
   schema_version: z.number().int(),
@@ -699,6 +755,7 @@ const checkpointRowSchema = z.object({
 
 const maxOrdinalRowSchema = z.object({ max_ordinal: z.number().int() });
 const countRowSchema = z.object({ count: z.number().int() });
+const resultTreeRowSchema = z.object({ result_tree: z.string() });
 
 const workflowDispatchRowSchema = z.object({
   id: z.string(),
@@ -747,10 +804,32 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("LIST_PENDING_DISPATCHES") }).strict(),
   z.object({ type: z.literal("GET_SQUAD_ASSIGNMENT"), pipelineRunId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_AGENT_RUN"), agentRunId: opaqueIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal("GET_LATEST_SUCCEEDED_DEVELOPER_AGENT_RUN"),
+      pipelineRunId: opaqueIdSchema,
+    })
+    .strict(),
   z
     .object({
       type: z.literal("LIST_AGENT_RUNS"),
       status: agentRunStatusSchema.optional(),
+      limit: z.number().int().min(1).max(200).default(200),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("LIST_REVIEW_REPORTS"),
+      pipelineRunId: opaqueIdSchema,
+      limit: z.number().int().min(1).max(200).default(200),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("LIST_REVIEW_FINDINGS"),
+      pipelineRunId: opaqueIdSchema,
+      status: reviewFindingStatusSchema.optional(),
       limit: z.number().int().min(1).max(200).default(200),
     })
     .strict(),
@@ -1179,6 +1258,62 @@ const evidenceArtifactFromRow = (value: unknown): EvidenceArtifact => {
     summary: row.summary,
     checks: parseJson(row.checks_json),
     createdAt: row.created_at,
+  });
+};
+
+const reviewReportFromRow = (value: unknown): ReviewReport => {
+  const row = reviewReportRowSchema.parse(value);
+  return reviewReportSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    stageAttemptId: row.stage_attempt_id,
+    authorAgentRunId: row.author_agent_run_id,
+    reviewerAgentRunId: row.reviewer_agent_run_id,
+    providerRelation: row.provider_relation,
+    reviewedTree: row.reviewed_tree,
+    round: row.round,
+    title: row.title,
+    summary: row.summary,
+    checks: parseJson(row.checks_json),
+    verdict: row.verdict,
+    findingIds: parseJson(row.finding_ids_json),
+    createdAt: row.created_at,
+  });
+};
+
+const reviewFindingFromRow = (value: unknown): ReviewFinding => {
+  const row = reviewFindingRowSchema.parse(value);
+  return reviewFindingSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    stageAttemptId: row.stage_attempt_id,
+    reviewArtifactId: row.review_artifact_id,
+    reviewedTree: row.reviewed_tree,
+    ordinal: row.ordinal,
+    severity: row.severity,
+    status: row.status,
+    title: row.title,
+    description: row.description,
+    path: row.path,
+    startLine: row.start_line,
+    endLine: row.end_line,
+    reproduction: row.reproduction,
+    criterion: row.criterion,
+    suggestedFix: row.suggested_fix,
+    resolutionReason: row.resolution_reason,
+    resolvedBy:
+      row.resolved_by_type === null || row.resolved_by_id === null
+        ? null
+        : { type: row.resolved_by_type, id: row.resolved_by_id },
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at,
+    version: row.version,
   });
 };
 
@@ -2102,6 +2237,29 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectRunningAgentRunForStageAttempt = database.prepare(
       "SELECT * FROM agent_runs WHERE stage_attempt_id = ? AND status = 'RUNNING' LIMIT 1",
     );
+    const selectAgentRunById = database.prepare("SELECT * FROM agent_runs WHERE id = ?");
+    const selectLatestSucceededDeveloperAgentRun = database.prepare(
+      `SELECT * FROM agent_runs
+       WHERE pipeline_run_id = ? AND profile_role = 'DEVELOPER' AND status = 'SUCCEEDED'
+       ORDER BY finished_at DESC, id DESC LIMIT 1`,
+    );
+    const selectLatestSucceededImplementTree = database.prepare(
+      `SELECT result_tree FROM stage_attempts
+       WHERE pipeline_run_id = ? AND stage = 'IMPLEMENT' AND status = 'SUCCEEDED'
+         AND result_tree IS NOT NULL
+       ORDER BY attempt DESC, finished_at DESC, id DESC LIMIT 1`,
+    );
+    const selectLatestSucceededImplementAttempt = database.prepare(
+      `SELECT * FROM stage_attempts
+       WHERE pipeline_run_id = ? AND stage = 'IMPLEMENT' AND status = 'SUCCEEDED'
+         AND result_tree IS NOT NULL
+       ORDER BY attempt DESC, finished_at DESC, id DESC LIMIT 1`,
+    );
+    const selectOpenReviewFindings = database.prepare(
+      `SELECT * FROM review_findings
+       WHERE pipeline_run_id = ? AND status = 'OPEN' ORDER BY created_at, id LIMIT 200`,
+    );
+    const selectReviewFindingById = database.prepare("SELECT * FROM review_findings WHERE id = ?");
     const selectRunningAgentRuns = database.prepare(
       "SELECT * FROM agent_runs WHERE status = 'RUNNING' ORDER BY started_at, id",
     );
@@ -2602,6 +2760,46 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 openQuestions: latestCheckpointEntity.openQuestions,
               };
 
+        const reviewInput =
+          stageAttempt.stage === "REVIEW"
+            ? (() => {
+                const implementationValue = selectLatestSucceededImplementAttempt.get(run.id);
+                const authorValue = selectLatestSucceededDeveloperAgentRun.get(run.id);
+                if (implementationValue === undefined || authorValue === undefined) return null;
+                const implementationAttempt = stageAttemptFromRow(implementationValue);
+                const authorAgentRun = agentRunFromRow(authorValue);
+                if (implementationAttempt.resultTree === null) return null;
+                return {
+                  implementationAttempt: {
+                    id: implementationAttempt.id,
+                    version: implementationAttempt.version,
+                    attempt: implementationAttempt.attempt,
+                    resultTree: implementationAttempt.resultTree,
+                  },
+                  authorAgentRun: {
+                    id: authorAgentRun.id,
+                    version: authorAgentRun.version,
+                    provider: authorAgentRun.provider,
+                  },
+                  openFindings: selectOpenReviewFindings
+                    .all(run.id)
+                    .map(reviewFindingFromRow)
+                    .map((finding) => ({
+                      id: finding.id,
+                      version: finding.version,
+                      severity: finding.severity,
+                      title: finding.title,
+                      description: finding.description,
+                      path: finding.path,
+                      startLine: finding.startLine,
+                      endLine: finding.endLine,
+                      reproduction: finding.reproduction,
+                      criterion: finding.criterion,
+                    })),
+                };
+              })()
+            : null;
+
         const evidence = readRecentEvidenceArtifacts(run.id, MAX_CONTEXT_SOURCE_RECORDS).map((artifact) => ({
           id: artifact.id,
           version: 1,
@@ -2647,6 +2845,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           },
           decisions,
           latestCheckpoint,
+          reviewInput,
           evidence,
           activity,
         };
@@ -3320,6 +3519,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       | PipelineControlDecision["events"][number]
       | BudgetOverrideDecision["events"][number]
       | RecoveryDecision["events"][number]
+      | ReviewFindingDispositionDecision["events"][number]
       | AcceptanceResolutionDecision["events"][number]
       | StageAttemptPauseDecision["events"][number];
 
@@ -3853,6 +4053,101 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           JSON.stringify(artifact.checks),
           artifact.createdAt,
         );
+    };
+
+    const insertReviewReport = (report: ReviewReport): void => {
+      database
+        .prepare(
+          `INSERT INTO review_reports (
+            id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+            author_agent_run_id, reviewer_agent_run_id, provider_relation, reviewed_tree, round,
+            title, summary, checks_json, verdict, finding_ids_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          report.id,
+          report.schemaVersion,
+          report.projectId,
+          report.workItemId,
+          report.pipelineRunId,
+          report.stageAttemptId,
+          report.authorAgentRunId,
+          report.reviewerAgentRunId,
+          report.providerRelation,
+          report.reviewedTree,
+          report.round,
+          report.title,
+          report.summary,
+          JSON.stringify(report.checks),
+          report.verdict,
+          JSON.stringify(report.findingIds),
+          report.createdAt,
+        );
+    };
+
+    const insertReviewFinding = (finding: ReviewFinding): void => {
+      database
+        .prepare(
+          `INSERT INTO review_findings (
+            id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+            review_artifact_id, reviewed_tree, ordinal, severity, status, title, description,
+            path, start_line, end_line, reproduction, criterion, suggested_fix, resolution_reason,
+            resolved_by_type, resolved_by_id, created_at, resolved_at, version
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          finding.id,
+          finding.schemaVersion,
+          finding.projectId,
+          finding.workItemId,
+          finding.pipelineRunId,
+          finding.stageAttemptId,
+          finding.reviewArtifactId,
+          finding.reviewedTree,
+          finding.ordinal,
+          finding.severity,
+          finding.status,
+          finding.title,
+          finding.description,
+          finding.path,
+          finding.startLine,
+          finding.endLine,
+          finding.reproduction,
+          finding.criterion,
+          finding.suggestedFix,
+          finding.resolutionReason,
+          finding.resolvedBy?.type ?? null,
+          finding.resolvedBy?.id ?? null,
+          finding.createdAt,
+          finding.resolvedAt,
+          finding.version,
+        );
+    };
+
+    const updateReviewFinding = (finding: ReviewFinding): void => {
+      const update = database
+        .prepare(
+          `UPDATE review_findings SET
+            status = ?, resolution_reason = ?, resolved_by_type = ?, resolved_by_id = ?,
+            resolved_at = ?, version = ?
+           WHERE id = ? AND version = ? AND status = 'OPEN'`,
+        )
+        .run(
+          finding.status,
+          finding.resolutionReason,
+          finding.resolvedBy?.type ?? null,
+          finding.resolvedBy?.id ?? null,
+          finding.resolvedAt,
+          finding.version,
+          finding.id,
+          finding.version - 1,
+        );
+      if (update.changes !== 1) {
+        throw new StateStoreError(
+          "PERSISTENCE_FAILURE",
+          "The review Finding changed while its disposition was being recorded",
+        );
+      }
     };
 
     const insertAcceptancePackage = (acceptancePackage: AcceptancePackage): void => {
@@ -5100,6 +5395,30 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "DISPOSE_REVIEW_FINDING") {
+        const findingValue = selectReviewFindingById.get(command.payload.findingId);
+        const decision = decideReviewFindingDisposition(command, {
+          finding: findingValue === undefined ? undefined : reviewFindingFromRow(findingValue),
+          now: occurredAt,
+        });
+        updateReviewFinding(decision.finding);
+        const events = appendWorkflowEvents(decision.events, {
+          workItemId: decision.finding.workItemId,
+          projectId: decision.finding.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "REVIEW_FINDING_DISPOSED",
+          replayed: false,
+          workItemId: decision.finding.workItemId,
+          finding: decision.finding,
+          events,
+        });
+      }
+
       if (command.type === "APPLY_MOCK_PROVIDER_OUTCOME" || command.type === "APPLY_PROVIDER_OUTCOME") {
         const dispatch = readWorkflowDispatch(command.payload.dispatchId);
         if (!dispatch) {
@@ -5117,6 +5436,40 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         // decideApplyProviderOutcome never reads command.type; normalizing it here keeps the
         // domain function's parameter type single-literal (so it, in turn, narrows cleanly)
         // without weakening what actually gets persisted as this command's command_type below.
+        const runningReviewerValue =
+          stageAttempt.stage === "REVIEW"
+            ? (selectRunningAgentRunForStageAttempt.get(stageAttempt.id) ?? undefined)
+            : undefined;
+        const reviewContext =
+          stageAttempt.stage === "REVIEW" &&
+          command.payload.outcome.type === "COMPLETED" &&
+          command.payload.outcome.reviewReport !== undefined
+            ? (() => {
+                const authorValue = selectLatestSucceededDeveloperAgentRun.get(run.id);
+                const treeValue = selectLatestSucceededImplementTree.get(run.id);
+                if (
+                  authorValue === undefined ||
+                  runningReviewerValue === undefined ||
+                  treeValue === undefined
+                ) {
+                  throw new WorkflowDomainError(
+                    "REVIEW_RUN_MISMATCH",
+                    "The review has no durable implementation author, reviewer, or stable tree",
+                  );
+                }
+                return {
+                  authorAgentRun: agentRunFromRow(authorValue),
+                  reviewerAgentRun: agentRunFromRow(runningReviewerValue),
+                  currentTree: resultTreeRowSchema.parse(treeValue).result_tree,
+                  openFindings: selectOpenReviewFindings.all(run.id).map(reviewFindingFromRow),
+                  reportId: createId("reviewReport"),
+                  findingIds: command.payload.outcome.reviewReport.findings.map(() =>
+                    createId("reviewFinding"),
+                  ),
+                  loopOptionIds: [createId("humanRequestOption"), createId("humanRequestOption")] as const,
+                };
+              })()
+            : undefined;
         const decision = decideApplyProviderOutcome(
           { ...command, type: "APPLY_PROVIDER_OUTCOME" },
           {
@@ -5136,6 +5489,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               command.payload.outcome.type === "COMPLETED"
                 ? (command.payload.outcome.artifacts ?? []).map(() => createId("evidenceArtifact"))
                 : [],
+            review: reviewContext,
+            // Pre-R1 fixture workflows completed Review without AgentRun reservation. Keep those
+            // historical migration paths readable, while every scheduled live reviewer is held to
+            // the structured independent-review contract.
+            reviewRequired: runningReviewerValue !== undefined,
             humanRequestId: createId("humanRequest"),
             acceptancePackageId: createId("acceptancePackage"),
             nextStageAttemptId: createId("stageAttempt"),
@@ -5148,6 +5506,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         updatePipelineRun(decision.run);
         if (decision.workItem.version !== workItem.version) updateWorkflowWorkItem(decision.workItem);
         if (decision.request) insertHumanRequest(decision.request);
+        if (decision.reviewReport) insertReviewReport(decision.reviewReport);
+        decision.reviewFindings?.forEach(insertReviewFinding);
+        decision.resolvedReviewFindings?.forEach(updateReviewFinding);
         decision.artifacts.forEach(insertEvidenceArtifact);
         if (decision.acceptancePackage) insertAcceptancePackage(decision.acceptancePackage);
         if (decision.nextStageAttempt) insertStageAttempt(decision.nextStageAttempt);
@@ -5245,13 +5606,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           request,
           decisionId: createId("decision"),
           dispatchId: createId("workflowDispatch"),
+          nextStageAttemptId: createId("stageAttempt"),
         });
         updateHumanRequest(decision.request);
         insertDecision(decision.decision);
         updateStageAttempt(decision.stageAttempt);
         updatePipelineRun(decision.run);
         updateWorkflowWorkItem(decision.workItem);
-        insertWorkflowDispatch(decision.dispatch);
+        if (decision.nextStageAttempt) insertStageAttempt(decision.nextStageAttempt);
+        if (decision.dispatch) insertWorkflowDispatch(decision.dispatch);
         const events = appendWorkflowEvents(decision.events, {
           workItemId: decision.workItem.id,
           projectId: decision.workItem.projectId,
@@ -6620,6 +6983,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           error instanceof McpDomainError ||
           error instanceof ReadinessDomainError ||
           error instanceof ProviderSelectionDomainError ||
+          error instanceof ReviewFindingDispositionError ||
           error instanceof ScaffoldDomainError ||
           error instanceof WorkItemDomainError ||
           error instanceof WorkflowDomainError ||
@@ -6822,6 +7186,17 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             assignment: row === undefined ? null : squadAssignmentFromRow(row),
           };
         }
+        case "GET_AGENT_RUN": {
+          const value = selectAgentRunById.get(queryValue.agentRunId);
+          return { type: "AGENT_RUNS", runs: value === undefined ? [] : [agentRunFromRow(value)] };
+        }
+        case "GET_LATEST_SUCCEEDED_DEVELOPER_AGENT_RUN": {
+          const value = selectLatestSucceededDeveloperAgentRun.get(queryValue.pipelineRunId);
+          return {
+            type: "AGENT_RUNS",
+            runs: value === undefined ? [] : [agentRunFromRow(value)],
+          };
+        }
         case "LIST_AGENT_RUNS": {
           const rows =
             queryValue.status === undefined
@@ -6834,6 +7209,31 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                   )
                   .all(queryValue.status, queryValue.limit);
           return { type: "AGENT_RUNS", runs: rows.map(agentRunFromRow) };
+        }
+        case "LIST_REVIEW_REPORTS":
+          return {
+            type: "REVIEW_REPORTS",
+            reports: database
+              .prepare(
+                "SELECT * FROM review_reports WHERE pipeline_run_id = ? ORDER BY round DESC, id DESC LIMIT ?",
+              )
+              .all(queryValue.pipelineRunId, queryValue.limit)
+              .map(reviewReportFromRow),
+          };
+        case "LIST_REVIEW_FINDINGS": {
+          const rows =
+            queryValue.status === undefined
+              ? database
+                  .prepare(
+                    "SELECT * FROM review_findings WHERE pipeline_run_id = ? ORDER BY created_at, id LIMIT ?",
+                  )
+                  .all(queryValue.pipelineRunId, queryValue.limit)
+              : database
+                  .prepare(
+                    "SELECT * FROM review_findings WHERE pipeline_run_id = ? AND status = ? ORDER BY created_at, id LIMIT ?",
+                  )
+                  .all(queryValue.pipelineRunId, queryValue.status, queryValue.limit);
+          return { type: "REVIEW_FINDINGS", findings: rows.map(reviewFindingFromRow) };
         }
         case "LIST_WORK_ITEMS": {
           const rows =

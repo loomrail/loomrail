@@ -8,6 +8,7 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
+import { reviewFindingOwnerDispositionSchema, reviewFindingSchema } from "./review.js";
 import {
   acceptanceRequestedEventSchema,
   acceptanceResolvedEventSchema,
@@ -53,6 +54,10 @@ import {
   recordProviderSessionProcessCommandSchema,
   reduceContextPackShareCommandSchema,
   recoveryReportCreatedEventSchema,
+  reviewFindingRecordedEventSchema,
+  reviewFindingResolvedEventSchema,
+  reviewLoopExhaustedEventSchema,
+  reviewReportRecordedEventSchema,
   resolveAcceptanceCommandSchema,
   resumePipelineCommandSchema,
   requestContextHandoffCommandSchema,
@@ -342,6 +347,10 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   budgetOverrideApprovedEventSchema,
   recoveryReportCreatedEventSchema,
   evidenceArtifactRecordedEventSchema,
+  reviewReportRecordedEventSchema,
+  reviewFindingRecordedEventSchema,
+  reviewFindingResolvedEventSchema,
+  reviewLoopExhaustedEventSchema,
   acceptanceRequestedEventSchema,
   acceptanceResolvedEventSchema,
   pipelineCompletedEventSchema,
@@ -480,6 +489,18 @@ export const startAgentRunCommandSchema = commandBaseSchema.extend({
     .strict(),
 });
 
+export const disposeReviewFindingCommandSchema = commandBaseSchema.extend({
+  type: z.literal("DISPOSE_REVIEW_FINDING"),
+  payload: z
+    .object({
+      findingId: opaqueIdSchema,
+      expectedVersion: z.number().int().positive(),
+      disposition: reviewFindingOwnerDispositionSchema,
+      reason: z.string().trim().min(1).max(4_000),
+    })
+    .strict(),
+});
+
 export const stateCommandSchema = z.discriminatedUnion("type", [
   registerProjectCommandSchema,
   repointFixtureProjectCommandSchema,
@@ -505,6 +526,7 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   updateWorkItemCommandSchema,
   moveWorkItemCommandSchema,
   startAgentRunCommandSchema,
+  disposeReviewFindingCommandSchema,
   startMockPipelineCommandSchema,
   markWorkflowDispatchStartedCommandSchema,
   applyProviderOutcomeCommandSchema,
@@ -574,6 +596,13 @@ export const agentRunStartedResultSchema = commandResultBaseSchema.extend({
   ),
 });
 
+export const reviewFindingDisposedResultSchema = commandResultBaseSchema.extend({
+  type: z.literal("REVIEW_FINDING_DISPOSED"),
+  workItemId: opaqueIdSchema,
+  finding: reviewFindingSchema,
+  events: z.array(reviewFindingResolvedEventSchema).length(1),
+});
+
 export const stateCommandResultSchema = z.discriminatedUnion("type", [
   projectRegisteredResultSchema,
   projectScaffoldRequestedResultSchema,
@@ -596,6 +625,7 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   workItemUpdatedResultSchema,
   workItemMovedResultSchema,
   agentRunStartedResultSchema,
+  reviewFindingDisposedResultSchema,
   pipelineStartedResultSchema,
   workflowDispatchStartedResultSchema,
   mockProviderOutcomeAppliedResultSchema,
@@ -738,5 +768,6 @@ export type CreateWorkItemCommand = z.infer<typeof createWorkItemCommandSchema>;
 export type UpdateWorkItemCommand = z.infer<typeof updateWorkItemCommandSchema>;
 export type MoveWorkItemCommand = z.infer<typeof moveWorkItemCommandSchema>;
 export type StartAgentRunCommand = z.infer<typeof startAgentRunCommandSchema>;
+export type DisposeReviewFindingCommand = z.infer<typeof disposeReviewFindingCommandSchema>;
 export type StateCommand = z.infer<typeof stateCommandSchema>;
 export type StateCommandResult = z.infer<typeof stateCommandResultSchema>;

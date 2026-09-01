@@ -10,6 +10,7 @@ import {
   type ProviderAvailability,
   type ProviderId,
   type ProviderPreference,
+  type WorkflowStage,
 } from "@loomrail/contracts";
 import type { ProviderAdapter } from "@loomrail/provider-core";
 import { createClaudeCodeProvider } from "@loomrail/provider-claude-code";
@@ -41,7 +42,10 @@ export type ProjectProviderResolution = {
 
 export type ProviderRegistry = {
   refresh: () => Promise<void>;
-  resolve: (project: Project) => ProjectProviderResolution;
+  resolve: (
+    project: Project,
+    options?: { stage?: WorkflowStage | undefined; avoidProvider?: ProviderId | null | undefined },
+  ) => ProjectProviderResolution;
   environment: {
     override: ProviderId | null;
     invalid: boolean;
@@ -264,7 +268,10 @@ export const createProviderRegistry = (
     firstRefresh = false;
   };
 
-  const resolve = (project: Project): ProjectProviderResolution => {
+  const resolve = (
+    project: Project,
+    resolveOptions: { stage?: WorkflowStage | undefined; avoidProvider?: ProviderId | null | undefined } = {},
+  ): ProjectProviderResolution => {
     const preferred = environment.invalid
       ? "MOCK"
       : (environment.override ?? preferenceProvider(project.providerPreference));
@@ -275,10 +282,17 @@ export const createProviderRegistry = (
           ? "AUTO"
           : "PROJECT_PREFERENCE";
     const autoCandidates = LIVE_PROVIDER_IDS.map((provider) => availability[provider])
-      .filter((candidate) => candidate.ready)
+      .filter(
+        (candidate) =>
+          candidate.ready &&
+          (resolveOptions.stage === undefined || candidate.stages.includes(resolveOptions.stage)),
+      )
       .sort(
         (left, right) =>
-          right.stages.length - left.stages.length || left.provider.localeCompare(right.provider),
+          Number(right.provider !== resolveOptions.avoidProvider) -
+            Number(left.provider !== resolveOptions.avoidProvider) ||
+          right.stages.length - left.stages.length ||
+          left.provider.localeCompare(right.provider),
       );
     const effectiveProvider = preferred ?? autoCandidates[0]?.provider ?? "MOCK";
     const effectiveAvailability = availability[effectiveProvider];

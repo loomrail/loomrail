@@ -734,7 +734,7 @@ describe("SQLite local state", () => {
 
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -742,6 +742,248 @@ describe("SQLite local state", () => {
     const backup = new DatabaseSync(localState.startup.backupPath, { readOnly: true });
     expect(backup.prepare("SELECT value FROM legacy_marker").get()).toEqual({ value: "preserve-me" });
     backup.close();
+  });
+
+  it("migrates and reads bounded independent review reports and findings", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem());
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-review-state", created.workItem.id, 1, "READY"));
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "start-review-state",
+      correlationId: "correlation-start-review-state",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: mockTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    const snapshotResult = localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    if (snapshotResult.type !== "WORKFLOW_SNAPSHOT" || snapshotResult.snapshot.run === null) {
+      throw new Error("Expected workflow state");
+    }
+    const run = snapshotResult.snapshot.run;
+    const attempt = snapshotResult.snapshot.stageAttempts[0];
+    if (attempt === undefined) throw new Error("Expected StageAttempt");
+    const assignmentResult = localState.query({ type: "GET_SQUAD_ASSIGNMENT", pipelineRunId: run.id });
+    if (assignmentResult.type !== "SQUAD_ASSIGNMENT" || assignmentResult.assignment === null) {
+      throw new Error("Expected SquadAssignment");
+    }
+    const assignment = assignmentResult.assignment;
+    localState.close();
+    state = undefined;
+
+    const raw = new DatabaseSync(databasePath);
+    const insertRun = raw.prepare(
+      `INSERT INTO agent_runs (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id, ordinal,
+        squad_assignment_id, profile_id, profile_revision, profile_role, provider, status,
+        policy_snapshot_hash, started_at, finished_at, version
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'SUCCEEDED', ?, ?, ?, 2)`,
+    );
+    const policyHash = `sha256:${"a".repeat(64)}`;
+    insertRun.run(
+      "agent-author",
+      created.workItem.projectId,
+      created.workItem.id,
+      run.id,
+      attempt.id,
+      1,
+      assignment.id,
+      "builtin.developer",
+      "DEVELOPER",
+      "CODEX",
+      policyHash,
+      timestamp,
+      timestamp,
+    );
+    insertRun.run(
+      "agent-reviewer",
+      created.workItem.projectId,
+      created.workItem.id,
+      run.id,
+      attempt.id,
+      2,
+      assignment.id,
+      "builtin.code-reviewer",
+      "CODE_REVIEWER",
+      "CLAUDE_CODE",
+      policyHash,
+      timestamp,
+      timestamp,
+    );
+    raw
+      .prepare(
+        `INSERT INTO review_reports (
+          id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+          author_agent_run_id, reviewer_agent_run_id, provider_relation, reviewed_tree, round,
+          title, summary, checks_json, verdict, finding_ids_json, created_at
+        ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, 'CROSS_PROVIDER', ?, 1, ?, ?, ?,
+          'CHANGES_REQUESTED', ?, ?)`,
+      )
+      .run(
+        "review-report-1",
+        created.workItem.projectId,
+        created.workItem.id,
+        run.id,
+        attempt.id,
+        "agent-author",
+        "agent-reviewer",
+        "b".repeat(40),
+        "Independent review",
+        "One blocking finding remains.",
+        JSON.stringify(["Compared the diff with the criterion."]),
+        JSON.stringify(["review-finding-1"]),
+        timestamp,
+      );
+    raw
+      .prepare(
+        `INSERT INTO review_findings (
+          id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+          review_artifact_id, reviewed_tree, ordinal, severity, status, title, description,
+          path, start_line, end_line, reproduction, criterion, suggested_fix, resolution_reason,
+          resolved_by_type, resolved_by_id, created_at, resolved_at, version
+        ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, 1, 'HIGH', 'OPEN', ?, ?, ?, 10, 12, ?, ?, ?,
+          NULL, NULL, NULL, ?, NULL, 1)`,
+      )
+      .run(
+        "review-finding-1",
+        created.workItem.projectId,
+        created.workItem.id,
+        run.id,
+        attempt.id,
+        "review-report-1",
+        "b".repeat(40),
+        "Expected-version is ignored",
+        "The guarded mutation accepts a stale version.",
+        "packages/domain/src/review.ts",
+        "Submit the previous aggregate version.",
+        "Concurrent writes fail closed.",
+        "Add the version to the update predicate.",
+        timestamp,
+      );
+    raw.close();
+
+    const reopened = await open();
+    expect(reopened.query({ type: "LIST_REVIEW_REPORTS", pipelineRunId: run.id })).toMatchObject({
+      type: "REVIEW_REPORTS",
+      reports: [
+        {
+          id: "review-report-1",
+          verdict: "CHANGES_REQUESTED",
+          providerRelation: "CROSS_PROVIDER",
+          findingIds: ["review-finding-1"],
+        },
+      ],
+    });
+    expect(
+      reopened.query({ type: "LIST_REVIEW_FINDINGS", pipelineRunId: run.id, status: "OPEN" }),
+    ).toMatchObject({
+      type: "REVIEW_FINDINGS",
+      findings: [
+        {
+          id: "review-finding-1",
+          status: "OPEN",
+          severity: "HIGH",
+          path: "packages/domain/src/review.ts",
+        },
+      ],
+    });
+    expect(() =>
+      reopened.execute({
+        schemaVersion: 1,
+        commandId: "provider-dispose-review-finding",
+        correlationId: "correlation-provider-dispose-review-finding",
+        actor: { type: "SYSTEM", id: "provider" },
+        type: "DISPOSE_REVIEW_FINDING",
+        payload: {
+          findingId: "review-finding-1",
+          expectedVersion: 1,
+          disposition: "WAIVED",
+          reason: "Provider output must not own this disposition.",
+        },
+      }),
+    ).toThrow(expect.objectContaining({ code: "REVIEW_FINDING_ACTOR_FORBIDDEN" }));
+    expect(() =>
+      reopened.execute({
+        schemaVersion: 1,
+        commandId: "stale-dispose-review-finding",
+        correlationId: "correlation-stale-dispose-review-finding",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "DISPOSE_REVIEW_FINDING",
+        payload: {
+          findingId: "review-finding-1",
+          expectedVersion: 2,
+          disposition: "WAIVED",
+          reason: "The expected version is deliberately stale.",
+        },
+      }),
+    ).toThrow(expect.objectContaining({ code: "REVIEW_FINDING_VERSION_CONFLICT" }));
+    const dispositionCommand = {
+      schemaVersion: 1 as const,
+      commandId: "dispose-review-finding",
+      correlationId: "correlation-dispose-review-finding",
+      actor: { type: "HUMAN" as const, id: "local-owner" },
+      type: "DISPOSE_REVIEW_FINDING" as const,
+      payload: {
+        findingId: "review-finding-1",
+        expectedVersion: 1,
+        disposition: "FALSE_POSITIVE" as const,
+        reason: "The reported path is unreachable under the validated command schema.",
+      },
+    };
+    const disposed = reopened.execute(dispositionCommand);
+    expect(disposed).toMatchObject({
+      type: "REVIEW_FINDING_DISPOSED",
+      replayed: false,
+      finding: {
+        id: "review-finding-1",
+        status: "FALSE_POSITIVE",
+        resolvedBy: { type: "HUMAN", id: "local-owner" },
+        version: 2,
+      },
+      events: [{ type: "REVIEW_FINDING_RESOLVED" }],
+    });
+    expect(reopened.execute(dispositionCommand)).toMatchObject({
+      type: "REVIEW_FINDING_DISPOSED",
+      replayed: true,
+      finding: { status: "FALSE_POSITIVE", version: 2 },
+    });
+    expect(() =>
+      reopened.execute({
+        ...dispositionCommand,
+        commandId: "dispose-review-finding-again",
+        correlationId: "correlation-dispose-review-finding-again",
+        payload: { ...dispositionCommand.payload, expectedVersion: 2, disposition: "WAIVED" },
+      }),
+    ).toThrow(expect.objectContaining({ code: "REVIEW_FINDING_ALREADY_CLOSED" }));
+    reopened.close();
+    state = undefined;
+
+    const dispositionRestart = await open();
+    expect(dispositionRestart.query({ type: "LIST_REVIEW_FINDINGS", pipelineRunId: run.id })).toMatchObject({
+      type: "REVIEW_FINDINGS",
+      findings: [{ id: "review-finding-1", status: "FALSE_POSITIVE", version: 2 }],
+    });
+    dispositionRestart.close();
+    state = undefined;
+
+    const immutable = new DatabaseSync(databasePath);
+    expect(() => {
+      immutable.exec("UPDATE review_reports SET title = 'changed' WHERE id = 'review-report-1'");
+    }).toThrow(/append-only/);
+    expect(() => {
+      immutable.exec("DELETE FROM review_findings WHERE id = 'review-finding-1'");
+    }).toThrow(/cannot be deleted/);
+    immutable.close();
   });
 
   describe("A3 AgentRun reservation (migration 0020)", () => {
@@ -983,6 +1225,562 @@ describe("SQLite local state", () => {
         finished_at: timestamp,
       });
       raw.close();
+    });
+
+    it("records an independent review and queues a bounded fix round atomically", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const created = localState.execute(createWorkItem("create-r1-review-loop"));
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      localState.execute(moveWorkItem("ready-r1-review-loop", created.workItem.id, 1, "READY"));
+      const reviewLoopTemplate: StartMockPipelineCommand["payload"]["template"] = {
+        schemaVersion: 1,
+        id: "review-loop-v1",
+        version: 1,
+        name: "Independent review loop",
+        stages: [
+          { stage: "IMPLEMENT", ordinal: 0, contextPack },
+          { stage: "REVIEW", ordinal: 1, contextPack },
+          { stage: "QA", ordinal: 2, contextPack },
+        ],
+      };
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "pipeline-r1-review-loop",
+        correlationId: "correlation-pipeline-r1-review-loop",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_MOCK_PIPELINE",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedVersion: 2,
+          template: reviewLoopTemplate,
+          budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+        },
+      });
+
+      const nextDispatch = () => {
+        const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+        if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
+        const dispatch = pending.dispatches.find(({ workItemId }) => workItemId === created.workItem.id);
+        if (!dispatch) throw new Error("Expected a pending dispatch");
+        return dispatch;
+      };
+
+      const implementationDispatch = nextDispatch();
+      const author = localState.execute(startAgentRun("r1-author", implementationDispatch.id));
+      if (author.type !== "AGENT_RUN_STARTED") throw new Error("Expected author AgentRun");
+      const reviewedTree = "a".repeat(40);
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-r1-implementation",
+        correlationId: "correlation-apply-r1-implementation",
+        actor: { type: "SYSTEM", id: "codex-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: implementationDispatch.id,
+          provider: "CODEX",
+          template: reviewLoopTemplate,
+          outcome: { type: "COMPLETED", summary: "Implementation is ready for independent review." },
+          resultTree: reviewedTree,
+        },
+      });
+
+      const reviewDispatch = nextDispatch();
+      const firstReviewSources = localState.query({
+        type: "READ_CONTEXT_SOURCES",
+        stageAttemptId: reviewDispatch.stageAttemptId,
+        sessionOrdinal: 1,
+      });
+      expect(firstReviewSources).toMatchObject({
+        type: "CONTEXT_SOURCES",
+        sources: {
+          latestCheckpoint: null,
+          reviewInput: {
+            implementationAttempt: { attempt: 1, resultTree: reviewedTree },
+            authorAgentRun: { id: author.run.id, provider: "CODEX" },
+            openFindings: [],
+          },
+        },
+      });
+      const reviewerCommand = startAgentRun("r1-reviewer", reviewDispatch.id);
+      const reviewer = localState.execute({
+        ...reviewerCommand,
+        payload: { ...reviewerCommand.payload, provider: "CLAUDE_CODE" },
+      });
+      if (reviewer.type !== "AGENT_RUN_STARTED") throw new Error("Expected reviewer AgentRun");
+      const applied = localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-r1-review",
+        correlationId: "correlation-apply-r1-review",
+        actor: { type: "SYSTEM", id: "claude-code-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: reviewDispatch.id,
+          provider: "CLAUDE_CODE",
+          template: reviewLoopTemplate,
+          outcome: {
+            type: "COMPLETED",
+            summary: "One blocking finding requires another implementation round.",
+            artifacts: [
+              {
+                kind: "REVIEW_REPORT",
+                title: "Independent review",
+                summary: "Changes requested.",
+                checks: ["Checked the guarded update against the acceptance criterion."],
+              },
+            ],
+            reviewReport: {
+              kind: "REVIEW_REPORT",
+              title: "Independent review",
+              summary: "The guarded update accepts a stale aggregate version.",
+              checks: ["Checked the guarded update against the acceptance criterion."],
+              verdict: "CHANGES_REQUESTED",
+              findings: [
+                {
+                  severity: "HIGH",
+                  title: "Expected version is ignored",
+                  description: "The mutation can overwrite a concurrent update.",
+                  path: "packages/domain/src/review.ts",
+                  startLine: 40,
+                  endLine: 44,
+                  reproduction: "Submit the command with the previous aggregate version.",
+                  criterion: "Concurrent updates fail closed.",
+                  suggestedFix: "Include expectedVersion in the guarded update predicate.",
+                },
+              ],
+            },
+          },
+          resultTree: reviewedTree,
+        },
+      });
+
+      expect(applied).toMatchObject({
+        type: "MOCK_PROVIDER_OUTCOME_APPLIED",
+        run: { status: "RUNNING" },
+        stageAttempt: { id: reviewDispatch.stageAttemptId, stage: "REVIEW", status: "SUCCEEDED" },
+        events: [
+          { type: "REVIEW_REPORT_RECORDED" },
+          { type: "REVIEW_FINDING_RECORDED" },
+          { type: "STAGE_ATTEMPT_CHANGED" },
+        ],
+      });
+      const fixDispatch = nextDispatch();
+      expect(fixDispatch).toMatchObject({ status: "PENDING" });
+
+      const snapshot = localState.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: created.workItem.id,
+      });
+      if (snapshot.type !== "WORKFLOW_SNAPSHOT" || !snapshot.snapshot.run) {
+        throw new Error("Expected review-loop workflow snapshot");
+      }
+      expect(
+        snapshot.snapshot.stageAttempts.find(({ id }) => id === fixDispatch.stageAttemptId),
+      ).toMatchObject({ stage: "IMPLEMENT", attempt: 2, status: "QUEUED" });
+      expect(
+        localState.query({ type: "LIST_REVIEW_REPORTS", pipelineRunId: snapshot.snapshot.run.id }),
+      ).toMatchObject({
+        type: "REVIEW_REPORTS",
+        reports: [
+          {
+            authorAgentRunId: author.run.id,
+            reviewerAgentRunId: reviewer.run.id,
+            providerRelation: "CROSS_PROVIDER",
+            reviewedTree,
+            round: 1,
+            verdict: "CHANGES_REQUESTED",
+          },
+        ],
+      });
+      expect(
+        localState.query({
+          type: "LIST_REVIEW_FINDINGS",
+          pipelineRunId: snapshot.snapshot.run.id,
+          status: "OPEN",
+        }),
+      ).toMatchObject({
+        type: "REVIEW_FINDINGS",
+        findings: [{ status: "OPEN", reviewedTree, severity: "HIGH" }],
+      });
+      const audit = localState.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id });
+      expect(audit.type === "EVENTS" ? audit.events.map(({ type }) => type) : []).toEqual(
+        expect.arrayContaining(["REVIEW_REPORT_RECORDED", "REVIEW_FINDING_RECORDED", "AGENT_RUN_FINISHED"]),
+      );
+
+      localState.close();
+      state = undefined;
+      const reopened = await open();
+      expect(reopened.query({ type: "LIST_PENDING_DISPATCHES" })).toMatchObject({
+        type: "WORKFLOW_DISPATCHES",
+        dispatches: [{ id: fixDispatch.id, stageAttemptId: fixDispatch.stageAttemptId, status: "PENDING" }],
+      });
+      expect(
+        reopened.query({
+          type: "LIST_REVIEW_FINDINGS",
+          pipelineRunId: snapshot.snapshot.run.id,
+          status: "OPEN",
+        }),
+      ).toMatchObject({ type: "REVIEW_FINDINGS", findings: [{ severity: "HIGH", status: "OPEN" }] });
+
+      const secondAuthor = reopened.execute(startAgentRun("r1-second-author", fixDispatch.id));
+      if (secondAuthor.type !== "AGENT_RUN_STARTED") throw new Error("Expected second author AgentRun");
+      const fixedTree = "b".repeat(40);
+      reopened.execute({
+        schemaVersion: 1,
+        commandId: "apply-r1-second-implementation",
+        correlationId: "correlation-apply-r1-second-implementation",
+        actor: { type: "SYSTEM", id: "codex-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: fixDispatch.id,
+          provider: "CODEX",
+          template: reviewLoopTemplate,
+          outcome: { type: "COMPLETED", summary: "The guarded update now rejects stale versions." },
+          resultTree: fixedTree,
+        },
+      });
+      const pendingReview = reopened.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (pendingReview.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
+      const secondReviewDispatch = pendingReview.dispatches.find(
+        ({ workItemId }) => workItemId === created.workItem.id,
+      );
+      if (!secondReviewDispatch) throw new Error("Expected second review dispatch");
+      const secondReviewSnapshot = reopened.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: created.workItem.id,
+      });
+      if (secondReviewSnapshot.type !== "WORKFLOW_SNAPSHOT") {
+        throw new Error("Expected second review snapshot");
+      }
+      expect(
+        secondReviewSnapshot.snapshot.stageAttempts.find(
+          ({ id }) => id === secondReviewDispatch.stageAttemptId,
+        ),
+      ).toMatchObject({ stage: "REVIEW", attempt: 2, status: "QUEUED" });
+      expect(
+        reopened.query({
+          type: "READ_CONTEXT_SOURCES",
+          stageAttemptId: secondReviewDispatch.stageAttemptId,
+          sessionOrdinal: 1,
+        }),
+      ).toMatchObject({
+        type: "CONTEXT_SOURCES",
+        sources: {
+          latestCheckpoint: null,
+          reviewInput: {
+            implementationAttempt: { attempt: 2, resultTree: fixedTree },
+            authorAgentRun: { id: secondAuthor.run.id, provider: "CODEX" },
+            openFindings: [{ severity: "HIGH" }],
+          },
+        },
+      });
+      const secondReviewerCommand = startAgentRun("r1-second-reviewer", secondReviewDispatch.id);
+      const secondReviewer = reopened.execute({
+        ...secondReviewerCommand,
+        payload: { ...secondReviewerCommand.payload, provider: "CLAUDE_CODE" },
+      });
+      if (secondReviewer.type !== "AGENT_RUN_STARTED") throw new Error("Expected second reviewer AgentRun");
+      const passed = reopened.execute({
+        schemaVersion: 1,
+        commandId: "apply-r1-passed-review",
+        correlationId: "correlation-apply-r1-passed-review",
+        actor: { type: "SYSTEM", id: "claude-code-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: secondReviewDispatch.id,
+          provider: "CLAUDE_CODE",
+          template: reviewLoopTemplate,
+          outcome: {
+            type: "COMPLETED",
+            summary: "The independent re-review passed.",
+            artifacts: [
+              {
+                kind: "REVIEW_REPORT",
+                title: "Independent re-review",
+                summary: "The previous finding is resolved.",
+                checks: ["Reproduced the stale-version scenario and observed a guarded failure."],
+              },
+            ],
+            reviewReport: {
+              kind: "REVIEW_REPORT",
+              title: "Independent re-review",
+              summary: "The previous finding is resolved.",
+              checks: ["Reproduced the stale-version scenario and observed a guarded failure."],
+              verdict: "PASSED",
+              findings: [],
+            },
+          },
+          resultTree: fixedTree,
+        },
+      });
+      if (passed.type !== "MOCK_PROVIDER_OUTCOME_APPLIED") {
+        throw new Error("Expected passed review outcome");
+      }
+      expect(passed.events.map(({ type }) => type)).toEqual([
+        "REVIEW_REPORT_RECORDED",
+        "REVIEW_FINDING_RESOLVED",
+        "EVIDENCE_ARTIFACT_RECORDED",
+        "STAGE_ATTEMPT_CHANGED",
+      ]);
+      expect(
+        reopened.query({ type: "LIST_REVIEW_REPORTS", pipelineRunId: snapshot.snapshot.run.id }),
+      ).toMatchObject({
+        type: "REVIEW_REPORTS",
+        reports: [
+          {
+            authorAgentRunId: secondAuthor.run.id,
+            reviewerAgentRunId: secondReviewer.run.id,
+            round: 2,
+            verdict: "PASSED",
+          },
+          { round: 1, verdict: "CHANGES_REQUESTED" },
+        ],
+      });
+      expect(
+        reopened.query({ type: "LIST_REVIEW_FINDINGS", pipelineRunId: snapshot.snapshot.run.id }),
+      ).toMatchObject({
+        type: "REVIEW_FINDINGS",
+        findings: [
+          {
+            status: "RESOLVED",
+            resolutionReason: "A later independent review passed the current implementation tree.",
+            resolvedBy: { type: "SYSTEM", id: "local-daemon" },
+          },
+        ],
+      });
+      const qaDispatches = reopened.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (qaDispatches.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected QA dispatch queue");
+      const qaDispatch = qaDispatches.dispatches.find(({ workItemId }) => workItemId === created.workItem.id);
+      if (!qaDispatch) throw new Error("Expected QA dispatch");
+      const qaSnapshot = reopened.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: created.workItem.id,
+      });
+      if (qaSnapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected QA workflow snapshot");
+      expect(
+        qaSnapshot.snapshot.stageAttempts.find(({ id }) => id === qaDispatch.stageAttemptId),
+      ).toMatchObject({
+        stage: "QA",
+        attempt: 1,
+        status: "QUEUED",
+      });
+    });
+
+    it("persists one owner-authorized review round and prevents a fourth round after restart", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const created = localState.execute(createWorkItem("create-r1-owner-round"));
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      localState.execute(moveWorkItem("ready-r1-owner-round", created.workItem.id, 1, "READY"));
+      const reviewLoopTemplate: StartMockPipelineCommand["payload"]["template"] = {
+        schemaVersion: 1,
+        id: "review-owner-round-v1",
+        version: 1,
+        name: "Owner-authorized review round",
+        stages: [
+          { stage: "IMPLEMENT", ordinal: 0, contextPack },
+          { stage: "REVIEW", ordinal: 1, contextPack },
+          { stage: "QA", ordinal: 2, contextPack },
+        ],
+      };
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "pipeline-r1-owner-round",
+        correlationId: "correlation-pipeline-r1-owner-round",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_MOCK_PIPELINE",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedVersion: 2,
+          template: reviewLoopTemplate,
+          budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+        },
+      });
+
+      const pendingDispatch = (target: LocalState) => {
+        const pending = target.query({ type: "LIST_PENDING_DISPATCHES" });
+        if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
+        const dispatch = pending.dispatches.find(({ workItemId }) => workItemId === created.workItem.id);
+        if (!dispatch) throw new Error("Expected a pending review-loop dispatch");
+        return dispatch;
+      };
+      const completeImplementation = (target: LocalState, round: number, tree: string): void => {
+        const dispatch = pendingDispatch(target);
+        target.execute(startAgentRun(`owner-round-author-${round.toString()}`, dispatch.id));
+        target.execute({
+          schemaVersion: 1,
+          commandId: `apply-owner-round-implementation-${round.toString()}`,
+          correlationId: `correlation-owner-round-implementation-${round.toString()}`,
+          actor: { type: "SYSTEM", id: "codex-provider" },
+          type: "APPLY_PROVIDER_OUTCOME",
+          payload: {
+            dispatchId: dispatch.id,
+            provider: "CODEX",
+            template: reviewLoopTemplate,
+            outcome: { type: "COMPLETED", summary: `Implementation ${round.toString()} completed.` },
+            resultTree: tree,
+          },
+        });
+      };
+      const requestChanges = (target: LocalState, round: number, tree: string): void => {
+        const dispatch = pendingDispatch(target);
+        const reviewerCommand = startAgentRun(`owner-round-reviewer-${round.toString()}`, dispatch.id);
+        target.execute({
+          ...reviewerCommand,
+          payload: { ...reviewerCommand.payload, provider: "CLAUDE_CODE" },
+        });
+        target.execute({
+          schemaVersion: 1,
+          commandId: `apply-owner-round-review-${round.toString()}`,
+          correlationId: `correlation-owner-round-review-${round.toString()}`,
+          actor: { type: "SYSTEM", id: "claude-code-provider" },
+          type: "APPLY_PROVIDER_OUTCOME",
+          payload: {
+            dispatchId: dispatch.id,
+            provider: "CLAUDE_CODE",
+            template: reviewLoopTemplate,
+            outcome: {
+              type: "COMPLETED",
+              summary: `Review ${round.toString()} requested changes.`,
+              artifacts: [
+                {
+                  kind: "REVIEW_REPORT",
+                  title: `Review ${round.toString()}`,
+                  summary: "A bounded synthetic defect remains.",
+                  checks: ["Checked the synthetic invariant."],
+                },
+              ],
+              reviewReport: {
+                kind: "REVIEW_REPORT",
+                title: `Review ${round.toString()}`,
+                summary: "A bounded synthetic defect remains.",
+                checks: ["Checked the synthetic invariant."],
+                verdict: "CHANGES_REQUESTED",
+                findings: [
+                  {
+                    severity: "HIGH",
+                    title: `Finding ${round.toString()}`,
+                    description: "The synthetic invariant is not yet enforced.",
+                    path: "packages/domain/src/review.ts",
+                    startLine: 1,
+                    endLine: 1,
+                    reproduction: "Run the bounded review fixture.",
+                    criterion: "The automatic loop remains bounded.",
+                    suggestedFix: "Enforce the invariant before the next review.",
+                  },
+                ],
+              },
+            },
+            resultTree: tree,
+          },
+        });
+      };
+
+      completeImplementation(localState, 1, "1".repeat(40));
+      requestChanges(localState, 1, "1".repeat(40));
+      completeImplementation(localState, 2, "2".repeat(40));
+      requestChanges(localState, 2, "2".repeat(40));
+
+      const ownerRequests = localState.query({
+        type: "LIST_HUMAN_REQUESTS",
+        projectId: created.workItem.projectId,
+        status: "OPEN",
+      });
+      if (ownerRequests.type !== "HUMAN_REQUESTS") throw new Error("Expected owner request list");
+      const ownerRequest = ownerRequests.humanRequests.find(
+        ({ workItemId }) => workItemId === created.workItem.id,
+      );
+      if (!ownerRequest) throw new Error("Expected exhausted review request");
+      expect(ownerRequest.options).toHaveLength(2);
+      const retryOption = ownerRequest.options[0];
+      if (!retryOption) throw new Error("Expected the owner-authorized retry option");
+      const authorized = localState.execute({
+        schemaVersion: 1,
+        commandId: "authorize-r1-owner-round",
+        correlationId: "correlation-authorize-r1-owner-round",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "ANSWER_HUMAN_REQUEST",
+        payload: {
+          humanRequestId: ownerRequest.id,
+          expectedVersion: ownerRequest.version,
+          answer: { type: "OPTION", optionIds: [retryOption.id] },
+        },
+      });
+      expect(authorized).toMatchObject({
+        type: "HUMAN_REQUEST_ANSWERED",
+        dispatch: { mode: "START", status: "PENDING" },
+        events: [{ type: "HUMAN_REQUEST_RESOLVED" }, { type: "STAGE_ATTEMPT_CHANGED" }],
+      });
+
+      localState.close();
+      state = undefined;
+      const reopened = await open();
+      const afterRestart = reopened.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: created.workItem.id,
+      });
+      if (afterRestart.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected workflow snapshot");
+      expect(afterRestart.snapshot.stageAttempts.at(-1)).toMatchObject({
+        stage: "IMPLEMENT",
+        attempt: 3,
+        status: "QUEUED",
+      });
+
+      completeImplementation(reopened, 3, "3".repeat(40));
+      requestChanges(reopened, 3, "3".repeat(40));
+      const finalRequests = reopened.query({
+        type: "LIST_HUMAN_REQUESTS",
+        projectId: created.workItem.projectId,
+        status: "OPEN",
+      });
+      if (finalRequests.type !== "HUMAN_REQUESTS") throw new Error("Expected final owner request list");
+      const finalRequest = finalRequests.humanRequests.find(
+        ({ workItemId }) => workItemId === created.workItem.id,
+      );
+      if (!finalRequest) throw new Error("Expected final exhausted review request");
+      expect(finalRequest.options).toHaveLength(1);
+      const cancelOption = finalRequest.options[0];
+      if (!cancelOption) throw new Error("Expected the cancel option");
+      expect(cancelOption.label).toBe("Cancel the work");
+      const cancelled = reopened.execute({
+        schemaVersion: 1,
+        commandId: "cancel-r1-owner-round",
+        correlationId: "correlation-cancel-r1-owner-round",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "ANSWER_HUMAN_REQUEST",
+        payload: {
+          humanRequestId: finalRequest.id,
+          expectedVersion: finalRequest.version,
+          answer: { type: "OPTION", optionIds: [cancelOption.id] },
+        },
+      });
+      expect(cancelled).toMatchObject({
+        type: "HUMAN_REQUEST_ANSWERED",
+        dispatch: null,
+        events: [{ type: "HUMAN_REQUEST_RESOLVED" }, { type: "PIPELINE_CANCELLED" }],
+      });
+      const cancelledSnapshot = reopened.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: created.workItem.id,
+      });
+      expect(cancelledSnapshot).toMatchObject({
+        type: "WORKFLOW_SNAPSHOT",
+        snapshot: { run: { status: "CANCELLED" } },
+      });
+      expect(reopened.query({ type: "GET_WORK_ITEM", workItemId: created.workItem.id })).toMatchObject({
+        type: "WORK_ITEM",
+        workItem: { state: "CANCELLED" },
+      });
+      expect(
+        reopened.query({ type: "LIST_REVIEW_REPORTS", pipelineRunId: afterRestart.snapshot.run?.id ?? "" }),
+      ).toMatchObject({
+        type: "REVIEW_REPORTS",
+        reports: [{ round: 3 }, { round: 2 }, { round: 1 }],
+      });
+      expect(reopened.query({ type: "LIST_PENDING_DISPATCHES" })).toMatchObject({
+        type: "WORKFLOW_DISPATCHES",
+        dispatches: [],
+      });
     });
   });
 

@@ -2,6 +2,7 @@ import {
   checkpointDraftSchema,
   humanRequestDraftSchema,
   providerOutcomeSchema,
+  reviewReportDraftSchema,
   type CheckpointDraft,
   type ProviderOutcome,
   type WorkflowStage,
@@ -20,15 +21,6 @@ const needsHumanSchema = z
 
 const ordinaryCompletionSchema = checkpointDraftSchema.extend({ type: z.literal("COMPLETED") }).strict();
 
-const reviewArtifactSchema = z
-  .object({
-    kind: z.literal("REVIEW_REPORT"),
-    title: z.string().trim().min(1).max(200),
-    summary: z.string().trim().min(1).max(4_000),
-    checks: z.array(z.string().trim().min(1).max(500)).min(1).max(20),
-  })
-  .strict();
-
 const qaArtifactSchema = z
   .object({
     kind: z.literal("QA_REPORT"),
@@ -39,7 +31,7 @@ const qaArtifactSchema = z
   .strict();
 
 const reviewCompletionSchema = ordinaryCompletionSchema
-  .extend({ artifact: reviewArtifactSchema })
+  .extend({ artifact: reviewReportDraftSchema })
   .strict()
   .describe(
     "Review the repository change without modifying it. Complete only after recording one structured REVIEW_REPORT.",
@@ -205,7 +197,15 @@ export const decodeProviderStageResult = (
         outcome: providerOutcomeSchema.parse({
           type: "COMPLETED",
           summary: parsed.data.result.summary,
-          artifacts: [parsed.data.result.artifact],
+          artifacts: [
+            {
+              kind: parsed.data.result.artifact.kind,
+              title: parsed.data.result.artifact.title,
+              summary: parsed.data.result.artifact.summary,
+              checks: parsed.data.result.artifact.checks,
+            },
+          ],
+          reviewReport: parsed.data.result.artifact,
         }),
         checkpoint: checkpointFrom(parsed.data.result),
       };

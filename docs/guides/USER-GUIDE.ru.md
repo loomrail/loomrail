@@ -102,6 +102,23 @@ run state, а не второй scheduler: reload страницы или restar
 выдать permission, поднять budget, ответить на Human Request или принять поставку — эти действия остаются в своих
 owner gates.
 
+### Независимое ревью
+
+После Implementation Loomrail запускает новый AgentRun роли **Code reviewer** над зафиксированным Git tree. При
+**Auto** и двух готовых live CLI стадия Review предпочитает provider, которым не выполнялся последний Developer run.
+Явный выбор provider для Project остаётся lock: Task Cockpit честно показывает **Тот же provider**, но reviewer всё
+равно работает в отдельном запуске.
+
+Task Cockpit показывает раунд, verdict, связь providers, проверенный tree и ограниченный список findings с severity,
+portable file/line location и шагами воспроизведения. `PASSED` переводит работу в QA. Первый
+`CHANGES_REQUESTED` ставит в очередь второй Implementation и новое Review. После второго появляется Human Request:
+владелец может разрешить ровно один финальный bounded fix/re-review либо отменить run. Если финальное ревью снова
+требует правок, четвёртый dispatch не создаётся.
+
+Только владелец может отметить открытое замечание как **Риск принят** или **Ложное срабатывание**, обязательно указав
+причину. Решение попадает в audit и переживает restart; оно не превращает автора в собственного reviewer и не
+обходит повторное ревью незаметно.
+
 ### Ответ на Human Request
 
 Mock-стадия Discovery открывает блокирующий вопрос, а задача получает статус **Ждёт вас**. Откройте **Внимание** в

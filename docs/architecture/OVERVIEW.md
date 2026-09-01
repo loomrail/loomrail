@@ -130,8 +130,9 @@ D3 and ADR-0002.
 - deterministic, clock/ID injected, infrastructure-free tests.
 
 The deterministic interfaces include `decideWorkItemCommand`, workflow lifecycle decisions,
-`decideResolveAcceptance`, and `buildAttentionInbox`. They own WorkItem/run transitions, budgets, recovery, the
-owner-only `DONE` gate, and the bounded global Attention classification without knowing SQLite or HTTP.
+`decideReviewLoop`, `decideReviewFindingDisposition`, `decideResolveAcceptance`, and `buildAttentionInbox`. They own
+WorkItem/run transitions, budgets, recovery, the bounded review/fix/owner gate, the owner-only `DONE` gate, and the
+bounded global Attention classification without knowing SQLite or HTTP.
 
 ### `packages/contracts`
 
@@ -150,6 +151,12 @@ owner-only `DONE` gate, and the bounded global Attention classification without 
 `openLocalState()` remains the deep persistence module with `execute`, `query` and `close`. Migration checksums,
 online backup, prepared SQL, optimistic concurrency, idempotency receipts, append-only evidence, mutable versioned
 AcceptancePackages, current state and Event append stay behind that interface.
+
+Independent review uses the same boundary: persistence derives author/reviewer identity and provider relation from
+AgentRuns, compares the reported tree with the latest successful IMPLEMENT tree, and atomically stores ReviewReport,
+ReviewFinding lifecycle changes, the next dispatch or HumanRequest, events and command receipt. Review first-session
+context is assembled from the stable implementation attempt, its author and OPEN findings; author checkpoints and
+transcripts are not sources for a new review round.
 
 ### `packages/workflow-engine`
 
@@ -202,6 +209,7 @@ logs without redaction.
 - no automatic replay of an agent/tool action;
 - partial artifacts are retained and visible;
 - budget, HumanRequest and acceptance gates survive browser/daemon restart.
+- review reports/findings and the two-automatic-plus-one-owner round bound survive restart without duplicate dispatch.
 
 ## Architecture tests
 

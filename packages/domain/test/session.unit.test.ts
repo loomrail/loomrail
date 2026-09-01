@@ -430,7 +430,7 @@ describe("provider session decisions", () => {
       // ...but the guard is not reset: answering must not buy an unbounded run of fresh
       // unproductive sessions.
       expect(decision.stageAttempt.unproductiveSessions).toBe(2);
-      expect(decision.dispatch.mode).toBe("RESUME");
+      expect(decision.dispatch).toMatchObject({ mode: "RESUME" });
       expect(decision.decision.answer).toMatchObject({ type: "OTHER" });
     });
 

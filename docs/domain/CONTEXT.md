@@ -78,6 +78,21 @@ Provider, который resolver назначит следующей ProviderSe
 видимого environment override.
 _Не означает_: автоматическую миграцию уже запущенной session.
 
+**ReviewReport**:
+Append-only результат одного независимого CODE_REVIEWER AgentRun над точным Git tree: проверенные свойства,
+`PASSED | CHANGES_REQUESTED`, round и daemon-owned связь author/reviewer.
+_Не означает_: сообщение автора «готово», raw transcript или разрешение перейти в QA без domain transition.
+
+**ReviewFinding**:
+Durable замечание одного ReviewReport с severity, portable location, reproduction и lifecycle
+`OPEN -> RESOLVED | WAIVED | FALSE_POSITIVE`.
+_Не означает_: право provider самому закрыть замечание или filesystem path, которому можно доверять как authority.
+
+**Independent Review Loop**:
+Последовательность IMPLEMENT(n) → fresh REVIEW(n), в которой первый failed review автоматически создаёт второй
+IMPLEMENT, второй останавливается на HumanRequest, а владелец может разрешить ровно один финальный bounded round.
+_Не означает_: continuation writer session, бесконечный retry или смену explicit Project provider preference.
+
 ## MCP connections
 
 **MCP Profile Proposal**:
@@ -174,6 +189,8 @@ WorkItem
         │     ├── WorkflowDispatch
         │     └── AgentRun
         │           └── ProviderSession
+        ├── ReviewReport
+        │     └── ReviewFinding
         ├── EvidenceArtifact (Review / QA)
         ├── AcceptancePackage
         └── HumanRequest
@@ -190,6 +207,13 @@ fail-closed request не продвигает стадию и не считае�
 Acceptance — отдельный owner gate: обычный ответ на HumanRequest и generic pipeline controls его не обходят. Только
 versioned `Accept`, `Return to work` или `Reject` закрывают AcceptancePackage; лишь `Accept` переводит WorkItem в
 `DONE`. Review/QA evidence остаётся append-only, AcceptancePackage меняется только optimistic-versioned transition.
+
+Review также имеет отдельную доменную развилку. Fresh CODE_REVIEWER AgentRun не совпадает с latest successful
+DEVELOPER AgentRun; AUTO предпочитает другой ready provider, explicit preference остаётся lock. Reviewer получает
+stable tree, implementation handoff и OPEN findings, но не checkpoint/transcript автора. Первый
+`CHANGES_REQUESTED` создаёт IMPLEMENT(2), второй — HumanRequest; owner-authorized IMPLEMENT/REVIEW(3) является
+последним. `WAIVED` и `FALSE_POSITIVE` требуют HUMAN actor, reason и expected version и сами по себе не подменяют
+повторный review.
 
 Attention Inbox читает все Project одной локальной session, но state не меняет. `ANSWER_REQUEST` использует тот же
 атомарный `Answer & resume`; `REVIEW_ACCEPTANCE` только открывает exact Project/WorkItem в Task Cockpit. Project name,

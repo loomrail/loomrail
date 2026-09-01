@@ -4,6 +4,7 @@ import type {
   AcceptanceResolvedEvent,
   AnswerHumanRequestCommand,
   ApplyProviderOutcomeCommand,
+  AgentRun,
   ApproveBudgetOverrideCommand,
   BudgetOverrideApprovedEvent,
   BudgetPolicy,
@@ -27,6 +28,12 @@ import type {
   RecoveryReport,
   RecoveryReportCreatedEvent,
   ResolveAcceptanceCommand,
+  ReviewFinding,
+  ReviewFindingRecordedEvent,
+  ReviewFindingResolvedEvent,
+  ReviewLoopExhaustedEvent,
+  ReviewReport,
+  ReviewReportRecordedEvent,
   ResumePipelineCommand,
   StageAttempt,
   StageAttemptChangedEvent,
@@ -37,9 +44,11 @@ import type {
   WorkItem,
   WorkflowDispatch,
 } from "@loomrail/contracts";
+import { MAX_TOTAL_REVIEW_ROUNDS } from "@loomrail/contracts";
 import { nextWorkflowStage, validateWorkflowTemplate } from "@loomrail/workflow-engine";
 
 import { isSessionPauseFailureCode } from "./session-pause.js";
+import { decideReviewLoop, ReviewLoopError } from "./review.js";
 
 export type WorkflowDomainErrorCode =
   | "WORKFLOW_NOT_READY"
@@ -61,6 +70,9 @@ export type WorkflowDomainErrorCode =
   | "ACCEPTANCE_NOT_READY"
   | "ACCEPTANCE_ALREADY_RESOLVED"
   | "PROVIDER_SESSION_MISMATCH"
+  | "REVIEW_REPORT_REQUIRED"
+  | "REVIEW_RUN_MISMATCH"
+  | "REVIEW_TREE_STALE"
   | "SESSION_END_REASON_NOT_HANDLED";
 
 export class WorkflowDomainError extends Error {
@@ -108,6 +120,9 @@ export type ApplyProviderOutcomeDecision = {
   nextDispatch: WorkflowDispatch | null;
   usageRecords: UsageRecord[];
   artifacts: EvidenceArtifact[];
+  reviewReport?: ReviewReport | undefined;
+  reviewFindings?: ReviewFinding[] | undefined;
+  resolvedReviewFindings?: ReviewFinding[] | undefined;
   acceptancePackage: AcceptancePackage | null;
   events: (
     | EventIntent<StageAttemptChangedEvent>
@@ -116,6 +131,10 @@ export type ApplyProviderOutcomeDecision = {
     | EventIntent<BudgetThresholdReachedEvent>
     | EventIntent<PipelinePausedEvent>
     | EventIntent<EvidenceArtifactRecordedEvent>
+    | EventIntent<ReviewReportRecordedEvent>
+    | EventIntent<ReviewFindingRecordedEvent>
+    | EventIntent<ReviewFindingResolvedEvent>
+    | EventIntent<ReviewLoopExhaustedEvent>
     | EventIntent<AcceptanceRequestedEvent>
     | EventIntent<PipelineCompletedEvent>
   )[];
@@ -127,8 +146,13 @@ export type AnswerHumanRequestDecision = {
   stageAttempt: StageAttempt;
   request: HumanRequest;
   decision: Decision;
-  dispatch: WorkflowDispatch;
-  events: EventIntent<HumanRequestResolvedEvent>[];
+  dispatch: WorkflowDispatch | null;
+  nextStageAttempt: StageAttempt | null;
+  events: (
+    | EventIntent<HumanRequestResolvedEvent>
+    | EventIntent<StageAttemptChangedEvent>
+    | EventIntent<PipelineCancelledEvent>
+  )[];
 };
 
 export type PipelineControlDecision = {
@@ -671,6 +695,18 @@ export const decideApplyProviderOutcome = (
     usageRecordIds: readonly string[];
     existingArtifacts?: readonly EvidenceArtifact[];
     artifactIds?: readonly string[];
+    review?:
+      | {
+          authorAgentRun: AgentRun;
+          reviewerAgentRun: AgentRun;
+          currentTree: string;
+          openFindings: readonly ReviewFinding[];
+          reportId: string;
+          findingIds: readonly string[];
+          loopOptionIds: readonly [string, string];
+        }
+      | undefined;
+    reviewRequired?: boolean | undefined;
     humanRequestId?: string;
     acceptancePackageId?: string;
     nextStageAttemptId?: string;
@@ -893,6 +929,309 @@ export const decideApplyProviderOutcome = (
     throw new WorkflowDomainError("WORKFLOW_STAGE_MISMATCH", "A session-level outcome is not a stage result");
   }
 
+  let reviewReport: ReviewReport | undefined;
+  let reviewFindings: ReviewFinding[] | undefined;
+  let resolvedReviewFindings: ReviewFinding[] | undefined;
+  let reviewEvents: ApplyProviderOutcomeDecision["events"] = [];
+  const reviewReportDraft = command.payload.outcome.reviewReport;
+  const reviewRequired = context.reviewRequired === true || context.review !== undefined;
+  if (context.stageAttempt.stage === "REVIEW" && reviewRequired && reviewReportDraft === undefined) {
+    throw new WorkflowDomainError(
+      "REVIEW_REPORT_REQUIRED",
+      "Review must produce one structured report before the workflow can advance",
+    );
+  }
+  if (context.stageAttempt.stage !== "REVIEW" && reviewReportDraft !== undefined) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_STAGE_MISMATCH",
+      "Only the Review stage can produce a structured review report",
+    );
+  }
+  if (reviewReportDraft !== undefined) {
+    const review = context.review;
+    if (review === undefined || command.payload.resultTree === null) {
+      throw new WorkflowDomainError(
+        "REVIEW_REPORT_REQUIRED",
+        "A structured review requires durable author, reviewer, and tree context",
+      );
+    }
+    if (
+      review.authorAgentRun.id === review.reviewerAgentRun.id ||
+      review.authorAgentRun.profile.role !== "DEVELOPER" ||
+      review.reviewerAgentRun.profile.role !== "CODE_REVIEWER" ||
+      review.authorAgentRun.pipelineRunId !== context.run.id ||
+      review.reviewerAgentRun.pipelineRunId !== context.run.id ||
+      review.reviewerAgentRun.stageAttemptId !== context.stageAttempt.id ||
+      review.reviewerAgentRun.status !== "RUNNING"
+    ) {
+      throw new WorkflowDomainError(
+        "REVIEW_RUN_MISMATCH",
+        "The durable author and reviewer AgentRuns do not prove an independent review",
+      );
+    }
+    let loop;
+    try {
+      loop = decideReviewLoop({
+        round: context.stageAttempt.attempt,
+        reviewedTree: command.payload.resultTree,
+        currentTree: review.currentTree,
+        report: reviewReportDraft,
+        openFindingIds: review.openFindings.map(({ id }) => id),
+      });
+    } catch (error: unknown) {
+      if (error instanceof ReviewLoopError && error.code === "STALE_REVIEW_TREE") {
+        throw new WorkflowDomainError("REVIEW_TREE_STALE", error.message, error.details);
+      }
+      throw error;
+    }
+    if (review.findingIds.length !== loop.newFindings.length) {
+      throw new WorkflowDomainError(
+        "REVIEW_REPORT_REQUIRED",
+        "Durable Finding IDs do not match the structured review report",
+      );
+    }
+    reviewFindings = loop.newFindings.map((finding, index) => {
+      const id = review.findingIds[index];
+      if (id === undefined) {
+        throw new WorkflowDomainError("REVIEW_REPORT_REQUIRED", "A durable Finding ID was not supplied");
+      }
+      return {
+        schemaVersion: 1,
+        id,
+        projectId: context.workItem.projectId,
+        workItemId: context.workItem.id,
+        pipelineRunId: context.run.id,
+        stageAttemptId: context.stageAttempt.id,
+        reviewArtifactId: review.reportId,
+        reviewedTree: review.currentTree,
+        ordinal: index + 1,
+        status: "OPEN",
+        resolutionReason: null,
+        resolvedBy: null,
+        createdAt: context.now,
+        resolvedAt: null,
+        version: 1,
+        ...finding,
+      } satisfies ReviewFinding;
+    });
+    reviewReport = {
+      schemaVersion: 1,
+      id: review.reportId,
+      projectId: context.workItem.projectId,
+      workItemId: context.workItem.id,
+      pipelineRunId: context.run.id,
+      stageAttemptId: context.stageAttempt.id,
+      authorAgentRunId: review.authorAgentRun.id,
+      reviewerAgentRunId: review.reviewerAgentRun.id,
+      providerRelation:
+        review.authorAgentRun.provider === review.reviewerAgentRun.provider
+          ? "SAME_PROVIDER"
+          : "CROSS_PROVIDER",
+      reviewedTree: review.currentTree,
+      round: context.stageAttempt.attempt,
+      title: reviewReportDraft.title,
+      summary: reviewReportDraft.summary,
+      checks: reviewReportDraft.checks,
+      verdict: reviewReportDraft.verdict,
+      findingIds: reviewFindings.map(({ id }) => id),
+      createdAt: context.now,
+    };
+    resolvedReviewFindings = loop.resolveFindingIds.map((id) => {
+      const finding = review.openFindings.find((candidate) => candidate.id === id);
+      if (finding?.status !== "OPEN") {
+        throw new WorkflowDomainError(
+          "REVIEW_RUN_MISMATCH",
+          "A passing re-review can resolve only an open finding from the same PipelineRun",
+        );
+      }
+      return {
+        ...finding,
+        status: "RESOLVED",
+        resolutionReason: "A later independent review passed the current implementation tree.",
+        resolvedBy: { type: "SYSTEM", id: "local-daemon" },
+        resolvedAt: context.now,
+        version: finding.version + 1,
+      } satisfies ReviewFinding;
+    });
+    reviewEvents = [
+      { type: "REVIEW_REPORT_RECORDED", data: { report: reviewReport } },
+      ...reviewFindings.map((finding): EventIntent<ReviewFindingRecordedEvent> => ({
+        type: "REVIEW_FINDING_RECORDED",
+        data: { finding },
+      })),
+      ...resolvedReviewFindings.map((finding): EventIntent<ReviewFindingResolvedEvent> => ({
+        type: "REVIEW_FINDING_RESOLVED",
+        data: { finding },
+      })),
+    ];
+
+    if (loop.action !== "ADVANCE_TO_QA") {
+      if (loop.action === "QUEUE_FIX") {
+        if (!context.nextStageAttemptId || !context.nextDispatchId) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_STAGE_MISMATCH",
+            "The review fix round requires durable attempt and dispatch IDs",
+          );
+        }
+        const completedStage: StageAttempt = {
+          ...context.stageAttempt,
+          status: "SUCCEEDED",
+          version: context.stageAttempt.version + 1,
+          finishedAt: context.now,
+          resultTree: command.payload.resultTree,
+        };
+        const nextStageAttempt: StageAttempt = {
+          schemaVersion: 1,
+          id: context.nextStageAttemptId,
+          pipelineRunId: context.run.id,
+          projectId: context.workItem.projectId,
+          workItemId: context.workItem.id,
+          stage: "IMPLEMENT",
+          attempt: loop.nextAttempt,
+          status: "QUEUED",
+          version: 1,
+          startedAt: null,
+          finishedAt: null,
+          failureCode: null,
+          unproductiveSessions: 0,
+          packShareBackoffs: 0,
+          resultTree: null,
+        };
+        const run: PipelineRun = {
+          ...context.run,
+          status: "RUNNING",
+          currentStageAttemptId: nextStageAttempt.id,
+          version: context.run.version + 1,
+          updatedAt: context.now,
+        };
+        const workItem: WorkItem = {
+          ...context.workItem,
+          state: "IN_PROGRESS",
+          currentStage: "IMPLEMENT",
+          version: context.workItem.version + 1,
+          updatedAt: context.now,
+        };
+        const nextDispatch = createDispatch(
+          context.nextDispatchId,
+          workItem,
+          run,
+          nextStageAttempt,
+          "START",
+          context.now,
+        );
+        return {
+          workItem,
+          run,
+          stageAttempt: completedStage,
+          dispatch,
+          request: null,
+          nextStageAttempt,
+          nextDispatch,
+          usageRecords: [],
+          artifacts: [],
+          reviewReport,
+          reviewFindings,
+          resolvedReviewFindings,
+          acceptancePackage: null,
+          events: [
+            ...reviewEvents,
+            { type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt: completedStage, previousStatus } },
+          ],
+        };
+      }
+
+      if (!context.humanRequestId) {
+        throw new WorkflowDomainError(
+          "HUMAN_REQUEST_NOT_FOUND",
+          "The exhausted review loop requires a durable HumanRequest ID",
+        );
+      }
+      const stageAttempt: StageAttempt = {
+        ...context.stageAttempt,
+        status: "WAITING_HUMAN",
+        version: context.stageAttempt.version + 1,
+        failureCode: loop.failureCode,
+        resultTree: command.payload.resultTree,
+      };
+      const run: PipelineRun = {
+        ...context.run,
+        status: "WAITING_HUMAN",
+        version: context.run.version + 1,
+        updatedAt: context.now,
+      };
+      const workItem: WorkItem = {
+        ...context.workItem,
+        state: "BLOCKED",
+        currentStage: "REVIEW",
+        version: context.workItem.version + 1,
+        updatedAt: context.now,
+      };
+      const [retryId, cancelId] = review.loopOptionIds;
+      const retryAvailable = context.stageAttempt.attempt < MAX_TOTAL_REVIEW_ROUNDS;
+      const request: HumanRequest = {
+        schemaVersion: 1,
+        id: context.humanRequestId,
+        projectId: workItem.projectId,
+        workItemId: workItem.id,
+        stageAttemptId: stageAttempt.id,
+        kind: "SINGLE_CHOICE",
+        blocking: true,
+        title: "Review loop needs a decision",
+        context:
+          context.stageAttempt.attempt === 2
+            ? "Two automatic fix and review rounds still left open findings."
+            : "The owner-authorized review round still left open findings.",
+        recommendation: retryAvailable
+          ? "Inspect the findings before authorizing the single additional bounded round."
+          : "Inspect the remaining findings and cancel this run when no further automatic work is appropriate.",
+        options: [
+          ...(retryAvailable
+            ? [
+                {
+                  id: retryId,
+                  label: "Authorize one final fix round",
+                  consequence: "Creates the only owner-authorized implementation and review round.",
+                  recommended: true,
+                },
+              ]
+            : []),
+          {
+            id: cancelId,
+            label: "Cancel the work",
+            consequence: "Stops this PipelineRun without accepting the implementation.",
+            recommended: false,
+          },
+        ],
+        allowOther: false,
+        status: "OPEN",
+        version: 1,
+        createdAt: context.now,
+        resolvedAt: null,
+      };
+      return {
+        workItem,
+        run,
+        stageAttempt,
+        dispatch,
+        request,
+        nextStageAttempt: null,
+        nextDispatch: null,
+        usageRecords: [],
+        artifacts: [],
+        reviewReport,
+        reviewFindings,
+        resolvedReviewFindings,
+        acceptancePackage: null,
+        events: [
+          ...reviewEvents,
+          { type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt, previousStatus } },
+          { type: "HUMAN_REQUEST_OPENED", data: { request } },
+          { type: "REVIEW_LOOP_EXHAUSTED", data: { report: reviewReport, run, stageAttempt, request } },
+        ],
+      };
+    }
+  }
+
   const artifactDrafts = command.payload.outcome.artifacts ?? [];
   const expectedArtifactKind =
     context.stageAttempt.stage === "REVIEW"
@@ -974,8 +1313,12 @@ export const decideApplyProviderOutcome = (
       nextDispatch: null,
       usageRecords: [],
       artifacts,
+      reviewReport,
+      reviewFindings,
+      resolvedReviewFindings,
       acceptancePackage: null,
       events: [
+        ...reviewEvents,
         ...artifactEvents,
         { type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt: completedStage, previousStatus } },
         { type: "PIPELINE_COMPLETED", data: { run, stageAttempt: completedStage } },
@@ -996,7 +1339,7 @@ export const decideApplyProviderOutcome = (
     projectId: context.workItem.projectId,
     workItemId: context.workItem.id,
     stage: nextStage,
-    attempt: 1,
+    attempt: completedStage.stage === "IMPLEMENT" && nextStage === "REVIEW" ? completedStage.attempt : 1,
     status: "QUEUED",
     version: 1,
     startedAt: null,
@@ -1039,8 +1382,12 @@ export const decideApplyProviderOutcome = (
     nextDispatch,
     usageRecords: [],
     artifacts,
+    reviewReport,
+    reviewFindings,
+    resolvedReviewFindings,
     acceptancePackage: null,
     events: [
+      ...reviewEvents,
       ...artifactEvents,
       { type: "STAGE_ATTEMPT_CHANGED", data: { run, stageAttempt: completedStage, previousStatus } },
     ],
@@ -1084,6 +1431,7 @@ export const decideAnswerHumanRequest = (
     request: HumanRequest;
     decisionId: string;
     dispatchId: string;
+    nextStageAttemptId?: string;
   },
 ): AnswerHumanRequestDecision => {
   if (context.request.id !== command.payload.humanRequestId) {
@@ -1150,6 +1498,130 @@ export const decideAnswerHumanRequest = (
     reason: null,
     createdAt: context.now,
   };
+
+  const resolvingReviewLoop =
+    context.stageAttempt.stage === "REVIEW" && context.stageAttempt.failureCode === "REVIEW_LOOP_EXHAUSTED";
+  if (resolvingReviewLoop) {
+    if (command.actor.type !== "HUMAN" || command.payload.answer.type !== "OPTION") {
+      throw new WorkflowDomainError(
+        "WORKFLOW_CONTROL_NOT_ALLOWED",
+        "Only the owner can resolve an exhausted review loop",
+      );
+    }
+    const selectedOptionId = command.payload.answer.optionIds[0];
+    const retryAvailable = context.stageAttempt.attempt < MAX_TOTAL_REVIEW_ROUNDS;
+    const retryOptionId = retryAvailable ? context.request.options[0]?.id : undefined;
+    const cancelOptionId = context.request.options.at(-1)?.id;
+    if (retryAvailable && selectedOptionId === retryOptionId) {
+      if (context.nextStageAttemptId === undefined) {
+        throw new WorkflowDomainError(
+          "WORKFLOW_STAGE_MISMATCH",
+          "The owner-authorized fix round requires a durable StageAttempt ID",
+        );
+      }
+      const stageAttempt: StageAttempt = {
+        ...context.stageAttempt,
+        status: "SUCCEEDED",
+        failureCode: null,
+        version: context.stageAttempt.version + 1,
+        finishedAt: context.now,
+      };
+      const nextStageAttempt: StageAttempt = {
+        schemaVersion: 1,
+        id: context.nextStageAttemptId,
+        pipelineRunId: context.run.id,
+        projectId: context.workItem.projectId,
+        workItemId: context.workItem.id,
+        stage: "IMPLEMENT",
+        attempt: context.stageAttempt.attempt + 1,
+        status: "QUEUED",
+        version: 1,
+        startedAt: null,
+        finishedAt: null,
+        failureCode: null,
+        unproductiveSessions: 0,
+        packShareBackoffs: 0,
+        resultTree: null,
+      };
+      const run: PipelineRun = {
+        ...context.run,
+        status: "RUNNING",
+        currentStageAttemptId: nextStageAttempt.id,
+        version: context.run.version + 1,
+        updatedAt: context.now,
+      };
+      const workItem: WorkItem = {
+        ...context.workItem,
+        state: "IN_PROGRESS",
+        currentStage: "IMPLEMENT",
+        version: context.workItem.version + 1,
+        updatedAt: context.now,
+      };
+      const dispatch = createDispatch(
+        context.dispatchId,
+        workItem,
+        run,
+        nextStageAttempt,
+        "START",
+        context.now,
+      );
+      return {
+        workItem,
+        run,
+        stageAttempt,
+        request,
+        decision,
+        dispatch,
+        nextStageAttempt,
+        events: [
+          { type: "HUMAN_REQUEST_RESOLVED", data: { request, decision } },
+          {
+            type: "STAGE_ATTEMPT_CHANGED",
+            data: { run, stageAttempt, previousStatus: context.stageAttempt.status },
+          },
+        ],
+      };
+    }
+    if (selectedOptionId !== cancelOptionId) {
+      throw new WorkflowDomainError(
+        "HUMAN_REQUEST_INVALID_ANSWER",
+        "The exhausted review loop received an unsupported owner action",
+      );
+    }
+    const stageAttempt: StageAttempt = {
+      ...context.stageAttempt,
+      status: "CANCELLED",
+      failureCode: "REVIEW_LOOP_EXHAUSTED",
+      version: context.stageAttempt.version + 1,
+      finishedAt: context.now,
+    };
+    const run: PipelineRun = {
+      ...context.run,
+      status: "CANCELLED",
+      version: context.run.version + 1,
+      updatedAt: context.now,
+      finishedAt: context.now,
+    };
+    const workItem: WorkItem = {
+      ...context.workItem,
+      state: "CANCELLED",
+      version: context.workItem.version + 1,
+      updatedAt: context.now,
+    };
+    return {
+      workItem,
+      run,
+      stageAttempt,
+      request,
+      decision,
+      dispatch: null,
+      nextStageAttempt: null,
+      events: [
+        { type: "HUMAN_REQUEST_RESOLVED", data: { request, decision } },
+        { type: "PIPELINE_CANCELLED", data: { run, stageAttempt } },
+      ],
+    };
+  }
   const stageAttempt: StageAttempt = {
     ...context.stageAttempt,
     status: "QUEUED",
@@ -1181,6 +1653,7 @@ export const decideAnswerHumanRequest = (
     request,
     decision,
     dispatch,
+    nextStageAttempt: null,
     events: [{ type: "HUMAN_REQUEST_RESOLVED", data: { request, decision } }],
   };
 };

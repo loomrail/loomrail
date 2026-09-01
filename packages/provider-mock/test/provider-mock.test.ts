@@ -104,6 +104,7 @@ describe("mock provider scenario A", () => {
     await expect(createMockProvider().start(invocation("REVIEW"), listener())).resolves.toMatchObject({
       type: "COMPLETED",
       artifacts: [{ kind: "REVIEW_REPORT" }],
+      reviewReport: { verdict: "PASSED", findings: [] },
     });
     await expect(createMockProvider().start(invocation("QA"), listener())).resolves.toMatchObject({
       type: "COMPLETED",

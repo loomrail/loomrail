@@ -188,4 +188,118 @@ describe("mock workflow decisions", () => {
       }),
     ).toThrow(expect.objectContaining({ code: "HUMAN_REQUEST_INVALID_ANSWER" }));
   });
+
+  it("turns an exhausted review into one owner-authorized fix round or a cancellation", () => {
+    const run: PipelineRun = {
+      schemaVersion: 1,
+      id: "run-review",
+      projectId: "project-1",
+      workItemId: "work-item-1",
+      workflowTemplateId: template.id,
+      workflowVersion: 1,
+      status: "WAITING_HUMAN",
+      currentStageAttemptId: "review-2",
+      version: 5,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      finishedAt: null,
+    };
+    const stageAttempt: StageAttempt = {
+      schemaVersion: 1,
+      id: "review-2",
+      pipelineRunId: run.id,
+      projectId: "project-1",
+      workItemId: "work-item-1",
+      stage: "REVIEW",
+      attempt: 2,
+      status: "WAITING_HUMAN",
+      version: 3,
+      startedAt: timestamp,
+      finishedAt: null,
+      failureCode: "REVIEW_LOOP_EXHAUSTED",
+      unproductiveSessions: 0,
+      packShareBackoffs: 0,
+      resultTree: "a".repeat(40),
+    };
+    const request: HumanRequest = {
+      schemaVersion: 1,
+      id: "review-decision",
+      projectId: "project-1",
+      workItemId: "work-item-1",
+      stageAttemptId: stageAttempt.id,
+      kind: "SINGLE_CHOICE",
+      blocking: true,
+      title: "Review loop needs a decision",
+      context: "Two rounds left findings open.",
+      recommendation: "Inspect the findings.",
+      options: [
+        {
+          id: "authorize-final-fix",
+          label: "Authorize one final fix round",
+          consequence: "Creates one final round.",
+          recommended: true,
+        },
+        {
+          id: "cancel-review-work",
+          label: "Cancel the work",
+          consequence: "Stops the pipeline.",
+          recommended: false,
+        },
+      ],
+      allowOther: false,
+      status: "OPEN",
+      version: 1,
+      createdAt: timestamp,
+      resolvedAt: null,
+    };
+    const answer = (optionId: string): AnswerHumanRequestCommand => ({
+      schemaVersion: 1,
+      commandId: `answer-${optionId}`,
+      correlationId: `correlation-${optionId}`,
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "ANSWER_HUMAN_REQUEST",
+      payload: {
+        humanRequestId: request.id,
+        expectedVersion: request.version,
+        answer: { type: "OPTION", optionIds: [optionId] },
+      },
+    });
+    const blockedWorkItem = { ...workItem("BLOCKED"), currentStage: "REVIEW" as const };
+
+    const retry = decideAnswerHumanRequest(answer("authorize-final-fix"), {
+      now: timestamp,
+      workItem: blockedWorkItem,
+      run,
+      stageAttempt,
+      request,
+      decisionId: "decision-retry",
+      dispatchId: "dispatch-final-fix",
+      nextStageAttemptId: "implement-3",
+    });
+    expect(retry).toMatchObject({
+      workItem: { state: "IN_PROGRESS", currentStage: "IMPLEMENT" },
+      run: { status: "RUNNING", currentStageAttemptId: "implement-3" },
+      stageAttempt: { id: "review-2", status: "SUCCEEDED" },
+      nextStageAttempt: { id: "implement-3", stage: "IMPLEMENT", attempt: 3, status: "QUEUED" },
+      dispatch: { stageAttemptId: "implement-3", mode: "START", status: "PENDING" },
+    });
+
+    const cancelled = decideAnswerHumanRequest(answer("cancel-review-work"), {
+      now: timestamp,
+      workItem: blockedWorkItem,
+      run,
+      stageAttempt,
+      request,
+      decisionId: "decision-cancel",
+      dispatchId: "unused-dispatch",
+    });
+    expect(cancelled).toMatchObject({
+      workItem: { state: "CANCELLED" },
+      run: { status: "CANCELLED", finishedAt: timestamp },
+      stageAttempt: { status: "CANCELLED", finishedAt: timestamp },
+      dispatch: null,
+      nextStageAttempt: null,
+      events: [{ type: "HUMAN_REQUEST_RESOLVED" }, { type: "PIPELINE_CANCELLED" }],
+    });
+  });
 });

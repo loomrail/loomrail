@@ -19,6 +19,9 @@ import type {
   ProjectConstitutionSnapshot,
   ProjectConstitutionVersion,
   ProjectReadinessSnapshot,
+  ReviewFinding,
+  ReviewFindingStatus,
+  ReviewReport,
   ProviderSession,
   ScaffoldOperation,
   SquadAssignment,
@@ -114,7 +117,20 @@ export type StateQuery =
     }
   | { type: "LIST_PENDING_DISPATCHES" }
   | { type: "GET_SQUAD_ASSIGNMENT"; pipelineRunId: string }
+  | { type: "GET_AGENT_RUN"; agentRunId: string }
+  | { type: "GET_LATEST_SUCCEEDED_DEVELOPER_AGENT_RUN"; pipelineRunId: string }
   | { type: "LIST_AGENT_RUNS"; status?: AgentRunStatus; limit?: number }
+  | {
+      type: "LIST_REVIEW_REPORTS";
+      pipelineRunId: string;
+      limit?: number;
+    }
+  | {
+      type: "LIST_REVIEW_FINDINGS";
+      pipelineRunId: string;
+      status?: ReviewFindingStatus;
+      limit?: number;
+    }
   | {
       type: "LIST_WORK_ITEMS";
       projectId: string;
@@ -175,6 +191,8 @@ export type StateQueryResult =
   | { type: "WORKFLOW_DISPATCHES"; dispatches: WorkflowDispatch[] }
   | { type: "SQUAD_ASSIGNMENT"; assignment: SquadAssignment | null }
   | { type: "AGENT_RUNS"; runs: AgentRun[] }
+  | { type: "REVIEW_REPORTS"; reports: ReviewReport[] }
+  | { type: "REVIEW_FINDINGS"; findings: ReviewFinding[] }
   | { type: "WORK_ITEMS"; workItems: WorkItem[] }
   | { type: "EVENTS"; events: DomainEvent[]; nextSequence: number; hasMore: boolean }
   | { type: "CONTEXT_SOURCES"; sources: ContextSources }
@@ -221,6 +239,7 @@ export type LocalStateIdKind =
   | "stageAttempt"
   | "workflowDispatch"
   | "humanRequest"
+  | "humanRequestOption"
   | "decision"
   | "budgetPolicy"
   | "usageRecord"
@@ -230,6 +249,8 @@ export type LocalStateIdKind =
   | "providerSession"
   | "squadAssignment"
   | "agentRun"
+  | "reviewReport"
+  | "reviewFinding"
   | "contextPackRecipe"
   | "checkpoint"
   | "workItemWorkspace"

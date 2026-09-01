@@ -115,7 +115,7 @@ const artifact = (
 });
 
 describe("M6 acceptance decisions", () => {
-  it("requires and records the typed Review artifact before advancing", () => {
+  it("rejects a legacy Review artifact without the structured independent-review report", () => {
     const attempt = stageAttempt("REVIEW", "attempt-review");
     const command: ApplyProviderOutcomeCommand = {
       schemaVersion: 1,
@@ -142,9 +142,10 @@ describe("M6 acceptance decisions", () => {
       usageRecordIds: [],
       nextStageAttemptId: "attempt-qa",
       nextDispatchId: "dispatch-qa",
+      reviewRequired: true,
     };
     expect(() => decideApplyProviderOutcome(command, context)).toThrow(
-      expect.objectContaining({ code: "ACCEPTANCE_NOT_READY" }),
+      expect.objectContaining({ code: "REVIEW_REPORT_REQUIRED" }),
     );
 
     command.payload.outcome = {
@@ -159,14 +160,12 @@ describe("M6 acceptance decisions", () => {
         },
       ],
     };
-    const decision = decideApplyProviderOutcome(command, {
-      ...context,
-      artifactIds: ["artifact-review"],
-    });
-    expect(decision).toMatchObject({
-      artifacts: [{ id: "artifact-review", kind: "REVIEW_REPORT", status: "PASSED", provider: "CODEX" }],
-      nextStageAttempt: { stage: "QA" },
-    });
+    expect(() =>
+      decideApplyProviderOutcome(command, {
+        ...context,
+        artifactIds: ["artifact-review"],
+      }),
+    ).toThrow(expect.objectContaining({ code: "REVIEW_REPORT_REQUIRED" }));
   });
 
   it("forbids ordinary provider completion from bypassing owner acceptance", () => {
@@ -199,6 +198,49 @@ describe("M6 acceptance decisions", () => {
         },
       ),
     ).toThrow(expect.objectContaining({ code: "ACCEPTANCE_NOT_READY" }));
+  });
+
+  it("rejects structured review data outside the Review stage", () => {
+    const attempt = stageAttempt("QA", "attempt-qa-review-payload");
+    expect(() =>
+      decideApplyProviderOutcome(
+        {
+          schemaVersion: 1,
+          commandId: "review-payload-on-acceptance",
+          correlationId: "correlation-review-payload-on-acceptance",
+          actor: { type: "SYSTEM", id: "codex-provider" },
+          type: "APPLY_PROVIDER_OUTCOME",
+          payload: {
+            resultTree: null,
+            dispatchId: "dispatch-qa",
+            provider: "CODEX",
+            template,
+            outcome: {
+              type: "COMPLETED",
+              summary: "Review-shaped payload on the wrong stage.",
+              reviewReport: {
+                kind: "REVIEW_REPORT",
+                title: "Wrong-stage report",
+                summary: "This report must be rejected.",
+                checks: ["Checked the stage boundary."],
+                verdict: "PASSED",
+                findings: [],
+              },
+            },
+          },
+        },
+        {
+          now,
+          workItem: { ...workItem, currentStage: "QA" },
+          run: { ...run, currentStageAttemptId: attempt.id },
+          stageAttempt: attempt,
+          dispatch: dispatch(attempt),
+          budgetPolicy: null,
+          existingUsageRecords: [],
+          usageRecordIds: [],
+        },
+      ),
+    ).toThrow(expect.objectContaining({ code: "WORKFLOW_STAGE_MISMATCH" }));
   });
 
   it("creates a blocking package and only human acceptance can finish the WorkItem", () => {

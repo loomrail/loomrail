@@ -99,6 +99,21 @@ and run state, not a second scheduler: reloading the page or restarting Loomrail
 cannot grant permissions, raise a budget, answer a Human Request, or accept a delivery. Those actions stay in their
 existing owner gates.
 
+### Read an independent review
+
+After Implementation, Loomrail starts a fresh **Code reviewer** AgentRun over the recorded Git tree. With **Auto** and
+both live CLIs ready, Review prefers the provider the latest Developer run did not use. An explicit Project provider
+selection remains a lock, so the cockpit labels the result **Same provider** while still using a separate reviewer run.
+
+The Task Cockpit shows the round, verdict, provider relation, reviewed tree, and bounded findings with severity,
+portable file/line location, and reproduction steps. A passed review advances to QA. A first
+**Changes requested** result queues a second Implementation and fresh Review. A second stops on a Human Request:
+the owner may authorize exactly one final bounded fix/re-review or cancel the run. If that final review still requests
+changes, no fourth dispatch is created.
+
+Only the owner may mark an open finding **Risk accepted** or **False positive**, and a reason is required. The decision
+is audited and survives restart; it does not make the author their own reviewer or silently bypass re-review.
+
 ### Answer the Human Request
 
 The mock Discovery stage opens a blocking question and the task becomes **Waiting for you**. Open **Attention** in the

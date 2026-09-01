@@ -1,5 +1,6 @@
 import type {
   Project,
+  ProviderId,
   StageAttempt,
   WorkItem,
   WorkflowDispatch,
@@ -50,7 +51,11 @@ const workspaceClaim = (
  */
 export const readAgentSchedulingSnapshot = (input: {
   state: LocalState;
-  resolveAdapter: (projectId: string) => ProviderAdapter;
+  resolveAdapter: (
+    projectId: string,
+    stage?: StageAttempt["stage"],
+    avoidProvider?: ProviderId | null,
+  ) => ProviderAdapter;
   excludedDispatchIds?: ReadonlySet<string>;
 }): AgentSchedulingSnapshot => {
   const queued = input.state.query({ type: "LIST_PENDING_DISPATCHES" });
@@ -73,7 +78,17 @@ export const readAgentSchedulingSnapshot = (input: {
     if (snapshot === null || attempt === undefined || workItem === null || project === null) {
       throw new StateStoreError("PERSISTENCE_FAILURE", "A scheduler candidate is incomplete");
     }
-    const adapter = input.resolveAdapter(dispatch.projectId);
+    const authorProvider =
+      attempt.stage === "REVIEW" && snapshot.run !== null
+        ? (() => {
+            const author = input.state.query({
+              type: "GET_LATEST_SUCCEEDED_DEVELOPER_AGENT_RUN",
+              pipelineRunId: snapshot.run.id,
+            });
+            return author.type === "AGENT_RUNS" ? (author.runs[0]?.provider ?? null) : null;
+          })()
+        : null;
+    const adapter = input.resolveAdapter(dispatch.projectId, attempt.stage, authorProvider);
     contexts.set(dispatch.id, { dispatch, adapter, project, workItem, attempt });
     candidates.push({
       dispatchId: dispatch.id,

@@ -40,6 +40,8 @@ describe("provider stage result contract", () => {
           title: "Independent review",
           summary: "No blocking findings remain.",
           checks: ["Acceptance criteria traced"],
+          verdict: "PASSED",
+          findings: [],
         },
       },
     });
@@ -49,6 +51,7 @@ describe("provider stage result contract", () => {
       outcome: {
         type: "COMPLETED",
         artifacts: [{ kind: "REVIEW_REPORT" }],
+        reviewReport: { verdict: "PASSED", findings: [] },
       },
     });
   });

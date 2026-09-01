@@ -19,6 +19,8 @@ import type {
   ProviderPreference,
   ReadinessAttestationOutcome,
   ReadinessCheck,
+  ReviewFinding,
+  ReviewFindingOwnerDisposition,
   ScaffoldOperation,
   ScaffoldProposal,
   PipelineRun,
@@ -33,6 +35,7 @@ import {
   answerHumanRequest,
   controlPipeline,
   createWorkItem,
+  disposeReviewFinding,
   getProviderCapabilities,
   getProjectProviderSelection,
   getProjectMcpProfiles,
@@ -42,6 +45,7 @@ import {
   getAgentFleet,
   getWorkItemChanges,
   getWorkItemFileDiff,
+  getWorkItemReviews,
   getWorkItemWorkflow,
   getWorkItemWorkspace,
   listOpenHumanRequests,
@@ -88,6 +92,7 @@ const projectWorkItemsKey = (projectId: string) => ["projects", projectId, "work
 const workItemEventsKey = (projectId: string, workItemId: string) =>
   ["projects", projectId, "work-items", workItemId, "events"] as const;
 const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "workflow"] as const;
+const workItemReviewsKey = (workItemId: string) => ["work-items", workItemId, "reviews"] as const;
 // Nested under the same `["work-items", <id>]` prefix the event channel invalidates for a WORK_ITEM
 // signal (eventStream.ts, scopesForSignal), so a stage that cuts a workspace refreshes the card
 // without a reload and without a second entry in that mapping.
@@ -232,6 +237,16 @@ export const useWorkItemWorkflow = (workItemId: string | undefined) =>
     queryFn: () => {
       if (!workItemId) throw new Error("A work item is required to load its workflow");
       return getWorkItemWorkflow(workItemId);
+    },
+    enabled: workItemId !== undefined,
+  });
+
+export const useWorkItemReviews = (workItemId: string | undefined) =>
+  useQuery({
+    queryKey: workItemId ? workItemReviewsKey(workItemId) : ["work-items", "none", "reviews"],
+    queryFn: () => {
+      if (!workItemId) throw new Error("A work item is required to load review state");
+      return getWorkItemReviews(workItemId);
     },
     enabled: workItemId !== undefined,
   });
@@ -667,6 +682,30 @@ export const useAnswerHumanRequest = () => {
         }),
         queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(request.projectId) }),
         queryClient.invalidateQueries({ queryKey: stageAttemptSessionsKey(request.stageAttemptId) }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
+      ]);
+    },
+  });
+};
+
+export const useDisposeReviewFinding = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      disposition,
+      finding,
+      reason,
+    }: {
+      disposition: ReviewFindingOwnerDisposition;
+      finding: ReviewFinding;
+      reason: string;
+    }) => disposeReviewFinding(finding, disposition, reason),
+    onSuccess: async (finding) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workItemReviewsKey(finding.workItemId) }),
+        queryClient.invalidateQueries({
+          queryKey: workItemEventsKey(finding.projectId, finding.workItemId),
+        }),
         queryClient.invalidateQueries({ queryKey: attentionKey }),
       ]);
     },

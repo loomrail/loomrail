@@ -494,6 +494,14 @@ describe("session worker", () => {
                 checks: ["Decision traced", "Changed path reviewed"],
               },
             ],
+            reviewReport: {
+              kind: "REVIEW_REPORT",
+              title: "Independent live-shaped review",
+              summary: "The bounded worktree change matches the recorded decision.",
+              checks: ["Decision traced", "Changed path reviewed"],
+              verdict: "PASSED",
+              findings: [],
+            },
           };
         }
         if (stage === "QA") {
