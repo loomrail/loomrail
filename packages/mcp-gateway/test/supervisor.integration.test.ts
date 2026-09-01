@@ -80,17 +80,20 @@ const waitUntilGone = async (pids: readonly number[]): Promise<void> => {
 describe("MCP process-tree supervisor", () => {
   let directory = "";
   let treePids: TreePids | undefined;
+  let orphanRoot: ChildProcess | undefined;
   let watchedParent: ChildProcess | undefined;
   let supervisor: ChildProcess | undefined;
 
   afterEach(async () => {
     forceStop(supervisor);
+    forceStop(orphanRoot);
     forceStop(watchedParent);
     forceStopPid(treePids?.serverPid);
     forceStopPid(treePids?.helperPid);
     if (directory !== "") await rm(directory, { recursive: true, force: true });
     directory = "";
     treePids = undefined;
+    orphanRoot = undefined;
     watchedParent = undefined;
     supervisor = undefined;
   });
@@ -98,6 +101,7 @@ describe("MCP process-tree supervisor", () => {
   it("closes the server and its signal-resistant descendant with the MCP transport", async () => {
     directory = await mkdtemp(join(tmpdir(), "loomrail mcp tree "));
     const pidFile = join(directory, "pids.json");
+    const recordFile = join(directory, `mcp-${randomBytes(32).toString("base64url")}.json`);
     const client = new Client({ name: "supervisor-close-test", version: "1.0.0" });
     try {
       await client.connect(
@@ -109,6 +113,8 @@ describe("MCP process-tree supervisor", () => {
             String(process.pid),
             "--control-token",
             randomBytes(32).toString("base64url"),
+            "--registry-file",
+            recordFile,
             "--",
             process.execPath,
             fixturePath,
@@ -121,12 +127,16 @@ describe("MCP process-tree supervisor", () => {
         { timeout: 5_000, maxTotalTimeout: 5_000 },
       );
       treePids = await waitForTreePids(pidFile);
+      await expect(readFile(recordFile, "utf8")).resolves.toContain(
+        `"serverPid":${treePids.serverPid.toString()}`,
+      );
       const tools = await client.listTools();
       expect(tools.tools.map(({ name }) => name)).toEqual(["tool_00", "tool_01"]);
     } finally {
       await client.close().catch(() => undefined);
     }
     await waitUntilGone([treePids.serverPid, treePids.helperPid]);
+    await expect(readFile(recordFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   }, 15_000);
 
   it("reaps the whole tree when its watched daemon process disappears", async () => {
@@ -168,33 +178,25 @@ describe("MCP process-tree supervisor", () => {
     directory = await mkdtemp(join(tmpdir(), "loomrail mcp durable orphan "));
     const pidFile = join(directory, "pids.json");
     const recordFile = join(directory, `mcp-${randomBytes(32).toString("base64url")}.json`);
-    supervisor = spawn(
-      process.execPath,
-      [
-        supervisorEntrypoint,
-        "--parent-pid",
-        String(process.pid),
-        "--control-token",
-        randomBytes(32).toString("base64url"),
-        "--registry-file",
-        recordFile,
-        "--",
-        process.execPath,
-        fixturePath,
-        "orphan-tree",
-        pidFile,
-      ],
-      { stdio: ["pipe", "ignore", "ignore"], windowsHide: true },
-    );
-    if (supervisor.pid === undefined) throw new Error("The durable MCP supervisor fixture did not start");
+    orphanRoot = spawn(process.execPath, [fixturePath, "orphan-tree", pidFile], {
+      detached: process.platform !== "win32",
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    if (orphanRoot.pid === undefined) throw new Error("The durable MCP orphan fixture did not start");
+    const startedAt = new Date().toISOString();
     treePids = await waitForTreePids(pidFile);
-    await expect(readFile(recordFile, "utf8")).resolves.toContain(
-      `"serverPid":${treePids.serverPid.toString()}`,
+    expect(treePids.serverPid).toBe(orphanRoot.pid);
+    await writeFile(
+      recordFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        supervisorPid: 2_147_483_647,
+        serverPid: treePids.serverPid,
+        startedAt,
+      }),
+      { encoding: "utf8", mode: 0o600 },
     );
-
-    const supervisorExit = once(supervisor, "exit");
-    supervisor.kill("SIGKILL");
-    await supervisorExit;
     expect(processExists(treePids.serverPid)).toBe(true);
 
     await expect(recoverMcpOrphans(directory)).resolves.toEqual([
