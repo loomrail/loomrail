@@ -368,11 +368,48 @@ h3 {
   flex: none;
 }
 
+.frame-player {
+  position: relative;
+}
+
 .frame-media {
   display: block;
   width: 100%;
   height: auto;
   background: var(--color-surface);
+}
+
+/* Shown only when the recording is not playing: autoplay refused, or the reader
+ * asked for reduced motion. Native controls would read as a video embed, not a product shot. */
+.demo-play {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  gap: 0.5rem;
+  width: max-content;
+  height: 2.75rem;
+  margin: auto;
+  padding-inline: var(--space-lg);
+  align-items: center;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font-size: var(--text-sm);
+  font-weight: 520;
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+}
+
+.demo-play[hidden] {
+  display: none;
+}
+
+.demo-play::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 0.5rem solid currentColor;
+  border-block: 0.3125rem solid transparent;
 }
 
 .hero-shot figcaption {

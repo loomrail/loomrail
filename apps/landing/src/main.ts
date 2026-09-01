@@ -46,6 +46,7 @@ const messages = {
       "A real run of 0.1.0-alpha.2 against the deterministic mock: the task contract, a blocking Human Request, an approved budget increase, and the owner accepting the delivery.",
     demoAlt:
       "Screen recording of Loomrail: a task is created, the workflow blocks on a Human Request, a budget increase is approved, and the owner accepts the delivery",
+    demoPlay: "Play the demo",
 
     promisesLabel: "What Loomrail never does",
     promiseCommit: "Never commits",
@@ -215,6 +216,7 @@ const messages = {
       "Реальный прогон 0.1.0-alpha.2 на детерминированном mock: контракт задачи, блокирующий Human Request, подтверждение бюджета и приёмка владельцем.",
     demoAlt:
       "Запись экрана Loomrail: создаётся задача, workflow блокируется на Human Request, подтверждается увеличение бюджета, владелец принимает поставку",
+    demoPlay: "Запустить демо",
 
     promisesLabel: "Чего Loomrail не делает",
     promiseCommit: "Не коммитит",
@@ -484,31 +486,33 @@ function applyDemoTheme(doc: Document, theme: Theme): void {
     for (const source of video.querySelectorAll<HTMLSourceElement>("source[data-demo-format]")) {
       source.src = `./demo/mock-route-${theme}.${source.dataset["demoFormat"] ?? "webm"}`;
     }
-    reloadDemo(video, wasPlaying);
+    try {
+      video.load();
+    } catch {
+      // Media is unavailable in this environment; the poster frame stands in for it.
+    }
+    if (wasPlaying) playDemo(video);
   }
 }
 
-/** Media playback is unavailable in some environments; the poster frame is an acceptable result there. */
-function reloadDemo(video: HTMLVideoElement, resume: boolean): void {
-  try {
-    video.load();
-    if (resume) startDemo(video);
-  } catch {
-    video.controls = true;
-  }
-}
-
-function startDemo(video: HTMLVideoElement): void {
+/** Native controls do not belong on a looping hero; a blocked autoplay reveals our own button. */
+function playDemo(video: HTMLVideoElement): void {
+  const settle = (): void => {
+    syncDemoTrigger(video);
+  };
   try {
     const started: unknown = video.play();
-    if (started instanceof Promise) {
-      started.catch(() => {
-        video.controls = true;
-      });
-    }
+    if (started instanceof Promise) started.then(settle, settle);
+    else settle();
   } catch {
-    video.controls = true;
+    settle();
   }
+}
+
+function syncDemoTrigger(video: HTMLVideoElement): void {
+  const trigger = video.parentElement?.querySelector<HTMLButtonElement>("[data-demo-play]");
+  if (trigger === null || trigger === undefined) return;
+  trigger.hidden = !video.paused;
 }
 
 function setupTheme(doc: Document, win: Window): void {
@@ -622,12 +626,18 @@ function setupDemo(doc: Document, win: Window): void {
 
   const reduced = win.matchMedia("(prefers-reduced-motion: reduce)").matches;
   for (const video of videos) {
-    if (reduced) {
-      video.controls = true;
-      continue;
+    video.controls = false;
+    video.addEventListener("play", () => syncDemoTrigger(video));
+    video.addEventListener("pause", () => syncDemoTrigger(video));
+    video.parentElement
+      ?.querySelector<HTMLButtonElement>("[data-demo-play]")
+      ?.addEventListener("click", () => playDemo(video));
+
+    if (!reduced) {
+      video.autoplay = true;
+      playDemo(video);
     }
-    video.autoplay = true;
-    startDemo(video);
+    syncDemoTrigger(video);
   }
 }
 

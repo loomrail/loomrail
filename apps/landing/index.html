@@ -83,21 +83,26 @@
               <span class="frame-dot" aria-hidden="true"></span>
               <span class="frame-url" aria-hidden="true">127.0.0.1:4176</span>
             </div>
-            <video
-              class="frame-media"
-              width="1280"
-              height="800"
-              poster="./demo/mock-route-light.webp"
-              preload="metadata"
-              muted
-              loop
-              playsinline
-              data-product-demo
-              data-i18n-aria-label="demoAlt"
-            >
-              <source data-demo-format="webm" src="./demo/mock-route-light.webm" type="video/webm" />
-              <source data-demo-format="mp4" src="./demo/mock-route-light.mp4" type="video/mp4" />
-            </video>
+            <div class="frame-player">
+              <video
+                class="frame-media"
+                width="1280"
+                height="800"
+                poster="./demo/mock-route-light.webp"
+                preload="auto"
+                muted
+                loop
+                playsinline
+                data-product-demo
+                data-i18n-aria-label="demoAlt"
+              >
+                <source data-demo-format="webm" src="./demo/mock-route-light.webm" type="video/webm" />
+                <source data-demo-format="mp4" src="./demo/mock-route-light.mp4" type="video/mp4" />
+              </video>
+              <button class="demo-play" type="button" data-demo-play hidden>
+                <span data-i18n="demoPlay">Play the demo</span>
+              </button>
+            </div>
           </div>
           <figcaption data-i18n="heroShotCaption">
             A real run of 0.1.0-alpha.2 against the deterministic mock: the task contract, a blocking Human

@@ -18,10 +18,13 @@ function renderControls(): void {
       <p data-i18n="heroTitle">Hero</p>
       <a data-doc-link="quick-start" href="https://example.test/start">Guide</a>
       <button data-theme-toggle><span data-theme-label></span></button>
-      <video data-product-demo poster="./demo/mock-route-light.webp">
-        <source data-demo-format="webm" src="./demo/mock-route-light.webm" type="video/webm" />
-        <source data-demo-format="mp4" src="./demo/mock-route-light.mp4" type="video/mp4" />
-      </video>
+      <div class="frame-player">
+        <video data-product-demo poster="./demo/mock-route-light.webp">
+          <source data-demo-format="webm" src="./demo/mock-route-light.webm" type="video/webm" />
+          <source data-demo-format="mp4" src="./demo/mock-route-light.mp4" type="video/mp4" />
+        </video>
+        <button data-demo-play hidden><span data-i18n="demoPlay">Play</span></button>
+      </div>
       <button data-copy><span data-copy-label data-i18n="copy">Copy</span></button>
       <section data-reveal><p data-i18n="whyTitle">Why</p></section>
       <ol data-flow><li>Backlog</li><li>Ready</li><li>Running</li></ol>
@@ -113,6 +116,16 @@ describe("landing interactions", () => {
     expect(copy?.textContent).toBe("Copied");
   });
 
+  test("offers its own play control instead of native chrome when autoplay is refused", () => {
+    const video = document.querySelector<HTMLVideoElement>("[data-product-demo]");
+    const trigger = document.querySelector<HTMLButtonElement>("[data-demo-play]");
+    // jsdom cannot play media, which is the same observable state as a browser refusing autoplay.
+    expect(video?.paused).toBe(true);
+    expect(video?.controls).toBe(false);
+    expect(trigger?.hidden).toBe(false);
+    expect(trigger?.textContent).toBe("Play the demo");
+  });
+
   test("marks exactly one workflow stage as current", () => {
     expect(document.querySelectorAll("[data-flow] .is-current")).toHaveLength(1);
   });
@@ -194,6 +207,9 @@ describe("landing public contract", () => {
     expect(demo[0]?.hasAttribute("loop")).toBe(true);
     expect(demo[0]?.hasAttribute("playsinline")).toBe(true);
     expect(demo[0]?.getAttribute("poster")).toBe("./demo/mock-route-light.webp");
+    expect(demo[0]?.hasAttribute("controls")).toBe(false);
+    expect(demo[0]?.getAttribute("preload")).toBe("auto");
+    expect(parsed.querySelectorAll("[data-demo-play]")).toHaveLength(1);
     expect([...(demo[0]?.querySelectorAll("source") ?? [])].map((s) => s.getAttribute("type"))).toEqual([
       "video/webm",
       "video/mp4",
