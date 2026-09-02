@@ -49,6 +49,7 @@ import {
   sessionPauseFailureCodes,
   providerSessionSchema,
   recoveryReportSchema,
+  reportingFactsSchema,
   reviewFindingSchema,
   reviewFindingStatusSchema,
   reviewReportSchema,
@@ -585,6 +586,36 @@ const recoveryReportRowSchema = z.object({
   created_at: z.string(),
 });
 
+const reportingFactsRowSchema = z.object({
+  work_items_total: z.number().int(),
+  work_items_accepted: z.number().int(),
+  work_items_cancelled: z.number().int(),
+  work_items_active: z.number().int(),
+  pipeline_runs_total: z.number().int(),
+  pipeline_runs_succeeded: z.number().int(),
+  pipeline_runs_failed: z.number().int(),
+  pipeline_runs_interrupted: z.number().int(),
+  pipeline_runs_cancelled: z.number().int(),
+  agent_runs_total: z.number().int(),
+  agent_runs_succeeded: z.number().int(),
+  agent_runs_failed: z.number().int(),
+  agent_runs_interrupted: z.number().int(),
+  reviews_total: z.number().int(),
+  reviews_first_round: z.number().int(),
+  reviews_first_round_passed: z.number().int(),
+  qa_total: z.number().int(),
+  qa_passed: z.number().int(),
+  qa_failed: z.number().int(),
+  qa_errored: z.number().int(),
+  qa_defects_open: z.number().int(),
+  qa_defects_resolved: z.number().int(),
+  qa_defects_waived: z.number().int(),
+  human_requests_total: z.number().int(),
+  human_requests_resolved: z.number().int(),
+  estimated_tokens: z.number().int(),
+  daemon_restart_recoveries: z.number().int(),
+});
+
 const evidenceArtifactRowSchema = z.object({
   id: z.string(),
   schema_version: z.number().int(),
@@ -930,6 +961,7 @@ const workflowDispatchRowSchema = z.object({
 
 const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LIST_PROJECTS") }).strict(),
+  z.object({ type: z.literal("GET_REPORTING_FACTS") }).strict(),
   z.object({ type: z.literal("GET_PROJECT"), projectId: opaqueIdSchema }).strict(),
   z
     .object({
@@ -2184,6 +2216,38 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       .run(DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACE_NAME, openedAt, openedAt);
 
     const selectProjectById = database.prepare("SELECT * FROM projects WHERE id = ?");
+    // One statement is the snapshot seam for Insights. Only counts cross it: no row, identifier,
+    // free text, timestamp or path can be accidentally handed to the reporting module.
+    const selectReportingFacts = database.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM work_items) AS work_items_total,
+        (SELECT COUNT(*) FROM work_items WHERE state = 'DONE') AS work_items_accepted,
+        (SELECT COUNT(*) FROM work_items WHERE state = 'CANCELLED') AS work_items_cancelled,
+        (SELECT COUNT(*) FROM work_items WHERE state IN ('READY', 'IN_PROGRESS', 'BLOCKED')) AS work_items_active,
+        (SELECT COUNT(*) FROM pipeline_runs) AS pipeline_runs_total,
+        (SELECT COUNT(*) FROM pipeline_runs WHERE orchestration_status = 'SUCCEEDED') AS pipeline_runs_succeeded,
+        (SELECT COUNT(*) FROM pipeline_runs WHERE orchestration_status = 'FAILED') AS pipeline_runs_failed,
+        (SELECT COUNT(*) FROM pipeline_runs WHERE orchestration_status = 'INTERRUPTED') AS pipeline_runs_interrupted,
+        (SELECT COUNT(*) FROM pipeline_runs WHERE orchestration_status = 'CANCELLED') AS pipeline_runs_cancelled,
+        (SELECT COUNT(*) FROM agent_runs) AS agent_runs_total,
+        (SELECT COUNT(*) FROM agent_runs WHERE status = 'SUCCEEDED') AS agent_runs_succeeded,
+        (SELECT COUNT(*) FROM agent_runs WHERE status = 'FAILED') AS agent_runs_failed,
+        (SELECT COUNT(*) FROM agent_runs WHERE status = 'INTERRUPTED') AS agent_runs_interrupted,
+        (SELECT COUNT(*) FROM review_reports) AS reviews_total,
+        (SELECT COUNT(*) FROM review_reports WHERE round = 1) AS reviews_first_round,
+        (SELECT COUNT(*) FROM review_reports WHERE round = 1 AND verdict = 'PASSED') AS reviews_first_round_passed,
+        (SELECT COUNT(*) FROM qa_runs) AS qa_total,
+        (SELECT COUNT(*) FROM qa_runs WHERE status = 'PASSED') AS qa_passed,
+        (SELECT COUNT(*) FROM qa_runs WHERE status = 'FAILED') AS qa_failed,
+        (SELECT COUNT(*) FROM qa_runs WHERE status = 'ERROR') AS qa_errored,
+        (SELECT COUNT(*) FROM qa_defects WHERE status = 'OPEN') AS qa_defects_open,
+        (SELECT COUNT(*) FROM qa_defects WHERE status = 'RESOLVED') AS qa_defects_resolved,
+        (SELECT COUNT(*) FROM qa_defects WHERE status = 'WAIVED') AS qa_defects_waived,
+        (SELECT COUNT(*) FROM human_requests) AS human_requests_total,
+        (SELECT COUNT(*) FROM human_requests WHERE status = 'RESOLVED') AS human_requests_resolved,
+        (SELECT COALESCE(SUM(amount), 0) FROM usage_records) AS estimated_tokens,
+        (SELECT COUNT(*) FROM recovery_reports WHERE reason = 'DAEMON_RESTART') AS daemon_restart_recoveries
+    `);
     const selectProjectByRepositoryPath = database.prepare(
       "SELECT * FROM projects WHERE repository_path = ? LIMIT 1",
     );
@@ -8376,6 +8440,53 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               .all()
               .map(projectFromRow),
           };
+        case "GET_REPORTING_FACTS": {
+          const row = reportingFactsRowSchema.parse(selectReportingFacts.get());
+          return {
+            type: "REPORTING_FACTS",
+            facts: reportingFactsSchema.parse({
+              workItems: {
+                total: row.work_items_total,
+                accepted: row.work_items_accepted,
+                cancelled: row.work_items_cancelled,
+                active: row.work_items_active,
+              },
+              pipelineRuns: {
+                total: row.pipeline_runs_total,
+                succeeded: row.pipeline_runs_succeeded,
+                failed: row.pipeline_runs_failed,
+                interrupted: row.pipeline_runs_interrupted,
+                cancelled: row.pipeline_runs_cancelled,
+              },
+              agentRuns: {
+                total: row.agent_runs_total,
+                succeeded: row.agent_runs_succeeded,
+                failed: row.agent_runs_failed,
+                interrupted: row.agent_runs_interrupted,
+              },
+              reviews: {
+                total: row.reviews_total,
+                firstRound: row.reviews_first_round,
+                firstRoundPassed: row.reviews_first_round_passed,
+              },
+              qa: {
+                total: row.qa_total,
+                passed: row.qa_passed,
+                failed: row.qa_failed,
+                errored: row.qa_errored,
+                defectsOpen: row.qa_defects_open,
+                defectsResolved: row.qa_defects_resolved,
+                defectsWaived: row.qa_defects_waived,
+              },
+              humanRequests: {
+                total: row.human_requests_total,
+                resolved: row.human_requests_resolved,
+              },
+              usage: { estimatedTokens: row.estimated_tokens },
+              reliability: { daemonRestartRecoveries: row.daemon_restart_recoveries },
+            }),
+          };
+        }
         case "GET_PROJECT":
           return { type: "PROJECT", project: readProject(queryValue.projectId) };
         case "GET_PROJECT_BY_REPOSITORY_PATH": {

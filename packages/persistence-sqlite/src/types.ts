@@ -28,6 +28,7 @@ import type {
   ReviewFinding,
   ReviewFindingStatus,
   ReviewReport,
+  ReportingFacts,
   ProviderSession,
   ScaffoldOperation,
   SquadAssignment,
@@ -104,6 +105,7 @@ export class StateStoreError extends Error {
 
 export type StateQuery =
   | { type: "LIST_PROJECTS" }
+  | { type: "GET_REPORTING_FACTS" }
   | { type: "GET_PROJECT"; projectId: string }
   // Reads the raw `projects` row for a path, PROVISIONING included -- unlike LIST_PROJECTS, which
   // hides a Project whose repository the scaffold publisher has not verified yet. A caller about to
@@ -182,6 +184,7 @@ export type StateQuery =
 
 export type StateQueryResult =
   | { type: "PROJECTS"; projects: Project[] }
+  | { type: "REPORTING_FACTS"; facts: ReportingFacts }
   | { type: "PROJECT"; project: Project | null }
   | { type: "PROJECT_CONSTITUTION_SNAPSHOT"; snapshot: ProjectConstitutionSnapshot }
   | { type: "PROJECT_READINESS_SNAPSHOT"; snapshot: ProjectReadinessSnapshot }

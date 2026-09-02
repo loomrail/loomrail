@@ -211,8 +211,9 @@ Inspect those repositories separately before any manual cleanup.
 Durable Tasks, Events, Decisions, usage, and acceptance records remain until the owner removes the installation data.
 Browser QA screenshots and traces use the audited `STANDARD_30_DAYS` policy after a task reaches `DONE` or
 `CANCELLED`. Operational logs use the same 30-day maximum plus a 16 MiB capacity bound; raw provider output is not
-recorded. Unsafe or unknown files are preserved rather than recursively deleted. There is no telemetry or crash
-upload in this release, and no supported online workspace export/import or retention UI.
+recorded. Unsafe or unknown files are preserved rather than recursively deleted. **Insights** shows local aggregate
+metrics and lets the owner download an exact previewed aggregate or restart-recovery JSON report. There is no
+automatic collection or crash upload, and no supported online workspace export/import or retention UI.
 
 For the product workflow, continue with the [quick start](GETTING-STARTED.md) and [owner guide](USER-GUIDE.md). For
 maintainer packaging gates, see the [release guide](../RELEASE.md).

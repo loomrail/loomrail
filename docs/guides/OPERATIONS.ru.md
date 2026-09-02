@@ -212,8 +212,9 @@ provider configuration/credentials, Git commits/branches или worktree metadat
 Durable Tasks, Events, Decisions, usage и acceptance records сохраняются, пока владелец не удалит installation data.
 Browser QA screenshots/traces используют audited policy `STANDARD_30_DAYS` после перехода Task в `DONE` или
 `CANCELLED`. Operational logs используют тот же 30-дневный максимум и дополнительный предел 16 MiB; raw provider
-output не сохраняется. Unsafe/unknown files сохраняются, а не удаляются рекурсивно. В этом release нет
-telemetry/crash upload, поддержанного online workspace export/import или retention UI.
+output не сохраняется. Unsafe/unknown files сохраняются, а не удаляются рекурсивно. **Метрики** показывают local
+aggregate-показатели и позволяют владельцу скачать exact preview aggregate или restart-recovery JSON report.
+Automatic collection/crash upload отсутствуют; поддержанного online workspace export/import или retention UI нет.
 
 Для product workflow продолжайте с [quick start](GETTING-STARTED.ru.md) и
 [гайдом владельца](USER-GUIDE.ru.md). Packaging gates для maintainer описаны в [release guide](../RELEASE.md).

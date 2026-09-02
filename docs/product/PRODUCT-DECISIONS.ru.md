@@ -317,6 +317,19 @@ Tasks, events, decisions, usage summaries и handoffs сохраняются б�
 screenshots, traces и временные builds по умолчанию удаляются через 30 дней после закрытия работы. Очистка не
 затрагивает Git.
 
+### SD-005 — Public-alpha reporting требует preview и одноразового действия владельца
+
+Local Insights вычисляются по запросу из aggregate counts и остаются внутри authenticated loopback session. Public
+alpha не содержит telemetry collector, фонового sender, stable installation ID, cookie, расписания или постоянного
+toggle согласия. Opt-in означает одно явное скачивание ровно того strict JSON payload, который владелец уже видит
+целиком; aggregate и crash reports не содержат code, prompts, provider responses, IDs, names, paths, timestamps,
+artifacts, logs, error strings или stack traces.
+
+Crash payload существует только при durable `RecoveryReport(reason = DAEMON_RESTART)`. Любой будущий direct/network
+transport требует нового ADR с owned endpoint, retention/deletion и отдельным consent lifetime; прежнее скачивание
+не является согласием на последующие отправки. Полный seam и rationale —
+[ADR-0009](../adr/0009-previewed-owner-initiated-reporting.md).
+
 ## 11. UX и distribution
 
 ### UXD-001 — Command Center

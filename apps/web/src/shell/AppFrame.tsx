@@ -1043,7 +1043,7 @@ const SidebarLink = ({
   countOverflow?: boolean;
   icon: IconName;
   label: string;
-  to: "/" | "/attention" | "/fleet";
+  to: "/" | "/attention" | "/fleet" | "/insights";
 }): React.JSX.Element => {
   const content = (
     <>
@@ -1069,8 +1069,15 @@ const SidebarLink = ({
       </Link>
     );
   }
+  if (to === "/fleet") {
+    return (
+      <Link className={className} to="/fleet">
+        {content}
+      </Link>
+    );
+  }
   return (
-    <Link className={className} to="/fleet">
+    <Link className={className} to="/insights">
       {content}
     </Link>
   );
@@ -1123,6 +1130,7 @@ const WorkspaceNavigation = ({
   const attentionCount = attentionQuery.data?.items.length ?? 0;
   const onAttention = pathname === "/attention";
   const onFleet = pathname === "/fleet";
+  const onInsights = pathname === "/insights";
 
   return (
     <>
@@ -1177,6 +1185,7 @@ const WorkspaceNavigation = ({
             label={t("nav.attention")}
             to="/attention"
           />
+          <SidebarLink active={onInsights} icon="insights" label={t("nav.insights")} to="/insights" />
         </nav>
       </div>
 

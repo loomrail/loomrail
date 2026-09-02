@@ -279,7 +279,19 @@ a **Recovery report** and **Resume** action for owner intervention.
 The task's worktree is checked again at startup. If its directory vanished, Loomrail marks the workspace gone and does
 not silently cut a replacement: a new tree could overwrite the meaning of the recorded branch and baseline.
 
-## 8. Preserve or restore local state
+## 8. Inspect local metrics or export a report
+
+Open **Insights** in the global sidebar to see aggregate delivery, review, QA, request, usage, and restart-recovery
+metrics for this local installation. No consent is needed to view them: the daemon computes counts on demand inside
+the authenticated local session, and the page does not send them anywhere.
+
+The page also shows the complete JSON for an aggregate report. A separate crash report appears only when durable
+recovery state proves that an active workflow was interrupted by a daemon restart. Read the entire preview before
+choosing **Download**. That click saves exactly the shown JSON; it does not upload it, enable a persistent setting, or
+authorize later collection. The schemas exclude source, prompts, provider responses, names, IDs, paths, timestamps,
+artifacts, logs, error messages, and stack traces, but you should still inspect the file before sharing it.
+
+## 9. Preserve or restore local state
 
 The default data directory is:
 
@@ -323,7 +335,7 @@ After stopping Loomrail, `loomrail logs export` prints a complete re-redacted ND
 records, Browser QA evidence, repositories, workspaces, or unknown neighboring files. Operational logs have a
 30-day/16 MiB bound; still review an export before sharing it.
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 **The page says the local session ended.** The daemon stopped or the one-time session is no longer valid. Restart
 Loomrail and use the new authenticated tab. Refreshing an old tab cannot mint a new session.

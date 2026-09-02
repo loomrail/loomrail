@@ -110,6 +110,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T43 | Poisoned or drifted provider CLI is falsely admitted as compatible           | High     | version-before-auth; fixed argv/no shell/minimal env; stdout/deadline bounds; exact parser/allowlist; closed readiness invariant                                                             | see Q9 provider-compatibility delta below                                         |
 | T44 | Bundled sample executes hidden code or carries unreviewed repository input   | High     | exact file catalog; regular bounded files; no dependencies/lifecycle scripts/links; no implicit execution                                                                                    | see Q10 bundled-sample delta below                                                |
 | T45 | Public issue intake exposes private data or routes a vulnerability publicly  | High     | closed forms; explicit public-data acknowledgement; enabled private reporting; no uploads/log requests; no runtime ingestion                                                                 | see Q11 public-intake delta below                                                 |
+| T46 | Insights/report export leaks sensitive local workflow or machine metadata    | High     | numeric/enum facts; strict nested schemas; exact preview/download object; authenticated loopback; no network sender                                                                          | see Q12 private-reporting delta below                                             |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -480,6 +481,33 @@ Required controls and verification:
 Residual risk remains: GitHub cannot prevent a reporter from manually editing submitted Markdown to add sensitive or
 hostile content. Maintainers must treat all issue text and links as untrusted, minimize redistribution, and move any
 suspected vulnerability to the private channel without copying confidential detail into public artifacts.
+
+### Q12 private-reporting delta (T46)
+
+Q12 derives local Insights from durable workflow state and permits the owner to export aggregate or restart-recovery
+JSON. Those source rows contain repository names and paths, work-item text, provider output, identifiers, timestamps
+and artifact metadata. A broad diagnostics object, a permissive nested schema or a refetch after preview could expose
+that data despite safe UI copy. Rated **High** because the exported file is intended to cross the local boundary and
+may be shared publicly.
+
+Required controls and verification:
+
+- persistence returns only bounded numeric counts from one coherent SQLite statement; rows, IDs, text, paths and
+  timestamps never cross the reporting query contract;
+- one deterministic domain module builds both local metrics and public payloads from those facts plus closed runtime
+  categories; strict schemas reject unknown fields at every nested object;
+- crash preview exists only when durable `DAEMON_RESTART` recovery evidence exists and includes no stack, log,
+  arbitrary error message, exact time or affected workflow identity;
+- authenticated loopback protects the facts endpoint, and public alpha has no collector, beacon, account,
+  installation ID, schedule, retry queue or non-loopback reporting request;
+- the browser downloads bytes serialized from the same parsed in-memory object rendered in the complete preview;
+  there is no consent-time refetch or hidden enrichment;
+- unit, persistence, daemon and browser tests inject sensitive canaries, reject top-level and nested schema additions,
+  prove preview/download byte equality and observe no external reporting request.
+
+Residual risk remains: the owner can manually combine an exported report with identifying information or share it in
+an unsuitable public channel. Reports are deliberately sparse, and any future direct delivery requires a new threat
+review, owned retention/deletion controls and fresh consent rather than reusing this one-shot download action.
 
 ### A4 Attention Inbox delta (T35)
 

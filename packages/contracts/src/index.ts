@@ -2,6 +2,7 @@ export * from "./attention.js";
 export * from "./agents.js";
 export * from "./constitution.js";
 export * from "./readiness.js";
+export * from "./reporting.js";
 export * from "./scaffolding.js";
 export * from "./event-stream.js";
 export * from "./mcp.js";

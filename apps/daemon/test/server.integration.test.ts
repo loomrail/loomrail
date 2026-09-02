@@ -11,6 +11,7 @@ import {
   apiErrorResponseSchema,
   correlationIdSchema,
   eventsResponseSchema,
+  insightsResponseSchema,
   projectsResponseSchema,
   qaStateResponseSchema,
   reviewStateResponseSchema,
@@ -203,6 +204,127 @@ describe("local daemon session and state boundary", () => {
     expect(status.status).toBe(401);
     expect(new URL(daemon.baseUrl).hostname).toBe("127.0.0.1");
     expect(daemon.app.server.address()).toMatchObject({ address: "127.0.0.1" });
+  });
+
+  it("serves privacy-safe local Insights only inside the authenticated loopback session", async () => {
+    const token = bootstrapToken();
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      productVersion: "0.1.0-alpha.5",
+    });
+
+    const unauthenticated = await fetch(`${daemon.baseUrl}/api/v1/insights`);
+    expect(unauthenticated.status).toBe(401);
+
+    const session = await authenticate(daemon, token);
+    const response = await fetch(`${daemon.baseUrl}/api/v1/insights`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(response.status).toBe(200);
+    const insights = insightsResponseSchema.parse(await response.json());
+    expect(insights.aggregateReport.runtime.productVersion).toBe("0.1.0-alpha.5");
+    expect(insights.localMetrics.workItems.total).toBe(0);
+    expect(insights.localMetrics.rates.acceptedCompletionPercent).toBeNull();
+    expect(insights.crashReport).toBeNull();
+    expect(JSON.stringify(insights)).not.toMatch(/projectId|repositoryPath|generatedAt|message|stack/);
+  });
+
+  it("offers a bounded crash preview only after durable daemon-restart recovery", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail reporting recovery "));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "state.sqlite");
+    let nextId = 0;
+    const localState = await openLocalState({
+      databasePath,
+      now: () => new Date("2026-09-03T12:00:00.000Z"),
+      createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+    });
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "reporting-register-project",
+      correlationId: "correlation-reporting-register-project",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "REGISTER_PROJECT",
+      payload: {
+        id: "reporting-project",
+        fixtureId: "web-app-a",
+        name: "Private project name",
+        repositoryPath: join(directory, "private-repository-name"),
+      },
+    });
+    const created = localState.execute({
+      schemaVersion: 1,
+      commandId: "reporting-create-work-item",
+      correlationId: "correlation-reporting-create-work-item",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CREATE_WORK_ITEM",
+      payload: {
+        projectId: "reporting-project",
+        parentId: null,
+        type: "TASK",
+        title: "Private work item title",
+        description: "Private prompt-like text",
+        priority: "MEDIUM",
+        risk: "LOW",
+        acceptanceCriteria: ["Private acceptance text"],
+      },
+    });
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected a WorkItem");
+    const ready = localState.execute({
+      schemaVersion: 1,
+      commandId: "reporting-ready-work-item",
+      correlationId: "correlation-reporting-ready-work-item",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "MOVE_WORK_ITEM",
+      payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
+    });
+    if (ready.type !== "WORK_ITEM_MOVED") throw new Error("Expected a ready WorkItem");
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: "reporting-start-pipeline",
+      correlationId: "correlation-reporting-start-pipeline",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: ready.workItem.version,
+        template: mockDeliveryTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (started.type !== "PIPELINE_STARTED") throw new Error("Expected a PipelineRun");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "reporting-start-dispatch",
+      correlationId: "correlation-reporting-start-dispatch",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "MARK_WORKFLOW_DISPATCH_STARTED",
+      payload: { dispatchId: started.dispatch.id },
+    });
+    localState.close();
+
+    const token = bootstrapToken();
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      productVersion: "0.1.0-alpha.5",
+      stateDatabasePath: databasePath,
+    });
+    const session = await authenticate(daemon, token);
+    const response = await fetch(`${daemon.baseUrl}/api/v1/insights`, {
+      headers: { cookie: session.cookie },
+    });
+    const bodyText = await response.text();
+    const insights = insightsResponseSchema.parse(JSON.parse(bodyText));
+    expect(insights.crashReport?.incident).toEqual({
+      reason: "DAEMON_RESTART",
+      recoveredStatus: "INTERRUPTED",
+      affectedWorkflowCount: 1,
+    });
+    expect(bodyText).not.toMatch(
+      /Private project name|private-repository-name|Private work item title|Private prompt-like text/,
+    );
   });
 
   it("protects QA evidence routes and returns an empty typed state before a run", async () => {

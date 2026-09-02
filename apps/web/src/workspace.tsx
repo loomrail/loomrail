@@ -46,6 +46,7 @@ import {
   getProjectReadiness,
   getAttentionInbox,
   getAgentFleet,
+  getInsights,
   getWorkItemChanges,
   getWorkItemFileDiff,
   getWorkItemQA,
@@ -91,6 +92,7 @@ import { useEventStream } from "./useEventStream";
 const projectsKey = ["projects"] as const;
 const attentionKey = ["attention"] as const;
 const agentFleetKey = ["agent-fleet"] as const;
+const insightsKey = ["insights"] as const;
 const constitutionPresetsKey = ["constitution-presets"] as const;
 const projectConstitutionKey = (projectId: string) => ["projects", projectId, "constitution"] as const;
 const projectReadinessKey = (projectId: string) => ["projects", projectId, "readiness"] as const;
@@ -216,6 +218,12 @@ export const useAgentFleet = () =>
   useQuery({
     queryKey: agentFleetKey,
     queryFn: getAgentFleet,
+  });
+
+export const useInsights = () =>
+  useQuery({
+    queryKey: insightsKey,
+    queryFn: getInsights,
   });
 
 /**

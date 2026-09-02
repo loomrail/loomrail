@@ -26,6 +26,7 @@ import {
   type SetupRoute,
 } from "./setup.js";
 import { formatStartupReport } from "./startup-report.js";
+import { LOOMRAIL_VERSION } from "./version.js";
 
 const writeLine = (message: string): void => {
   process.stdout.write(`${message}\n`);
@@ -47,6 +48,7 @@ const start = async (options: StartCliCommand): Promise<void> => {
     daemon = await startDaemon({
       bootstrapToken,
       loggerStream: { write: (message) => void localLogs.stream.write(message) },
+      productVersion: LOOMRAIL_VERSION,
       stateDatabasePath,
       webRoot,
       ...(options.port === undefined ? {} : { port: options.port }),

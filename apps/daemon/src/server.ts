@@ -31,6 +31,7 @@ import {
   healthResponseSchema,
   humanRequestStatusSchema,
   humanRequestsResponseSchema,
+  insightsResponseSchema,
   moveWorkItemRequestSchema,
   mcpProfilesResponseSchema,
   mcpProfileProposalSchema,
@@ -94,6 +95,7 @@ import {
 } from "@loomrail/contracts";
 import {
   adapterWorksInWorkspace,
+  buildReportingSnapshot,
   MAX_RELEASE_SUMMARY_AUDIT_EVENTS,
   ConstitutionDomainError,
   McpDomainError,
@@ -174,6 +176,7 @@ import {
   resolveRegisteredRepository,
 } from "./fixtures.js";
 import { createSessionWorker } from "./session-worker.js";
+import { describeReportingRuntime } from "./reporting.js";
 import { createMcpProposalChallengeStore, McpProposalError } from "./mcp-proposals.js";
 import { createMcpConnectionOpener } from "./mcp-sessions.js";
 import { changeBaselineOf, MAX_PATCH_BYTES, MAX_SUMMARY_FILES } from "./workspace-changes.js";
@@ -227,6 +230,8 @@ export type StartDaemonOptions = {
   demoProjectsRoot?: string;
   host?: "127.0.0.1" | "::1";
   port?: number;
+  /** Release version shown in diagnostics and privacy-safe report previews. */
+  productVersion?: string;
   now?: Clock;
   logger?: DaemonLoggerOption;
   loggerStream?: DaemonLoggerStream;
@@ -638,6 +643,8 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   if (!LOOPBACK_HOSTS.has(host)) {
     throw new Error("Loomrail local daemon can only bind to a loopback address");
   }
+  const productVersion = options.productVersion ?? DAEMON_VERSION;
+  const reportingRuntime = describeReportingRuntime({ productVersion });
 
   const now = options.now ?? (() => new Date());
   const startedAt = now();
@@ -1195,7 +1202,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         authenticated: true,
         daemon: {
           status: "online",
-          version: DAEMON_VERSION,
+          version: productVersion,
           mode: "local",
           startedAt: startedAt.toISOString(),
           platform: normalizePlatform(),
@@ -1207,6 +1214,18 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           persistence: "sqlite",
         },
       });
+    });
+
+    app.get("/api/v1/insights", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      const result = localState.query({ type: "GET_REPORTING_FACTS" });
+      if (result.type !== "REPORTING_FACTS") {
+        throw new StateStoreError("PERSISTENCE_FAILURE", "The reporting facts could not be read");
+      }
+      return insightsResponseSchema.parse(
+        buildReportingSnapshot({ facts: result.facts, runtime: reportingRuntime }),
+      );
     });
 
     app.get("/api/v1/projects", async (request, reply) => {

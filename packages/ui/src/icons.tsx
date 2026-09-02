@@ -20,6 +20,7 @@ export type IconName =
   | "filter"
   | "inbox"
   | "info"
+  | "insights"
   | "layers"
   | "link"
   | "list"
@@ -85,6 +86,7 @@ const paths: Record<Exclude<IconName, "spinner">, readonly string[]> = {
   filter: ["M4 6h16", "M7 12h10", "M10 18h4"],
   inbox: ["M4 4h16v16H4z", "M4 14h4l2 3h4l2-3h4"],
   info: ["M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20", "M12 11v6", "M12 7h.01"],
+  insights: ["M4 19V10", "M10 19V5", "M16 19v-7", "M22 19V2"],
   layers: ["m12 2 9 5-9 5-9-5 9-5Z", "m3 12 9 5 9-5", "m3 17 9 5 9-5"],
   link: [
     "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71",

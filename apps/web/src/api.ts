@@ -5,6 +5,7 @@ import {
   constitutionPresetsResponseSchema,
   eventsResponseSchema,
   humanRequestsResponseSchema,
+  insightsResponseSchema,
   mcpProfileProposalSchema,
   mcpProfilesResponseSchema,
   projectsResponseSchema,
@@ -173,6 +174,8 @@ export const requestLocalApi = async <T>(
 };
 
 export const listProjects = async () => requestLocalApi("/api/v1/projects", projectsResponseSchema);
+
+export const getInsights = async () => requestLocalApi("/api/v1/insights", insightsResponseSchema);
 
 export const listConstitutionPresets = async () =>
   requestLocalApi("/api/v1/constitution-presets", constitutionPresetsResponseSchema);

@@ -404,6 +404,75 @@ describe("SQLite local state", () => {
     }
   };
 
+  it("reads privacy-safe reporting facts from one aggregate snapshot", async () => {
+    const localState = await open();
+    expect(localState.query({ type: "GET_REPORTING_FACTS" })).toEqual({
+      type: "REPORTING_FACTS",
+      facts: {
+        workItems: { total: 0, accepted: 0, cancelled: 0, active: 0 },
+        pipelineRuns: { total: 0, succeeded: 0, failed: 0, interrupted: 0, cancelled: 0 },
+        agentRuns: { total: 0, succeeded: 0, failed: 0, interrupted: 0 },
+        reviews: { total: 0, firstRound: 0, firstRoundPassed: 0 },
+        qa: {
+          total: 0,
+          passed: 0,
+          failed: 0,
+          errored: 0,
+          defectsOpen: 0,
+          defectsResolved: 0,
+          defectsWaived: 0,
+        },
+        humanRequests: { total: 0, resolved: 0 },
+        usage: { estimatedTokens: 0 },
+        reliability: { daemonRestartRecoveries: 0 },
+      },
+    });
+
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-reporting-item"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-reporting-item", created.workItem.id, 1, "READY"));
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-reporting-workflow",
+      correlationId: "correlation-start-reporting-workflow",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: mockTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "dispatch-reporting-workflow",
+      correlationId: "correlation-dispatch-reporting-workflow",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "MARK_WORKFLOW_DISPATCH_STARTED",
+      payload: { dispatchId: started.dispatch.id },
+    });
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "reconcile-reporting-workflow",
+      correlationId: "correlation-reconcile-reporting-workflow",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "RECONCILE_WORKFLOWS",
+      payload: {},
+    });
+
+    expect(localState.query({ type: "GET_REPORTING_FACTS" })).toMatchObject({
+      type: "REPORTING_FACTS",
+      facts: {
+        workItems: { total: 1, accepted: 0, cancelled: 0, active: 1 },
+        pipelineRuns: { total: 1, succeeded: 0, failed: 0, interrupted: 1, cancelled: 0 },
+        reliability: { daemonRestartRecoveries: 1 },
+      },
+    });
+  });
+
   it("replays a duplicate command without duplicating state or Events", async () => {
     const localState = await open();
     localState.execute(registerProject());

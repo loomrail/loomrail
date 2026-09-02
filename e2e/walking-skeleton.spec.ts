@@ -2911,7 +2911,7 @@ test.describe("authenticated walking skeleton", () => {
 
     // Every sidebar entry resolves to a view the product actually serves.
     const links = page.locator(".app-sidebar .app-nav-link");
-    await expect(links).toHaveCount(3);
+    await expect(links).toHaveCount(4);
     for (const link of await links.all()) {
       await expect(link).toHaveAttribute("href", /^\//);
       await expect(link).not.toHaveAttribute("aria-disabled", "true");
