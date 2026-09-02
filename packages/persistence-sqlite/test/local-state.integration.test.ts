@@ -125,7 +125,12 @@ const withoutQ2Lineage = (value: unknown): unknown => {
   if (
     ("stage" in result && "attempt" in result && "pipelineRunId" in result) ||
     ("providerRelation" in result && "reviewerAgentRunId" in result && "reviewedTree" in result) ||
-    ("reviewArtifactId" in result && "severity" in result && "reviewedTree" in result)
+    ("reviewArtifactId" in result && "severity" in result && "reviewedTree" in result) ||
+    ("pipelineRunId" in result &&
+      "stage" in result &&
+      "kind" in result &&
+      "provider" in result &&
+      "checks" in result)
   ) {
     delete result["correctionRunId"];
   }
@@ -154,6 +159,12 @@ const countLegacyQ2Lineage = (raw: DatabaseSync): { events: number; commands: nu
                  OR (json_type(tree.value, '$.reviewArtifactId') IS NOT NULL
                    AND json_type(tree.value, '$.severity') IS NOT NULL
                    AND json_type(tree.value, '$.reviewedTree') IS NOT NULL)
+                 OR (json_type(tree.value, '$.pipelineRunId') IS NOT NULL
+                   AND json_extract(tree.value, '$.stage') IN ('REVIEW', 'QA')
+                   AND json_extract(tree.value, '$.kind') IN ('REVIEW_REPORT', 'QA_REPORT')
+                   AND json_extract(tree.value, '$.status') = 'PASSED'
+                   AND json_type(tree.value, '$.provider') IS NOT NULL
+                   AND json_type(tree.value, '$.checks') = 'array')
                )
              )
              OR (
@@ -886,7 +897,7 @@ describe("SQLite local state", () => {
       BEFORE DELETE ON evidence_artifacts BEGIN
         SELECT RAISE(ABORT, 'evidence artifacts are append-only');
       END;
-      DELETE FROM schema_migrations WHERE version IN (14, 23);
+      DELETE FROM schema_migrations WHERE version IN (14, 23, 26);
     `);
     expect(
       (pre14.prepare("SELECT provider FROM evidence_artifacts").get() as { provider: string }).provider,
@@ -894,7 +905,7 @@ describe("SQLite local state", () => {
     pre14.close();
 
     const migrated = await open();
-    expect(migrated.startup.appliedMigrations).toEqual([14, 23]);
+    expect(migrated.startup.appliedMigrations).toEqual([14, 23, 26]);
     const snapshot = migrated.query({
       type: "GET_WORKFLOW_SNAPSHOT",
       workItemId: created.workItem.id,
@@ -912,7 +923,7 @@ describe("SQLite local state", () => {
 
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -1268,6 +1279,42 @@ describe("SQLite local state", () => {
       JSON.stringify(["Reviewed the correction tree independently."]),
       timestamp,
     );
+    const insertReviewArtifact = raw.prepare(
+      `INSERT INTO evidence_artifacts (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+        correction_run_id, stage, kind, status, provider, title, summary, checks_json,
+        review_report_id, qa_run_id, qa_evidence_bundle_id, tested_tree, created_at
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, 'REVIEW', 'REVIEW_REPORT', 'PASSED', 'CLAUDE_CODE',
+        ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+    );
+    insertReviewArtifact.run(
+      "q2-initial-review-artifact",
+      created.workItem.projectId,
+      created.workItem.id,
+      pipeline.run.id,
+      "q2-initial-review-attempt",
+      null,
+      "Initial review evidence",
+      "The initial review passed.",
+      JSON.stringify(["Reviewed the initial delivery tree."]),
+      "q2-initial-review-report",
+      testedTree,
+      timestamp,
+    );
+    insertReviewArtifact.run(
+      "q2-correction-review-artifact",
+      created.workItem.projectId,
+      created.workItem.id,
+      pipeline.run.id,
+      "q2-correction-review-attempt",
+      "q2-correction-1",
+      "Correction review evidence",
+      "The correction review passed.",
+      JSON.stringify(["Reviewed the correction tree independently."]),
+      "q2-correction-review-report",
+      testedTree,
+      timestamp,
+    );
     insertAgentRun.run(
       "q2-retest-agent",
       created.workItem.projectId,
@@ -1400,6 +1447,14 @@ describe("SQLite local state", () => {
         }),
       ]),
     );
+    expect(snapshot.snapshot.artifacts).toHaveLength(2);
+    expect(
+      snapshot.snapshot.artifacts.find(({ id }) => id === "q2-correction-review-artifact"),
+    ).toMatchObject({
+      correctionRunId: "q2-correction-1",
+      reviewReportId: "q2-correction-review-report",
+      testedTree,
+    });
   });
 
   it("backfills Q2 lineage in strict Events and command receipts", async () => {
@@ -1474,6 +1529,23 @@ describe("SQLite local state", () => {
       completedAt: null,
       version: 1,
     };
+    const evidenceArtifact = {
+      schemaVersion: 1,
+      id: "pre-q2-review-artifact",
+      projectId: created.workItem.projectId,
+      workItemId: created.workItem.id,
+      pipelineRunId: started.run.id,
+      stageAttemptId: started.stageAttempt.id,
+      correctionRunId: null,
+      stage: "REVIEW",
+      kind: "REVIEW_REPORT",
+      status: "PASSED",
+      provider: "MOCK",
+      title: "Historical review evidence",
+      summary: "The historical compact review artifact predates authority lineage.",
+      checks: ["Historical review completed."],
+      createdAt: timestamp,
+    };
     localState.close();
     state = undefined;
 
@@ -1501,6 +1573,33 @@ describe("SQLite local state", () => {
          VALUES (?, 'LEGACY_QA_FIXTURE', ?, ?, ?)`,
       )
       .run("receipt-pre-q2-qa-run", "c".repeat(64), JSON.stringify({ qaRun }), timestamp);
+    raw
+      .prepare(
+        `INSERT INTO events (
+          id, schema_version, type, aggregate_type, aggregate_id, project_id,
+          actor_type, actor_id, occurred_at, correlation_id, data_json
+        ) VALUES (?, 1, 'EVIDENCE_ARTIFACT_RECORDED', 'WORK_ITEM', ?, ?, 'SYSTEM',
+          'mock-provider', ?, ?, ?)`,
+      )
+      .run(
+        "event-pre-q2-review-artifact",
+        created.workItem.id,
+        created.workItem.projectId,
+        timestamp,
+        "correlation-pre-q2-review-artifact",
+        JSON.stringify({ artifact: evidenceArtifact }),
+      );
+    raw
+      .prepare(
+        `INSERT INTO commands (command_id, command_type, input_hash, result_json, created_at)
+         VALUES (?, 'LEGACY_EVIDENCE_FIXTURE', ?, ?, ?)`,
+      )
+      .run(
+        "receipt-pre-q2-review-artifact",
+        "d".repeat(64),
+        JSON.stringify({ artifact: evidenceArtifact }),
+        timestamp,
+      );
     for (const row of raw.prepare("SELECT sequence, data_json FROM events").all() as {
       sequence: number;
       data_json: string;
@@ -1548,6 +1647,15 @@ describe("SQLite local state", () => {
     expect(historyOffset).toBeGreaterThan(0);
     const repair = new DatabaseSync(databasePath);
     repair.exec(migration.slice(historyOffset));
+    expect(countLegacyQ2Lineage(repair)).toEqual({ events: 1, commands: 1 });
+    const evidenceMigration = await readFile(
+      new URL("../migrations/0026_evidence_authority_lineage.sql", import.meta.url),
+      "utf8",
+    );
+    const evidenceHistoryMarker = "-- EvidenceArtifact is embedded in Events";
+    const evidenceHistoryOffset = evidenceMigration.indexOf(evidenceHistoryMarker);
+    expect(evidenceHistoryOffset).toBeGreaterThan(0);
+    repair.exec(evidenceMigration.slice(evidenceHistoryOffset));
     expect(countLegacyQ2Lineage(repair)).toEqual({ events: 0, commands: 0 });
     repair.close();
 
@@ -1557,6 +1665,10 @@ describe("SQLite local state", () => {
     expect(events.events.find(({ id }) => id === "event-pre-q2-qa-run")).toMatchObject({
       type: "QA_RUN_RESERVED",
       data: { qaRun: { scope: { type: "FULL" } } },
+    });
+    expect(events.events.find(({ id }) => id === "event-pre-q2-review-artifact")).toMatchObject({
+      type: "EVIDENCE_ARTIFACT_RECORDED",
+      data: { artifact: { correctionRunId: null } },
     });
     expect(migrated.execute(startCommand)).toMatchObject({
       type: "PIPELINE_STARTED",

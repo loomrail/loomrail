@@ -108,6 +108,7 @@ const artifact = (
   workItemId: workItem.id,
   pipelineRunId: run.id,
   stageAttemptId: `attempt-${stage.toLowerCase()}`,
+  correctionRunId: null,
   stage,
   kind,
   status: "PASSED",

@@ -1347,18 +1347,24 @@ export const decideApplyProviderOutcome = (
       workItemId: context.workItem.id,
       pipelineRunId: context.run.id,
       stageAttemptId: context.stageAttempt.id,
+      correctionRunId: context.stageAttempt.correctionRunId,
       stage: context.stageAttempt.stage,
       status: "PASSED",
       provider: command.payload.provider ?? "MOCK",
       createdAt: context.now,
       ...draft,
-      ...(measuredQA === undefined
-        ? {}
-        : {
-            qaRunId: measuredQA.qaRun.id,
-            qaEvidenceBundleId: measuredQA.evidence.id,
-            testedTree: measuredQA.qaRun.testedTree,
-          }),
+      ...(draft.kind === "REVIEW_REPORT" && reviewReport !== undefined
+        ? {
+            reviewReportId: reviewReport.id,
+            testedTree: reviewReport.reviewedTree,
+          }
+        : measuredQA === undefined
+          ? {}
+          : {
+              qaRunId: measuredQA.qaRun.id,
+              qaEvidenceBundleId: measuredQA.evidence.id,
+              testedTree: measuredQA.qaRun.testedTree,
+            }),
     };
   });
   const artifactEvents: ApplyProviderOutcomeDecision["events"] = artifacts.map((artifact) => ({

@@ -119,6 +119,11 @@ const migrations: readonly Migration[] = [
     filename: "0025_qa_correction_lineage.sql",
     rebuildsAReferencedTable: true,
   },
+  {
+    version: 26,
+    name: "evidence_authority_lineage",
+    filename: "0026_evidence_authority_lineage.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

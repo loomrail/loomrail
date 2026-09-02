@@ -183,8 +183,9 @@ durable Defect lifecycle и scoped retest с bounded regression subset; архи
 [спецификации 49](49-q2-qa-defect-correction-loop-spec.ru.md) и
 [плане 50](50-q2-qa-defect-correction-loop-implementation-plan.ru.md). Первый durable Q2 slice уже сохраняет bounded
 CorrectionRun/immutable QARetestPlan и реальную StageAttempt/Review/QARun lineage; migration 0025 переводит локальную
-нумерацию на per-cycle uniqueness и backfill'ит старые strict Events/receipts без потери истории. Публикация следующей
-версии всё ещё ждёт полного зелёного release gate, включая landing lint.
+нумерацию на per-cycle uniqueness, а migration 0026 сохраняет несколько authority-bound Review/QA artifacts одного
+PipelineRun; обе backfill'ят старые strict Events/receipts без потери истории. Публикация следующей версии всё ещё
+ждёт полного зелёного release gate, включая landing lint.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

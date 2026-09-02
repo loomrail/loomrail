@@ -116,6 +116,11 @@ _Не означает_: AgentRun, StageAttempt, R1 review round или повт
 с failure и OPEN Defects, плюс regression subset из исходного locked QA plan.
 _Не означает_: новый provider-authored evaluator, полный cartesian baseline или разрешение исключить неудобный defect.
 
+**EvidenceArtifact**:
+Append-only compact projection passing authority: Review artifact указывает на exact PASSED ReviewReport/tree, QA
+artifact — на exact PASSED QARun/QAEvidenceBundle/tree; correction lineage совпадает с owning StageAttempt.
+_Не означает_: самостоятельный verdict, provider-authored proof или право выбрать произвольный старый PASSED artifact.
+
 ## MCP connections
 
 **MCP Profile Proposal**:

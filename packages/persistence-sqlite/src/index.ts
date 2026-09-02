@@ -576,6 +576,7 @@ const evidenceArtifactRowSchema = z.object({
   work_item_id: z.string(),
   pipeline_run_id: z.string(),
   stage_attempt_id: z.string(),
+  correction_run_id: z.string().nullable(),
   stage: z.string(),
   kind: z.string(),
   status: z.string(),
@@ -583,6 +584,7 @@ const evidenceArtifactRowSchema = z.object({
   title: z.string(),
   summary: z.string(),
   checks_json: z.string(),
+  review_report_id: z.string().nullable(),
   qa_run_id: z.string().nullable(),
   qa_evidence_bundle_id: z.string().nullable(),
   tested_tree: z.string().nullable(),
@@ -1365,6 +1367,7 @@ const evidenceArtifactFromRow = (value: unknown): EvidenceArtifact => {
     workItemId: row.work_item_id,
     pipelineRunId: row.pipeline_run_id,
     stageAttemptId: row.stage_attempt_id,
+    correctionRunId: row.correction_run_id,
     stage: row.stage,
     kind: row.kind,
     status: row.status,
@@ -1372,6 +1375,7 @@ const evidenceArtifactFromRow = (value: unknown): EvidenceArtifact => {
     title: row.title,
     summary: row.summary,
     checks: parseJson(row.checks_json),
+    ...(row.review_report_id === null ? {} : { reviewReportId: row.review_report_id }),
     ...(row.qa_run_id === null ? {} : { qaRunId: row.qa_run_id }),
     ...(row.qa_evidence_bundle_id === null ? {} : { qaEvidenceBundleId: row.qa_evidence_bundle_id }),
     ...(row.tested_tree === null ? {} : { testedTree: row.tested_tree }),
@@ -4354,9 +4358,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO evidence_artifacts (
             id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
-            stage, kind, status, provider, title, summary, checks_json,
-            qa_run_id, qa_evidence_bundle_id, tested_tree, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            correction_run_id, stage, kind, status, provider, title, summary, checks_json,
+            review_report_id, qa_run_id, qa_evidence_bundle_id, tested_tree, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           artifact.id,
@@ -4365,6 +4369,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           artifact.workItemId,
           artifact.pipelineRunId,
           artifact.stageAttemptId,
+          artifact.correctionRunId,
           artifact.stage,
           artifact.kind,
           artifact.status,
@@ -4372,6 +4377,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           artifact.title,
           artifact.summary,
           JSON.stringify(artifact.checks),
+          artifact.reviewReportId ?? null,
           artifact.qaRunId ?? null,
           artifact.qaEvidenceBundleId ?? null,
           artifact.testedTree ?? null,

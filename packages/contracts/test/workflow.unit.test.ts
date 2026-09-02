@@ -36,6 +36,7 @@ describe("evidence provider contract", () => {
     workItemId: "work-item-1",
     pipelineRunId: "run-1",
     stageAttemptId: "attempt-review",
+    correctionRunId: null,
     stage: "REVIEW",
     kind: "REVIEW_REPORT",
     status: "PASSED",
@@ -73,6 +74,34 @@ describe("evidence provider contract", () => {
     });
     expect(() => evidenceArtifactSchema.parse({ ...qaArtifact, qaEvidenceBundleId: undefined })).toThrow();
     expect(() => evidenceArtifactSchema.parse({ ...artifact, qaRunId: "qa-run-1" })).toThrow();
+  });
+
+  it("requires exact authority provenance for correction evidence", () => {
+    const reviewArtifact = {
+      ...artifact,
+      correctionRunId: "correction-run-1",
+      reviewReportId: "review-report-1",
+      testedTree: "b".repeat(40),
+    } as const;
+    expect(evidenceArtifactSchema.parse(reviewArtifact)).toMatchObject({
+      correctionRunId: "correction-run-1",
+      reviewReportId: "review-report-1",
+    });
+    expect(() => evidenceArtifactSchema.parse({ ...reviewArtifact, reviewReportId: undefined })).toThrow();
+
+    const qaArtifact = {
+      ...artifact,
+      id: "artifact-correction-qa",
+      stageAttemptId: "attempt-correction-qa",
+      correctionRunId: "correction-run-1",
+      stage: "QA",
+      kind: "QA_REPORT",
+      qaRunId: "qa-run-1",
+      qaEvidenceBundleId: "qa-evidence-1",
+      testedTree: "c".repeat(40),
+    } as const;
+    expect(evidenceArtifactSchema.parse(qaArtifact).correctionRunId).toBe("correction-run-1");
+    expect(() => evidenceArtifactSchema.parse({ ...qaArtifact, qaEvidenceBundleId: undefined })).toThrow();
   });
 });
 

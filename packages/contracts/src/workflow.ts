@@ -493,9 +493,11 @@ export const evidenceArtifactSchema = providerArtifactDraftSchema
     workItemId: opaqueIdSchema,
     pipelineRunId: opaqueIdSchema,
     stageAttemptId: opaqueIdSchema,
+    correctionRunId: opaqueIdSchema.nullable(),
     stage: z.enum(["REVIEW", "QA"]),
     status: evidenceArtifactStatusSchema,
     provider: providerIdSchema,
+    reviewReportId: opaqueIdSchema.optional(),
     qaRunId: opaqueIdSchema.optional(),
     qaEvidenceBundleId: opaqueIdSchema.optional(),
     testedTree: treeShaSchema.optional(),
@@ -505,11 +507,38 @@ export const evidenceArtifactSchema = providerArtifactDraftSchema
   .superRefine((artifact, context) => {
     const qaProvenance = [artifact.qaRunId, artifact.qaEvidenceBundleId, artifact.testedTree];
     const present = qaProvenance.filter((value) => value !== undefined).length;
-    if (present !== 0 && present !== qaProvenance.length) {
+    const reviewProvenance = [artifact.reviewReportId, artifact.testedTree];
+    const reviewPresent = reviewProvenance.filter((value) => value !== undefined).length;
+    if (artifact.kind === "QA_REPORT" && present !== 0 && present !== qaProvenance.length) {
       context.addIssue({ code: "custom", message: "Measured QA provenance must be complete" });
     }
-    if (present > 0 && (artifact.kind !== "QA_REPORT" || artifact.stage !== "QA")) {
+    if (
+      artifact.kind === "REVIEW_REPORT" &&
+      reviewPresent !== 0 &&
+      reviewPresent !== reviewProvenance.length
+    ) {
+      context.addIssue({ code: "custom", message: "Measured review provenance must be complete" });
+    }
+    const hasQAIdentity = artifact.qaRunId !== undefined || artifact.qaEvidenceBundleId !== undefined;
+    if (hasQAIdentity && (artifact.kind !== "QA_REPORT" || artifact.stage !== "QA")) {
       context.addIssue({ code: "custom", message: "Only QA evidence can reference a measured browser run" });
+    }
+    if (
+      artifact.reviewReportId !== undefined &&
+      (artifact.kind !== "REVIEW_REPORT" || artifact.stage !== "REVIEW")
+    ) {
+      context.addIssue({ code: "custom", message: "Only review evidence can reference a review report" });
+    }
+    if (artifact.correctionRunId !== null) {
+      const hasCorrectionAuthority =
+        (artifact.kind === "REVIEW_REPORT" && reviewPresent === reviewProvenance.length) ||
+        (artifact.kind === "QA_REPORT" && present === qaProvenance.length);
+      if (!hasCorrectionAuthority) {
+        context.addIssue({
+          code: "custom",
+          message: "Correction evidence requires complete authority provenance",
+        });
+      }
     }
   });
 

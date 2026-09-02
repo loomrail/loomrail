@@ -13,7 +13,7 @@
 - [x] Добавить bounded `CorrectionRun`, `QARetestPlan` и canonical cell reason schemas.
 - [x] Добавить full/retest QARun lineage schemas и проверку scope на reservation boundary.
 - [x] Добавить nullable correction lineage StageAttempt и ReviewReport/Finding.
-- [ ] Добавить correction/authority lineage evidence artifacts.
+- [x] Добавить correction/authority lineage evidence artifacts.
 - [x] Реализовать pure derivation affected cells + deterministic regression subset.
 - [x] Реализовать pure correction-loop transition: start, supersede, pass, exhaust, owner final/cancel.
 - [ ] Добавить owner-only optimistic QADefect waiver; SYSTEM resolution остаётся только outcome passing retest.
@@ -25,7 +25,7 @@
 - [x] Backfill existing StageAttempt/QARun/Review rows и strict Event/receipt payloads как initial cycle без
       correction identity.
 - [x] Перестроить StageAttempt/ReviewReport uniqueness на per-cycle без потери append-only истории.
-- [ ] Перестроить evidence uniqueness на per-authority и сохранить старые compact artifacts.
+- [x] Перестроить evidence uniqueness на per-authority и сохранить старые compact artifacts.
 - [ ] Атомарно писать FAILED evidence/defects + next CorrectionRun/retest plan/IMPLEMENT dispatch или HumanRequest.
 - [ ] Атомарно писать passing retest + SYSTEM defect resolutions + correction pass + ACCEPTANCE dispatch.
 - [ ] Покрыть command receipt, optimistic version, duplicate completion, restart и parallel-active rejection.
@@ -65,8 +65,9 @@
 
 ## 4. Первый implementation slice
 
-Contracts + pure `deriveQARetestPlan`/`decideQACorrectionLoop`, lineage contracts и migration 0025 завершены с
-focused tests. Migration хранит bounded CorrectionRun/immutable QARetestPlan, различает FULL/RETEST QARun, делает
-StageAttempt attempt и ReviewReport round локальными для initial/correction cycle и ремонтирует старые strict JSON
-Events/receipts. Следующий slice — correction/authority provenance compact evidence и атомарные commands; daemon и UI
-до этой transaction boundary не должны самостоятельно интерпретировать correction transitions.
+Contracts + pure `deriveQARetestPlan`/`decideQACorrectionLoop`, lineage contracts и migrations 0025–0026 завершены с
+focused tests. Они хранят bounded CorrectionRun/immutable QARetestPlan, различают FULL/RETEST QARun, делают
+StageAttempt attempt и ReviewReport round локальными для initial/correction cycle, привязывают compact evidence к
+exact ReviewReport либо QARun/EvidenceBundle и ремонтируют старые strict JSON Events/receipts. Следующий slice —
+атомарные correction commands; daemon и UI до этой transaction boundary не должны самостоятельно интерпретировать
+correction transitions.
