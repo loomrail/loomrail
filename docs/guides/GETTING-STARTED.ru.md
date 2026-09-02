@@ -75,6 +75,8 @@ Pinned Context7 MCP server уже входит в пакет. Его не нуж
 
 Для встроенного web-demo не нужен dev server. На стадии QA детерминированный план проверяет readiness endpoint
 Loomrail на фактическом порту launcher и сохраняет снимки с трассировками до открытия приёмки.
+Материализованный Project также содержит dependency-free baseline приложения и точные optional Task recipes; см.
+[каталог примеров](SAMPLES.ru.md). Во время Mock walkthrough Loomrail не запускает это приложение.
 
 Перезагрузка страницы или Loomrail не удаляет задачу, запрос, Decision, бюджет, доказательства и решение о приёмке.
 Остановите Loomrail сочетанием `Ctrl+C` и дождитесь выхода команды.

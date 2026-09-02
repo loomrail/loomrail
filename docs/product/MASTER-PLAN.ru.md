@@ -1333,6 +1333,14 @@ audit, fault, clean-package и 52/52 browser gates зелёные на macOS/Win
 трёх protected landing lint findings. Отдельно авторизованный real-provider matrix promotion ещё открыт. Q9 не
 изменяет protected landing и не разрешает npm publish.
 
+Q10 bundled sample catalog локально реализован по планам 65–66. Оба allowlisted demo Project теперь являются
+dependency-free Node.js repositories с исполняемым baseline и двумя exact Task recipes каждый. EN/RU catalog честно
+фиксирует один shipped workflow revision, пять реально dispatch-имых standard roles, недиспетчеризуемые Lead PM и
+Acceptance Manager и исключительную authority владельца над Acceptance. Closed verifier запрещает unreviewed files,
+dependencies, lifecycle scripts, links и изменённую identity; source, materialised и clean-tarball samples зелёные
+локально вместе с full test/typecheck, 52/52 browser, fault и production audit. macOS/Windows Q10 evidence ещё открыт;
+landing, provider matrix и npm publish не менялись.
+
 ### Оценка первого цикла
 
 - internal dogfood alpha: примерно 12–16 недель;

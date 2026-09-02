@@ -53,6 +53,11 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod --audit-level high
 
+      # The public samples ship as executable repository input. Exercise their closed, dependency-free
+      # baseline on both supported platforms before an unrelated source lint failure can hide it.
+      - name: Verify bundled sample repositories
+        run: pnpm test:samples
+
       # Exercise the fixed-argv child-process boundary on both supported platforms before a
       # protected source lint failure can hide the compatibility evidence.
       - name: Verify provider compatibility probes

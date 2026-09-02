@@ -7,6 +7,7 @@ Use the shortest document that matches what you are trying to do.
 | Goal                                                     | English                                                    | Русский                                                          |
 | -------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------- |
 | Guided setup and first safe mock delivery                | [Quick start](guides/GETTING-STARTED.md)                   | [Быстрый старт](guides/GETTING-STARTED.ru.md)                    |
+| Try bundled repositories, task recipes, and roles        | [Samples](guides/SAMPLES.md)                               | [Примеры](guides/SAMPLES.ru.md)                                  |
 | Repository, providers, recovery, backup, troubleshooting | [Owner guide](guides/USER-GUIDE.md)                        | [Руководство владельца](guides/USER-GUIDE.ru.md)                 |
 | Configure and inspect deterministic browser QA           | [Browser QA](guides/BROWSER-QA.md)                         | [QA в браузере](guides/BROWSER-QA.ru.md)                         |
 | Build a local read-only tool plugin                      | [Plugin SDK](guides/PLUGIN-SDK.md)                         | [Plugin SDK](guides/PLUGIN-SDK.ru.md)                            |

@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { inspectRepository } from "@loomrail/workspace";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,9 +10,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   isRegisteredRepositoryUsable,
   materialiseFixtureRepository,
+  resolveBundledFixture,
   resolveRegisteredRepository,
   type ResolvedFixtureProject,
 } from "../src/fixtures.js";
+
+const execFileAsync = promisify(execFile);
 
 // An integration suite rather than a unit one: every case here copies real directories and spawns
 // real `git`, which is the whole point -- a bundled fixture becoming a repository is filesystem work
@@ -47,6 +52,24 @@ describe("fixture materialisation", () => {
     projectId: "project-fixture-web-app-a",
     name: "Fixture web application",
     templatePath,
+  });
+
+  it("materialises both bundled samples as isolated tested repositories", async () => {
+    const demoProjectsRoot = await scratch("materialise bundled samples ");
+
+    for (const fixtureId of ["api-service-b", "web-app-a"] as const) {
+      const fixture = await resolveBundledFixture(fixtureId);
+      const materialised = await materialiseFixtureRepository(fixture, demoProjectsRoot);
+      const repository = await inspectRepository(materialised.repositoryPath);
+      const baseline = await execFileAsync(process.execPath, ["--test"], {
+        cwd: materialised.repositoryPath,
+        encoding: "utf8",
+      });
+
+      expect(materialised.created).toBe(true);
+      expect(repository?.headCommit).toEqual(expect.stringMatching(/^[0-9a-f]{40}$/));
+      expect(baseline.stdout).toContain("fail 0");
+    }
   });
 
   it("never carries a .git directory out of the template", async () => {

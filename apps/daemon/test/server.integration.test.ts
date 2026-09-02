@@ -569,7 +569,7 @@ describe("local daemon session and state boundary", () => {
     const repository = await inspectRepository(registered.project.repositoryPath);
     expect(repository?.headCommit).toEqual(expect.stringMatching(/^[0-9a-f]{40}$/));
     expect(await readFile(join(demoProjectsRoot, "web-app-a", "README.md"), "utf8")).toContain(
-      "Fixture web application",
+      "Loomrail web application sample",
     );
   });
 

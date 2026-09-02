@@ -108,6 +108,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T41 | Release artifact is substituted or an unsigned checksum is called provenance | High     | closed receipt; tarball/file digests; clean CI source; trusted OIDC publish; registry signature verification                                                                                 | see Q6 release-integrity and supply-chain delta below                             |
 | T42 | Guided setup performs hidden actions or reports a false-safe route           | High     | zero-write setup report; exact route input; reuse read-only probes; stat-only browser check; no login/install/start; closed output                                                           | see Q8 guided-setup delta below                                                   |
 | T43 | Poisoned or drifted provider CLI is falsely admitted as compatible           | High     | version-before-auth; fixed argv/no shell/minimal env; stdout/deadline bounds; exact parser/allowlist; closed readiness invariant                                                             | see Q9 provider-compatibility delta below                                         |
+| T44 | Bundled sample executes hidden code or carries unreviewed repository input   | High     | exact file catalog; regular bounded files; no dependencies/lifecycle scripts/links; no implicit execution                                                                                    | see Q10 bundled-sample delta below                                                |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -423,6 +424,35 @@ Required controls and verification:
 Residual risk remains: an executable can be replaced after observation, and exact version identity does not prove
 binary provenance or account/quota fitness. Runtime provider envelopes and final domain results remain independently
 validated; provider signing/attestation and authenticated real-provider dogfood remain release gaps.
+
+### Q10 bundled-sample delta (T44)
+
+Q10 turns the two bundled fixture placeholders into executable repository input that both an owner and a live
+provider may read and change. A hidden dependency, lifecycle script, symbolic link, credential or unreviewed file in
+that tree could cross the materialisation boundary or make the apparently safe baseline execute more than its public
+recipe. Rated **High** because the templates ship inside the trusted package and become repositories without a second
+content review on the consumer machine.
+
+Required controls and verification:
+
+- fixture IDs and initial Project identities remain a closed two-entry catalog; every expected relative file is
+  allowlisted and the verifier rejects an extra or missing entry;
+- templates contain only bounded regular files and directories. Existing materialisation refuses symbolic links and
+  special files, skips any `.git`, disables ambient Git hooks/templates/signing and creates an isolated repository;
+- each private ESM package has no dependencies and only exact reviewed `node` scripts. Baseline tests use the Node.js
+  standard library, listen on no port, install nothing and make no network request;
+- the optional web server starts only after the owner explicitly runs `npm start`, binds only `127.0.0.1`, and rejects
+  an invalid port. Loomrail neither launches it nor treats its existence as Browser QA evidence;
+- recipe text contains exact bounded briefs and acceptance criteria but has no authority over role capability,
+  budget, provider selection, Project Constitution or acceptance. The deterministic domain workflow and owner gate
+  remain authoritative;
+- source policy tests reject dependency and unexpected-file mutations. A named CI gate validates and executes both
+  samples on macOS and Windows before repository-wide lint; clean-install verification repeats it from the exact
+  receipt-checked package tree.
+
+Residual risk remains: reviewed sample prose is still untrusted input to a provider, and `npm start` is code execution
+with the owner's OS-user authority. Owners should inspect diffs and run commands only in the materialised sample or a
+task worktree. The gate proves the shipped baseline, not future provider output or private dogfood stability.
 
 ### A4 Attention Inbox delta (T35)
 

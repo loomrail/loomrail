@@ -582,11 +582,11 @@ const seedWorktreeChanges = async (worktreePath: string): Promise<SeededChanges>
 
   await mkdir(join(worktreePath, "src"), { recursive: true });
   await mkdir(join(worktreePath, "generated"), { recursive: true });
-  await writeFile(
-    join(worktreePath, changed.modified),
-    `# Fixture web application\n\n${changed.modifiedLine}\n`,
-    "utf8",
-  );
+  const readmePath = join(worktreePath, changed.modified);
+  const readme = await readFile(readmePath, "utf8");
+  const baselineHeading = "# Loomrail web application sample";
+  if (!readme.includes(baselineHeading)) throw new Error("The bundled web sample heading changed");
+  await writeFile(readmePath, readme.replace(baselineHeading, changed.modifiedLine), "utf8");
   await writeFile(join(worktreePath, changed.added), "export const added = true;\n", "utf8");
   await rename(join(worktreePath, changed.renamedFrom), join(worktreePath, changed.renamed));
   // Real NUL bytes, not just a `.bin` suffix: git decides a file is binary by reading it, and a
@@ -2213,7 +2213,7 @@ test.describe("authenticated walking skeleton", () => {
       await modified.click();
       const patch = changes.locator(".changes-diff__patch");
       await expect(patch).toContainText(`+${seeded.changed.modifiedLine}`);
-      await expect(patch).toContainText("-Synthetic Phase 0 fixture.");
+      await expect(patch).toContainText("-# Loomrail web application sample");
       // One body, for the one file that was opened -- not one per row, and not one for a file the
       // owner never touched.
       expect(bodyRequests).toEqual([seeded.changed.modified]);

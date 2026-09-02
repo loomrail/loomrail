@@ -94,6 +94,7 @@ change inspection, backup, recovery, diagnostics, upgrade, and uninstall:
 - [Руководство владельца](docs/guides/USER-GUIDE.ru.md)
 - [Operations guide](docs/guides/OPERATIONS.md) · [Эксплуатация](docs/guides/OPERATIONS.ru.md)
 - [Provider compatibility](docs/guides/PROVIDER-COMPATIBILITY.md) · [Совместимость провайдеров](docs/guides/PROVIDER-COMPATIBILITY.ru.md)
+- [Bundled samples and roles](docs/guides/SAMPLES.md) · [Встроенные примеры и роли](docs/guides/SAMPLES.ru.md)
 - [Reproducible full-route example](docs/examples/full-route/README.md)
 - [Security and trust boundaries](docs/security/THREAT-MODEL.md)
 

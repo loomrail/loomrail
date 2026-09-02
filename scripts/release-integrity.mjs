@@ -10,8 +10,27 @@ const maxUnpackedBytes = 256 * 1024 * 1024;
 const maxEntryCount = 4096;
 const maxPortablePathLength = 240;
 
-const rootFiles = new Set(["LICENSE", "NOTICE", "README.md", "package.json"]);
-const rootDirectories = new Set([
+const allowedExactFiles = new Set([
+  "LICENSE",
+  "NOTICE",
+  "README.md",
+  "package.json",
+  "fixtures/projects/api-service-b/README.md",
+  "fixtures/projects/api-service-b/SAMPLE-WORKFLOWS.md",
+  "fixtures/projects/api-service-b/loomrail-fixture.json",
+  "fixtures/projects/api-service-b/package.json",
+  "fixtures/projects/api-service-b/src/issues.mjs",
+  "fixtures/projects/api-service-b/test/issues.test.mjs",
+  "fixtures/projects/web-app-a/README.md",
+  "fixtures/projects/web-app-a/SAMPLE-WORKFLOWS.md",
+  "fixtures/projects/web-app-a/loomrail-fixture.json",
+  "fixtures/projects/web-app-a/package.json",
+  "fixtures/projects/web-app-a/src/server.mjs",
+  "fixtures/projects/web-app-a/src/tasks.mjs",
+  "fixtures/projects/web-app-a/test/server.test.mjs",
+  "fixtures/projects/web-app-a/test/tasks.test.mjs",
+]);
+const allowedExactDirectories = new Set([
   "apps",
   "apps/cli",
   "apps/cli/dist",
@@ -20,6 +39,12 @@ const rootDirectories = new Set([
   "apps/web/dist",
   "fixtures",
   "fixtures/projects",
+  "fixtures/projects/api-service-b",
+  "fixtures/projects/api-service-b/src",
+  "fixtures/projects/api-service-b/test",
+  "fixtures/projects/web-app-a",
+  "fixtures/projects/web-app-a/src",
+  "fixtures/projects/web-app-a/test",
   "packages",
   "packages/plugin-sdk",
   "packages/plugin-sdk/dist",
@@ -28,14 +53,12 @@ const allowedDirectoryPatterns = [
   /^apps\/cli\/dist\/[A-Za-z0-9._/-]+$/,
   /^apps\/web\/dist\/[A-Za-z0-9._/-]+$/,
   /^packages\/plugin-sdk\/dist\/[A-Za-z0-9._/-]+$/,
-  /^fixtures\/projects\/[a-z0-9][a-z0-9-]*$/,
 ];
 const allowedFilePatterns = [
   /^apps\/cli\/dist\/[A-Za-z0-9._/-]+\.js$/,
   /^apps\/cli\/migrations\/\d{4}_[a-z0-9_]+\.sql$/,
   /^apps\/web\/dist\/[A-Za-z0-9._/-]+\.(?:css|html|ico|jpeg|jpg|js|map|png|svg|webp|woff|woff2)$/,
   /^packages\/plugin-sdk\/dist\/[A-Za-z0-9._/-]+\.(?:d\.ts|js)(?:\.map)?$/,
-  /^fixtures\/projects\/[a-z0-9][a-z0-9-]*\/(?:README\.md|loomrail-fixture\.json)$/,
 ];
 
 const fail = (message) => {
@@ -82,7 +105,7 @@ const assertPortableRelativePath = (value, label) => {
 
 const assertSafePackageDirectoryPath = (value) => {
   const path = assertPortableRelativePath(value, "package directory path");
-  if (!rootDirectories.has(path) && !allowedDirectoryPatterns.some((pattern) => pattern.test(path))) {
+  if (!allowedExactDirectories.has(path) && !allowedDirectoryPatterns.some((pattern) => pattern.test(path))) {
     fail(`package directory is outside the release allowlist: ${path}`);
   }
   return path;
@@ -90,7 +113,7 @@ const assertSafePackageDirectoryPath = (value) => {
 
 const assertSafePackagePath = (value) => {
   const path = assertPortableRelativePath(value, "package file path");
-  if (!rootFiles.has(path) && !allowedFilePatterns.some((pattern) => pattern.test(path))) {
+  if (!allowedExactFiles.has(path) && !allowedFilePatterns.some((pattern) => pattern.test(path))) {
     fail(`package file is outside the release allowlist: ${path}`);
   }
   return path;

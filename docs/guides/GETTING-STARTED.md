@@ -74,6 +74,8 @@ it; configuration remains an explicit owner action in **Settings → MCP connect
 
 The bundled web demo needs no development server. Its deterministic QA step measures Loomrail's local readiness
 endpoint at the port the launcher actually selected and records screenshots and traces before opening acceptance.
+The materialized Project also contains a dependency-free application baseline and exact optional task recipes; see
+the [sample catalog](SAMPLES.md). Loomrail does not run that application during the Mock walkthrough.
 
 Reloading the page or restarting Loomrail does not erase the task, request, Decision, budget, evidence, or acceptance
 state. Stop Loomrail with `Ctrl+C` and wait for the command to exit.

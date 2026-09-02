@@ -16,6 +16,7 @@ import {
   toolSpawnOptions,
 } from "./release-manifest.mjs";
 import { verifyInstalledReleaseFiles, verifyReleaseReceipt } from "./release-integrity.mjs";
+import { verifySamples } from "./verify-samples.mjs";
 
 /**
  * Installs the packed launcher into an empty directory and proves it runs there.
@@ -145,6 +146,7 @@ const run = async () => {
       );
     }
     await verifyInstalledReleaseFiles({ installedRoot, receipt });
+    await verifySamples(join(installedRoot, "fixtures", "projects"));
     execFileSync(toolCommand("npm"), ["audit", "--omit=dev", "--audit-level=high"], {
       cwd: installDirectory,
       stdio: "inherit",
@@ -368,7 +370,7 @@ const run = async () => {
     }
 
     process.stdout.write(
-      `Release check passed: setup, receipt, installed files and log lifecycle match; ${tarball} runs from a clean install.\n`,
+      `Release check passed: samples, setup, receipt, installed files and log lifecycle match; ${tarball} runs from a clean install.\n`,
     );
   } finally {
     launcher?.kill("SIGTERM");
