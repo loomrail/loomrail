@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implementation complete; cross-platform CI evidence pending
+**Статус:** complete; named gate verified on macOS and Windows; repository verify blocked only by protected landing lint
 
 **Спецификация:**
 [55-q5-crash-and-fault-injection-gate-spec.ru.md](55-q5-crash-and-fault-injection-gate-spec.ru.md)
@@ -32,11 +32,14 @@
 - [x] Новый black-box drill зелёный локально и не оставляет child/temp artifacts.
 - [x] Named fault gate зелёный последовательно.
 - [x] Existing full typecheck/unit, production audit и release tarball остаются зелёными.
-- [ ] macOS/Windows CI named gate; общий verify может оставаться blocked только protected landing.
+- [x] macOS/Windows CI named gate; общий verify blocked только protected landing.
 
 Локальное evidence: [Q5-CRASH-FAULT-INJECTION-EVIDENCE.md](../evidence/phase-8/Q5-CRASH-FAULT-INJECTION-EVIDENCE.md).
 Первый Q5 CI run обнаружил missing Chromium prerequisite в новом Verify step; CI теперь устанавливает Chromium перед
 матрицей, не ослабляя browser-qa suite и не превращая отсутствие executable в recovery evidence.
+Replacement [GitHub Actions run 33658781891](https://github.com/loomrail/loomrail/actions/runs/33658781891)
+подтвердил named crash/fault gate, production audit, clean-install tarball и browser smoke на macOS и Windows. Оба
+repository-wide Verify дошли до lint и остановились только на защищённых `apps/landing/src/main.ts:630,631,634`.
 
 ## 3. Release boundary
 

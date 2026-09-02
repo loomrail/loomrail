@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
-**Статус:** реализация через Q5 локально завершена; release gate открыт; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** реализация через Q5 и cross-platform Q5 gate завершены; release gate открыт; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -208,8 +208,10 @@ Q5 закрывает Phase 8 crash/fault-injection deliverable по
 [плану 56](56-q5-crash-and-fault-injection-gate-implementation-plan.ru.md). Named sequential gate собрал repository,
 провёл 486 focused tests и process-boundary drill: exact daemon child получил `SIGKILL` после durable
 ProviderSession start, два restart на той же SQLite/WAL state сохранили один `DAEMON_RESTART` RecoveryReport без
-active session/run и automatic replay. Локальное evidence зелёное; отдельный macOS/Windows CI step, private dogfood
-и общий release gate остаются открыты.
+active session/run и automatic replay. Локальный и macOS/Windows CI gate зелёные в
+[run 33658781891](https://github.com/loomrail/loomrail/actions/runs/33658781891); audit, clean install и browser smoke
+также прошли на обеих ОС. Общий Verify дошёл до защищённого landing lint; private dogfood и release gate остаются
+открыты.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

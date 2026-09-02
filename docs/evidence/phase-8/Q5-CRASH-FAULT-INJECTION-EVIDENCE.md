@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-02
 
-**Scope:** local macOS gate; macOS/Windows CI confirmation pending
+**Scope:** local macOS gate plus macOS/Windows GitHub Actions confirmation
 
 ## Release command
 
@@ -70,19 +70,29 @@ outcome was unknown.
 - The test fixture is outside the release-package staging manifest; the clean-install tarball gate must continue to
   verify that boundary.
 
-## Remaining evidence
+## Cross-platform CI evidence
 
-This local run does not certify power-loss/filesystem corruption, real provider crashes or Windows process
-semantics. The CI matrix must show this named gate green on both macOS and Windows. Phase 8's private dogfood exit
+[GitHub Actions run 33658781891](https://github.com/loomrail/loomrail/actions/runs/33658781891) ran the named gate on
+both release platforms after installing the pinned Playwright Chromium prerequisite. The macOS and Windows
+`Verify crash and fault recovery` steps both passed. The same run also passed the production audit, release-tarball
+clean install and independent Browser smoke jobs on both platforms.
+
+Both repository-wide Verify jobs then passed formatting, the 564-file public-tree check, toolchain validation and the
+full build before stopping at the same three protected landing lint errors in
+`apps/landing/src/main.ts:630,631,634`. No Q5 or cross-platform portability failure was reported.
+
+## Remaining evidence boundary
+
+These runs do not certify power-loss/filesystem corruption or real provider crashes. Phase 8's private dogfood exit
 gate and the repository-wide release gate remain separate requirements.
 
 CI run 33657047573 proved the production audit and clean-install path but initially failed the named macOS fault step
 because a fresh Verify runner had the Playwright package without its Chromium binary. The gate correctly refused to
 reinterpret that `DRIVER_CRASHED` result as BrowserDriver fault evidence. CI now installs Chromium explicitly before
-the unchanged matrix; replacement cross-platform evidence remains pending.
+the unchanged matrix.
 
 Replacement run 33657337447 proved the macOS fault gate and every clean-install/browser job. Its Windows daemon suite
 passed 183 of 188 tests but reported three failures, including one setup hook, after existing deadlines were exhausted
 while test files competed for SQLite/process/server resources. The Q5 runner now executes daemon files with one
-Vitest worker, matching the specification's sequential reliability boundary without lengthening test deadlines. A
-replacement Windows result remains pending.
+Vitest worker, matching the specification's sequential reliability boundary without lengthening test deadlines;
+run 33658781891 verified that correction on Windows.

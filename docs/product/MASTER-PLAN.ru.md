@@ -1284,8 +1284,10 @@ Q5 full crash/fault-injection gate реализован по планам 55–5
 прогоняет fault suites persistence/provider/MCP/scaffolding/Browser QA/daemon и затем убивает test-owned daemon
 process только после durable старта ProviderSession. Два новых process на той же SQLite/WAL state доказывают exact
 `DAEMON_RESTART` interruption, один RecoveryReport, отсутствие active ProviderSession/AgentRun и отсутствие
-automatic replay. Отдельный CI step запускается на macOS/Windows до общего lint; локальное evidence зафиксировано,
-cross-platform CI и private dogfood exit gate остаются открыты. Production failpoint и npm publish не добавлены.
+automatic replay. Отдельный CI step запускается на macOS/Windows до общего lint; локальное и cross-platform evidence
+зелёные в [run 33658781891](https://github.com/loomrail/loomrail/actions/runs/33658781891), включая production audit,
+clean install и browser smoke на обеих ОС. Общий Verify остановился только на защищённых landing lint errors;
+private dogfood exit gate остаётся открытым. Production failpoint и npm publish не добавлены.
 
 ### Оценка первого цикла
 

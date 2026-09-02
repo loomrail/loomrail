@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implemented locally; cross-platform CI evidence pending
+**Статус:** implemented; named gate verified on macOS and Windows; repository verify blocked only by protected landing lint
 
 **Предшественники:** M5, A1.5, A2, E1, C1, B4, Q1, Q4
 
