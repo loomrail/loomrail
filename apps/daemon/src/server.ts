@@ -3373,3 +3373,6 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     throw error;
   }
 };
+
+export { inspectProviderAvailability } from "./provider-selection.js";
+export type { ProviderAvailabilitySnapshot } from "./provider-selection.js";

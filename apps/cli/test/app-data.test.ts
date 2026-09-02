@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveLoomrailDataDirectory } from "../src/app-data.js";
+import { resolveLoomrailDataDirectory, resolveLoomrailDataLocation } from "../src/app-data.js";
 
 describe("Loomrail application-data paths", () => {
   it("uses Application Support on macOS", () => {
@@ -31,5 +31,15 @@ describe("Loomrail application-data paths", () => {
         environment: { LOOMRAIL_DATA_DIR: "/tmp/loomrail isolated" },
       }),
     ).toBe("/tmp/loomrail isolated");
+    expect(
+      resolveLoomrailDataLocation({
+        platform: "linux",
+        homeDirectory: "/home/local",
+        environment: { LOOMRAIL_DATA_DIR: "/tmp/loomrail isolated" },
+      }),
+    ).toEqual({
+      directory: "/tmp/loomrail isolated",
+      source: "ENVIRONMENT_OVERRIDE",
+    });
   });
 });

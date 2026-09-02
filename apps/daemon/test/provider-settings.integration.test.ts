@@ -71,6 +71,7 @@ describe("Project provider settings API", () => {
       probeAuthentication: () => Promise.resolve("AUTHENTICATED"),
     });
     await registry.refresh();
+    expect(registry.availability().map(({ provider }) => provider)).toEqual(["MOCK", "CODEX", "CLAUDE_CODE"]);
     const project: Project = {
       schemaVersion: 1,
       id: "project-auto-review",

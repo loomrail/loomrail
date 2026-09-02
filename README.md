@@ -83,11 +83,12 @@ The task, request, budget, evidence, and decision survive page reloads and Loomr
 
 ## Your repository and live providers
 
-After the mock route works, the owner guide explains repository registration, Project Constitution review, task
-worktrees, change inspection, backup, and recovery:
+After the mock route works, the guides explain repository registration, Project Constitution review, task worktrees,
+change inspection, backup, recovery, diagnostics, upgrade, and uninstall:
 
 - [Owner guide](docs/guides/USER-GUIDE.md)
 - [Руководство владельца](docs/guides/USER-GUIDE.ru.md)
+- [Operations guide](docs/guides/OPERATIONS.md) · [Эксплуатация](docs/guides/OPERATIONS.ru.md)
 - [Reproducible full-route example](docs/examples/full-route/README.md)
 - [Security and trust boundaries](docs/security/THREAT-MODEL.md)
 

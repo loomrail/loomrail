@@ -316,6 +316,9 @@ Data directory по умолчанию:
 репозитории в исходные пути и запустите Loomrail обычной командой. Связи linked worktree записаны и в data directory,
 и в Git metadata исходного репозитория; перенос только одной стороны может сделать workspace потерянным.
 
+Перед startup используйте `loomrail doctor`, а exact storage path явно запрашивайте через `loomrail data-path`.
+Полный contract diagnostics, upgrade, rollback и uninstall находится в [operations guide](OPERATIONS.ru.md).
+
 ## 9. Решение проблем
 
 **Страница сообщает, что локальная сессия закончилась.** Daemon остановился или одноразовая сессия больше не

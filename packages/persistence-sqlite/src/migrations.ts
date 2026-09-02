@@ -34,6 +34,11 @@ type Migration = {
   rebuildsAReferencedTable?: true;
 };
 
+export type MigrationSource = Migration & {
+  sql: string;
+  checksum: string;
+};
+
 const migrations: readonly Migration[] = [
   { version: 1, name: "initial", filename: "0001_initial.sql" },
   { version: 2, name: "mock_workflow", filename: "0002_mock_workflow.sql" },
@@ -161,6 +166,16 @@ const schemaMigrationsSql = `
 
 const checksum = (sql: string): string => createHash("sha256").update(sql).digest("hex");
 
+export const loadMigrationSources = async (
+  migrationsDirectory = fileURLToPath(new URL("../migrations", import.meta.url)),
+): Promise<readonly MigrationSource[]> =>
+  Promise.all(
+    migrations.map(async (migration) => {
+      const sql = await readFile(join(migrationsDirectory, migration.filename), "utf8");
+      return { ...migration, sql, checksum: checksum(sql) };
+    }),
+  );
+
 const databaseHasMigrationTable = (database: DatabaseSync): boolean =>
   database
     .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations'")
@@ -229,8 +244,6 @@ export const applyMigrations = async (
     databaseWasNonEmpty: boolean;
   },
 ): Promise<StateStoreStartup> => {
-  const migrationsDirectory =
-    options.migrationsDirectory ?? fileURLToPath(new URL("../migrations", import.meta.url));
   const hasMigrationTable = databaseHasMigrationTable(database);
   const appliedRows = hasMigrationTable
     ? migrationRowSchema
@@ -240,12 +253,7 @@ export const applyMigrations = async (
         )
     : [];
   const appliedByVersion = new Map(appliedRows.map((row) => [row.version, row]));
-  const migrationSources = await Promise.all(
-    migrations.map(async (migration) => {
-      const sql = await readFile(join(migrationsDirectory, migration.filename), "utf8");
-      return { ...migration, sql, checksum: checksum(sql) };
-    }),
-  );
+  const migrationSources = await loadMigrationSources(options.migrationsDirectory);
 
   for (const migration of migrationSources) {
     const applied = appliedByVersion.get(migration.version);

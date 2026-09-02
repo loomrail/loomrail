@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@loomrail/daemon": "workspace:*",
+    "@loomrail/persistence-sqlite": "workspace:*",
     "open": "^10.0.0"
   },
   "devDependencies": {

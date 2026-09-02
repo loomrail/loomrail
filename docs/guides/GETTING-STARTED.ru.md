@@ -28,7 +28,8 @@ mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install loomrail@next
 npx playwright install chromium
-npx loomrail
+npx loomrail doctor
+npx loomrail start
 ```
 
 Тег `next` явно выбирает публичный pre-alpha канал. Launcher слушает только `127.0.0.1` и открывает одноразовую
@@ -36,6 +37,8 @@ npx loomrail
 входом; в следующем разделе вы переключите demo-проект на **Mock** до запуска workflow. Не закрывайте терминал.
 
 Chromium скачивается один раз как обязательная среда Browser QA и не использует ваш авторизованный browser profile.
+`doctor` работает read-only; для новой базы или отсутствующего live-provider login он показывает warnings. Коды,
+upgrade, rollback, backup и uninstall описаны в [operations guide](OPERATIONS.ru.md).
 
 Чтобы браузер не открывался автоматически:
 

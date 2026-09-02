@@ -1,17 +1,32 @@
 import { describe, expect, it } from "vitest";
 
-import { parseCliOptions } from "../src/options.js";
+import { parseCliCommand } from "../src/options.js";
 
 describe("CLI options", () => {
   it("uses a dynamic port and opens the browser by default", () => {
-    expect(parseCliOptions([])).toEqual({ noOpen: false });
+    expect(parseCliCommand([])).toEqual({ command: "START", noOpen: false });
   });
 
-  it("accepts a fixed test port", () => {
-    expect(parseCliOptions(["--no-open", "--port", "3210"])).toEqual({ noOpen: true, port: 3210 });
+  it("keeps legacy start flags and accepts the explicit start command", () => {
+    const expected = { command: "START", noOpen: true, port: 3210 };
+    expect(parseCliCommand(["--no-open", "--port", "3210"])).toEqual(expected);
+    expect(parseCliCommand(["start", "--no-open", "--port", "3210"])).toEqual(expected);
   });
 
   it("rejects an invalid port", () => {
-    expect(() => parseCliOptions(["--port", "70000"])).toThrow(/--port/);
+    expect(() => parseCliCommand(["--port", "70000"])).toThrow(/--port/);
+  });
+
+  it("parses read-only commands without accepting mixed flags or positionals", () => {
+    expect(parseCliCommand(["doctor"])).toEqual({ command: "DOCTOR", format: "HUMAN" });
+    expect(parseCliCommand(["doctor", "--json"])).toEqual({ command: "DOCTOR", format: "JSON" });
+    expect(parseCliCommand(["data-path"])).toEqual({ command: "DATA_PATH" });
+    expect(parseCliCommand(["help"])).toEqual({ command: "HELP" });
+    expect(parseCliCommand(["--help"])).toEqual({ command: "HELP" });
+    expect(parseCliCommand(["-h"])).toEqual({ command: "HELP" });
+
+    expect(() => parseCliCommand(["doctor", "--no-open"])).toThrow();
+    expect(() => parseCliCommand(["data-path", "extra"])).toThrow();
+    expect(() => parseCliCommand(["unknown"])).toThrow(/Unknown Loomrail command/);
   });
 });

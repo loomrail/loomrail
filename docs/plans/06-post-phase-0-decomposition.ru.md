@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
-**Статус:** реализация через Q2 локально завершена; release gate открыт; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** реализация через Q4 локально завершена; release gate открыт; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -196,6 +196,13 @@ domain-модулем с current Review/measured QA checks, historical package/E
 redaction, 1000-Event/512-KiB bounds и complete-or-error semantics. Полный Q2 correction browser path скачивает
 реальный summary в RU/EN, dark и 320 px states; unit, persistence, daemon, 52/52 E2E, audit и clean-install локально
 зелёны. Phase 7 implementation deliverables закрыты, но dogfood exit gate и общий cross-platform `verify` ещё нет.
+Q4 начинает Phase 8 operational hardening по [спецификации 53](53-q4-local-diagnostics-and-data-lifecycle-spec.ru.md)
+и [плану 54](54-q4-local-diagnostics-and-data-lifecycle-implementation-plan.ru.md): closed CLI router сохраняет legacy
+start и добавляет read-only doctor/JSON, help и отдельный data-path; persistence проверяет quick-check и exact current
+migration ledger без создания, migration или recovery state; provider snapshot не раскрывает output/account. EN/RU
+operations guide разводит whole-directory backup, forward upgrade, restore-based rollback, package uninstall и
+owner-controlled data removal. Full build/typecheck/unit, public-tree, non-landing lint, audit и clean-install tarball
+зелёные; общий macOS/Windows CI и dogfood contract остаются открыты.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

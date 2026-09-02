@@ -308,6 +308,9 @@ For the least surprising restore, stop Loomrail, restore the whole data director
 repositories to their original paths, and start Loomrail normally. Linked worktrees store connections in both the data
 directory and the source repository's Git metadata; moving only one side can make the workspace appear orphaned.
 
+Use `loomrail doctor` before startup and `loomrail data-path` when you explicitly need the resolved storage path. The
+[operations guide](OPERATIONS.md) owns the complete diagnostic, upgrade, rollback and uninstall contract.
+
 ## 9. Troubleshooting
 
 **The page says the local session ended.** The daemon stopped or the one-time session is no longer valid. Restart

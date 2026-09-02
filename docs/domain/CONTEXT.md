@@ -73,6 +73,12 @@ _Не означает_: provider уже запущенной ProviderSession и
 авторизацию.
 _Не означает_: provider credential, account profile или durable domain state.
 
+**Doctor Report**:
+Короткоживущая closed-проекция совместимости runtime, Git, data directory, SQLite migration/integrity и Provider
+Availability для локальной установки. Общий status выводится только из typed checks; exact path раскрывается другой
+явно запрошенной командой.
+_Не означает_: durable workflow state, startup/recovery, migration, support upload или источник product truth.
+
 **Effective Provider**:
 Provider, который resolver назначит следующей ProviderSession с учётом Project preference, текущей availability и
 видимого environment override.

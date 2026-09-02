@@ -104,6 +104,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T37 | Reviewer forges independence, closes findings, or reviews a stale tree     | High     | distinct durable AgentRuns; daemon-owned relation/IDs; exact tree compare; closed reports; owner-only dispositions; bounded rounds                                                           | see R1 independent-review delta below                       |
 | T38 | Provider or hostile page waives a QA defect or turns waiver into evidence  | High     | HUMAN-only optimistic command; session/Origin/CSRF; reason; atomic disposition/Event/receipt; waiver cannot create pass/evidence/Acceptance                                                  | see Q2 QA-defect lifecycle delta below                      |
 | T39 | Acceptance export leaks local authority or turns untrusted prose active    | High     | authenticated exact-correlation read; domain-validated allowlist; escaped Markdown and path redaction; attachment+nosniff; audit/byte bounds; complete-or-error                              | see Q3 Acceptance export delta below                        |
+| T40 | Diagnostics leak local metadata or mutate state during inspection          | High     | closed allowlisted report; no raw paths/output/errors/env; argv/no-shell bounded probes; read-only SQLite; explicit path disclosure; no cleanup                                              | see Q4 local-diagnostics delta below                        |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -241,6 +242,38 @@ Focused domain, persistence, daemon and browser tests cover mapping completeness
 escaping and path redaction, historical package reads, transaction rollback, authentication, headers, pending and
 resolved exports, and downloaded content. The export is still sensitive owner data: path redaction is not a general
 secret scanner, so Loomrail does not publish, upload or share it automatically.
+
+### Q4 local-diagnostics delta (T40)
+
+Q4 makes runtime, Git, data-directory, SQLite and provider observations portable as terminal output. A broad support
+dump could reveal usernames, absolute paths, environment values, provider accounts or raw command/database errors;
+an apparently harmless diagnostic could also create a hostile override path, migrate or reconcile production state,
+or inherit credentials into a shell command. Rated **High** because support output is likely to be shared and the
+inspector touches the same durable database startup normally mutates.
+
+Required controls and verification:
+
+- `DoctorReport` is a closed product-authored projection with fixed codes and bounds. It contains no cwd, home/data/
+  repository path, raw environment override value, provider account/profile, command stdout/stderr, credential,
+  exception message or timestamp. Provider presence/authentication remains local metadata, so docs still require
+  owner review before sharing;
+- Git and provider checks use fixed argv with `shell: false`, ignored stdio, a three-second deadline and minimal
+  launch-environment allowlists. Provider status never installs a CLI, opens a login flow or changes authentication;
+- only `packages/persistence-sqlite` imports `node:sqlite`. The diagnostic connection is `readOnly`, runs
+  `PRAGMA quick_check`, reads only the migration ledger and compares it with packaged immutable migration sources; it
+  never creates a DB, applies a migration, changes WAL mode or runs startup recovery;
+- data-directory inspection uses only stat/access and checks an existing parent for a first run. A missing path stays
+  absent. Exact path disclosure is isolated in the separately invoked `data-path` command and documented as sensitive;
+- `PASS/WARN/FAIL` and exit codes derive from typed status, never exception prose. Missing first-run state and
+  unauthenticated live providers warn; unsupported runtime, Git/storage failure and corrupt/drift/future/unreadable
+  state fail closed;
+- package uninstall and owner-data deletion remain separate. The launcher exposes no delete/reset/repair command;
+  operations docs require stopped whole-directory backup, reject down-migration claims and never imply that source
+  repositories, provider data or Git worktree metadata are removed.
+
+Focused CLI/persistence/package tests cover command isolation, no-create path inspection, current/pending/drift/future/
+corrupt DB states, unchanged database bytes, canary non-disclosure, deterministic JSON and installed-package
+doctor/data-path plus the existing readiness launch on macOS and Windows.
 
 ### A4 Attention Inbox delta (T35)
 

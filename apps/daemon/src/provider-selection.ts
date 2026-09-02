@@ -42,6 +42,7 @@ export type ProjectProviderResolution = {
 
 export type ProviderRegistry = {
   refresh: () => Promise<void>;
+  availability: () => readonly ProviderAvailability[];
   resolve: (
     project: Project,
     options?: { stage?: WorkflowStage | undefined; avoidProvider?: ProviderId | null | undefined },
@@ -319,7 +320,33 @@ export const createProviderRegistry = (
     };
   };
 
-  return { refresh, resolve, environment };
+  const readAvailability = (): readonly ProviderAvailability[] => [
+    availability.MOCK,
+    availability.CODEX,
+    availability.CLAUDE_CODE,
+  ];
+
+  return { refresh, availability: readAvailability, resolve, environment };
+};
+
+export type ProviderAvailabilitySnapshot = {
+  environmentOverride: "NONE" | "VALID" | "INVALID";
+  providers: readonly ProviderAvailability[];
+};
+
+export const inspectProviderAvailability = async (
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<ProviderAvailabilitySnapshot> => {
+  const registry = createProviderRegistry({ env });
+  await registry.refresh();
+  return {
+    environmentOverride: registry.environment.invalid
+      ? "INVALID"
+      : registry.environment.override === null
+        ? "NONE"
+        : "VALID",
+    providers: registry.availability(),
+  };
 };
 
 // Compatibility projection for launchers/tests that still ask for the startup environment alone.

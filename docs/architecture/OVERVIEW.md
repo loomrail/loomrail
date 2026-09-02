@@ -104,7 +104,8 @@ D3 and ADR-0002.
 - generate bootstrap token;
 - wait for readiness;
 - open browser;
-- predictable shutdown/diagnostics.
+- predictable shutdown;
+- closed read-only runtime/Git/data/state/provider diagnostics and explicit data-path disclosure.
 
 ### `apps/daemon`
 
@@ -152,6 +153,10 @@ release projection, and bounded global Attention classification without knowing 
 `openLocalState()` remains the deep persistence module with `execute`, `query` and `close`. Migration checksums,
 online backup, prepared SQL, optimistic concurrency, idempotency receipts, append-only evidence, mutable versioned
 AcceptancePackages, current state and Event append stay behind that interface.
+
+`inspectStateDatabase()` is a separate read-only public contract for CLI diagnostics. It opens no missing database,
+applies no migration and runs no recovery; it returns only closed integrity/migration states after `quick_check` and
+comparison with the same immutable migration sources used by `openLocalState()`.
 
 The Acceptance provider receives criterion and evidence-check text already present in its exact ContextPack snapshot,
 but no artifact, report, run or tree IDs. The domain binds its ordered claims to current durable Review and measured QA

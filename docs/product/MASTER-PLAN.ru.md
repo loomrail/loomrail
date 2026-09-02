@@ -1271,6 +1271,15 @@ full build/typecheck/unit, 52/52 E2E, production audit и clean-install tarball.
 **Exit gate:** clean macOS и Windows machines проходят CLI setup и один full fixture flow; private dogfood alpha стабильно
 восстанавливается после restart; known P0/P1 security/reliability defects отсутствуют.
 
+Q4 local diagnostics и data lifecycle реализованы по планам 53–54. Launcher сохраняет legacy start и добавляет
+explicit `start`, bounded help, read-only `doctor [--json]` и отдельно раскрывающий exact path `data-path`. Doctor не
+создаёт каталог/DB, не применяет migrations/recovery и не запускает daemon/browser; typed SQLite inspector отличает
+missing/uninitialized/current/pending/drift/future/corrupt/unrelated state и переиспользует те же packaged migration
+sources. Provider probe остаётся output-free и provider-owned. EN/RU operations guide фиксирует stopped
+whole-directory backup, forward upgrade, restore-based rollback и раздельные package uninstall/data removal без
+recursive product cleanup. T40 и clean-install tarball smoke добавлены. Это закрывает diagnostics и
+uninstall/data-retention docs, но не остальные Phase 8 deliverables или dogfood exit gate; npm publish запрещён.
+
 ### Оценка первого цикла
 
 - internal dogfood alpha: примерно 12–16 недель;

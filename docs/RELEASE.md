@@ -30,10 +30,16 @@ that:
 
 - the daemon reports `/health/ready`;
 - the installed launcher serves the built Workbench shell, not just the API;
-- the launcher prints the one-time sign-in URL, so a headless install can authenticate.
+- the launcher prints the one-time sign-in URL, so a headless install can authenticate;
+- `loomrail doctor --json` inspects the isolated installation without creating state or leaking its path;
+- `loomrail data-path` resolves that exact isolated path explicitly.
 
 Run it on macOS and on Windows before tagging a release. A green `pnpm verify` does not imply a working package: the
 repository resolves assets through the workspace layout, and only this check exercises the published layout.
+
+Owner-facing install, diagnostic, upgrade, rollback and uninstall semantics are maintained in the
+[operations guide](guides/OPERATIONS.md). A release that changes package layout, migrations or retention must update
+that contract in the same change.
 
 ## Why the package mirrors the repository layout
 

@@ -47,6 +47,9 @@ importers:
       '@loomrail/daemon':
         specifier: workspace:*
         version: link:../daemon
+      '@loomrail/persistence-sqlite':
+        specifier: workspace:*
+        version: link:../../packages/persistence-sqlite
       open:
         specifier: ^10.0.0
         version: 10.2.0

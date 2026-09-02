@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import { access, copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -164,9 +164,53 @@ const run = async () => {
       mcpSupervisorPath,
       "Invalid Loomrail MCP supervisor invocation",
     );
+    const diagnosticEnvironment = { ...process.env, LOOMRAIL_DATA_DIR: dataDirectory };
+    const diagnosticOutput = execFileSync(process.execPath, [binaryPath, "doctor", "--json"], {
+      cwd: installDirectory,
+      env: diagnosticEnvironment,
+      encoding: "utf8",
+    });
+    const diagnostic = JSON.parse(diagnosticOutput);
+    if (
+      diagnostic.schemaVersion !== 1 ||
+      !["PASS", "WARN"].includes(diagnostic.status) ||
+      diagnosticOutput.includes(dataDirectory)
+    ) {
+      throw new Error("the packaged read-only diagnostic report is invalid or leaks its data path");
+    }
+    const reportedDataPath = execFileSync(process.execPath, [binaryPath, "data-path"], {
+      cwd: installDirectory,
+      env: diagnosticEnvironment,
+      encoding: "utf8",
+    }).trim();
+    if (reportedDataPath !== dataDirectory) {
+      throw new Error("the packaged launcher did not resolve its explicit data path");
+    }
+    await access(join(dataDirectory, "state.sqlite"))
+      .then(() => {
+        throw new Error("doctor created state instead of inspecting it read-only");
+      })
+      .catch((error) => {
+        if (error?.code !== "ENOENT") throw error;
+      });
+    const unusableDataPath = join(installDirectory, "not-a-data-directory");
+    await writeFile(unusableDataPath, "diagnostic refusal fixture", "utf8");
+    const failedDiagnostic = spawnSync(process.execPath, [binaryPath, "doctor", "--json"], {
+      cwd: installDirectory,
+      env: { ...process.env, LOOMRAIL_DATA_DIR: unusableDataPath },
+      encoding: "utf8",
+    });
+    const failedDiagnosticReport = JSON.parse(failedDiagnostic.stdout);
+    if (
+      failedDiagnostic.status !== 1 ||
+      failedDiagnosticReport.status !== "FAIL" ||
+      failedDiagnostic.stdout.includes(unusableDataPath)
+    ) {
+      throw new Error("the packaged diagnostic did not fail closed for an unusable data path");
+    }
     launcher = spawn(process.execPath, [binaryPath, "--no-open", "--port", String(port)], {
       cwd: installDirectory,
-      env: { ...process.env, LOOMRAIL_DATA_DIR: dataDirectory },
+      env: diagnosticEnvironment,
     });
 
     let output = "";

@@ -226,6 +226,7 @@ import {
 } from "./types.js";
 
 export * from "./types.js";
+export * from "./inspection.js";
 
 const DEFAULT_WORKSPACE_ID = "workspace-local";
 const DEFAULT_WORKSPACE_NAME = "Local workspace";
