@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implemented locally; clean macOS/Windows setup evidence pending
+**Статус:** implemented; local and clean macOS/Windows setup evidence complete
 
 **Предшественники:** Q4, Q5, Q6, Q7
 
@@ -112,6 +112,11 @@ JSON и negative canaries.
 7. Clean tarball на macOS/Windows выполняет packaged setup после explicit Chromium installation, затем прежний
    doctor/start/log lifecycle smoke.
 8. Q8 не меняет `apps/landing/**` и не публикует npm package.
+
+Acceptance подтверждён локально и в clean macOS/Windows jobs
+[CI run 33680374866](https://github.com/loomrail/loomrail/actions/runs/33680374866): CLI 33/33, explicit Chromium
+installation, packaged setup/receipt/files/log lifecycle, consumer audit и browser smoke прошли на обеих платформах.
+Оба source Verify прошли fault gate и остановились только на трёх protected landing lint diagnostics.
 
 ## 8. Non-goals
 

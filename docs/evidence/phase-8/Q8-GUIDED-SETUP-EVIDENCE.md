@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-02
 
-**Scope:** local implementation; macOS/Windows CI pending
+**Scope:** local implementation and clean macOS/Windows CI
 
 ## Closed setup observation
 
@@ -34,8 +34,21 @@ installed launcher then proved non-TTY setup refusal, `setup --mode mock --json`
 Chromium prerequisite, no state creation, the existing doctor/data-path boundary, daemon readiness/Workbench serving
 and the full redacted log export/delete lifecycle.
 
-The local receipt records `source.tree=DIRTY`, as required before commit. A committed clean macOS/Windows run remains
-required before Q8 can claim cross-platform evidence.
+The local receipt records `source.tree=DIRTY`, as required before commit. The committed candidate was then exercised
+by [CI run 33680374866](https://github.com/loomrail/loomrail/actions/runs/33680374866):
+
+| Gate                              | macOS                        | Windows                      |
+| --------------------------------- | ---------------------------- | ---------------------------- |
+| CLI suite before package smoke    | 6/6 files, 33/33 tests       | 6/6 files, 33/33 tests       |
+| Guided-setup browser prerequisite | Chromium installation passed | Chromium installation passed |
+| Clean consumer audit              | zero vulnerabilities         | zero vulnerabilities         |
+| Packaged setup/receipt/files/logs | passed                       | passed                       |
+| Browser smoke                     | 52/52                        | 52/52                        |
+| Crash/fault gate                  | passed                       | passed                       |
+
+The two source Verify jobs reached ESLint only after the crash/fault gate passed. Both reported exactly the same
+three protected `apps/landing/src/main.ts` diagnostics on lines 630, 631 and 634; no Q8 or other non-landing failure
+was present.
 
 ## Repository gates
 
@@ -47,12 +60,12 @@ required before Q8 can claim cross-platform evidence.
 - Repository `pnpm verify` reaches ESLint and reports only the three protected `apps/landing/src/main.ts` findings on
   lines 630, 631 and 634.
 
-## Authority and remaining evidence
+## Authority and remaining gates
 
 Setup Route and Setup Readiness Report are transient guidance. They are not Provider Preference, an installation
 receipt, durable state, migration approval or permission to run any next action. The command performs only the
 existing bounded Git/provider status probes plus a local `stat` of the Playwright-reported Chromium executable; it
 does not launch an agent session, browser, login, package manager or network download.
 
-The remaining Q8 gate is clean macOS/Windows CLI and package evidence. Provider version compatibility, registry
-provenance, private dogfood, protected landing lint and npm publication remain separate stable-release gates.
+Q8's local and clean macOS/Windows gate is complete. Provider version compatibility, registry provenance, private
+dogfood, protected landing lint and npm publication remain separate stable-release gates.

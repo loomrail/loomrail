@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
-**Статус:** Q8 guided setup локально реализован, cross-platform evidence ожидается; protected landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** Q8 guided setup и cross-platform gate закрыты; protected landing, private dogfood, provider compatibility и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -235,8 +235,10 @@ Q8 реализует guided local setup по [спецификации 61](61-q
 Report, stat-only Chromium observation и provider readiness в closed Setup Readiness Report с ordered owner actions.
 Interactive default — zero-quota Mock; automation указывает mode явно. Setup не создаёт data/state, не применяет
 migrations и не запускает daemon, browser, agent session, login или installer; любой provider override блокирует
-false-safe guidance. CLI 33/33 и clean tarball setup/doctor/start/log lifecycle локально зелёные; macOS/Windows
-evidence ещё требуется.
+false-safe guidance. CLI 33/33 и clean tarball setup/doctor/start/log lifecycle зелёные локально и в
+[CI run 33680374866](https://github.com/loomrail/loomrail/actions/runs/33680374866): clean receipt, consumer audit,
+explicit Chromium prerequisite и browser smoke прошли на macOS/Windows. Оба Verify прошли fault gate и остановились
+только на трёх protected landing lint diagnostics, поэтому Q8 закрыт без изменения landing.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

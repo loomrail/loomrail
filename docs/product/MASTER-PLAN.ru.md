@@ -1317,7 +1317,10 @@ Q8 guided local setup локально реализован по планам 61
 owner actions. Interactive default ведёт в zero-quota Mock walkthrough; non-TTY/JSON требуют explicit mode. Команда
 не создаёт data/state, не применяет migrations/recovery и не запускает daemon, browser, agent session, provider login
 или installer; любой environment provider override блокирует false-safe recommendation. CLI 33/33 и clean-package
-setup/doctor/start/log lifecycle локально зелёные; Q8 cross-platform evidence ещё требуется.
+setup/doctor/start/log lifecycle зелёные локально и в
+[CI run 33680374866](https://github.com/loomrail/loomrail/actions/runs/33680374866). Clean receipt, consumer audit,
+explicit Chromium prerequisite и browser smoke прошли на macOS/Windows; оба Verify прошли fault gate и остановились
+только на трёх protected landing lint diagnostics. Q8 cross-platform gate закрыт без изменения landing.
 
 ### Оценка первого цикла
 

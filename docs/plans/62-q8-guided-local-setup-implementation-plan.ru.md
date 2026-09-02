@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** local implementation complete; cross-platform clean-install evidence pending
+**Статус:** implementation and clean macOS/Windows setup gate complete
 
 **Спецификация:** [61-q8-guided-local-setup-spec.ru.md](61-q8-guided-local-setup-spec.ru.md)
 
@@ -28,7 +28,7 @@
 - [x] Проверить no-create filesystem behavior и отсутствие browser/agent-session/login/package process launch.
 - [x] Добавить packaged `setup --mode mock --json` после explicit Chromium installation в release smoke.
 - [x] Запустить local format/non-landing lint/typecheck/tests/fault/release/public/audit gates.
-- [ ] Получить macOS/Windows CLI setup и clean-install evidence; общий Verify может оставаться blocked только landing.
+- [x] Получить macOS/Windows CLI setup и clean-install evidence; общий Verify blocked только protected landing.
 
 ## 2. Module seam
 
@@ -43,4 +43,5 @@ credential, Project, database или migration и не запускает action
 явными командами владельца за пределами setup process; Q4 read-only status probes остаются единственным допустимым
 child-process observation.
 
-Local evidence: [Q8-GUIDED-SETUP-EVIDENCE.md](../evidence/phase-8/Q8-GUIDED-SETUP-EVIDENCE.md).
+Local и cross-platform evidence: [Q8-GUIDED-SETUP-EVIDENCE.md](../evidence/phase-8/Q8-GUIDED-SETUP-EVIDENCE.md),
+[CI run 33680374866](https://github.com/loomrail/loomrail/actions/runs/33680374866).
