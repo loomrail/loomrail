@@ -350,6 +350,7 @@ export const stageAttemptSchema = z
     pipelineRunId: opaqueIdSchema,
     projectId: opaqueIdSchema,
     workItemId: opaqueIdSchema,
+    correctionRunId: opaqueIdSchema.nullable(),
     stage: workflowStageSchema,
     attempt: z.number().int().positive(),
     status: stageAttemptStatusSchema,

@@ -43,6 +43,7 @@ const qaRun = (id: string, status: QARun["status"]): QARun => ({
       },
     ],
   },
+  scope: { type: "FULL" },
   status,
   error: null,
   startedAt: "2026-09-02T00:00:00.000Z",

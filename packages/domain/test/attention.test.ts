@@ -63,6 +63,7 @@ const source = (
     pipelineRunId: `run-${id}`,
     projectId: project.id,
     workItemId: workItem.id,
+    correctionRunId: null,
     stage,
     attempt: 1,
     status: overrides.stageStatus ?? "WAITING_HUMAN",

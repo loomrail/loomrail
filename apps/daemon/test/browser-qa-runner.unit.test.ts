@@ -42,6 +42,7 @@ describe("daemon Browser QA runner", () => {
       testedTree: "a".repeat(40),
       targetOrigin: config.targetOrigin,
       plan: config.plan,
+      scope: { type: "FULL" },
       status: "RUNNING",
       error: null,
       startedAt: "2026-09-02T10:00:00.000Z",

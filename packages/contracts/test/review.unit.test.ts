@@ -69,6 +69,7 @@ describe("review contracts", () => {
       workItemId: "work-item-1",
       pipelineRunId: "run-1",
       stageAttemptId: "attempt-review-1",
+      correctionRunId: null,
       reviewArtifactId: "artifact-review-1",
       reviewedTree: "a".repeat(40),
       ordinal: 1,

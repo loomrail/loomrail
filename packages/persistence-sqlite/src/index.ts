@@ -1378,6 +1378,7 @@ const reviewReportFromRow = (value: unknown): ReviewReport => {
     workItemId: row.work_item_id,
     pipelineRunId: row.pipeline_run_id,
     stageAttemptId: row.stage_attempt_id,
+    correctionRunId: null,
     authorAgentRunId: row.author_agent_run_id,
     reviewerAgentRunId: row.reviewer_agent_run_id,
     providerRelation: row.provider_relation,
@@ -1401,6 +1402,7 @@ const reviewFindingFromRow = (value: unknown): ReviewFinding => {
     workItemId: row.work_item_id,
     pipelineRunId: row.pipeline_run_id,
     stageAttemptId: row.stage_attempt_id,
+    correctionRunId: null,
     reviewArtifactId: row.review_artifact_id,
     reviewedTree: row.reviewed_tree,
     ordinal: row.ordinal,
@@ -1439,6 +1441,7 @@ const qaRunFromRow = (value: unknown): QARun => {
     testedTree: row.tested_tree,
     targetOrigin: row.target_origin,
     plan: parseJson(row.plan_json),
+    scope: { type: "FULL" },
     status: row.status,
     error:
       row.error_code === null || row.error_summary === null
@@ -1581,6 +1584,7 @@ const stageAttemptFromRow = (value: unknown): StageAttempt => {
     pipelineRunId: row.pipeline_run_id,
     projectId: row.project_id,
     workItemId: row.work_item_id,
+    correctionRunId: null,
     stage: row.stage,
     attempt: row.attempt,
     status: row.status,

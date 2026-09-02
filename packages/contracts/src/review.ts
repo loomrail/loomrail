@@ -7,12 +7,14 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
+import { MAX_TOTAL_QA_CORRECTION_RUNS } from "./qa.js";
 
 export const MAX_REVIEW_FINDINGS_PER_REPORT = 20;
 export const MAX_OPEN_REVIEW_FINDINGS = 200;
 export const MAX_AUTOMATIC_REVIEW_ROUNDS = 2;
 export const MAX_OWNER_AUTHORIZED_REVIEW_ROUNDS = 1;
 export const MAX_TOTAL_REVIEW_ROUNDS = MAX_AUTOMATIC_REVIEW_ROUNDS + MAX_OWNER_AUTHORIZED_REVIEW_ROUNDS;
+export const MAX_REVIEW_REPORT_HISTORY = MAX_TOTAL_REVIEW_ROUNDS * (1 + MAX_TOTAL_QA_CORRECTION_RUNS);
 
 export const reviewVerdictSchema = z.enum(["PASSED", "CHANGES_REQUESTED"]);
 export const reviewFindingSeveritySchema = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
@@ -99,6 +101,7 @@ export const reviewFindingSchema = z
     workItemId: opaqueIdSchema,
     pipelineRunId: opaqueIdSchema,
     stageAttemptId: opaqueIdSchema,
+    correctionRunId: opaqueIdSchema.nullable(),
     reviewArtifactId: opaqueIdSchema,
     reviewedTree: treeShaSchema,
     ordinal: z.number().int().positive().max(MAX_REVIEW_FINDINGS_PER_REPORT),
@@ -132,6 +135,7 @@ export const reviewReportSchema = z
     workItemId: opaqueIdSchema,
     pipelineRunId: opaqueIdSchema,
     stageAttemptId: opaqueIdSchema,
+    correctionRunId: opaqueIdSchema.nullable(),
     authorAgentRunId: opaqueIdSchema,
     reviewerAgentRunId: opaqueIdSchema,
     providerRelation: reviewProviderRelationSchema,
@@ -172,7 +176,7 @@ export const reviewStateResponseSchema = z
           reviewerProvider: providerIdSchema,
         }),
       )
-      .max(MAX_TOTAL_REVIEW_ROUNDS),
+      .max(MAX_REVIEW_REPORT_HISTORY),
     findings: z.array(reviewFindingSchema).max(MAX_OPEN_REVIEW_FINDINGS),
   })
   .strict();

@@ -45,6 +45,7 @@ const qaRun: QARun = {
       },
     ],
   },
+  scope: { type: "FULL" },
   status: "RUNNING",
   error: null,
   startedAt: "2026-09-02T10:00:00.000Z",
@@ -66,6 +67,7 @@ const stageAttempt: StageAttempt = {
   projectId: qaRun.projectId,
   workItemId: qaRun.workItemId,
   pipelineRunId: qaRun.pipelineRunId,
+  correctionRunId: null,
   stage: "QA",
   attempt: 1,
   status: "RUNNING",
@@ -108,6 +110,7 @@ const reserveCommand: ReserveQARunCommand = {
     testedTree: tree,
     targetOrigin: qaRun.targetOrigin,
     plan: qaRun.plan,
+    scope: qaRun.scope,
   },
 };
 
@@ -184,6 +187,49 @@ describe("deterministic Browser QA completion", () => {
         agentRun,
       }),
     ).toThrow(expect.objectContaining<Partial<QAReservationError>>({ code: "STALE_QA_TREE" }));
+  });
+
+  it("requires FULL scope outside a correction and the exact correction identity for a retest", () => {
+    const retestScope = {
+      type: "RETEST" as const,
+      correctionRunId: "correction-1",
+      retestPlanId: "retest-plan-1",
+    };
+    expect(() =>
+      decideQAReservation(
+        { ...reserveCommand, payload: { ...reserveCommand.payload, scope: retestScope } },
+        {
+          newQARunId: "qa-run-invalid-retest",
+          now: qaRun.startedAt,
+          currentTree: tree,
+          stageAttempt,
+          agentRun,
+        },
+      ),
+    ).toThrow(expect.objectContaining<Partial<QAReservationError>>({ code: "QA_SCOPE_MISMATCH" }));
+
+    const correctionStage = { ...stageAttempt, correctionRunId: "correction-1" };
+    expect(() =>
+      decideQAReservation(reserveCommand, {
+        newQARunId: "qa-run-invalid-full",
+        now: qaRun.startedAt,
+        currentTree: tree,
+        stageAttempt: correctionStage,
+        agentRun,
+      }),
+    ).toThrow(expect.objectContaining<Partial<QAReservationError>>({ code: "QA_SCOPE_MISMATCH" }));
+    expect(
+      decideQAReservation(
+        { ...reserveCommand, payload: { ...reserveCommand.payload, scope: retestScope } },
+        {
+          newQARunId: "qa-run-retest",
+          now: qaRun.startedAt,
+          currentTree: tree,
+          stageAttempt: correctionStage,
+          agentRun,
+        },
+      ),
+    ).toMatchObject({ scope: retestScope });
   });
 
   it("derives PASSED only from a complete green matrix", () => {

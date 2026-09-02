@@ -69,6 +69,7 @@ const stageAttempt: StageAttempt = {
   pipelineRunId: run.id,
   projectId: workItem.projectId,
   workItemId: workItem.id,
+  correctionRunId: null,
   stage: "IMPLEMENT",
   attempt: 1,
   status: "RUNNING",

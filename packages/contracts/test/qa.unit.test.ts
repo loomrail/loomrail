@@ -95,6 +95,7 @@ describe("browser QA contracts", () => {
       testedTree: "b".repeat(40),
       targetOrigin: "http://127.0.0.1:4173",
       plan,
+      scope: { type: "FULL" },
       status: "RUNNING",
       error: null,
       startedAt: "2026-09-02T10:00:00.000Z",
@@ -102,6 +103,20 @@ describe("browser QA contracts", () => {
       version: 1,
     } as const;
     expect(qaRunSchema.safeParse(running).success).toBe(true);
+    expect(
+      qaRunSchema.safeParse({
+        ...running,
+        scope: {
+          type: "RETEST",
+          correctionRunId: "correction-1",
+          retestPlanId: "retest-plan-1",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      qaRunSchema.safeParse({ ...running, scope: { type: "RETEST", correctionRunId: "correction-1" } })
+        .success,
+    ).toBe(false);
     expect(qaRunSchema.safeParse({ ...running, completedAt: running.startedAt }).success).toBe(false);
     expect(
       qaRunSchema.safeParse({ ...running, status: "ERROR", completedAt: running.startedAt }).success,
@@ -224,7 +239,6 @@ describe("browser QA contracts", () => {
       sourceEvidenceBundleId: "qa-evidence-1",
       sourceTestedTree: "e".repeat(40),
       defectIds: ["defect-1"],
-      retestPlanId: "retest-plan-1",
       status: "ACTIVE",
       createdAt: "2026-09-02T10:02:00.000Z",
       completedAt: null,

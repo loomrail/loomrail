@@ -94,6 +94,7 @@ const qaRun = (targetOrigin: string): QARun => ({
       },
     ],
   },
+  scope: { type: "FULL" },
   status: "RUNNING",
   error: null,
   startedAt: "2026-09-02T10:00:00.000Z",

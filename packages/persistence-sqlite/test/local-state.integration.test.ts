@@ -296,6 +296,7 @@ describe("SQLite local state", () => {
         testedTree,
         targetOrigin: "http://127.0.0.1:4173",
         plan,
+        scope: { type: "FULL" },
       },
     });
     if (reserved.type !== "QA_RUN_RESERVED") throw new Error("Expected durable QA reservation");
@@ -1768,6 +1769,7 @@ describe("SQLite local state", () => {
           testedTree: fixedTree,
           targetOrigin: "http://127.0.0.1:4173",
           plan: qaPlan,
+          scope: { type: "FULL" as const },
         },
       };
       expect(() =>
@@ -2071,6 +2073,7 @@ describe("SQLite local state", () => {
           testedTree,
           targetOrigin: "http://127.0.0.1:4173",
           plan,
+          scope: { type: "FULL" },
         },
       });
       if (reserved.type !== "QA_RUN_RESERVED") throw new Error("Expected QA reservation");

@@ -11,8 +11,9 @@
 ### Q2.1 — Contracts и чистый domain
 
 - [x] Добавить bounded `CorrectionRun`, `QARetestPlan` и canonical cell reason schemas.
-- [ ] Добавить full/retest QARun lineage schemas.
-- [ ] Добавить nullable correction lineage StageAttempt, ReviewReport/Finding и evidence artifacts.
+- [x] Добавить full/retest QARun lineage schemas и проверку scope на reservation boundary.
+- [x] Добавить nullable correction lineage StageAttempt и ReviewReport/Finding.
+- [ ] Добавить correction/authority lineage evidence artifacts.
 - [x] Реализовать pure derivation affected cells + deterministic regression subset.
 - [x] Реализовать pure correction-loop transition: start, supersede, pass, exhaust, owner final/cancel.
 - [ ] Добавить owner-only optimistic QADefect waiver; SYSTEM resolution остаётся только outcome passing retest.
@@ -62,6 +63,6 @@
 
 ## 4. Первый implementation slice
 
-Contracts + pure `deriveQARetestPlan`/`decideQACorrectionLoop` с focused tests завершены. Следующий slice — добавить
-correction lineage в StageAttempt/Review/QARun contracts и подготовить additive migration; daemon и UI до этого не
-должны самостоятельно интерпретировать correction transitions.
+Contracts + pure `deriveQARetestPlan`/`decideQACorrectionLoop` и StageAttempt/Review/QARun lineage завершены с
+focused tests. Следующий slice — additive migration для CorrectionRun/RetestPlan и реальных lineage columns; daemon и
+UI до этой transaction boundary не должны самостоятельно интерпретировать correction transitions.

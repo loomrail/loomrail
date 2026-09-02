@@ -103,6 +103,16 @@ export const qaDriverErrorCodeSchema = z.enum([
   "TIMEOUT",
   "EVIDENCE_INVALID",
 ]);
+export const qaRunScopeSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("FULL") }).strict(),
+  z
+    .object({
+      type: z.literal("RETEST"),
+      correctionRunId: opaqueIdSchema,
+      retestPlanId: opaqueIdSchema,
+    })
+    .strict(),
+]);
 
 export const qaViewportSchema = z
   .object({
@@ -262,6 +272,7 @@ export const qaRunSchema = z
     testedTree: treeShaSchema,
     targetOrigin: qaTargetOriginSchema,
     plan: qaPlanSnapshotSchema,
+    scope: qaRunScopeSchema,
     status: qaRunStatusSchema,
     error: z.object({ code: qaDriverErrorCodeSchema, summary: shortDescriptionSchema }).strict().nullable(),
     startedAt: utcTimestampSchema,
@@ -453,7 +464,6 @@ export const qaCorrectionRunSchema = z
     sourceEvidenceBundleId: opaqueIdSchema,
     sourceTestedTree: treeShaSchema,
     defectIds: z.array(opaqueIdSchema).min(1).max(MAX_QA_CORRECTION_DEFECTS),
-    retestPlanId: opaqueIdSchema,
     status: qaCorrectionRunStatusSchema,
     createdAt: utcTimestampSchema,
     completedAt: utcTimestampSchema.nullable(),
@@ -579,6 +589,7 @@ export const reserveQARunCommandSchema = qaCommandBaseSchema.extend({
       testedTree: treeShaSchema,
       targetOrigin: qaTargetOriginSchema,
       plan: qaPlanSnapshotSchema,
+      scope: qaRunScopeSchema,
     })
     .strict(),
 });
@@ -646,6 +657,7 @@ export const qaStateResponseSchema = z
 
 export type BrowserDriverId = z.infer<typeof browserDriverIdSchema>;
 export type QARunStatus = z.infer<typeof qaRunStatusSchema>;
+export type QARunScope = z.infer<typeof qaRunScopeSchema>;
 export type QACheckStatus = z.infer<typeof qaCheckStatusSchema>;
 export type QAPlanSnapshot = z.infer<typeof qaPlanSnapshotSchema>;
 export type QALocator = z.infer<typeof qaLocatorSchema>;

@@ -59,6 +59,7 @@ export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): Brow
         testedTree,
         targetOrigin: config.targetOrigin,
         plan: config.plan,
+        scope: { type: "FULL" },
       },
     });
     if (reserved.type !== "QA_RUN_RESERVED") {

@@ -41,6 +41,7 @@ const attemptWith = (overrides: Partial<StageAttempt> = {}): StageAttempt => ({
   pipelineRunId: "run-1",
   projectId: "project-1",
   workItemId: "work-item-1",
+  correctionRunId: null,
   stage: "IMPLEMENT",
   attempt: 1,
   status: "RUNNING",

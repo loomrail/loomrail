@@ -37,6 +37,7 @@ const durableFinding: ReviewFinding = {
   workItemId: "work-item-1",
   pipelineRunId: "pipeline-1",
   stageAttemptId: "review-attempt-1",
+  correctionRunId: null,
   reviewArtifactId: "report-1",
   reviewedTree: tree,
   ordinal: 1,

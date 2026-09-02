@@ -16,7 +16,11 @@ import {
 } from "@loomrail/contracts";
 
 export type QAReservationErrorCode =
-  "QA_RUN_ACTOR_FORBIDDEN" | "QA_STAGE_NOT_RUNNING" | "QA_AGENT_RUN_MISMATCH" | "STALE_QA_TREE";
+  | "QA_RUN_ACTOR_FORBIDDEN"
+  | "QA_STAGE_NOT_RUNNING"
+  | "QA_AGENT_RUN_MISMATCH"
+  | "QA_SCOPE_MISMATCH"
+  | "STALE_QA_TREE";
 
 export class QAReservationError extends Error {
   readonly code: QAReservationErrorCode;
@@ -78,6 +82,17 @@ export const decideQAReservation = (
       currentTree: context.currentTree,
     });
   }
+  const correctionRunId = context.stageAttempt.correctionRunId;
+  if (
+    (correctionRunId === null && command.payload.scope.type !== "FULL") ||
+    (correctionRunId !== null &&
+      (command.payload.scope.type !== "RETEST" || command.payload.scope.correctionRunId !== correctionRunId))
+  ) {
+    throw new QAReservationError(
+      "QA_SCOPE_MISMATCH",
+      "The Browser QA scope does not match the StageAttempt correction lineage",
+    );
+  }
   return qaRunSchema.parse({
     schemaVersion: 1,
     id: context.newQARunId,
@@ -90,6 +105,7 @@ export const decideQAReservation = (
     testedTree: command.payload.testedTree,
     targetOrigin: command.payload.targetOrigin,
     plan: command.payload.plan,
+    scope: command.payload.scope,
     status: "RUNNING",
     error: null,
     startedAt: context.now,
