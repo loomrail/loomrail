@@ -52,6 +52,9 @@ export const releaseDependencies = () => {
     const manifest = readPackageJson(workspacePackage);
     for (const [name, range] of Object.entries(manifest.dependencies ?? {})) {
       if (name.startsWith("@loomrail/")) continue;
+      if (!/^\^?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(range)) {
+        throw new Error(`${name} from ${workspacePackage} must use an exact or caret semver registry range`);
+      }
       const existing = dependencies.get(name);
       if (existing !== undefined && existing.range !== range) {
         throw new Error(
@@ -69,6 +72,13 @@ export const releaseDependencies = () => {
 };
 
 export const releaseVersion = () => readPackageJson("apps/cli").version;
+
+export const releasePnpmVersion = () => {
+  const packageManager = readPackageJson(".").packageManager;
+  const match = /^pnpm@(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$/.exec(packageManager);
+  if (match === null) throw new Error("the root packageManager must pin an exact pnpm version");
+  return match[1];
+};
 
 const onWindows = process.platform === "win32";
 

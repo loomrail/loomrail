@@ -3,8 +3,24 @@ packages:
   - "packages/*"
 
 minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
 minimumReleaseAgeExclude:
   - "@loomrail/*"
+
+# Re-validate even a committed lockfile against registry trust metadata. A package whose
+# publisher trust regresses, an exotic transitive source, or a newly introduced lifecycle
+# script must fail installation until an exact reviewed exception is committed.
+trustPolicy: no-downgrade
+# Historical dev-only Babel/ESLint transitive. It is exact-locked, has no install script and is
+# excluded only because its 2023 publication predates the stronger trust evidence observed on
+# another semver release. Remove this exception when the upstream Babel graph drops semver 6.
+trustPolicyExclude:
+  - "semver@6.3.1"
+trustLockfile: false
+blockExoticSubdeps: true
+strictDepBuilds: true
+allowBuilds: {}
 
 overrides:
   "fast-uri@3.1.5": "3.1.6"

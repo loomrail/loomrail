@@ -10,6 +10,7 @@ Use the shortest document that matches what you are trying to do.
 | Repository, providers, recovery, backup, troubleshooting | [Owner guide](guides/USER-GUIDE.md)      | [Руководство владельца](guides/USER-GUIDE.ru.md) |
 | Configure and inspect deterministic browser QA           | [Browser QA](guides/BROWSER-QA.md)       | [QA в браузере](guides/BROWSER-QA.ru.md)         |
 | Build a local read-only tool plugin                      | [Plugin SDK](guides/PLUGIN-SDK.md)       | [Plugin SDK](guides/PLUGIN-SDK.ru.md)            |
+| Verify dependencies, release integrity, and provenance   | [Supply chain](security/SUPPLY-CHAIN.md) | [Supply chain](security/SUPPLY-CHAIN.ru.md)      |
 
 For a disposable repository and exact live-provider task, use the
 [full-route example](examples/full-route/README.md). Before a live run, read the
@@ -25,6 +26,7 @@ For a disposable repository and exact live-provider task, use the
 - [Component system](design/COMPONENT-SYSTEM.md)
 - [Localization contract](design/LOCALIZATION.md)
 - [Release procedure](RELEASE.md)
+- [Supply-chain policy](security/SUPPLY-CHAIN.md) · [Supply-chain policy (RU)](security/SUPPLY-CHAIN.ru.md)
 - [Current release candidate notes](releases/0.1.0-alpha.5.md)
 
 Files under [`plans/`](plans/) are versioned implementation records. They explain why a slice was built and how it

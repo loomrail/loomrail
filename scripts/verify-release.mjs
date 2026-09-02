@@ -15,6 +15,7 @@ import {
   toolCommand,
   toolSpawnOptions,
 } from "./release-manifest.mjs";
+import { verifyInstalledReleaseFiles, verifyReleaseReceipt } from "./release-integrity.mjs";
 
 /**
  * Installs the packed launcher into an empty directory and proves it runs there.
@@ -82,11 +83,19 @@ const waitForReady = async (baseUrl, launcher, readOutput) => {
 const run = async () => {
   const version = releaseVersion();
   const tarball = resolve(repositoryRoot, "dist-release", `${releaseName}-${version}.tgz`);
+  const receiptPath = resolve(repositoryRoot, "dist-release", `${releaseName}-${version}.receipt.json`);
   const installDirectory = await mkdtemp(join(tmpdir(), "loomrail-release-"));
   const dataDirectory = await mkdtemp(join(tmpdir(), "loomrail-state-"));
   let launcher;
 
   try {
+    const receipt = await verifyReleaseReceipt({
+      receiptPath,
+      tarballPath: tarball,
+      name: releaseName,
+      version,
+      requireCleanSource: process.env.CI === "true",
+    });
     // An empty project, so nothing from the workspace can satisfy an import by accident.
     await writeFile(
       join(installDirectory, "package.json"),
@@ -97,11 +106,15 @@ const run = async () => {
     // shell, and a temporary path containing a space would break the command.
     const localTarball = "loomrail.tgz";
     await copyFile(tarball, join(installDirectory, localTarball));
-    execFileSync(toolCommand("npm"), ["install", "--no-audit", "--no-fund", localTarball], {
-      cwd: installDirectory,
-      stdio: "inherit",
-      ...toolSpawnOptions(),
-    });
+    execFileSync(
+      toolCommand("npm"),
+      ["install", "--ignore-scripts", "--no-audit", "--no-fund", localTarball],
+      {
+        cwd: installDirectory,
+        stdio: "inherit",
+        ...toolSpawnOptions(),
+      },
+    );
 
     const port = await freePort();
     const baseUrl = `http://127.0.0.1:${port}`;
@@ -116,6 +129,12 @@ const run = async () => {
         `unexpected installed package: ${String(installedManifest.name)}@${String(installedManifest.version)}`,
       );
     }
+    await verifyInstalledReleaseFiles({ installedRoot, receipt });
+    execFileSync(toolCommand("npm"), ["audit", "--omit=dev", "--audit-level=high"], {
+      cwd: installDirectory,
+      stdio: "inherit",
+      ...toolSpawnOptions(),
+    });
     const binaryPath = join(installedRoot, installedManifest.bin.loomrail);
     if (installedManifest.dependencies?.["@upstash/context7-mcp"] !== "3.2.5") {
       throw new Error("the packaged launcher does not pin its bundled Context7 server");
@@ -232,7 +251,9 @@ const run = async () => {
       throw new Error(`the launcher did not print a sign-in URL:\n${output}`);
     }
 
-    process.stdout.write(`Release check passed: ${tarball} runs from a clean install.\n`);
+    process.stdout.write(
+      `Release check passed: receipt and installed files match; ${tarball} runs from a clean install.\n`,
+    );
   } finally {
     launcher?.kill("SIGTERM");
     launcher?.stdout?.destroy();

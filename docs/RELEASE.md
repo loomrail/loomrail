@@ -15,8 +15,16 @@ pnpm pack:release
 ```
 
 `pnpm pack:release` builds the workspace, bundles the launcher, stages `dist-release/package/` and writes
-`dist-release/loomrail-<version>.tgz`. Both `dist-release/` and the intermediate `bundle/` directory are ignored by
-Git and must never be committed.
+`dist-release/loomrail-<version>.tgz` plus `dist-release/loomrail-<version>.receipt.json`. Both `dist-release/` and the
+intermediate `bundle/` directory are ignored by Git and must never be committed.
+
+Packaging consumes the structured `npm pack --json` result and rejects an unexpected package identity, path, file
+type, symlink, bundled dependency tree, size, or digest. The closed receipt records source commit plus clean/dirty
+observation, Node/npm/pnpm versions, tarball SHA-1/SHA-256/SHA-512, and SHA-256 for every allowlisted package file. It
+contains no build timestamp, runner name, local path, environment, or credential.
+
+The receipt is unsigned integrity metadata, not registry provenance. It detects changed candidate bytes and gives a
+trusted workflow an exact artifact to publish, but it does not prove who built it.
 
 ## Verify the artifact
 
@@ -38,8 +46,9 @@ pnpm test:release
 ```
 
 This is the clean-machine gate. It installs the tarball into an empty temporary project using only the public
-registry, launches the installed binary on a free loopback port with an isolated `LOOMRAIL_DATA_DIR`, and asserts
-that:
+registry. Before install it verifies the receipt and all tarball digests; after install it compares every
+package-owned extracted file with the receipt and audits the actual npm production graph at High severity. It then
+launches the installed binary on a free loopback port with an isolated `LOOMRAIL_DATA_DIR` and asserts that:
 
 - the daemon reports `/health/ready`;
 - the installed launcher serves the built Workbench shell, not just the API;
@@ -49,6 +58,7 @@ that:
 
 Run it on macOS and on Windows before tagging a release. A green `pnpm verify` does not imply a working package: the
 repository resolves assets through the workspace layout, and only this check exercises the published layout.
+The CI release lane additionally rejects a receipt whose source-tree observation is not `CLEAN`.
 
 Owner-facing install, diagnostic, upgrade, rollback and uninstall semantics are maintained in the
 [operations guide](guides/OPERATIONS.md). A release that changes package layout, migrations or retention must update
@@ -81,36 +91,63 @@ two different ranges fails the build instead of resolving silently.
 `apps/web` and `packages/ui` are deliberately excluded: React, TanStack and Radix are compiled into `apps/web/dist`
 and are never installed by a consumer.
 
-## Publishing
+Runtime dependency specs in the generated manifest are restricted to exact or caret semver registry ranges. The
+workspace also enforces strict 24-hour release age, missing-publication-time refusal, publisher-trust no-downgrade,
+lockfile re-verification, blocked exotic transitive sources, and denied dependency lifecycle scripts unless an exact
+reviewed exception exists. The complete review and exception contract is the
+[supply-chain policy](security/SUPPLY-CHAIN.md).
 
-Publishing is a deliberate, human action and is not automated. Nothing in CI runs `npm publish`.
+## Publishing and provenance
+
+Publishing is a deliberate, human-authorized terminal action. Ordinary CI never runs `npm publish`, holds no npm
+write token, and has only `contents: read`. No Q6 change authorizes a tag, GitHub Release, dist-tag mutation, or npm
+publication.
+
+Before the first stable publication, configure npm trusted publishing for the exact public repository and dedicated
+GitHub-hosted publish workflow. That workflow must use OIDC `id-token: write`, build and verify the candidate inside
+the trusted job, and publish the exact verified tarball with provenance. The generated package sets
+`publishConfig.provenance: true`; an unsupported local publish must fail instead of silently producing an
+unprovenanced version. Prefer short-lived workflow OIDC over a long-lived npm write token.
+
+For every authorized candidate:
 
 1. Decide the version and set it in `apps/cli/package.json`; the release manifest reads it from there.
-2. `pnpm test:fault-injection && pnpm verify && pnpm test:e2e` on macOS and Windows.
-3. `pnpm pack:release && pnpm test:release` on macOS and Windows.
-4. Inspect `dist-release/package/` — confirm no local paths, no state databases and no logs were staged.
-5. Publish the tarball from an account with rights to the `loomrail` name.
+2. `pnpm test:fault-injection && pnpm verify && pnpm test:e2e` passes on macOS and Windows.
+3. `pnpm pack:release && pnpm test:release` passes on macOS and Windows with a clean receipt.
+4. Inspect the receipt and `dist-release/package/`; confirm exact source commit, expected files, no local paths, no
+   state databases, and no logs.
+5. Human approval releases the dedicated trusted-publish job for that exact commit/version.
+6. Verify registry integrity, source commit/workflow provenance, signature audit, install, and startup before moving
+   any default channel.
 
 ### Pre-alpha channel
 
 The currently published pre-alpha version is `0.1.0-alpha.4`; the repository prepares `0.1.0-alpha.5`. Published
 pre-alpha releases use the explicit `next` dist-tag. Check the registry before publishing: a prepared repository
-version is not evidence that the registry has already advanced.
+version or local receipt is not evidence that the registry has already advanced.
 
 ```bash
-npm publish ./dist-release/loomrail-0.1.0-alpha.5.tgz --tag next --access public
+npm publish ./dist-release/loomrail-0.1.0-alpha.5.tgz --tag next --access public --provenance
 ```
 
-Before running that command, authenticate the local npm CLI, satisfy the account's current 2FA requirements and
-review the [release notes](releases/0.1.0-alpha.5.md). After publishing, verify the registry rather than the local
-tarball:
+This command belongs only inside the configured trusted workflow after explicit release approval; do not run it from
+a maintainer laptop or ordinary CI. npm trusted publishing may add provenance automatically, while the explicit flag
+also documents the fail-closed requirement. Review the [release notes](releases/0.1.0-alpha.5.md) before approval.
+After publishing, verify the registry rather than the local tarball:
 
 ```bash
-npm view loomrail@next name version dist-tags --json
-npm install loomrail@next
+npm view loomrail@0.1.0-alpha.5 name version dist.integrity --json
+npm install --ignore-scripts loomrail@0.1.0-alpha.5
+npm audit signatures
 npx loomrail --no-open --port 4176
 ```
 
 Until a stable release exists, documentation and release checks use `loomrail@next` or an exact version so the
 intended pre-alpha channel stays explicit. Treat `npm view loomrail@next version` as the source of truth for what a
 new install will receive.
+
+The trusted-publishing and verification semantics follow the primary
+[npm provenance](https://docs.npmjs.com/generating-provenance-statements/),
+[trusted publisher](https://docs.npmjs.com/trusted-publishers/), and
+[registry signature](https://docs.npmjs.com/verifying-registry-signatures/) documentation. Provenance links bytes to
+source and build instructions; it is not a safety certification.

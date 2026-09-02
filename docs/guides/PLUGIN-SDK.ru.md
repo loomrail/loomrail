@@ -9,7 +9,7 @@ workflow hooks, установки packages, marketplace, secrets, shell/Git и 
 SDK публикуется внутри основного пакета:
 
 ```bash
-npm install loomrail@next zod
+npm install --ignore-scripts loomrail@next zod
 ```
 
 Импортируйте его через `loomrail/plugin-sdk`. Не импортируйте daemon, domain или persistence packages Loomrail.

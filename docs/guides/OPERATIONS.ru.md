@@ -16,15 +16,35 @@ account.
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
-npm install loomrail@next
+npm install --ignore-scripts loomrail@next
 npx playwright install chromium
 npx loomrail doctor
 npx loomrail start
 ```
 
-`next` явно выбирает pre-alpha channel. Для global install используйте `npm install -g loomrail@next`, затем
-`npx playwright install chromium`, `loomrail doctor` и `loomrail start`. Если важна воспроизводимость, укажите exact
-version вместо `next`.
+`next` явно выбирает pre-alpha channel. Для global install используйте
+`npm install -g --ignore-scripts loomrail@next`, затем `npx playwright install chromium`, `loomrail doctor` и
+`loomrail start`. Если важна воспроизводимость, укажите exact version вместо `next`. Loomrail не требует dependency
+lifecycle scripts; Chromium остаётся отдельным видимым installation step.
+
+## Проверка происхождения package
+
+Проверяйте exact version: moving tag `next` может измениться после review.
+
+```bash
+npm view loomrail@<exact-version> name version dist.integrity --json
+npm install --ignore-scripts loomrail@<exact-version>
+npm audit signatures
+```
+
+Registry integrity связывает downloaded tarball, а `npm audit signatures` проверяет registry signatures и доступные
+provenance attestations установленного dependency graph. Release, заявляющий Loomrail provenance, должен ссылаться
+на этот public repository, trusted publish workflow и reviewed source commit. Provenance не доказывает безопасность
+кода; сохраняйте exact version, release notes и backup boundary.
+
+Текущий published pre-alpha мог появиться до trusted-publishing policy. Будущий stable release не проходит release
+gate без registry provenance. JSON рядом с локальным candidate tarball — unsigned integrity receipt, а не registry
+attestation. Подробности — в [supply-chain policy](../security/SUPPLY-CHAIN.ru.md).
 
 ## Read-only diagnostics
 
@@ -104,10 +124,11 @@ migration, а не регулярный полный backup или portable work
 
 1. Зафиксируйте exact установленную Loomrail version.
 2. Остановите Loomrail и сохраните весь data directory.
-3. Установите exact target version или осознанно обновите channel `next`.
-4. Выполните `loomrail doctor`. До первого запуска нового совместимого build ожидаем `STATE_UPGRADE_REQUIRED`.
-5. Запустите Loomrail нормально: только startup применяет migrations и recovery.
-6. Пройдите mock walkthrough до работы с live provider.
+3. Проверьте release notes, exact registry integrity и заявленный provenance target version.
+4. Установите exact target version или осознанно обновите channel `next`.
+5. Выполните `loomrail doctor`. До первого запуска нового совместимого build ожидаем `STATE_UPGRADE_REQUIRED`.
+6. Запустите Loomrail нормально: только startup применяет migrations и recovery.
+7. Пройдите mock walkthrough до работы с live provider.
 
 Перед migration непустой DB в `backups/` может появиться автоматическая копия. Всё равно сохраняйте собственный
 whole-directory pre-upgrade backup: автоматическая копия не включает repositories и остальные installation files.

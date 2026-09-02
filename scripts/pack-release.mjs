@@ -6,11 +6,13 @@ import process from "node:process";
 import {
   releaseDependencies,
   releaseName,
+  releasePnpmVersion,
   releaseVersion,
   repositoryRoot,
   toolCommand,
   toolSpawnOptions,
 } from "./release-manifest.mjs";
+import { createReleaseReceipt, verifyReleaseStagingFiles } from "./release-integrity.mjs";
 
 /**
  * Assembles the publishable launcher from an already-built workspace and packs it into a tarball.
@@ -21,6 +23,8 @@ import {
  */
 const stagingDirectory = resolve(repositoryRoot, "dist-release");
 const packageDirectory = resolve(stagingDirectory, "package");
+
+const gitOutput = (args) => execFileSync("git", args, { cwd: repositoryRoot, encoding: "utf8" }).trim();
 
 const copyInto = async (from, to) => {
   await cp(resolve(repositoryRoot, from), resolve(packageDirectory, to), { recursive: true });
@@ -59,6 +63,7 @@ const run = async () => {
     homepage: "https://github.com/loomrail/loomrail#readme",
     bugs: { url: "https://github.com/loomrail/loomrail/issues" },
     repository: { type: "git", url: "git+https://github.com/loomrail/loomrail.git" },
+    publishConfig: { access: "public", provenance: true },
     type: "module",
     bin: { loomrail: "apps/cli/dist/index.js" },
     exports: {
@@ -85,21 +90,46 @@ const run = async () => {
     `${JSON.stringify(manifest, null, 2)}\n`,
     "utf8",
   );
+  await verifyReleaseStagingFiles({ packageDirectory });
 
   // `npm pack` writes to its working directory, so no path needs to travel through the argument
   // list; on Windows those arguments would go through a shell.
-  const packed = execFileSync(toolCommand("npm"), ["pack"], {
+  const version = releaseVersion();
+  const packOutput = execFileSync(toolCommand("npm"), ["pack", "--json"], {
     cwd: packageDirectory,
     encoding: "utf8",
     ...toolSpawnOptions(),
-  })
-    .trim()
-    .split("\n")
-    .at(-1);
+  });
 
-  const tarball = resolve(stagingDirectory, packed);
-  await rename(resolve(packageDirectory, packed), tarball);
-  process.stdout.write(`${tarball}\n`);
+  const artifactFilename = `${releaseName}-${version}.tgz`;
+  const tarball = resolve(stagingDirectory, artifactFilename);
+  await rename(resolve(packageDirectory, artifactFilename), tarball);
+  const receipt = await createReleaseReceipt({
+    packageDirectory,
+    tarballPath: tarball,
+    packOutput,
+    name: releaseName,
+    version,
+    source: {
+      repository: "https://github.com/loomrail/loomrail",
+      commit: gitOutput(["rev-parse", "HEAD"]),
+      tree: gitOutput(["status", "--porcelain=v1", "--untracked-files=all"]) === "" ? "CLEAN" : "DIRTY",
+    },
+    toolchain: {
+      node: process.version,
+      npm: execFileSync(toolCommand("npm"), ["--version"], {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        ...toolSpawnOptions(),
+      }).trim(),
+      pnpm: releasePnpmVersion(),
+    },
+  });
+  const receiptPath = resolve(stagingDirectory, `${releaseName}-${version}.receipt.json`);
+  const temporaryReceiptPath = `${receiptPath}.tmp`;
+  await writeFile(temporaryReceiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+  await rename(temporaryReceiptPath, receiptPath);
+  process.stdout.write(`Release receipt: ${receiptPath}\n${tarball}\n`);
 };
 
 await run();

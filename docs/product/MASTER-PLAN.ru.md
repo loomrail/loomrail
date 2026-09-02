@@ -1289,6 +1289,16 @@ automatic replay. Отдельный CI step запускается на macOS/W
 clean install и browser smoke на обеих ОС. Общий Verify остановился только на защищённых landing lint errors;
 private dogfood exit gate остаётся открытым. Production failpoint и npm publish не добавлены.
 
+Q6 release integrity и supply-chain policy реализованы по планам 57–58. Packaging теперь fail closed читает
+`npm pack --json`, разрешает только closed regular-file tree и создаёт unsigned receipt с clean/dirty source
+observation, toolchain, тремя tarball digests и SHA-256 каждого из 60 package files. Clean-install gate проверяет
+receipt до установки, exact extracted files после неё, запрещает dependency scripts, аудитит consumer npm graph и
+запускает прежний smoke. pnpm повторно проверяет 547 lock entries по strict release age/publication time,
+trust no-downgrade, exotic-source и lifecycle-script policy; единственное exact dev-only exception документировано.
+EN/RU security/operations docs различают receipt и npm/Sigstore provenance, explicit update и restore rollback.
+Cross-platform clean-receipt CI, private dogfood и registry provenance до owner-authorized publish остаются открыты;
+publish workflow/credential/tag/dist-tag не добавлены.
+
 ### Оценка первого цикла
 
 - internal dogfood alpha: примерно 12–16 недель;

@@ -13,6 +13,9 @@ mitigation. Do not include real user data, credentials, or unrelated private inf
 Loomrail is currently pre-alpha and does not yet publish supported release lines or response-time guarantees. Valid
 reports will be acknowledged and handled privately before coordinated disclosure whenever practical.
 
+Dependency intake, exact exceptions, release-candidate receipts, trusted publishing, provenance, and post-publish
+signature verification are defined in the [supply-chain policy](docs/security/SUPPLY-CHAIN.md).
+
 ## Scope
 
 Security boundaries include local process execution, provider credentials, repository access, browser automation,

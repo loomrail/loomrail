@@ -26,7 +26,7 @@ node --version
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
-npm install loomrail@next
+npm install --ignore-scripts loomrail@next
 npx playwright install chromium
 npx loomrail doctor
 npx loomrail start
@@ -49,7 +49,7 @@ npx loomrail --no-open --port 4176
 Откройте напечатанную ссылку в браузере на той же машине в течение 60 секунд. Флаг `--no-open` не включает удалённый
 доступ.
 
-Если нужен глобальный бинарник, выполните `npm install -g loomrail@next`, затем
+Если нужен глобальный бинарник, выполните `npm install -g --ignore-scripts loomrail@next`, затем
 `npx playwright install chromium`, а после этого `loomrail`. Для проверки продукта рекомендуется локальная установка
 выше: выбранный pre-alpha канал остаётся явным.
 

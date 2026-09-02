@@ -16,15 +16,35 @@ For an isolated evaluation install:
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
-npm install loomrail@next
+npm install --ignore-scripts loomrail@next
 npx playwright install chromium
 npx loomrail doctor
 npx loomrail start
 ```
 
-`next` is the explicit pre-alpha channel. A global installation uses `npm install -g loomrail@next`, followed by
-`npx playwright install chromium`, `loomrail doctor`, and `loomrail start`. Pin an exact version instead of `next`
-when you need a reproducible installation.
+`next` is the explicit pre-alpha channel. A global installation uses
+`npm install -g --ignore-scripts loomrail@next`, followed by `npx playwright install chromium`, `loomrail doctor`,
+and `loomrail start`. Pin an exact version instead of `next` when you need a reproducible installation. Loomrail does
+not require dependency lifecycle scripts; Chromium remains a separate, visible installation step.
+
+## Verify package origin
+
+Use an exact version when verifying a release; a moving `next` tag can change after review:
+
+```bash
+npm view loomrail@<exact-version> name version dist.integrity --json
+npm install --ignore-scripts loomrail@<exact-version>
+npm audit signatures
+```
+
+The registry integrity value binds the downloaded tarball. `npm audit signatures` verifies registry signatures and
+available provenance attestations for the installed dependency graph. A release that advertises Loomrail provenance
+must link to this public repository, the trusted publish workflow, and the reviewed source commit. Provenance does
+not prove that the code is safe; keep the exact version, release notes, and backup boundary visible.
+
+The current published pre-alpha may predate the trusted-publishing policy. A future stable release cannot pass its
+release gate without registry provenance. The JSON file produced beside a local candidate tarball is an unsigned
+integrity receipt, not a registry attestation. See the [supply-chain policy](../security/SUPPLY-CHAIN.md).
 
 ## Read-only diagnostics
 
@@ -106,10 +126,11 @@ Pre-alpha schema changes are forward migrations. Before every upgrade:
 
 1. Note the exact installed Loomrail version.
 2. Stop Loomrail and preserve the whole data directory as above.
-3. Install an explicit target version or intentionally update the `next` channel.
-4. Run `loomrail doctor`. `STATE_UPGRADE_REQUIRED` is expected before the first start with a newer compatible build.
-5. Start normally. Only startup applies migrations and performs recovery.
-6. Run the mock walkthrough before trusting live-provider work.
+3. Review the target's release notes, exact registry integrity, and advertised provenance.
+4. Install an explicit target version or intentionally update the `next` channel.
+5. Run `loomrail doctor`. `STATE_UPGRADE_REQUIRED` is expected before the first start with a newer compatible build.
+6. Start normally. Only startup applies migrations and performs recovery.
+7. Run the mock walkthrough before trusting live-provider work.
 
 An automatic database copy may be created under `backups/` immediately before a non-empty database migration. Keep
 your own pre-upgrade whole-directory backup as well; the automatic copy excludes repositories and other installation

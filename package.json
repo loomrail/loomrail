@@ -16,7 +16,7 @@
     "format:check": "prettier --check .",
     "lint": "pnpm build && eslint .",
     "typecheck": "pnpm build && tsc -p tsconfig.json --noEmit && pnpm -r --sort --if-present typecheck",
-    "test": "pnpm -r --sort --if-present test",
+    "test": "node --test scripts/release-integrity.test.mjs && pnpm -r --workspace-concurrency=1 --sort --if-present test",
     "test:unit": "pnpm -r --sort --if-present test:unit",
     "test:integration": "pnpm -r --sort --if-present test:integration",
     "test:fault-injection": "node scripts/run-fault-injection.mjs",

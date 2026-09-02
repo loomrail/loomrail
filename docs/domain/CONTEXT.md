@@ -85,6 +85,20 @@ Test-owned process scenario, который обрывает daemon только
 _Не означает_: product workflow, automatic resume/retry, crash-report upload или гарантию результата внешнего side
 effect.
 
+**Release Candidate Artifact**:
+Exact npm tarball bytes одного versioned Loomrail build, ещё не равные published release или moving dist-tag.
+_Не означает_: проверенный registry package, owner data export, Git tag или разрешение publish.
+
+**Release Integrity Receipt**:
+Closed unsigned JSON, который связывает candidate name/version/source observation/toolchain с digest tarball и
+каждого allowlisted package file.
+_Не означает_: подпись, identity builder, Registry Provenance, SBOM или доказательство безопасности кода.
+
+**Registry Provenance**:
+Consumer-verifiable npm/Sigstore attestation от configured trusted publisher, связывающая published artifact с public
+repository, hosted workflow и source commit.
+_Не означает_: локальный receipt/checksum, code review, vulnerability scan или право обойти release gate.
+
 **Effective Provider**:
 Provider, который resolver назначит следующей ProviderSession с учётом Project preference, текущей availability и
 видимого environment override.

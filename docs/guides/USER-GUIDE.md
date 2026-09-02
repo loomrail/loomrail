@@ -17,7 +17,7 @@ directory rather than inside a repository you care about:
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
-npm install loomrail@next
+npm install --ignore-scripts loomrail@next
 npx playwright install chromium
 npx loomrail
 ```
@@ -26,7 +26,7 @@ The explicit Chromium download is a one-time prerequisite for isolated Browser Q
 browser profile. The `next` tag keeps the pre-alpha channel explicit. To put the launcher on your `PATH` instead:
 
 ```bash
-npm install -g loomrail@next
+npm install -g --ignore-scripts loomrail@next
 npx playwright install chromium
 loomrail
 ```

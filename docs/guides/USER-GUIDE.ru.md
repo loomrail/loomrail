@@ -18,7 +18,7 @@ Loomrail работает локально, но не является security 
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
-npm install loomrail@next
+npm install --ignore-scripts loomrail@next
 npx playwright install chromium
 npx loomrail
 ```
@@ -27,7 +27,7 @@ npx loomrail
 profile. Тег `next` оставляет pre-alpha канал явным. Чтобы добавить launcher в `PATH`:
 
 ```bash
-npm install -g loomrail@next
+npm install -g --ignore-scripts loomrail@next
 npx playwright install chromium
 loomrail
 ```

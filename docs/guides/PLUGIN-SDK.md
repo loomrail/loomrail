@@ -9,7 +9,7 @@ hooks, package installation, a marketplace, secrets, shell/Git access, or side-e
 The SDK is published from the main package:
 
 ```bash
-npm install loomrail@next zod
+npm install --ignore-scripts loomrail@next zod
 ```
 
 Import it through `loomrail/plugin-sdk`. Do not import Loomrail daemon, domain, or persistence packages.

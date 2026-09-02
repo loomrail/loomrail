@@ -15,13 +15,16 @@ them, so never restate either number.
 ```bash
 nvm use          # or: fnm use
 corepack enable  # installs the pnpm version pinned by packageManager
-pnpm install
+pnpm install --frozen-lockfile
 pnpm verify
 ```
 
 Run `pnpm test:e2e` after `pnpm exec playwright install chromium` when changing CLI, daemon session behavior, or the
 web shell. Run `pnpm pack:release && pnpm test:release` when changing how the launcher, the daemon or the persistence
 layer locate files on disk; see the [release guide](docs/RELEASE.md). macOS and Windows are blocking platforms; platform-specific behavior must not be accepted from only one.
+
+Dependency changes must satisfy the exact exception, lifecycle-script, trust, audit, and clean-install rules in the
+[supply-chain policy](docs/security/SUPPLY-CHAIN.md). Do not relax a repository-wide gate to land one update.
 
 ## Public-by-default rule
 

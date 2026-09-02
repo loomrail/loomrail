@@ -42,7 +42,7 @@ Start in a new empty directory, not inside a repository you care about:
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
-npm install loomrail@next
+npm install --ignore-scripts loomrail@next
 npx playwright install chromium
 npx loomrail
 ```
@@ -61,7 +61,8 @@ npx loomrail --no-open --port 4176
 
 Open the printed URL on the same machine within 60 seconds. `--no-open` does not enable remote access.
 
-For a global launcher, use `npm install -g loomrail@next`, run `npx playwright install chromium`, and then `loomrail`.
+For a global launcher, use `npm install -g --ignore-scripts loomrail@next`, run
+`npx playwright install chromium`, and then `loomrail`.
 The project-local route above is recommended for evaluation because it keeps the selected pre-alpha channel visible.
 
 ## First run

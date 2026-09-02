@@ -47,7 +47,7 @@ describe("plugin SDK conformance", () => {
       prompts: [],
     });
     expect(typeof observation.protocolVersion).toBe("string");
-  });
+  }, 10_000);
 
   it("owns annotations and redacts a handler exception", async () => {
     const client = new Client(

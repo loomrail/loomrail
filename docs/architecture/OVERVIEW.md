@@ -70,6 +70,17 @@ persistence/provider/browser/git adapters
 - packages do not import from apps;
 - circular dependencies fail verification.
 
+## Release integrity boundary
+
+Release packaging is a maintainer adapter outside the product domain. `scripts/release-integrity.mjs` is its one deep
+module: it owns the closed npm-pack metadata schema, portable package-file allowlist, receipt schema, cryptographic
+digests, and installed-file comparison. `pack-release.mjs` composes a candidate and `verify-release.mjs` exercises it;
+neither becomes workflow authority or a runtime package import.
+
+The local Release Integrity Receipt is deliberately unsigned. Only a future npm trusted-publish workflow can create
+Registry Provenance; ordinary CI retains read-only permissions and no publish action. This boundary prevents a
+checksum generated beside a modified tarball from being described as proof of builder identity.
+
 ## Command and event flow
 
 ```mermaid

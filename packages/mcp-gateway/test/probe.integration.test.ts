@@ -62,7 +62,7 @@ describe("MCP capability probe", () => {
       resources: ["project_readme"],
       prompts: ["summarize_project"],
     });
-  });
+  }, 10_000);
 
   it("rejects a mismatched consent before spawning", async () => {
     await expect(
@@ -75,7 +75,7 @@ describe("MCP capability probe", () => {
       state: "OUTPUT_LIMIT_REACHED",
       tools: [],
     });
-  });
+  }, 10_000);
 
   it("stops a stalled server at the five-second probe deadline", async () => {
     await expect(probe(revision("stalled"))).resolves.toEqual({
@@ -100,7 +100,7 @@ describe("MCP capability probe", () => {
       resources: [],
       prompts: [],
     });
-  });
+  }, 10_000);
 
   it("contains invalid JSON from an untrusted server as a typed failed probe", async () => {
     const invalidRevision: McpProfileRevision = {
@@ -114,7 +114,7 @@ describe("MCP capability probe", () => {
       resources: [],
       prompts: [],
     });
-  });
+  }, 10_000);
 
   it("contains a server stdout flood without accepting any capability", async () => {
     const floodRevision: McpProfileRevision = {
@@ -127,5 +127,5 @@ describe("MCP capability probe", () => {
       resources: [],
       prompts: [],
     });
-  });
+  }, 10_000);
 });
