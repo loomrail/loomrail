@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implemented locally; macOS/Windows evidence pending
+**Статус:** complete; source, materialised и clean-package evidence получен на macOS/Windows
 
 **Предшественники:** D2, B1–B5, A3, R1, Q6, Q8
 

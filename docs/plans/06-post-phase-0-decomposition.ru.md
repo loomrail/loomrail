@@ -1,9 +1,9 @@
 # Декомпозиция работ после Phase 0
 
-**Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
+**Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-03
 
-**Статус:** Q10 bundled sample catalog реализован локально; macOS/Windows Q10 evidence, exact live row, protected
-landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** Q10 bundled sample catalog закрыт на macOS/Windows; exact live row, protected landing, private dogfood,
+telemetry, public issue/roadmap и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -255,8 +255,9 @@ Q10 реализует bundled sample repositories/workflow recipes/role catalog
 [плану 66](66-q10-bundled-sample-catalog-implementation-plan.ru.md). Два прежних placeholder Project стали
 dependency-free tested repositories с четырьмя exact Task recipes; public EN/RU guide объясняет единственный shipped
 workflow и фактический standard role mapping без обещания custom templates. Closed source/package verifier, isolated
-materialisation, full tests/typecheck, 52/52 E2E, fault gate, audit и clean-tarball execution зелёные локально;
-macOS/Windows evidence ещё открыт.
+materialisation, fault gate, audit, clean-tarball execution и 52/52 browser smoke зелёные на macOS/Windows в
+[run 33690688589](https://github.com/loomrail/loomrail/actions/runs/33690688589). Оба Verify остановились только на
+protected landing lint; Q10 закрыт.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

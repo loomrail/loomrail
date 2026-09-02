@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** local implementation and gates complete; macOS/Windows evidence pending
+**Статус:** complete; local и macOS/Windows gates recorded
 
 **Спецификация:**
 [65-q10-bundled-sample-catalog-spec.ru.md](65-q10-bundled-sample-catalog-spec.ru.md)
@@ -27,7 +27,7 @@
 - [x] Добавить standard-library source/package verifier с closed catalog и no-dependency/no-link policy.
 - [x] Запускать named sample gate на macOS/Windows до repository-wide lint и из clean-install tarball.
 - [x] Прогнать focused tests, full build/typecheck, non-landing lint, public tree, audit, fault/browser/release gates.
-- [ ] Получить macOS/Windows sample/package evidence; общий Verify может быть blocked только protected landing.
+- [x] Получить macOS/Windows sample/package evidence; общий Verify blocked только protected landing.
 
 ## 2. Module seam
 

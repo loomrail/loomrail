@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-03
 
-**Scope:** local implementation; macOS/Windows CI evidence pending
+**Scope:** local, macOS and Windows source/materialisation/package verification
 
 ## Repository and policy observations
 
@@ -37,6 +37,9 @@ quota-bearing D2 live route.
   Node/pnpm toolchain.
 - Production dependency audit reports no known vulnerabilities.
 - Full Playwright browser E2E passes 52/52 after keeping the change-summary seed to an exact one-line README edit.
+  A macOS retry exposed an ambiguous waiver-text locator in the first committed run; the assertion was narrowed to
+  the persisted resolution paragraph, passed 3/3 focused local repetitions and then passed the full matrix without a
+  retry on both platforms.
 - `pnpm test:fault-injection` passes all focused suites and the process drill: one interrupted run, no replay and one
   durable report.
 - `pnpm pack:release && pnpm test:release` passes. The dirty local receipt contains 70 allowlisted files; the tarball
@@ -44,12 +47,24 @@ quota-bearing D2 live route.
   disabled, reports zero vulnerabilities, validates and runs both bundled samples from the installed package, then
   completes the existing setup/receipt/files/start/log lifecycle checks.
 
-Repository-wide `pnpm verify` passes format, public-tree, toolchain and full build, then reports only the three
-protected `apps/landing/src/main.ts` ESLint findings on lines 630, 631 and 634. The named sample step and clean-package
-evidence will be recorded after the committed macOS/Windows CI run; no Q10 source file is under `apps/landing/**`.
+GitHub Actions [run 33690688589](https://github.com/loomrail/loomrail/actions/runs/33690688589) records the final
+post-fix cross-platform matrix:
+
+| Gate                                       | macOS                       | Windows                     |
+| ------------------------------------------ | --------------------------- | --------------------------- |
+| Production dependency audit                | pass                        | pass                        |
+| Bundled source sample gate                 | pass                        | pass                        |
+| Provider compatibility probe               | pass                        | pass                        |
+| Fault/restart matrix                       | pass                        | pass                        |
+| Receipt-checked clean-package verification | pass                        | pass                        |
+| Browser smoke                              | 52/52, no retry             | 52/52, no retry             |
+| Repository-wide Verify                     | protected landing lint only | protected landing lint only |
+
+Both Verify jobs pass format, the 607-file public-tree gate, pinned toolchain and full build, then report only the
+three protected `apps/landing/src/main.ts` ESLint findings on lines 630, 631 and 634. No Q10 or stabilization source
+file is under `apps/landing/**`.
 
 ## Remaining release evidence
 
-Q10 remains locally complete until the same source/package checks pass on macOS and Windows. Even after that, this
-slice is not an exact live-provider row, private dogfood, telemetry, public issue/roadmap, final security review,
-registry provenance or permission to publish the stable package.
+Q10 is complete. This slice is not an exact live-provider row, private dogfood, telemetry, public issue/roadmap,
+final security review, registry provenance or permission to publish the stable package.
