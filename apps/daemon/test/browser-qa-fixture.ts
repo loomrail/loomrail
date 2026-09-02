@@ -33,6 +33,7 @@ export const passingBrowserQADriver = (): BrowserDriver => ({
         defects: [],
       },
       finalizeAttachments: () => Promise.resolve([]),
+      confirmAttachments: () => Promise.resolve(),
       dispose: () => Promise.resolve(),
     }),
 });

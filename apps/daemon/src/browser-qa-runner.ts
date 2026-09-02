@@ -127,5 +127,15 @@ export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): Brow
     if (completed.type !== "QA_RUN_COMPLETED") {
       throw new StateStoreError("PERSISTENCE_FAILURE", "The Browser QA completion was not recorded");
     }
+    await execution?.confirmAttachments().catch((error: unknown) => {
+      deps.logger.warn(
+        {
+          dispatchId: dispatch.id,
+          qaRunId: reserved.qaRun.id,
+          error: error instanceof Error ? error.name : "unknown",
+        },
+        "The committed Browser QA attachment marker remains pending for startup recovery",
+      );
+    });
   },
 });

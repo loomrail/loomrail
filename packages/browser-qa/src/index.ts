@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rename, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -19,12 +19,22 @@ import {
 } from "@loomrail/contracts";
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
 
+import { confirmBrowserQAArtifacts, stageBrowserQAArtifacts } from "./artifact-recovery.js";
+
+export {
+  BROWSER_QA_RECOVERY_MARKER,
+  recoverBrowserQAArtifacts,
+  type BrowserQAArtifactRecovery,
+  type BrowserQARecoveryMarker,
+} from "./artifact-recovery.js";
+
 export type BrowserDriverExecution = {
   result: QADriverResult;
   finalizeAttachments: (input: {
     qaRunId: string;
     createAttachmentId: () => string;
   }) => Promise<readonly QAFinalizedAttachment[]>;
+  confirmAttachments: () => Promise<void>;
   dispose: () => Promise<void>;
 };
 
@@ -272,6 +282,14 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
       let browserVersion = "unknown";
       let finalized = false;
 
+      const confirmAttachments = async (): Promise<void> => {
+        if (!finalized) return;
+        await confirmBrowserQAArtifacts({
+          artifactsDirectory: options.artifactsDirectory,
+          runStorageSegment,
+        });
+      };
+
       const dispose = async (): Promise<void> => {
         if (!finalized) await rm(quarantineDirectory, { recursive: true, force: true });
       };
@@ -488,7 +506,12 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
           code: "DRIVER_CRASHED",
           summary: errorSummary(error),
         });
-        return { result, finalizeAttachments: () => Promise.resolve([]), dispose };
+        return {
+          result,
+          finalizeAttachments: () => Promise.resolve([]),
+          confirmAttachments,
+          dispose,
+        };
       } finally {
         await browser?.close().catch(() => undefined);
       }
@@ -564,13 +587,17 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
             });
           }),
         );
-        const finalRoot = join(options.artifactsDirectory, "qa");
-        await mkdir(finalRoot, { recursive: true });
-        await rename(quarantineDirectory, join(finalRoot, runStorageSegment));
+        await stageBrowserQAArtifacts({
+          artifactsDirectory: options.artifactsDirectory,
+          quarantineDirectory,
+          runStorageSegment,
+          qaRunId: qaRun.id,
+          attachments: refs,
+        });
         finalized = true;
         return refs;
       };
-      return { result, finalizeAttachments, dispose };
+      return { result, finalizeAttachments, confirmAttachments, dispose };
     },
   };
 };

@@ -128,6 +128,7 @@ import { z, ZodError } from "zod";
 
 import { broadcastingState } from "./broadcasting-state.js";
 import { resolveProjectBrowserQAConfig, type BrowserQAConfigResolver } from "./browser-qa-config.js";
+import { reconcileBrowserQAArtifacts } from "./browser-qa-recovery.js";
 import { createBrowserQAStageRunner } from "./browser-qa-runner.js";
 import { buildAgentFleet } from "./agent-fleet.js";
 import {
@@ -765,6 +766,12 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       : startupProjectionProject;
   const startupProviderAdapter = fixedProviderAdapter ?? providerRegistry.resolve(startupProject).adapter;
   const providerCapabilities = startupProviderAdapter.capabilities();
+
+  await reconcileBrowserQAArtifacts({
+    state: localState,
+    artifactsDirectory: browserQAArtifactsDirectory,
+    logger: app.log,
+  });
 
   const constitutionPublisher = options.constitutionPublisher ?? publishProjectConstitution;
   const publicationCommandId = (

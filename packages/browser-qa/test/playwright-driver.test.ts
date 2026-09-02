@@ -1,12 +1,16 @@
 import { createServer, type RequestListener, type Server } from "node:http";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { QARun } from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createPlaywrightDriver } from "../src/index.js";
+import {
+  BROWSER_QA_RECOVERY_MARKER,
+  createPlaywrightDriver,
+  recoverBrowserQAArtifacts,
+} from "../src/index.js";
 
 const closeServer = (server: Server): Promise<void> =>
   new Promise((resolve, reject) => {
@@ -146,6 +150,68 @@ describe("Playwright BrowserDriver", () => {
     await expect(
       access(join(directory, "qa", finalized[0]?.ref.storageKey.split("/")[0] ?? "")),
     ).resolves.toBeUndefined();
+    const runStorageSegment = finalized[0]?.ref.storageKey.split("/")[0];
+    if (!runStorageSegment) throw new Error("Expected an attachment storage segment");
+    await expect(
+      access(join(directory, "qa", runStorageSegment, BROWSER_QA_RECOVERY_MARKER)),
+    ).resolves.toBeUndefined();
+    await execution.confirmAttachments();
+    await expect(
+      access(join(directory, "qa", runStorageSegment, BROWSER_QA_RECOVERY_MARKER)),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("confirms committed attachments and quarantines uncommitted attachments after restart", async () => {
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        "<!doctype html><html><body><main><h1>Current work</h1><button>Continue</button></main></body></html>",
+      );
+    });
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-recovery-"));
+    resources.push({ server: fixture.server, directory });
+    const driver = createPlaywrightDriver({ artifactsDirectory: directory });
+
+    const orphanedExecution = await driver.run(qaRun(fixture.origin));
+    const orphaned = await orphanedExecution.finalizeAttachments({
+      qaRunId: "qa-run-1",
+      createAttachmentId: () => "orphaned-attachment",
+    });
+    const orphanedSegment = orphaned[0]?.ref.storageKey.split("/")[0];
+    if (!orphanedSegment) throw new Error("Expected orphaned attachments");
+    await expect(
+      recoverBrowserQAArtifacts({ artifactsDirectory: directory, isCommitted: () => false }),
+    ).resolves.toEqual([
+      {
+        qaRunId: "qa-run-1",
+        runStorageSegment: orphanedSegment,
+        action: "QUARANTINED_ORPHAN",
+      },
+    ]);
+    await expect(access(join(directory, "qa", orphanedSegment))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(join(directory, ".quarantine", "orphaned"))).toHaveLength(1);
+
+    let attachmentIndex = 0;
+    const committedExecution = await driver.run(qaRun(fixture.origin));
+    const committed = await committedExecution.finalizeAttachments({
+      qaRunId: "qa-run-1",
+      createAttachmentId: () => `committed-${(attachmentIndex += 1).toString()}`,
+    });
+    const committedSegment = committed[0]?.ref.storageKey.split("/")[0];
+    if (!committedSegment) throw new Error("Expected committed attachments");
+    await expect(
+      recoverBrowserQAArtifacts({
+        artifactsDirectory: directory,
+        isCommitted: (marker) =>
+          marker.qaRunId === "qa-run-1" && marker.attachments.length === committed.length,
+      }),
+    ).resolves.toEqual([{ qaRunId: "qa-run-1", runStorageSegment: committedSegment, action: "CONFIRMED" }]);
+    await expect(
+      access(join(directory, "qa", committedSegment, BROWSER_QA_RECOVERY_MARKER)),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    for (const item of committed) {
+      await expect(access(join(directory, "qa", item.ref.storageKey))).resolves.toBeUndefined();
+    }
   });
 
   it("blocks off-origin redirects and exposes no finalizable evidence", async () => {

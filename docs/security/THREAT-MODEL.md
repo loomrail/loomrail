@@ -938,6 +938,10 @@ Q1 tightens the deterministic baseline further:
   verdict is not part of the input schema;
 - screenshot/trace handles are not evidence. The daemon must quarantine, hash, size-check and atomically finalize each
   file before `COMPLETE_QA_RUN`; the command accepts only matching relative storage refs and persists no absolute path;
+- finalization writes a bounded marker before the directory rename and removes it only after the SQLite transaction;
+  startup confirms it only when the terminal QARun, every persisted attachment field and every file hash/size match.
+  Uncommitted or damaged marker-bound directories move to an orphan quarantine; unknown unmarked files are not
+  adopted or deleted;
 - a missing matrix cell, stale tree, mismatched attachment, off-origin navigation or unavailable target fails closed
   and cannot open Acceptance.
 

@@ -28,8 +28,8 @@
 - [x] Добавить новую migration для QARun, evidence bundle, observations, attachment refs и Defects.
 - [x] Резервировать QARun до запуска browser process вместе с active BROWSER_QA AgentRun.
 - [x] Завершать QARun, AgentRun, evidence, HumanRequest/next dispatch, events и receipt одной транзакцией.
-- [ ] Хранить тяжёлые файлы вне SQLite через quarantine/finalize/recovery protocol.
-- [ ] Добавить restart/recovery marker coverage.
+- [x] Хранить тяжёлые файлы вне SQLite через quarantine/finalize/recovery protocol.
+- [x] Добавить restart/recovery marker coverage.
 - [x] Добавить duplicate-completion и completed-state restart coverage.
 
 ### Q1.4 — Workflow и Acceptance
@@ -57,7 +57,8 @@
 ## 3. Verification gate
 
 - [x] Unit: schemas, verdict derivation, bounds, stale tree и forbidden transitions.
-- [ ] Persistence: atomic success/failure, restart, idempotency, expected-version conflict и recovery marker.
+- [x] Persistence: atomic success/failure, restart, idempotency и expected-version conflict.
+- [x] Artifact recovery: committed marker, orphan quarantine и hash/size mismatch.
 - [ ] Daemon: green baseline, intentional assertion failure, driver error, off-origin redirect и timeout (green
       baseline и project config готовы).
 - [ ] Browser: real green route и real failed route; Acceptance никогда не стартует на неподтверждённом pass.
