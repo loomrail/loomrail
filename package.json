@@ -21,6 +21,7 @@
     "test:integration": "pnpm -r --sort --if-present test:integration",
     "test:fault-injection": "node scripts/run-fault-injection.mjs",
     "test:community": "node scripts/verify-community-files.mjs",
+    "test:reporting": "pnpm build && pnpm --dir packages/contracts exec vitest run test/reporting.unit.test.ts && pnpm --dir packages/domain exec vitest run test/reporting.unit.test.ts && pnpm --dir packages/persistence-sqlite exec vitest run test/local-state.integration.test.ts -t \"privacy-safe reporting facts\" && pnpm --dir apps/daemon exec vitest run test/reporting.unit.test.ts test/server.integration.test.ts -t \"reporting runtime categories|privacy-safe local Insights|bounded crash preview\" --maxWorkers=1 && pnpm --dir apps/web exec vitest run src/reportDownload.test.ts",
     "test:samples": "node scripts/verify-samples.mjs",
     "test:e2e": "playwright test",
     "test:public-readiness": "node scripts/check-public-tree.mjs && node scripts/check-toolchain.mjs",

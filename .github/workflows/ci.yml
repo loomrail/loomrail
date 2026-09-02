@@ -67,6 +67,11 @@ jobs:
       - name: Verify provider compatibility probes
         run: pnpm exec vitest run apps/daemon/test/provider-compatibility.unit.test.ts
 
+      # Reporting is a privacy boundary. Run its exact schema/domain/SQLite/daemon/web tests on both
+      # platforms before protected landing lint can prevent the repository-wide suite from starting.
+      - name: Verify private Insights reporting
+        run: pnpm test:reporting
+
       # The named fault matrix includes the real Playwright BrowserDriver suite. A fresh runner has
       # the package but no browser binary; keep that prerequisite explicit instead of weakening the
       # suite into a skip or treating a missing executable as crash-recovery evidence.

@@ -31,7 +31,7 @@
 
 - [x] Прогнать focused tests, build, typecheck, format и landing-excluded lint.
 - [x] Прогнать full test/release/browser gates без изменения `apps/landing/**`.
-- [ ] Записать local и macOS/Windows evidence, обновить Phase 8 status.
+- [ ] Прогнать named `test:reporting` на macOS/Windows, записать evidence и обновить Phase 8 status.
 
 ## 2. Module interface
 
