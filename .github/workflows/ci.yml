@@ -55,6 +55,10 @@ jobs:
 
       - name: Verify source and SQLite portability
         run: pnpm verify
+        env:
+          # ESLint's typed-program graph crosses the whole workspace and exceeded Node's default
+          # 2 GiB heap on the arm64 macOS runner before it could report the actual lint gate.
+          NODE_OPTIONS: --max-old-space-size=4096
 
   browser:
     name: Browser smoke (${{ matrix.os }})
