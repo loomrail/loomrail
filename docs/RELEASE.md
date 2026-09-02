@@ -50,6 +50,8 @@ registry. Before install it verifies the receipt and all tarball digests; after 
 package-owned extracted file with the receipt and audits the actual npm production graph at High severity. It then
 launches the installed binary on a free loopback port with an isolated `LOOMRAIL_DATA_DIR` and asserts that:
 
+- non-TTY setup requires an explicit route, while `setup --mode mock --json` reports the clean installation READY
+  after the CI lane's explicit Chromium installation and creates no state;
 - the daemon reports `/health/ready`;
 - the installed launcher serves the built Workbench shell, not just the API;
 - the launcher prints the one-time sign-in URL, so a headless install can authenticate;

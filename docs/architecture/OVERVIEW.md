@@ -92,6 +92,17 @@ Operational Log Segments are diagnostics, never Events, workflow evidence or pro
 stdout/stderr still stops at its adapter boundary. Export and delete run only with the daemon stopped, do not have an
 HTTP route, and cannot address SQLite, artifacts, workspaces, repositories or unknown siblings under `logs/`.
 
+## Guided local-setup boundary
+
+`apps/cli/src/setup.ts` is a deep read-only module whose small interface accepts one transient Setup Route and returns
+a closed Setup Readiness Report. It composes the existing Doctor Report with a stat-only Playwright Chromium
+observation, derives ordered remediation/next actions and renders deterministic human or JSON output. The CLI entry
+module owns only argv, TTY prompt, stdout and exit-code wiring.
+
+Setup never becomes a domain command or installer. It stores no route, preference or state and launches no daemon,
+browser, agent session, login or package manager. Existing Q4 provider/Git status probes remain the only child-process
+observations, so the seam cannot acquire hidden machine authority while presenting itself as guidance.
+
 ## Command and event flow
 
 ```mermaid
@@ -127,7 +138,9 @@ D3 and ADR-0002.
 - wait for readiness;
 - open browser;
 - predictable shutdown;
-- closed read-only runtime/Git/data/state/provider diagnostics and explicit data-path disclosure.
+- closed read-only runtime/Git/data/state/provider diagnostics and explicit data-path disclosure;
+- transient guided-setup readiness and exact owner next actions without install/start/persistence authority;
+- bounded redacted operational-log persistence, export and exact-owned deletion.
 
 ### `apps/daemon`
 

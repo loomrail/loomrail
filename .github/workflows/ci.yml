@@ -140,6 +140,12 @@ jobs:
       - name: Verify local log lifecycle
         run: pnpm --filter @loomrail/cli test
 
+      # Guided setup must prove the Browser QA prerequisite from the same clean-machine lane. The
+      # package install remains lifecycle-script-free; this explicit owner-equivalent step is what
+      # downloads Chromium.
+      - name: Install Chromium for guided setup
+        run: pnpm exec playwright install chromium
+
       # Proves the published layout works from a registry install, which `pnpm verify` cannot show.
       - name: Verify the tarball on a clean install
         run: pnpm test:release

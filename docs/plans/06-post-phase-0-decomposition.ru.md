@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
-**Статус:** implementation и cross-platform gates через Q7 завершены; protected landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** Q8 guided setup локально реализован, cross-platform evidence ожидается; protected landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -230,6 +230,13 @@ unknown siblings. Raw provider output остаётся несохраняемы�
 зелёные; [CI run 33676031870](https://github.com/loomrail/loomrail/actions/runs/33676031870) подтвердил CLI 28/28,
 clean receipt/audit/lifecycle и browser smoke на macOS/Windows. Оба Verify прошли fault gate и остановились только на
 трёх protected landing lint diagnostics, поэтому Q7 закрыт без изменения landing.
+Q8 реализует guided local setup по [спецификации 61](61-q8-guided-local-setup-spec.ru.md) и
+[плану 62](62-q8-guided-local-setup-implementation-plan.ru.md). Transient `MOCK | LIVE` route сворачивает Q4 Doctor
+Report, stat-only Chromium observation и provider readiness в closed Setup Readiness Report с ordered owner actions.
+Interactive default — zero-quota Mock; automation указывает mode явно. Setup не создаёт data/state, не применяет
+migrations и не запускает daemon, browser, agent session, login или installer; любой provider override блокирует
+false-safe guidance. CLI 33/33 и clean tarball setup/doctor/start/log lifecycle локально зелёные; macOS/Windows
+evidence ещё требуется.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

@@ -18,12 +18,12 @@ mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail doctor
+npx loomrail setup
 npx loomrail start
 ```
 
 `next` явно выбирает pre-alpha channel. Для global install используйте
-`npm install -g --ignore-scripts loomrail@next`, затем `npx playwright install chromium`, `loomrail doctor` и
+`npm install -g --ignore-scripts loomrail@next`, затем `npx playwright install chromium`, `loomrail setup` и
 `loomrail start`. Если важна воспроизводимость, укажите exact version вместо `next`. Loomrail не требует dependency
 lifecycle scripts; Chromium остаётся отдельным видимым installation step.
 
@@ -45,6 +45,25 @@ provenance attestations установленного dependency graph. Release, 
 Текущий published pre-alpha мог появиться до trusted-publishing policy. Будущий stable release не проходит release
 gate без registry provenance. JSON рядом с локальным candidate tarball — unsigned integrity receipt, а не registry
 attestation. Подробности — в [supply-chain policy](../security/SUPPLY-CHAIN.ru.md).
+
+## Guided setup
+
+В interactive terminal выполните `npx loomrail setup` и нажмите Enter для рекомендуемого Mock walkthrough либо
+выберите проверку live provider. Automation обязана указать route явно:
+
+```bash
+npx loomrail setup --mode mock --json
+```
+
+Exit code 0 и `READY` означают, что выбранный full fixture route можно начать. Report объединяет те же read-only
+наблюдения runtime/Git/data/SQLite/provider, что и `doctor`, со stat-only проверкой Chromium. Он содержит только
+closed codes и ordered next actions, без paths, provider output, account, credentials или exception text.
+
+Setup не создаёт data directory/БД, не применяет migration/recovery и не запускает daemon, browser, agent session,
+provider login, installer или download. Он выполняет только документированные output-free Git/provider status probes.
+Любой `LOOMRAIL_PROVIDER` override блокирует guided setup, чтобы route не расходился с фактическим startup. Pending
+migration тоже блокирует путь до остановки Loomrail и сохранения всего data directory. Выполняйте показанные действия
+самостоятельно: setup их не запускает и не сохраняет.
 
 ## Read-only diagnostics
 

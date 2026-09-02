@@ -28,7 +28,7 @@ mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail doctor
+npx loomrail setup
 npx loomrail start
 ```
 
@@ -36,9 +36,11 @@ npx loomrail start
 authenticated URL. New projects use **Auto**, which can find an installed, signed-in provider CLI; the next section
 switches the demo project to **Mock** before any workflow starts. Keep the terminal open.
 
-The Chromium download is a one-time Browser QA prerequisite. It is isolated from your signed-in browser profile.
-`doctor` is read-only and reports warnings for a new database or missing live-provider login. See the
-[operations guide](OPERATIONS.md) for diagnostic codes, upgrade, rollback, backup, and uninstall.
+The Chromium download is a one-time Browser QA prerequisite. It is isolated from your signed-in browser profile. In
+the setup prompt, press Enter for the recommended **Mock walkthrough**. Setup composes the read-only diagnostics with
+the Chromium and route checks; it changes and persists nothing. A new database or missing live-provider login is safe
+for the Mock route. See the [operations guide](OPERATIONS.md) for machine-readable setup, diagnostic codes, upgrade,
+rollback, backup, and uninstall.
 
 If the browser must not open automatically:
 
@@ -49,8 +51,8 @@ npx loomrail --no-open --port 4176
 Open the printed URL in a browser on the same machine within 60 seconds. `--no-open` does not enable remote access.
 
 To put the launcher on your `PATH` instead, run `npm install -g --ignore-scripts loomrail@next`, then
-`npx playwright install chromium`, and then `loomrail`. The project-local installation above is recommended for
-evaluation because the selected pre-alpha channel remains visible.
+`npx playwright install chromium`, `loomrail setup`, and `loomrail start`. The project-local installation above is
+recommended for evaluation because the selected pre-alpha channel remains visible.
 
 The package already includes the pinned Context7 MCP server. You do not need to install it globally or run `npx` for
 it; configuration remains an explicit owner action in **Settings → MCP connections** after the mock walkthrough.

@@ -106,6 +106,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T39 | Acceptance export leaks local authority or turns untrusted prose active      | High     | authenticated exact-correlation read; domain-validated allowlist; escaped Markdown and path redaction; attachment+nosniff; audit/byte bounds; complete-or-error                              | see Q3 Acceptance export delta below                                              |
 | T40 | Diagnostics leak local metadata or mutate state during inspection            | High     | closed allowlisted report; no raw paths/output/errors/env; argv/no-shell bounded probes; read-only SQLite; explicit path disclosure; no cleanup                                              | see Q4 local-diagnostics delta below                                              |
 | T41 | Release artifact is substituted or an unsigned checksum is called provenance | High     | closed receipt; tarball/file digests; clean CI source; trusted OIDC publish; registry signature verification                                                                                 | see Q6 release-integrity and supply-chain delta below                             |
+| T42 | Guided setup performs hidden actions or reports a false-safe route           | High     | zero-write setup report; exact route input; reuse read-only probes; stat-only browser check; no login/install/start; closed output                                                           | see Q8 guided-setup delta below                                                   |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -362,6 +363,36 @@ Required controls and verification:
 Residual risk remains: a process with the same OS-user authority can read files or memory before/after redaction and
 can tamper with retained diagnostics. Logs are investigation aids, not integrity evidence; encryption-at-rest and
 remote support upload are not claimed. Raw provider stdout/stderr remains deliberately unrecorded under SD-003.
+
+### Q8 guided-setup delta (T42)
+
+Q8 combines system, Browser QA and provider observations into a first-run recommendation. A command named `setup`
+could be mistaken for authority to install dependencies, authenticate a provider, migrate state or persist the route;
+it could also print executable/data paths or raw probe errors, or recommend Mock while an environment override forces
+a live provider. Rated **High** because a false-safe result could make the owner's first workflow spend quota or
+cross a repository boundary they did not knowingly select.
+
+Required controls and verification:
+
+- Setup Route is a transient `MOCK | LIVE` choice. It is not persisted and never changes Project Provider Preference
+  or `LOOMRAIL_PROVIDER`; any present or invalid override blocks both routes until the owner removes it;
+- `loomrail setup` reuses the Q4 Doctor Report and its fixed argv/no-shell/output-free probes. It creates no data
+  directory or SQLite/log file, applies no migration/recovery and launches no daemon, browser, agent session, login,
+  package manager or network download;
+- the Browser QA prerequisite is observed only by asking the installed Playwright runtime for its executable
+  location and applying `stat`; neither the path nor an exception is returned, and Chromium is never launched;
+- interactive mode requires stdin/stdout TTY, accepts only empty/`1`/`mock` or `2`/`live`, defaults to Mock and never
+  asks for a path, account or secret. Machine-readable mode requires an explicit route before any probe;
+- `SetupReadinessReport` is a closed deterministic schema containing three typed checks and ordered remediation or
+  next-action codes. Pending migration blocks with a backup instruction; missing state/provider login remains safe
+  only where the selected route permits it;
+- unit tests cover every route/status combination, overlong/free-text input, probe exception and path/error canaries,
+  stable remediation order and no-create behavior. The clean-package gate runs setup after an explicit Chromium
+  installation on macOS and Windows, then continues through doctor/start/log lifecycle checks.
+
+Residual risk remains: filesystem presence plus an authentication status exit code does not certify provider or
+browser version compatibility and can become stale immediately after the check. Setup is guidance for one local
+invocation, not an installation receipt, security attestation or future compatibility promise.
 
 ### A4 Attention Inbox delta (T35)
 

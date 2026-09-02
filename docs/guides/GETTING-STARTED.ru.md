@@ -28,7 +28,7 @@ mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail doctor
+npx loomrail setup
 npx loomrail start
 ```
 
@@ -37,8 +37,10 @@ npx loomrail start
 входом; в следующем разделе вы переключите demo-проект на **Mock** до запуска workflow. Не закрывайте терминал.
 
 Chromium скачивается один раз как обязательная среда Browser QA и не использует ваш авторизованный browser profile.
-`doctor` работает read-only; для новой базы или отсутствующего live-provider login он показывает warnings. Коды,
-upgrade, rollback, backup и uninstall описаны в [operations guide](OPERATIONS.ru.md).
+В setup prompt нажмите Enter для рекомендуемого **Mock walkthrough**. Setup объединяет read-only диагностику с
+проверками Chromium и выбранного маршрута; он ничего не меняет и не сохраняет. Новая база или отсутствующий
+live-provider login безопасны для Mock route. Machine-readable setup, коды диагностики, upgrade, rollback, backup и
+uninstall описаны в [operations guide](OPERATIONS.ru.md).
 
 Чтобы браузер не открывался автоматически:
 
@@ -50,8 +52,8 @@ npx loomrail --no-open --port 4176
 доступ.
 
 Если нужен глобальный бинарник, выполните `npm install -g --ignore-scripts loomrail@next`, затем
-`npx playwright install chromium`, а после этого `loomrail`. Для проверки продукта рекомендуется локальная установка
-выше: выбранный pre-alpha канал остаётся явным.
+`npx playwright install chromium`, `loomrail setup` и `loomrail start`. Для проверки продукта рекомендуется локальная
+установка выше: выбранный pre-alpha канал остаётся явным.
 
 Pinned Context7 MCP server уже входит в пакет. Его не нужно устанавливать глобально или запускать через `npx`;
 настройка остаётся явным действием владельца в **Настройки → MCP-подключения** после mock-маршрута.

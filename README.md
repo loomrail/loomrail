@@ -44,11 +44,13 @@ mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail
+npx loomrail setup
+npx loomrail start
 ```
 
 The Chromium download is an explicit one-time installation for deterministic Browser QA. Loomrail never reuses your
-signed-in browser profile.
+signed-in browser profile. Guided setup defaults to the zero-quota Mock route, checks the full local path, and prints
+the remaining owner actions without changing or persisting state.
 
 The launcher binds to `127.0.0.1`, opens a one-time authenticated URL, and stores state in local SQLite. Keep the
 terminal open and stop Loomrail with `Ctrl+C`.
@@ -62,7 +64,7 @@ npx loomrail --no-open --port 4176
 Open the printed URL on the same machine within 60 seconds. `--no-open` does not enable remote access.
 
 For a global launcher, use `npm install -g --ignore-scripts loomrail@next`, run
-`npx playwright install chromium`, and then `loomrail`.
+`npx playwright install chromium`, `loomrail setup`, and then `loomrail start`.
 The project-local route above is recommended for evaluation because it keeps the selected pre-alpha channel visible.
 
 ## First run

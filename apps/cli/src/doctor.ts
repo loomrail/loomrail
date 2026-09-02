@@ -286,6 +286,7 @@ export const formatCliHelp = (): readonly string[] => [
   "",
   "Commands:",
   "  start [--no-open] [--port N]  Start the local daemon and Workbench (default).",
+  "  setup [--mode mock|live]       Check and guide the first full local walkthrough.",
   "  doctor [--json]               Inspect runtime, Git, local state, and providers read-only.",
   "  logs export                   Write a redacted NDJSON log export to stdout.",
   "  logs delete                   Delete only Loomrail-owned operational log segments.",

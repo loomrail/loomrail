@@ -198,7 +198,41 @@ const run = async () => {
       mcpSupervisorPath,
       "Invalid Loomrail MCP supervisor invocation",
     );
-    const diagnosticEnvironment = { ...process.env, LOOMRAIL_DATA_DIR: dataDirectory };
+    const diagnosticEnvironment = {
+      ...process.env,
+      LOOMRAIL_DATA_DIR: dataDirectory,
+      LOOMRAIL_PROVIDER: "",
+    };
+    const interactiveSetup = spawnSync(process.execPath, [binaryPath, "setup"], {
+      cwd: installDirectory,
+      env: diagnosticEnvironment,
+      encoding: "utf8",
+    });
+    if (
+      interactiveSetup.status !== 1 ||
+      interactiveSetup.stdout.length !== 0 ||
+      !interactiveSetup.stderr.includes("setup requires --mode") ||
+      interactiveSetup.stderr.includes(dataDirectory)
+    ) {
+      throw new Error("the packaged setup did not refuse a non-interactive invocation safely");
+    }
+    const setupOutput = execFileSync(process.execPath, [binaryPath, "setup", "--mode", "mock", "--json"], {
+      cwd: installDirectory,
+      env: diagnosticEnvironment,
+      encoding: "utf8",
+    });
+    const setup = JSON.parse(setupOutput);
+    if (
+      setup.schemaVersion !== 1 ||
+      setup.status !== "READY" ||
+      setup.route !== "MOCK" ||
+      setup.checks?.browser?.code !== "BROWSER_READY" ||
+      !Array.isArray(setup.nextActions) ||
+      !setup.nextActions.includes("SELECT_MOCK") ||
+      setupOutput.includes(dataDirectory)
+    ) {
+      throw new Error("the packaged guided setup report is invalid or not ready");
+    }
     const diagnosticOutput = execFileSync(process.execPath, [binaryPath, "doctor", "--json"], {
       cwd: installDirectory,
       env: diagnosticEnvironment,
@@ -313,7 +347,7 @@ const run = async () => {
     }
 
     process.stdout.write(
-      `Release check passed: receipt, installed files and log lifecycle match; ${tarball} runs from a clean install.\n`,
+      `Release check passed: setup, receipt, installed files and log lifecycle match; ${tarball} runs from a clean install.\n`,
     );
   } finally {
     launcher?.kill("SIGTERM");

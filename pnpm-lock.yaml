@@ -57,6 +57,9 @@ importers:
       open:
         specifier: ^10.0.0
         version: 10.2.0
+      playwright:
+        specifier: ^1.55.0
+        version: 1.62.1
     devDependencies:
       vite:
         specifier: ^8.1.0

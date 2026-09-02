@@ -2,6 +2,7 @@
 
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 import { startDaemon } from "@loomrail/daemon";
@@ -16,6 +17,14 @@ import {
   redactOperationalText,
 } from "./log-lifecycle.js";
 import { parseCliCommand, type StartCliCommand } from "./options.js";
+import {
+  collectSetupReadiness,
+  formatSetupReadiness,
+  selectSetupRoute,
+  serializeSetupReadiness,
+  setupRoutePrompt,
+  type SetupRoute,
+} from "./setup.js";
 import { formatStartupReport } from "./startup-report.js";
 
 const writeLine = (message: string): void => {
@@ -106,12 +115,36 @@ const start = async (options: StartCliCommand): Promise<void> => {
   }
 };
 
+const chooseSetupRoute = async (): Promise<SetupRoute> => {
+  if (!(process.stdin.isTTY && process.stdout.isTTY)) {
+    throw new Error("setup requires --mode mock or --mode live outside an interactive terminal");
+  }
+  for (const promptLine of setupRoutePrompt()) writeLine(promptLine);
+  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await selectSetupRoute((prompt) => terminal.question(prompt));
+  } finally {
+    terminal.close();
+  }
+};
+
 const run = async (): Promise<void> => {
   const command = parseCliCommand(process.argv.slice(2));
   switch (command.command) {
     case "START":
       await start(command);
       return;
+    case "SETUP": {
+      const route = command.route ?? (await chooseSetupRoute());
+      const report = await collectSetupReadiness(route);
+      if (command.format === "JSON") {
+        writeLine(serializeSetupReadiness(report));
+      } else {
+        for (const reportLine of formatSetupReadiness(report)) writeLine(reportLine);
+      }
+      if (report.status === "BLOCKED") process.exitCode = 1;
+      return;
+    }
     case "DOCTOR": {
       const report = await collectDoctorReport();
       if (command.format === "JSON") {

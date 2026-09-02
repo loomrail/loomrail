@@ -19,16 +19,20 @@ mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail
+npx loomrail setup
+npx loomrail start
 ```
 
 The explicit Chromium download is a one-time prerequisite for isolated Browser QA; Loomrail does not reuse a signed-in
-browser profile. The `next` tag keeps the pre-alpha channel explicit. To put the launcher on your `PATH` instead:
+browser profile. Setup defaults to a Mock walkthrough, verifies the complete local route without changing state, and
+prints the exact owner actions that remain. The `next` tag keeps the pre-alpha channel explicit. To put the launcher
+on your `PATH` instead:
 
 ```bash
 npm install -g --ignore-scripts loomrail@next
 npx playwright install chromium
-loomrail
+loomrail setup
+loomrail start
 ```
 
 Loomrail binds to an available loopback port and opens the Workbench in your default browser. If the browser should not

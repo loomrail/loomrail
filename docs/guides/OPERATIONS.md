@@ -18,13 +18,13 @@ mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail doctor
+npx loomrail setup
 npx loomrail start
 ```
 
 `next` is the explicit pre-alpha channel. A global installation uses
-`npm install -g --ignore-scripts loomrail@next`, followed by `npx playwright install chromium`, `loomrail doctor`,
-and `loomrail start`. Pin an exact version instead of `next` when you need a reproducible installation. Loomrail does
+`npm install -g --ignore-scripts loomrail@next`, followed by `npx playwright install chromium`, `loomrail setup`, and
+`loomrail start`. Pin an exact version instead of `next` when you need a reproducible installation. Loomrail does
 not require dependency lifecycle scripts; Chromium remains a separate, visible installation step.
 
 ## Verify package origin
@@ -45,6 +45,25 @@ not prove that the code is safe; keep the exact version, release notes, and back
 The current published pre-alpha may predate the trusted-publishing policy. A future stable release cannot pass its
 release gate without registry provenance. The JSON file produced beside a local candidate tarball is an unsigned
 integrity receipt, not a registry attestation. See the [supply-chain policy](../security/SUPPLY-CHAIN.md).
+
+## Guided setup
+
+Run `npx loomrail setup` in an interactive terminal and press Enter for the recommended Mock walkthrough, or select
+the live-provider preflight. Automation must make the route explicit:
+
+```bash
+npx loomrail setup --mode mock --json
+```
+
+Exit code 0 and `READY` mean the selected full fixture route can begin. The report combines the same read-only
+runtime/Git/data/SQLite/provider observations as `doctor` with a stat-only Chromium check. It contains only closed
+codes and ordered next actions, never paths, provider output, accounts, credentials, or exception text.
+
+Setup creates no data directory or database, applies no migration/recovery, and launches no daemon, browser, agent
+session, provider login, installer, or download. It does run the documented output-free Git/provider status probes.
+Any `LOOMRAIL_PROVIDER` override blocks guided setup so its route cannot disagree with startup. A pending migration
+also blocks until you stop Loomrail and preserve the whole data directory. Follow the displayed actions yourself;
+setup neither executes nor persists them.
 
 ## Read-only diagnostics
 

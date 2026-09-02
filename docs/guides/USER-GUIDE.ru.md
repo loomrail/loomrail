@@ -20,16 +20,20 @@ mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail
+npx loomrail setup
+npx loomrail start
 ```
 
 Явная загрузка Chromium нужна один раз для изолированного Browser QA; Loomrail не использует авторизованный browser
-profile. Тег `next` оставляет pre-alpha канал явным. Чтобы добавить launcher в `PATH`:
+profile. Setup по умолчанию выбирает Mock walkthrough, проверяет полный локальный маршрут без изменения state и
+показывает точные оставшиеся действия владельца. Тег `next` оставляет pre-alpha канал явным. Чтобы добавить launcher
+в `PATH`:
 
 ```bash
 npm install -g --ignore-scripts loomrail@next
 npx playwright install chromium
-loomrail
+loomrail setup
+loomrail start
 ```
 
 Loomrail занимает свободный loopback-порт и открывает Workbench в браузере по умолчанию. Чтобы не открывать браузер

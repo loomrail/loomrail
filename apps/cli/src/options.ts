@@ -6,8 +6,15 @@ export type StartCliCommand = {
   port?: number;
 };
 
+export type SetupCliCommand = {
+  command: "SETUP";
+  format: "HUMAN" | "JSON";
+  route?: "MOCK" | "LIVE";
+};
+
 export type CliCommand =
   | StartCliCommand
+  | SetupCliCommand
   | { command: "DOCTOR"; format: "HUMAN" | "JSON" }
   | { command: "DATA_PATH" }
   | { command: "LOGS_EXPORT" }
@@ -47,6 +54,30 @@ const parseDoctor = (args: string[]): CliCommand => {
   return { command: "DOCTOR", format: parsed.values.json ? "JSON" : "HUMAN" };
 };
 
+const parseSetup = (args: string[]): SetupCliCommand => {
+  const parsed = parseArgs({
+    args,
+    strict: true,
+    allowPositionals: false,
+    options: {
+      mode: { type: "string" },
+      json: { type: "boolean", default: false },
+    },
+  });
+  const mode = parsed.values.mode;
+  if (mode !== undefined && mode !== "mock" && mode !== "live") {
+    throw new Error("setup --mode must be mock or live");
+  }
+  if (parsed.values.json && mode === undefined) {
+    throw new Error("setup --json requires --mode mock or live");
+  }
+  return {
+    command: "SETUP",
+    format: parsed.values.json ? "JSON" : "HUMAN",
+    ...(mode === undefined ? {} : { route: mode === "mock" ? "MOCK" : "LIVE" }),
+  };
+};
+
 const noArguments = (command: string, args: string[]): void => {
   if (args.length > 0) throw new Error(`${command} does not accept arguments`);
 };
@@ -72,6 +103,7 @@ export const parseCliCommand = (args: string[]): CliCommand => {
   }
   if (first === undefined || first.startsWith("-")) return parseStart(args);
   if (first === "start") return parseStart(rest);
+  if (first === "setup") return parseSetup(rest);
   if (first === "doctor") return parseDoctor(rest);
   if (first === "logs") return parseLogs(rest);
   if (first === "data-path") {

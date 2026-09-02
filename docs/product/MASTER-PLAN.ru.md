@@ -1312,6 +1312,13 @@ tests/typecheck/build и clean-package lifecycle smoke зелёные. В
 receipt/audit/lifecycle и browser smoke прошли на macOS/Windows; оба Verify прошли fault gate и остановились только на
 трёх protected landing lint diagnostics. Q7 cross-platform gate закрыт без изменения landing.
 
+Q8 guided local setup локально реализован по планам 61–62. `loomrail setup` выбирает transient Mock/Live route,
+переиспользует closed Doctor Report, stat-only проверяет Playwright Chromium и возвращает три typed checks с ordered
+owner actions. Interactive default ведёт в zero-quota Mock walkthrough; non-TTY/JSON требуют explicit mode. Команда
+не создаёт data/state, не применяет migrations/recovery и не запускает daemon, browser, agent session, provider login
+или installer; любой environment provider override блокирует false-safe recommendation. CLI 33/33 и clean-package
+setup/doctor/start/log lifecycle локально зелёные; Q8 cross-platform evidence ещё требуется.
+
 ### Оценка первого цикла
 
 - internal dogfood alpha: примерно 12–16 недель;

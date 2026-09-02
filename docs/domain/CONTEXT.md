@@ -79,6 +79,15 @@ Availability для локальной установки. Общий status в�
 явно запрошенной командой.
 _Не означает_: durable workflow state, startup/recovery, migration, support upload или источник product truth.
 
+**Setup Route**:
+Короткоживущий выбор `MOCK | LIVE`, определяющий только проверки и инструкции одного guided setup invocation.
+_Не означает_: Project Provider Preference, environment override, durable настройку или право запустить provider.
+
+**Setup Readiness Report**:
+Closed local projection готовности выбранного Setup Route к первому полному fixture flow, собранная из Doctor Report,
+Chromium prerequisite и provider readiness.
+_Не означает_: installer, installation receipt, durable state, migration, login или выполненное next action.
+
 **Recovery Drill**:
 Test-owned process scenario, который обрывает daemon только после durable старта ProviderSession и проверяет
 детерминированный recovery state через новый daemon process и обычные authenticated read-модели.
