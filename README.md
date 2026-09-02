@@ -5,7 +5,8 @@
     <a href="https://loomrail.github.io/loomrail/">Website</a> ·
     <a href="docs/guides/GETTING-STARTED.md">Quick start</a> ·
     <a href="docs/guides/GETTING-STARTED.ru.md">Быстрый старт</a> ·
-    <a href="docs/README.md">Documentation</a>
+    <a href="docs/README.md">Documentation</a> ·
+    <a href="ROADMAP.md">Roadmap</a>
   </p>
   <p>
     <a href="https://github.com/loomrail/loomrail/actions/workflows/ci.yml"><img src="https://github.com/loomrail/loomrail/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -155,6 +156,8 @@ pnpm test:e2e
 See [CONTRIBUTING.md](CONTRIBUTING.md), the [architecture overview](docs/architecture/OVERVIEW.md), and the
 [release guide](docs/RELEASE.md). Plugin authors should start with the
 [Plugin SDK guide](docs/guides/PLUGIN-SDK.md) or its [Russian version](docs/guides/PLUGIN-SDK.ru.md).
+Use the [structured issue chooser](https://github.com/loomrail/loomrail/issues/new/choose) for reproducible bugs or
+bounded product proposals; suspected vulnerabilities belong in the [private security channel](SECURITY.md).
 
 ## License
 

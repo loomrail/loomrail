@@ -109,6 +109,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T42 | Guided setup performs hidden actions or reports a false-safe route           | High     | zero-write setup report; exact route input; reuse read-only probes; stat-only browser check; no login/install/start; closed output                                                           | see Q8 guided-setup delta below                                                   |
 | T43 | Poisoned or drifted provider CLI is falsely admitted as compatible           | High     | version-before-auth; fixed argv/no shell/minimal env; stdout/deadline bounds; exact parser/allowlist; closed readiness invariant                                                             | see Q9 provider-compatibility delta below                                         |
 | T44 | Bundled sample executes hidden code or carries unreviewed repository input   | High     | exact file catalog; regular bounded files; no dependencies/lifecycle scripts/links; no implicit execution                                                                                    | see Q10 bundled-sample delta below                                                |
+| T45 | Public issue intake exposes private data or routes a vulnerability publicly  | High     | closed forms; explicit public-data acknowledgement; enabled private reporting; no uploads/log requests; no runtime ingestion                                                                 | see Q11 public-intake delta below                                                 |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -453,6 +454,32 @@ Required controls and verification:
 Residual risk remains: reviewed sample prose is still untrusted input to a provider, and `npm start` is code execution
 with the owner's OS-user authority. Owners should inspect diffs and run commands only in the materialised sample or a
 task worktree. The gate proves the shipped baseline, not future provider output or private dogfood stability.
+
+### Q11 public-intake delta (T45)
+
+Q11 adds a public issue chooser to a public-by-default repository. A reporter may accidentally disclose credentials,
+private repository content, transcripts, logs, local paths or vulnerability details; a malicious issue may also try
+to act as trusted product or provider instruction. Rated **High** because public issue content and its edit history
+can be copied quickly, while vulnerability disclosure may remove the opportunity for coordinated remediation.
+
+Required controls and verification:
+
+- external contributors receive two structured forms and no blank public issue route; both forms begin with a
+  private-vulnerability link and require explicit acknowledgement that secrets, private content, paths, raw logs and
+  unsanitized artifacts were removed;
+- the forms request reproducible state or bounded acceptance evidence but no upload, raw transcript, log dump,
+  credential, repository archive or personal contact field;
+- GitHub Private Vulnerability Reporting is enabled for the exact public `loomrail/loomrail` repository, and
+  `SECURITY.md`, the chooser and both forms point to the same private advisory route;
+- issue text, labels, reactions and proposals create no workflow, release, severity or priority authority. Q11 has no
+  GitHub API/runtime ingestion path, and future GitHub integration must validate issue content as untrusted input;
+- a standard-library policy gate checks the exact template set, unique/required form fields, security and roadmap
+  routes, safety copy and roadmap non-promises; mutation tests cover blank-issue, private-route, required-field and
+  dated-roadmap refusals.
+
+Residual risk remains: GitHub cannot prevent a reporter from manually editing submitted Markdown to add sensitive or
+hostile content. Maintainers must treat all issue text and links as untrusted, minimize redistribution, and move any
+suspected vulnerability to the private channel without copying confidential detail into public artifacts.
 
 ### A4 Attention Inbox delta (T35)
 

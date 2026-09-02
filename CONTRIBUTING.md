@@ -1,10 +1,13 @@
 # Contributing to Loomrail
 
-Loomrail is in pre-alpha implementation. The Phase 0 architecture and repository contracts are approved; broader
-implementation contributions will open after the initial public checkpoint. Documentation corrections and
-well-scoped design feedback are welcome earlier.
+Loomrail is in pre-alpha implementation. Reproducible bug reports, documentation corrections, and bounded product
+proposals are welcome through the [structured issue chooser](https://github.com/loomrail/loomrail/issues/new/choose).
+The [public roadmap](ROADMAP.md) shows the current outcome order, but neither an issue nor reactions create a delivery
+commitment. Broad unsolicited implementation work should wait for a maintainer-scoped issue while the first stable
+release gates are still closing.
 
 Participation in project spaces is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
+Suspected vulnerabilities must use the [private reporting route](SECURITY.md), never a public issue.
 
 ## Local setup and verification
 

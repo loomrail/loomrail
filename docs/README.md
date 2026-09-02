@@ -21,6 +21,8 @@ For a disposable repository and exact live-provider task, use the
 
 ## Understand or contribute to Loomrail
 
+- [Public roadmap](../ROADMAP.md)
+- [Structured issue chooser](https://github.com/loomrail/loomrail/issues/new/choose)
 - [Architecture overview](architecture/OVERVIEW.md)
 - [Product decisions](product/PRODUCT-DECISIONS.ru.md)
 - [Master plan](product/MASTER-PLAN.ru.md)

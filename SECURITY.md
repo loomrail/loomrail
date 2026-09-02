@@ -16,6 +16,10 @@ reports will be acknowledged and handled privately before coordinated disclosure
 Dependency intake, exact exceptions, release-candidate receipts, trusted publishing, provenance, and post-publish
 signature verification are defined in the [supply-chain policy](docs/security/SUPPLY-CHAIN.md).
 
+Non-security defects and bounded product proposals use the
+[structured public issue chooser](https://github.com/loomrail/loomrail/issues/new/choose). Its public-data warning does
+not make public issues suitable for suspected vulnerabilities.
+
 ## Scope
 
 Security boundaries include local process execution, provider credentials, repository access, browser automation,

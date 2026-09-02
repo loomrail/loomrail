@@ -1,0 +1,73 @@
+name: Product proposal
+description: Propose a bounded product outcome that fits Loomrail's delivery scope
+title: "[Proposal]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Proposals are planning input, not a delivery promise. Read the
+        [public roadmap](https://github.com/loomrail/loomrail/blob/main/ROADMAP.md) and describe a software-delivery
+        outcome rather than a provider prompt. Do not include credentials, private repository content, raw
+        transcripts or logs, personal paths, or unsanitized screenshots and traces. Report suspected vulnerabilities through the
+        [private security channel](https://github.com/loomrail/loomrail/security/advisories/new).
+  - type: checkboxes
+    id: public_data
+    attributes:
+      label: Public-data check
+      options:
+        - label: I have removed secrets, private content, personal paths, raw logs, and unsanitized artifacts.
+          required: true
+  - type: checkboxes
+    id: existing_scope
+    attributes:
+      label: Existing scope
+      options:
+        - label: I reviewed the roadmap and existing issues for related work.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What software-delivery problem exists, for whom, and why does it matter?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the observable owner or contributor outcome without prescribing hidden authority.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Bounded proposal
+      description: Define the smallest useful scope and explicit non-goals.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: List concrete checks that would prove the outcome works and fails safely.
+    validations:
+      required: true
+  - type: textarea
+    id: security_privacy
+    attributes:
+      label: Security and privacy impact
+      description: Name new data, execution, permission, network, or provider boundaries; write "None identified" if none.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional smaller approaches or existing workflows that nearly solve the problem.
+  - type: checkboxes
+    id: conduct
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow the [Code of Conduct](https://github.com/loomrail/loomrail/blob/main/CODE_OF_CONDUCT.md).
+          required: true

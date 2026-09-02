@@ -1,0 +1,104 @@
+name: Bug report
+description: Report a reproducible Loomrail defect without sharing private data
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Loomrail. Suspected vulnerabilities belong in the
+        [private security channel](https://github.com/loomrail/loomrail/security/advisories/new), not a public issue.
+        Do not include credentials, private repository content, raw transcripts or logs, personal paths, databases,
+        or unsanitized screenshots and traces.
+  - type: checkboxes
+    id: public_data
+    attributes:
+      label: Public-data check
+      options:
+        - label: I have removed secrets, private content, personal paths, raw logs, and unsanitized artifacts.
+          required: true
+  - type: checkboxes
+    id: duplicate_search
+    attributes:
+      label: Existing reports
+      options:
+        - label: I searched the existing issues and did not find this defect.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Loomrail version or commit
+      description: Use the package version or the full commit SHA. Do not paste a local path.
+      placeholder: "Example: 0.1.0-alpha.4 or 0123456789abcdef..."
+    validations:
+      required: true
+  - type: dropdown
+    id: operating_system
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux (best effort)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: install_route
+    attributes:
+      label: Install route
+      options:
+        - Project-local npm package
+        - Global npm package
+        - Source checkout
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: provider_route
+    attributes:
+      label: Provider route
+      options:
+        - Mock
+        - Codex CLI
+        - Claude Code CLI
+        - Not provider-related
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: current_behavior
+    attributes:
+      label: Current behavior
+      description: Describe the observable failure and the last durable state you can still see.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Give ordered steps using synthetic or public data only.
+      placeholder: |
+        1. Start from ...
+        2. Perform ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected behavior
+      description: State the result or invariant you expected to observe.
+    validations:
+      required: true
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional safe context
+      description: Optional public links or already-sanitized facts. Do not paste raw logs or artifacts.
+  - type: checkboxes
+    id: conduct
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow the [Code of Conduct](https://github.com/loomrail/loomrail/blob/main/CODE_OF_CONDUCT.md).
+          required: true

@@ -58,6 +58,10 @@ jobs:
       - name: Verify bundled sample repositories
         run: pnpm test:samples
 
+      # Keep public contribution intake closed and portable before unrelated source lint can hide it.
+      - name: Verify public issue intake and roadmap
+        run: pnpm test:community
+
       # Exercise the fixed-argv child-process boundary on both supported platforms before a
       # protected source lint failure can hide the compatibility evidence.
       - name: Verify provider compatibility probes

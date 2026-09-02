@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/loomrail/loomrail/security/advisories/new
+    about: Report suspected vulnerabilities privately; never put them in a public issue.
+  - name: Project roadmap and scope
+    url: https://github.com/loomrail/loomrail/blob/main/ROADMAP.md
+    about: Check the current outcome order, non-goals, and release gates before proposing work.
