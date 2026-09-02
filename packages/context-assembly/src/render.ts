@@ -1,4 +1,11 @@
-import type { ContextSectionId, ProviderId, ReviewFindingSeverity } from "@loomrail/contracts";
+import type {
+  ContextSectionId,
+  ProviderId,
+  QACorrectionRun,
+  QADefect,
+  QARetestPlan,
+  ReviewFindingSeverity,
+} from "@loomrail/contracts";
 
 export type ContextSources = {
   workItemBrief: {
@@ -17,6 +24,41 @@ export type ContextSources = {
     attempt: number;
     sessionOrdinal: number;
   };
+  qaCorrection: {
+    correctionRun: {
+      id: string;
+      version: number;
+      ordinal: number;
+      status: QACorrectionRun["status"];
+    };
+    sourceQARun: {
+      id: string;
+      version: number;
+      testedTree: string;
+      targetOrigin: string;
+    };
+    sourceEvidence: { id: string; version: number };
+    retestPlan: {
+      id: string;
+      version: number;
+      baselineQARunId: string;
+      baselinePlanRevision: number;
+      baselinePlanContentHash: string;
+      cells: QARetestPlan["cells"];
+    };
+    currentTree: string;
+    defects: readonly {
+      id: string;
+      version: number;
+      severity: QADefect["severity"];
+      status: QADefect["status"];
+      title: string;
+      description: string;
+      reproduction: readonly string[];
+      targetId: string;
+      scenarioId: string;
+    }[];
+  } | null;
   decisions: readonly { id: string; version: number; question: string; answer: string }[];
   latestCheckpoint: {
     id: string;
@@ -110,7 +152,39 @@ const renderWorkItemBrief = (sources: ContextSources): RenderedBody => {
 };
 
 const renderWorkflowPosition = (sources: ContextSources): RenderedBody => {
-  const { workflowPosition } = sources;
+  const { qaCorrection, workflowPosition } = sources;
+  const correctionLines =
+    qaCorrection === null
+      ? []
+      : [
+          "",
+          "QA Correction Authority:",
+          "- Correct the durable defect set below; do not change the locked browser plan or scope to evade a failure.",
+          "- Review and QA results must remain attached to this CorrectionRun and current implementation tree.",
+          untrusted(
+            [
+              `CorrectionRun: ${qaCorrection.correctionRun.id} (v${qaCorrection.correctionRun.version.toString()}, ordinal ${qaCorrection.correctionRun.ordinal.toString()}, ${qaCorrection.correctionRun.status})`,
+              `Immediate source QARun: ${qaCorrection.sourceQARun.id} (v${qaCorrection.sourceQARun.version.toString()})`,
+              `Source tree: ${qaCorrection.sourceQARun.testedTree}`,
+              `Current implementation tree: ${qaCorrection.currentTree}`,
+              `Locked target origin: ${qaCorrection.sourceQARun.targetOrigin}`,
+              `Source evidence: ${qaCorrection.sourceEvidence.id}`,
+              `Locked baseline QARun: ${qaCorrection.retestPlan.baselineQARunId}`,
+              `Locked plan: revision ${qaCorrection.retestPlan.baselinePlanRevision.toString()} · ${qaCorrection.retestPlan.baselinePlanContentHash}`,
+              "Locked retest cells:",
+              ...qaCorrection.retestPlan.cells.map(
+                (cell) => `- ${cell.targetId} / ${cell.scenarioId}: ${cell.reasons.join(", ")}`,
+              ),
+              "Defect snapshot:",
+              ...qaCorrection.defects.flatMap((defect) => [
+                `- [${defect.id} v${defect.version.toString()}] ${defect.severity} ${defect.status}: ${defect.title}`,
+                `  Cell: ${defect.targetId} / ${defect.scenarioId}`,
+                `  Description: ${defect.description}`,
+                `  Reproduction: ${defect.reproduction.join("; ")}`,
+              ]),
+            ].join("\n"),
+          ),
+        ];
   const text = block("Workflow Position", [
     "Objective: finish the current stage and return its stage result.",
     `Template: ${workflowPosition.templateId} (v${String(workflowPosition.templateVersion)})`,
@@ -123,10 +197,39 @@ const renderWorkflowPosition = (sources: ContextSources): RenderedBody => {
           "Continue the current stage from durable Decisions and checkpoint; do not restart completed work or owner requests.",
         ]
       : []),
+    ...correctionLines,
   ]);
   // No per-section ref: templateId/templateVersion are recorded at the recipe's top level (spec
   // §4.2), so a ref here would be redundant rather than missing provenance.
-  return { text, sources: [] };
+  return {
+    text,
+    sources:
+      qaCorrection === null
+        ? []
+        : [
+            {
+              kind: "QA_CORRECTION_RUN",
+              id: qaCorrection.correctionRun.id,
+              version: qaCorrection.correctionRun.version,
+            },
+            {
+              kind: "QA_RUN",
+              id: qaCorrection.sourceQARun.id,
+              version: qaCorrection.sourceQARun.version,
+            },
+            {
+              kind: "QA_EVIDENCE_BUNDLE",
+              id: qaCorrection.sourceEvidence.id,
+              version: qaCorrection.sourceEvidence.version,
+            },
+            {
+              kind: "QA_RETEST_PLAN",
+              id: qaCorrection.retestPlan.id,
+              version: qaCorrection.retestPlan.version,
+            },
+            ...qaCorrection.defects.map(({ id, version }) => ({ kind: "QA_DEFECT", id, version })),
+          ],
+  };
 };
 
 const renderDecisions = (sources: ContextSources): RenderedBody => {

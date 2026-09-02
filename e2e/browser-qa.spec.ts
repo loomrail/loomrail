@@ -181,7 +181,6 @@ test.describe("measured Browser QA cockpit", () => {
     await page.goto(daemon.bootstrapUrl);
     await initializeWorkspace(page);
     const workflow = await advanceTaskToBrowserQA(page, "Measured Browser QA failure");
-    const inspector = page.getByRole("complementary", { name: "Measured Browser QA failure" });
 
     const qa = workflow.getByRole("region", { name: "Browser QA" });
     await expect(qa).toBeVisible({ timeout: 20_000 });
@@ -197,7 +196,17 @@ test.describe("measured Browser QA cockpit", () => {
     await expect(qa.getByText("Readiness route is unavailable", { exact: true })).toBeVisible();
     await expect(qa.getByText("High", { exact: true })).toBeVisible();
     await expect(workflow.getByRole("heading", { name: "Acceptance package" })).toHaveCount(0);
-    await expect(inspector.getByRole("heading", { name: "Browser QA found blocking defects" })).toBeVisible();
+    await expect(qa.getByText("Correction 1", { exact: true })).toBeVisible();
+    await expect(qa.getByText("Active", { exact: true })).toBeVisible();
+
+    await qa.getByRole("button", { name: "Accept risk" }).click();
+    const waiverReason = qa.getByRole("textbox", { name: "Owner reason" });
+    await expect(waiverReason).toBeFocused();
+    await waiverReason.fill("Accepted for this bounded browser fixture.");
+    await qa.getByRole("button", { name: "Record waiver" }).click();
+    await expect(qa.getByText("Risk accepted", { exact: true })).toBeVisible();
+    await expect(qa.getByText("Accepted for this bounded browser fixture.", { exact: true })).toBeVisible();
+    await expect(workflow.getByRole("heading", { name: "Acceptance package" })).toHaveCount(0);
 
     await page.reload();
     await expect(page.getByRole("region", { name: "Browser QA" })).toBeVisible();
@@ -271,6 +280,7 @@ test.describe("measured Browser QA cockpit", () => {
     ).toBeVisible();
     await expect(qa.getByRole("link", { name: "Open evidence" })).toHaveCount(2);
     await expect(workflow.getByRole("heading", { name: "Acceptance package" })).toHaveCount(0);
-    await expect(workflow.getByRole("heading", { name: "Browser QA found blocking defects" })).toBeVisible();
+    await expect(qa.getByText("Correction 1", { exact: true })).toBeVisible();
+    await expect(qa.getByText("Active", { exact: true })).toBeVisible();
   });
 });

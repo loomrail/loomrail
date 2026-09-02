@@ -24,7 +24,10 @@ import type {
   PipelinePausedEvent,
   PipelineResumedEvent,
   PipelineRun,
+  QACorrectionRun,
+  QADefect,
   QAEvidenceBundle,
+  QARetestPlan,
   QARun,
   PipelineStartedEvent,
   RecoveryReport,
@@ -51,6 +54,7 @@ import { nextWorkflowStage, validateWorkflowTemplate } from "@loomrail/workflow-
 
 import { isSessionPauseFailureCode } from "./session-pause.js";
 import { decideReviewLoop, ReviewLoopError } from "./review.js";
+import { assertQACorrectionAcceptanceLineage } from "./qa-correction.js";
 
 export type WorkflowDomainErrorCode =
   | "WORKFLOW_NOT_READY"
@@ -718,6 +722,15 @@ export const decideApplyProviderOutcome = (
           currentTree: string;
         }
       | undefined;
+    qaCorrectionHistory?:
+      | {
+          correctionRuns: readonly QACorrectionRun[];
+          retestPlans: readonly QARetestPlan[];
+          qaRuns: readonly QARun[];
+          evidenceBundles: readonly QAEvidenceBundle[];
+          defects: readonly QADefect[];
+        }
+      | undefined;
     qaRunRequired?: boolean | undefined;
     qaRunCompletion?: QARun | undefined;
     humanRequestId?: string;
@@ -831,15 +844,34 @@ export const decideApplyProviderOutcome = (
     if (!context.humanRequestId || !context.acceptancePackageId) {
       throw new WorkflowDomainError("ACCEPTANCE_NOT_FOUND", "Durable acceptance IDs were not supplied");
     }
-    const reviewArtifact = context.existingArtifacts?.find(({ kind }) => kind === "REVIEW_REPORT");
-    const qaArtifact = context.existingArtifacts?.find(({ kind }) => kind === "QA_REPORT");
+    const measuredQA = context.measuredQA;
+    const qaArtifact =
+      measuredQA === undefined
+        ? undefined
+        : context.existingArtifacts?.find(
+            (artifact) =>
+              artifact.kind === "QA_REPORT" &&
+              artifact.qaRunId === measuredQA.qaRun.id &&
+              artifact.qaEvidenceBundleId === measuredQA.evidence.id &&
+              artifact.testedTree === measuredQA.currentTree,
+          );
+    const reviewArtifact =
+      qaArtifact === undefined
+        ? undefined
+        : context.existingArtifacts?.find(
+            (artifact) =>
+              artifact.kind === "REVIEW_REPORT" &&
+              artifact.correctionRunId === qaArtifact.correctionRunId &&
+              (qaArtifact.correctionRunId === null
+                ? artifact.testedTree === undefined || artifact.testedTree === qaArtifact.testedTree
+                : artifact.reviewReportId !== undefined && artifact.testedTree === qaArtifact.testedTree),
+          );
     if (!reviewArtifact || !qaArtifact) {
       throw new WorkflowDomainError(
         "ACCEPTANCE_NOT_READY",
         "Owner acceptance requires both Review and QA evidence",
       );
     }
-    const measuredQA = context.measuredQA;
     const measuredQAMatchesArtifact =
       measuredQA === undefined
         ? false
@@ -855,7 +887,9 @@ export const decideApplyProviderOutcome = (
           measuredQA.qaRun.workItemId === context.workItem.id &&
           measuredQA.evidence.workItemId === context.workItem.id &&
           measuredQA.evidence.qaRunId === measuredQA.qaRun.id &&
-          measuredQA.evidence.stageAttemptId === qaArtifact.stageAttemptId;
+          measuredQA.evidence.stageAttemptId === qaArtifact.stageAttemptId &&
+          qaArtifact.correctionRunId ===
+            (measuredQA.qaRun.scope.type === "RETEST" ? measuredQA.qaRun.scope.correctionRunId : null);
     if (
       qaArtifact.qaRunId === undefined ||
       qaArtifact.qaEvidenceBundleId === undefined ||
@@ -866,6 +900,20 @@ export const decideApplyProviderOutcome = (
         "ACCEPTANCE_NOT_READY",
         "Owner acceptance requires current daemon-measured browser QA evidence",
       );
+    }
+    if (qaArtifact.correctionRunId !== null) {
+      if (measuredQA === undefined || context.qaCorrectionHistory === undefined) {
+        throw new WorkflowDomainError(
+          "ACCEPTANCE_NOT_READY",
+          "Corrected acceptance requires its complete QA correction history",
+        );
+      }
+      assertQACorrectionAcceptanceLineage({
+        passingQARun: measuredQA.qaRun,
+        passingEvidence: measuredQA.evidence,
+        currentTree: measuredQA.currentTree,
+        ...context.qaCorrectionHistory,
+      });
     }
     const stageAttempt: StageAttempt = {
       ...context.stageAttempt,
@@ -1568,6 +1616,12 @@ export const decideAnswerHumanRequest = (
     throw new WorkflowDomainError(
       "WORKFLOW_CONTROL_NOT_ALLOWED",
       "Final acceptance must be accepted, returned, or rejected through its AcceptancePackage",
+    );
+  }
+  if (context.stageAttempt.failureCode === "QA_CORRECTION_EXHAUSTED") {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "An exhausted QA correction requires its dedicated bounded owner transition",
     );
   }
   validateAnswer(context.request, command.payload.answer);

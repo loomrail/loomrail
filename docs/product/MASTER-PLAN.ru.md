@@ -1230,13 +1230,16 @@ writer; hard budget останавливает run и продолжает ег�
 human acceptance; у каждого criterion есть evidence.
 
 **Implementation checkpoint (2026-09-02):** Q1 deterministic Playwright baseline реализован и прошёл independent
-browser/clean-install gates на macOS и Windows; общий release gate остаётся красным только на lint параллельно
-разрабатываемого landing. Q2 durable Defect correction loop активен: отдельный от R1 `CorrectionRun`, locked scoped
-retest + regression subset и bounded 2 automatic + 1 owner cycle зафиксированы в ADR-0008 и планах 49–50. Migration
-0025–0027 уже сохраняют CorrectionRun/QARetestPlan, явную StageAttempt/Review/QARun lineage, authority-bound compact
-evidence без pipeline-wide потери истории и отдельный audit event owner waiver. HUMAN-only optimistic QADefect waiver
-доступен через session/Origin/CSRF boundary и не меняет FAILED evidence, correction state или Acceptance; Task Cockpit
-показывает lifecycle и reason. Новая npm-версия до полного зелёного gate не публикуется.
+browser/clean-install gates на macOS и Windows. Q2 durable Defect correction loop также локально завершён: отдельный
+от R1 `CorrectionRun`, daemon-derived locked sparse retest с regression subset и bounded 2 automatic + 1 owner cycle
+реализованы по ADR-0008 и планам 49–50. Migrations 0025–0029 сохраняют per-cycle StageAttempt/Review/QARun lineage,
+authority-bound evidence, correction audit events и exact passing-retest provenance для SYSTEM-resolved defects.
+FAILED/pass/exhaust/final/cancel и ERROR retry атомарно меняют current state, Event и durable follow-up; Acceptance
+проверяет полную FULL-baseline → sequential corrections → current passing RETEST lineage. Task Cockpit показывает
+timeline, locked scope, evidence и OPEN/RESOLVED/WAIVED lifecycle, включая HUMAN-only owner waiver/final/cancel через
+session/Origin/CSRF boundary. Локально прошли 52/52 browser E2E, production audit и clean-install tarball; общий
+release gate остаётся красным только на трёх lint-ошибках параллельно разрабатываемого landing и ждёт нового
+macOS/Windows CI-прогона. Новая npm-версия до полного зелёного gate не публикуется.
 
 ### Phase 8 — Public Alpha hardening (3–4 недели)
 

@@ -12,6 +12,7 @@ import {
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
   qaDefectWaivedResultSchema,
+  qaCorrectionGateResolvedResultSchema,
   qaStateResponseSchema,
   projectConstitutionSnapshotSchema,
   projectReadinessSnapshotSchema,
@@ -40,6 +41,8 @@ import {
   type ListedProject,
   type ProjectReadinessRun,
   type QADefect,
+  type QACorrectionGateAction,
+  type QACorrectionRun,
   type ScaffoldOperation,
   type ScaffoldProposal,
   type ProviderPreference,
@@ -722,6 +725,29 @@ export const waiveQADefect = async (defect: QADefect, reason: string): Promise<Q
   );
   return result.defect;
 };
+
+export const resolveQACorrectionGate = async (
+  request: HumanRequest,
+  correctionRun: QACorrectionRun,
+  run: PipelineRun,
+  action: QACorrectionGateAction,
+) =>
+  requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(request.workItemId)}/qa/correction-gate/${encodeURIComponent(request.id)}`,
+    qaCorrectionGateResolvedResultSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedRequestVersion: request.version,
+        correctionRunId: correctionRun.id,
+        expectedCorrectionVersion: correctionRun.version,
+        expectedPipelineRunVersion: run.version,
+        action,
+      }),
+    },
+  );
 
 export type PipelineControlAction = "pause" | "resume" | "cancel";
 

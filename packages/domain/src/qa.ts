@@ -1,13 +1,17 @@
 import {
   qaDriverResultSchema,
+  qaCorrectionRunSchema,
+  qaRetestPlanSchema,
   qaRunSchema,
   type AgentRun,
   type QAAttachmentRef,
+  type QACorrectionRun,
   type QADefectDraft,
   type QADriverResult,
   type QAFinalizedAttachment,
   type QAEnvironment,
   type QAObservation,
+  type QARetestPlan,
   type QARun,
   type ProviderOutcome,
   type ReserveQARunCommand,
@@ -47,6 +51,9 @@ export const decideQAReservation = (
     currentTree: string;
     stageAttempt: StageAttempt;
     agentRun: AgentRun;
+    currentCorrection?: QACorrectionRun | undefined;
+    retestPlan?: QARetestPlan | undefined;
+    baselineQARun?: QARun | undefined;
   },
 ): QARun => {
   if (command.actor.type !== "SYSTEM" || command.actor.id !== "local-daemon") {
@@ -83,10 +90,58 @@ export const decideQAReservation = (
     });
   }
   const correctionRunId = context.stageAttempt.correctionRunId;
+  if (correctionRunId === null) {
+    if (command.payload.scope.type !== "FULL" || context.currentCorrection !== undefined) {
+      throw new QAReservationError(
+        "QA_SCOPE_MISMATCH",
+        "The Browser QA scope does not match the StageAttempt correction lineage",
+      );
+    }
+  } else {
+    const correction =
+      context.currentCorrection === undefined
+        ? undefined
+        : qaCorrectionRunSchema.parse(context.currentCorrection);
+    const retestPlan =
+      context.retestPlan === undefined ? undefined : qaRetestPlanSchema.parse(context.retestPlan);
+    const baseline =
+      context.baselineQARun === undefined ? undefined : qaRunSchema.parse(context.baselineQARun);
+    const scopeMatches =
+      command.payload.scope.type === "RETEST" &&
+      command.payload.scope.correctionRunId === correctionRunId &&
+      correction?.id === correctionRunId &&
+      correction.status === "ACTIVE" &&
+      correction.projectId === context.stageAttempt.projectId &&
+      correction.workItemId === context.stageAttempt.workItemId &&
+      correction.pipelineRunId === context.stageAttempt.pipelineRunId &&
+      retestPlan?.id === command.payload.scope.retestPlanId &&
+      retestPlan.correctionRunId === correction.id &&
+      retestPlan.projectId === correction.projectId &&
+      retestPlan.workItemId === correction.workItemId &&
+      retestPlan.pipelineRunId === correction.pipelineRunId &&
+      retestPlan.baselineQARunId === correction.baselineQARunId &&
+      baseline?.id === correction.baselineQARunId &&
+      baseline.status === "FAILED" &&
+      baseline.projectId === correction.projectId &&
+      baseline.workItemId === correction.workItemId &&
+      baseline.pipelineRunId === correction.pipelineRunId &&
+      baseline.targetOrigin === command.payload.targetOrigin &&
+      baseline.plan.revision === command.payload.plan.revision &&
+      baseline.plan.contentHash === command.payload.plan.contentHash &&
+      JSON.stringify(baseline.plan.targets) === JSON.stringify(command.payload.plan.targets) &&
+      JSON.stringify(baseline.plan.scenarios) === JSON.stringify(command.payload.plan.scenarios) &&
+      retestPlan.baselinePlanRevision === baseline.plan.revision &&
+      retestPlan.baselinePlanContentHash === baseline.plan.contentHash;
+    if (!scopeMatches) {
+      throw new QAReservationError(
+        "QA_SCOPE_MISMATCH",
+        "The Browser QA retest scope is not the active immutable correction plan",
+      );
+    }
+  }
   if (
-    (correctionRunId === null && command.payload.scope.type !== "FULL") ||
-    (correctionRunId !== null &&
-      (command.payload.scope.type !== "RETEST" || command.payload.scope.correctionRunId !== correctionRunId))
+    correctionRunId !== null &&
+    (command.payload.scope.type !== "RETEST" || command.payload.scope.correctionRunId !== correctionRunId)
   ) {
     throw new QAReservationError(
       "QA_SCOPE_MISMATCH",
@@ -176,7 +231,10 @@ export const qaWorkflowOutcome = (decision: QACompletionDecision): ProviderOutco
     );
     return {
       type: "COMPLETED",
-      summary: "The deterministic browser baseline passed.",
+      summary:
+        decision.qaRun.scope.type === "RETEST"
+          ? "The locked QA correction retest passed."
+          : "The deterministic browser baseline passed.",
       artifacts: [
         {
           kind: "QA_REPORT",
@@ -232,18 +290,39 @@ const executionKey = (targetId: string, scenarioId: string): string => `${target
 const validateMeasuredMatrix = (
   run: QARun,
   result: Extract<QADriverResult, { outcome: "MEASURED" }>,
+  retestPlan?: QARetestPlan,
 ): void => {
-  const expected = new Set<string>();
-  for (const target of run.plan.targets) {
-    for (const scenario of run.plan.scenarios) expected.add(executionKey(target.id, scenario.id));
-  }
+  const expected =
+    run.scope.type === "FULL"
+      ? run.plan.targets.flatMap((target) =>
+          run.plan.scenarios.map((scenario) => executionKey(target.id, scenario.id)),
+        )
+      : (() => {
+          const parsed = retestPlan && qaRetestPlanSchema.parse(retestPlan);
+          if (
+            parsed?.id !== run.scope.retestPlanId ||
+            parsed.correctionRunId !== run.scope.correctionRunId ||
+            parsed.projectId !== run.projectId ||
+            parsed.workItemId !== run.workItemId ||
+            parsed.pipelineRunId !== run.pipelineRunId ||
+            parsed.baselinePlanRevision !== run.plan.revision ||
+            parsed.baselinePlanContentHash !== run.plan.contentHash
+          ) {
+            throw new QACompletionError(
+              "QA_MATRIX_INCOMPLETE",
+              "The browser retest result is not bound to its immutable retest plan",
+            );
+          }
+          return parsed.cells.map(({ targetId, scenarioId }) => executionKey(targetId, scenarioId));
+        })();
+  const expectedSet = new Set(expected);
   const actual = new Set<string>();
-  for (const execution of result.executions) {
+  for (const [executionIndex, execution] of result.executions.entries()) {
     const key = executionKey(execution.targetId, execution.scenarioId);
-    if (actual.has(key) || !expected.has(key)) {
+    if (actual.has(key) || !expectedSet.has(key) || key !== expected[executionIndex]) {
       throw new QACompletionError(
         "QA_MATRIX_INCOMPLETE",
-        "The browser result contains an unexpected or duplicate target/scenario execution",
+        "The browser result contains an unexpected, reordered, or duplicate target/scenario execution",
         { targetId: execution.targetId, scenarioId: execution.scenarioId },
       );
     }
@@ -261,12 +340,12 @@ const validateMeasuredMatrix = (
       );
     }
   }
-  if (actual.size !== expected.size) {
+  if (actual.size !== expected.length) {
     throw new QACompletionError(
       "QA_MATRIX_INCOMPLETE",
       "The browser result did not cover the complete QA matrix",
       {
-        expected: expected.size,
+        expected: expected.length,
         actual: actual.size,
       },
     );
@@ -342,6 +421,7 @@ export const decideQACompletion = (input: {
   currentTree: string;
   result: QADriverResult;
   finalizedAttachments: readonly QAFinalizedAttachment[];
+  retestPlan?: QARetestPlan | undefined;
   now: string;
 }): QACompletionDecision => {
   const run = qaRunSchema.parse(input.qaRun);
@@ -391,7 +471,7 @@ export const decideQACompletion = (input: {
     return { status: "ERROR", qaRun, evidence: null, requiresHumanRequest: true };
   }
 
-  validateMeasuredMatrix(run, result);
+  validateMeasuredMatrix(run, result, input.retestPlan);
   const attachments = validateFinalizedAttachments(run, result, input.finalizedAttachments);
   const failedCheck = result.executions.some(
     ({ steps, assertions }) =>

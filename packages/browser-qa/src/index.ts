@@ -14,6 +14,7 @@ import {
   qaAttachmentDraftSchema,
   qaDriverResultSchema,
   qaFinalizedAttachmentSchema,
+  qaRetestCellSchema,
   qaRunSchema,
   type QAAttachmentDraft,
   type QADefectDraft,
@@ -21,6 +22,7 @@ import {
   type QAFinalizedAttachment,
   type QALocator,
   type QAObservation,
+  type QARetestCell,
   type QARun,
 } from "@loomrail/contracts";
 import { chromium, type BrowserContext, type Locator, type Page, type Route } from "playwright";
@@ -56,7 +58,7 @@ export type BrowserDriverExecution = {
 
 export type BrowserDriver = {
   id: "PLAYWRIGHT";
-  run: (qaRun: QARun) => Promise<BrowserDriverExecution>;
+  run: (qaRun: QARun, retestCells?: readonly QARetestCell[]) => Promise<BrowserDriverExecution>;
 };
 
 export type PlaywrightDriverOptions = {
@@ -448,8 +450,29 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
     options.resolveHostname ?? (async (hostname: string) => lookup(hostname, { all: true, verbatim: true }));
   return {
     id: "PLAYWRIGHT",
-    run: async (input): Promise<BrowserDriverExecution> => {
+    run: async (input, retestCells): Promise<BrowserDriverExecution> => {
       const qaRun = qaRunSchema.parse(input);
+      const selectedCells =
+        qaRun.scope.type === "FULL"
+          ? (() => {
+              if (retestCells !== undefined) {
+                throw new TypeError("A full Browser QA run cannot receive a sparse retest scope");
+              }
+              return null;
+            })()
+          : (() => {
+              const parsed = z.array(qaRetestCellSchema).min(1).parse(retestCells);
+              const baselineCells = new Set(
+                qaRun.plan.targets.flatMap((target) =>
+                  qaRun.plan.scenarios.map((scenario) => `${target.id}\u0000${scenario.id}`),
+                ),
+              );
+              const keys = parsed.map(({ targetId, scenarioId }) => `${targetId}\u0000${scenarioId}`);
+              if (new Set(keys).size !== keys.length || keys.some((key) => !baselineCells.has(key))) {
+                throw new TypeError("The Browser QA retest scope is outside the locked baseline plan");
+              }
+              return new Set(keys);
+            })();
       const runStorageSegment = `run-${createHash("sha256").update(qaRun.id).digest("hex").slice(0, 32)}`;
       const quarantineRoot = join(parsedOptions.artifactsDirectory, ".quarantine");
       await mkdir(quarantineRoot, { recursive: true });
@@ -483,6 +506,10 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
         browser = await chromium.launch({ headless: true, args: [...networkPolicy.launchArgs] });
         browserVersion = browser.version();
         for (const [targetIndex, target] of qaRun.plan.targets.entries()) {
+          const selectedScenarios = qaRun.plan.scenarios.filter(
+            (scenario) => selectedCells === null || selectedCells.has(`${target.id}\u0000${scenario.id}`),
+          );
+          if (selectedScenarios.length === 0) continue;
           const context = await browser.newContext({
             viewport: target.viewport,
             locale: target.locale,
@@ -493,7 +520,7 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
           context.setDefaultTimeout(timeoutMs);
           await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
           const page = await context.newPage();
-          let scenarioId = qaRun.plan.scenarios[0]?.id ?? "baseline";
+          let scenarioId = selectedScenarios[0]?.id ?? "baseline";
           await bindEvidenceListeners({
             context,
             page,
@@ -517,7 +544,8 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
             },
           });
 
-          for (const [scenarioIndex, scenario] of qaRun.plan.scenarios.entries()) {
+          for (const scenario of selectedScenarios) {
+            const scenarioIndex = qaRun.plan.scenarios.findIndex(({ id }) => id === scenario.id);
             scenarioId = scenario.id;
             const stepResults: Extract<
               QADriverResult,
@@ -678,7 +706,7 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
               throw new QAEvidenceLimitError("Browser QA evidence exceeded the per-run size limit");
             }
             attachmentBytes += metadata.byteSize;
-            const firstScenario = qaRun.plan.scenarios[0];
+            const firstScenario = selectedScenarios[0];
             if (!firstScenario) throw new Error("QA plan has no scenario for trace attribution");
             const draft = qaAttachmentDraftSchema.parse({
               handle: `trace:${target.id}`,
@@ -693,7 +721,7 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
             if (error instanceof QAEvidenceLimitError) {
               securityViolations.add("INVALID_EVIDENCE");
             }
-            const firstScenario = qaRun.plan.scenarios[0];
+            const firstScenario = selectedScenarios[0];
             if (firstScenario) {
               defect(defects, {
                 severity: "HIGH",

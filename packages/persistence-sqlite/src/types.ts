@@ -20,8 +20,10 @@ import type {
   ProjectConstitutionVersion,
   ProjectReadinessSnapshot,
   QAAttachmentRef,
+  QACorrectionRun,
   QADefect,
   QAEvidenceBundle,
+  QARetestPlan,
   QARun,
   ReviewFinding,
   ReviewFindingStatus,
@@ -210,6 +212,8 @@ export type StateQueryResult =
       evidence: QAEvidenceBundle[];
       attachments: QAAttachmentRef[];
       defects: QADefect[];
+      correctionRuns: QACorrectionRun[];
+      retestPlans: QARetestPlan[];
     }
   | { type: "QA_ATTACHMENTS"; attachments: QAAttachmentRef[] }
   | { type: "REVIEW_REPORTS"; reports: ReviewReport[] }
@@ -274,6 +278,8 @@ export type LocalStateIdKind =
   | "qaEvidenceBundle"
   | "qaAttachment"
   | "qaDefect"
+  | "qaCorrectionRun"
+  | "qaRetestPlan"
   | "reviewReport"
   | "reviewFinding"
   | "contextPackRecipe"

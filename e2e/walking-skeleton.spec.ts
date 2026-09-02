@@ -6,7 +6,11 @@ import { dirname, join, resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
 import { gatedAdapter } from "../apps/daemon/test/gated-adapter.js";
-import { passingBrowserQADriver } from "../apps/daemon/test/browser-qa-fixture.js";
+import {
+  alwaysFailingBrowserQADriver,
+  failThenPassBrowserQADriver,
+  passingBrowserQADriver,
+} from "../apps/daemon/test/browser-qa-fixture.js";
 import { materialiseFixtureRepository, resolveBundledFixture } from "../apps/daemon/dist/fixtures.js";
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
 import { createProviderRegistry } from "../apps/daemon/dist/provider-selection.js";
@@ -1794,6 +1798,92 @@ test.describe("authenticated walking skeleton", () => {
     await expect(page).toHaveURL(/scope=backlog/);
     await expect(page.locator(".lr-kanban-column")).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Human decision workflow" })).toHaveCount(0);
+  });
+
+  test("shows fail-fix-review-scoped-pass correction evidence down to 320 px", async ({ page }) => {
+    const adapter = gatedAdapter();
+    adapter.release();
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      browserQADriver: failThenPassBrowserQADriver(),
+      logger: false,
+      providerAdapter: adapter,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Measured QA correction");
+    const inspector = page.getByRole("complementary", { name: "Measured QA correction" });
+    await inspector.getByRole("button", { name: "Move to Ready" }).click();
+    await inspector.getByRole("button", { name: "Start workflow" }).click();
+
+    const workflowSection = inspector
+      .locator(".lr-inspector-section")
+      .filter({ has: page.getByText("Workflow", { exact: true }) });
+    await expect(workflowSection.getByRole("heading", { name: "Acceptance package" })).toBeVisible({
+      timeout: BUDGET_WALL_MS,
+    });
+    const browserQA = workflowSection.getByRole("region", { name: "Browser QA" });
+    await expect(browserQA.getByText("Correction timeline", { exact: true })).toBeVisible();
+    await expect(browserQA.getByText("Correction 1", { exact: true })).toBeVisible();
+    await expect(browserQA.getByText("Source failure", { exact: true })).toBeVisible();
+    await expect(browserQA.getByText(/Locked retest scope · \d+ cells/)).toBeVisible();
+    await expect(browserQA.getByText("open defect", { exact: true })).toBeVisible();
+    await expect(browserQA.getByText("regression", { exact: true })).toBeVisible();
+    await expect(browserQA.getByText("Resolved by retest", { exact: true })).toBeVisible();
+    await expect(browserQA.getByText(/^Passing retest:/)).toBeVisible();
+
+    await chooseInSettings(page, "Change color theme", "Dark");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await chooseInSettings(page, "Change language", "Русский");
+    const russianQA = inspector.getByRole("region", { name: "QA в браузере" });
+    await expect(russianQA.getByText("История коррекций", { exact: true })).toBeVisible();
+    await expect(russianQA.getByText("Коррекция 1", { exact: true })).toBeVisible();
+    await expect(russianQA.getByText("регрессия", { exact: true })).toBeVisible();
+
+    await page.setViewportSize({ width: 320, height: 800 });
+    await russianQA.scrollIntoViewIfNeeded();
+    expect(await russianQA.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
+    ).toBe(true);
+  });
+
+  test("renders the exhausted correction gate and cancels it from the keyboard", async ({ page }) => {
+    const adapter = gatedAdapter();
+    adapter.release();
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      browserQADriver: alwaysFailingBrowserQADriver(),
+      logger: false,
+      providerAdapter: adapter,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await createTask(page, "Exhausted QA correction");
+    const inspector = page.getByRole("complementary", { name: "Exhausted QA correction" });
+    await inspector.getByRole("button", { name: "Move to Ready" }).click();
+    await inspector.getByRole("button", { name: "Start workflow" }).click();
+
+    const browserQA = inspector.getByRole("region", { name: "Browser QA" });
+    await expect(browserQA.getByRole("heading", { name: "QA correction decision" })).toBeVisible({
+      timeout: BUDGET_WALL_MS,
+    });
+    await expect(browserQA.getByText("Correction 1", { exact: true })).toBeVisible();
+    await expect(browserQA.getByText("Superseded", { exact: true })).toBeVisible();
+    await expect(browserQA.getByText("Correction 2", { exact: true })).toBeVisible();
+    await expect(browserQA.getByText("Limit reached", { exact: true })).toBeVisible();
+    await expect(browserQA.getByText("Correction 3", { exact: true })).toHaveCount(0);
+    await expect(browserQA.getByRole("button", { name: "Authorize final correction" })).toBeVisible();
+
+    const cancel = browserQA.getByRole("button", { name: "Cancel delivery" });
+    await cancel.focus();
+    await expect(cancel).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("button", { name: "Exhausted QA correction" })).toHaveCount(0);
   });
 
   test("shows the sessions inside a running stage attempt, with occupancy, handoff, and full checkpoint text", async ({

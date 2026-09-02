@@ -3,6 +3,9 @@ import type {
   Project,
   QADriverResult,
   QAFinalizedAttachment,
+  QAPlanSnapshot,
+  QARetestCell,
+  QARunScope,
   WorkflowDispatch,
 } from "@loomrail/contracts";
 import type { BrowserDriver, BrowserDriverExecution } from "@loomrail/browser-qa";
@@ -38,13 +41,62 @@ const readProject = (state: LocalState, projectId: string): Project => {
 
 export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): BrowserQAStageRunner => ({
   run: async ({ dispatch, agentRunId, testedTree }) => {
-    let config: BrowserQAConfigResolution;
-    try {
-      config = await deps.resolveConfig(readProject(deps.state, dispatch.projectId));
-    } catch {
-      config = unavailableBrowserQAConfig(
-        "The project Browser QA configuration could not be loaded safely. Fix it before retrying QA.",
+    const workflow = deps.state.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: dispatch.workItemId,
+    });
+    if (workflow.type !== "WORKFLOW_SNAPSHOT") {
+      throw new StateStoreError("PERSISTENCE_FAILURE", "The Browser QA workflow could not be loaded");
+    }
+    const stageAttempt = workflow.snapshot.stageAttempts.find(({ id }) => id === dispatch.stageAttemptId);
+    if (stageAttempt === undefined) {
+      throw new StateStoreError("PERSISTENCE_FAILURE", "The Browser QA StageAttempt could not be loaded");
+    }
+
+    let targetOrigin: string;
+    let plan: QAPlanSnapshot;
+    let scope: QARunScope;
+    let retestCells: readonly QARetestCell[] | undefined;
+    let configError: Extract<QADriverResult, { outcome: "ERROR" }> | null = null;
+    if (stageAttempt.correctionRunId === null) {
+      let config: BrowserQAConfigResolution;
+      try {
+        config = await deps.resolveConfig(readProject(deps.state, dispatch.projectId));
+      } catch {
+        config = unavailableBrowserQAConfig(
+          "The project Browser QA configuration could not be loaded safely. Fix it before retrying QA.",
+        );
+      }
+      targetOrigin = config.targetOrigin;
+      plan = config.plan;
+      scope = { type: "FULL" };
+      if (config.status === "ERROR") configError = config.error;
+    } else {
+      const qaState = deps.state.query({ type: "GET_QA_STATE", pipelineRunId: dispatch.pipelineRunId });
+      if (qaState.type !== "QA_STATE") {
+        throw new StateStoreError("PERSISTENCE_FAILURE", "The QA correction state could not be loaded");
+      }
+      const correction = qaState.correctionRuns.find(
+        ({ id, status }) => id === stageAttempt.correctionRunId && status === "ACTIVE",
       );
+      const retestPlan = qaState.retestPlans.find(
+        ({ correctionRunId }) => correctionRunId === stageAttempt.correctionRunId,
+      );
+      const baseline = qaState.runs.find(({ id }) => id === correction?.baselineQARunId);
+      if (correction === undefined || retestPlan === undefined || baseline?.status !== "FAILED") {
+        throw new StateStoreError(
+          "PERSISTENCE_FAILURE",
+          "The active QA correction is missing its failed baseline or immutable retest plan",
+        );
+      }
+      targetOrigin = baseline.targetOrigin;
+      plan = baseline.plan;
+      scope = {
+        type: "RETEST",
+        correctionRunId: correction.id,
+        retestPlanId: retestPlan.id,
+      };
+      retestCells = retestPlan.cells;
     }
 
     const reserved = deps.state.execute({
@@ -57,9 +109,9 @@ export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): Brow
         stageAttemptId: dispatch.stageAttemptId,
         agentRunId,
         testedTree,
-        targetOrigin: config.targetOrigin,
-        plan: config.plan,
-        scope: { type: "FULL" },
+        targetOrigin,
+        plan,
+        scope,
       },
     });
     if (reserved.type !== "QA_RUN_RESERVED") {
@@ -69,11 +121,11 @@ export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): Brow
     let execution: BrowserDriverExecution | undefined;
     let result: QADriverResult;
     let finalizedAttachments: QAFinalizedAttachment[] = [];
-    if (config.status === "ERROR") {
-      result = config.error;
+    if (configError !== null) {
+      result = configError;
     } else {
       try {
-        execution = await deps.driver.run(reserved.qaRun);
+        execution = await deps.driver.run(reserved.qaRun, retestCells);
         result = execution.result;
         finalizedAttachments = [
           ...(await execution.finalizeAttachments({

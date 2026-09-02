@@ -229,6 +229,8 @@ describe("local daemon session and state boundary", () => {
       evidence: [],
       attachments: [],
       defects: [],
+      correctionRuns: [],
+      retestPlans: [],
     });
     expect(missing.status).toBe(404);
     expect(unauthenticated.status).toBe(401);

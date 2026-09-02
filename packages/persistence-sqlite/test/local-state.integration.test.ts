@@ -923,7 +923,8 @@ describe("SQLite local state", () => {
 
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
+      29,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -1541,6 +1542,466 @@ describe("SQLite local state", () => {
       durable.prepare("SELECT status FROM qa_correction_runs WHERE id = ?").get("q2-correction-1"),
     ).toEqual({ status: "ACTIVE" });
     durable.close();
+  });
+
+  it("resolves an exhausted QA gate atomically and preserves the final correction across restart", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-q2-owner-gate"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-q2-owner-gate", created.workItem.id, 1, "READY"));
+    const template: StartMockPipelineCommand["payload"]["template"] = {
+      schemaVersion: 1,
+      id: "q2-owner-gate-v1",
+      version: 1,
+      name: "Q2 exhausted correction gate",
+      stages: [{ stage: "QA", ordinal: 0, contextPack }],
+    };
+    const pipeline = localState.execute({
+      schemaVersion: 1,
+      commandId: "pipeline-q2-owner-gate",
+      correlationId: "correlation-pipeline-q2-owner-gate",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    const baselineAgent = localState.execute({
+      schemaVersion: 1,
+      commandId: "q2-owner-gate-baseline-agent",
+      correlationId: "correlation-q2-owner-gate-baseline-agent",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: pipeline.dispatch.id,
+        provider: "CODEX",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (baselineAgent.type !== "AGENT_RUN_STARTED") throw new Error("Expected baseline QA AgentRun");
+    localState.close();
+    state = undefined;
+
+    const testedTree = "f".repeat(40);
+    const plan = {
+      schemaVersion: 1,
+      revision: 1,
+      contentHash: `sha256:${"c".repeat(64)}`,
+      targets: [
+        {
+          id: "mobile-dark-ru",
+          viewport: { width: 320, height: 720 },
+          locale: "ru-RU",
+          theme: "DARK",
+        },
+      ],
+      scenarios: [
+        {
+          id: "task-cockpit",
+          title: "Task Cockpit remains usable on mobile",
+          steps: [{ id: "open", title: "Open the Task Cockpit", action: { type: "NAVIGATE", path: "/" } }],
+          assertions: [
+            {
+              id: "no-overflow",
+              title: "The page does not overflow horizontally",
+              rule: { type: "NO_HORIZONTAL_OVERFLOW" },
+            },
+          ],
+        },
+      ],
+    };
+    const environment = {
+      osFamily: "MACOS",
+      runtimeName: "NODE",
+      runtimeVersion: "24.7.0",
+      browserName: "CHROMIUM",
+      browserVersion: "140.0",
+    };
+    const executions = [
+      {
+        targetId: "mobile-dark-ru",
+        scenarioId: "task-cockpit",
+        durationMs: 90,
+        steps: [{ id: "open", status: "PASSED", durationMs: 40 }],
+        assertions: [{ id: "no-overflow", status: "FAILED", details: "24px overflow" }],
+      },
+    ];
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("PRAGMA foreign_keys = ON");
+    const assignment = raw
+      .prepare("SELECT id FROM squad_assignments WHERE pipeline_run_id = ?")
+      .get(pipeline.run.id) as { id: string };
+    raw
+      .prepare(
+        `UPDATE agent_runs SET status = 'SUCCEEDED', finished_at = ?, version = 2
+         WHERE id = ? AND status = 'RUNNING' AND version = 1`,
+      )
+      .run(timestamp, baselineAgent.run.id);
+    raw
+      .prepare(
+        `UPDATE stage_attempts SET status = 'SUCCEEDED', finished_at = ?, result_tree = ?, version = 2
+         WHERE id = ? AND version = 1`,
+      )
+      .run(timestamp, testedTree, pipeline.stageAttempt.id);
+    const insertQARun = raw.prepare(
+      `INSERT INTO qa_runs (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+        agent_run_id, driver_id, tested_tree, target_origin, plan_json, correction_run_id,
+        retest_plan_id, status, error_code, error_summary, started_at, completed_at, version
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, 'PLAYWRIGHT', ?, ?, ?, ?, ?,
+        'FAILED', NULL, NULL, ?, ?, 2)`,
+    );
+    insertQARun.run(
+      "q2-owner-gate-baseline-run",
+      created.workItem.projectId,
+      created.workItem.id,
+      pipeline.run.id,
+      pipeline.stageAttempt.id,
+      baselineAgent.run.id,
+      testedTree,
+      "http://127.0.0.1:4173",
+      JSON.stringify(plan),
+      null,
+      null,
+      timestamp,
+      timestamp,
+    );
+    raw
+      .prepare(
+        `INSERT INTO qa_defects (
+          id, schema_version, qa_run_id, project_id, work_item_id, tested_tree, ordinal,
+          severity, status, title, description, reproduction_json, target_id, scenario_id,
+          resolution_reason, resolved_by_qa_run_id, created_at, resolved_at, version
+        ) VALUES (?, 1, ?, ?, ?, ?, 1, 'HIGH', 'OPEN', ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, 1)`,
+      )
+      .run(
+        "q2-owner-gate-defect",
+        "q2-owner-gate-baseline-run",
+        created.workItem.projectId,
+        created.workItem.id,
+        testedTree,
+        "Task Cockpit overflows on mobile",
+        "The page width exceeds the viewport.",
+        JSON.stringify(["Open the Task Cockpit at 320x720."]),
+        "mobile-dark-ru",
+        "task-cockpit",
+        timestamp,
+      );
+    const insertEvidence = raw.prepare(
+      `INSERT INTO qa_evidence_bundles (
+        id, schema_version, qa_run_id, project_id, work_item_id, pipeline_run_id,
+        stage_attempt_id, tested_tree, verdict, environment_json, executions_json,
+        observations_json, attachment_ids_json, defect_ids_json, created_at
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, 'FAILED', ?, ?, '[]', '[]', ?, ?)`,
+    );
+    insertEvidence.run(
+      "q2-owner-gate-baseline-evidence",
+      "q2-owner-gate-baseline-run",
+      created.workItem.projectId,
+      created.workItem.id,
+      pipeline.run.id,
+      pipeline.stageAttempt.id,
+      testedTree,
+      JSON.stringify(environment),
+      JSON.stringify(executions),
+      JSON.stringify(["q2-owner-gate-defect"]),
+      timestamp,
+    );
+    raw
+      .prepare(
+        `INSERT INTO qa_correction_runs (
+          id, schema_version, project_id, work_item_id, pipeline_run_id, ordinal,
+          source_qa_run_id, baseline_qa_run_id, source_evidence_bundle_id, source_tested_tree,
+          defect_ids_json, status, created_at, completed_at, version
+        ) VALUES (?, 1, ?, ?, ?, 2, ?, ?, ?, ?, ?, 'ACTIVE', ?, NULL, 1)`,
+      )
+      .run(
+        "q2-owner-gate-correction-2",
+        created.workItem.projectId,
+        created.workItem.id,
+        pipeline.run.id,
+        "q2-owner-gate-baseline-run",
+        "q2-owner-gate-baseline-run",
+        "q2-owner-gate-baseline-evidence",
+        testedTree,
+        JSON.stringify(["q2-owner-gate-defect"]),
+        timestamp,
+      );
+    raw
+      .prepare(
+        `INSERT INTO qa_retest_plans (
+          id, schema_version, project_id, work_item_id, pipeline_run_id, correction_run_id,
+          baseline_qa_run_id, source_qa_run_id, source_evidence_bundle_id,
+          baseline_plan_revision, baseline_plan_content_hash, cells_json, created_at
+        ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+      )
+      .run(
+        "q2-owner-gate-retest-2",
+        created.workItem.projectId,
+        created.workItem.id,
+        pipeline.run.id,
+        "q2-owner-gate-correction-2",
+        "q2-owner-gate-baseline-run",
+        "q2-owner-gate-baseline-run",
+        "q2-owner-gate-baseline-evidence",
+        plan.contentHash,
+        JSON.stringify([
+          {
+            targetId: "mobile-dark-ru",
+            scenarioId: "task-cockpit",
+            reasons: ["FAILED_CHECK", "OPEN_DEFECT"],
+          },
+        ]),
+        timestamp,
+      );
+    raw
+      .prepare(
+        `INSERT INTO stage_attempts (
+          id, pipeline_run_id, project_id, work_item_id, correction_run_id, stage, attempt,
+          status, version, started_at, finished_at, failure_code, unproductive_sessions,
+          pack_share_backoffs, result_tree
+        ) VALUES (?, ?, ?, ?, ?, 'QA', 1, 'WAITING_HUMAN', 1, ?, NULL,
+          'QA_CORRECTION_EXHAUSTED', 0, 0, NULL)`,
+      )
+      .run(
+        "q2-owner-gate-qa-attempt",
+        pipeline.run.id,
+        created.workItem.projectId,
+        created.workItem.id,
+        "q2-owner-gate-correction-2",
+        timestamp,
+      );
+    raw
+      .prepare(
+        `INSERT INTO agent_runs (
+          id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id, ordinal,
+          squad_assignment_id, profile_id, profile_revision, profile_role, provider, status,
+          policy_snapshot_hash, started_at, finished_at, version
+        ) VALUES (?, 1, ?, ?, ?, ?, 1, ?, 'builtin.browser-qa', 1, 'BROWSER_QA', 'CODEX',
+          'SUCCEEDED', ?, ?, ?, 2)`,
+      )
+      .run(
+        "q2-owner-gate-retest-agent",
+        created.workItem.projectId,
+        created.workItem.id,
+        pipeline.run.id,
+        "q2-owner-gate-qa-attempt",
+        assignment.id,
+        `sha256:${"e".repeat(64)}`,
+        timestamp,
+        timestamp,
+      );
+    insertQARun.run(
+      "q2-owner-gate-retest-run",
+      created.workItem.projectId,
+      created.workItem.id,
+      pipeline.run.id,
+      "q2-owner-gate-qa-attempt",
+      "q2-owner-gate-retest-agent",
+      testedTree,
+      "http://127.0.0.1:4173",
+      JSON.stringify(plan),
+      "q2-owner-gate-correction-2",
+      "q2-owner-gate-retest-2",
+      timestamp,
+      timestamp,
+    );
+    insertEvidence.run(
+      "q2-owner-gate-retest-evidence",
+      "q2-owner-gate-retest-run",
+      created.workItem.projectId,
+      created.workItem.id,
+      pipeline.run.id,
+      "q2-owner-gate-qa-attempt",
+      testedTree,
+      JSON.stringify(environment),
+      JSON.stringify(executions),
+      JSON.stringify(["q2-owner-gate-defect"]),
+      timestamp,
+    );
+    raw
+      .prepare(
+        `UPDATE qa_correction_runs SET status = 'EXHAUSTED', version = 2
+         WHERE id = 'q2-owner-gate-correction-2' AND status = 'ACTIVE' AND version = 1`,
+      )
+      .run();
+    raw
+      .prepare(
+        `UPDATE pipeline_runs SET status = 'WAITING_HUMAN', orchestration_status = 'WAITING_HUMAN',
+          current_stage_attempt_id = 'q2-owner-gate-qa-attempt', version = 2, updated_at = ?
+         WHERE id = ? AND version = 1`,
+      )
+      .run(timestamp, pipeline.run.id);
+    raw
+      .prepare(
+        `UPDATE work_items SET state = 'BLOCKED', current_stage = 'QA', version = version + 1,
+          updated_at = ? WHERE id = ?`,
+      )
+      .run(timestamp, created.workItem.id);
+    raw
+      .prepare(
+        `INSERT INTO human_requests (
+          id, project_id, work_item_id, stage_attempt_id, kind, blocking, title, context,
+          recommendation, allow_other, status, version, created_at, resolved_at
+        ) VALUES (?, ?, ?, ?, 'SINGLE_CHOICE', 1, ?, ?, ?, 0, 'OPEN', 1, ?, NULL)`,
+      )
+      .run(
+        "q2-owner-gate-request",
+        created.workItem.projectId,
+        created.workItem.id,
+        "q2-owner-gate-qa-attempt",
+        "QA correction loop needs a decision",
+        "Two automatic QA correction runs still ended in measured defects.",
+        "Inspect the complete defect and evidence history.",
+        timestamp,
+      );
+    const insertOption = raw.prepare(
+      `INSERT INTO human_request_options
+       (human_request_id, ordinal, id, label, consequence, recommended)
+       VALUES ('q2-owner-gate-request', ?, ?, ?, ?, ?)`,
+    );
+    insertOption.run(
+      0,
+      "q2-owner-gate-authorize",
+      "Authorize one final QA correction",
+      "Creates CorrectionRun 3 with a locked retest plan.",
+      1,
+    );
+    insertOption.run(
+      1,
+      "q2-owner-gate-cancel",
+      "Cancel the delivery",
+      "Stops this PipelineRun without acceptance.",
+      0,
+    );
+    expect(raw.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    raw.close();
+
+    const reopened = await open();
+    expect(() =>
+      reopened.execute({
+        schemaVersion: 1,
+        commandId: "generic-answer-q2-owner-gate",
+        correlationId: "correlation-generic-answer-q2-owner-gate",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "ANSWER_HUMAN_REQUEST",
+        payload: {
+          humanRequestId: "q2-owner-gate-request",
+          expectedVersion: 1,
+          answer: { type: "OPTION", optionIds: ["q2-owner-gate-authorize"] },
+        },
+      }),
+    ).toThrow(expect.objectContaining({ code: "WORKFLOW_CONTROL_NOT_ALLOWED" }));
+    const command = {
+      schemaVersion: 1 as const,
+      commandId: "resolve-q2-owner-gate",
+      correlationId: "correlation-resolve-q2-owner-gate",
+      actor: { type: "HUMAN" as const, id: "local-owner" },
+      type: "RESOLVE_QA_CORRECTION_GATE" as const,
+      payload: {
+        humanRequestId: "q2-owner-gate-request",
+        expectedRequestVersion: 1,
+        correctionRunId: "q2-owner-gate-correction-2",
+        expectedCorrectionVersion: 2,
+        expectedPipelineRunVersion: 2,
+        action: "AUTHORIZE_FINAL" as const,
+      },
+    };
+    const resolved = reopened.execute(command);
+    if (resolved.type !== "QA_CORRECTION_GATE_RESOLVED" || resolved.correctionRun === null) {
+      throw new Error("Expected the final QA correction to start");
+    }
+    const finalCorrectionId = resolved.correctionRun.id;
+    expect(resolved).toMatchObject({
+      type: "QA_CORRECTION_GATE_RESOLVED",
+      replayed: false,
+      action: "AUTHORIZE_FINAL",
+      request: { status: "RESOLVED", version: 2 },
+      decision: { answer: { type: "OPTION", optionIds: ["q2-owner-gate-authorize"] } },
+      previousCorrection: { id: "q2-owner-gate-correction-2", status: "SUPERSEDED", version: 3 },
+      correctionRun: { ordinal: 3, status: "ACTIVE", version: 1 },
+      retestPlan: { sourceQARunId: "q2-owner-gate-retest-run" },
+      run: { status: "RUNNING", version: 3 },
+      stageAttempt: { id: "q2-owner-gate-qa-attempt", status: "SUCCEEDED", version: 2 },
+      dispatch: { status: "PENDING" },
+    });
+    expect(resolved.events.map(({ type }) => type)).toEqual(
+      expect.arrayContaining(["HUMAN_REQUEST_RESOLVED", "QA_CORRECTION_STARTED", "STAGE_ATTEMPT_CHANGED"]),
+    );
+    expect(reopened.execute(command)).toMatchObject({
+      type: "QA_CORRECTION_GATE_RESOLVED",
+      replayed: true,
+    });
+    reopened.close();
+    state = undefined;
+
+    const restarted = await open();
+    const restartedQA = restarted.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id });
+    expect(restartedQA).toMatchObject({
+      type: "QA_STATE",
+      correctionRuns: [
+        { ordinal: 2, status: "SUPERSEDED", version: 3 },
+        { ordinal: 3, status: "ACTIVE", version: 1 },
+      ],
+    });
+    if (restartedQA.type !== "QA_STATE") throw new Error("Expected restarted QA state");
+    expect(
+      restartedQA.retestPlans.some(({ correctionRunId }) => correctionRunId === "q2-owner-gate-correction-2"),
+    ).toBe(true);
+    expect(
+      restartedQA.retestPlans.some(({ sourceQARunId }) => sourceQARunId === "q2-owner-gate-retest-run"),
+    ).toBe(true);
+    const restartedWorkflow = restarted.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    expect(restartedWorkflow).toMatchObject({
+      type: "WORKFLOW_SNAPSHOT",
+      snapshot: {
+        run: { status: "RUNNING" },
+        humanRequests: [{ id: "q2-owner-gate-request", status: "RESOLVED" }],
+      },
+    });
+    if (restartedWorkflow.type !== "WORKFLOW_SNAPSHOT" || restartedWorkflow.snapshot.run === null) {
+      throw new Error("Expected the restarted final correction workflow");
+    }
+    expect(
+      restartedWorkflow.snapshot.stageAttempts.some(
+        ({ correctionRunId, stage }) => correctionRunId === finalCorrectionId && stage === "IMPLEMENT",
+      ),
+    ).toBe(true);
+    const cancelled = restarted.execute({
+      schemaVersion: 1,
+      commandId: "cancel-q2-owner-gate-final-correction",
+      correlationId: "correlation-cancel-q2-owner-gate-final-correction",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CANCEL_PIPELINE",
+      payload: {
+        pipelineRunId: restartedWorkflow.snapshot.run.id,
+        expectedVersion: restartedWorkflow.snapshot.run.version,
+      },
+    });
+    expect(cancelled).toMatchObject({
+      type: "PIPELINE_CONTROL_APPLIED",
+      action: "CANCEL",
+      run: { status: "CANCELLED" },
+    });
+    if (cancelled.type !== "PIPELINE_CONTROL_APPLIED") throw new Error("Expected cancelled pipeline");
+    expect(cancelled.events.map(({ type }) => type)).toEqual(
+      expect.arrayContaining(["PIPELINE_CANCELLED", "QA_CORRECTION_CANCELLED"]),
+    );
+    expect(restarted.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id })).toMatchObject({
+      type: "QA_STATE",
+      correctionRuns: [
+        { ordinal: 2, status: "SUPERSEDED" },
+        { ordinal: 3, status: "CANCELLED", version: 2 },
+      ],
+    });
   });
 
   it("backfills Q2 lineage in strict Events and command receipts", async () => {
@@ -2868,7 +3329,7 @@ describe("SQLite local state", () => {
       immutableQA.close();
     });
 
-    it("blocks Acceptance atomically when measured browser QA fails", async () => {
+    it("starts the first bounded correction atomically when measured browser QA fails", async () => {
       const localState = await open();
       localState.execute(registerProject());
       const created = localState.execute(createWorkItem("create-q1-failed-qa"));
@@ -2881,8 +3342,9 @@ describe("SQLite local state", () => {
         name: "Measured QA failure",
         stages: [
           { stage: "IMPLEMENT", ordinal: 0, contextPack },
-          { stage: "QA", ordinal: 1, contextPack },
-          { stage: "ACCEPTANCE", ordinal: 2, contextPack },
+          { stage: "REVIEW", ordinal: 1, contextPack },
+          { stage: "QA", ordinal: 2, contextPack },
+          { stage: "ACCEPTANCE", ordinal: 3, contextPack },
         ],
       };
       const pipeline = localState.execute({
@@ -2899,14 +3361,10 @@ describe("SQLite local state", () => {
         },
       });
       if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
-      localState.execute({
-        schemaVersion: 1,
-        commandId: "mark-q1-failed-implementation",
-        correlationId: "correlation-mark-q1-failed-implementation",
-        actor: { type: "SYSTEM", id: "mock-provider" },
-        type: "MARK_WORKFLOW_DISPATCH_STARTED",
-        payload: { dispatchId: pipeline.dispatch.id },
-      });
+      const initialAuthor = localState.execute(
+        startAgentRun("q1-failed-initial-author", pipeline.dispatch.id),
+      );
+      if (initialAuthor.type !== "AGENT_RUN_STARTED") throw new Error("Expected initial author AgentRun");
       const testedTree = "c".repeat(40);
       localState.execute({
         schemaVersion: 1,
@@ -2919,6 +3377,50 @@ describe("SQLite local state", () => {
           provider: "CODEX",
           template,
           outcome: { type: "COMPLETED", summary: "Implementation is ready for browser QA." },
+          resultTree: testedTree,
+        },
+      });
+      const pendingReview = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (pendingReview.type !== "WORKFLOW_DISPATCHES" || pendingReview.dispatches[0] === undefined) {
+        throw new Error("Expected initial REVIEW dispatch");
+      }
+      const initialReviewDispatch = pendingReview.dispatches[0];
+      const initialReviewerCommand = startAgentRun("q1-failed-initial-reviewer", initialReviewDispatch.id);
+      const initialReviewer = localState.execute({
+        ...initialReviewerCommand,
+        payload: { ...initialReviewerCommand.payload, provider: "CLAUDE_CODE" },
+      });
+      if (initialReviewer.type !== "AGENT_RUN_STARTED") throw new Error("Expected initial reviewer AgentRun");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-q1-failed-initial-review",
+        correlationId: "correlation-apply-q1-failed-initial-review",
+        actor: { type: "SYSTEM", id: "claude-code-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: initialReviewDispatch.id,
+          provider: "CLAUDE_CODE",
+          template,
+          outcome: {
+            type: "COMPLETED",
+            summary: "The initial tree passed independent review.",
+            artifacts: [
+              {
+                kind: "REVIEW_REPORT",
+                title: "Initial independent review",
+                summary: "The initial implementation is internally consistent.",
+                checks: ["Inspected the initial implementation tree."],
+              },
+            ],
+            reviewReport: {
+              kind: "REVIEW_REPORT",
+              title: "Initial independent review",
+              summary: "The initial implementation is internally consistent.",
+              checks: ["Inspected the initial implementation tree."],
+              verdict: "PASSED",
+              findings: [],
+            },
+          },
           resultTree: testedTree,
         },
       });
@@ -3064,23 +3566,387 @@ describe("SQLite local state", () => {
       });
       if (failedSnapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected failed QA snapshot");
       expect(failedSnapshot.snapshot).toMatchObject({
-        run: { status: "WAITING_HUMAN" },
-        artifacts: [],
+        run: { status: "RUNNING" },
+        artifacts: [{ kind: "REVIEW_REPORT", correctionRunId: null, testedTree }],
         acceptancePackage: null,
-        humanRequests: [{ title: "Browser QA found blocking defects", status: "OPEN" }],
+        humanRequests: [],
+      });
+      expect(localState.query({ type: "GET_WORK_ITEM", workItemId: created.workItem.id })).toMatchObject({
+        type: "WORK_ITEM",
+        workItem: { state: "IN_PROGRESS", currentStage: "IMPLEMENT" },
       });
       expect(
         failedSnapshot.snapshot.stageAttempts.find(({ id }) => id === qaDispatch.stageAttemptId),
-      ).toMatchObject({ stage: "QA", status: "WAITING_HUMAN" });
-      expect(localState.query({ type: "LIST_PENDING_DISPATCHES" })).toMatchObject({
-        type: "WORKFLOW_DISPATCHES",
-        dispatches: [],
+      ).toMatchObject({ stage: "QA", status: "SUCCEEDED", resultTree: testedTree });
+      const correctionImplementation = failedSnapshot.snapshot.stageAttempts.at(-1);
+      expect(correctionImplementation).toMatchObject({
+        stage: "IMPLEMENT",
+        attempt: 1,
+        status: "QUEUED",
       });
+      if (correctionImplementation?.correctionRunId === null || correctionImplementation === undefined) {
+        throw new Error("Expected a correction-bound IMPLEMENT attempt");
+      }
+      const correctionDispatches = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      expect(correctionDispatches).toMatchObject({
+        type: "WORKFLOW_DISPATCHES",
+        dispatches: [{ stageAttemptId: correctionImplementation.id, status: "PENDING" }],
+      });
+      if (
+        correctionDispatches.type !== "WORKFLOW_DISPATCHES" ||
+        correctionDispatches.dispatches[0] === undefined
+      ) {
+        throw new Error("Expected the correction IMPLEMENT dispatch");
+      }
+      const correctionDispatch = correctionDispatches.dispatches[0];
+      const correctionQAState = localState.query({
+        type: "GET_QA_STATE",
+        pipelineRunId: pipeline.run.id,
+      });
+      expect(correctionQAState).toMatchObject({
+        type: "QA_STATE",
+        runs: [{ id: reserved.qaRun.id, status: "FAILED" }],
+        defects: [{ severity: "HIGH", status: "OPEN" }],
+        correctionRuns: [
+          {
+            id: correctionImplementation.correctionRunId,
+            ordinal: 1,
+            sourceQARunId: reserved.qaRun.id,
+            baselineQARunId: reserved.qaRun.id,
+            status: "ACTIVE",
+          },
+        ],
+        retestPlans: [
+          {
+            correctionRunId: correctionImplementation.correctionRunId,
+            baselineQARunId: reserved.qaRun.id,
+            sourceQARunId: reserved.qaRun.id,
+            cells: [
+              {
+                targetId: "mobile-dark-ru",
+                scenarioId: "task-cockpit",
+                reasons: ["FAILED_CHECK", "OPEN_DEFECT"],
+              },
+            ],
+          },
+        ],
+      });
+      if (correctionQAState.type !== "QA_STATE") throw new Error("Expected correction QA state");
+      const activeCorrection = correctionQAState.correctionRuns[0];
+      const activeRetestPlan = correctionQAState.retestPlans[0];
+      if (activeCorrection === undefined || activeRetestPlan === undefined) {
+        throw new Error("Expected an active correction and retest plan");
+      }
+      expect(
+        localState.query({
+          type: "READ_CONTEXT_SOURCES",
+          stageAttemptId: correctionImplementation.id,
+          sessionOrdinal: 1,
+        }),
+      ).toMatchObject({
+        type: "CONTEXT_SOURCES",
+        sources: {
+          qaCorrection: {
+            correctionRun: { id: activeCorrection.id, ordinal: 1, status: "ACTIVE" },
+            sourceQARun: { id: reserved.qaRun.id, testedTree, targetOrigin: reserved.qaRun.targetOrigin },
+            retestPlan: {
+              id: activeRetestPlan.id,
+              baselinePlanRevision: reserved.qaRun.plan.revision,
+              baselinePlanContentHash: reserved.qaRun.plan.contentHash,
+            },
+            currentTree: testedTree,
+            defects: [{ severity: "HIGH", status: "OPEN", targetId: "mobile-dark-ru" }],
+          },
+        },
+      });
+
+      const correctionAuthor = localState.execute(
+        startAgentRun("q2-correction-author", correctionDispatch.id),
+      );
+      if (correctionAuthor.type !== "AGENT_RUN_STARTED")
+        throw new Error("Expected correction author AgentRun");
+      const correctedTree = "e".repeat(40);
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-q2-correction-implementation",
+        correlationId: "correlation-apply-q2-correction-implementation",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: correctionDispatch.id,
+          provider: "CODEX",
+          template,
+          outcome: { type: "COMPLETED", summary: "The measured mobile overflow is corrected." },
+          resultTree: correctedTree,
+        },
+      });
+      const correctionReviewDispatches = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (
+        correctionReviewDispatches.type !== "WORKFLOW_DISPATCHES" ||
+        correctionReviewDispatches.dispatches[0] === undefined
+      ) {
+        throw new Error("Expected the correction REVIEW dispatch");
+      }
+      const correctionReviewDispatch = correctionReviewDispatches.dispatches[0];
+      expect(
+        localState.query({
+          type: "READ_CONTEXT_SOURCES",
+          stageAttemptId: correctionReviewDispatch.stageAttemptId,
+          sessionOrdinal: 1,
+        }),
+      ).toMatchObject({
+        type: "CONTEXT_SOURCES",
+        sources: {
+          qaCorrection: {
+            correctionRun: { id: activeCorrection.id },
+            currentTree: correctedTree,
+          },
+          reviewInput: {
+            implementationAttempt: { attempt: 1, resultTree: correctedTree },
+          },
+        },
+      });
+      const correctionReviewerCommand = startAgentRun("q2-correction-reviewer", correctionReviewDispatch.id);
+      const correctionReviewer = localState.execute({
+        ...correctionReviewerCommand,
+        payload: { ...correctionReviewerCommand.payload, provider: "CLAUDE_CODE" },
+      });
+      if (correctionReviewer.type !== "AGENT_RUN_STARTED") {
+        throw new Error("Expected correction reviewer AgentRun");
+      }
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-q2-correction-review",
+        correlationId: "correlation-apply-q2-correction-review",
+        actor: { type: "SYSTEM", id: "claude-code-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: correctionReviewDispatch.id,
+          provider: "CLAUDE_CODE",
+          template,
+          outcome: {
+            type: "COMPLETED",
+            summary: "The correction passed fresh independent review.",
+            artifacts: [
+              {
+                kind: "REVIEW_REPORT",
+                title: "Correction independent review",
+                summary: "The mobile overflow correction is scoped and complete.",
+                checks: ["Reproduced the original overflow and inspected the corrected tree."],
+              },
+            ],
+            reviewReport: {
+              kind: "REVIEW_REPORT",
+              title: "Correction independent review",
+              summary: "The mobile overflow correction is scoped and complete.",
+              checks: ["Reproduced the original overflow and inspected the corrected tree."],
+              verdict: "PASSED",
+              findings: [],
+            },
+          },
+          resultTree: correctedTree,
+        },
+      });
+      const retestDispatches = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (retestDispatches.type !== "WORKFLOW_DISPATCHES" || retestDispatches.dispatches[0] === undefined) {
+        throw new Error("Expected the correction QA dispatch");
+      }
+      const retestDispatch = retestDispatches.dispatches[0];
+      const retestAgent = localState.execute(startAgentRun("q2-correction-browser-qa", retestDispatch.id));
+      if (retestAgent.type !== "AGENT_RUN_STARTED") throw new Error("Expected retest Browser QA AgentRun");
+      const erroredRetestReservation = localState.execute({
+        schemaVersion: 1,
+        commandId: "reserve-q2-correction-browser-qa",
+        correlationId: "correlation-reserve-q2-correction-browser-qa",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "RESERVE_QA_RUN",
+        payload: {
+          stageAttemptId: retestDispatch.stageAttemptId,
+          agentRunId: retestAgent.run.id,
+          testedTree: correctedTree,
+          targetOrigin: reserved.qaRun.targetOrigin,
+          plan: reserved.qaRun.plan,
+          scope: {
+            type: "RETEST",
+            correctionRunId: activeCorrection.id,
+            retestPlanId: activeRetestPlan.id,
+          },
+        },
+      });
+      if (erroredRetestReservation.type !== "QA_RUN_RESERVED") {
+        throw new Error("Expected QA retest reservation");
+      }
+      expect(erroredRetestReservation.qaRun).toMatchObject({
+        testedTree: correctedTree,
+        scope: {
+          type: "RETEST",
+          correctionRunId: activeCorrection.id,
+          retestPlanId: activeRetestPlan.id,
+        },
+      });
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "error-q2-correction-browser-qa",
+        correlationId: "correlation-error-q2-correction-browser-qa",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "COMPLETE_QA_RUN",
+        payload: {
+          qaRunId: erroredRetestReservation.qaRun.id,
+          expectedVersion: 1,
+          currentTree: correctedTree,
+          result: {
+            outcome: "ERROR",
+            code: "TARGET_UNHEALTHY",
+            summary: "The loopback target briefly refused connections.",
+          },
+          finalizedAttachments: [],
+        },
+      });
+      const erroredSnapshot = localState.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: created.workItem.id,
+      });
+      if (erroredSnapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected errored retest state");
+      const retryRequest = erroredSnapshot.snapshot.humanRequests.at(-1);
+      expect(erroredSnapshot.snapshot).toMatchObject({
+        run: { status: "WAITING_HUMAN" },
+        humanRequests: [expect.objectContaining({ status: "OPEN" })],
+      });
+      expect(
+        erroredSnapshot.snapshot.stageAttempts.some(
+          ({ id, correctionRunId, status }) =>
+            id === retestDispatch.stageAttemptId &&
+            correctionRunId === activeCorrection.id &&
+            status === "WAITING_HUMAN",
+        ),
+      ).toBe(true);
+      expect(localState.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id })).toMatchObject({
+        type: "QA_STATE",
+        runs: [{ status: "FAILED" }, { status: "ERROR" }],
+        correctionRuns: [{ id: activeCorrection.id, ordinal: 1, status: "ACTIVE", version: 1 }],
+      });
+      if (retryRequest === undefined) throw new Error("Expected environment retry request");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "answer-q2-correction-environment-retry",
+        correlationId: "correlation-answer-q2-correction-environment-retry",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "ANSWER_HUMAN_REQUEST",
+        payload: {
+          humanRequestId: retryRequest.id,
+          expectedVersion: retryRequest.version,
+          answer: { type: "OTHER", text: "The local target is healthy again; rerun the same retest." },
+        },
+      });
+      const retryDispatches = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (retryDispatches.type !== "WORKFLOW_DISPATCHES" || retryDispatches.dispatches[0] === undefined) {
+        throw new Error("Expected resumed correction QA dispatch");
+      }
+      const retryDispatch = retryDispatches.dispatches[0];
+      const retryAgent = localState.execute(
+        startAgentRun("q2-correction-browser-qa-environment-retry", retryDispatch.id),
+      );
+      if (retryAgent.type !== "AGENT_RUN_STARTED") throw new Error("Expected retry Browser QA AgentRun");
+      const passingRetestReservation = localState.execute({
+        schemaVersion: 1,
+        commandId: "reserve-q2-correction-browser-qa-environment-retry",
+        correlationId: "correlation-reserve-q2-correction-browser-qa-environment-retry",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "RESERVE_QA_RUN",
+        payload: {
+          stageAttemptId: retryDispatch.stageAttemptId,
+          agentRunId: retryAgent.run.id,
+          testedTree: correctedTree,
+          targetOrigin: reserved.qaRun.targetOrigin,
+          plan: reserved.qaRun.plan,
+          scope: {
+            type: "RETEST",
+            correctionRunId: activeCorrection.id,
+            retestPlanId: activeRetestPlan.id,
+          },
+        },
+      });
+      if (passingRetestReservation.type !== "QA_RUN_RESERVED") {
+        throw new Error("Expected resumed QA retest reservation");
+      }
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "complete-q2-correction-browser-qa",
+        correlationId: "correlation-complete-q2-correction-browser-qa",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "COMPLETE_QA_RUN",
+        payload: {
+          qaRunId: passingRetestReservation.qaRun.id,
+          expectedVersion: 1,
+          currentTree: correctedTree,
+          result: {
+            outcome: "MEASURED",
+            environment: completionCommand.payload.result.environment,
+            executions: [
+              {
+                targetId: "mobile-dark-ru",
+                scenarioId: "task-cockpit",
+                durationMs: 80,
+                steps: [{ id: "open", status: "PASSED", durationMs: 35 }],
+                assertions: [{ id: "no-overflow", status: "PASSED", details: null }],
+              },
+            ],
+            observations: [],
+            attachments: [],
+            defects: [],
+          },
+          finalizedAttachments: [],
+        },
+      });
+      const passingSnapshot = localState.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: created.workItem.id,
+      });
+      expect(passingSnapshot).toMatchObject({
+        type: "WORKFLOW_SNAPSHOT",
+        snapshot: {
+          run: { status: "RUNNING" },
+          acceptancePackage: null,
+        },
+      });
+      if (passingSnapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected passing workflow state");
+      expect(
+        passingSnapshot.snapshot.artifacts.some(
+          ({ kind, qaRunId }) => kind === "QA_REPORT" && qaRunId === passingRetestReservation.qaRun.id,
+        ),
+      ).toBe(true);
+      expect(
+        passingSnapshot.snapshot.stageAttempts.some(
+          ({ correctionRunId, stage, status }) =>
+            correctionRunId === activeCorrection.id && stage === "ACCEPTANCE" && status === "QUEUED",
+        ),
+      ).toBe(true);
+      expect(localState.query({ type: "GET_WORK_ITEM", workItemId: created.workItem.id })).toMatchObject({
+        type: "WORK_ITEM",
+        workItem: { currentStage: "ACCEPTANCE", state: "IN_PROGRESS" },
+      });
+      const passedQAState = localState.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id });
+      expect(passedQAState).toMatchObject({
+        type: "QA_STATE",
+        defects: [{ status: "RESOLVED", version: 2 }],
+        correctionRuns: [{ id: activeCorrection.id, status: "PASSED", version: 2 }],
+      });
+      const correctionEvents = localState.query({
+        type: "LIST_EVENTS",
+        aggregateId: created.workItem.id,
+        direction: "ASC",
+      });
+      if (correctionEvents.type !== "EVENTS") throw new Error("Expected correction events");
+      expect(correctionEvents.events.map(({ type }) => type)).toEqual(
+        expect.arrayContaining(["QA_CORRECTION_STARTED", "QA_CORRECTION_PASSED"]),
+      );
       expect(localState.query({ type: "LIST_EXPIRED_QA_ATTACHMENTS", closedBefore: timestamp })).toEqual({
         type: "QA_ATTACHMENTS",
         attachments: [],
       });
-      if (!failedSnapshot.snapshot.run) throw new Error("Expected the failed pipeline run");
+      if (passingSnapshot.snapshot.run === null) {
+        throw new Error("Expected the corrected pipeline run");
+      }
       localState.execute({
         schemaVersion: 1,
         commandId: "cancel-q1-failed-qa",
@@ -3088,8 +3954,8 @@ describe("SQLite local state", () => {
         actor: { type: "HUMAN", id: "local-owner" },
         type: "CANCEL_PIPELINE",
         payload: {
-          pipelineRunId: failedSnapshot.snapshot.run.id,
-          expectedVersion: failedSnapshot.snapshot.run.version,
+          pipelineRunId: passingSnapshot.snapshot.run.id,
+          expectedVersion: passingSnapshot.snapshot.run.version,
         },
       });
       expect(
@@ -3145,6 +4011,13 @@ describe("SQLite local state", () => {
       expect(reopened.query({ type: "GET_QA_RUN", qaRunId: reserved.qaRun.id })).toMatchObject({
         type: "QA_RUN",
         qaRun: { status: "FAILED" },
+      });
+      expect(reopened.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id })).toMatchObject({
+        type: "QA_STATE",
+        runs: [{ status: "FAILED" }, { status: "ERROR" }, { status: "PASSED" }],
+        defects: [{ status: "RESOLVED" }],
+        correctionRuns: [{ ordinal: 1, status: "PASSED" }],
+        retestPlans: [{ baselineQARunId: reserved.qaRun.id }],
       });
     });
 

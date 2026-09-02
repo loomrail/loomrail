@@ -116,6 +116,7 @@ describe("local API client", () => {
       targetId: "mobile-dark-ru",
       scenarioId: "task-cockpit",
       resolutionReason: null,
+      resolvedByQARunId: null,
       createdAt: "2026-09-02T10:00:00.000Z",
       resolvedAt: null,
       version: 3,
@@ -124,6 +125,7 @@ describe("local API client", () => {
       ...defect,
       status: "WAIVED" as const,
       resolutionReason: "The owner accepts this bounded risk.",
+      resolvedByQARunId: null,
       resolvedAt: "2026-09-02T10:05:00.000Z",
       version: 4,
     };

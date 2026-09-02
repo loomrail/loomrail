@@ -162,6 +162,66 @@ describe("Playwright BrowserDriver", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("executes only the ordered cells selected by a correction retest plan", async () => {
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        "<!doctype html><html><body><main><h1>Current work</h1><button>Continue</button></main></body></html>",
+      );
+    });
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-retest-"));
+    resources.push({ server: fixture.server, directory });
+    const baseline = qaRun(fixture.origin);
+    const baselineTarget = baseline.plan.targets[0];
+    const baselineScenario = baseline.plan.scenarios[0];
+    if (baselineTarget === undefined || baselineScenario === undefined) {
+      throw new Error("Expected a non-empty Browser QA baseline fixture");
+    }
+    const secondTarget = {
+      ...baselineTarget,
+      id: "mobile-dark-ru",
+      viewport: { width: 320, height: 720 },
+      locale: "ru-RU",
+      theme: "DARK" as const,
+    };
+    const secondScenario = {
+      ...baselineScenario,
+      id: "acceptance",
+      title: "Owner can inspect acceptance",
+    };
+    const run: QARun = {
+      ...baseline,
+      plan: {
+        ...baseline.plan,
+        targets: [...baseline.plan.targets, secondTarget],
+        scenarios: [...baseline.plan.scenarios, secondScenario],
+      },
+      scope: {
+        type: "RETEST",
+        correctionRunId: "correction-1",
+        retestPlanId: "retest-plan-1",
+      },
+    };
+
+    const execution = await createPlaywrightDriver({ artifactsDirectory: directory }).run(run, [
+      {
+        targetId: secondTarget.id,
+        scenarioId: secondScenario.id,
+        reasons: ["FAILED_CHECK", "OPEN_DEFECT"],
+      },
+    ]);
+
+    expect(execution.result).toMatchObject({
+      outcome: "MEASURED",
+      executions: [{ targetId: secondTarget.id, scenarioId: secondScenario.id }],
+      attachments: [
+        { kind: "SCREENSHOT", targetId: secondTarget.id, scenarioId: secondScenario.id },
+        { kind: "TRACE", targetId: secondTarget.id, scenarioId: secondScenario.id },
+      ],
+    });
+    await execution.dispose();
+  });
+
   it("confirms committed attachments and quarantines uncommitted attachments after restart", async () => {
     const fixture = await startServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });

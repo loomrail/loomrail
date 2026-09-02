@@ -17,6 +17,8 @@ import type {
   McpProfileRevision,
   ProjectReadinessRun,
   ProviderPreference,
+  QACorrectionGateAction,
+  QACorrectionRun,
   QADefect,
   ReadinessAttestationOutcome,
   ReadinessCheck,
@@ -72,6 +74,7 @@ import {
   retryProjectConstitutionPublication,
   runProjectReadiness,
   resolveAcceptance,
+  resolveQACorrectionGate,
   startMockPipeline,
   scanProjectConstitution,
   setProjectProviderPreference,
@@ -674,6 +677,7 @@ export const useStartMockPipeline = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(workItem.id) }),
+        queryClient.invalidateQueries({ queryKey: workItemQAKey(workItem.id) }),
         queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
         queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: attentionKey }),
@@ -742,6 +746,36 @@ export const useWaiveQADefect = () => {
   });
 };
 
+export const useResolveQACorrectionGate = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      action,
+      correctionRun,
+      request,
+      run,
+    }: {
+      action: QACorrectionGateAction;
+      correctionRun: QACorrectionRun;
+      request: HumanRequest;
+      run: PipelineRun;
+    }) => resolveQACorrectionGate(request, correctionRun, run, action),
+    onSuccess: async (_, { request }) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(request.projectId) }),
+        queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(request.workItemId) }),
+        queryClient.invalidateQueries({ queryKey: workItemQAKey(request.workItemId) }),
+        queryClient.invalidateQueries({
+          queryKey: workItemEventsKey(request.projectId, request.workItemId),
+        }),
+        queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(request.projectId) }),
+        queryClient.invalidateQueries({ queryKey: stageAttemptSessionsKey(request.stageAttemptId) }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
+      ]);
+    },
+  });
+};
+
 export const usePipelineControl = () => {
   const queryClient = useQueryClient();
   return useMutation({
@@ -758,6 +792,7 @@ export const usePipelineControl = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(workItem.id) }),
+        queryClient.invalidateQueries({ queryKey: workItemQAKey(workItem.id) }),
         queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
         queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: stageAttemptSessionsKey(run.currentStageAttemptId) }),

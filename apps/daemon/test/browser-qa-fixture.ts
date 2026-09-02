@@ -89,6 +89,79 @@ export const passingBrowserQADriver = (options?: { artifactsDirectory?: string }
   },
 });
 
+const correctionFixtureDriver = (retestOutcome: "PASS" | "FAIL"): BrowserDriver => ({
+  id: "PLAYWRIGHT",
+  run: (qaRun, retestCells) => {
+    const failing = qaRun.scope.type === "FULL" || retestOutcome === "FAIL";
+    const cells =
+      qaRun.scope.type === "FULL"
+        ? qaRun.plan.targets.flatMap((target) =>
+            qaRun.plan.scenarios.map((scenario) => ({
+              targetId: target.id,
+              scenarioId: scenario.id,
+            })),
+          )
+        : retestCells;
+    if (cells === undefined || cells.length === 0) {
+      throw new Error("The correction fixture requires its durable sparse retest cells");
+    }
+    const firstCell = cells[0];
+    if (firstCell === undefined) throw new Error("The correction fixture requires a measured cell");
+    return Promise.resolve({
+      result: {
+        outcome: "MEASURED",
+        environment: {
+          osFamily: "MACOS",
+          runtimeName: "NODE",
+          runtimeVersion: "24.19.0",
+          browserName: "CHROMIUM",
+          browserVersion: "140.0",
+        },
+        executions: cells.map((cell) => {
+          const scenario = qaRun.plan.scenarios.find(({ id }) => id === cell.scenarioId);
+          if (scenario === undefined) throw new Error("The retest cell is outside the locked QA plan");
+          const failingCell =
+            failing && cell.targetId === firstCell.targetId && cell.scenarioId === firstCell.scenarioId;
+          return {
+            targetId: cell.targetId,
+            scenarioId: cell.scenarioId,
+            durationMs: 10,
+            steps: scenario.steps.map(({ id }) => ({ id, status: "PASSED" as const, durationMs: 5 })),
+            assertions: scenario.assertions.map(({ id }, index) => ({
+              id,
+              status: failingCell && index === 0 ? ("FAILED" as const) : ("PASSED" as const),
+              details: failingCell && index === 0 ? "The intentional Q2 baseline check failed." : null,
+            })),
+          };
+        }),
+        observations: [],
+        attachments: [],
+        defects: failing
+          ? [
+              {
+                severity: "HIGH" as const,
+                title: "Intentional browser regression",
+                description: "The initial full QA run found a deterministic regression for the Q2 loop.",
+                reproduction: ["Open the affected cell and run its locked assertion."],
+                targetId: firstCell.targetId,
+                scenarioId: firstCell.scenarioId,
+              },
+            ]
+          : [],
+      },
+      finalizeAttachments: () => Promise.resolve([]),
+      confirmAttachments: () => Promise.resolve(),
+      dispose: () => Promise.resolve(),
+    });
+  },
+});
+
+/** Measured Q2 fixture: the full baseline fails once and its locked sparse retest passes. */
+export const failThenPassBrowserQADriver = (): BrowserDriver => correctionFixtureDriver("PASS");
+
+/** Measured Q2 fixture: every locked run fails until the owner cancels the exhausted delivery. */
+export const alwaysFailingBrowserQADriver = (): BrowserDriver => correctionFixtureDriver("FAIL");
+
 export const readyBrowserQAConfig: BrowserQAConfigResolver = () =>
   Promise.resolve({
     status: "READY",

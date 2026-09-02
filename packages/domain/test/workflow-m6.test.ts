@@ -116,6 +116,7 @@ const artifact = (
   title: `${stage} report`,
   summary: `${stage} checks passed.`,
   checks: ["Synthetic check passed."],
+  ...(kind === "REVIEW_REPORT" ? { reviewReportId: "review-report-1", testedTree } : {}),
   ...(kind === "QA_REPORT" ? { qaRunId: "qa-run-1", qaEvidenceBundleId: "qa-evidence-1", testedTree } : {}),
   createdAt: now,
 });

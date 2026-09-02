@@ -12,6 +12,7 @@ import {
   type ContextWindowUsage,
   type DomainEvent,
   type EvidenceArtifact,
+  type HumanRequest,
   type PipelineRun,
   type ProviderSession,
   type QADefect,
@@ -96,6 +97,7 @@ import {
   useProjectWorkItems,
   useProviderCapabilities,
   useResolveAcceptance,
+  useResolveQACorrectionGate,
   useStageAttemptSessions,
   useStartMockPipeline,
   useUpdateWorkItem,
@@ -930,6 +932,44 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.qaDefectWaived"),
         tone: "warning",
       };
+    case "QA_CORRECTION_STARTED":
+      return {
+        detail: t("event.qaCorrectionStartedDetail", {
+          ordinal: event.data.correctionRun.ordinal,
+          cells: event.data.retestPlan.cells.length,
+        }),
+        icon: "play",
+        label: t("event.qaCorrectionStarted"),
+        tone: "accent",
+      };
+    case "QA_CORRECTION_EXHAUSTED":
+      return {
+        detail: t("event.qaCorrectionExhaustedDetail", {
+          ordinal: event.data.correctionRun.ordinal,
+        }),
+        icon: "pause",
+        label: t("event.qaCorrectionExhausted"),
+        tone: "warning",
+      };
+    case "QA_CORRECTION_PASSED":
+      return {
+        detail: t("event.qaCorrectionPassedDetail", {
+          ordinal: event.data.correctionRun.ordinal,
+          defects: event.data.resolvedDefects.length,
+        }),
+        icon: "check",
+        label: t("event.qaCorrectionPassed"),
+        tone: "success",
+      };
+    case "QA_CORRECTION_CANCELLED":
+      return {
+        detail: t("event.qaCorrectionCancelledDetail", {
+          ordinal: event.data.correctionRun.ordinal,
+        }),
+        icon: "warning",
+        label: t("event.qaCorrectionCancelled"),
+        tone: "warning",
+      };
     case "PROVIDER_SESSION_STARTED":
       return {
         detail: t("event.providerSessionStartedDetail", { ordinal: event.data.session.ordinal }),
@@ -1453,9 +1493,24 @@ const qaDefectStatusTones: Record<QADefect["status"], BadgeTone> = {
   WAIVED: "warning",
 };
 
-const BrowserQAPanel = ({ item }: { item: WorkItem }): React.JSX.Element | null => {
+const qaCorrectionStatusTones: Record<QAStateResponse["correctionRuns"][number]["status"], BadgeTone> = {
+  ACTIVE: "info",
+  PASSED: "success",
+  SUPERSEDED: "neutral",
+  EXHAUSTED: "warning",
+  CANCELLED: "neutral",
+};
+
+const BrowserQAPanel = ({
+  correctionGate,
+  item,
+}: {
+  correctionGate: { correctionRunId: string; request: HumanRequest; run: PipelineRun } | null;
+  item: WorkItem;
+}): React.JSX.Element | null => {
   const { t } = useI18n();
   const qaQuery = useWorkItemQA(item.id);
+  const gateMutation = useResolveQACorrectionGate();
   const waiverMutation = useWaiveQADefect();
   const [selectedDefect, setSelectedDefect] = useState<QADefect | null>(null);
   const [waiverReason, setWaiverReason] = useState("");
@@ -1478,6 +1533,10 @@ const BrowserQAPanel = ({ item }: { item: WorkItem }): React.JSX.Element | null 
   const attachments = qa.attachments.filter(({ qaRunId }) => qaRunId === latest.id);
   const defects = qa.defects;
   const environment = evidence?.environment;
+  const exhaustedCorrection =
+    correctionGate === null
+      ? undefined
+      : qa.correctionRuns.find(({ id }) => id === correctionGate.correctionRunId);
 
   const submitWaiver = (event: SyntheticEvent<HTMLFormElement>): void => {
     event.preventDefault();
@@ -1503,6 +1562,54 @@ const BrowserQAPanel = ({ item }: { item: WorkItem }): React.JSX.Element | null 
         <Badge tone={qaRunStatusTones[latest.status]}>{t(`qa.status.${latest.status}`)}</Badge>
       </header>
 
+      {correctionGate !== null && exhaustedCorrection?.status === "EXHAUSTED" ? (
+        <div className="human-request-card">
+          <h3>{t("qa.correctionGate.title")}</h3>
+          <p>{t("qa.correctionGate.description", { ordinal: exhaustedCorrection.ordinal })}</p>
+          {correctionGate.request.recommendation ? (
+            <div className="human-request-card__recommendation">
+              <strong>{t("humanRequest.recommendation")}</strong>
+              <span>{correctionGate.request.recommendation}</span>
+            </div>
+          ) : null}
+          {gateMutation.error ? <LocalConnectionRecovery error={gateMutation.error} /> : null}
+          <div className="workflow-panel__actions">
+            {exhaustedCorrection.ordinal === 2 ? (
+              <Button
+                disabled={gateMutation.isPending}
+                loading={gateMutation.isPending && gateMutation.variables.action === "AUTHORIZE_FINAL"}
+                onClick={() => {
+                  gateMutation.mutate({
+                    action: "AUTHORIZE_FINAL",
+                    correctionRun: exhaustedCorrection,
+                    request: correctionGate.request,
+                    run: correctionGate.run,
+                  });
+                }}
+                variant="primary"
+              >
+                {t("qa.correctionGate.authorizeFinal")}
+              </Button>
+            ) : null}
+            <Button
+              disabled={gateMutation.isPending}
+              loading={gateMutation.isPending && gateMutation.variables.action === "CANCEL"}
+              onClick={() => {
+                gateMutation.mutate({
+                  action: "CANCEL",
+                  correctionRun: exhaustedCorrection,
+                  request: correctionGate.request,
+                  run: correctionGate.run,
+                });
+              }}
+              variant="secondary"
+            >
+              {t("qa.correctionGate.cancel")}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       <dl className="qa-panel__facts">
         <div>
           <dt>{t("qa.tree")}</dt>
@@ -1525,6 +1632,73 @@ const BrowserQAPanel = ({ item }: { item: WorkItem }): React.JSX.Element | null 
       </dl>
 
       {latest.error ? <p className="qa-panel__error">{latest.error.summary}</p> : null}
+
+      {qa.correctionRuns.length > 0 ? (
+        <div className="qa-panel__section">
+          <strong>{t("qa.correctionTimeline")}</strong>
+          <ol aria-label={t("qa.correctionTimeline")} className="qa-correction-list">
+            {qa.correctionRuns.map((correction) => {
+              const retestPlan = qa.retestPlans.find(
+                (candidate) => candidate.correctionRunId === correction.id,
+              );
+              return (
+                <li key={correction.id}>
+                  <div className="qa-correction__heading">
+                    <strong>{t("qa.correction", { ordinal: correction.ordinal })}</strong>
+                    <Badge tone={qaCorrectionStatusTones[correction.status]}>
+                      {t(`qa.correctionStatus.${correction.status}`)}
+                    </Badge>
+                  </div>
+                  <dl className="qa-correction__lineage">
+                    <div>
+                      <dt>{t("qa.correctionSource")}</dt>
+                      <dd>
+                        <code title={correction.sourceQARunId}>{correction.sourceQARunId}</code>
+                        <span>
+                          {t("qa.correctionTree", { tree: correction.sourceTestedTree.slice(0, 8) })}
+                        </span>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>{t("qa.correctionEvidence")}</dt>
+                      <dd>
+                        <code title={correction.sourceEvidenceBundleId}>
+                          {correction.sourceEvidenceBundleId}
+                        </code>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>{t("qa.correctionBaseline")}</dt>
+                      <dd>
+                        <code title={correction.baselineQARunId}>{correction.baselineQARunId}</code>
+                      </dd>
+                    </div>
+                  </dl>
+                  {retestPlan ? (
+                    <div className="qa-correction__scope">
+                      <strong>{t("qa.retestScope", { count: retestPlan.cells.length })}</strong>
+                      <ol>
+                        {retestPlan.cells.map((cell) => (
+                          <li key={`${cell.targetId}:${cell.scenarioId}`}>
+                            <code>{cell.targetId}</code>
+                            <span aria-hidden="true">/</span>
+                            <code>{cell.scenarioId}</code>
+                            <span className="qa-correction__reasons">
+                              {cell.reasons.map((reason) => (
+                                <span key={reason}>{t(`qa.retestReason.${reason}`)}</span>
+                              ))}
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      ) : null}
 
       <div className="qa-panel__section">
         <strong>{t("qa.matrix")}</strong>
@@ -1640,6 +1814,12 @@ const BrowserQAPanel = ({ item }: { item: WorkItem }): React.JSX.Element | null 
                   </div>
                 ) : defect.resolutionReason ? (
                   <p className="qa-defect__resolution">{defect.resolutionReason}</p>
+                ) : null}
+                {defect.status === "RESOLVED" && defect.resolvedByQARunId ? (
+                  <span className="qa-defect__provenance">
+                    <strong>{t("qa.resolvedBy")}: </strong>
+                    <code title={defect.resolvedByQARunId}>{defect.resolvedByQARunId}</code>
+                  </span>
                 ) : null}
                 {selectedDefect?.id === defect.id ? (
                   <form className="qa-defect-waiver" onSubmit={submitWaiver}>
@@ -2150,6 +2330,18 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const run = snapshot.run;
   const currentAttempt =
     snapshot.stageAttempts.find((attempt) => attempt.id === run.currentStageAttemptId) ?? null;
+  const correctionGateRequest =
+    openRequest !== null &&
+    currentAttempt?.stage === "QA" &&
+    currentAttempt.status === "WAITING_HUMAN" &&
+    currentAttempt.failureCode === "QA_CORRECTION_EXHAUSTED" &&
+    currentAttempt.correctionRunId !== null
+      ? {
+          correctionRunId: currentAttempt.correctionRunId,
+          request: openRequest,
+          run,
+        }
+      : null;
   const budgetPolicy = snapshot.budgetPolicies.at(-1) ?? null;
   const used = snapshot.usageRecords.reduce((total, record) => total + record.amount, 0);
   const budgetPercent = budgetPolicy
@@ -2218,7 +2410,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
       </ol>
       {currentAttempt ? <AttemptSessionsPanel attempt={currentAttempt} /> : null}
       <ReviewPanel item={item} />
-      <BrowserQAPanel item={item} />
+      <BrowserQAPanel correctionGate={correctionGateRequest} item={item} />
       {snapshot.acceptancePackage ? (
         <AcceptancePanel
           acceptancePackage={snapshot.acceptancePackage}
@@ -2232,7 +2424,9 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
           <span>{t("acceptance.evidenceCount", { count: snapshot.artifacts.length })}</span>
         </div>
       ) : null}
-      {openRequest ? <HumanRequestAnswerForm request={openRequest} /> : null}
+      {openRequest && correctionGateRequest === null ? (
+        <HumanRequestAnswerForm request={openRequest} />
+      ) : null}
       {snapshot.recoveryReports.at(-1) ? (
         <div className="workflow-recovery" role="status">
           <strong>{t("workflow.recovery.title")}</strong>

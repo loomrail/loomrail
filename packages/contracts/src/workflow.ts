@@ -11,6 +11,12 @@ import {
 import { mcpSessionSnapshotSchema } from "./mcp.js";
 import { workItemWorkspaceOrphanedEventSchema, workItemWorkspaceSchema } from "./workspace.js";
 import { reviewFindingSchema, reviewReportDraftSchema, reviewReportSchema } from "./review.js";
+import {
+  qaCorrectionCancelledEventSchema,
+  qaCorrectionRunSchema,
+  qaCorrectionStartedEventSchema,
+  qaRetestPlanSchema,
+} from "./qa.js";
 
 // A Git TREE object id, not a commit one. Same forty lowercase hex characters as
 // `commitShaSchema` in workspace.ts and deliberately a separate declaration: what this names is the
@@ -94,6 +100,11 @@ export const contextSourceKindSchema = z.enum([
   "STAGE_ATTEMPT",
   "AGENT_RUN",
   "REVIEW_FINDING",
+  "QA_CORRECTION_RUN",
+  "QA_RUN",
+  "QA_EVIDENCE_BUNDLE",
+  "QA_RETEST_PLAN",
+  "QA_DEFECT",
 ]);
 export const contextPackSpecSourceSchema = z.literal("WORKFLOW_TEMPLATE"); // A3 adds ROLE_PLAYBOOK
 export const contextPackOmittedReasonSchema = z.literal("CONTEXT_BUDGET");
@@ -1064,6 +1075,22 @@ export const answerHumanRequestCommandSchema = commandBaseSchema.extend({
     .strict(),
 });
 
+export const qaCorrectionGateActionSchema = z.enum(["AUTHORIZE_FINAL", "CANCEL"]);
+
+export const resolveQACorrectionGateCommandSchema = commandBaseSchema.extend({
+  type: z.literal("RESOLVE_QA_CORRECTION_GATE"),
+  payload: z
+    .object({
+      humanRequestId: opaqueIdSchema,
+      expectedRequestVersion: z.number().int().positive(),
+      correctionRunId: opaqueIdSchema,
+      expectedCorrectionVersion: z.number().int().positive(),
+      expectedPipelineRunVersion: z.number().int().positive(),
+      action: qaCorrectionGateActionSchema,
+    })
+    .strict(),
+});
+
 const pipelineControlPayloadSchema = z
   .object({
     pipelineRunId: opaqueIdSchema,
@@ -1344,10 +1371,38 @@ export const humanRequestAnsweredResultSchema = z
   })
   .strict();
 
+export const qaCorrectionGateResolvedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("QA_CORRECTION_GATE_RESOLVED"),
+    replayed: z.boolean(),
+    action: qaCorrectionGateActionSchema,
+    workItemId: opaqueIdSchema,
+    request: humanRequestSchema,
+    decision: decisionSchema,
+    previousCorrection: qaCorrectionRunSchema,
+    correctionRun: qaCorrectionRunSchema.nullable(),
+    retestPlan: qaRetestPlanSchema.nullable(),
+    run: pipelineRunSchema,
+    stageAttempt: stageAttemptSchema,
+    dispatch: workflowDispatchSchema.nullable(),
+    events: z.array(
+      z.discriminatedUnion("type", [
+        humanRequestResolvedEventSchema,
+        stageAttemptChangedEventSchema,
+        qaCorrectionStartedEventSchema,
+        qaCorrectionCancelledEventSchema,
+        pipelineCancelledEventSchema,
+      ]),
+    ),
+  })
+  .strict();
+
 const pipelineControlEventSchema = z.discriminatedUnion("type", [
   pipelinePausedEventSchema,
   pipelineResumedEventSchema,
   pipelineCancelledEventSchema,
+  qaCorrectionCancelledEventSchema,
 ]);
 
 export const pipelineControlAppliedResultSchema = z
@@ -1553,6 +1608,18 @@ export const answerHumanRequestRequestSchema = z
   })
   .strict();
 
+export const resolveQACorrectionGateRequestSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    commandId: opaqueIdSchema,
+    expectedRequestVersion: z.number().int().positive(),
+    correctionRunId: opaqueIdSchema,
+    expectedCorrectionVersion: z.number().int().positive(),
+    expectedPipelineRunVersion: z.number().int().positive(),
+    action: qaCorrectionGateActionSchema,
+  })
+  .strict();
+
 export const pipelineControlRequestSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -1683,6 +1750,10 @@ export type LegacyApplyMockProviderOutcomeCommand = z.infer<
   typeof legacyApplyMockProviderOutcomeCommandSchema
 >;
 export type AnswerHumanRequestCommand = z.infer<typeof answerHumanRequestCommandSchema>;
+export type ResolveQACorrectionGateCommand = z.infer<typeof resolveQACorrectionGateCommandSchema>;
+export type QACorrectionGateAction = z.infer<typeof qaCorrectionGateActionSchema>;
+export type QACorrectionGateResolvedResult = z.infer<typeof qaCorrectionGateResolvedResultSchema>;
+export type ResolveQACorrectionGateRequest = z.infer<typeof resolveQACorrectionGateRequestSchema>;
 export type PausePipelineCommand = z.infer<typeof pausePipelineCommandSchema>;
 export type ResumePipelineCommand = z.infer<typeof resumePipelineCommandSchema>;
 export type CancelPipelineCommand = z.infer<typeof cancelPipelineCommandSchema>;

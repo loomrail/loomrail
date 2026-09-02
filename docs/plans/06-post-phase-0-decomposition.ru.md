@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
-**Статус:** реализация через Q1 завершена; Q2 активен; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** реализация через Q2 локально завершена; release gate открыт; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -177,17 +177,18 @@ tarball установился и запустился на обеих плат�
 параллельно разрабатываемом `apps/landing/src/main.ts`; Q1 не меняет этот каталог и не маскирует его failure.
 Спецификация —
 [47](47-q1-deterministic-browser-qa-spec.ru.md), план —
-[48](48-q1-deterministic-browser-qa-implementation-plan.ru.md). Q2 активен с отдельным correction-run counter,
-durable Defect lifecycle и scoped retest с bounded regression subset; архитектурная граница и порядок реализации
-зафиксированы в [ADR-0008](../adr/0008-separate-qa-correction-runs.md),
+[48](48-q1-deterministic-browser-qa-implementation-plan.ru.md). Q2 durable Defect correction loop локально завершён:
+отдельный correction-run counter, deterministic sparse retest, bounded regression subset и 2 automatic + 1
+owner-authorized cycle зафиксированы в [ADR-0008](../adr/0008-separate-qa-correction-runs.md),
 [спецификации 49](49-q2-qa-defect-correction-loop-spec.ru.md) и
-[плане 50](50-q2-qa-defect-correction-loop-implementation-plan.ru.md). Первый durable Q2 slice уже сохраняет bounded
-CorrectionRun/immutable QARetestPlan и реальную StageAttempt/Review/QARun lineage; migration 0025 переводит локальную
-нумерацию на per-cycle uniqueness, migration 0026 сохраняет несколько authority-bound Review/QA artifacts одного
-PipelineRun, а migration 0027 добавляет audit event HUMAN-only optimistic QADefect waiver. Старые strict
-Events/receipts сохраняются без потери истории; waiver не меняет FAILED evidence, active correction или Acceptance и
-видим в Task Cockpit с owner reason. Публикация следующей версии всё ещё ждёт полного зелёного release gate, включая
-landing lint.
+[плане 50](50-q2-qa-defect-correction-loop-implementation-plan.ru.md). Migrations 0025–0029 сохраняют bounded
+CorrectionRun/immutable QARetestPlan, per-cycle StageAttempt/Review/QARun lineage, authority-bound evidence,
+correction audit events и exact passing-retest provenance для resolved defects. Daemon атомарно ведёт
+fail → correction → fresh review → scoped retest → Acceptance, отдельный owner final/cancel gate и retry ERROR без
+расходования ordinal; Task Cockpit показывает timeline, locked scope, evidence и OPEN/RESOLVED/WAIVED lifecycle.
+Локально прошли non-landing lint/typecheck/unit, 52/52 browser E2E, production audit и clean-install tarball
+`0.1.0-alpha.5`. Он не опубликован: полный release gate всё ещё ждёт исправления landing lint его отдельной сессией и
+нового macOS/Windows CI-прогона Q2.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

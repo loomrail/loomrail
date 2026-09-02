@@ -25,6 +25,7 @@ export const sampleSources = (): ContextSources => ({
     attempt: 1,
     sessionOrdinal: 2,
   },
+  qaCorrection: null,
   decisions: [
     { id: "dec_01", version: 1, question: "Which parser library?", answer: "Use pdf-lib for extraction." },
   ],

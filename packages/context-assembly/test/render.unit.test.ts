@@ -45,6 +45,62 @@ describe("section rendering", () => {
     expect(rendered.text).toContain("Objective: finish the current stage and return its stage result");
   });
 
+  it("renders bounded correction authority and its exact durable provenance", () => {
+    const sources = sampleSources();
+    sources.qaCorrection = {
+      correctionRun: { id: "correction-2", version: 1, ordinal: 2, status: "ACTIVE" },
+      sourceQARun: {
+        id: "qa-run-failed-retest",
+        version: 2,
+        testedTree: "b".repeat(40),
+        targetOrigin: "http://127.0.0.1:4173",
+      },
+      sourceEvidence: { id: "qa-evidence-failed-retest", version: 1 },
+      retestPlan: {
+        id: "retest-2",
+        version: 1,
+        baselineQARunId: "qa-run-baseline",
+        baselinePlanRevision: 4,
+        baselinePlanContentHash: `sha256:${"c".repeat(64)}`,
+        cells: [
+          {
+            targetId: "mobile-dark-ru",
+            scenarioId: "task-cockpit",
+            reasons: ["FAILED_CHECK", "OPEN_DEFECT", "REGRESSION"],
+          },
+        ],
+      },
+      currentTree: "b".repeat(40),
+      defects: [
+        {
+          id: "defect-4",
+          version: 1,
+          severity: "HIGH",
+          status: "OPEN",
+          title: "Task Cockpit overflows",
+          description: "The measured page exceeds the mobile viewport.",
+          reproduction: ["Open the Task Cockpit at 320px."],
+          targetId: "mobile-dark-ru",
+          scenarioId: "task-cockpit",
+        },
+      ],
+    };
+
+    const rendered = renderSection("WORKFLOW_POSITION", sources);
+    expect(rendered.text).toContain("QA Correction Authority:");
+    expect(rendered.text).toContain("CorrectionRun: correction-2 (v1, ordinal 2, ACTIVE)");
+    expect(rendered.text).toContain("Locked plan: revision 4");
+    expect(rendered.text).toContain("mobile-dark-ru / task-cockpit: FAILED_CHECK, OPEN_DEFECT, REGRESSION");
+    expect(rendered.text).toContain("BEGIN UNTRUSTED AGENT REPORT");
+    expect(rendered.sources).toEqual([
+      { kind: "QA_CORRECTION_RUN", id: "correction-2", version: 1 },
+      { kind: "QA_RUN", id: "qa-run-failed-retest", version: 2 },
+      { kind: "QA_EVIDENCE_BUNDLE", id: "qa-evidence-failed-retest", version: 1 },
+      { kind: "QA_RETEST_PLAN", id: "retest-2", version: 1 },
+      { kind: "QA_DEFECT", id: "defect-4", version: 1 },
+    ]);
+  });
+
   it("marks a checkpoint as untrusted provider output", () => {
     // Спек §8: checkpoint попадает в контекст следующей сессии и переживает смену провайдера.
     const rendered = renderSection("LATEST_CHECKPOINT", sampleSources());

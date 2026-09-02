@@ -166,6 +166,28 @@ describe("session handoff contracts", () => {
     expect(contextPackRecipeSchema.parse(recipe({}))).toBeTruthy();
   });
 
+  it("accepts exact QA correction authority as workflow-position provenance", () => {
+    expect(
+      contextPackRecipeSchema.parse(
+        recipe({
+          sections: [
+            {
+              id: "WORKFLOW_POSITION",
+              sources: [
+                { kind: "QA_CORRECTION_RUN", id: "correction-1", version: 1 },
+                { kind: "QA_RUN", id: "qa-run-1", version: 2 },
+                { kind: "QA_EVIDENCE_BUNDLE", id: "qa-evidence-1", version: 1 },
+                { kind: "QA_RETEST_PLAN", id: "retest-plan-1", version: 1 },
+                { kind: "QA_DEFECT", id: "qa-defect-1", version: 1 },
+              ],
+              bytes: 480,
+            },
+          ],
+        }),
+      ),
+    ).toBeTruthy();
+  });
+
   it("rejects a content hash missing the sha256 prefix", () => {
     expect(() => contextPackRecipeSchema.parse(recipe({ contentHash: "a".repeat(64) }))).toThrow();
   });

@@ -59,7 +59,15 @@ const stateFor = (run: QARun | null, attachments: QAAttachmentRef[]): LocalState
   query: (query: StateQuery): StateQueryResult => {
     if (query.type === "GET_QA_RUN") return { type: "QA_RUN", qaRun: run };
     if (query.type === "GET_QA_STATE") {
-      return { type: "QA_STATE", runs: run === null ? [] : [run], evidence: [], attachments, defects: [] };
+      return {
+        type: "QA_STATE",
+        runs: run === null ? [] : [run],
+        evidence: [],
+        attachments,
+        defects: [],
+        correctionRuns: [],
+        retestPlans: [],
+      };
     }
     throw new Error(`Unexpected query ${query.type}`);
   },

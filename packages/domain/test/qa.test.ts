@@ -1,4 +1,12 @@
-import type { AgentRun, QADriverResult, QARun, ReserveQARunCommand, StageAttempt } from "@loomrail/contracts";
+import type {
+  AgentRun,
+  QACorrectionRun,
+  QADriverResult,
+  QARetestPlan,
+  QARun,
+  ReserveQARunCommand,
+  StageAttempt,
+} from "@loomrail/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -114,6 +122,53 @@ const reserveCommand: ReserveQARunCommand = {
   },
 };
 
+const failedBaselineRun: QARun = {
+  ...qaRun,
+  status: "FAILED",
+  completedAt: "2026-09-02T09:55:00.000Z",
+  version: 2,
+};
+
+const correctionRun: QACorrectionRun = {
+  schemaVersion: 1,
+  id: "correction-1",
+  projectId: qaRun.projectId,
+  workItemId: qaRun.workItemId,
+  pipelineRunId: qaRun.pipelineRunId,
+  ordinal: 1,
+  sourceQARunId: failedBaselineRun.id,
+  baselineQARunId: failedBaselineRun.id,
+  sourceEvidenceBundleId: "evidence-baseline-1",
+  sourceTestedTree: failedBaselineRun.testedTree,
+  defectIds: ["defect-1"],
+  status: "ACTIVE",
+  createdAt: qaRun.startedAt,
+  completedAt: null,
+  version: 1,
+};
+
+const retestPlan: QARetestPlan = {
+  schemaVersion: 1,
+  id: "retest-plan-1",
+  projectId: qaRun.projectId,
+  workItemId: qaRun.workItemId,
+  pipelineRunId: qaRun.pipelineRunId,
+  correctionRunId: correctionRun.id,
+  baselineQARunId: failedBaselineRun.id,
+  sourceQARunId: failedBaselineRun.id,
+  sourceEvidenceBundleId: correctionRun.sourceEvidenceBundleId,
+  baselinePlanRevision: failedBaselineRun.plan.revision,
+  baselinePlanContentHash: failedBaselineRun.plan.contentHash,
+  cells: [
+    {
+      targetId: "desktop-light-en",
+      scenarioId: "task-cockpit",
+      reasons: ["FAILED_CHECK", "OPEN_DEFECT"],
+    },
+  ],
+  createdAt: qaRun.startedAt,
+};
+
 const execution = (targetId: string, status: "PASSED" | "FAILED" = "PASSED") => ({
   targetId,
   scenarioId: "task-cockpit",
@@ -227,9 +282,67 @@ describe("deterministic Browser QA completion", () => {
           currentTree: tree,
           stageAttempt: correctionStage,
           agentRun,
+          currentCorrection: correctionRun,
+          retestPlan,
+          baselineQARun: failedBaselineRun,
         },
       ),
     ).toMatchObject({ scope: retestScope });
+  });
+
+  it("accepts only the ordered cells in the immutable retest plan", () => {
+    const retestRun: QARun = {
+      ...qaRun,
+      scope: {
+        type: "RETEST",
+        correctionRunId: correctionRun.id,
+        retestPlanId: retestPlan.id,
+      },
+    };
+    const result = measuredResult();
+    if (result.outcome !== "MEASURED") throw new Error("Expected measured result fixture");
+    const retestDecision = decideQACompletion({
+      qaRun: retestRun,
+      agentRun,
+      expectedVersion: 1,
+      currentTree: tree,
+      result: { ...result, executions: [execution("desktop-light-en")] },
+      finalizedAttachments: [],
+      retestPlan,
+      now: "2026-09-02T10:05:00.000Z",
+    });
+    expect(retestDecision).toMatchObject({
+      status: "PASSED",
+      evidence: { executions: [{ targetId: "desktop-light-en" }] },
+    });
+    expect(qaWorkflowOutcome(retestDecision)).toMatchObject({
+      type: "COMPLETED",
+      summary: "The locked QA correction retest passed.",
+    });
+
+    expect(() =>
+      decideQACompletion({
+        qaRun: retestRun,
+        agentRun,
+        expectedVersion: 1,
+        currentTree: tree,
+        result,
+        finalizedAttachments: [],
+        retestPlan,
+        now: "2026-09-02T10:05:00.000Z",
+      }),
+    ).toThrow(expect.objectContaining<Partial<QACompletionError>>({ code: "QA_MATRIX_INCOMPLETE" }));
+    expect(() =>
+      decideQACompletion({
+        qaRun: retestRun,
+        agentRun,
+        expectedVersion: 1,
+        currentTree: tree,
+        result: { ...result, executions: [execution("desktop-light-en")] },
+        finalizedAttachments: [],
+        now: "2026-09-02T10:05:00.000Z",
+      }),
+    ).toThrow(expect.objectContaining<Partial<QACompletionError>>({ code: "QA_MATRIX_INCOMPLETE" }));
   });
 
   it("derives PASSED only from a complete green matrix", () => {

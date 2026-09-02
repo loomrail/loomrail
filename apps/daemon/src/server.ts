@@ -46,7 +46,9 @@ import {
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
   qaDefectWaivedResultSchema,
+  qaCorrectionGateResolvedResultSchema,
   qaStateResponseSchema,
+  resolveQACorrectionGateRequestSchema,
   waiveQADefectRequestSchema,
   proposeContext7PresetRequestSchema,
   proposeMcpProfileRequestSchema,
@@ -95,6 +97,7 @@ import {
   McpDomainError,
   ProviderSelectionDomainError,
   QADefectDispositionError,
+  QACorrectionError,
   ReadinessDomainError,
   ReviewFindingDispositionError,
   ScaffoldDomainError,
@@ -339,6 +342,9 @@ const stageAttemptParamsSchema = z.object({ stageAttemptId: opaqueIdSchema }).st
 const humanRequestParamsSchema = z.object({ humanRequestId: opaqueIdSchema }).strict();
 const reviewFindingParamsSchema = z.object({ findingId: opaqueIdSchema }).strict();
 const qaDefectParamsSchema = z.object({ defectId: opaqueIdSchema }).strict();
+const qaCorrectionGateParamsSchema = z
+  .object({ workItemId: opaqueIdSchema, humanRequestId: opaqueIdSchema })
+  .strict();
 const acceptanceParamsSchema = z
   .object({ workItemId: opaqueIdSchema, acceptancePackageId: opaqueIdSchema })
   .strict();
@@ -583,6 +589,10 @@ const sendOperationError = (
   }
   if (error instanceof QADefectDispositionError) {
     const status = error.code === "QA_DEFECT_NOT_FOUND" ? 404 : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof QACorrectionError) {
+    const status = error.code === "QA_CORRECTION_REQUEST_INVALID" ? 404 : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
   if (error instanceof WorkflowDomainError) {
@@ -2170,6 +2180,8 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             evidence: [],
             attachments: [],
             defects: [],
+            correctionRuns: [],
+            retestPlans: [],
           });
         }
         const qaState = localState.query({ type: "GET_QA_STATE", pipelineRunId: run.id });
@@ -2186,6 +2198,8 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             .filter(({ qaRunId }) => includedRunIds.has(qaRunId))
             .map(publishQAAttachment),
           defects: qaState.defects.filter(({ qaRunId }) => includedRunIds.has(qaRunId)),
+          correctionRuns: qaState.correctionRuns,
+          retestPlans: qaState.retestPlans,
         });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
@@ -3009,6 +3023,49 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
               defectId: params.defectId,
               expectedVersion: body.expectedVersion,
               reason: body.reason,
+            },
+          }),
+        );
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/work-items/:workItemId/qa/correction-gate/:humanRequestId", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = qaCorrectionGateParamsSchema.parse(request.params);
+        const body = resolveQACorrectionGateRequestSchema.parse(request.body);
+        const current = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        if (
+          current.type !== "WORKFLOW_SNAPSHOT" ||
+          !current.snapshot.humanRequests.some(
+            ({ id, status }) => id === params.humanRequestId && status === "OPEN",
+          )
+        ) {
+          throw new QACorrectionError(
+            "QA_CORRECTION_REQUEST_INVALID",
+            "The exhausted QA correction gate does not exist",
+          );
+        }
+        return qaCorrectionGateResolvedResultSchema.parse(
+          localState.execute({
+            schemaVersion: 1,
+            commandId: body.commandId,
+            correlationId,
+            actor: { type: "HUMAN", id: "local-owner" },
+            type: "RESOLVE_QA_CORRECTION_GATE",
+            payload: {
+              humanRequestId: params.humanRequestId,
+              expectedRequestVersion: body.expectedRequestVersion,
+              correctionRunId: body.correctionRunId,
+              expectedCorrectionVersion: body.expectedCorrectionVersion,
+              expectedPipelineRunVersion: body.expectedPipelineRunVersion,
+              action: body.action,
             },
           }),
         );

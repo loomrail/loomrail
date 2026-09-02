@@ -394,6 +394,7 @@ export const qaDefectSchema = qaDefectDraftSchema
     ordinal: z.number().int().positive().max(MAX_QA_DEFECTS),
     status: qaDefectStatusSchema,
     resolutionReason: descriptionSchema.nullable(),
+    resolvedByQARunId: opaqueIdSchema.nullable(),
     createdAt: utcTimestampSchema,
     resolvedAt: utcTimestampSchema.nullable(),
     version: z.number().int().positive(),
@@ -405,6 +406,15 @@ export const qaDefectSchema = qaDefectDraftSchema
     const hasCompleteResolution = defect.resolutionReason !== null && defect.resolvedAt !== null;
     if ((open && hasAnyResolution) || (!open && !hasCompleteResolution)) {
       context.addIssue({ code: "custom", message: "A terminal QA defect requires complete resolution data" });
+    }
+    if (
+      (defect.status === "RESOLVED" && defect.resolvedByQARunId === null) ||
+      (defect.status !== "RESOLVED" && defect.resolvedByQARunId !== null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Only an evidence-resolved QA defect carries its passing QA run identity",
+      });
     }
   });
 
@@ -576,6 +586,31 @@ export const qaDefectWaivedEventSchema = qaEventBaseSchema.extend({
   data: z.object({ defect: qaDefectSchema }).strict(),
 });
 
+export const qaCorrectionStartedEventSchema = qaEventBaseSchema.extend({
+  type: z.literal("QA_CORRECTION_STARTED"),
+  data: z.object({ correctionRun: qaCorrectionRunSchema, retestPlan: qaRetestPlanSchema }).strict(),
+});
+
+export const qaCorrectionExhaustedEventSchema = qaEventBaseSchema.extend({
+  type: z.literal("QA_CORRECTION_EXHAUSTED"),
+  data: z.object({ correctionRun: qaCorrectionRunSchema, canAuthorizeFinal: z.boolean() }).strict(),
+});
+
+export const qaCorrectionPassedEventSchema = qaEventBaseSchema.extend({
+  type: z.literal("QA_CORRECTION_PASSED"),
+  data: z
+    .object({
+      correctionRun: qaCorrectionRunSchema,
+      resolvedDefects: z.array(qaDefectSchema).max(MAX_QA_CORRECTION_DEFECTS),
+    })
+    .strict(),
+});
+
+export const qaCorrectionCancelledEventSchema = qaEventBaseSchema.extend({
+  type: z.literal("QA_CORRECTION_CANCELLED"),
+  data: z.object({ correctionRun: qaCorrectionRunSchema }).strict(),
+});
+
 const qaCommandBaseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -684,6 +719,8 @@ export const qaStateResponseSchema = z
     evidence: z.array(qaEvidenceBundleSchema).max(MAX_QA_RUN_HISTORY),
     attachments: z.array(qaAttachmentSummarySchema).max(MAX_QA_RUN_HISTORY * MAX_QA_ATTACHMENTS),
     defects: z.array(qaDefectSchema).max(MAX_QA_RUN_HISTORY * MAX_QA_DEFECTS),
+    correctionRuns: z.array(qaCorrectionRunSchema).max(MAX_TOTAL_QA_CORRECTION_RUNS),
+    retestPlans: z.array(qaRetestPlanSchema).max(MAX_TOTAL_QA_CORRECTION_RUNS),
   })
   .strict();
 
@@ -715,6 +752,10 @@ export type QAEvidenceBundle = z.infer<typeof qaEvidenceBundleSchema>;
 export type QARunReservedEvent = z.infer<typeof qaRunReservedEventSchema>;
 export type QARunCompletedEvent = z.infer<typeof qaRunCompletedEventSchema>;
 export type QADefectWaivedEvent = z.infer<typeof qaDefectWaivedEventSchema>;
+export type QACorrectionStartedEvent = z.infer<typeof qaCorrectionStartedEventSchema>;
+export type QACorrectionExhaustedEvent = z.infer<typeof qaCorrectionExhaustedEventSchema>;
+export type QACorrectionPassedEvent = z.infer<typeof qaCorrectionPassedEventSchema>;
+export type QACorrectionCancelledEvent = z.infer<typeof qaCorrectionCancelledEventSchema>;
 export type ReserveQARunCommand = z.infer<typeof reserveQARunCommandSchema>;
 export type CompleteQARunCommand = z.infer<typeof completeQARunCommandSchema>;
 export type RecordQAAttachmentRetentionCommand = z.infer<typeof recordQAAttachmentRetentionCommandSchema>;

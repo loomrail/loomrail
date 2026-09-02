@@ -129,6 +129,16 @@ const migrations: readonly Migration[] = [
     name: "qa_defect_waiver_event",
     filename: "0027_qa_defect_waiver_event.sql",
   },
+  {
+    version: 28,
+    name: "qa_correction_events",
+    filename: "0028_qa_correction_events.sql",
+  },
+  {
+    version: 29,
+    name: "qa_defect_resolution_provenance",
+    filename: "0029_qa_defect_resolution_provenance.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

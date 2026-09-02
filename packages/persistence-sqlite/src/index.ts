@@ -39,8 +39,10 @@ import {
   projectReadinessSnapshotSchema,
   projectProviderSelectionSchema,
   qaAttachmentRefSchema,
+  qaCorrectionRunSchema,
   qaDefectSchema,
   qaEvidenceBundleSchema,
+  qaRetestPlanSchema,
   qaRunSchema,
   readinessAttestationSchema,
   readinessCheckSchema,
@@ -90,8 +92,10 @@ import {
   type ProjectConstitutionVersion,
   type ProjectReadinessRun,
   type QAAttachmentRef,
+  type QACorrectionRun,
   type QADefect,
   type QAEvidenceBundle,
+  type QARetestPlan,
   type QARun,
   type ReadinessAttestation,
   type ReadinessCheck,
@@ -121,6 +125,10 @@ import {
   canonicalMcpProfileSource,
   decideProjectReadinessAssessment,
   decideProjectReadinessAttestation,
+  decideFailedQACorrectionTransition,
+  decidePassedQACorrectionTransition,
+  decideQACorrectionCancellation,
+  decideQACorrectionGateResolution,
   decideQADefectWaiver,
   decideReviewFindingDisposition,
   decideQACompletion,
@@ -166,6 +174,7 @@ import {
   McpDomainError,
   ProviderSelectionDomainError,
   QACompletionError,
+  QACorrectionError,
   QADefectDispositionError,
   QAReservationError,
   ReviewFindingDispositionError,
@@ -179,6 +188,9 @@ import {
   type ProjectReadinessAssessedIntent,
   type ProjectReadinessAttestedIntent,
   type ProjectProviderPreferenceChangedIntent,
+  type FailedQACorrectionTransition,
+  type PassedQACorrectionTransition,
+  type QACorrectionGateResolution,
   type ScaffoldCompletedIntent,
   type ScaffoldFailedIntent,
   type ScaffoldRequestedIntent,
@@ -725,9 +737,44 @@ const qaDefectRowSchema = z.object({
   target_id: z.string(),
   scenario_id: z.string(),
   resolution_reason: z.string().nullable(),
+  resolved_by_qa_run_id: z.string().nullable(),
   created_at: z.string(),
   resolved_at: z.string().nullable(),
   version: z.number().int(),
+});
+
+const qaCorrectionRunRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  ordinal: z.number().int(),
+  source_qa_run_id: z.string(),
+  baseline_qa_run_id: z.string(),
+  source_evidence_bundle_id: z.string(),
+  source_tested_tree: z.string(),
+  defect_ids_json: z.string(),
+  status: z.string(),
+  created_at: z.string(),
+  completed_at: z.string().nullable(),
+  version: z.number().int(),
+});
+
+const qaRetestPlanRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  correction_run_id: z.string(),
+  baseline_qa_run_id: z.string(),
+  source_qa_run_id: z.string(),
+  source_evidence_bundle_id: z.string(),
+  baseline_plan_revision: z.number().int(),
+  baseline_plan_content_hash: z.string(),
+  cells_json: z.string(),
+  created_at: z.string(),
 });
 
 const acceptancePackageRowSchema = z.object({
@@ -1533,9 +1580,50 @@ const qaDefectFromRow = (value: unknown): QADefect => {
     targetId: row.target_id,
     scenarioId: row.scenario_id,
     resolutionReason: row.resolution_reason,
+    resolvedByQARunId: row.resolved_by_qa_run_id,
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
     version: row.version,
+  });
+};
+
+const qaCorrectionRunFromRow = (value: unknown): QACorrectionRun => {
+  const row = qaCorrectionRunRowSchema.parse(value);
+  return qaCorrectionRunSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    ordinal: row.ordinal,
+    sourceQARunId: row.source_qa_run_id,
+    baselineQARunId: row.baseline_qa_run_id,
+    sourceEvidenceBundleId: row.source_evidence_bundle_id,
+    sourceTestedTree: row.source_tested_tree,
+    defectIds: parseJson(row.defect_ids_json),
+    status: row.status,
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
+    version: row.version,
+  });
+};
+
+const qaRetestPlanFromRow = (value: unknown): QARetestPlan => {
+  const row = qaRetestPlanRowSchema.parse(value);
+  return qaRetestPlanSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    correctionRunId: row.correction_run_id,
+    baselineQARunId: row.baseline_qa_run_id,
+    sourceQARunId: row.source_qa_run_id,
+    sourceEvidenceBundleId: row.source_evidence_bundle_id,
+    baselinePlanRevision: row.baseline_plan_revision,
+    baselinePlanContentHash: row.baseline_plan_content_hash,
+    cells: parseJson(row.cells_json),
+    createdAt: row.created_at,
   });
 };
 
@@ -2470,17 +2558,33 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       `SELECT result_tree FROM stage_attempts
        WHERE pipeline_run_id = ? AND stage = 'IMPLEMENT' AND status = 'SUCCEEDED'
          AND result_tree IS NOT NULL
-       ORDER BY attempt DESC, finished_at DESC, id DESC LIMIT 1`,
+       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     );
-    const selectLatestSucceededImplementAttempt = database.prepare(
+    const selectLatestSucceededDeveloperAgentRunForCycle = database.prepare(
+      `SELECT agent_runs.* FROM agent_runs
+       INNER JOIN stage_attempts ON stage_attempts.id = agent_runs.stage_attempt_id
+       WHERE agent_runs.pipeline_run_id = ?
+         AND stage_attempts.correction_run_id IS ?
+         AND agent_runs.profile_role = 'DEVELOPER'
+         AND agent_runs.status = 'SUCCEEDED'
+       ORDER BY agent_runs.finished_at DESC, agent_runs.rowid DESC LIMIT 1`,
+    );
+    const selectLatestSucceededImplementAttemptForCycle = database.prepare(
       `SELECT * FROM stage_attempts
-       WHERE pipeline_run_id = ? AND stage = 'IMPLEMENT' AND status = 'SUCCEEDED'
-         AND result_tree IS NOT NULL
-       ORDER BY attempt DESC, finished_at DESC, id DESC LIMIT 1`,
+       WHERE pipeline_run_id = ? AND correction_run_id IS ?
+         AND stage = 'IMPLEMENT' AND status = 'SUCCEEDED' AND result_tree IS NOT NULL
+       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     );
-    const selectOpenReviewFindings = database.prepare(
+    const selectLatestSucceededImplementTreeForCycle = database.prepare(
+      `SELECT result_tree FROM stage_attempts
+       WHERE pipeline_run_id = ? AND correction_run_id IS ?
+         AND stage = 'IMPLEMENT' AND status = 'SUCCEEDED' AND result_tree IS NOT NULL
+       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+    );
+    const selectOpenReviewFindingsForCycle = database.prepare(
       `SELECT * FROM review_findings
-       WHERE pipeline_run_id = ? AND status = 'OPEN' ORDER BY created_at, id LIMIT 200`,
+       WHERE pipeline_run_id = ? AND correction_run_id IS ? AND status = 'OPEN'
+       ORDER BY created_at, id LIMIT 200`,
     );
     const selectReviewFindingById = database.prepare("SELECT * FROM review_findings WHERE id = ?");
     const selectQADefectById = database.prepare("SELECT * FROM qa_defects WHERE id = ?");
@@ -2515,6 +2619,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     );
     const selectQARunById = database.prepare("SELECT * FROM qa_runs WHERE id = ?");
     const selectQARunByAgentRun = database.prepare("SELECT * FROM qa_runs WHERE agent_run_id = ?");
+    const selectQARunsForPipeline = database.prepare(
+      "SELECT * FROM qa_runs WHERE pipeline_run_id = ? ORDER BY started_at, id",
+    );
     const insertQARun = database.prepare(
       `INSERT INTO qa_runs (
         id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
@@ -2534,6 +2641,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const selectQAEvidenceBundleById = database.prepare("SELECT * FROM qa_evidence_bundles WHERE id = ?");
+    const selectQAEvidenceBundleByQARun = database.prepare(
+      "SELECT * FROM qa_evidence_bundles WHERE qa_run_id = ?",
+    );
+    const selectQAEvidenceBundlesForPipeline = database.prepare(
+      "SELECT * FROM qa_evidence_bundles WHERE pipeline_run_id = ? ORDER BY created_at, id",
+    );
     const insertQAAttachmentRef = database.prepare(
       `INSERT INTO qa_attachment_refs (
         id, schema_version, qa_run_id, kind, content_hash, byte_size, target_id,
@@ -2576,8 +2689,64 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       `INSERT INTO qa_defects (
         id, schema_version, qa_run_id, project_id, work_item_id, tested_tree, ordinal,
         severity, status, title, description, reproduction_json, target_id, scenario_id,
-        resolution_reason, created_at, resolved_at, version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        resolution_reason, resolved_by_qa_run_id, created_at, resolved_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectCurrentQACorrectionRun = database.prepare(
+      `SELECT * FROM qa_correction_runs
+       WHERE pipeline_run_id = ? AND status IN ('ACTIVE', 'EXHAUSTED')
+       ORDER BY ordinal DESC LIMIT 1`,
+    );
+    const selectQACorrectionRunById = database.prepare("SELECT * FROM qa_correction_runs WHERE id = ?");
+    const selectQACorrectionRunsForPipeline = database.prepare(
+      "SELECT * FROM qa_correction_runs WHERE pipeline_run_id = ? ORDER BY ordinal, id",
+    );
+    const selectLatestFailedRetestForCorrection = database.prepare(
+      `SELECT * FROM qa_runs
+       WHERE correction_run_id = ? AND status = 'FAILED'
+       ORDER BY completed_at DESC, rowid DESC LIMIT 1`,
+    );
+    const selectQARetestPlanById = database.prepare("SELECT * FROM qa_retest_plans WHERE id = ?");
+    const selectQARetestPlanByCorrection = database.prepare(
+      "SELECT * FROM qa_retest_plans WHERE correction_run_id = ?",
+    );
+    const selectQARetestPlansForPipeline = database.prepare(
+      "SELECT * FROM qa_retest_plans WHERE pipeline_run_id = ? ORDER BY created_at, id",
+    );
+    const selectQADefectsForPipeline = database.prepare(
+      `SELECT qa_defects.* FROM qa_defects
+       INNER JOIN qa_runs ON qa_runs.id = qa_defects.qa_run_id
+       WHERE qa_runs.pipeline_run_id = ?
+       ORDER BY qa_defects.created_at, qa_defects.id`,
+    );
+    const selectOpenQADefectsForPipeline = database.prepare(
+      `SELECT qa_defects.* FROM qa_defects
+       INNER JOIN qa_runs ON qa_runs.id = qa_defects.qa_run_id
+       WHERE qa_runs.pipeline_run_id = ? AND qa_defects.status = 'OPEN'
+       ORDER BY qa_defects.created_at, qa_defects.id`,
+    );
+    const selectPassedReviewForCorrectionTree = database.prepare(
+      `SELECT * FROM review_reports
+       WHERE pipeline_run_id = ? AND correction_run_id = ? AND reviewed_tree = ? AND verdict = 'PASSED'
+       ORDER BY round DESC, rowid DESC LIMIT 1`,
+    );
+    const insertQACorrectionRun = database.prepare(
+      `INSERT INTO qa_correction_runs (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, ordinal,
+        source_qa_run_id, baseline_qa_run_id, source_evidence_bundle_id, source_tested_tree,
+        defect_ids_json, status, created_at, completed_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateQACorrectionRun = database.prepare(
+      `UPDATE qa_correction_runs SET status = ?, completed_at = ?, version = ?
+       WHERE id = ? AND version = ? AND status IN ('ACTIVE', 'EXHAUSTED')`,
+    );
+    const insertQARetestPlan = database.prepare(
+      `INSERT INTO qa_retest_plans (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, correction_run_id,
+        baseline_qa_run_id, source_qa_run_id, source_evidence_bundle_id,
+        baseline_plan_revision, baseline_plan_content_hash, cells_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const selectAcceptancePackageById = database.prepare("SELECT * FROM acceptance_packages WHERE id = ?");
     const selectAcceptancePackageByRun = database.prepare(
@@ -2852,6 +3021,44 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       return value === undefined ? null : stageAttemptFromRow(value);
     };
 
+    const readCurrentQACorrectionRun = (pipelineRunId: string): QACorrectionRun | null => {
+      const value = selectCurrentQACorrectionRun.get(pipelineRunId);
+      return value === undefined ? null : qaCorrectionRunFromRow(value);
+    };
+
+    const readQACorrectionRun = (correctionRunId: string): QACorrectionRun | null => {
+      const value = selectQACorrectionRunById.get(correctionRunId);
+      return value === undefined ? null : qaCorrectionRunFromRow(value);
+    };
+
+    const readQARetestPlan = (retestPlanId: string): QARetestPlan | null => {
+      const value = selectQARetestPlanById.get(retestPlanId);
+      return value === undefined ? null : qaRetestPlanFromRow(value);
+    };
+
+    const readOpenQADefects = (pipelineRunId: string): QADefect[] =>
+      selectOpenQADefectsForPipeline.all(pipelineRunId).map(qaDefectFromRow);
+
+    const readQACorrectionHistory = (pipelineRunId: string) => ({
+      correctionRuns: selectQACorrectionRunsForPipeline.all(pipelineRunId).map(qaCorrectionRunFromRow),
+      retestPlans: selectQARetestPlansForPipeline.all(pipelineRunId).map(qaRetestPlanFromRow),
+      qaRuns: selectQARunsForPipeline.all(pipelineRunId).map(qaRunFromRow),
+      evidenceBundles: selectQAEvidenceBundlesForPipeline.all(pipelineRunId).map(qaEvidenceBundleFromRow),
+      defects: selectQADefectsForPipeline.all(pipelineRunId).map(qaDefectFromRow),
+    });
+
+    const readQACorrectionDefects = (correctionRun: QACorrectionRun): QADefect[] =>
+      correctionRun.defectIds.map((defectId) => {
+        const value = selectQADefectById.get(defectId);
+        if (value === undefined) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "A QA correction references a defect that no longer exists",
+          );
+        }
+        return qaDefectFromRow(value);
+      });
+
     const readCurrentBudgetPolicy = (pipelineRunId: string): BudgetPolicy | null => {
       const value = selectCurrentBudgetPolicy.get(pipelineRunId);
       return value === undefined ? null : budgetPolicyFromRow(value);
@@ -3085,8 +3292,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const reviewInput =
           stageAttempt.stage === "REVIEW"
             ? (() => {
-                const implementationValue = selectLatestSucceededImplementAttempt.get(run.id);
-                const authorValue = selectLatestSucceededDeveloperAgentRun.get(run.id);
+                const implementationValue = selectLatestSucceededImplementAttemptForCycle.get(
+                  run.id,
+                  stageAttempt.correctionRunId,
+                );
+                const authorValue = selectLatestSucceededDeveloperAgentRunForCycle.get(
+                  run.id,
+                  stageAttempt.correctionRunId,
+                );
                 if (implementationValue === undefined || authorValue === undefined) return null;
                 const implementationAttempt = stageAttemptFromRow(implementationValue);
                 const authorAgentRun = agentRunFromRow(authorValue);
@@ -3103,8 +3316,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                     version: authorAgentRun.version,
                     provider: authorAgentRun.provider,
                   },
-                  openFindings: selectOpenReviewFindings
-                    .all(run.id)
+                  openFindings: selectOpenReviewFindingsForCycle
+                    .all(run.id, stageAttempt.correctionRunId)
                     .map(reviewFindingFromRow)
                     .map((finding) => ({
                       id: finding.id,
@@ -3121,6 +3334,76 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 };
               })()
             : null;
+
+        const qaCorrection =
+          stageAttempt.correctionRunId === null
+            ? null
+            : (() => {
+                const correctionRun = readQACorrectionRun(stageAttempt.correctionRunId);
+                const retestPlanValue = selectQARetestPlanByCorrection.get(stageAttempt.correctionRunId);
+                if (correctionRun === null || retestPlanValue === undefined) {
+                  throw new StateStoreError(
+                    "PERSISTENCE_FAILURE",
+                    "The correction context authority is incomplete",
+                  );
+                }
+                const retestPlan = qaRetestPlanFromRow(retestPlanValue);
+                const sourceQARunValue = selectQARunById.get(correctionRun.sourceQARunId);
+                const sourceEvidenceValue = selectQAEvidenceBundleById.get(
+                  correctionRun.sourceEvidenceBundleId,
+                );
+                if (sourceQARunValue === undefined || sourceEvidenceValue === undefined) {
+                  throw new StateStoreError(
+                    "PERSISTENCE_FAILURE",
+                    "The correction source evidence is incomplete",
+                  );
+                }
+                const sourceQARun = qaRunFromRow(sourceQARunValue);
+                const sourceEvidence = qaEvidenceBundleFromRow(sourceEvidenceValue);
+                const currentTreeValue = selectLatestSucceededImplementTreeForCycle.get(
+                  run.id,
+                  correctionRun.id,
+                );
+                const currentTree =
+                  currentTreeValue === undefined
+                    ? sourceQARun.testedTree
+                    : resultTreeRowSchema.parse(currentTreeValue).result_tree;
+                return {
+                  correctionRun: {
+                    id: correctionRun.id,
+                    version: correctionRun.version,
+                    ordinal: correctionRun.ordinal,
+                    status: correctionRun.status,
+                  },
+                  sourceQARun: {
+                    id: sourceQARun.id,
+                    version: sourceQARun.version,
+                    testedTree: sourceQARun.testedTree,
+                    targetOrigin: sourceQARun.targetOrigin,
+                  },
+                  sourceEvidence: { id: sourceEvidence.id, version: 1 },
+                  retestPlan: {
+                    id: retestPlan.id,
+                    version: 1,
+                    baselineQARunId: retestPlan.baselineQARunId,
+                    baselinePlanRevision: retestPlan.baselinePlanRevision,
+                    baselinePlanContentHash: retestPlan.baselinePlanContentHash,
+                    cells: retestPlan.cells,
+                  },
+                  currentTree,
+                  defects: readQACorrectionDefects(correctionRun).map((defect) => ({
+                    id: defect.id,
+                    version: defect.version,
+                    severity: defect.severity,
+                    status: defect.status,
+                    title: defect.title,
+                    description: defect.description,
+                    reproduction: defect.reproduction,
+                    targetId: defect.targetId,
+                    scenarioId: defect.scenarioId,
+                  })),
+                };
+              })();
 
         const evidence = readRecentEvidenceArtifacts(run.id, MAX_CONTEXT_SOURCE_RECORDS).map((artifact) => ({
           id: artifact.id,
@@ -3165,6 +3448,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             attempt: stageAttempt.attempt,
             sessionOrdinal,
           },
+          qaCorrection,
           decisions,
           latestCheckpoint,
           reviewInput,
@@ -3842,6 +4126,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       | BudgetOverrideDecision["events"][number]
       | RecoveryDecision["events"][number]
       | QADefectDispositionDecision["events"][number]
+      | FailedQACorrectionTransition["events"][number]
+      | PassedQACorrectionTransition["events"][number]
+      | QACorrectionGateResolution["events"][number]
       | ReviewFindingDispositionDecision["events"][number]
       | AcceptanceResolutionDecision["events"][number]
       | StageAttemptPauseDecision["events"][number];
@@ -4491,12 +4778,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       const update = database
         .prepare(
           `UPDATE qa_defects SET
-            status = ?, resolution_reason = ?, resolved_at = ?, version = ?
+            status = ?, resolution_reason = ?, resolved_by_qa_run_id = ?, resolved_at = ?, version = ?
            WHERE id = ? AND version = ? AND status = 'OPEN'`,
         )
         .run(
           defect.status,
           defect.resolutionReason,
+          defect.resolvedByQARunId,
           defect.resolvedAt,
           defect.version,
           defect.id,
@@ -4505,9 +4793,63 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       if (update.changes !== 1) {
         throw new StateStoreError(
           "PERSISTENCE_FAILURE",
-          "The QA defect changed while its waiver was being recorded",
+          "The QA defect changed while its disposition was being recorded",
         );
       }
+    };
+
+    const persistQACorrectionRun = (correctionRun: QACorrectionRun): void => {
+      insertQACorrectionRun.run(
+        correctionRun.id,
+        correctionRun.schemaVersion,
+        correctionRun.projectId,
+        correctionRun.workItemId,
+        correctionRun.pipelineRunId,
+        correctionRun.ordinal,
+        correctionRun.sourceQARunId,
+        correctionRun.baselineQARunId,
+        correctionRun.sourceEvidenceBundleId,
+        correctionRun.sourceTestedTree,
+        JSON.stringify(correctionRun.defectIds),
+        correctionRun.status,
+        correctionRun.createdAt,
+        correctionRun.completedAt,
+        correctionRun.version,
+      );
+    };
+
+    const persistUpdatedQACorrectionRun = (correctionRun: QACorrectionRun): void => {
+      const update = updateQACorrectionRun.run(
+        correctionRun.status,
+        correctionRun.completedAt,
+        correctionRun.version,
+        correctionRun.id,
+        correctionRun.version - 1,
+      );
+      if (update.changes !== 1) {
+        throw new StateStoreError(
+          "PERSISTENCE_FAILURE",
+          "The QA correction changed while its workflow transition was being recorded",
+        );
+      }
+    };
+
+    const persistQARetestPlan = (retestPlan: QARetestPlan): void => {
+      insertQARetestPlan.run(
+        retestPlan.id,
+        retestPlan.schemaVersion,
+        retestPlan.projectId,
+        retestPlan.workItemId,
+        retestPlan.pipelineRunId,
+        retestPlan.correctionRunId,
+        retestPlan.baselineQARunId,
+        retestPlan.sourceQARunId,
+        retestPlan.sourceEvidenceBundleId,
+        retestPlan.baselinePlanRevision,
+        retestPlan.baselinePlanContentHash,
+        JSON.stringify(retestPlan.cells),
+        retestPlan.createdAt,
+      );
     };
 
     const insertAcceptancePackage = (acceptancePackage: AcceptancePackage): void => {
@@ -5810,12 +6152,25 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           );
         }
         const currentTree = resultTreeRowSchema.parse(treeValue).result_tree;
+        const currentCorrection = readCurrentQACorrectionRun(stageAttempt.pipelineRunId);
+        const retestPlan =
+          command.payload.scope.type === "RETEST"
+            ? readQARetestPlan(command.payload.scope.retestPlanId)
+            : null;
+        let baselineQARun: QARun | null = null;
+        if (currentCorrection !== null) {
+          const baselineValue = selectQARunById.get(currentCorrection.baselineQARunId);
+          if (baselineValue !== undefined) baselineQARun = qaRunFromRow(baselineValue);
+        }
         const qaRun = decideQAReservation(command, {
           newQARunId: createId("qaRun"),
           now: occurredAt,
           currentTree,
           stageAttempt,
           agentRun: agentRunFromRow(agentRunValue),
+          ...(currentCorrection === null ? {} : { currentCorrection }),
+          ...(retestPlan === null ? {} : { retestPlan }),
+          ...(baselineQARun === null ? {} : { baselineQARun }),
         });
         insertQARun.run(
           qaRun.id,
@@ -5870,6 +6225,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           throw new StateStoreError("QA_RUN_NOT_FOUND", "The QA run does not exist");
         }
         const current = qaRunFromRow(qaRunValue);
+        const retestPlan =
+          current.scope.type === "RETEST" ? readQARetestPlan(current.scope.retestPlanId) : null;
         const agentRunValue = selectAgentRunById.get(current.agentRunId);
         if (agentRunValue === undefined) {
           throw new StateStoreError("QA_STABLE_TREE_MISSING", "The Browser QA AgentRun does not exist");
@@ -5896,6 +6253,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           currentTree,
           result: command.payload.result,
           finalizedAttachments: command.payload.finalizedAttachments,
+          ...(retestPlan === null ? {} : { retestPlan }),
           now: occurredAt,
         });
         const update = completeQARun.run(
@@ -5943,6 +6301,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               ordinal: index + 1,
               status: "OPEN",
               resolutionReason: null,
+              resolvedByQARunId: null,
               createdAt: occurredAt,
               resolvedAt: null,
               version: 1,
@@ -5964,6 +6323,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             JSON.stringify(defect.reproduction),
             defect.targetId,
             defect.scenarioId,
+            null,
             null,
             defect.createdAt,
             null,
@@ -6018,6 +6378,137 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             "WORKFLOW_NOT_FOUND",
             "The workflow state backing the Browser QA run is incomplete",
           );
+        }
+        const metadata = {
+          workItemId: decision.qaRun.workItemId,
+          projectId: decision.qaRun.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        };
+        if (decision.status === "FAILED") {
+          if (evidence === null) {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "A measured failed QA run must persist its evidence before correction starts",
+            );
+          }
+          const currentCorrection = readCurrentQACorrectionRun(decision.qaRun.pipelineRunId);
+          let baselineQARun = decision.qaRun;
+          if (currentCorrection !== null) {
+            const baselineValue = selectQARunById.get(currentCorrection.baselineQARunId);
+            if (baselineValue === undefined) {
+              throw new StateStoreError("PERSISTENCE_FAILURE", "The QA correction baseline no longer exists");
+            }
+            baselineQARun = qaRunFromRow(baselineValue);
+          }
+          const correctionDecision = decideFailedQACorrectionTransition({
+            qaRun: decision.qaRun,
+            sourceEvidence: evidence,
+            baselineQARun,
+            openDefects: readOpenQADefects(decision.qaRun.pipelineRunId),
+            ...(currentCorrection === null ? {} : { currentCorrection }),
+            workItem,
+            run: pipelineRun,
+            stageAttempt,
+            dispatch,
+            ids: {
+              correctionRunId: createId("qaCorrectionRun"),
+              retestPlanId: createId("qaRetestPlan"),
+              nextStageAttemptId: createId("stageAttempt"),
+              nextDispatchId: createId("workflowDispatch"),
+              humanRequestId: createId("humanRequest"),
+              authorizeFinalOptionId: createId("humanRequestOption"),
+              cancelOptionId: createId("humanRequestOption"),
+            },
+            now: occurredAt,
+          });
+          if (correctionDecision.previousCorrection !== null) {
+            persistUpdatedQACorrectionRun(correctionDecision.previousCorrection);
+          }
+          if (correctionDecision.correctionRun !== null) {
+            persistQACorrectionRun(correctionDecision.correctionRun);
+            persistQARetestPlan(correctionDecision.retestPlan);
+          }
+          updateWorkflowDispatch(correctionDecision.completedDispatch);
+          updateStageAttempt(correctionDecision.completedStageAttempt);
+          updatePipelineRun(correctionDecision.run);
+          updateWorkflowWorkItem(correctionDecision.workItem);
+          if (correctionDecision.nextStageAttempt !== null) {
+            insertStageAttempt(correctionDecision.nextStageAttempt);
+          }
+          if (correctionDecision.nextDispatch !== null) {
+            insertWorkflowDispatch(correctionDecision.nextDispatch);
+          }
+          if (correctionDecision.request !== null) {
+            insertHumanRequest(correctionDecision.request);
+          }
+          const event = appendAgentEvent(
+            {
+              type: "QA_RUN_COMPLETED",
+              data: {
+                qaRun: decision.qaRun,
+                evidenceBundleId: evidence.id,
+                defectIds: defects.map(({ id }) => id),
+              },
+            },
+            metadata,
+          );
+          finishActiveAgentRun(stageAttempt.id, "SUCCEEDED", metadata);
+          appendWorkflowEvents(correctionDecision.events, metadata);
+          return stateCommandResultSchema.parse({
+            schemaVersion: 1,
+            type: "QA_RUN_COMPLETED",
+            replayed: false,
+            workItemId: decision.qaRun.workItemId,
+            qaRun: decision.qaRun,
+            evidence,
+            attachments,
+            defects,
+            event,
+          });
+        }
+        let passedCorrection: PassedQACorrectionTransition | null = null;
+        if (decision.status === "PASSED" && decision.qaRun.scope.type === "RETEST") {
+          const currentCorrection = readCurrentQACorrectionRun(decision.qaRun.pipelineRunId);
+          const reviewValue = selectPassedReviewForCorrectionTree.get(
+            decision.qaRun.pipelineRunId,
+            decision.qaRun.scope.correctionRunId,
+            decision.qaRun.testedTree,
+          );
+          const reviewReport = reviewValue === undefined ? null : reviewReportFromRow(reviewValue);
+          const reviewArtifactValue =
+            reviewReport === null
+              ? undefined
+              : database
+                  .prepare(
+                    `SELECT * FROM evidence_artifacts
+                     WHERE review_report_id = ? AND kind = 'REVIEW_REPORT' AND status = 'PASSED' LIMIT 1`,
+                  )
+                  .get(reviewReport.id);
+          if (
+            currentCorrection === null ||
+            evidence === null ||
+            reviewReport === null ||
+            reviewArtifactValue === undefined
+          ) {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "A passing QA retest has no active correction, measured evidence, or current independent review",
+            );
+          }
+          passedCorrection = decidePassedQACorrectionTransition({
+            qaRun: decision.qaRun,
+            evidence,
+            currentCorrection,
+            defects: readQACorrectionDefects(currentCorrection),
+            openDefects: readOpenQADefects(decision.qaRun.pipelineRunId),
+            reviewReport,
+            reviewArtifact: evidenceArtifactFromRow(reviewArtifactValue),
+            now: occurredAt,
+          });
+          persistUpdatedQACorrectionRun(passedCorrection.correctionRun);
+          passedCorrection.resolvedDefects.forEach(updateQADefect);
         }
         const template = readWorkflowTemplate(pipelineRun);
         const workflowOutcome = qaWorkflowOutcome(decision);
@@ -6074,13 +6565,6 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         workflowDecision.artifacts.forEach(insertEvidenceArtifact);
         if (workflowDecision.nextStageAttempt) insertStageAttempt(workflowDecision.nextStageAttempt);
         if (workflowDecision.nextDispatch) insertWorkflowDispatch(workflowDecision.nextDispatch);
-        const metadata = {
-          workItemId: decision.qaRun.workItemId,
-          projectId: decision.qaRun.projectId,
-          actor: command.actor,
-          occurredAt,
-          correlationId: command.correlationId,
-        };
         const event = appendAgentEvent(
           {
             type: "QA_RUN_COMPLETED",
@@ -6094,6 +6578,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         );
         const agentStatus = terminalAgentRunStatus(workflowDecision.stageAttempt.status);
         if (agentStatus) finishActiveAgentRun(workflowDecision.stageAttempt.id, agentStatus, metadata);
+        if (passedCorrection !== null) appendWorkflowEvents(passedCorrection.events, metadata);
         appendWorkflowEvents(workflowDecision.events, metadata);
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
@@ -6188,8 +6673,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           command.payload.outcome.type === "COMPLETED" &&
           command.payload.outcome.reviewReport !== undefined
             ? (() => {
-                const authorValue = selectLatestSucceededDeveloperAgentRun.get(run.id);
-                const treeValue = selectLatestSucceededImplementTree.get(run.id);
+                const authorValue = selectLatestSucceededDeveloperAgentRunForCycle.get(
+                  run.id,
+                  stageAttempt.correctionRunId,
+                );
+                const treeValue = selectLatestSucceededImplementTreeForCycle.get(
+                  run.id,
+                  stageAttempt.correctionRunId,
+                );
                 if (
                   authorValue === undefined ||
                   runningReviewerValue === undefined ||
@@ -6204,7 +6695,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                   authorAgentRun: agentRunFromRow(authorValue),
                   reviewerAgentRun: agentRunFromRow(runningReviewerValue),
                   currentTree: resultTreeRowSchema.parse(treeValue).result_tree,
-                  openFindings: selectOpenReviewFindings.all(run.id).map(reviewFindingFromRow),
+                  openFindings: selectOpenReviewFindingsForCycle
+                    .all(run.id, stageAttempt.correctionRunId)
+                    .map(reviewFindingFromRow),
                   reportId: createId("reviewReport"),
                   findingIds: command.payload.outcome.reviewReport.findings.map(() =>
                     createId("reviewFinding"),
@@ -6217,13 +6710,23 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const measuredQA =
           command.payload.outcome.type === "READY_FOR_ACCEPTANCE"
             ? (() => {
-                const qaArtifact = existingArtifacts.find(({ kind }) => kind === "QA_REPORT");
-                const treeValue = selectLatestSucceededImplementTree.get(run.id);
-                return treeValue === undefined
-                  ? undefined
-                  : readMeasuredQAForArtifact(qaArtifact, resultTreeRowSchema.parse(treeValue).result_tree);
+                const treeValue = selectLatestSucceededImplementTreeForCycle.get(
+                  run.id,
+                  stageAttempt.correctionRunId,
+                );
+                if (treeValue === undefined) return undefined;
+                const currentTree = resultTreeRowSchema.parse(treeValue).result_tree;
+                const qaArtifact = existingArtifacts.find(
+                  (artifact) =>
+                    artifact.kind === "QA_REPORT" &&
+                    artifact.correctionRunId === stageAttempt.correctionRunId &&
+                    artifact.testedTree === currentTree,
+                );
+                return readMeasuredQAForArtifact(qaArtifact, currentTree);
               })()
             : undefined;
+        const qaCorrectionHistory =
+          measuredQA?.qaRun.scope.type === "RETEST" ? readQACorrectionHistory(run.id) : undefined;
         const decision = decideApplyProviderOutcome(
           { ...command, type: "APPLY_PROVIDER_OUTCOME" },
           {
@@ -6245,6 +6748,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 : [],
             review: reviewContext,
             measuredQA,
+            qaCorrectionHistory,
             qaRunRequired,
             // Pre-R1 fixture workflows completed Review without AgentRun reservation. Keep those
             // historical migration paths readable, while every scheduled live reviewer is held to
@@ -6343,6 +6847,91 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "RESOLVE_QA_CORRECTION_GATE") {
+        const request = readHumanRequest(command.payload.humanRequestId);
+        const correctionRun = readQACorrectionRun(command.payload.correctionRunId);
+        const stageAttempt = request ? readStageAttempt(request.stageAttemptId) : null;
+        const run = stageAttempt ? readPipelineRun(stageAttempt.pipelineRunId) : null;
+        const workItem = request ? readWorkItem(request.workItemId) : null;
+        if (!request || !correctionRun || !stageAttempt || !run || !workItem) {
+          throw new QACorrectionError(
+            "QA_CORRECTION_REQUEST_INVALID",
+            "The exhausted QA correction gate does not exist",
+          );
+        }
+        const sourceValue = selectLatestFailedRetestForCorrection.get(correctionRun.id);
+        const baselineValue = selectQARunById.get(correctionRun.baselineQARunId);
+        if (sourceValue === undefined || baselineValue === undefined) {
+          throw new QACorrectionError(
+            "QA_CORRECTION_LINEAGE_MISMATCH",
+            "The exhausted QA correction lineage is incomplete",
+          );
+        }
+        const sourceQARun = qaRunFromRow(sourceValue);
+        const evidenceValue = selectQAEvidenceBundleByQARun.get(sourceQARun.id);
+        if (evidenceValue === undefined) {
+          throw new QACorrectionError(
+            "QA_CORRECTION_LINEAGE_MISMATCH",
+            "The exhausted QA correction source evidence is missing",
+          );
+        }
+        const gateDecision = decideQACorrectionGateResolution({
+          command,
+          workItem,
+          run,
+          stageAttempt,
+          request,
+          correctionRun,
+          sourceQARun,
+          sourceEvidence: qaEvidenceBundleFromRow(evidenceValue),
+          baselineQARun: qaRunFromRow(baselineValue),
+          openDefects: readOpenQADefects(run.id),
+          ids: {
+            decisionId: createId("decision"),
+            correctionRunId: createId("qaCorrectionRun"),
+            retestPlanId: createId("qaRetestPlan"),
+            nextStageAttemptId: createId("stageAttempt"),
+            dispatchId: createId("workflowDispatch"),
+          },
+          now: occurredAt,
+        });
+        updateHumanRequest(gateDecision.request);
+        insertDecision(gateDecision.decision);
+        persistUpdatedQACorrectionRun(gateDecision.previousCorrection);
+        if (gateDecision.correctionRun !== null) {
+          persistQACorrectionRun(gateDecision.correctionRun);
+          persistQARetestPlan(gateDecision.retestPlan);
+        }
+        updateStageAttempt(gateDecision.stageAttempt);
+        updatePipelineRun(gateDecision.run);
+        updateWorkflowWorkItem(gateDecision.workItem);
+        if (gateDecision.nextStageAttempt !== null) insertStageAttempt(gateDecision.nextStageAttempt);
+        if (gateDecision.dispatch !== null) insertWorkflowDispatch(gateDecision.dispatch);
+        const events = appendWorkflowEvents(gateDecision.events, {
+          workItemId: gateDecision.workItem.id,
+          projectId: gateDecision.workItem.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "QA_CORRECTION_GATE_RESOLVED",
+          replayed: false,
+          action: gateDecision.action,
+          workItemId: gateDecision.workItem.id,
+          request: gateDecision.request,
+          decision: gateDecision.decision,
+          previousCorrection: gateDecision.previousCorrection,
+          correctionRun: gateDecision.correctionRun,
+          retestPlan: gateDecision.retestPlan,
+          run: gateDecision.run,
+          stageAttempt: gateDecision.stageAttempt,
+          dispatch: gateDecision.dispatch,
+          events,
+        });
+      }
+
       if (command.type === "ANSWER_HUMAN_REQUEST") {
         const request = readHumanRequest(command.payload.humanRequestId);
         if (!request) {
@@ -6402,6 +6991,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow state is incomplete");
         }
         const pendingDispatch = readPendingDispatch(stageAttempt.id);
+        const currentCorrection = readCurrentQACorrectionRun(run.id);
+        const correctionCancellation =
+          command.type === "CANCEL_PIPELINE" && currentCorrection !== null
+            ? decideQACorrectionCancellation({
+                correctionRun: currentCorrection,
+                run,
+                stageAttempt,
+                now: occurredAt,
+              })
+            : null;
         const decision =
           command.type === "PAUSE_PIPELINE"
             ? decidePausePipeline(command, {
@@ -6434,6 +7033,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           updateWorkflowDispatch(decision.previousDispatch);
         }
         if (decision.dispatch) insertWorkflowDispatch(decision.dispatch);
+        if (correctionCancellation !== null) {
+          persistUpdatedQACorrectionRun(correctionCancellation.correctionRun);
+        }
         if (decision.action === "CANCEL") {
           database
             .prepare(
@@ -6451,7 +7053,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         };
         const agentStatus = terminalAgentRunStatus(decision.stageAttempt.status);
         if (agentStatus) finishActiveAgentRun(decision.stageAttempt.id, agentStatus, metadata);
-        const events = appendWorkflowEvents(decision.events, metadata);
+        const events = appendWorkflowEvents(
+          [...decision.events, ...(correctionCancellation?.events ?? [])],
+          metadata,
+        );
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "PIPELINE_CONTROL_APPLIED",
@@ -7740,6 +8345,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           error instanceof ReadinessDomainError ||
           error instanceof ProviderSelectionDomainError ||
           error instanceof QACompletionError ||
+          error instanceof QACorrectionError ||
           error instanceof QADefectDispositionError ||
           error instanceof QAReservationError ||
           error instanceof ReviewFindingDispositionError ||
@@ -7980,6 +8586,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               )
               .all(queryValue.pipelineRunId)
               .map(qaDefectFromRow),
+            correctionRuns: database
+              .prepare("SELECT * FROM qa_correction_runs WHERE pipeline_run_id = ? ORDER BY ordinal, id")
+              .all(queryValue.pipelineRunId)
+              .map(qaCorrectionRunFromRow),
+            retestPlans: database
+              .prepare("SELECT * FROM qa_retest_plans WHERE pipeline_run_id = ? ORDER BY created_at, id")
+              .all(queryValue.pipelineRunId)
+              .map(qaRetestPlanFromRow),
           };
         case "LIST_EXPIRED_QA_ATTACHMENTS":
           return {
