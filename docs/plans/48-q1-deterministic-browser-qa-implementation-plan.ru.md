@@ -41,10 +41,10 @@
 
 ### Q1.5 — Task Cockpit
 
-- [ ] Показать measured status и tested environment без raw JSON.
-- [ ] Показать scenario matrix, failed assertions, console/network observations и Defects.
-- [ ] Дать безопасно открыть screenshot/trace через authenticated daemon route без absolute path.
-- [ ] Проверить RU/EN, light/dark, keyboard, 320 px, reconnect и version-conflict recovery.
+- [x] Показать measured status и tested environment без raw JSON.
+- [x] Показать scenario matrix, failed assertions, console/network observations и Defects.
+- [x] Дать безопасно открыть screenshot/trace через authenticated daemon route без absolute path.
+- [x] Проверить RU/EN, light/dark, keyboard, 320 px, reconnect и version-conflict recovery.
 
 ## 2. Security gate
 

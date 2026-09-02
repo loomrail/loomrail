@@ -1,11 +1,37 @@
+import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import { qaFinalizedAttachmentSchema } from "@loomrail/contracts";
 import type { BrowserDriver } from "@loomrail/browser-qa";
 
 import type { BrowserQAConfigResolver } from "../src/browser-qa-config.js";
 
-export const passingBrowserQADriver = (): BrowserDriver => ({
+export const BROWSER_QA_FIXTURE_SCREENSHOT = "verified browser QA screenshot";
+
+export const passingBrowserQADriver = (options?: { artifactsDirectory?: string }): BrowserDriver => ({
   id: "PLAYWRIGHT",
-  run: (qaRun) =>
-    Promise.resolve({
+  run: (qaRun) => {
+    const target = qaRun.plan.targets[0];
+    const scenario = qaRun.plan.scenarios[0];
+    if (target === undefined || scenario === undefined) {
+      throw new Error("The Browser QA fixture requires one target and one scenario");
+    }
+    const content = Buffer.from(BROWSER_QA_FIXTURE_SCREENSHOT);
+    const contentHash = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+    const attachment =
+      options?.artifactsDirectory === undefined
+        ? undefined
+        : {
+            handle: "fixture-screenshot",
+            kind: "SCREENSHOT" as const,
+            contentHash,
+            byteSize: content.byteLength,
+            targetId: target.id,
+            scenarioId: scenario.id,
+            capturedAt: qaRun.startedAt,
+          };
+    return Promise.resolve({
       result: {
         outcome: "MEASURED",
         environment: {
@@ -29,13 +55,38 @@ export const passingBrowserQADriver = (): BrowserDriver => ({
           })),
         ),
         observations: [],
-        attachments: [],
+        attachments: attachment === undefined ? [] : [attachment],
         defects: [],
       },
-      finalizeAttachments: () => Promise.resolve([]),
+      finalizeAttachments: async ({ qaRunId, createAttachmentId }) => {
+        if (attachment === undefined || options?.artifactsDirectory === undefined) return [];
+        const runStorageSegment = `run-${createHash("sha256").update(qaRunId).digest("hex").slice(0, 32)}`;
+        const filename = "fixture-screenshot.png";
+        await mkdir(join(options.artifactsDirectory, "qa", runStorageSegment), { recursive: true });
+        await writeFile(join(options.artifactsDirectory, "qa", runStorageSegment, filename), content);
+        return [
+          qaFinalizedAttachmentSchema.parse({
+            handle: attachment.handle,
+            ref: {
+              schemaVersion: 1,
+              id: createAttachmentId(),
+              qaRunId,
+              kind: attachment.kind,
+              contentHash: attachment.contentHash,
+              byteSize: attachment.byteSize,
+              targetId: attachment.targetId,
+              scenarioId: attachment.scenarioId,
+              capturedAt: attachment.capturedAt,
+              retentionClass: "STANDARD_30_DAYS",
+              storageKey: `${runStorageSegment}/${filename}`,
+            },
+          }),
+        ];
+      },
       confirmAttachments: () => Promise.resolve(),
       dispose: () => Promise.resolve(),
-    }),
+    });
+  },
 });
 
 export const readyBrowserQAConfig: BrowserQAConfigResolver = () =>

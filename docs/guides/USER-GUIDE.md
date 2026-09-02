@@ -53,9 +53,9 @@ Provider choice belongs to a Project. Open **Settings → AI provider** after se
 | Choice      | What happens                                                                                                    |
 | ----------- | --------------------------------------------------------------------------------------------------------------- |
 | Auto        | Uses an installed, authenticated live CLI. If none is ready, new sessions use the clearly marked Mock fallback. |
-| Mock        | Deterministic test double. No external agent runs; all six stages are available.                                |
-| Codex       | The real `codex` CLI runs in the task's Git worktree for all six stages.                                        |
-| Claude Code | The real `claude` CLI serves Discovery, Plan, and Review. Unsupported stages stop as a Human Request.           |
+| Mock        | Deterministic test double for agent work. Browser QA is still measured by the local Playwright driver.          |
+| Codex       | The real `codex` CLI runs supported agent stages in the task's Git worktree. Browser QA stays daemon-owned.     |
+| Claude Code | The real `claude` CLI serves Discovery, Plan, and Review. Unsupported agent stages stop as a Human Request.     |
 
 Install and authenticate Codex or Claude Code with that provider's own CLI, then start Loomrail normally. Choose
 **Check again** after installing or signing in. Loomrail checks only whether the executable exists and whether the
@@ -85,7 +85,8 @@ in Mock mode. Ordinary use does not require this variable.
 5. Select **Move to Ready**, then **Start workflow**.
 
 The button starts the same bounded Discovery → Plan → Implementation → Review → QA → Acceptance template for every
-provider. With the default provider, the mock supplies deterministic stage results; with Codex, real sessions do.
+provider. Mock supplies deterministic agent-stage results; with Codex, live sessions do that work. QA itself always
+uses Loomrail's isolated Playwright driver and cannot be passed by provider prose.
 
 ### Watch parallel work in Agent Fleet
 
@@ -113,6 +114,13 @@ changes, no fourth dispatch is created.
 
 Only the owner may mark an open finding **Risk accepted** or **False positive**, and a reason is required. The decision
 is audited and survives restart; it does not make the author their own reviewer or silently bypass re-review.
+
+### Prepare browser QA
+
+The bundled web demo needs no second process: its fixed plan measures Loomrail's local readiness endpoint. For your
+own web repository, start the app on loopback and commit a bounded `.loomrail/browser-qa.json` plan before the workflow
+reaches QA. The Task Cockpit then shows the measured tree, target matrix, environment, failures, observations, defects,
+screenshots, and traces. See [Browser QA](BROWSER-QA.md) for the exact format and security boundary.
 
 ### Answer the Human Request
 
@@ -229,9 +237,10 @@ Only the expanded file body is fetched and refreshed. The display is an inspecti
 of individual hunks. To keep the result, open the shown worktree in your editor and perform your own Git workflow. Until
 you do, Loomrail has committed none of the agent's edits.
 
-Claude Code currently cannot complete the same live route: it serves Discovery, Plan, and Review, but not Implementation
-or QA. When the workflow reaches an unsupported stage, Loomrail refuses dispatch through a blocking Human Request
-instead of silently switching providers.
+Claude Code currently cannot complete the same live route: it serves Discovery, Plan, and Review, but not
+Implementation. Browser QA is provider-independent, but the route cannot reach it until a supported implementation
+stage produces an exact tree. Loomrail refuses an unsupported stage through a blocking Human Request instead of
+silently switching providers.
 
 ## 6. Add Context7 or another MCP connection
 
@@ -330,7 +339,7 @@ instead of masquerading as an empty list.
 - The npm package is pre-alpha and there is no desktop installer.
 - The daemon is local-only; there is no remote or multi-user mode.
 - Provider preference is saved per Project; an optional process-wide environment override locks it until restart.
-- Claude Code has no validated write path for Implementation or QA.
+- Claude Code has no validated write path for Implementation; Browser QA is daemon-owned.
 - Loomrail does not commit, squash, push, merge, or clean up the owner's result.
 - There is no supported online state export, retention UI, or portable workspace restore.
 - A worktree is collision isolation, not a complete security sandbox.

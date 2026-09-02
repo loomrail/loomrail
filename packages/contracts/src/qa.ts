@@ -16,6 +16,7 @@ export const MAX_QA_EXECUTIONS = MAX_QA_TARGETS * MAX_QA_SCENARIOS;
 export const MAX_QA_OBSERVATIONS = 100;
 export const MAX_QA_ATTACHMENTS = 50;
 export const MAX_QA_DEFECTS = 50;
+export const MAX_QA_RUN_HISTORY = 20;
 
 const titleSchema = z.string().trim().min(1).max(200);
 const descriptionSchema = z.string().trim().min(1).max(4_000);
@@ -315,6 +316,8 @@ export const qaAttachmentRefSchema = qaAttachmentDraftSchema
   })
   .strict();
 
+export const qaAttachmentSummarySchema = qaAttachmentRefSchema.omit({ storageKey: true }).strict();
+
 export const qaFinalizedAttachmentSchema = z
   .object({
     handle: opaqueIdSchema,
@@ -502,6 +505,16 @@ export const qaRunCompletedResultSchema = qaCommandResultBaseSchema.extend({
   event: qaRunCompletedEventSchema,
 });
 
+export const qaStateResponseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    runs: z.array(qaRunSchema).max(MAX_QA_RUN_HISTORY),
+    evidence: z.array(qaEvidenceBundleSchema).max(MAX_QA_RUN_HISTORY),
+    attachments: z.array(qaAttachmentSummarySchema).max(MAX_QA_RUN_HISTORY * MAX_QA_ATTACHMENTS),
+    defects: z.array(qaDefectSchema).max(MAX_QA_RUN_HISTORY * MAX_QA_DEFECTS),
+  })
+  .strict();
+
 export type BrowserDriverId = z.infer<typeof browserDriverIdSchema>;
 export type QARunStatus = z.infer<typeof qaRunStatusSchema>;
 export type QACheckStatus = z.infer<typeof qaCheckStatusSchema>;
@@ -515,6 +528,7 @@ export type QAScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;
 export type QAObservation = z.infer<typeof qaObservationSchema>;
 export type QAAttachmentDraft = z.infer<typeof qaAttachmentDraftSchema>;
 export type QAAttachmentRef = z.infer<typeof qaAttachmentRefSchema>;
+export type QAAttachmentSummary = z.infer<typeof qaAttachmentSummarySchema>;
 export type QAFinalizedAttachment = z.infer<typeof qaFinalizedAttachmentSchema>;
 export type QADefectDraft = z.infer<typeof qaDefectDraftSchema>;
 export type QADefect = z.infer<typeof qaDefectSchema>;
@@ -526,3 +540,4 @@ export type ReserveQARunCommand = z.infer<typeof reserveQARunCommandSchema>;
 export type CompleteQARunCommand = z.infer<typeof completeQARunCommandSchema>;
 export type QARunReservedResult = z.infer<typeof qaRunReservedResultSchema>;
 export type QARunCompletedResult = z.infer<typeof qaRunCompletedResultSchema>;
+export type QAStateResponse = z.infer<typeof qaStateResponseSchema>;

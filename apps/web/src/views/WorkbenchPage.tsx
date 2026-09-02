@@ -14,6 +14,10 @@ import {
   type EvidenceArtifact,
   type PipelineRun,
   type ProviderSession,
+  type QADefect,
+  type QAObservation,
+  type QARunStatus,
+  type QAStateResponse,
   type ReadinessCheck,
   type ReviewFinding,
   type ReviewFindingOwnerDisposition,
@@ -66,6 +70,7 @@ import {
 } from "@loomrail/ui";
 
 import { ChangesSection } from "./ChangesSection";
+import { workItemQAAttachmentUrl } from "../api";
 import {
   defaultBoardView,
   isBoardOrdering,
@@ -96,6 +101,7 @@ import {
   useUpdateWorkItem,
   useWorkspace,
   useWorkItemEvents,
+  useWorkItemQA,
   useWorkItemWorkflow,
   useWorkItemReviews,
   useWorkItemWorkspace,
@@ -1411,6 +1417,203 @@ const ReviewPanel = ({ item }: { item: WorkItem }): React.JSX.Element | null => 
   );
 };
 
+type QARunView = QAStateResponse["runs"][number];
+
+const qaRunStatusTones: Record<QARunStatus, BadgeTone> = {
+  RUNNING: "info",
+  PASSED: "success",
+  FAILED: "danger",
+  ERROR: "warning",
+};
+
+const qaObservationTones: Record<QAObservation["severity"], BadgeTone> = {
+  INFO: "neutral",
+  WARNING: "warning",
+  ERROR: "danger",
+};
+
+const qaDefectTones: Record<QADefect["severity"], BadgeTone> = {
+  LOW: "neutral",
+  MEDIUM: "info",
+  HIGH: "warning",
+  CRITICAL: "danger",
+};
+
+const BrowserQAPanel = ({ item }: { item: WorkItem }): React.JSX.Element | null => {
+  const { t } = useI18n();
+  const qaQuery = useWorkItemQA(item.id);
+  if (qaQuery.error) {
+    return (
+      <LocalConnectionRecovery
+        error={qaQuery.error}
+        onRetry={() => {
+          void qaQuery.refetch();
+        }}
+        retrying={qaQuery.isFetching}
+      />
+    );
+  }
+
+  const qa = qaQuery.data;
+  const latest: QARunView | undefined = qa?.runs.at(-1);
+  if (qa === undefined || latest === undefined) return null;
+  const evidence = qa.evidence.find(({ qaRunId }) => qaRunId === latest.id);
+  const attachments = qa.attachments.filter(({ qaRunId }) => qaRunId === latest.id);
+  const defects = qa.defects.filter(({ qaRunId }) => qaRunId === latest.id);
+  const environment = evidence?.environment;
+
+  return (
+    <section aria-label={t("qa.title")} className="qa-panel">
+      <header className="qa-panel__heading">
+        <div>
+          <span>{t("qa.planRevision", { revision: latest.plan.revision })}</span>
+          <strong>{t("qa.title")}</strong>
+        </div>
+        <Badge tone={qaRunStatusTones[latest.status]}>{t(`qa.status.${latest.status}`)}</Badge>
+      </header>
+
+      <dl className="qa-panel__facts">
+        <div>
+          <dt>{t("qa.tree")}</dt>
+          <dd>
+            <code title={latest.testedTree}>{latest.testedTree.slice(0, 8)}</code>
+          </dd>
+        </div>
+        <div>
+          <dt>{t("qa.target")}</dt>
+          <dd>{latest.targetOrigin}</dd>
+        </div>
+        <div>
+          <dt>{t("qa.environment")}</dt>
+          <dd>
+            {environment
+              ? `${environment.browserName} ${environment.browserVersion} · ${environment.osFamily} · Node ${environment.runtimeVersion}`
+              : t("qa.notRun")}
+          </dd>
+        </div>
+      </dl>
+
+      {latest.error ? <p className="qa-panel__error">{latest.error.summary}</p> : null}
+
+      <div className="qa-panel__section">
+        <strong>{t("qa.matrix")}</strong>
+        <ol className="qa-matrix">
+          {latest.plan.targets.flatMap((target) =>
+            latest.plan.scenarios.map((scenario) => {
+              const execution = evidence?.executions.find(
+                (candidate) => candidate.targetId === target.id && candidate.scenarioId === scenario.id,
+              );
+              const failedAssertions =
+                execution?.assertions.filter(({ status }) => status === "FAILED") ?? [];
+              const failedSteps = execution?.steps.filter(({ status }) => status === "FAILED") ?? [];
+              const passed =
+                execution !== undefined && failedAssertions.length === 0 && failedSteps.length === 0;
+              return (
+                <li key={`${target.id}:${scenario.id}`}>
+                  <div className="qa-matrix__heading">
+                    <div>
+                      <strong>{scenario.title}</strong>
+                      <span>
+                        {target.viewport.width}×{target.viewport.height} · {target.locale} ·{" "}
+                        {t(target.theme === "LIGHT" ? "theme.light" : "theme.dark")}
+                      </span>
+                    </div>
+                    <Badge tone={execution === undefined ? "neutral" : passed ? "success" : "danger"}>
+                      {execution === undefined
+                        ? t("qa.notRun")
+                        : t(passed ? "qa.status.PASSED" : "qa.status.FAILED")}
+                    </Badge>
+                  </div>
+                  {execution ? (
+                    <span className="qa-matrix__progress">
+                      {t("qa.scenarioProgress", {
+                        steps: execution.steps.length,
+                        assertions: execution.assertions.length,
+                      })}
+                    </span>
+                  ) : null}
+                  {failedAssertions.length > 0 ? (
+                    <ul className="qa-matrix__failures">
+                      {failedAssertions.map((assertion) => {
+                        const plan = scenario.assertions.find(({ id }) => id === assertion.id);
+                        return (
+                          <li key={assertion.id}>
+                            {t("qa.assertionFailed", { title: plan?.title ?? assertion.id })}
+                            {assertion.details ? <span>{assertion.details}</span> : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
+                </li>
+              );
+            }),
+          )}
+        </ol>
+      </div>
+
+      {evidence && evidence.observations.length > 0 ? (
+        <div className="qa-panel__section">
+          <strong>{t("qa.observations")}</strong>
+          <ul className="qa-observation-list">
+            {evidence.observations.map((observation, index) => (
+              <li key={`${observation.targetId}:${observation.scenarioId}:${index.toString()}`}>
+                <span>
+                  <Badge tone={qaObservationTones[observation.severity]}>
+                    {t(`qa.observation.${observation.kind}`)}
+                  </Badge>
+                  {observation.blocking ? <Badge tone="danger">{t("qa.blocking")}</Badge> : null}
+                </span>
+                <p>{observation.summary}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {defects.length > 0 ? (
+        <div className="qa-panel__section">
+          <strong>{t("qa.defects")}</strong>
+          <ol className="qa-defect-list">
+            {defects.map((defect) => (
+              <li key={defect.id}>
+                <div>
+                  <strong>{defect.title}</strong>
+                  <Badge tone={qaDefectTones[defect.severity]}>
+                    {t(`review.severity.${defect.severity}`)}
+                  </Badge>
+                </div>
+                <p>{defect.description}</p>
+                <span>
+                  <strong>{t("qa.reproduction")}: </strong>
+                  {defect.reproduction.join(" · ")}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+
+      {attachments.length > 0 ? (
+        <div className="qa-panel__section">
+          <strong>{t("qa.attachments")}</strong>
+          <ul className="qa-attachment-list">
+            {attachments.map((attachment) => (
+              <li key={attachment.id}>
+                <span>{t(`qa.attachment.${attachment.kind}`)}</span>
+                <a href={workItemQAAttachmentUrl(item.id, attachment.id)} rel="noreferrer" target="_blank">
+                  {t("qa.openAttachment")}
+                  <Icon name="external" size={13} />
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
+  );
+};
+
 const AcceptancePanel = ({
   acceptancePackage,
   artifacts,
@@ -1921,6 +2124,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
       </ol>
       {currentAttempt ? <AttemptSessionsPanel attempt={currentAttempt} /> : null}
       <ReviewPanel item={item} />
+      <BrowserQAPanel item={item} />
       {snapshot.acceptancePackage ? (
         <AcceptancePanel
           acceptancePackage={snapshot.acceptancePackage}

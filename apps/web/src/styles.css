@@ -2747,6 +2747,190 @@ body.is-resizing {
   padding: var(--lr-space-2-5);
 }
 
+.qa-panel {
+  border-top: 1px solid var(--lr-border-subtle);
+  display: grid;
+  gap: var(--lr-space-3);
+  padding-top: var(--lr-space-3);
+}
+
+.qa-panel__heading,
+.qa-matrix__heading,
+.qa-defect-list > li > div,
+.qa-attachment-list > li {
+  align-items: flex-start;
+  display: flex;
+  gap: var(--lr-space-2);
+  justify-content: space-between;
+}
+
+.qa-panel__heading > div,
+.qa-matrix__heading > div,
+.qa-panel__facts > div,
+.qa-panel__section {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.qa-panel__heading span,
+.qa-panel__facts dt,
+.qa-matrix__heading span,
+.qa-matrix__progress,
+.qa-defect-list > li > span {
+  color: var(--lr-text-faint);
+  font-size: var(--lr-font-xs);
+}
+
+.qa-panel__heading strong,
+.qa-panel__section > strong,
+.qa-matrix__heading strong,
+.qa-defect-list > li > div > strong {
+  color: var(--lr-text);
+  font-size: var(--lr-font-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.qa-panel__facts {
+  display: grid;
+  gap: var(--lr-space-2);
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+}
+
+.qa-panel__facts dd {
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-xs);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.qa-panel code {
+  background: var(--lr-surface-inset);
+  border-radius: var(--lr-radius-xs);
+  color: var(--lr-text-secondary);
+  font-family: var(--lr-font-mono);
+  font-size: var(--lr-font-xs);
+}
+
+.qa-panel__error {
+  background: var(--lr-warning-soft);
+  border: 1px solid color-mix(in srgb, var(--lr-warning) 24%, var(--lr-border));
+  border-radius: var(--lr-radius-control);
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-xs);
+  line-height: 1.5;
+  margin: 0;
+  padding: var(--lr-space-2-5);
+}
+
+.qa-panel__section {
+  gap: var(--lr-space-2);
+}
+
+.qa-matrix,
+.qa-observation-list,
+.qa-defect-list,
+.qa-attachment-list,
+.qa-matrix__failures {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.qa-matrix,
+.qa-observation-list,
+.qa-defect-list,
+.qa-attachment-list {
+  border-block: 1px solid var(--lr-border-subtle);
+}
+
+.qa-matrix > li,
+.qa-observation-list > li,
+.qa-defect-list > li,
+.qa-attachment-list > li {
+  padding: var(--lr-space-2-5) 0;
+}
+
+.qa-matrix > li + li,
+.qa-observation-list > li + li,
+.qa-defect-list > li + li,
+.qa-attachment-list > li + li {
+  border-top: 1px solid var(--lr-border-subtle);
+}
+
+.qa-matrix > li,
+.qa-observation-list > li,
+.qa-defect-list > li {
+  display: grid;
+  gap: var(--lr-space-1-5);
+}
+
+.qa-matrix__failures {
+  display: grid;
+  gap: var(--lr-space-1);
+}
+
+.qa-matrix__failures li,
+.qa-observation-list p,
+.qa-defect-list p,
+.qa-defect-list > li > span {
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-xs);
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.qa-matrix__failures li,
+.qa-observation-list > li > span {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lr-space-1);
+}
+
+.qa-matrix__failures li {
+  align-items: baseline;
+  flex-direction: column;
+}
+
+.qa-observation-list > li > span,
+.qa-defect-list > li > div {
+  align-items: center;
+}
+
+.qa-attachment-list > li {
+  align-items: center;
+}
+
+.qa-attachment-list > li > span,
+.qa-attachment-list a {
+  font-size: var(--lr-font-xs);
+}
+
+.qa-attachment-list > li > span {
+  color: var(--lr-text-secondary);
+}
+
+.qa-attachment-list a {
+  align-items: center;
+  color: var(--lr-accent-text);
+  display: inline-flex;
+  gap: var(--lr-space-1);
+  text-decoration: none;
+}
+
+.qa-attachment-list a:hover {
+  text-decoration: underline;
+}
+
+.qa-attachment-list a:focus-visible {
+  border-radius: var(--lr-radius-xs);
+  box-shadow: 0 0 0 2px var(--lr-focus);
+  outline: none;
+}
+
 .workspace-identity {
   display: grid;
   gap: var(--lr-space-3);
@@ -3517,7 +3701,10 @@ body.is-resizing {
 
   .workbench {
     height: auto;
-    overflow-y: visible;
+    /* `overflow-x: hidden` from the tablet layout would coerce a visible y-axis back to `auto`.
+       That leaves a content-height scroll container which consumes wheel/touch input without
+       moving, so the lower half of a long inspector is unreachable on phones. */
+    overflow: visible;
   }
 
   .attention-inbox {
@@ -3537,6 +3724,26 @@ body.is-resizing {
 
   .review-panel__summary dl {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .qa-panel__heading,
+  .qa-matrix__heading {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .qa-panel__heading > .lr-badge,
+  .qa-matrix__heading > .lr-badge {
+    justify-self: start;
+  }
+
+  .qa-panel__facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .qa-attachment-list > li {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .attention-inbox__index {

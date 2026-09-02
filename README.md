@@ -69,6 +69,10 @@ recommended for evaluation because it keeps the selected pre-alpha channel visib
 6. When acceptance appears in **Attention**, open its exact task, inspect Review and QA evidence, then accept the
    delivery or return it to work as the owner.
 
+The bundled web demo needs no second server: its deterministic QA step measures Loomrail's own local readiness
+endpoint on the selected port. Your repositories use an explicit `.loomrail/browser-qa.json` plan; see the
+[Browser QA guide](docs/guides/BROWSER-QA.md).
+
 The task, request, budget, evidence, and decision survive page reloads and Loomrail restarts. The
 [quick start](docs/guides/GETTING-STARTED.md) walks through the route in detail.
 

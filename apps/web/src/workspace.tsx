@@ -45,6 +45,7 @@ import {
   getAgentFleet,
   getWorkItemChanges,
   getWorkItemFileDiff,
+  getWorkItemQA,
   getWorkItemReviews,
   getWorkItemWorkflow,
   getWorkItemWorkspace,
@@ -93,6 +94,7 @@ const workItemEventsKey = (projectId: string, workItemId: string) =>
   ["projects", projectId, "work-items", workItemId, "events"] as const;
 const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "workflow"] as const;
 const workItemReviewsKey = (workItemId: string) => ["work-items", workItemId, "reviews"] as const;
+const workItemQAKey = (workItemId: string) => ["work-items", workItemId, "qa"] as const;
 // Nested under the same `["work-items", <id>]` prefix the event channel invalidates for a WORK_ITEM
 // signal (eventStream.ts, scopesForSignal), so a stage that cuts a workspace refreshes the card
 // without a reload and without a second entry in that mapping.
@@ -247,6 +249,16 @@ export const useWorkItemReviews = (workItemId: string | undefined) =>
     queryFn: () => {
       if (!workItemId) throw new Error("A work item is required to load review state");
       return getWorkItemReviews(workItemId);
+    },
+    enabled: workItemId !== undefined,
+  });
+
+export const useWorkItemQA = (workItemId: string | undefined) =>
+  useQuery({
+    queryKey: workItemId ? workItemQAKey(workItemId) : ["work-items", "none", "qa"],
+    queryFn: () => {
+      if (!workItemId) throw new Error("A work item is required to load Browser QA state");
+      return getWorkItemQA(workItemId);
     },
     enabled: workItemId !== undefined,
   });

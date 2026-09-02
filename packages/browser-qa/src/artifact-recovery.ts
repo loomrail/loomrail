@@ -1,8 +1,24 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, open, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  rename,
+  unlink,
+  writeFile,
+  type FileHandle,
+} from "node:fs/promises";
 import { join } from "node:path";
 
-import { qaFinalizedAttachmentSchema, type QAFinalizedAttachment } from "@loomrail/contracts";
+import {
+  qaAttachmentRefSchema,
+  qaFinalizedAttachmentSchema,
+  type QAAttachmentRef,
+  type QAFinalizedAttachment,
+} from "@loomrail/contracts";
 import { z } from "zod";
 
 export const BROWSER_QA_RECOVERY_MARKER = ".loomrail-pending.json";
@@ -24,6 +40,21 @@ export type BrowserQAArtifactRecovery = {
   runStorageSegment: string;
   action: "CONFIRMED" | "QUARANTINED_ORPHAN" | "QUARANTINED_INVALID" | "LEFT_PENDING";
 };
+
+export type BrowserQAArtifactOpenErrorCode =
+  "ATTACHMENT_INVALID" | "STORAGE_LAYOUT_INVALID" | "ATTACHMENT_UNAVAILABLE" | "EVIDENCE_MISMATCH";
+
+export class BrowserQAArtifactOpenError extends Error {
+  readonly code: BrowserQAArtifactOpenErrorCode;
+
+  constructor(code: BrowserQAArtifactOpenErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "BrowserQAArtifactOpenError";
+    this.code = code;
+  }
+}
+
+const isSameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
 
 const readBoundedMarker = async (path: string): Promise<BrowserQARecoveryMarker> => {
   const metadata = await lstat(path);
@@ -130,6 +161,118 @@ export const confirmBrowserQAArtifacts = async (input: {
   runStorageSegment: string;
 }): Promise<void> => {
   await unlink(join(input.artifactsDirectory, "qa", input.runStorageSegment, BROWSER_QA_RECOVERY_MARKER));
+};
+
+/** Opens the already-verified descriptor; callers stream from this handle without exposing a path. */
+export const openVerifiedBrowserQAArtifact = async (input: {
+  artifactsDirectory: string;
+  attachment: QAAttachmentRef;
+}): Promise<FileHandle> => {
+  const parsedAttachment = qaAttachmentRefSchema.safeParse(input.attachment);
+  if (!parsedAttachment.success) {
+    throw new BrowserQAArtifactOpenError("ATTACHMENT_INVALID", "Browser QA attachment metadata is invalid");
+  }
+  const attachment = parsedAttachment.data;
+  const segments = attachment.storageKey.split("/");
+  const runStorageSegment = segments[0];
+  const filename = segments[1];
+  if (
+    segments.length !== 2 ||
+    runStorageSegment === undefined ||
+    filename === undefined ||
+    !RUN_STORAGE_SEGMENT.test(runStorageSegment)
+  ) {
+    throw new BrowserQAArtifactOpenError(
+      "STORAGE_LAYOUT_INVALID",
+      "Browser QA attachment storage key is outside the managed layout",
+    );
+  }
+  try {
+    const qaDirectory = join(input.artifactsDirectory, "qa");
+    const runDirectory = join(qaDirectory, runStorageSegment);
+    const [canonicalQADirectory, canonicalRunDirectory, directoryMetadata] = await Promise.all([
+      realpath(qaDirectory),
+      realpath(runDirectory),
+      lstat(runDirectory),
+    ]);
+    if (
+      !directoryMetadata.isDirectory() ||
+      directoryMetadata.isSymbolicLink() ||
+      canonicalRunDirectory !== join(canonicalQADirectory, runStorageSegment)
+    ) {
+      throw new BrowserQAArtifactOpenError(
+        "STORAGE_LAYOUT_INVALID",
+        "Browser QA attachment directory is not a managed directory",
+      );
+    }
+
+    const path = join(runDirectory, filename);
+    const pathMetadata = await lstat(path);
+    if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink()) {
+      throw new BrowserQAArtifactOpenError(
+        "ATTACHMENT_UNAVAILABLE",
+        "Browser QA attachment is not a regular file",
+      );
+    }
+    const flags =
+      process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
+    const handle = await open(path, flags);
+    try {
+      const [metadata, directoryAfterOpen, pathAfterOpen] = await Promise.all([
+        handle.stat(),
+        lstat(runDirectory),
+        lstat(path),
+      ]);
+      if (
+        !directoryAfterOpen.isDirectory() ||
+        directoryAfterOpen.isSymbolicLink() ||
+        !isSameFile(directoryMetadata, directoryAfterOpen) ||
+        !pathAfterOpen.isFile() ||
+        pathAfterOpen.isSymbolicLink() ||
+        !isSameFile(pathMetadata, pathAfterOpen) ||
+        !isSameFile(pathAfterOpen, metadata)
+      ) {
+        throw new BrowserQAArtifactOpenError(
+          "ATTACHMENT_UNAVAILABLE",
+          "Browser QA attachment changed while it was opened",
+        );
+      }
+      if (!metadata.isFile() || metadata.size !== attachment.byteSize) {
+        throw new BrowserQAArtifactOpenError(
+          "EVIDENCE_MISMATCH",
+          "Browser QA attachment size does not match its durable evidence",
+        );
+      }
+      const hash = createHash("sha256");
+      const buffer = Buffer.alloc(64 * 1_024);
+      let position = 0;
+      let bytesRead = buffer.length;
+      while (bytesRead > 0) {
+        ({ bytesRead } = await handle.read(buffer, 0, buffer.length, position));
+        if (bytesRead > 0) {
+          hash.update(buffer.subarray(0, bytesRead));
+          position += bytesRead;
+        }
+      }
+      if (`sha256:${hash.digest("hex")}` !== attachment.contentHash) {
+        throw new BrowserQAArtifactOpenError(
+          "EVIDENCE_MISMATCH",
+          "Browser QA attachment hash does not match its durable evidence",
+        );
+      }
+      return handle;
+    } catch (error: unknown) {
+      await handle.close();
+      throw error;
+    }
+  } catch (error: unknown) {
+    if (error instanceof BrowserQAArtifactOpenError) throw error;
+    throw new BrowserQAArtifactOpenError(
+      "ATTACHMENT_UNAVAILABLE",
+      "Browser QA attachment could not be opened safely",
+      { cause: error },
+    );
+  }
 };
 
 /**

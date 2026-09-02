@@ -8,7 +8,11 @@ import { dirname, join, resolve } from "node:path";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import fastifyStatic from "@fastify/static";
-import { createPlaywrightDriver, type BrowserDriver } from "@loomrail/browser-qa";
+import {
+  createPlaywrightDriver,
+  openVerifiedBrowserQAArtifact,
+  type BrowserDriver,
+} from "@loomrail/browser-qa";
 import {
   attentionInboxResponseSchema,
   agentFleetResponseSchema,
@@ -30,6 +34,7 @@ import {
   moveWorkItemRequestSchema,
   mcpProfilesResponseSchema,
   mcpProfileProposalSchema,
+  MAX_QA_RUN_HISTORY,
   opaqueIdSchema,
   pipelineControlRequestSchema,
   projectConstitutionSnapshotSchema,
@@ -40,6 +45,7 @@ import {
   projectsResponseSchema,
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
+  qaStateResponseSchema,
   proposeContext7PresetRequestSchema,
   proposeMcpProfileRequestSchema,
   confirmMcpProfileRequestSchema,
@@ -75,6 +81,8 @@ import {
   type ApiErrorResponse,
   type PublishedWorkItemWorkspace,
   type Project,
+  type QAAttachmentRef,
+  type QAAttachmentSummary,
   type ScaffoldOperationErrorCode,
   type WorkflowStage,
   type WorkItemWorkspace,
@@ -307,6 +315,22 @@ const scaffoldParamsSchema = z.object({ operationId: opaqueIdSchema }).strict();
 const mcpProposalParamsSchema = z.object({ projectId: opaqueIdSchema, challengeId: opaqueIdSchema }).strict();
 const mcpRevisionParamsSchema = z.object({ projectId: opaqueIdSchema, revisionId: opaqueIdSchema }).strict();
 const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
+const qaAttachmentParamsSchema = z
+  .object({ workItemId: opaqueIdSchema, attachmentId: opaqueIdSchema })
+  .strict();
+
+const publishQAAttachment = (attachment: QAAttachmentRef): QAAttachmentSummary => ({
+  schemaVersion: attachment.schemaVersion,
+  id: attachment.id,
+  qaRunId: attachment.qaRunId,
+  kind: attachment.kind,
+  contentHash: attachment.contentHash,
+  byteSize: attachment.byteSize,
+  targetId: attachment.targetId,
+  scenarioId: attachment.scenarioId,
+  capturedAt: attachment.capturedAt,
+  retentionClass: attachment.retentionClass,
+});
 const stageAttemptParamsSchema = z.object({ stageAttemptId: opaqueIdSchema }).strict();
 const humanRequestParamsSchema = z.object({ humanRequestId: opaqueIdSchema }).strict();
 const reviewFindingParamsSchema = z.object({ findingId: opaqueIdSchema }).strict();
@@ -976,7 +1000,9 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       driver:
         options.browserQADriver ??
         createPlaywrightDriver({ artifactsDirectory: browserQAArtifactsDirectory }),
-      resolveConfig: options.browserQAConfigResolver ?? resolveProjectBrowserQAConfig,
+      resolveConfig:
+        options.browserQAConfigResolver ??
+        ((project) => resolveProjectBrowserQAConfig(project, { fixtureTargetOrigin: allowedOrigin })),
       createCommandId: () => `browser-qa-command-${randomUUID()}`,
       createAttachmentId: () => `browser-qa-attachment-${randomUUID()}`,
       logger: app.log,
@@ -996,13 +1022,6 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     type: "RECONCILE_WORKFLOWS",
     payload: {},
   });
-  // A behaviour improvement, not just a refactor: before this, a resumed attempt that could not run
-  // kept the daemon from ever starting to listen at all. `wake()` schedules the first pass and
-  // returns immediately, so the daemon reaches `app.listen` regardless of how that pass turns out --
-  // a failure inside it is caught and logged by the worker's own pump (session-worker.ts), never
-  // thrown here, so it is visible but never fatal to startup.
-  worker.wake();
-
   const sessionForRequest = (request: FastifyRequest): Session | undefined => {
     const sessionToken = request.cookies[SESSION_COOKIE];
     if (!sessionToken) return undefined;
@@ -2115,6 +2134,120 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
+    app.get("/api/v1/work-items/:workItemId/qa", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const workItem = localState.query({ type: "GET_WORK_ITEM", workItemId: params.workItemId });
+        if (workItem.type !== "WORK_ITEM" || !workItem.workItem) {
+          throw new WorkItemDomainError("WORK_ITEM_NOT_FOUND", "The WorkItem does not exist");
+        }
+        const snapshot = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        const run = snapshot.type === "WORKFLOW_SNAPSHOT" ? snapshot.snapshot.run : null;
+        if (run === null) {
+          return qaStateResponseSchema.parse({
+            schemaVersion: 1,
+            runs: [],
+            evidence: [],
+            attachments: [],
+            defects: [],
+          });
+        }
+        const qaState = localState.query({ type: "GET_QA_STATE", pipelineRunId: run.id });
+        if (qaState.type !== "QA_STATE") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The Browser QA state could not be loaded");
+        }
+        const runs = qaState.runs.slice(-MAX_QA_RUN_HISTORY);
+        const includedRunIds = new Set(runs.map(({ id }) => id));
+        return qaStateResponseSchema.parse({
+          schemaVersion: 1,
+          runs,
+          evidence: qaState.evidence.filter(({ qaRunId }) => includedRunIds.has(qaRunId)),
+          attachments: qaState.attachments
+            .filter(({ qaRunId }) => includedRunIds.has(qaRunId))
+            .map(publishQAAttachment),
+          defects: qaState.defects.filter(({ qaRunId }) => includedRunIds.has(qaRunId)),
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/work-items/:workItemId/qa/attachments/:attachmentId", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = qaAttachmentParamsSchema.parse(request.params);
+        const workItem = localState.query({ type: "GET_WORK_ITEM", workItemId: params.workItemId });
+        if (workItem.type !== "WORK_ITEM" || !workItem.workItem) {
+          throw new WorkItemDomainError("WORK_ITEM_NOT_FOUND", "The WorkItem does not exist");
+        }
+        const snapshot = localState.query({
+          type: "GET_WORKFLOW_SNAPSHOT",
+          workItemId: params.workItemId,
+        });
+        const run = snapshot.type === "WORKFLOW_SNAPSHOT" ? snapshot.snapshot.run : null;
+        if (run === null) {
+          return await reply
+            .code(404)
+            .send(createError("QA_ATTACHMENT_NOT_FOUND", "The QA attachment does not exist", correlationId));
+        }
+        const qaState = localState.query({ type: "GET_QA_STATE", pipelineRunId: run.id });
+        const attachment =
+          qaState.type === "QA_STATE"
+            ? qaState.attachments.find(({ id }) => id === params.attachmentId)
+            : undefined;
+        if (attachment === undefined) {
+          return await reply
+            .code(404)
+            .send(createError("QA_ATTACHMENT_NOT_FOUND", "The QA attachment does not exist", correlationId));
+        }
+
+        let handle: Awaited<ReturnType<typeof openVerifiedBrowserQAArtifact>>;
+        try {
+          handle = await openVerifiedBrowserQAArtifact({
+            artifactsDirectory: browserQAArtifactsDirectory,
+            attachment,
+          });
+        } catch (error: unknown) {
+          request.log.warn(
+            {
+              attachmentId: attachment.id,
+              qaRunId: attachment.qaRunId,
+              error: error instanceof Error ? error.name : "unknown",
+            },
+            "A Browser QA attachment failed verification while it was opened",
+          );
+          return await reply
+            .code(409)
+            .send(
+              createError(
+                "QA_ATTACHMENT_UNAVAILABLE",
+                "The QA attachment is unavailable or no longer matches its evidence",
+                correlationId,
+              ),
+            );
+        }
+
+        const screenshot = attachment.kind === "SCREENSHOT";
+        return await reply
+          .header("cache-control", "private, no-store")
+          .header("content-length", attachment.byteSize.toString())
+          .header(
+            "content-disposition",
+            `${screenshot ? "inline" : "attachment"}; filename="browser-qa-evidence.${screenshot ? "png" : "zip"}"`,
+          )
+          .type(screenshot ? "image/png" : "application/zip")
+          .send(handle.createReadStream({ autoClose: true, start: 0 }));
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
     // Where this work item's agent writes: the repository branch and the worktree directory the
     // owner opens in their own editor (spec §4, "Что видно владельцу").
     //
@@ -3001,6 +3134,10 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     const address = await app.listen({ host, port: options.port ?? 0 });
     const baseUrl = address.replace("[::1]", "127.0.0.1");
     allowedOrigin = baseUrl;
+    // Startup reconciliation may have restored runnable work, including a bundled demo Browser QA
+    // dispatch whose safe target is this exact dynamic origin. Do not let that work race ahead of
+    // `listen()` and turn the not-yet-known origin into a durable QA error.
+    worker.wake();
     const bootstrapUrl = `${baseUrl}/#bootstrap=${encodeURIComponent(options.bootstrapToken)}`;
 
     return {

@@ -174,8 +174,11 @@ Durable orchestration резервирует QARun вместе с active BROWSE
 evidence, Defects, HumanRequest/следующий dispatch и audit; daemon worker запускает isolated Playwright по bounded
 `.loomrail/browser-qa.json`, provider-owned `QA_REPORT` больше не может пройти gate, а Acceptance принимает только
 current measured pass. Screenshot/trace проходят marker-bound quarantine/finalize: restart подтверждает только exact
-SQLite metadata + hash/size, а orphan/повреждённый каталог изолирует без удаления неизвестных файлов. Следующий срез
-Q1 — measured evidence в Task Cockpit и authenticated attachment route. Спецификация —
+SQLite metadata + hash/size, а orphan/повреждённый каталог изолирует без удаления неизвестных файлов. Task Cockpit
+показывает matrix/environment/Defects и открывает проверенные файлы через authenticated route без absolute path;
+встроенный web-demo использует безопасный readiness fallback на фактическом порту daemon, а пользовательский Project
+по-прежнему fail-closed без своего config. Следующий срез Q1 — закрыть security/verification matrix, production audit
+и clean-package platform gate. Спецификация —
 [47](47-q1-deterministic-browser-qa-spec.ru.md), план —
 [48](48-q1-deterministic-browser-qa-implementation-plan.ru.md). Работа не затрагивает отдельно разрабатываемый
 landing; общий release gate после Q1 всё ещё требует повторного macOS/Windows clean-install прогона.

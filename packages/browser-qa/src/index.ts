@@ -23,8 +23,11 @@ import { confirmBrowserQAArtifacts, stageBrowserQAArtifacts } from "./artifact-r
 
 export {
   BROWSER_QA_RECOVERY_MARKER,
+  BrowserQAArtifactOpenError,
+  openVerifiedBrowserQAArtifact,
   recoverBrowserQAArtifacts,
   type BrowserQAArtifactRecovery,
+  type BrowserQAArtifactOpenErrorCode,
   type BrowserQARecoveryMarker,
 } from "./artifact-recovery.js";
 

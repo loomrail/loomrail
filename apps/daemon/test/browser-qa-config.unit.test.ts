@@ -94,6 +94,39 @@ describe("project Browser QA configuration", () => {
     });
   });
 
+  it("uses the running daemon only for a missing config on the bundled web demo", async () => {
+    const fixtureProject: Project = { ...project, fixtureId: "web-app-a" };
+    await expect(
+      resolveProjectBrowserQAConfig(fixtureProject, {
+        fixtureTargetOrigin: "http://127.0.0.1:49152",
+      }),
+    ).resolves.toMatchObject({
+      status: "READY",
+      targetOrigin: "http://127.0.0.1:49152",
+      plan: {
+        targets: [
+          { viewport: { width: 1_280, height: 800 }, locale: "en-US", theme: "LIGHT" },
+          { viewport: { width: 320, height: 720 }, locale: "ru-RU", theme: "DARK" },
+        ],
+        scenarios: [
+          {
+            steps: [{ action: { type: "NAVIGATE", path: "/health/ready" } }],
+          },
+        ],
+      },
+    });
+
+    await writeConfig({ ...config, targetOrigin: "https://example.com" });
+    await expect(
+      resolveProjectBrowserQAConfig(fixtureProject, {
+        fixtureTargetOrigin: "http://127.0.0.1:49152",
+      }),
+    ).resolves.toMatchObject({
+      status: "ERROR",
+      error: { outcome: "ERROR", code: "EVIDENCE_INVALID" },
+    });
+  });
+
   it("refuses a symlinked config even when its target is valid", async () => {
     const outside = join(repositoryPath, "outside.json");
     await writeFile(outside, JSON.stringify(config));

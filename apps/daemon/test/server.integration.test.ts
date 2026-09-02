@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { access, chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
@@ -11,6 +12,7 @@ import {
   correlationIdSchema,
   eventsResponseSchema,
   projectsResponseSchema,
+  qaStateResponseSchema,
   reviewStateResponseSchema,
   stateCommandResultSchema,
   workItemChangesResponseSchema,
@@ -32,7 +34,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveBundledFixture } from "../src/fixtures.js";
 import { runStageAttempt } from "../src/session-loop.js";
 import { startDaemon, type RunningDaemon } from "../src/server.js";
-import { passingBrowserQADriver, readyBrowserQAConfig } from "./browser-qa-fixture.js";
+import { BROWSER_QA_FIXTURE_SCREENSHOT, passingBrowserQADriver } from "./browser-qa-fixture.js";
 import {
   authenticate,
   bootstrapToken,
@@ -201,6 +203,35 @@ describe("local daemon session and state boundary", () => {
     expect(status.status).toBe(401);
     expect(new URL(daemon.baseUrl).hostname).toBe("127.0.0.1");
     expect(daemon.app.server.address()).toMatchObject({ address: "127.0.0.1" });
+  });
+
+  it("protects QA evidence routes and returns an empty typed state before a run", async () => {
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, logger: false });
+    const session = await authenticate(daemon, token);
+    const workItemId = await createReadyWorkItem(daemon, session, "qa-route-item");
+
+    const state = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/qa`, {
+      headers: { cookie: session.cookie },
+    });
+    const missing = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${workItemId}/qa/attachments/missing-attachment`,
+      { headers: { cookie: session.cookie } },
+    );
+    const unauthenticated = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${workItemId}/qa/attachments/missing-attachment`,
+    );
+
+    expect(state.status).toBe(200);
+    expect(qaStateResponseSchema.parse(await state.json())).toEqual({
+      schemaVersion: 1,
+      runs: [],
+      evidence: [],
+      attachments: [],
+      defects: [],
+    });
+    expect(missing.status).toBe(404);
+    expect(unauthenticated.status).toBe(401);
   });
 
   it("blocks stylesheet injection while allowing overlay style attributes", async () => {
@@ -1287,13 +1318,14 @@ describe("local daemon session and state boundary", () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail workflow state "));
     temporaryDirectories.push(temporaryDirectory);
     const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
+    const browserQAArtifactsDirectory = join(temporaryDirectory, "browser-qa-artifacts");
     const firstToken = bootstrapToken();
     const firstDaemon = await startDaemon({
       bootstrapToken: firstToken,
       logger: false,
       stateDatabasePath,
-      browserQADriver: passingBrowserQADriver(),
-      browserQAConfigResolver: readyBrowserQAConfig,
+      browserQADriver: passingBrowserQADriver({ artifactsDirectory: browserQAArtifactsDirectory }),
+      browserQAArtifactsDirectory,
     });
     daemon = firstDaemon;
     const firstSession = await authenticate(firstDaemon, firstToken);
@@ -1352,8 +1384,8 @@ describe("local daemon session and state boundary", () => {
       bootstrapToken: secondToken,
       logger: false,
       stateDatabasePath,
-      browserQADriver: passingBrowserQADriver(),
-      browserQAConfigResolver: readyBrowserQAConfig,
+      browserQADriver: passingBrowserQADriver({ artifactsDirectory: browserQAArtifactsDirectory }),
+      browserQAArtifactsDirectory,
     });
     const secondSession = await authenticate(daemon, secondToken);
     const restoredResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/workflow`, {
@@ -1445,6 +1477,67 @@ describe("local daemon session and state boundary", () => {
     const acceptancePackage = awaitingAcceptance.acceptancePackage;
     if (!acceptancePackage || !awaitingAcceptance.run) {
       throw new Error("Expected a pending AcceptancePackage");
+    }
+    const qaResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/qa`, {
+      headers: { cookie: secondSession.cookie },
+    });
+    expect(qaResponse.status).toBe(200);
+    const qaState = qaStateResponseSchema.parse(await qaResponse.json());
+    expect(qaState).toMatchObject({
+      schemaVersion: 1,
+      runs: [
+        {
+          status: "PASSED",
+          targetOrigin: daemon.baseUrl,
+          plan: { targets: [{}, {}], scenarios: [{}] },
+        },
+      ],
+      evidence: [{ verdict: "PASSED" }],
+      attachments: [{ kind: "SCREENSHOT" }],
+      defects: [],
+    });
+    expect(qaState).not.toHaveProperty("type");
+    const qaAttachment = qaState.attachments[0];
+    if (qaAttachment === undefined) throw new Error("Expected a persisted QA attachment");
+    expect(qaAttachment).not.toHaveProperty("storageKey");
+    const qaRun = qaState.runs[0];
+    if (qaRun === undefined) throw new Error("Expected a persisted QA run");
+    const attachmentUrl = `${daemon.baseUrl}/api/v1/work-items/${workItemId}/qa/attachments/${qaAttachment.id}`;
+    const attachmentResponse = await fetch(attachmentUrl, {
+      headers: { cookie: secondSession.cookie },
+    });
+    expect(attachmentResponse.status).toBe(200);
+    expect(attachmentResponse.headers.get("content-type")).toBe("image/png");
+    expect(attachmentResponse.headers.get("cache-control")).toBe("private, no-store");
+    expect(await attachmentResponse.text()).toBe(BROWSER_QA_FIXTURE_SCREENSHOT);
+
+    const runStorageSegment = `run-${createHash("sha256").update(qaRun.id).digest("hex").slice(0, 32)}`;
+    const attachmentPath = join(
+      browserQAArtifactsDirectory,
+      "qa",
+      runStorageSegment,
+      "fixture-screenshot.png",
+    );
+    await writeFile(attachmentPath, "tampered screenshot");
+    const tamperedResponse = await fetch(attachmentUrl, {
+      headers: { cookie: secondSession.cookie },
+    });
+    expect(tamperedResponse.status).toBe(409);
+    expect(apiErrorResponseSchema.parse(await tamperedResponse.json()).error.code).toBe(
+      "QA_ATTACHMENT_UNAVAILABLE",
+    );
+    if (platform() !== "win32") {
+      const outsideAttachment = join(temporaryDirectory, "outside-browser-qa-evidence.png");
+      await writeFile(outsideAttachment, BROWSER_QA_FIXTURE_SCREENSHOT);
+      await rm(attachmentPath);
+      await symlink(outsideAttachment, attachmentPath);
+      const symlinkedResponse = await fetch(attachmentUrl, {
+        headers: { cookie: secondSession.cookie },
+      });
+      expect(symlinkedResponse.status).toBe(409);
+      expect(apiErrorResponseSchema.parse(await symlinkedResponse.json()).error.code).toBe(
+        "QA_ATTACHMENT_UNAVAILABLE",
+      );
     }
     expect(
       attentionInboxResponseSchema.parse(

@@ -52,6 +52,55 @@ const planFromConfig = (value: z.infer<typeof browserQAConfigFileSchema>): QAPla
   });
 };
 
+const demoPlanDefinition = {
+  schemaVersion: 1 as const,
+  revision: 1,
+  targets: [
+    {
+      id: "desktop-light-en",
+      viewport: { width: 1_280, height: 800 },
+      locale: "en-US",
+      theme: "LIGHT" as const,
+    },
+    {
+      id: "mobile-dark-ru",
+      viewport: { width: 320, height: 720 },
+      locale: "ru-RU",
+      theme: "DARK" as const,
+    },
+  ],
+  scenarios: [
+    {
+      id: "loomrail-readiness",
+      title: "The local Loomrail demo is reachable",
+      steps: [
+        {
+          id: "open-readiness",
+          title: "Open the public readiness endpoint",
+          action: { type: "NAVIGATE" as const, path: "/health/ready" },
+        },
+      ],
+      assertions: [
+        {
+          id: "readiness-path",
+          title: "The readiness path is active",
+          rule: { type: "URL_PATH" as const, path: "/health/ready" },
+        },
+        {
+          id: "no-horizontal-overflow",
+          title: "The readiness response has no horizontal overflow",
+          rule: { type: "NO_HORIZONTAL_OVERFLOW" as const },
+        },
+      ],
+    },
+  ],
+};
+
+const demoPlan = qaPlanSnapshotSchema.parse({
+  ...demoPlanDefinition,
+  contentHash: `sha256:${createHash("sha256").update(JSON.stringify(demoPlanDefinition)).digest("hex")}`,
+});
+
 const unavailablePlanDefinition = {
   schemaVersion: 1 as const,
   revision: 1,
@@ -125,12 +174,27 @@ const readBoundedFile = async (path: string): Promise<string> => {
 };
 
 /** Reads only the bounded, declarative browser plan. It never launches a project command. */
-export const resolveProjectBrowserQAConfig: BrowserQAConfigResolver = async (project) => {
+export const resolveProjectBrowserQAConfig = async (
+  project: Project,
+  options: { fixtureTargetOrigin?: string } = {},
+): Promise<BrowserQAConfigResolution> => {
   try {
     const source = await readBoundedFile(join(project.repositoryPath, BROWSER_QA_CONFIG_RELATIVE_PATH));
     const parsed = browserQAConfigFileSchema.parse(JSON.parse(source));
     return { status: "READY", targetOrigin: parsed.targetOrigin, plan: planFromConfig(parsed) };
-  } catch {
+  } catch (error: unknown) {
+    // The bundled web fixture exists to prove Loomrail's persisted owner workflow; its mock
+    // implementation intentionally changes no application. On a first run it therefore measures
+    // the running daemon's public readiness surface at the actual dynamic port. This exception is
+    // restricted to a missing file on the exact built-in fixture. A user Project, or even an
+    // invalid fixture file, must still fail closed instead of silently testing something else.
+    const fixtureOrigin =
+      (error as NodeJS.ErrnoException).code === "ENOENT" && project.fixtureId === "web-app-a"
+        ? qaTargetOriginSchema.safeParse(options.fixtureTargetOrigin)
+        : undefined;
+    if (fixtureOrigin?.success === true) {
+      return { status: "READY", targetOrigin: fixtureOrigin.data, plan: demoPlan };
+    }
     return unavailableBrowserQAConfig(
       `Add a valid ${BROWSER_QA_CONFIG_RELATIVE_PATH} file and start its loopback target before retrying QA.`,
     );

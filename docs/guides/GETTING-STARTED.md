@@ -58,6 +58,9 @@ it; configuration remains an explicit owner action in **Settings → MCP connect
 6. When acceptance appears in **Attention**, open its task, inspect Review and QA evidence, then accept or return the
    delivery as the owner.
 
+The bundled web demo needs no development server. Its deterministic QA step measures Loomrail's local readiness
+endpoint at the port the launcher actually selected and records screenshots and traces before opening acceptance.
+
 Reloading the page or restarting Loomrail does not erase the task, request, Decision, budget, evidence, or acceptance
 state. Stop Loomrail with `Ctrl+C` and wait for the command to exit.
 

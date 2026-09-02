@@ -8,6 +8,7 @@ Use the shortest document that matches what you are trying to do.
 | -------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------ |
 | Safe install and first mock delivery                     | [Quick start](guides/GETTING-STARTED.md) | [Быстрый старт](guides/GETTING-STARTED.ru.md)    |
 | Repository, providers, recovery, backup, troubleshooting | [Owner guide](guides/USER-GUIDE.md)      | [Руководство владельца](guides/USER-GUIDE.ru.md) |
+| Configure and inspect deterministic browser QA           | [Browser QA](guides/BROWSER-QA.md)       | [QA в браузере](guides/BROWSER-QA.ru.md)         |
 | Build a local read-only tool plugin                      | [Plugin SDK](guides/PLUGIN-SDK.md)       | [Plugin SDK](guides/PLUGIN-SDK.ru.md)            |
 
 For a disposable repository and exact live-provider task, use the

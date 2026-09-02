@@ -942,6 +942,15 @@ Q1 tightens the deterministic baseline further:
   startup confirms it only when the terminal QARun, every persisted attachment field and every file hash/size match.
   Uncommitted or damaged marker-bound directories move to an orphan quarantine; unknown unmarked files are not
   adopted or deleted;
+- the authenticated attachment route first scopes the id through the requested WorkItem and its current PipelineRun,
+  rejects symlinked directories/files, opens one descriptor, and verifies its size and SHA-256 before streaming; the
+  response contains no storage key or absolute path and is never cached;
+- attachment metadata records `STANDARD_30_DAYS`, but automatic age-based retention cleanup is not implemented in
+  Q1 yet. Files are therefore not currently deleted after 30 days; the cleanup policy remains an explicit open
+  security/release gate and must not recursively delete an unresolved path;
+- only the exact bundled `web-app-a` fixture may fall back when its config file is absent, and only to the current
+  daemon's validated loopback origin plus public readiness route. An invalid fixture config and every missing user
+  Project config still fail closed, so the exception cannot silently redirect real-project QA;
 - a missing matrix cell, stale tree, mismatched attachment, off-origin navigation or unavailable target fails closed
   and cannot open Acceptance.
 

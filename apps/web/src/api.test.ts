@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LocalApiError, requestLocalApi, storeCsrfToken } from "./api";
+import { LocalApiError, requestLocalApi, storeCsrfToken, workItemQAAttachmentUrl } from "./api";
 
 const passThroughSchema = { parse: (value: unknown): unknown => value };
 
@@ -84,5 +84,11 @@ describe("local API client", () => {
     const headers = new Headers(requestInit?.headers);
     expect(headers.get("x-loomrail-csrf")).toBe("csrf-fixture-token");
     expect(headers.get("content-type")).toBe("application/json");
+  });
+
+  it("keeps QA attachment identifiers inside the authenticated same-origin route", () => {
+    expect(workItemQAAttachmentUrl("work item/1", "attachment?1")).toBe(
+      "/api/v1/work-items/work%20item%2F1/qa/attachments/attachment%3F1",
+    );
   });
 });

@@ -11,6 +11,7 @@ import {
   projectProviderSelectionResponseSchema,
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
+  qaStateResponseSchema,
   projectConstitutionSnapshotSchema,
   projectReadinessSnapshotSchema,
   reviewFindingDisposedResultSchema,
@@ -509,6 +510,12 @@ export const getAgentFleet = async () => requestLocalApi("/api/v1/agent-fleet", 
 
 export const getWorkItemReviews = async (workItemId: string) =>
   requestLocalApi(`/api/v1/work-items/${encodeURIComponent(workItemId)}/reviews`, reviewStateResponseSchema);
+
+export const getWorkItemQA = async (workItemId: string) =>
+  requestLocalApi(`/api/v1/work-items/${encodeURIComponent(workItemId)}/qa`, qaStateResponseSchema);
+
+export const workItemQAAttachmentUrl = (workItemId: string, attachmentId: string): string =>
+  `/api/v1/work-items/${encodeURIComponent(workItemId)}/qa/attachments/${encodeURIComponent(attachmentId)}`;
 
 export const registerFixtureProject = async (fixtureId: FixtureProjectId): Promise<void> => {
   await requestLocalApi("/api/v1/projects/fixtures/register", stateCommandResultSchema, {
