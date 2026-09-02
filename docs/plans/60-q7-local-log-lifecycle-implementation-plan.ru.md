@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** local implementation complete; cross-platform release evidence pending
+**Статус:** implementation and clean macOS/Windows log-lifecycle gate complete
 
 **Спецификация:** [59-q7-local-log-lifecycle-spec.ru.md](59-q7-local-log-lifecycle-spec.ru.md)
 
@@ -34,7 +34,7 @@
 - [x] Daemon logging/auth redaction tests зелёные.
 - [x] Full `pnpm test`, non-landing lint, typecheck, public-tree и production audit зелёные.
 - [x] `pnpm test:fault-injection` и clean release verification не регрессируют.
-- [ ] macOS/Windows CI доказывает Q7 unit + clean-install gates; общий Verify может оставаться blocked только landing.
+- [x] macOS/Windows CI доказывает Q7 unit + clean-install gates; общий Verify blocked только protected landing.
 
 ## 3. Authority boundary
 
@@ -42,4 +42,7 @@ Q7 управляет только operational files. Он не добавляе
 telemetry consent или filesystem authority над любым другим data-directory subtree. Unknown files сохраняются, а
 publish и `apps/landing/**` остаются вне scope.
 
-Локальное evidence: [Q7-LOCAL-LOG-LIFECYCLE-EVIDENCE.md](../evidence/phase-8/Q7-LOCAL-LOG-LIFECYCLE-EVIDENCE.md).
+Evidence: [Q7-LOCAL-LOG-LIFECYCLE-EVIDENCE.md](../evidence/phase-8/Q7-LOCAL-LOG-LIFECYCLE-EVIDENCE.md).
+Clean macOS/Windows Q7 unit и packaged lifecycle gates прошли в
+[CI run 33676031870](https://github.com/loomrail/loomrail/actions/runs/33676031870); оба Verify прошли fault gate и
+остановились только на трёх protected landing lint diagnostics.

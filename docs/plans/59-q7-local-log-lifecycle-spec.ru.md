@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** approved implementation scope
+**Статус:** implemented; clean macOS/Windows log-lifecycle evidence green in CI run 33676031870
 
 **Предшественники:** Q4, Q5, Q6
 

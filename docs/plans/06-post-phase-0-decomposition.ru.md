@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
-**Статус:** Q7 локально реализован, cross-platform gate ожидается; protected landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** implementation и cross-platform gates через Q7 завершены; protected landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -227,7 +227,9 @@ pre-persistence-redacted closed-schema NDJSON; 2-MiB segments ограничен
 lease. Stopped-daemon команды `logs export` и `logs delete` повторно проверяют exact regular owned files, не выдают
 partial/unredacted bytes и не получают authority над SQLite, Events, artifacts, workspaces, repositories или
 unknown siblings. Raw provider output остаётся несохраняемым. Локальные CLI/typecheck и packaged lifecycle gates
-добавлены; macOS/Windows evidence ещё требуется до закрытия Q7.
+зелёные; [CI run 33676031870](https://github.com/loomrail/loomrail/actions/runs/33676031870) подтвердил CLI 28/28,
+clean receipt/audit/lifecycle и browser smoke на macOS/Windows. Оба Verify прошли fault gate и остановились только на
+трёх protected landing lint diagnostics, поэтому Q7 закрыт без изменения landing.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

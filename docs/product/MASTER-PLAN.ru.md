@@ -1307,7 +1307,10 @@ Q7 local-log lifecycle локально реализован по планам 5
 отредактированный NDJSON snapshot, а `logs delete` удаляет только exact regular owned segments; обе команды требуют
 остановленного daemon и не имеют HTTP boundary. SQLite Events/Decisions/acceptance, Browser QA artifacts, workspaces,
 repositories и unknown siblings не затрагиваются; raw provider stdout/stderr по-прежнему не сохраняется. Локальные
-tests/typecheck/build и clean-package lifecycle smoke добавлены, но Q7 cross-platform CI evidence ещё не получено.
+tests/typecheck/build и clean-package lifecycle smoke зелёные. В
+[CI run 33676031870](https://github.com/loomrail/loomrail/actions/runs/33676031870) Q7 CLI 28/28, clean
+receipt/audit/lifecycle и browser smoke прошли на macOS/Windows; оба Verify прошли fault gate и остановились только на
+трёх protected landing lint diagnostics. Q7 cross-platform gate закрыт без изменения landing.
 
 ### Оценка первого цикла
 

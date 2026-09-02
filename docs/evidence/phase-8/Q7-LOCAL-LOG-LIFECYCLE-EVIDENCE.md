@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-02
 
-**Scope:** local implementation; macOS/Windows CI pending
+**Scope:** local implementation and macOS/Windows CI evidence
 
 ## Persistence and redaction observations
 
@@ -40,12 +40,12 @@ The installed launcher then proved:
 4. post-stop output is non-empty schema-v1 redacted NDJSON;
 5. packaged delete removes retained segments and a second export is empty.
 
-The receipt records `source.tree=DIRTY`, as required for a pre-commit local candidate. CI must produce `CLEAN` on the
-committed source before this slice can claim cross-platform evidence.
+The receipt records `source.tree=DIRTY`, as required for a pre-commit local candidate. The committed CI candidate
+produced `CLEAN` receipts on macOS and Windows before clean installation.
 
 ## Repository gates
 
-- Prettier check, public-tree check for 575 files and pinned Node/pnpm toolchain check pass.
+- Prettier check, public-tree check for 576 files and pinned Node/pnpm toolchain check pass.
 - Full non-landing ESLint passes. Repository `pnpm verify` stops only at the three protected
   `apps/landing/src/main.ts` diagnostics on lines 630, 631 and 634.
 - Full TypeScript build/typecheck passes, including the landing typecheck.
@@ -57,6 +57,22 @@ committed source before this slice can claim cross-platform evidence.
   one durable report.
 - Workspace production audit reports no known vulnerabilities.
 
+## Cross-platform CI observation
+
+[GitHub Actions run 33676031870](https://github.com/loomrail/loomrail/actions/runs/33676031870) exercised commit
+`bdc70f2` on both blocking platforms:
+
+| Lane               | macOS                                                                 | Windows                                                               |
+| ------------------ | --------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Clean install      | CLI 5/5 files, 28/28 tests; clean receipt, audit and lifecycle passed | CLI 5/5 files, 28/28 tests; clean receipt, audit and lifecycle passed |
+| Browser smoke      | Passed                                                                | Passed                                                                |
+| Fault/recovery     | Passed                                                                | Passed                                                                |
+| Full source verify | Stopped only at protected landing lines 630, 631 and 634              | Stopped only at protected landing lines 630, 631 and 634              |
+
+Both clean consumers reported zero vulnerabilities and the packaged launcher confirmed that the receipt, installed
+files and log lifecycle matched. The Q7-specific gate is therefore complete; the overall workflow remains red only
+because `apps/landing/**` is owned by a separate development session.
+
 ## Authority and remaining evidence
 
 Operational segments remain diagnostics rather than Event/Decision/acceptance authority. Q7 adds no provider raw
@@ -64,6 +80,5 @@ output capture, HTTP route, telemetry, upload, recursive data removal, publish a
 running as the same OS user can still inspect or tamper with local files; therefore exported logs are not integrity
 evidence and must be reviewed before sharing.
 
-The remaining Q7 gate is a committed macOS/Windows CI run proving the enhanced clean-install lifecycle on both
-blocking platforms. Registry provenance, private dogfood and the protected landing lint remain separate stable-release
-gates.
+Registry provenance, private dogfood and the protected landing lint remain separate stable-release gates. Q7 does not
+claim or close any of them.
