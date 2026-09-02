@@ -35,6 +35,12 @@ Crash-recovery drill passed: one interrupted run, no replay, one durable report.
 Fault-injection gate passed.
 ```
 
+Full repository typecheck and tests also passed. The clean-install `0.1.0-alpha.5` tarball contained 60 allowlisted
+files, did not contain the crash fixture, and launched successfully from an empty temporary project. During this gate
+the production audit detected newly disclosed `fast-uri` 3.x/4.x advisories; the workspace lock now overrides the two
+affected resolutions to patched 3.1.6 and 4.1.3. The repeated production audit reported no known vulnerabilities, and
+the complete fault/package gates passed again on that graph.
+
 ## Process-boundary claim
 
 The parent process created an isolated temporary data root, authenticated through the normal session/CSRF API,

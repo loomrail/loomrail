@@ -31,7 +31,7 @@
 
 - [x] Новый black-box drill зелёный локально и не оставляет child/temp artifacts.
 - [x] Named fault gate зелёный последовательно.
-- [ ] Existing full typecheck/unit, production audit и release tarball остаются зелёными.
+- [x] Existing full typecheck/unit, production audit и release tarball остаются зелёными.
 - [ ] macOS/Windows CI named gate; общий verify может оставаться blocked только protected landing.
 
 Локальное evidence: [Q5-CRASH-FAULT-INJECTION-EVIDENCE.md](../evidence/phase-8/Q5-CRASH-FAULT-INJECTION-EVIDENCE.md).
