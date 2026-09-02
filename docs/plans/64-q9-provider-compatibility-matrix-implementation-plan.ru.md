@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** local implementation and gates complete; macOS/Windows evidence pending
+**Статус:** implementation and synthetic macOS/Windows gates complete; live row promotion is a separate authorized slice
 
 **Спецификация:**
 [63-q9-provider-compatibility-matrix-spec.ru.md](63-q9-provider-compatibility-matrix-spec.ru.md)
@@ -28,7 +28,7 @@
 - [x] Unit: parse/status matrix, deadline/output/error canaries, auth-after-version и refresh version change.
 - [x] Integration/browser: AUTO/explicit fail-closed, API invariants, RU/EN status и Mock fallback.
 - [x] Проверить focused format/lint/typecheck/tests, public tree, audit, fault и release package.
-- [ ] Получить macOS/Windows synthetic version-probe и clean-package evidence; общий Verify может быть blocked только
+- [x] Получить macOS/Windows synthetic version-probe и clean-package evidence; общий Verify может быть blocked только
       protected landing.
 
 ## 2. Module seam

@@ -1322,14 +1322,16 @@ setup/doctor/start/log lifecycle зелёные локально и в
 explicit Chromium prerequisite и browser smoke прошли на macOS/Windows; оба Verify прошли fault gate и остановились
 только на трёх protected landing lint diagnostics. Q8 cross-platform gate закрыт без изменения landing.
 
-Q9 provider compatibility admission реализован локально по планам 63–64. Deep daemon module выполняет bounded
+Q9 provider compatibility admission реализован по планам 63–64. Deep daemon module выполняет bounded
 version-before-auth probe с fixed argv, exact parser, minimal env, deadline/output caps и closed result; runtime schema
 разрешает live `ready` только для installed + exact `VERIFIED` + authenticated CLI. AUTO игнорирует incompatible
 version, explicit preference сохраняется, но fail closed до spawn; Doctor, guided setup и RU/EN Settings показывают
 normalized version/status. Public matrix намеренно начинает с пустого live verified allowlist: Claude Code ниже
-2.1.214 имеет `TOO_OLD`, остальные распознанные версии без reviewed row — `UNVERIFIED`. Synthetic unit/integration
-gates локально зелёные; macOS/Windows CI evidence и отдельно авторизованный real-provider matrix promotion ещё
-открыты. Q9 не изменяет protected landing и не разрешает npm publish.
+2.1.214 имеет `TOO_OLD`, остальные распознанные версии без reviewed row — `UNVERIFIED`. Synthetic probe, production
+audit, fault, clean-package и 52/52 browser gates зелёные на macOS/Windows в
+[CI run 33686253005](https://github.com/loomrail/loomrail/actions/runs/33686253005); оба Verify остановились только на
+трёх protected landing lint findings. Отдельно авторизованный real-provider matrix promotion ещё открыт. Q9 не
+изменяет protected landing и не разрешает npm publish.
 
 ### Оценка первого цикла
 

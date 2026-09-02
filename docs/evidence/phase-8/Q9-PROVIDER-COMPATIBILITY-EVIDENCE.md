@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-03
 
-**Scope:** local implementation; macOS/Windows CI evidence pending
+**Scope:** local implementation and macOS/Windows synthetic admission/package evidence
 
 ## Admission observations
 
@@ -49,9 +49,22 @@ dark theme at 320 px without horizontal page overflow. The complete browser suit
   completes setup/receipt/files/start/log lifecycle checks.
 
 Repository-wide `pnpm verify` passes format, public-tree, toolchain and full build, then reports exactly the three
-protected `apps/landing/src/main.ts` ESLint findings on lines 630, 631 and 634. The explicit macOS/Windows
-compatibility step will be recorded after the committed CI run; no Q9/non-landing failure precedes that unrelated
-landing blocker.
+protected `apps/landing/src/main.ts` ESLint findings on lines 630, 631 and 634.
+
+[GitHub Actions run 33686253005](https://github.com/loomrail/loomrail/actions/runs/33686253005) records the committed
+Q9 gate:
+
+| Lane                  | macOS | Windows |
+| --------------------- | ----- | ------- |
+| Compatibility probes  | PASS  | PASS    |
+| Production audit      | PASS  | PASS    |
+| Crash/fault recovery  | PASS  | PASS    |
+| Clean package install | PASS  | PASS    |
+| Browser smoke         | 52/52 | 52/52   |
+| Repository Verify     | FAIL¹ | FAIL¹   |
+
+¹ Both Verify jobs reached ESLint after format, public-tree, toolchain and full build, then stopped only at protected
+landing lines 630, 631 and 634. No Q9 or other non-landing failure preceded that unrelated blocker.
 
 ## Matrix authority and remaining evidence
 

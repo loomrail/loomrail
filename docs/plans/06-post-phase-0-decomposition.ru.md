@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
-**Статус:** Q9 provider compatibility реализован локально с пустой live allowlist; cross-platform Q9 evidence,
+**Статус:** Q9 synthetic provider compatibility gate закрыт на macOS/Windows с пустой live allowlist; exact live row,
 protected landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной
 версией
 **Нормативные входы:**
@@ -247,8 +247,10 @@ Q9 реализует exact provider compatibility admission по
 возвращает только normalized version/closed status, а runtime invariant разрешает live start лишь для exact
 `VERIFIED` и authenticated CLI. Doctor, guided setup и RU/EN Settings различают missing, unlaunchable, unreadable,
 too-old и unverified state; AUTO остаётся на Mock, explicit incompatible provider fail closed до spawn. Initial live
-allowlist намеренно пуста: имеющиеся recordings не дают одинаковой macOS/Windows и successful MCP evidence. Local
-synthetic gates зелёные; cross-platform CI и отдельно owner-authorized quota-bearing promotion остаются открыты.
+allowlist намеренно пуста: имеющиеся recordings не дают одинаковой macOS/Windows и successful MCP evidence. Synthetic
+probe, audit, fault, clean-package и browser gates зелёные на обеих ОС в
+[run 33686253005](https://github.com/loomrail/loomrail/actions/runs/33686253005); Verify остановился только на protected
+landing. Отдельно owner-authorized quota-bearing promotion остаётся открытым.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

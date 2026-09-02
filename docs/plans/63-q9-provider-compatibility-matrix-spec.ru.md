@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implemented locally; macOS/Windows evidence pending
+**Статус:** synthetic admission implementation and macOS/Windows evidence complete; live row promotion pending
 
 **Предшественники:** A2, Provider Selection, Q4, Q8
 
