@@ -135,6 +135,11 @@ jobs:
       - name: Build the release tarball
         run: pnpm pack:release
 
+      # Keep Q7's file-mode/lease/retention unit contract visible even when protected landing lint
+      # prevents the repository-wide Verify job from reaching workspace tests.
+      - name: Verify local log lifecycle
+        run: pnpm --filter @loomrail/cli test
+
       # Proves the published layout works from a registry install, which `pnpm verify` cannot show.
       - name: Verify the tarball on a clean install
         run: pnpm test:release
