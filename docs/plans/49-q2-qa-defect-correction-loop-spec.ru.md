@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** approved implementation baseline; implementation starts after the full Q1 gate
+**Статус:** approved implementation baseline
 
 **Предшественники:** R1, Q1
 

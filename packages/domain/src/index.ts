@@ -7,6 +7,7 @@ export * from "./review.js";
 export * from "./scaffolding.js";
 export * from "./provider-selection.js";
 export * from "./qa.js";
+export * from "./qa-correction.js";
 
 import type {
   CreateWorkItemCommand,

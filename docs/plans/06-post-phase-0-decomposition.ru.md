@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
-**Статус:** утверждённая последовательность до B4 и A4 реализована; `0.1.0-alpha.4` опубликована
+**Статус:** реализация через Q1 завершена; Q2 активен; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -177,8 +177,12 @@ tarball установился и запустился на обеих плат�
 параллельно разрабатываемом `apps/landing/src/main.ts`; Q1 не меняет этот каталог и не маскирует его failure.
 Спецификация —
 [47](47-q1-deterministic-browser-qa-spec.ru.md), план —
-[48](48-q1-deterministic-browser-qa-implementation-plan.ru.md). Следующая доменная граница после полного зелёного
-Q1 gate — Q2: отдельный correction-run counter, durable Defect lifecycle и scoped retest с bounded regression subset.
+[48](48-q1-deterministic-browser-qa-implementation-plan.ru.md). Q2 активен с отдельным correction-run counter,
+durable Defect lifecycle и scoped retest с bounded regression subset; архитектурная граница и порядок реализации
+зафиксированы в [ADR-0008](../adr/0008-separate-qa-correction-runs.md),
+[спецификации 49](49-q2-qa-defect-correction-loop-spec.ru.md) и
+[плане 50](50-q2-qa-defect-correction-loop-implementation-plan.ru.md). Публикация следующей версии всё ещё ждёт
+полного зелёного release gate, включая landing lint.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

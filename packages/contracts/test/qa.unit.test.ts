@@ -4,9 +4,11 @@ import {
   MAX_QA_ATTACHMENT_BYTES,
   qaAttachmentDraftSchema,
   qaAttachmentRefSchema,
+  qaCorrectionRunSchema,
   qaDefectSchema,
   qaDriverResultSchema,
   qaPlanSnapshotSchema,
+  qaRetestPlanSchema,
   qaRunSchema,
   qaTargetOriginSchema,
 } from "../src/qa.js";
@@ -207,5 +209,79 @@ describe("browser QA contracts", () => {
         version: 2,
       }).success,
     ).toBe(true);
+  });
+
+  it("bounds correction identity independently from QA and review attempts", () => {
+    const correction = {
+      schemaVersion: 1,
+      id: "correction-1",
+      projectId: "project-1",
+      workItemId: "work-item-1",
+      pipelineRunId: "pipeline-1",
+      ordinal: 1,
+      sourceQARunId: "qa-run-1",
+      baselineQARunId: "qa-run-1",
+      sourceEvidenceBundleId: "qa-evidence-1",
+      sourceTestedTree: "e".repeat(40),
+      defectIds: ["defect-1"],
+      retestPlanId: "retest-plan-1",
+      status: "ACTIVE",
+      createdAt: "2026-09-02T10:02:00.000Z",
+      completedAt: null,
+      version: 1,
+    } as const;
+    expect(qaCorrectionRunSchema.safeParse(correction).success).toBe(true);
+    expect(qaCorrectionRunSchema.safeParse({ ...correction, ordinal: 4 }).success).toBe(false);
+    expect(
+      qaCorrectionRunSchema.safeParse({ ...correction, defectIds: ["defect-1", "defect-1"] }).success,
+    ).toBe(false);
+    expect(
+      qaCorrectionRunSchema.safeParse({ ...correction, status: "PASSED", completedAt: null }).success,
+    ).toBe(false);
+    expect(
+      qaCorrectionRunSchema.safeParse({
+        ...correction,
+        status: "PASSED",
+        completedAt: "2026-09-02T11:00:00.000Z",
+        version: 2,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("requires unique retest cells and canonical reason order", () => {
+    const retestPlan = {
+      schemaVersion: 1,
+      id: "retest-plan-1",
+      projectId: "project-1",
+      workItemId: "work-item-1",
+      pipelineRunId: "pipeline-1",
+      correctionRunId: "correction-1",
+      baselineQARunId: "qa-run-1",
+      sourceQARunId: "qa-run-1",
+      sourceEvidenceBundleId: "qa-evidence-1",
+      baselinePlanRevision: 1,
+      baselinePlanContentHash: plan.contentHash,
+      cells: [
+        {
+          targetId: "desktop-light-en",
+          scenarioId: "owner-acceptance",
+          reasons: ["FAILED_CHECK", "OPEN_DEFECT"],
+        },
+      ],
+      createdAt: "2026-09-02T10:02:00.000Z",
+    } as const;
+    expect(qaRetestPlanSchema.safeParse(retestPlan).success).toBe(true);
+    expect(
+      qaRetestPlanSchema.safeParse({
+        ...retestPlan,
+        cells: [...retestPlan.cells, retestPlan.cells[0]],
+      }).success,
+    ).toBe(false);
+    expect(
+      qaRetestPlanSchema.safeParse({
+        ...retestPlan,
+        cells: [{ ...retestPlan.cells[0], reasons: ["OPEN_DEFECT", "FAILED_CHECK"] }],
+      }).success,
+    ).toBe(false);
   });
 });

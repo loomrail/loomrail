@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** ready; implementation waits for full Q1 gate
+**Статус:** in progress
 
 **Спецификация:** [49-q2-qa-defect-correction-loop-spec.ru.md](49-q2-qa-defect-correction-loop-spec.ru.md)
 
@@ -10,10 +10,11 @@
 
 ### Q2.1 — Contracts и чистый domain
 
-- [ ] Добавить bounded `CorrectionRun`, `QARetestPlan`, cell reasons и full/retest QARun lineage schemas.
+- [x] Добавить bounded `CorrectionRun`, `QARetestPlan` и canonical cell reason schemas.
+- [ ] Добавить full/retest QARun lineage schemas.
 - [ ] Добавить nullable correction lineage StageAttempt, ReviewReport/Finding и evidence artifacts.
-- [ ] Реализовать pure derivation affected cells + deterministic regression subset.
-- [ ] Реализовать pure correction-loop transition: start, supersede, pass, exhaust, owner final/cancel.
+- [x] Реализовать pure derivation affected cells + deterministic regression subset.
+- [x] Реализовать pure correction-loop transition: start, supersede, pass, exhaust, owner final/cancel.
 - [ ] Добавить owner-only optimistic QADefect waiver; SYSTEM resolution остаётся только outcome passing retest.
 - [ ] Проверить два независимых bounds: R1 rounds локально на correction и 2 automatic + 1 owner Q2 runs.
 
@@ -61,5 +62,6 @@
 
 ## 4. Первый implementation slice
 
-После полного Q1 gate начать с contracts + pure `deriveQARetestPlan`/`decideQACorrectionLoop` и focused tests. До
-закрытия этого slice persistence, daemon и UI не должны самостоятельно интерпретировать correction transitions.
+Contracts + pure `deriveQARetestPlan`/`decideQACorrectionLoop` с focused tests завершены. Следующий slice — добавить
+correction lineage в StageAttempt/Review/QARun contracts и подготовить additive migration; daemon и UI до этого не
+должны самостоятельно интерпретировать correction transitions.

@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** in progress
+**Статус:** implementation complete; release gate pending on parallel landing lint
 
 **Спецификация:** [47-q1-deterministic-browser-qa-spec.ru.md](47-q1-deterministic-browser-qa-spec.ru.md)
 
@@ -65,7 +65,7 @@
 - [x] Production audit без high-severity уязвимостей.
 - [x] Clean npm tarball устанавливается и запускается только из опубликованного layout.
 - [x] Один и тот же baseline проходит на macOS и Windows: independent browser jobs дали 50/50 green в
-  [GitHub Actions run 33617720338](https://github.com/loomrail/loomrail/actions/runs/33617720338).
+      [GitHub Actions run 33617720338](https://github.com/loomrail/loomrail/actions/runs/33617720338).
 
 ## 4. Следующий срез
 

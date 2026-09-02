@@ -17,6 +17,9 @@ export const MAX_QA_OBSERVATIONS = 100;
 export const MAX_QA_ATTACHMENTS = 50;
 export const MAX_QA_DEFECTS = 50;
 export const MAX_QA_RUN_HISTORY = 20;
+export const MAX_AUTOMATIC_QA_CORRECTION_RUNS = 2;
+export const MAX_TOTAL_QA_CORRECTION_RUNS = 3;
+export const MAX_QA_CORRECTION_DEFECTS = MAX_TOTAL_QA_CORRECTION_RUNS * MAX_QA_DEFECTS;
 export const MAX_QA_ATTACHMENT_BYTES = 32 * 1_024 * 1_024;
 export const MAX_QA_STORED_ATTACHMENT_BYTES = 1_024 * 1_024 * 1_024;
 export const MAX_QA_TOTAL_ATTACHMENT_BYTES = 256 * 1_024 * 1_024;
@@ -79,6 +82,20 @@ export const qaRetentionClassSchema = z.literal("STANDARD_30_DAYS");
 export const qaAttachmentRetentionOutcomeSchema = z.enum(["DELETED", "ALREADY_ABSENT"]);
 export const qaDefectSeveritySchema = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
 export const qaDefectStatusSchema = z.enum(["OPEN", "RESOLVED", "WAIVED"]);
+export const qaCorrectionRunStatusSchema = z.enum([
+  "ACTIVE",
+  "PASSED",
+  "SUPERSEDED",
+  "EXHAUSTED",
+  "CANCELLED",
+]);
+export const qaRetestCellReasons = [
+  "FAILED_CHECK",
+  "BLOCKING_OBSERVATION",
+  "OPEN_DEFECT",
+  "REGRESSION",
+] as const;
+export const qaRetestCellReasonSchema = z.enum(qaRetestCellReasons);
 export const qaDriverErrorCodeSchema = z.enum([
   "TARGET_UNHEALTHY",
   "DRIVER_CRASHED",
@@ -380,6 +397,82 @@ export const qaDefectSchema = qaDefectDraftSchema
     }
   });
 
+export const qaRetestCellSchema = z
+  .object({
+    targetId: opaqueIdSchema,
+    scenarioId: opaqueIdSchema,
+    reasons: z.array(qaRetestCellReasonSchema).min(1).max(qaRetestCellReasons.length),
+  })
+  .strict()
+  .superRefine((cell, context) => {
+    if (new Set(cell.reasons).size !== cell.reasons.length) {
+      context.addIssue({ code: "custom", message: "A QA retest cell cannot repeat a scope reason" });
+    }
+    const ordered = [...cell.reasons].sort(
+      (left, right) => qaRetestCellReasons.indexOf(left) - qaRetestCellReasons.indexOf(right),
+    );
+    if (ordered.some((reason, index) => reason !== cell.reasons[index])) {
+      context.addIssue({ code: "custom", message: "QA retest cell reasons must use canonical order" });
+    }
+  });
+
+export const qaRetestPlanSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    workItemId: opaqueIdSchema,
+    pipelineRunId: opaqueIdSchema,
+    correctionRunId: opaqueIdSchema,
+    baselineQARunId: opaqueIdSchema,
+    sourceQARunId: opaqueIdSchema,
+    sourceEvidenceBundleId: opaqueIdSchema,
+    baselinePlanRevision: z.number().int().positive(),
+    baselinePlanContentHash: contentHashSchema,
+    cells: z.array(qaRetestCellSchema).min(1).max(MAX_QA_EXECUTIONS),
+    createdAt: utcTimestampSchema,
+  })
+  .strict()
+  .superRefine((plan, context) => {
+    const keys = plan.cells.map(({ targetId, scenarioId }) => `${targetId}\u0000${scenarioId}`);
+    if (new Set(keys).size !== keys.length) {
+      context.addIssue({ code: "custom", message: "A QA retest plan cannot repeat a target/scenario cell" });
+    }
+  });
+
+export const qaCorrectionRunSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    workItemId: opaqueIdSchema,
+    pipelineRunId: opaqueIdSchema,
+    ordinal: z.number().int().positive().max(MAX_TOTAL_QA_CORRECTION_RUNS),
+    sourceQARunId: opaqueIdSchema,
+    baselineQARunId: opaqueIdSchema,
+    sourceEvidenceBundleId: opaqueIdSchema,
+    sourceTestedTree: treeShaSchema,
+    defectIds: z.array(opaqueIdSchema).min(1).max(MAX_QA_CORRECTION_DEFECTS),
+    retestPlanId: opaqueIdSchema,
+    status: qaCorrectionRunStatusSchema,
+    createdAt: utcTimestampSchema,
+    completedAt: utcTimestampSchema.nullable(),
+    version: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((run, context) => {
+    if (new Set(run.defectIds).size !== run.defectIds.length) {
+      context.addIssue({ code: "custom", message: "A QA correction run cannot repeat a defect ID" });
+    }
+    const terminal = run.status === "PASSED" || run.status === "SUPERSEDED" || run.status === "CANCELLED";
+    if (terminal !== (run.completedAt !== null)) {
+      context.addIssue({
+        code: "custom",
+        message: "Only a terminal QA correction run can carry a completion time",
+      });
+    }
+  });
+
 const qaMeasuredDriverResultSchema = z
   .object({
     outcome: z.literal("MEASURED"),
@@ -568,6 +661,11 @@ export type QAAttachmentSummary = z.infer<typeof qaAttachmentSummarySchema>;
 export type QAFinalizedAttachment = z.infer<typeof qaFinalizedAttachmentSchema>;
 export type QADefectDraft = z.infer<typeof qaDefectDraftSchema>;
 export type QADefect = z.infer<typeof qaDefectSchema>;
+export type QACorrectionRunStatus = z.infer<typeof qaCorrectionRunStatusSchema>;
+export type QARetestCellReason = z.infer<typeof qaRetestCellReasonSchema>;
+export type QARetestCell = z.infer<typeof qaRetestCellSchema>;
+export type QARetestPlan = z.infer<typeof qaRetestPlanSchema>;
+export type QACorrectionRun = z.infer<typeof qaCorrectionRunSchema>;
 export type QADriverResult = z.infer<typeof qaDriverResultSchema>;
 export type QAEvidenceBundle = z.infer<typeof qaEvidenceBundleSchema>;
 export type QARunReservedEvent = z.infer<typeof qaRunReservedEventSchema>;
