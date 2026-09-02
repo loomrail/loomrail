@@ -30,6 +30,13 @@ const isLoopbackHostname = (hostname: string): boolean => {
   return octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255);
 };
 
+const hasControlCharacter = (value: string): boolean => {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) <= 31) return true;
+  }
+  return false;
+};
+
 export const qaTargetOriginSchema = z
   .url()
   .max(2_048)
@@ -84,14 +91,84 @@ export const qaTargetSchema = z
   })
   .strict();
 
-const qaPlannedCheckSchema = z.object({ id: opaqueIdSchema, title: titleSchema }).strict();
+export const qaLocatorSchema = z.discriminatedUnion("by", [
+  z
+    .object({
+      by: z.literal("ROLE"),
+      role: z.enum([
+        "button",
+        "checkbox",
+        "dialog",
+        "heading",
+        "link",
+        "listitem",
+        "menuitem",
+        "radio",
+        "region",
+        "tab",
+        "textbox",
+      ]),
+      name: titleSchema,
+    })
+    .strict(),
+  z.object({ by: z.literal("TEST_ID"), value: z.string().trim().min(1).max(200) }).strict(),
+  z.object({ by: z.literal("TEXT"), value: titleSchema }).strict(),
+]);
+
+const qaRelativeUrlPathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2_048)
+  .regex(/^\/(?!\/)[^\\]*$/, "Navigation target must be a same-origin absolute path")
+  .refine((value) => !hasControlCharacter(value), "Navigation target cannot contain control characters");
+
+export const qaStepActionSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("NAVIGATE"), path: qaRelativeUrlPathSchema }).strict(),
+  z.object({ type: z.literal("CLICK"), locator: qaLocatorSchema }).strict(),
+  z
+    .object({
+      type: z.literal("PRESS"),
+      locator: qaLocatorSchema,
+      key: z.enum([
+        "Tab",
+        "Shift+Tab",
+        "Enter",
+        "Space",
+        "Escape",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+      ]),
+    })
+    .strict(),
+  z.object({ type: z.literal("WAIT_FOR_IDLE") }).strict(),
+]);
+
+export const qaAssertionRuleSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("VISIBLE"), locator: qaLocatorSchema }).strict(),
+  z
+    .object({ type: z.literal("TEXT_CONTAINS"), locator: qaLocatorSchema, expected: shortDescriptionSchema })
+    .strict(),
+  z.object({ type: z.literal("URL_PATH"), path: qaRelativeUrlPathSchema }).strict(),
+  z.object({ type: z.literal("NO_HORIZONTAL_OVERFLOW") }).strict(),
+  z.object({ type: z.literal("FOCUSED"), locator: qaLocatorSchema }).strict(),
+]);
+
+const qaPlannedStepSchema = z
+  .object({ id: opaqueIdSchema, title: titleSchema, action: qaStepActionSchema })
+  .strict();
+const qaPlannedAssertionSchema = z
+  .object({ id: opaqueIdSchema, title: titleSchema, rule: qaAssertionRuleSchema })
+  .strict();
 
 export const qaScenarioPlanSchema = z
   .object({
     id: opaqueIdSchema,
     title: titleSchema,
-    steps: z.array(qaPlannedCheckSchema).min(1).max(MAX_QA_STEPS_PER_SCENARIO),
-    assertions: z.array(qaPlannedCheckSchema).min(1).max(MAX_QA_ASSERTIONS_PER_SCENARIO),
+    steps: z.array(qaPlannedStepSchema).min(1).max(MAX_QA_STEPS_PER_SCENARIO),
+    assertions: z.array(qaPlannedAssertionSchema).min(1).max(MAX_QA_ASSERTIONS_PER_SCENARIO),
   })
   .strict()
   .superRefine((scenario, context) => {
@@ -118,6 +195,13 @@ export const qaPlanSnapshotSchema = z
     }
     if (new Set(plan.scenarios.map(({ id }) => id)).size !== plan.scenarios.length) {
       context.addIssue({ code: "custom", message: "QA scenario IDs must be unique" });
+    }
+    const executions = plan.targets.length * plan.scenarios.length;
+    if (executions + plan.targets.length > MAX_QA_ATTACHMENTS) {
+      context.addIssue({
+        code: "custom",
+        message: "QA matrix is too large for one screenshot per execution and one trace per target",
+      });
     }
   });
 
@@ -422,6 +506,9 @@ export type BrowserDriverId = z.infer<typeof browserDriverIdSchema>;
 export type QARunStatus = z.infer<typeof qaRunStatusSchema>;
 export type QACheckStatus = z.infer<typeof qaCheckStatusSchema>;
 export type QAPlanSnapshot = z.infer<typeof qaPlanSnapshotSchema>;
+export type QALocator = z.infer<typeof qaLocatorSchema>;
+export type QAStepAction = z.infer<typeof qaStepActionSchema>;
+export type QAAssertionRule = z.infer<typeof qaAssertionRuleSchema>;
 export type QAEnvironment = z.infer<typeof qaEnvironmentSchema>;
 export type QARun = z.infer<typeof qaRunSchema>;
 export type QAScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;

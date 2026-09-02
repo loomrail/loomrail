@@ -20,8 +20,16 @@ const plan = {
     {
       id: "owner-acceptance",
       title: "Owner can inspect the current work",
-      steps: [{ id: "open-cockpit", title: "Open the Task Cockpit" }],
-      assertions: [{ id: "current-work-visible", title: "Current work is visible" }],
+      steps: [
+        { id: "open-cockpit", title: "Open the Task Cockpit", action: { type: "NAVIGATE", path: "/" } },
+      ],
+      assertions: [
+        {
+          id: "current-work-visible",
+          title: "Current work is visible",
+          rule: { type: "VISIBLE", locator: { by: "TEXT", value: "Current work" } },
+        },
+      ],
     },
   ],
 };
@@ -47,6 +55,23 @@ describe("browser QA contracts", () => {
           {
             ...plan.scenarios[0],
             assertions: [plan.scenarios[0]?.assertions[0], plan.scenarios[0]?.assertions[0]],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      qaPlanSnapshotSchema.safeParse({
+        ...plan,
+        scenarios: [
+          {
+            ...plan.scenarios[0],
+            steps: [
+              {
+                id: "external",
+                title: "Leave the target",
+                action: { type: "NAVIGATE", path: "https://example.com" },
+              },
+            ],
           },
         ],
       }).success,

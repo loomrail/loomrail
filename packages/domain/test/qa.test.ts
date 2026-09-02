@@ -28,8 +28,14 @@ const qaRun: QARun = {
       {
         id: "task-cockpit",
         title: "Task Cockpit shows measured work state",
-        steps: [{ id: "open", title: "Open the Task Cockpit" }],
-        assertions: [{ id: "state", title: "The current state is visible" }],
+        steps: [{ id: "open", title: "Open the Task Cockpit", action: { type: "NAVIGATE", path: "/" } }],
+        assertions: [
+          {
+            id: "state",
+            title: "The current state is visible",
+            rule: { type: "VISIBLE", locator: { by: "TEXT", value: "Current work" } },
+          },
+        ],
       },
     ],
   },

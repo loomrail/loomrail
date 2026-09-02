@@ -184,6 +184,15 @@ importers:
         specifier: ^8.1.0
         version: 8.2.2(@types/node@24.13.3)(jiti@2.7.0)
 
+  packages/browser-qa:
+    dependencies:
+      '@loomrail/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      playwright:
+        specifier: ^1.55.0
+        version: 1.62.1
+
   packages/context-assembly:
     dependencies:
       '@loomrail/contracts':

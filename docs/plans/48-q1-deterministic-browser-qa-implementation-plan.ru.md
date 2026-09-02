@@ -17,11 +17,11 @@
 
 ### Q1.2 — BrowserDriver boundary
 
-- [ ] Ввести небольшой provider-neutral `BrowserDriver` contract.
-- [ ] Реализовать обязательный `PLAYWRIGHT` adapter с новым isolated context на каждый QARun.
-- [ ] Разрешить только validated loopback origin; блокировать off-origin redirect, download и dialog.
-- [ ] Нормализовать browser/runtime fingerprint без secrets, cookies, headers и абсолютных путей.
-- [ ] Собирать deterministic viewport/locale/theme matrix, console/network observations, screenshots и trace.
+- [x] Ввести небольшой provider-neutral `BrowserDriver` contract.
+- [x] Реализовать обязательный `PLAYWRIGHT` adapter с новым isolated context на каждый QARun.
+- [x] Разрешить только validated loopback origin; блокировать off-origin redirect, download и dialog.
+- [x] Нормализовать browser/runtime fingerprint без secrets, cookies, headers и абсолютных путей.
+- [x] Собирать deterministic viewport/locale/theme matrix, console/network observations, screenshots и trace.
 
 ### Q1.3 — Durable orchestration
 
@@ -49,13 +49,13 @@
 
 - [x] Обновить BrowserDriver-раздел threat model одновременно с первой capability.
 - [ ] Проверить loopback allowlist, redirects, DNS/rebinding assumptions и response-size limits.
-- [ ] Не передавать cookies, provider credentials, `.env`, Authorization headers и signed-in browser profile.
-- [ ] Не разрешать shell/Git mutation, arbitrary launch recipe, external origin и destructive UI action.
+- [x] Не передавать cookies, provider credentials, `.env`, Authorization headers и signed-in browser profile.
+- [x] Не разрешать shell/Git mutation, arbitrary launch recipe, external origin и destructive UI action.
 - [ ] Проверить redaction, relative attachment keys, content hash/size и retention cleanup.
 
 ## 3. Verification gate
 
-- [ ] Unit: schemas, verdict derivation, bounds, stale tree и forbidden transitions.
+- [x] Unit: schemas, verdict derivation, bounds, stale tree и forbidden transitions.
 - [ ] Persistence: atomic success/failure, restart, idempotency, expected-version conflict и recovery marker.
 - [ ] Daemon: green baseline, intentional assertion failure, driver error, off-origin redirect и timeout.
 - [ ] Browser: real green route и real failed route; Acceptance никогда не стартует на неподтверждённом pass.

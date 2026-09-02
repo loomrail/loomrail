@@ -61,6 +61,10 @@ loopback origin. QA read-only: driver не получает shell/Git authority,
 произвольные external origins. Redirect вне allowlist, download, dialog и destructive/account/payment action
 останавливают run fail-closed.
 
+Scenario manifest исполняется как bounded typed DSL: same-origin `NAVIGATE`, semantic-locator `CLICK`/`PRESS`,
+`WAIT_FOR_IDLE` и assertions `VISIBLE`, `TEXT_CONTAINS`, `URL_PATH`, `NO_HORIZONTAL_OVERFLOW`, `FOCUSED`.
+Произвольный JavaScript, CSS/XPath selector и absolute URL в manifest не допускаются.
+
 Codex/Claude browser capabilities и signed-in Chrome остаются будущими adapters. Они не заменяют
 Playwright baseline.
 

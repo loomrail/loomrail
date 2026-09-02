@@ -167,13 +167,14 @@ mock-маршруте», а D2 всё равно ждёт E1.5.
   подходе к D3;
 - где живут примеры из D2 — в этом репозитории рядом с fixture-проектами или отдельным репозиторием — там же.
 
-Текущий checkpoint: C1, C3, C2, B4, A4, A3 и R1 реализованы и запушены. R1 добавил independent author/reviewer
-AgentRuns, structured findings, bounded fix/re-review rounds, owner-authorized final round и реальные browser routes
-для green и exhausted сценариев. Его implementation gate зелёный; общий release gate всё ещё ждёт отдельно
-разрабатываемый landing и повторный macOS/Windows clean-install прогон. Следующий продуктовый эпик — Q1
-deterministic Browser QA evidence: спецификация [47](47-q1-deterministic-browser-qa-spec.ru.md), план
-[48](48-q1-deterministic-browser-qa-implementation-plan.ru.md). Он заменяет provider-утверждение `QA_REPORT`
-измеряемым Playwright baseline, не затрагивая отдельную работу над лендингом.
+Текущий checkpoint: C1, C3, C2, B4, A4, A3 и R1 реализованы и запушены. Q1 deterministic Browser QA evidence
+находится в реализации: готовы runtime contracts, чистое derivation verdict, durable QARun/evidence/attachment/Defect
+хранилище и isolated Playwright BrowserDriver с typed manifest, loopback/read-only guard, screenshots и trace.
+Следующий срез Q1 — daemon orchestration: резервировать QARun до browser process, атомарно завершать AgentRun и
+workflow, исключить provider-owned `QA_REPORT` и только measured pass допускать к Acceptance. Спецификация —
+[47](47-q1-deterministic-browser-qa-spec.ru.md), план —
+[48](48-q1-deterministic-browser-qa-implementation-plan.ru.md). Работа не затрагивает отдельно разрабатываемый
+landing; общий release gate после Q1 всё ещё требует повторного macOS/Windows clean-install прогона.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

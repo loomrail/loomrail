@@ -1584,8 +1584,23 @@ describe("SQLite local state", () => {
           {
             id: "task-cockpit",
             title: "Task Cockpit shows the current state",
-            steps: [{ id: "open", title: "Open the Task Cockpit" }],
-            assertions: [{ id: "state-visible", title: "Current state is visible" }],
+            steps: [
+              {
+                id: "open",
+                title: "Open the Task Cockpit",
+                action: { type: "NAVIGATE" as const, path: "/" },
+              },
+            ],
+            assertions: [
+              {
+                id: "state-visible",
+                title: "Current state is visible",
+                rule: {
+                  type: "VISIBLE" as const,
+                  locator: { by: "TEXT" as const, value: "Current work" },
+                },
+              },
+            ],
           },
         ],
       };
