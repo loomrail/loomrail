@@ -1296,8 +1296,10 @@ receipt до установки, exact extracted files после неё, зап
 запускает прежний smoke. pnpm повторно проверяет 547 lock entries по strict release age/publication time,
 trust no-downgrade, exotic-source и lifecycle-script policy; единственное exact dev-only exception документировано.
 EN/RU security/operations docs различают receipt и npm/Sigstore provenance, explicit update и restore rollback.
-Cross-platform clean-receipt CI, private dogfood и registry provenance до owner-authorized publish остаются открыты;
-publish workflow/credential/tag/dist-tag не добавлены.
+macOS/Windows clean-receipt, consumer audit и smoke зелёные в
+[CI run 33668749126](https://github.com/loomrail/loomrail/actions/runs/33668749126); оба Verify прошли fault gate и
+остановились только на protected landing lint. Private dogfood и registry provenance до owner-authorized publish
+остаются открыты; publish workflow/credential/tag/dist-tag не добавлены.
 
 ### Оценка первого цикла
 

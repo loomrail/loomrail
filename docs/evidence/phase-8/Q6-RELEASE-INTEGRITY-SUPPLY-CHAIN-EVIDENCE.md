@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-02
 
-**Scope:** local macOS implementation; clean macOS/Windows CI receipt evidence pending
+**Scope:** local implementation and macOS/Windows CI run
 
 ## Dependency-policy observation
 
@@ -76,11 +76,29 @@ files and 22/22 tests.
 
 `pnpm verify` passes formatting, the 571-file public-tree/toolchain gate and the full build, then stops at exactly the
 three protected `apps/landing/src/main.ts` lint diagnostics on lines 630, 631 and 634. ESLint over every non-landing
-path passes, as do the full TypeScript check and all tests; Q6 does not modify or waive the landing diagnostics.
+path passes, as do the full TypeScript check and `pnpm test`; Q6 does not modify or waive the landing diagnostics.
+
+## Cross-platform CI evidence
+
+[GitHub Actions run 33668749126](https://github.com/loomrail/loomrail/actions/runs/33668749126) exercised commit
+`f4bb85d` on 2026-09-02:
+
+| Job                              | Result                                                                                 |
+| -------------------------------- | -------------------------------------------------------------------------------------- |
+| Clean install (`macos-latest`)   | pass: 547-entry policy, clean receipt, exact installed files, audit and runtime smoke  |
+| Clean install (`windows-latest`) | pass: 547-entry policy, clean receipt, exact installed files, audit and runtime smoke  |
+| Browser smoke (macOS/Windows)    | pass on both platforms                                                                 |
+| Verify (macOS/Windows)           | install, production audit and crash/fault pass; only protected landing lint then fails |
+
+The release verifier rejects a non-`CLEAN` source observation whenever `CI=true`, so both completed Release jobs
+also prove the committed receipt path saw a clean checkout. Their consumer audits reported zero vulnerabilities.
+Both Verify jobs reached the same three landing diagnostics at lines 630, 631 and 634 after the Q5 crash/fault gate;
+there was no Q6 or platform-specific failure.
 
 ## Authority boundary
 
 The receipt is unsigned integrity metadata, not npm/Sigstore provenance. Ordinary CI retains `contents: read`; Q6
 adds no publish workflow, npm credential, tag, GitHub Release, registry write, or dist-tag mutation. Registry
 provenance remains an explicit stable-release gate that can be satisfied only after owner-authorized trusted
-publishing from a supported hosted workflow. Private dogfood and repository-wide Verify remain separate gates.
+publishing from a supported hosted workflow. Private dogfood and the protected landing Verify failure remain
+separate gates.

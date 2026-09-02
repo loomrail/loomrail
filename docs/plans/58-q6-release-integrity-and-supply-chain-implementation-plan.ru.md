@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implementation complete locally; clean macOS/Windows CI receipt evidence pending
+**Статус:** implementation and clean macOS/Windows receipt gate complete
 
 **Спецификация:**
 [57-q6-release-integrity-and-supply-chain-spec.ru.md](57-q6-release-integrity-and-supply-chain-spec.ru.md)
@@ -37,7 +37,7 @@
 - [x] Focused non-landing lint/typecheck и production audit зелёные.
 - [x] `pnpm pack:release && pnpm test:release` выдаёт и проверяет clean/dirty receipt локально.
 - [x] `pnpm test:fault-injection` остаётся зелёным.
-- [ ] macOS/Windows CI release receipt + clean-install gate зелёный; общий verify может оставаться blocked только
+- [x] macOS/Windows CI release receipt + clean-install gate зелёный; общий verify может оставаться blocked только
       protected landing.
 
 ## 3. Release boundary

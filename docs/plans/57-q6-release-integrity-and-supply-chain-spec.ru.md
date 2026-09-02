@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implemented locally; clean macOS/Windows CI receipt evidence pending
+**Статус:** implemented; clean macOS/Windows receipt evidence green in run 33668749126
 
 **Предшественники:** Q4, Q5
 

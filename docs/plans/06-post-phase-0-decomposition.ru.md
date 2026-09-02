@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
-**Статус:** реализация через Q6 локально завершена; cross-platform Q6/release gate открыт; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** реализация и cross-platform gates через Q6 завершены; protected landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -218,8 +218,9 @@ Q6 закрывает локальную release-integrity и dependency/supply-
 проверяет structured npm pack metadata, portable file set и tarball/file digests; unsigned receipt затем проверяется
 до clean install и против extracted package. Frozen install повторно валидирует 547 lock entries по release-age,
 publisher-trust, source и lifecycle-script policy; workspace и consumer production audits зелёные. Локальный receipt
-намеренно `DIRTY`; после commit release CI обязан получить `CLEAN` на macOS/Windows. Registry provenance, private
-dogfood и publish остаются отдельными gates.
+намеренно `DIRTY`, а [CI run 33668749126](https://github.com/loomrail/loomrail/actions/runs/33668749126) получил
+`CLEAN` и прошёл exact-file/audit/smoke на macOS/Windows. Оба Verify прошли fault gate и остановились только на
+protected landing lint. Registry provenance, private dogfood и publish остаются отдельными gates.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах
