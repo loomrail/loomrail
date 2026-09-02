@@ -20,6 +20,18 @@ Git and must never be committed.
 
 ## Verify the artifact
 
+Before packaging, run the named crash and fault-injection gate:
+
+```bash
+pnpm test:fault-injection
+```
+
+It builds the repository, runs the persistence/provider/MCP/scaffolding/Browser QA/daemon fault suites sequentially,
+then kills a test-owned daemon child during a durably active ProviderSession. Fresh daemon processes on the same
+SQLite/WAL state must expose exactly one interruption report, no active provider/agent run and no automatic replay.
+Run this gate on both macOS and Windows; it is a separate CI step so repository-wide lint cannot hide crash evidence.
+It uses only a synthetic fixture and is not a substitute for the private dogfood recovery gate.
+
 ```bash
 pnpm test:release
 ```
@@ -73,7 +85,7 @@ and are never installed by a consumer.
 Publishing is a deliberate, human action and is not automated. Nothing in CI runs `npm publish`.
 
 1. Decide the version and set it in `apps/cli/package.json`; the release manifest reads it from there.
-2. `pnpm verify && pnpm test:e2e`
+2. `pnpm test:fault-injection && pnpm verify && pnpm test:e2e` on macOS and Windows.
 3. `pnpm pack:release && pnpm test:release` on macOS and Windows.
 4. Inspect `dist-release/package/` — confirm no local paths, no state databases and no logs were staged.
 5. Publish the tarball from an account with rights to the `loomrail` name.

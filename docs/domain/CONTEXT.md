@@ -79,6 +79,12 @@ Availability для локальной установки. Общий status в�
 явно запрошенной командой.
 _Не означает_: durable workflow state, startup/recovery, migration, support upload или источник product truth.
 
+**Recovery Drill**:
+Test-owned process scenario, который обрывает daemon только после durable старта ProviderSession и проверяет
+детерминированный recovery state через новый daemon process и обычные authenticated read-модели.
+_Не означает_: product workflow, automatic resume/retry, crash-report upload или гарантию результата внешнего side
+effect.
+
 **Effective Provider**:
 Provider, который resolver назначит следующей ProviderSession с учётом Project preference, текущей availability и
 видимого environment override.

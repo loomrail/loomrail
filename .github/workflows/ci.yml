@@ -53,6 +53,10 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod --audit-level high
 
+      # Runs before repository-wide lint so an unrelated source failure cannot hide crash evidence.
+      - name: Verify crash and fault recovery
+        run: pnpm test:fault-injection
+
       - name: Verify source and SQLite portability
         run: pnpm verify
         env:

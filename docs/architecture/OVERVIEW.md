@@ -158,6 +158,13 @@ AcceptancePackages, current state and Event append stay behind that interface.
 applies no migration and runs no recovery; it returns only closed integrity/migration states after `quick_check` and
 comparison with the same immutable migration sources used by `openLocalState()`.
 
+Startup recovery remains part of the mutating `openLocalState()` path, not the diagnostic inspector. The named
+`pnpm test:fault-injection` gate first exercises the component fault suites sequentially, then crosses the process
+boundary: a test-owned daemon child is killed only after its ProviderSession is durable, and fresh processes read the
+same SQLite/WAL state. The public API must then show one interrupted run/stage, one durable recovery report and no
+active ProviderSession or AgentRun. A second restart must neither add another report nor replay the provider. The
+fixture changes composition only under daemon tests; there is no product crash endpoint or automatic-resume seam.
+
 The Acceptance provider receives criterion and evidence-check text already present in its exact ContextPack snapshot,
 but no artifact, report, run or tree IDs. The domain binds its ordered claims to current durable Review and measured QA
 authority. The daemon's export route only gathers a bounded snapshot; the infrastructure-free renderer checks every

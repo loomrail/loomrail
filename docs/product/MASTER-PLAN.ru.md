@@ -1280,6 +1280,13 @@ whole-directory backup, forward upgrade, restore-based rollback и раздел�
 recursive product cleanup. T40 и clean-install tarball smoke добавлены. Это закрывает diagnostics и
 uninstall/data-retention docs, но не остальные Phase 8 deliverables или dogfood exit gate; npm publish запрещён.
 
+Q5 full crash/fault-injection gate реализован по планам 55–56. Одна команда последовательно собирает repository,
+прогоняет fault suites persistence/provider/MCP/scaffolding/Browser QA/daemon и затем убивает test-owned daemon
+process только после durable старта ProviderSession. Два новых process на той же SQLite/WAL state доказывают exact
+`DAEMON_RESTART` interruption, один RecoveryReport, отсутствие active ProviderSession/AgentRun и отсутствие
+automatic replay. Отдельный CI step запускается на macOS/Windows до общего lint; локальное evidence зафиксировано,
+cross-platform CI и private dogfood exit gate остаются открыты. Production failpoint и npm publish не добавлены.
+
 ### Оценка первого цикла
 
 - internal dogfood alpha: примерно 12–16 недель;

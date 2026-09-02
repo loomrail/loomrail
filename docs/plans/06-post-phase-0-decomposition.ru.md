@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
-**Статус:** реализация через Q4 локально завершена; release gate открыт; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** реализация через Q5 локально завершена; release gate открыт; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -203,6 +203,13 @@ migration ledger без создания, migration или recovery state; provi
 operations guide разводит whole-directory backup, forward upgrade, restore-based rollback, package uninstall и
 owner-controlled data removal. Full build/typecheck/unit, public-tree, non-landing lint, audit и clean-install tarball
 зелёные; общий macOS/Windows CI и dogfood contract остаются открыты.
+Q5 закрывает Phase 8 crash/fault-injection deliverable по
+[спецификации 55](55-q5-crash-and-fault-injection-gate-spec.ru.md) и
+[плану 56](56-q5-crash-and-fault-injection-gate-implementation-plan.ru.md). Named sequential gate собрал repository,
+провёл 486 focused tests и process-boundary drill: exact daemon child получил `SIGKILL` после durable
+ProviderSession start, два restart на той же SQLite/WAL state сохранили один `DAEMON_RESTART` RecoveryReport без
+active session/run и automatic replay. Локальное evidence зелёное; отдельный macOS/Windows CI step, private dogfood
+и общий release gate остаются открыты.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах
