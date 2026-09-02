@@ -99,11 +99,31 @@ reviewing it.
 `--no-open` and `--port N`. Stop with `Ctrl+C` and wait for the shutdown message before preserving, restoring,
 upgrading, or removing local state.
 
+## Operational logs
+
+The production launcher keeps redacted structured diagnostics under `logs/` in the data directory. Logs are capped
+at 2 MiB per segment and 16 MiB in total, rotate at least daily while active, and are removed after 30 days. They are
+not the durable Event audit, acceptance evidence, or raw provider output.
+
+Stop Loomrail before either management command. Export writes only revalidated, re-redacted NDJSON to stdout, so use
+shell redirection only to a location you intend to review and protect:
+
+```bash
+npx loomrail logs export > loomrail-logs.ndjson
+npx loomrail logs delete
+```
+
+Export is complete-or-error and includes neither source filenames nor the data-directory path. Delete removes only
+Loomrail-owned operational segments; it leaves unknown files in `logs/` and does not touch SQLite, migration backups,
+Browser QA artifacts, repositories, workspaces, provider credentials, or Git state. Both commands refuse to run
+while a live daemon owns the writer lease. Review an export before sharing it: redaction reduces disclosure risk but
+cannot prove arbitrary application text harmless.
+
 ## Preserve and restore
 
 The data directory contains the SQLite database and possible WAL files, migration safety backups, Browser QA
-artifacts, demo repositories, and managed task worktrees. It does not contain external repositories or provider
-credentials.
+artifacts, redacted operational logs, demo repositories, and managed task worktrees. It does not contain external
+repositories or provider credentials.
 
 To preserve an installation:
 
@@ -160,16 +180,17 @@ Removing the npm package and removing owner data are separate actions.
 3. Run the previously recorded path through Finder or File Explorer and inspect it before moving that exact Loomrail
    data directory to Trash/Recycle Bin.
 
-The package uninstall deliberately leaves the data directory in place. Loomrail provides no recursive delete/reset
-command in this release. It also does not remove source repositories, provider configuration or credentials, Git
-commits/branches, or worktree metadata stored by source repositories. Inspect those repositories separately before
-any manual cleanup.
+The package uninstall deliberately leaves the data directory in place. `loomrail logs delete` removes only owned log
+segments; Loomrail provides no recursive installation reset command. It also does not remove source repositories,
+provider configuration or credentials, Git commits/branches, or worktree metadata stored by source repositories.
+Inspect those repositories separately before any manual cleanup.
 
 ## Retention and privacy
 
 Durable Tasks, Events, Decisions, usage, and acceptance records remain until the owner removes the installation data.
 Browser QA screenshots and traces use the audited `STANDARD_30_DAYS` policy after a task reaches `DONE` or
-`CANCELLED`; unsafe or unknown files are preserved rather than recursively deleted. There is no telemetry or crash
+`CANCELLED`. Operational logs use the same 30-day maximum plus a 16 MiB capacity bound; raw provider output is not
+recorded. Unsafe or unknown files are preserved rather than recursively deleted. There is no telemetry or crash
 upload in this release, and no supported online workspace export/import or retention UI.
 
 For the product workflow, continue with the [quick start](GETTING-STARTED.md) and [owner guide](USER-GUIDE.md). For

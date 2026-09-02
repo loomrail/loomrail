@@ -10,6 +10,8 @@ export type CliCommand =
   | StartCliCommand
   | { command: "DOCTOR"; format: "HUMAN" | "JSON" }
   | { command: "DATA_PATH" }
+  | { command: "LOGS_EXPORT" }
+  | { command: "LOGS_DELETE" }
   | { command: "HELP" };
 
 const parseStart = (args: string[]): StartCliCommand => {
@@ -49,6 +51,19 @@ const noArguments = (command: string, args: string[]): void => {
   if (args.length > 0) throw new Error(`${command} does not accept arguments`);
 };
 
+const parseLogs = (args: string[]): CliCommand => {
+  const [action, ...rest] = args;
+  if (action === "export") {
+    noArguments("logs export", rest);
+    return { command: "LOGS_EXPORT" };
+  }
+  if (action === "delete") {
+    noArguments("logs delete", rest);
+    return { command: "LOGS_DELETE" };
+  }
+  throw new Error("logs requires exactly one action: export or delete");
+};
+
 export const parseCliCommand = (args: string[]): CliCommand => {
   const [first, ...rest] = args;
   if (first === "--help" || first === "-h") {
@@ -58,6 +73,7 @@ export const parseCliCommand = (args: string[]): CliCommand => {
   if (first === undefined || first.startsWith("-")) return parseStart(args);
   if (first === "start") return parseStart(rest);
   if (first === "doctor") return parseDoctor(rest);
+  if (first === "logs") return parseLogs(rest);
   if (first === "data-path") {
     noArguments("data-path", rest);
     return { command: "DATA_PATH" };

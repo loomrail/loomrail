@@ -99,6 +99,20 @@ Consumer-verifiable npm/Sigstore attestation от configured trusted publisher, 
 repository, hosted workflow и source commit.
 _Не означает_: локальный receipt/checksum, code review, vulnerability scan или право обойти release gate.
 
+**Operational Log Segment**:
+Локальный bounded NDJSON-файл с redacted daemon operational records, не являющийся domain state или provider
+transcript.
+_Не означает_: Event log, workflow evidence, raw provider output, telemetry или authority для state transition.
+
+**Log Writer Lease**:
+Exclusive process marker, который сериализует local log writer и offline export/delete над одним data directory.
+_Не означает_: browser session, owner approval, durable workflow lease или право читать другой data subtree.
+
+**Redacted Log Export**:
+Complete-or-error NDJSON snapshot retained Operational Log Segments после повторной validation/redaction.
+_Не означает_: backup/state export, support upload, source filename disclosure или гарантию отсутствия sensitive
+metadata за пределами заявленной redaction schema.
+
 **Effective Provider**:
 Provider, который resolver назначит следующей ProviderSession с учётом Project preference, текущей availability и
 видимого environment override.

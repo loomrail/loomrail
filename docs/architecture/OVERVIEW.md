@@ -81,6 +81,17 @@ The local Release Integrity Receipt is deliberately unsigned. Only a future npm 
 Registry Provenance; ordinary CI retains read-only permissions and no publish action. This boundary prevents a
 checksum generated beside a modified tarball from being described as proof of builder identity.
 
+## Local operational-log boundary
+
+`apps/cli/src/log-lifecycle.ts` is the single infrastructure module that owns local daemon log files. The production
+launcher passes Fastify/Pino output through its closed-field sanitizer before any disk write, then owns the exclusive
+writer lease, bounded NDJSON segmentation, rotation, 30-day retention, 16 MiB total capacity, export and exact-file
+deletion. Fastify's header redaction remains defense in depth rather than the persistence boundary.
+
+Operational Log Segments are diagnostics, never Events, workflow evidence or provider transcripts. Raw provider
+stdout/stderr still stops at its adapter boundary. Export and delete run only with the daemon stopped, do not have an
+HTTP route, and cannot address SQLite, artifacts, workspaces, repositories or unknown siblings under `logs/`.
+
 ## Command and event flow
 
 ```mermaid
@@ -223,7 +234,7 @@ Platform application data
   state.sqlite
   backups/
   artifacts/
-  logs/
+  logs/                        # bounded redacted operational NDJSON only
 ```
 
 Exact OS paths are resolved by a platform adapter and are never embedded in contracts, documentation fixtures or

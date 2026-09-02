@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
-**Статус:** реализация и cross-platform gates через Q6 завершены; protected landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** Q7 локально реализован, cross-platform gate ожидается; protected landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -221,6 +221,13 @@ publisher-trust, source и lifecycle-script policy; workspace и consumer produc
 намеренно `DIRTY`, а [CI run 33668749126](https://github.com/loomrail/loomrail/actions/runs/33668749126) получил
 `CLEAN` и прошёл exact-file/audit/smoke на macOS/Windows. Оба Verify прошли fault gate и остановились только на
 protected landing lint. Registry provenance, private dogfood и publish остаются отдельными gates.
+Q7 реализует local-log lifecycle по [спецификации 59](59-q7-local-log-lifecycle-spec.ru.md) и
+[плану 60](60-q7-local-log-lifecycle-implementation-plan.ru.md). Production launcher пишет только
+pre-persistence-redacted closed-schema NDJSON; 2-MiB segments ограничены 16 MiB/30 днями и защищены exclusive writer
+lease. Stopped-daemon команды `logs export` и `logs delete` повторно проверяют exact regular owned files, не выдают
+partial/unredacted bytes и не получают authority над SQLite, Events, artifacts, workspaces, repositories или
+unknown siblings. Raw provider output остаётся несохраняемым. Локальные CLI/typecheck и packaged lifecycle gates
+добавлены; macOS/Windows evidence ещё требуется до закрытия Q7.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

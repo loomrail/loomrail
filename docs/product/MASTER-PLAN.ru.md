@@ -1301,6 +1301,14 @@ macOS/Windows clean-receipt, consumer audit и smoke зелёные в
 остановились только на protected landing lint. Private dogfood и registry provenance до owner-authorized publish
 остаются открыты; publish workflow/credential/tag/dist-tag не добавлены.
 
+Q7 local-log lifecycle локально реализован по планам 59–60. Production launcher направляет Fastify/Pino stream в
+один deep CLI module, который до disk write строит closed-schema redacted record, владеет exclusive process lease,
+2-MiB rotation, 16-MiB capacity и 30-дневным retention. `loomrail logs export` делает complete-or-error повторно
+отредактированный NDJSON snapshot, а `logs delete` удаляет только exact regular owned segments; обе команды требуют
+остановленного daemon и не имеют HTTP boundary. SQLite Events/Decisions/acceptance, Browser QA artifacts, workspaces,
+repositories и unknown siblings не затрагиваются; raw provider stdout/stderr по-прежнему не сохраняется. Локальные
+tests/typecheck/build и clean-package lifecycle smoke добавлены, но Q7 cross-platform CI evidence ещё не получено.
+
 ### Оценка первого цикла
 
 - internal dogfood alpha: примерно 12–16 недель;

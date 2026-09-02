@@ -127,6 +127,8 @@ describe("Loomrail doctor", () => {
 
   it("keeps help bounded and points exact-path disclosure to its explicit command", () => {
     expect(formatCliHelp().join("\n")).toContain("doctor [--json]");
+    expect(formatCliHelp().join("\n")).toContain("logs export");
+    expect(formatCliHelp().join("\n")).toContain("logs delete");
     expect(formatCliHelp().join("\n")).toContain("data-path");
   });
 });

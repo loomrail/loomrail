@@ -289,6 +289,7 @@ The directory contains:
 
 - `state.sqlite` and any SQLite WAL files;
 - `backups/`, when a non-empty database needed a backup before a schema migration;
+- `logs/`, containing bounded redacted daemon diagnostics rather than workflow truth or raw provider output;
 - `demo-projects/`, the materialized demo repositories;
 - `workspaces/`, the task worktrees.
 
@@ -310,6 +311,11 @@ directory and the source repository's Git metadata; moving only one side can mak
 
 Use `loomrail doctor` before startup and `loomrail data-path` when you explicitly need the resolved storage path. The
 [operations guide](OPERATIONS.md) owns the complete diagnostic, upgrade, rollback and uninstall contract.
+
+After stopping Loomrail, `loomrail logs export` prints a complete re-redacted NDJSON snapshot and
+`loomrail logs delete` removes only Loomrail-owned log segments. The latter does not delete Events, acceptance
+records, Browser QA evidence, repositories, workspaces, or unknown neighboring files. Operational logs have a
+30-day/16 MiB bound; still review an export before sharing it.
 
 ## 9. Troubleshooting
 

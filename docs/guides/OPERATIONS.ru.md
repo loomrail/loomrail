@@ -97,10 +97,31 @@ npx loomrail data-path
 `--no-open` и `--port N`. Перед сохранением, восстановлением, upgrade или удалением state остановите Loomrail через
 `Ctrl+C` и дождитесь сообщения о завершении.
 
+## Operational logs
+
+Production launcher хранит отредактированную structured-диагностику в `logs/` внутри data directory. Один segment
+ограничен 2 MiB, весь набор — 16 MiB; при активной записи rotation происходит не реже раза в сутки, retention — не
+более 30 дней. Это не durable Event audit, не acceptance evidence и не raw output provider.
+
+Перед management-командами остановите Loomrail. Export пишет только повторно проверенный и отредактированный NDJSON
+в stdout, поэтому перенаправляйте его лишь в файл, который намерены проверить и защитить:
+
+```bash
+npx loomrail logs export > loomrail-logs.ndjson
+npx loomrail logs delete
+```
+
+Export работает целиком или возвращает ошибку, не раскрывает исходные filenames и data-directory path. Delete удаляет
+только принадлежащие Loomrail operational segments; неизвестные файлы в `logs/`, SQLite, migration backups, Browser
+QA artifacts, repositories, workspaces, provider credentials и Git state остаются нетронутыми. Обе команды
+отказываются работать, пока живой daemon владеет writer lease. Проверяйте export перед отправкой: redaction снижает
+риск раскрытия, но не доказывает безопасность произвольного application text.
+
 ## Сохранение и восстановление
 
 Data directory содержит SQLite с возможными WAL-файлами, migration safety backups, Browser QA artifacts,
-demo repositories и managed task worktrees. Внешние repositories и provider credentials туда не входят.
+отредактированные operational logs, demo repositories и managed task worktrees. Внешние repositories и provider
+credentials туда не входят.
 
 Чтобы сохранить установку:
 
@@ -157,16 +178,18 @@ files наугад может потерять committed WAL state.
 3. Откройте ранее записанный path через Finder или Проводник, проверьте его и переместите именно этот Loomrail data
    directory в Корзину.
 
-Package uninstall намеренно оставляет data directory. В этом release нет recursive delete/reset command. Loomrail
-также не удаляет source repositories, provider configuration/credentials, Git commits/branches или worktree metadata
-в source repositories. Перед ручной очисткой проверяйте их отдельно.
+Package uninstall намеренно оставляет data directory. `loomrail logs delete` удаляет только принадлежащие продукту
+log segments; recursive reset всей установки в этом release нет. Loomrail также не удаляет source repositories,
+provider configuration/credentials, Git commits/branches или worktree metadata в source repositories. Перед ручной
+очисткой проверяйте их отдельно.
 
 ## Retention и privacy
 
 Durable Tasks, Events, Decisions, usage и acceptance records сохраняются, пока владелец не удалит installation data.
 Browser QA screenshots/traces используют audited policy `STANDARD_30_DAYS` после перехода Task в `DONE` или
-`CANCELLED`; unsafe/unknown files сохраняются, а не удаляются рекурсивно. В этом release нет telemetry/crash upload,
-поддержанного online workspace export/import или retention UI.
+`CANCELLED`. Operational logs используют тот же 30-дневный максимум и дополнительный предел 16 MiB; raw provider
+output не сохраняется. Unsafe/unknown files сохраняются, а не удаляются рекурсивно. В этом release нет
+telemetry/crash upload, поддержанного online workspace export/import или retention UI.
 
 Для product workflow продолжайте с [quick start](GETTING-STARTED.ru.md) и
 [гайдом владельца](USER-GUIDE.ru.md). Packaging gates для maintainer описаны в [release guide](../RELEASE.md).

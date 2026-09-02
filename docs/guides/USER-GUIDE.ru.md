@@ -296,6 +296,7 @@ Data directory по умолчанию:
 
 - `state.sqlite` и возможные WAL-файлы SQLite;
 - `backups/`, если непустой базе потребовался backup перед миграцией схемы;
+- `logs/` с bounded redacted daemon-диагностикой, а не workflow truth или raw provider output;
 - `demo-projects/` с материализованными demo-репозиториями;
 - `workspaces/` с worktree задач.
 
@@ -318,6 +319,11 @@ Data directory по умолчанию:
 
 Перед startup используйте `loomrail doctor`, а exact storage path явно запрашивайте через `loomrail data-path`.
 Полный contract diagnostics, upgrade, rollback и uninstall находится в [operations guide](OPERATIONS.ru.md).
+
+После остановки Loomrail команда `loomrail logs export` печатает полный повторно отредактированный NDJSON snapshot,
+а `loomrail logs delete` удаляет только принадлежащие Loomrail log segments. Она не удаляет Events, acceptance
+records, Browser QA evidence, repositories, workspaces и неизвестные соседние файлы. Для operational logs действует
+предел 30 дней/16 MiB; всё равно проверяйте export перед отправкой.
 
 ## 9. Решение проблем
 

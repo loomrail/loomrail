@@ -84,7 +84,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T07 | Duplicate command/dispatch                                                   | High     | command ID idempotency, transaction + unique constraints                                                                                                                                     | M2 concurrent retry and command-reuse tests                                       |
 | T08 | False Done/approval tampering                                                | High     | state-machine gate, append-only Event/Decision/evidence, optimistic version                                                                                                                  | M2 transition tests; M6 Scenario D and acceptance replay                          |
 | T09 | SQLite corruption/migration failure                                          | High     | WAL, short transactions, backup before migration, fail closed                                                                                                                                | M2 backup/checksum/reopen tests; Q5 process crash drill; full restore drill in M7 |
-| T10 | Sensitive values in logs/errors                                              | High     | structured allowlisted fields and pre-persistence redaction                                                                                                                                  | M2 bootstrap/session canary redaction test                                        |
+| T10 | Sensitive values in logs/errors                                              | High     | structured allowlisted fields, pre-persistence redaction, bounded local retention and explicit scoped deletion                                                                               | M2 canaries plus Q7 local-log lifecycle delta below                               |
 | T11 | Event/resource exhaustion                                                    | Medium   | payload limits, pagination, queue bounds, open-stream cap; event-stream frames are three opaque identifiers and are not queued per subscriber (no slow-consumer policy — see the A1.5 delta) | M2 body/query bounds; A1.5 open-stream limit tests                                |
 | T12 | Dependency/supply-chain compromise                                           | High     | frozen lockfile; strict release age/trust/source/build-script policy; audit; reviewed exact exceptions                                                                                       | see Q6 release-integrity and supply-chain delta below                             |
 | T13 | Private data committed publicly                                              | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                                                                                                                          | automated public-tree scan; full history scan in M7                               |
@@ -334,6 +334,34 @@ Residual risk remains: age, audit, signature and provenance do not prove benign 
 manifest allow the consumer graph to receive compatible fixes or regressions. The clean-install audit measures the
 graph at release time, while exact-version owner installs and later incident response bound but do not eliminate
 registry-time change.
+
+### Q7 local-log lifecycle delta (T04, T10)
+
+Q7 makes daemon operational logging durable under the owner's local account. A bootstrap/session value, provider
+output, request body, filesystem path or credential could otherwise persist or enter a support export; unbounded
+files could also exhaust the data volume. Rated **High** because a copied log outlives the session that produced it.
+
+Required controls and verification:
+
+- only the production launcher enables disk logging; one deep CLI infrastructure module accepts Pino JSON, builds a
+  new closed-schema record and redacts strings before the first `FileHandle.write`;
+- headers, bodies, prompts/content, stacks, environment, argv and unknown fields are dropped. Requests retain only a
+  bounded method/path/ID summary, responses a status, and errors bounded type/code/message text. Malformed or
+  oversized raw input becomes a constant diagnostic without source bytes;
+- `logs/` and new segments use owner-only POSIX modes. Exact filenames, `wx` creation, regular-file checks and an
+  exclusive process lease reject symlinks, unknown types, concurrent writers and management while the daemon runs;
+- 2 MiB segments rotate on size or active-day age. Cleanup applies a 30-day privacy maximum and reserves capacity
+  under a 16 MiB retained-set bound; it never uses recursive deletion or treats unknown siblings as owned;
+- `loomrail logs export` buffers and revalidates/re-redacts the complete snapshot before stdout, exposes no filenames
+  or storage path, and fails without partial output. `logs delete` removes only exact owned segments. Neither command
+  has an HTTP/API equivalent or touches durable Events, artifacts, repositories, workspaces or provider state;
+- tests place bootstrap/token/path/body/header/stack canaries through the sanitizer and disk path, exercise malformed
+  input, size/age/retention/capacity, active/stale/invalid locks and non-regular names, and run the packaged lifecycle
+  smoke on macOS and Windows.
+
+Residual risk remains: a process with the same OS-user authority can read files or memory before/after redaction and
+can tamper with retained diagnostics. Logs are investigation aids, not integrity evidence; encryption-at-rest and
+remote support upload are not claimed. Raw provider stdout/stderr remains deliberately unrecorded under SD-003.
 
 ### A4 Attention Inbox delta (T35)
 
@@ -1144,7 +1172,8 @@ HumanRequest is never a secret-input channel.
 
 - telemetry absent in Phase 0 and opt-in later;
 - Tasks/Events/Decisions/handoffs persist until user deletion/export policy;
-- raw unpinned transcripts/logs/screenshots/traces default to 30 days after closure;
+- local operational logs and unpinned screenshots/traces have a 30-day maximum; raw provider transcripts are not
+  retained;
 - export excludes secrets, `.env`, provider credentials and Git repository;
 - deletion of Loomrail Project never deletes source repository/provider data without a separate exact confirmation.
 

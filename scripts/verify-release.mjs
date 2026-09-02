@@ -80,6 +80,21 @@ const waitForReady = async (baseUrl, launcher, readOutput) => {
   throw new Error(`the launcher was not ready within ${readyTimeoutMs}ms:\n${readOutput()}`);
 };
 
+const stopLauncher = async (launcher) => {
+  if (launcher.exitCode !== null || launcher.signalCode !== null) return;
+  await new Promise((resolveWith, rejectWith) => {
+    const timeout = setTimeout(() => {
+      launcher.kill("SIGKILL");
+      rejectWith(new Error("the packaged launcher did not stop within 20 seconds"));
+    }, 20_000);
+    launcher.once("close", () => {
+      clearTimeout(timeout);
+      resolveWith();
+    });
+    launcher.kill("SIGTERM");
+  });
+};
+
 const run = async () => {
   const version = releaseVersion();
   const tarball = resolve(repositoryRoot, "dist-release", `${releaseName}-${version}.tgz`);
@@ -251,8 +266,54 @@ const run = async () => {
       throw new Error(`the launcher did not print a sign-in URL:\n${output}`);
     }
 
+    const activeExport = spawnSync(process.execPath, [binaryPath, "logs", "export"], {
+      cwd: installDirectory,
+      env: diagnosticEnvironment,
+      encoding: "utf8",
+    });
+    if (
+      activeExport.status !== 1 ||
+      activeExport.stdout.length !== 0 ||
+      !activeExport.stderr.includes("Stop the running Loomrail daemon") ||
+      activeExport.stderr.includes(dataDirectory)
+    ) {
+      throw new Error("the packaged log export did not fail closed while the daemon was active");
+    }
+
+    await stopLauncher(launcher);
+    const logExport = execFileSync(process.execPath, [binaryPath, "logs", "export"], {
+      cwd: installDirectory,
+      env: diagnosticEnvironment,
+      encoding: "utf8",
+    });
+    const logEntries = logExport
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line));
+    if (
+      logEntries.length === 0 ||
+      logEntries.some((entry) => entry.schemaVersion !== 1 || entry.component !== "daemon") ||
+      logExport.includes(dataDirectory) ||
+      logExport.includes("#bootstrap=")
+    ) {
+      throw new Error("the packaged launcher did not produce a bounded redacted operational log export");
+    }
+    const deletionOutput = execFileSync(process.execPath, [binaryPath, "logs", "delete"], {
+      cwd: installDirectory,
+      env: diagnosticEnvironment,
+      encoding: "utf8",
+    });
+    const emptyLogExport = execFileSync(process.execPath, [binaryPath, "logs", "export"], {
+      cwd: installDirectory,
+      env: diagnosticEnvironment,
+      encoding: "utf8",
+    });
+    if (!deletionOutput.startsWith("Deleted ") || emptyLogExport.length !== 0) {
+      throw new Error("the packaged log deletion command did not remove the retained operational segments");
+    }
+
     process.stdout.write(
-      `Release check passed: receipt and installed files match; ${tarball} runs from a clean install.\n`,
+      `Release check passed: receipt, installed files and log lifecycle match; ${tarball} runs from a clean install.\n`,
     );
   } finally {
     launcher?.kill("SIGTERM");
