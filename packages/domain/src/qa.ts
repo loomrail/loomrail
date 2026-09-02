@@ -9,6 +9,7 @@ import {
   type QAEnvironment,
   type QAObservation,
   type QARun,
+  type ProviderOutcome,
   type ReserveQARunCommand,
   type QAScenarioExecution,
   type StageAttempt,
@@ -100,6 +101,7 @@ export const decideQAReservation = (
 export type QACompletionErrorCode =
   | "QA_RUN_VERSION_CONFLICT"
   | "QA_RUN_NOT_RUNNING"
+  | "QA_AGENT_RUN_MISMATCH"
   | "STALE_QA_TREE"
   | "QA_MATRIX_INCOMPLETE"
   | "QA_EVIDENCE_INCONSISTENT";
@@ -148,6 +150,63 @@ export type QACompletionDecision =
       evidence: null;
       requiresHumanRequest: true;
     };
+
+/** Converts daemon-derived QA state into the existing workflow outcome vocabulary. */
+export const qaWorkflowOutcome = (decision: QACompletionDecision): ProviderOutcome => {
+  if (decision.status === "PASSED") {
+    const assertionCount = decision.evidence.executions.reduce(
+      (total, execution) => total + execution.assertions.length,
+      0,
+    );
+    return {
+      type: "COMPLETED",
+      summary: "The deterministic browser baseline passed.",
+      artifacts: [
+        {
+          kind: "QA_REPORT",
+          title: "Deterministic browser QA",
+          summary: `Playwright measured ${decision.evidence.executions.length.toString()} required target/scenario executions on the exact implementation tree.`,
+          checks: [
+            `${assertionCount.toString()} required assertions passed.`,
+            "No blocking console or network observations were recorded.",
+            `${decision.evidence.attachments.length.toString()} screenshot/trace attachments were finalized and verified.`,
+          ],
+        },
+      ],
+    };
+  }
+
+  if (decision.status === "FAILED") {
+    return {
+      type: "NEEDS_HUMAN",
+      request: {
+        kind: "FREE_TEXT",
+        blocking: true,
+        title: "Browser QA found blocking defects",
+        context: `${decision.evidence.defects.length.toString()} blocking defect(s) were measured on tree ${decision.qaRun.testedTree}. Acceptance did not start.`,
+        recommendation:
+          "Inspect and fix the recorded defects, then answer when this exact stage is ready to rerun.",
+        options: [],
+        allowOther: true,
+      },
+    };
+  }
+
+  return {
+    type: "NEEDS_HUMAN",
+    request: {
+      kind: "FREE_TEXT",
+      blocking: true,
+      title: "Browser QA could not prove the implementation",
+      context:
+        decision.qaRun.error?.summary ?? "The deterministic browser baseline ended without valid evidence.",
+      recommendation:
+        "Restore the loopback target or browser environment, then answer when the baseline can rerun.",
+      options: [],
+      allowOther: true,
+    },
+  };
+};
 
 const sameIds = (actual: readonly { id: string }[], expected: readonly { id: string }[]): boolean =>
   actual.length === expected.length && actual.every(({ id }, index) => id === expected[index]?.id);
@@ -262,6 +321,7 @@ const validateFinalizedAttachments = (
  */
 export const decideQACompletion = (input: {
   qaRun: QARun;
+  agentRun: AgentRun;
   expectedVersion: number;
   currentTree: string;
   result: QADriverResult;
@@ -269,6 +329,17 @@ export const decideQACompletion = (input: {
   now: string;
 }): QACompletionDecision => {
   const run = qaRunSchema.parse(input.qaRun);
+  if (
+    input.agentRun.id !== run.agentRunId ||
+    input.agentRun.stageAttemptId !== run.stageAttemptId ||
+    input.agentRun.profile.role !== "BROWSER_QA" ||
+    input.agentRun.status !== "RUNNING"
+  ) {
+    throw new QACompletionError(
+      "QA_AGENT_RUN_MISMATCH",
+      "QA completion requires the active Browser QA AgentRun that owns the reservation",
+    );
+  }
   if (run.version !== input.expectedVersion) {
     throw new QACompletionError("QA_RUN_VERSION_CONFLICT", "The QA run changed before completion", {
       expectedVersion: input.expectedVersion,

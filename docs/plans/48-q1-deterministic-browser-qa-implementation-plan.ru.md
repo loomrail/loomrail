@@ -26,17 +26,18 @@
 ### Q1.3 — Durable orchestration
 
 - [x] Добавить новую migration для QARun, evidence bundle, observations, attachment refs и Defects.
-- [ ] Резервировать QARun до запуска browser process вместе с active BROWSER_QA AgentRun.
-- [ ] Завершать QARun, AgentRun, evidence, HumanRequest/next dispatch, events и receipt одной транзакцией.
+- [x] Резервировать QARun до запуска browser process вместе с active BROWSER_QA AgentRun.
+- [x] Завершать QARun, AgentRun, evidence, HumanRequest/next dispatch, events и receipt одной транзакцией.
 - [ ] Хранить тяжёлые файлы вне SQLite через quarantine/finalize/recovery protocol.
-- [ ] Добавить restart/recovery и duplicate-completion coverage.
+- [ ] Добавить restart/recovery marker coverage.
+- [x] Добавить duplicate-completion и completed-state restart coverage.
 
 ### Q1.4 — Workflow и Acceptance
 
-- [ ] Запретить provider-owned `QA_REPORT` для scheduled BROWSER_QA run.
-- [ ] На `PASSED` создавать daemon-owned QA evidence с exact tree и QARun id.
-- [ ] На `FAILED|ERROR` не открывать Acceptance; создать понятный HumanRequest.
-- [ ] Acceptance должен отклонять legacy/provider-only, stale и неполный QA evidence bundle.
+- [x] Запретить provider-owned `QA_REPORT` для scheduled BROWSER_QA run.
+- [x] На `PASSED` создавать daemon-owned QA evidence с exact tree и QARun id.
+- [x] На `FAILED|ERROR` не открывать Acceptance; создать понятный HumanRequest.
+- [x] Acceptance должен отклонять legacy/provider-only, stale и неполный QA evidence bundle.
 
 ### Q1.5 — Task Cockpit
 
@@ -57,7 +58,8 @@
 
 - [x] Unit: schemas, verdict derivation, bounds, stale tree и forbidden transitions.
 - [ ] Persistence: atomic success/failure, restart, idempotency, expected-version conflict и recovery marker.
-- [ ] Daemon: green baseline, intentional assertion failure, driver error, off-origin redirect и timeout.
+- [ ] Daemon: green baseline, intentional assertion failure, driver error, off-origin redirect и timeout (green
+      baseline и project config готовы).
 - [ ] Browser: real green route и real failed route; Acceptance никогда не стартует на неподтверждённом pass.
 - [ ] Полные `pnpm verify`, production audit и clean npm tarball.
 - [ ] Один и тот же baseline проходит на macOS и Windows.

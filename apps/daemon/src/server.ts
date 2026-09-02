@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import fastifyStatic from "@fastify/static";
+import { createPlaywrightDriver, type BrowserDriver } from "@loomrail/browser-qa";
 import {
   attentionInboxResponseSchema,
   agentFleetResponseSchema,
@@ -126,6 +127,8 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { z, ZodError } from "zod";
 
 import { broadcastingState } from "./broadcasting-state.js";
+import { resolveProjectBrowserQAConfig, type BrowserQAConfigResolver } from "./browser-qa-config.js";
+import { createBrowserQAStageRunner } from "./browser-qa-runner.js";
 import { buildAgentFleet } from "./agent-fleet.js";
 import {
   CONTEXT7_PRESET_NAME,
@@ -218,6 +221,12 @@ export type StartDaemonOptions = {
   providerRegistry?: ProviderRegistry;
   /** Optional bounded A3 concurrency policy; defaults to three globally, per Project and provider. */
   schedulingLimits?: SchedulerLimits;
+  /** Test seam; production reads `.loomrail/browser-qa.json` and uses isolated Playwright. */
+  browserQADriver?: BrowserDriver;
+  /** Test seam for a validated project-local target and manifest. */
+  browserQAConfigResolver?: BrowserQAConfigResolver;
+  /** Test seam; production stores heavy QA evidence beside the state database. */
+  browserQAArtifactsDirectory?: string;
   /** Injected only for daemon route tests; production owns the real bounded stdio gateway. */
   mcpGateway?: McpGateway;
   // Injected for the same reason as `providerAdapter` above, and only for it: the heartbeat is the
@@ -676,6 +685,11 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     (databasePath === ":memory:"
       ? join(tmpdir(), "loomrail-demo-projects", randomUUID())
       : join(dirname(resolve(databasePath)), "demo-projects"));
+  const browserQAArtifactsDirectory =
+    options.browserQAArtifactsDirectory ??
+    (databasePath === ":memory:"
+      ? join(tmpdir(), "loomrail-browser-qa", randomUUID())
+      : join(dirname(resolve(databasePath)), "artifacts"));
 
   // The single seam every writer -- request handlers and `runStageAttempt` alike -- publishes
   // through, because there is exactly one `localState` and it is already wrapped by the time any
@@ -950,6 +964,16 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     createCommandId: () => `session-${randomUUID()}`,
     logger: app.log,
     schedulingLimits,
+    browserQA: createBrowserQAStageRunner({
+      state: localState,
+      driver:
+        options.browserQADriver ??
+        createPlaywrightDriver({ artifactsDirectory: browserQAArtifactsDirectory }),
+      resolveConfig: options.browserQAConfigResolver ?? resolveProjectBrowserQAConfig,
+      createCommandId: () => `browser-qa-command-${randomUUID()}`,
+      createAttachmentId: () => `browser-qa-attachment-${randomUUID()}`,
+      logger: app.log,
+    }),
     openMcpConnections: createMcpConnectionOpener({
       state: localState,
       gateway: mcpGateway,

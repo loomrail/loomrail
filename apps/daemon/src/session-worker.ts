@@ -10,6 +10,7 @@ import {
 import type { FastifyBaseLogger } from "fastify";
 
 import { readAgentSchedulingSnapshot } from "./agent-scheduling.js";
+import type { BrowserQAStageRunner } from "./browser-qa-runner.js";
 import { runStageAttempt, type OpenMcpConnections } from "./session-loop.js";
 
 /**
@@ -40,6 +41,8 @@ export type SessionWorkerDeps = {
   createCommandId: () => string;
   logger: FastifyBaseLogger;
   openMcpConnections?: OpenMcpConnections;
+  /** Daemon-owned deterministic baseline. When present, QA never opens a provider session. */
+  browserQA?: BrowserQAStageRunner;
   /** Validated once at construction; persistence repeats the resolved limits in every claim. */
   schedulingLimits?: SchedulerLimits;
 };
@@ -83,13 +86,16 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         type: "GET_WORKFLOW_SNAPSHOT",
         workItemId: dispatch.workItemId,
       });
-      const stageAttempt =
-        snapshotResult.type === "WORKFLOW_SNAPSHOT"
-          ? snapshotResult.snapshot.stageAttempts.find(({ id }) => id === dispatch.stageAttemptId)
-          : undefined;
+      if (snapshotResult.type !== "WORKFLOW_SNAPSHOT") {
+        throw new StateStoreError("PERSISTENCE_FAILURE", "A pending workflow dispatch is incomplete");
+      }
+      const workflowSnapshot = snapshotResult.snapshot;
+      const stageAttempt = workflowSnapshot.stageAttempts.find(({ id }) => id === dispatch.stageAttemptId);
       if (!stageAttempt) {
         throw new StateStoreError("PERSISTENCE_FAILURE", "A pending workflow dispatch is incomplete");
       }
+
+      let agentRunId: string | undefined;
 
       // A3 reservations replace the old mark-only transition for executable agent stages.
       // ACCEPTANCE remains the owner gate and therefore has no synthetic AgentRun.
@@ -123,7 +129,32 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
           if (started.type !== "AGENT_RUN_STARTED") {
             throw new StateStoreError("PERSISTENCE_FAILURE", "The AgentRun reservation did not start");
           }
+          agentRunId = started.run.id;
         }
+      }
+
+      if (stageAttempt.stage === "QA" && deps.browserQA !== undefined) {
+        if (agentRunId === undefined) {
+          const active = deps.state.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" });
+          agentRunId =
+            active.type === "AGENT_RUNS"
+              ? active.runs.find(({ stageAttemptId }) => stageAttemptId === stageAttempt.id)?.id
+              : undefined;
+        }
+        const testedTree = [...workflowSnapshot.stageAttempts]
+          .reverse()
+          .find(
+            ({ stage, status, resultTree }) =>
+              stage === "IMPLEMENT" && status === "SUCCEEDED" && resultTree !== null,
+          )?.resultTree;
+        if (agentRunId === undefined || testedTree === undefined || testedTree === null) {
+          throw new StateStoreError(
+            "QA_STABLE_TREE_MISSING",
+            "Browser QA requires an active AgentRun and a successful implementation tree",
+          );
+        }
+        await deps.browserQA.run({ dispatch, agentRunId, testedTree });
+        return { dispatchId: dispatch.id, moved: true };
       }
 
       await runStageAttempt({

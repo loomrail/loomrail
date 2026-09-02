@@ -53,6 +53,27 @@ describe("evidence provider contract", () => {
   it("rejects an adapter identity outside the closed provider set", () => {
     expect(() => evidenceArtifactSchema.parse({ ...artifact, provider: "GPT" })).toThrow();
   });
+
+  it("accepts only complete measured provenance on a QA report", () => {
+    const qaArtifact = {
+      ...artifact,
+      id: "artifact-qa",
+      stageAttemptId: "attempt-qa",
+      stage: "QA",
+      kind: "QA_REPORT",
+      title: "Deterministic browser QA",
+      qaRunId: "qa-run-1",
+      qaEvidenceBundleId: "qa-evidence-1",
+      testedTree: "a".repeat(40),
+    } as const;
+
+    expect(evidenceArtifactSchema.parse(qaArtifact)).toMatchObject({
+      qaRunId: "qa-run-1",
+      qaEvidenceBundleId: "qa-evidence-1",
+    });
+    expect(() => evidenceArtifactSchema.parse({ ...qaArtifact, qaEvidenceBundleId: undefined })).toThrow();
+    expect(() => evidenceArtifactSchema.parse({ ...artifact, qaRunId: "qa-run-1" })).toThrow();
+  });
 });
 
 describe("provider Human Request draft contract", () => {

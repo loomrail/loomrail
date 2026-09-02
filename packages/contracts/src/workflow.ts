@@ -495,9 +495,22 @@ export const evidenceArtifactSchema = providerArtifactDraftSchema
     stage: z.enum(["REVIEW", "QA"]),
     status: evidenceArtifactStatusSchema,
     provider: providerIdSchema,
+    qaRunId: opaqueIdSchema.optional(),
+    qaEvidenceBundleId: opaqueIdSchema.optional(),
+    testedTree: treeShaSchema.optional(),
     createdAt: utcTimestampSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((artifact, context) => {
+    const qaProvenance = [artifact.qaRunId, artifact.qaEvidenceBundleId, artifact.testedTree];
+    const present = qaProvenance.filter((value) => value !== undefined).length;
+    if (present !== 0 && present !== qaProvenance.length) {
+      context.addIssue({ code: "custom", message: "Measured QA provenance must be complete" });
+    }
+    if (present > 0 && (artifact.kind !== "QA_REPORT" || artifact.stage !== "QA")) {
+      context.addIssue({ code: "custom", message: "Only QA evidence can reference a measured browser run" });
+    }
+  });
 
 export const acceptanceCriterionEvidenceSchema = z
   .object({

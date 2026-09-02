@@ -32,6 +32,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveBundledFixture } from "../src/fixtures.js";
 import { runStageAttempt } from "../src/session-loop.js";
 import { startDaemon, type RunningDaemon } from "../src/server.js";
+import { passingBrowserQADriver, readyBrowserQAConfig } from "./browser-qa-fixture.js";
 import {
   authenticate,
   bootstrapToken,
@@ -1287,7 +1288,13 @@ describe("local daemon session and state boundary", () => {
     temporaryDirectories.push(temporaryDirectory);
     const stateDatabasePath = join(temporaryDirectory, "state.sqlite");
     const firstToken = bootstrapToken();
-    const firstDaemon = await startDaemon({ bootstrapToken: firstToken, logger: false, stateDatabasePath });
+    const firstDaemon = await startDaemon({
+      bootstrapToken: firstToken,
+      logger: false,
+      stateDatabasePath,
+      browserQADriver: passingBrowserQADriver(),
+      browserQAConfigResolver: readyBrowserQAConfig,
+    });
     daemon = firstDaemon;
     const firstSession = await authenticate(firstDaemon, firstToken);
     const headers = mutationHeaders(firstDaemon, firstSession);
@@ -1341,7 +1348,13 @@ describe("local daemon session and state boundary", () => {
     await firstDaemon.close();
     daemon = undefined;
     const secondToken = bootstrapToken();
-    daemon = await startDaemon({ bootstrapToken: secondToken, logger: false, stateDatabasePath });
+    daemon = await startDaemon({
+      bootstrapToken: secondToken,
+      logger: false,
+      stateDatabasePath,
+      browserQADriver: passingBrowserQADriver(),
+      browserQAConfigResolver: readyBrowserQAConfig,
+    });
     const secondSession = await authenticate(daemon, secondToken);
     const restoredResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/workflow`, {
       headers: { cookie: secondSession.cookie },

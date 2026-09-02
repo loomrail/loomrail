@@ -230,6 +230,115 @@ describe("SQLite local state", () => {
     payload: { workItemId, expectedVersion, targetState },
   });
 
+  const completeMeasuredQA = (localState: LocalState, suffix: string, testedTree: string): void => {
+    const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+    if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
+    const dispatch = pending.dispatches[0];
+    if (!dispatch) throw new Error("Expected a pending QA dispatch");
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: `start-${suffix}-qa-agent`,
+      correlationId: `correlation-start-${suffix}-qa-agent`,
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: dispatch.id,
+        provider: "CODEX",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (started.type !== "AGENT_RUN_STARTED") throw new Error("Expected Browser QA AgentRun");
+    const plan = {
+      schemaVersion: 1 as const,
+      revision: 1,
+      contentHash: `sha256:${"e".repeat(64)}`,
+      targets: [
+        {
+          id: "desktop-light-en",
+          viewport: { width: 1_280, height: 800 },
+          locale: "en-US",
+          theme: "LIGHT" as const,
+        },
+      ],
+      scenarios: [
+        {
+          id: "task-cockpit",
+          title: "Task Cockpit shows the current state",
+          steps: [
+            {
+              id: "open",
+              title: "Open the Task Cockpit",
+              action: { type: "NAVIGATE" as const, path: "/" },
+            },
+          ],
+          assertions: [
+            {
+              id: "state-visible",
+              title: "The current state is visible",
+              rule: {
+                type: "VISIBLE" as const,
+                locator: { by: "TEXT" as const, value: "Current work" },
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const reserved = localState.execute({
+      schemaVersion: 1,
+      commandId: `reserve-${suffix}-qa`,
+      correlationId: `correlation-reserve-${suffix}-qa`,
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "RESERVE_QA_RUN",
+      payload: {
+        stageAttemptId: dispatch.stageAttemptId,
+        agentRunId: started.run.id,
+        testedTree,
+        targetOrigin: "http://127.0.0.1:4173",
+        plan,
+      },
+    });
+    if (reserved.type !== "QA_RUN_RESERVED") throw new Error("Expected durable QA reservation");
+    const completed = localState.execute({
+      schemaVersion: 1,
+      commandId: `complete-${suffix}-qa`,
+      correlationId: `correlation-complete-${suffix}-qa`,
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "COMPLETE_QA_RUN",
+      payload: {
+        qaRunId: reserved.qaRun.id,
+        expectedVersion: reserved.qaRun.version,
+        currentTree: testedTree,
+        result: {
+          outcome: "MEASURED",
+          environment: {
+            osFamily: "MACOS",
+            runtimeName: "NODE",
+            runtimeVersion: "24.7.0",
+            browserName: "CHROMIUM",
+            browserVersion: "140.0",
+          },
+          executions: [
+            {
+              targetId: "desktop-light-en",
+              scenarioId: "task-cockpit",
+              durationMs: 80,
+              steps: [{ id: "open", status: "PASSED", durationMs: 50 }],
+              assertions: [{ id: "state-visible", status: "PASSED", details: null }],
+            },
+          ],
+          observations: [],
+          attachments: [],
+          defects: [],
+        },
+        finalizedAttachments: [],
+      },
+    });
+    if (completed.type !== "QA_RUN_COMPLETED" || completed.qaRun.status !== "PASSED") {
+      throw new Error("Expected measured browser QA to pass");
+    }
+  };
+
   it("replays a duplicate command without duplicating state or Events", async () => {
     const localState = await open();
     localState.execute(registerProject());
@@ -406,9 +515,10 @@ describe("SQLite local state", () => {
       version: 1,
       name: "Acceptance fixture",
       stages: [
-        { stage: "REVIEW", ordinal: 0, contextPack },
-        { stage: "QA", ordinal: 1, contextPack },
-        { stage: "ACCEPTANCE", ordinal: 2, contextPack },
+        { stage: "IMPLEMENT", ordinal: 0, contextPack },
+        { stage: "REVIEW", ordinal: 1, contextPack },
+        { stage: "QA", ordinal: 2, contextPack },
+        { stage: "ACCEPTANCE", ordinal: 3, contextPack },
       ],
     };
     localState.execute({
@@ -425,7 +535,10 @@ describe("SQLite local state", () => {
       },
     });
 
-    const applyNext = (outcome: ApplyProviderOutcomeCommand["payload"]["outcome"]): void => {
+    const applyNext = (
+      outcome: ApplyProviderOutcomeCommand["payload"]["outcome"],
+      resultTree: string | null = null,
+    ): void => {
       const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
       if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
       const dispatch = pending.dispatches[0];
@@ -449,11 +562,19 @@ describe("SQLite local state", () => {
           provider: "CODEX",
           template: acceptanceTemplate,
           outcome,
-          resultTree: null,
+          resultTree,
         },
       });
     };
 
+    const acceptedTree = "a".repeat(40);
+    applyNext(
+      {
+        type: "COMPLETED",
+        summary: "Implementation completed.",
+      },
+      acceptedTree,
+    );
     applyNext({
       type: "COMPLETED",
       summary: "Review passed.",
@@ -466,18 +587,7 @@ describe("SQLite local state", () => {
         },
       ],
     });
-    applyNext({
-      type: "COMPLETED",
-      summary: "QA passed.",
-      artifacts: [
-        {
-          kind: "QA_REPORT",
-          title: "QA report",
-          summary: "QA passed.",
-          checks: ["Scenario D passed."],
-        },
-      ],
-    });
+    completeMeasuredQA(localState, "acceptance", acceptedTree);
     applyNext({
       type: "READY_FOR_ACCEPTANCE",
       releaseNote: "The bounded fixture is ready for owner acceptance.",
@@ -499,10 +609,17 @@ describe("SQLite local state", () => {
       run: { status: "WAITING_HUMAN" },
       artifacts: [
         { kind: "REVIEW_REPORT", provider: "CODEX" },
-        { kind: "QA_REPORT", provider: "CODEX" },
+        {
+          kind: "QA_REPORT",
+          provider: "CODEX",
+          testedTree: acceptedTree,
+        },
       ],
       acceptancePackage: { status: "PENDING" },
     });
+    const measuredQAArtifact = pendingSnapshot.snapshot.artifacts.find(({ kind }) => kind === "QA_REPORT");
+    expect(typeof measuredQAArtifact?.qaRunId).toBe("string");
+    expect(typeof measuredQAArtifact?.qaEvidenceBundleId).toBe("string");
     const pendingAttention = localState.query({ type: "GET_ATTENTION_INBOX" });
     expect(pendingAttention.type === "ATTENTION_INBOX" ? pendingAttention.inbox : null).toMatchObject({
       items: [
@@ -696,7 +813,14 @@ describe("SQLite local state", () => {
         created_at TEXT NOT NULL,
         UNIQUE (pipeline_run_id, kind)
       ) STRICT;
-      INSERT INTO evidence_artifacts SELECT * FROM evidence_artifacts_current;
+      INSERT INTO evidence_artifacts (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+        stage, kind, status, provider, title, summary, checks_json, created_at
+      )
+      SELECT
+        id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+        stage, kind, status, provider, title, summary, checks_json, created_at
+      FROM evidence_artifacts_current;
       DROP TABLE evidence_artifacts_current;
       CREATE INDEX evidence_artifacts_run_created_idx
         ON evidence_artifacts(pipeline_run_id, created_at, id);
@@ -708,7 +832,7 @@ describe("SQLite local state", () => {
       BEFORE DELETE ON evidence_artifacts BEGIN
         SELECT RAISE(ABORT, 'evidence artifacts are append-only');
       END;
-      DELETE FROM schema_migrations WHERE version = 14;
+      DELETE FROM schema_migrations WHERE version IN (14, 23);
     `);
     expect(
       (pre14.prepare("SELECT provider FROM evidence_artifacts").get() as { provider: string }).provider,
@@ -716,7 +840,7 @@ describe("SQLite local state", () => {
     pre14.close();
 
     const migrated = await open();
-    expect(migrated.startup.appliedMigrations).toEqual([14]);
+    expect(migrated.startup.appliedMigrations).toEqual([14, 23]);
     const snapshot = migrated.query({
       type: "GET_WORKFLOW_SNAPSHOT",
       workItemId: created.workItem.id,
@@ -734,7 +858,7 @@ describe("SQLite local state", () => {
 
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -1242,6 +1366,7 @@ describe("SQLite local state", () => {
           { stage: "IMPLEMENT", ordinal: 0, contextPack },
           { stage: "REVIEW", ordinal: 1, contextPack },
           { stage: "QA", ordinal: 2, contextPack },
+          { stage: "ACCEPTANCE", ordinal: 3, contextPack },
         ],
       };
       localState.execute({
@@ -1568,6 +1693,33 @@ describe("SQLite local state", () => {
       const qaAgent = reopened.execute(startAgentRun("q1-browser-qa", qaDispatch.id));
       if (qaAgent.type !== "AGENT_RUN_STARTED") throw new Error("Expected Browser QA AgentRun");
       expect(qaAgent.run.profile.role).toBe("BROWSER_QA");
+      expect(() =>
+        reopened.execute({
+          schemaVersion: 1,
+          commandId: "provider-cannot-complete-q1-browser-qa",
+          correlationId: "correlation-provider-cannot-complete-q1-browser-qa",
+          actor: { type: "SYSTEM", id: "codex-provider" },
+          type: "APPLY_PROVIDER_OUTCOME",
+          payload: {
+            dispatchId: qaDispatch.id,
+            provider: "CODEX",
+            template: reviewLoopTemplate,
+            outcome: {
+              type: "COMPLETED",
+              summary: "Provider claims that QA passed.",
+              artifacts: [
+                {
+                  kind: "QA_REPORT",
+                  title: "Provider QA",
+                  summary: "This report has no measured browser provenance.",
+                  checks: ["Provider says the page looks correct."],
+                },
+              ],
+            },
+            resultTree: fixedTree,
+          },
+        }),
+      ).toThrow(expect.objectContaining({ code: "QA_MEASUREMENT_REQUIRED" }));
       const qaPlan = {
         schemaVersion: 1 as const,
         revision: 1,
@@ -1705,6 +1857,14 @@ describe("SQLite local state", () => {
       expect(() =>
         reopened.execute({
           ...completionCommand,
+          commandId: "complete-q1-browser-qa-stale-version",
+          correlationId: "correlation-complete-q1-browser-qa-stale-version",
+          payload: { ...completionCommand.payload, expectedVersion: 2 },
+        }),
+      ).toThrow(expect.objectContaining({ code: "QA_RUN_VERSION_CONFLICT" }));
+      expect(() =>
+        reopened.execute({
+          ...completionCommand,
           commandId: "complete-q1-browser-qa-inconsistent",
           correlationId: "correlation-complete-q1-browser-qa-inconsistent",
           payload: {
@@ -1729,6 +1889,7 @@ describe("SQLite local state", () => {
         }),
       ).toThrow(expect.objectContaining({ code: "QA_EVIDENCE_INCONSISTENT" }));
       const completed = reopened.execute(completionCommand);
+      if (completed.type !== "QA_RUN_COMPLETED") throw new Error("Expected completed QA run");
       expect(completed).toMatchObject({
         type: "QA_RUN_COMPLETED",
         replayed: false,
@@ -1756,6 +1917,30 @@ describe("SQLite local state", () => {
           defects: [],
         },
       );
+      const workflowAfterQA = reopened.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: created.workItem.id,
+      });
+      if (workflowAfterQA.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected workflow snapshot");
+      expect(workflowAfterQA.snapshot.run).toMatchObject({ status: "RUNNING" });
+      expect(
+        workflowAfterQA.snapshot.stageAttempts.find(({ id }) => id === qaDispatch.stageAttemptId),
+      ).toMatchObject({ stage: "QA", status: "SUCCEEDED" });
+      expect(
+        workflowAfterQA.snapshot.stageAttempts.find(({ stage }) => stage === "ACCEPTANCE"),
+      ).toMatchObject({ status: "QUEUED" });
+      expect(workflowAfterQA.snapshot.artifacts.find(({ kind }) => kind === "QA_REPORT")).toMatchObject({
+        qaRunId: reserved.qaRun.id,
+        qaEvidenceBundleId: completed.evidence?.id,
+        testedTree: fixedTree,
+      });
+      const completedAgent = new DatabaseSync(databasePath, { readOnly: true });
+      expect(
+        completedAgent.prepare("SELECT status FROM agent_runs WHERE id = ?").get(qaAgent.run.id),
+      ).toEqual({
+        status: "SUCCEEDED",
+      });
+      completedAgent.close();
       reopened.close();
       state = undefined;
       const qaRestart = await open();
@@ -1778,6 +1963,201 @@ describe("SQLite local state", () => {
         immutableQA.exec("DELETE FROM qa_attachment_refs");
       }).toThrow(/append-only/);
       immutableQA.close();
+    });
+
+    it("blocks Acceptance atomically when measured browser QA fails", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const created = localState.execute(createWorkItem("create-q1-failed-qa"));
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      localState.execute(moveWorkItem("ready-q1-failed-qa", created.workItem.id, 1, "READY"));
+      const template: StartMockPipelineCommand["payload"]["template"] = {
+        schemaVersion: 1,
+        id: "q1-failed-qa-v1",
+        version: 1,
+        name: "Measured QA failure",
+        stages: [
+          { stage: "IMPLEMENT", ordinal: 0, contextPack },
+          { stage: "QA", ordinal: 1, contextPack },
+          { stage: "ACCEPTANCE", ordinal: 2, contextPack },
+        ],
+      };
+      const pipeline = localState.execute({
+        schemaVersion: 1,
+        commandId: "pipeline-q1-failed-qa",
+        correlationId: "correlation-pipeline-q1-failed-qa",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_MOCK_PIPELINE",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedVersion: 2,
+          template,
+          budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+        },
+      });
+      if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "mark-q1-failed-implementation",
+        correlationId: "correlation-mark-q1-failed-implementation",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: pipeline.dispatch.id },
+      });
+      const testedTree = "c".repeat(40);
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-q1-failed-implementation",
+        correlationId: "correlation-apply-q1-failed-implementation",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: pipeline.dispatch.id,
+          provider: "CODEX",
+          template,
+          outcome: { type: "COMPLETED", summary: "Implementation is ready for browser QA." },
+          resultTree: testedTree,
+        },
+      });
+      const pendingQA = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (pendingQA.type !== "WORKFLOW_DISPATCHES" || !pendingQA.dispatches[0]) {
+        throw new Error("Expected QA dispatch");
+      }
+      const qaDispatch = pendingQA.dispatches[0];
+      const qaAgent = localState.execute(startAgentRun("q1-failed-browser-qa", qaDispatch.id));
+      if (qaAgent.type !== "AGENT_RUN_STARTED") throw new Error("Expected Browser QA AgentRun");
+      const plan = {
+        schemaVersion: 1 as const,
+        revision: 1,
+        contentHash: `sha256:${"d".repeat(64)}`,
+        targets: [
+          {
+            id: "mobile-dark-ru",
+            viewport: { width: 320, height: 720 },
+            locale: "ru-RU",
+            theme: "DARK" as const,
+          },
+        ],
+        scenarios: [
+          {
+            id: "task-cockpit",
+            title: "Task Cockpit remains usable on mobile",
+            steps: [
+              {
+                id: "open",
+                title: "Open the Task Cockpit",
+                action: { type: "NAVIGATE" as const, path: "/" },
+              },
+            ],
+            assertions: [
+              {
+                id: "no-overflow",
+                title: "The page does not overflow horizontally",
+                rule: { type: "NO_HORIZONTAL_OVERFLOW" as const },
+              },
+            ],
+          },
+        ],
+      };
+      const reserved = localState.execute({
+        schemaVersion: 1,
+        commandId: "reserve-q1-failed-browser-qa",
+        correlationId: "correlation-reserve-q1-failed-browser-qa",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "RESERVE_QA_RUN",
+        payload: {
+          stageAttemptId: qaDispatch.stageAttemptId,
+          agentRunId: qaAgent.run.id,
+          testedTree,
+          targetOrigin: "http://127.0.0.1:4173",
+          plan,
+        },
+      });
+      if (reserved.type !== "QA_RUN_RESERVED") throw new Error("Expected QA reservation");
+      const completionCommand = {
+        schemaVersion: 1 as const,
+        commandId: "complete-q1-failed-browser-qa",
+        correlationId: "correlation-complete-q1-failed-browser-qa",
+        actor: { type: "SYSTEM" as const, id: "local-daemon" },
+        type: "COMPLETE_QA_RUN" as const,
+        payload: {
+          qaRunId: reserved.qaRun.id,
+          expectedVersion: 1,
+          currentTree: testedTree,
+          result: {
+            outcome: "MEASURED" as const,
+            environment: {
+              osFamily: "MACOS" as const,
+              runtimeName: "NODE" as const,
+              runtimeVersion: "24.7.0",
+              browserName: "CHROMIUM" as const,
+              browserVersion: "140.0",
+            },
+            executions: [
+              {
+                targetId: "mobile-dark-ru",
+                scenarioId: "task-cockpit",
+                durationMs: 90,
+                steps: [{ id: "open", status: "PASSED" as const, durationMs: 40 }],
+                assertions: [
+                  { id: "no-overflow", status: "FAILED" as const, details: "The page is 24px too wide." },
+                ],
+              },
+            ],
+            observations: [],
+            attachments: [],
+            defects: [
+              {
+                severity: "HIGH" as const,
+                title: "Task Cockpit overflows on mobile",
+                description: "The measured page width exceeds the 320px viewport.",
+                reproduction: ["Open the Task Cockpit at 320x720.", "Compare scrollWidth and clientWidth."],
+                targetId: "mobile-dark-ru",
+                scenarioId: "task-cockpit",
+              },
+            ],
+          },
+          finalizedAttachments: [],
+        },
+      };
+      const completed = localState.execute(completionCommand);
+      expect(completed).toMatchObject({
+        type: "QA_RUN_COMPLETED",
+        qaRun: { status: "FAILED" },
+        evidence: { verdict: "FAILED" },
+        defects: [{ severity: "HIGH", status: "OPEN" }],
+      });
+      const failedSnapshot = localState.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: created.workItem.id,
+      });
+      if (failedSnapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected failed QA snapshot");
+      expect(failedSnapshot.snapshot).toMatchObject({
+        run: { status: "WAITING_HUMAN" },
+        artifacts: [],
+        acceptancePackage: null,
+        humanRequests: [{ title: "Browser QA found blocking defects", status: "OPEN" }],
+      });
+      expect(
+        failedSnapshot.snapshot.stageAttempts.find(({ id }) => id === qaDispatch.stageAttemptId),
+      ).toMatchObject({ stage: "QA", status: "WAITING_HUMAN" });
+      expect(localState.query({ type: "LIST_PENDING_DISPATCHES" })).toMatchObject({
+        type: "WORKFLOW_DISPATCHES",
+        dispatches: [],
+      });
+      localState.close();
+      state = undefined;
+
+      const reopened = await open();
+      expect(reopened.execute(completionCommand)).toMatchObject({
+        type: "QA_RUN_COMPLETED",
+        replayed: true,
+        qaRun: { status: "FAILED" },
+      });
+      expect(reopened.query({ type: "GET_QA_RUN", qaRunId: reserved.qaRun.id })).toMatchObject({
+        type: "QA_RUN",
+        qaRun: { status: "FAILED" },
+      });
     });
 
     it("persists one owner-authorized review round and prevents a fourth round after restart", async () => {
@@ -2240,9 +2620,10 @@ describe("SQLite local state", () => {
       version: 1,
       name: "Pre-A1 counters fixture",
       stages: [
-        { stage: "REVIEW", ordinal: 0, contextPack },
-        { stage: "QA", ordinal: 1, contextPack },
-        { stage: "ACCEPTANCE", ordinal: 2, contextPack },
+        { stage: "IMPLEMENT", ordinal: 0, contextPack },
+        { stage: "REVIEW", ordinal: 1, contextPack },
+        { stage: "QA", ordinal: 2, contextPack },
+        { stage: "ACCEPTANCE", ordinal: 3, contextPack },
       ],
     };
     const startCommand: StartMockPipelineCommand = {
@@ -2260,7 +2641,10 @@ describe("SQLite local state", () => {
     };
     localState.execute(startCommand);
 
-    const applyNext = (outcome: ApplyProviderOutcomeCommand["payload"]["outcome"]): void => {
+    const applyNext = (
+      outcome: ApplyProviderOutcomeCommand["payload"]["outcome"],
+      resultTree: string | null = null,
+    ): void => {
       const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
       if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
       const dispatch = pending.dispatches[0];
@@ -2279,10 +2663,18 @@ describe("SQLite local state", () => {
         correlationId: `correlation-apply-${dispatch.id}`,
         actor: { type: "SYSTEM", id: "mock-provider" },
         type: "APPLY_PROVIDER_OUTCOME",
-        payload: { dispatchId: dispatch.id, template: acceptanceTemplate, outcome, resultTree: null },
+        payload: { dispatchId: dispatch.id, template: acceptanceTemplate, outcome, resultTree },
       });
     };
 
+    const acceptedTree = "b".repeat(40);
+    applyNext(
+      {
+        type: "COMPLETED",
+        summary: "Implementation completed.",
+      },
+      acceptedTree,
+    );
     applyNext({
       type: "COMPLETED",
       summary: "Review passed.",
@@ -2295,13 +2687,7 @@ describe("SQLite local state", () => {
         },
       ],
     });
-    applyNext({
-      type: "COMPLETED",
-      summary: "QA passed.",
-      artifacts: [
-        { kind: "QA_REPORT", title: "QA report", summary: "QA passed.", checks: ["Scenario D passed."] },
-      ],
-    });
+    completeMeasuredQA(localState, "pre-a1-counters", acceptedTree);
     applyNext({
       type: "READY_FOR_ACCEPTANCE",
       releaseNote: "Ready for owner acceptance.",

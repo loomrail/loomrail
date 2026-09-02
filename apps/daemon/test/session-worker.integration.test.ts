@@ -11,6 +11,8 @@ import type { FastifyBaseLogger } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createSessionWorker, DISPATCH_CYCLE_LIMIT, type SessionWorker } from "../src/session-worker.js";
+import { createBrowserQAStageRunner } from "../src/browser-qa-runner.js";
+import { passingBrowserQADriver, readyBrowserQAConfig } from "./browser-qa-fixture.js";
 import { gatedAdapter } from "./gated-adapter.js";
 import { makeThrowawayRepo } from "./repo-fixtures.js";
 import {
@@ -542,6 +544,14 @@ describe("session worker", () => {
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger,
+      browserQA: createBrowserQAStageRunner({
+        state: localState,
+        driver: passingBrowserQADriver(),
+        resolveConfig: readyBrowserQAConfig,
+        createCommandId,
+        createAttachmentId: createCommandId,
+        logger,
+      }),
     });
     const seeded = seedQueuedAttempt(localState);
 
@@ -567,10 +577,9 @@ describe("session worker", () => {
     await awaitIdle(worker);
 
     const completed = snapshotOf(localState, seeded.workItemId);
-    expect(seenStages).toEqual(["DISCOVERY", "DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
+    expect(seenStages).toEqual(["DISCOVERY", "DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "ACCEPTANCE"]);
     expect(seenHumanRequestPolicies).toEqual([
       "ALLOWED",
-      "DISALLOWED",
       "DISALLOWED",
       "DISALLOWED",
       "DISALLOWED",

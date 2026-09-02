@@ -170,8 +170,11 @@ mock-маршруте», а D2 всё равно ждёт E1.5.
 Текущий checkpoint: C1, C3, C2, B4, A4, A3 и R1 реализованы и запушены. Q1 deterministic Browser QA evidence
 находится в реализации: готовы runtime contracts, чистое derivation verdict, durable QARun/evidence/attachment/Defect
 хранилище и isolated Playwright BrowserDriver с typed manifest, loopback/read-only guard, screenshots и trace.
-Следующий срез Q1 — daemon orchestration: резервировать QARun до browser process, атомарно завершать AgentRun и
-workflow, исключить provider-owned `QA_REPORT` и только measured pass допускать к Acceptance. Спецификация —
+Durable orchestration резервирует QARun вместе с active BROWSER_QA AgentRun и одной транзакцией завершает run,
+evidence, Defects, HumanRequest/следующий dispatch и audit; daemon worker запускает isolated Playwright по bounded
+`.loomrail/browser-qa.json`, provider-owned `QA_REPORT` больше не может пройти gate, а Acceptance принимает только
+current measured pass. Следующий срез Q1 — recovery marker для тяжёлых файлов и measured evidence в Task Cockpit.
+Спецификация —
 [47](47-q1-deterministic-browser-qa-spec.ru.md), план —
 [48](48-q1-deterministic-browser-qa-implementation-plan.ru.md). Работа не затрагивает отдельно разрабатываемый
 landing; общий release gate после Q1 всё ещё требует повторного macOS/Windows clean-install прогона.

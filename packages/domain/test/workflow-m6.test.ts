@@ -3,6 +3,8 @@ import type {
   ApplyProviderOutcomeCommand,
   EvidenceArtifact,
   PipelineRun,
+  QAEvidenceBundle,
+  QARun,
   ResolveAcceptanceCommand,
   StageAttempt,
   WorkItem,
@@ -18,6 +20,7 @@ import {
 } from "../src/index.js";
 
 const now = "2026-08-24T14:00:00.000Z";
+const testedTree = "a".repeat(40);
 const contextPack: ApplyProviderOutcomeCommand["payload"]["template"]["stages"][number]["contextPack"] = {
   schemaVersion: 1,
   sections: [{ id: "WORK_ITEM_BRIEF", ordinal: 0, required: true }],
@@ -111,8 +114,75 @@ const artifact = (
   title: `${stage} report`,
   summary: `${stage} checks passed.`,
   checks: ["Synthetic check passed."],
+  ...(kind === "QA_REPORT" ? { qaRunId: "qa-run-1", qaEvidenceBundleId: "qa-evidence-1", testedTree } : {}),
   createdAt: now,
 });
+
+const measuredQARun: QARun = {
+  schemaVersion: 1,
+  id: "qa-run-1",
+  projectId: workItem.projectId,
+  workItemId: workItem.id,
+  pipelineRunId: run.id,
+  stageAttemptId: "attempt-qa",
+  agentRunId: "agent-run-qa",
+  driverId: "PLAYWRIGHT",
+  testedTree,
+  targetOrigin: "http://127.0.0.1:4173",
+  plan: {
+    schemaVersion: 1,
+    revision: 1,
+    contentHash: `sha256:${"b".repeat(64)}`,
+    targets: [
+      { id: "desktop-light-en", viewport: { width: 1_280, height: 800 }, locale: "en-US", theme: "LIGHT" },
+    ],
+    scenarios: [
+      {
+        id: "baseline",
+        title: "Baseline",
+        steps: [{ id: "open", title: "Open", action: { type: "NAVIGATE", path: "/" } }],
+        assertions: [{ id: "path", title: "Path", rule: { type: "URL_PATH", path: "/" } }],
+      },
+    ],
+  },
+  status: "PASSED",
+  error: null,
+  startedAt: now,
+  completedAt: now,
+  version: 2,
+};
+
+const measuredQAEvidence: QAEvidenceBundle = {
+  schemaVersion: 1,
+  id: "qa-evidence-1",
+  qaRunId: measuredQARun.id,
+  projectId: workItem.projectId,
+  workItemId: workItem.id,
+  pipelineRunId: run.id,
+  stageAttemptId: measuredQARun.stageAttemptId,
+  testedTree,
+  verdict: "PASSED",
+  environment: {
+    osFamily: "MACOS",
+    runtimeName: "NODE",
+    runtimeVersion: "24.19.0",
+    browserName: "CHROMIUM",
+    browserVersion: "151.0",
+  },
+  executions: [
+    {
+      targetId: "desktop-light-en",
+      scenarioId: "baseline",
+      durationMs: 100,
+      steps: [{ id: "open", status: "PASSED", durationMs: 50 }],
+      assertions: [{ id: "path", status: "PASSED", details: null }],
+    },
+  ],
+  observations: [],
+  attachmentIds: [],
+  defectIds: [],
+  createdAt: now,
+};
 
 describe("M6 acceptance decisions", () => {
   it("rejects a legacy Review artifact without the structured independent-review report", () => {
@@ -286,6 +356,7 @@ describe("M6 acceptance decisions", () => {
           artifact("REVIEW_REPORT", "REVIEW", "artifact-review"),
           artifact("QA_REPORT", "QA", "artifact-qa"),
         ],
+        measuredQA: { qaRun: measuredQARun, evidence: measuredQAEvidence, currentTree: testedTree },
         humanRequestId: "request-acceptance",
         acceptancePackageId: "package-1",
       },

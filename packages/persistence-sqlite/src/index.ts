@@ -123,6 +123,7 @@ import {
   decideReviewFindingDisposition,
   decideQACompletion,
   decideQAReservation,
+  qaWorkflowOutcome,
   decideProjectProviderPreference,
   decideApproveBudgetOverride,
   decideAnswerHumanRequest,
@@ -581,6 +582,9 @@ const evidenceArtifactRowSchema = z.object({
   title: z.string(),
   summary: z.string(),
   checks_json: z.string(),
+  qa_run_id: z.string().nullable(),
+  qa_evidence_bundle_id: z.string().nullable(),
+  tested_tree: z.string().nullable(),
   created_at: z.string(),
 });
 
@@ -1344,6 +1348,9 @@ const evidenceArtifactFromRow = (value: unknown): EvidenceArtifact => {
     title: row.title,
     summary: row.summary,
     checks: parseJson(row.checks_json),
+    ...(row.qa_run_id === null ? {} : { qaRunId: row.qa_run_id }),
+    ...(row.qa_evidence_bundle_id === null ? {} : { qaEvidenceBundleId: row.qa_evidence_bundle_id }),
+    ...(row.tested_tree === null ? {} : { testedTree: row.tested_tree }),
     createdAt: row.created_at,
   });
 };
@@ -2483,6 +2490,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         observations_json, attachment_ids_json, defect_ids_json, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    const selectQAEvidenceBundleById = database.prepare("SELECT * FROM qa_evidence_bundles WHERE id = ?");
     const insertQAAttachmentRef = database.prepare(
       `INSERT INTO qa_attachment_refs (
         id, schema_version, qa_run_id, kind, content_hash, byte_size, target_id,
@@ -2785,6 +2793,38 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare("SELECT * FROM evidence_artifacts WHERE pipeline_run_id = ? ORDER BY created_at, id")
         .all(pipelineRunId)
         .map(evidenceArtifactFromRow);
+
+    const readMeasuredQAForArtifact = (
+      artifact: EvidenceArtifact | undefined,
+      currentTree: string,
+    ):
+      | {
+          qaRun: QARun;
+          evidence: QAEvidenceBundle;
+          currentTree: string;
+        }
+      | undefined => {
+      if (artifact?.qaRunId === undefined || artifact.qaEvidenceBundleId === undefined) return undefined;
+      const qaRunValue = selectQARunById.get(artifact.qaRunId);
+      const evidenceValue = selectQAEvidenceBundleById.get(artifact.qaEvidenceBundleId);
+      if (qaRunValue === undefined || evidenceValue === undefined) return undefined;
+      return {
+        qaRun: qaRunFromRow(qaRunValue),
+        evidence: qaEvidenceBundleFromRow(evidenceValue),
+        currentTree,
+      };
+    };
+
+    const readWorkflowTemplate = (run: PipelineRun) => {
+      const value = database
+        .prepare("SELECT template_json FROM workflow_templates WHERE id = ? AND version = ?")
+        .get(run.workflowTemplateId, run.workflowVersion);
+      const row = z.object({ template_json: z.string() }).safeParse(value);
+      if (!row.success) {
+        throw new StateStoreError("PERSISTENCE_FAILURE", "The PipelineRun workflow template does not exist");
+      }
+      return workflowTemplateSchema.parse(parseJson(row.data.template_json));
+    };
 
     // The context-pack variant, bounded for the same reason as the decisions read. Today the
     // UNIQUE (pipeline_run_id, kind) constraint on evidence_artifacts already holds this to two rows
@@ -4246,8 +4286,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO evidence_artifacts (
             id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
-            stage, kind, status, provider, title, summary, checks_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            stage, kind, status, provider, title, summary, checks_json,
+            qa_run_id, qa_evidence_bundle_id, tested_tree, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           artifact.id,
@@ -4263,6 +4304,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           artifact.title,
           artifact.summary,
           JSON.stringify(artifact.checks),
+          artifact.qaRunId ?? null,
+          artifact.qaEvidenceBundleId ?? null,
+          artifact.testedTree ?? null,
           artifact.createdAt,
         );
     };
@@ -5688,6 +5732,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           throw new StateStoreError("QA_RUN_NOT_FOUND", "The QA run does not exist");
         }
         const current = qaRunFromRow(qaRunValue);
+        const agentRunValue = selectAgentRunById.get(current.agentRunId);
+        if (agentRunValue === undefined) {
+          throw new StateStoreError("QA_STABLE_TREE_MISSING", "The Browser QA AgentRun does not exist");
+        }
+        const activeAgentRun = agentRunFromRow(agentRunValue);
         const treeValue = selectLatestSucceededImplementTree.get(current.pipelineRunId);
         if (treeValue === undefined) {
           throw new StateStoreError(
@@ -5704,6 +5753,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         }
         const decision = decideQACompletion({
           qaRun: current,
+          agentRun: activeAgentRun,
           expectedVersion: command.payload.expectedVersion,
           currentTree,
           result: command.payload.result,
@@ -5821,6 +5871,78 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             evidence.createdAt,
           );
         }
+        const pipelineRun = readPipelineRun(decision.qaRun.pipelineRunId);
+        const stageAttempt = readStageAttempt(decision.qaRun.stageAttemptId);
+        const workItem = readWorkItem(decision.qaRun.workItemId);
+        const dispatch = readPendingDispatch(decision.qaRun.stageAttemptId);
+        if (!pipelineRun || !stageAttempt || !workItem || !dispatch) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_NOT_FOUND",
+            "The workflow state backing the Browser QA run is incomplete",
+          );
+        }
+        const template = readWorkflowTemplate(pipelineRun);
+        const workflowOutcome = qaWorkflowOutcome(decision);
+        const measuredQA =
+          decision.status === "PASSED" && evidence !== null
+            ? { qaRun: decision.qaRun, evidence, currentTree }
+            : undefined;
+        const workflowDecision = decideApplyProviderOutcome(
+          {
+            schemaVersion: 1,
+            commandId: command.commandId,
+            correlationId: command.correlationId,
+            actor: command.actor,
+            type: "APPLY_PROVIDER_OUTCOME",
+            payload: {
+              dispatchId: dispatch.id,
+              provider: activeAgentRun.provider,
+              template,
+              outcome: workflowOutcome,
+              resultTree: decision.status === "PASSED" ? decision.qaRun.testedTree : null,
+            },
+          },
+          {
+            now: occurredAt,
+            workItem,
+            run: pipelineRun,
+            stageAttempt,
+            dispatch,
+            budgetPolicy: readCurrentBudgetPolicy(pipelineRun.id),
+            existingUsageRecords: readUsageRecords(pipelineRun.id),
+            existingArtifacts: readEvidenceArtifacts(pipelineRun.id),
+            usageRecordIds: [],
+            artifactIds:
+              workflowOutcome.type === "COMPLETED"
+                ? (workflowOutcome.artifacts ?? []).map(() => createId("evidenceArtifact"))
+                : [],
+            measuredQA,
+            qaRunRequired: true,
+            qaRunCompletion: decision.qaRun,
+            reviewRequired: false,
+            humanRequestId: createId("humanRequest"),
+            acceptancePackageId: createId("acceptancePackage"),
+            nextStageAttemptId: createId("stageAttempt"),
+            nextDispatchId: createId("workflowDispatch"),
+          },
+        );
+        updateWorkflowDispatch(workflowDecision.dispatch);
+        updateStageAttempt(workflowDecision.stageAttempt);
+        updatePipelineRun(workflowDecision.run);
+        if (workflowDecision.workItem.version !== workItem.version) {
+          updateWorkflowWorkItem(workflowDecision.workItem);
+        }
+        if (workflowDecision.request) insertHumanRequest(workflowDecision.request);
+        workflowDecision.artifacts.forEach(insertEvidenceArtifact);
+        if (workflowDecision.nextStageAttempt) insertStageAttempt(workflowDecision.nextStageAttempt);
+        if (workflowDecision.nextDispatch) insertWorkflowDispatch(workflowDecision.nextDispatch);
+        const metadata = {
+          workItemId: decision.qaRun.workItemId,
+          projectId: decision.qaRun.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        };
         const event = appendAgentEvent(
           {
             type: "QA_RUN_COMPLETED",
@@ -5830,14 +5952,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               defectIds: defects.map(({ id }) => id),
             },
           },
-          {
-            workItemId: decision.qaRun.workItemId,
-            projectId: decision.qaRun.projectId,
-            actor: command.actor,
-            occurredAt,
-            correlationId: command.correlationId,
-          },
+          metadata,
         );
+        const agentStatus = terminalAgentRunStatus(workflowDecision.stageAttempt.status);
+        if (agentStatus) finishActiveAgentRun(workflowDecision.stageAttempt.id, agentStatus, metadata);
+        appendWorkflowEvents(workflowDecision.events, metadata);
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "QA_RUN_COMPLETED",
@@ -5892,10 +6011,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         // decideApplyProviderOutcome never reads command.type; normalizing it here keeps the
         // domain function's parameter type single-literal (so it, in turn, narrows cleanly)
         // without weakening what actually gets persisted as this command's command_type below.
-        const runningReviewerValue =
-          stageAttempt.stage === "REVIEW"
-            ? (selectRunningAgentRunForStageAttempt.get(stageAttempt.id) ?? undefined)
-            : undefined;
+        const runningAgentRunValue = selectRunningAgentRunForStageAttempt.get(stageAttempt.id) ?? undefined;
+        const runningReviewerValue = stageAttempt.stage === "REVIEW" ? runningAgentRunValue : undefined;
+        const qaRunRequired =
+          stageAttempt.stage === "QA" &&
+          runningAgentRunValue !== undefined &&
+          agentRunFromRow(runningAgentRunValue).profile.role === "BROWSER_QA";
         const reviewContext =
           stageAttempt.stage === "REVIEW" &&
           command.payload.outcome.type === "COMPLETED" &&
@@ -5926,6 +6047,17 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 };
               })()
             : undefined;
+        const existingArtifacts = readEvidenceArtifacts(run.id);
+        const measuredQA =
+          command.payload.outcome.type === "READY_FOR_ACCEPTANCE"
+            ? (() => {
+                const qaArtifact = existingArtifacts.find(({ kind }) => kind === "QA_REPORT");
+                const treeValue = selectLatestSucceededImplementTree.get(run.id);
+                return treeValue === undefined
+                  ? undefined
+                  : readMeasuredQAForArtifact(qaArtifact, resultTreeRowSchema.parse(treeValue).result_tree);
+              })()
+            : undefined;
         const decision = decideApplyProviderOutcome(
           { ...command, type: "APPLY_PROVIDER_OUTCOME" },
           {
@@ -5936,7 +6068,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             dispatch,
             budgetPolicy: readCurrentBudgetPolicy(run.id),
             existingUsageRecords: readUsageRecords(run.id),
-            existingArtifacts: readEvidenceArtifacts(run.id),
+            existingArtifacts,
             usageRecordIds:
               command.payload.outcome.type === "BUDGET_LIMIT_REACHED"
                 ? command.payload.outcome.usageIncrements.map(() => createId("usageRecord"))
@@ -5946,6 +6078,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 ? (command.payload.outcome.artifacts ?? []).map(() => createId("evidenceArtifact"))
                 : [],
             review: reviewContext,
+            measuredQA,
+            qaRunRequired,
             // Pre-R1 fixture workflows completed Review without AgentRun reservation. Keep those
             // historical migration paths readable, while every scheduled live reviewer is held to
             // the structured independent-review contract.

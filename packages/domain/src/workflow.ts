@@ -24,6 +24,8 @@ import type {
   PipelinePausedEvent,
   PipelineResumedEvent,
   PipelineRun,
+  QAEvidenceBundle,
+  QARun,
   PipelineStartedEvent,
   RecoveryReport,
   RecoveryReportCreatedEvent,
@@ -73,6 +75,7 @@ export type WorkflowDomainErrorCode =
   | "REVIEW_REPORT_REQUIRED"
   | "REVIEW_RUN_MISMATCH"
   | "REVIEW_TREE_STALE"
+  | "QA_MEASUREMENT_REQUIRED"
   | "SESSION_END_REASON_NOT_HANDLED";
 
 export class WorkflowDomainError extends Error {
@@ -707,6 +710,15 @@ export const decideApplyProviderOutcome = (
         }
       | undefined;
     reviewRequired?: boolean | undefined;
+    measuredQA?:
+      | {
+          qaRun: QARun;
+          evidence: QAEvidenceBundle;
+          currentTree: string;
+        }
+      | undefined;
+    qaRunRequired?: boolean | undefined;
+    qaRunCompletion?: QARun | undefined;
     humanRequestId?: string;
     acceptancePackageId?: string;
     nextStageAttemptId?: string;
@@ -731,6 +743,22 @@ export const decideApplyProviderOutcome = (
       "Only a running stage can accept a provider outcome",
       { status: context.stageAttempt.status },
     );
+  }
+  if (context.stageAttempt.stage === "QA" && context.qaRunRequired === true) {
+    const qaRun = context.qaRunCompletion;
+    if (
+      qaRun === undefined ||
+      qaRun.status === "RUNNING" ||
+      qaRun.projectId !== context.workItem.projectId ||
+      qaRun.workItemId !== context.workItem.id ||
+      qaRun.pipelineRunId !== context.run.id ||
+      qaRun.stageAttemptId !== context.stageAttempt.id
+    ) {
+      throw new WorkflowDomainError(
+        "QA_MEASUREMENT_REQUIRED",
+        "A scheduled Browser QA stage can finish only from its daemon-measured QARun",
+      );
+    }
   }
 
   if (command.payload.outcome.type === "BUDGET_LIMIT_REACHED") {
@@ -808,6 +836,34 @@ export const decideApplyProviderOutcome = (
       throw new WorkflowDomainError(
         "ACCEPTANCE_NOT_READY",
         "Owner acceptance requires both Review and QA evidence",
+      );
+    }
+    const measuredQA = context.measuredQA;
+    const measuredQAMatchesArtifact =
+      measuredQA === undefined
+        ? false
+        : measuredQA.qaRun.id === qaArtifact.qaRunId &&
+          measuredQA.evidence.id === qaArtifact.qaEvidenceBundleId &&
+          measuredQA.qaRun.status === "PASSED" &&
+          measuredQA.evidence.verdict === "PASSED" &&
+          measuredQA.qaRun.testedTree === qaArtifact.testedTree &&
+          measuredQA.evidence.testedTree === qaArtifact.testedTree &&
+          measuredQA.currentTree === qaArtifact.testedTree &&
+          measuredQA.qaRun.pipelineRunId === context.run.id &&
+          measuredQA.evidence.pipelineRunId === context.run.id &&
+          measuredQA.qaRun.workItemId === context.workItem.id &&
+          measuredQA.evidence.workItemId === context.workItem.id &&
+          measuredQA.evidence.qaRunId === measuredQA.qaRun.id &&
+          measuredQA.evidence.stageAttemptId === qaArtifact.stageAttemptId;
+    if (
+      qaArtifact.qaRunId === undefined ||
+      qaArtifact.qaEvidenceBundleId === undefined ||
+      qaArtifact.testedTree === undefined ||
+      !measuredQAMatchesArtifact
+    ) {
+      throw new WorkflowDomainError(
+        "ACCEPTANCE_NOT_READY",
+        "Owner acceptance requires current daemon-measured browser QA evidence",
       );
     }
     const stageAttempt: StageAttempt = {
@@ -1263,6 +1319,23 @@ export const decideApplyProviderOutcome = (
     if (!id || (context.stageAttempt.stage !== "REVIEW" && context.stageAttempt.stage !== "QA")) {
       throw new WorkflowDomainError("ACCEPTANCE_NOT_FOUND", "Durable EvidenceArtifact ID was not supplied");
     }
+    const measuredQA = draft.kind === "QA_REPORT" ? context.measuredQA : undefined;
+    if (draft.kind === "QA_REPORT" && measuredQA !== undefined) {
+      if (
+        measuredQA.qaRun.status !== "PASSED" ||
+        measuredQA.evidence.verdict !== "PASSED" ||
+        measuredQA.qaRun.id !== measuredQA.evidence.qaRunId ||
+        measuredQA.qaRun.testedTree !== measuredQA.evidence.testedTree ||
+        measuredQA.currentTree !== measuredQA.qaRun.testedTree ||
+        measuredQA.qaRun.stageAttemptId !== context.stageAttempt.id ||
+        measuredQA.evidence.stageAttemptId !== context.stageAttempt.id
+      ) {
+        throw new WorkflowDomainError(
+          "ACCEPTANCE_NOT_READY",
+          "A QA evidence artifact requires a current passed browser QA bundle",
+        );
+      }
+    }
     return {
       schemaVersion: 1,
       id,
@@ -1275,6 +1348,13 @@ export const decideApplyProviderOutcome = (
       provider: command.payload.provider ?? "MOCK",
       createdAt: context.now,
       ...draft,
+      ...(measuredQA === undefined
+        ? {}
+        : {
+            qaRunId: measuredQA.qaRun.id,
+            qaEvidenceBundleId: measuredQA.evidence.id,
+            testedTree: measuredQA.qaRun.testedTree,
+          }),
     };
   });
   const artifactEvents: ApplyProviderOutcomeDecision["events"] = artifacts.map((artifact) => ({

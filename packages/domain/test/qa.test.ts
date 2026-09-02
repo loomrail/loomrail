@@ -1,7 +1,13 @@
 import type { AgentRun, QADriverResult, QARun, ReserveQARunCommand, StageAttempt } from "@loomrail/contracts";
 import { describe, expect, it } from "vitest";
 
-import { decideQACompletion, decideQAReservation, QACompletionError, QAReservationError } from "../src/qa.js";
+import {
+  decideQACompletion,
+  decideQAReservation,
+  QACompletionError,
+  QAReservationError,
+  qaWorkflowOutcome,
+} from "../src/qa.js";
 
 const tree = "a".repeat(40);
 
@@ -183,6 +189,7 @@ describe("deterministic Browser QA completion", () => {
   it("derives PASSED only from a complete green matrix", () => {
     const decision = decideQACompletion({
       qaRun,
+      agentRun,
       expectedVersion: 1,
       currentTree: tree,
       result: measuredResult(),
@@ -196,11 +203,16 @@ describe("deterministic Browser QA completion", () => {
       evidence: { verdict: "PASSED", defects: [] },
       requiresHumanRequest: false,
     });
+    expect(qaWorkflowOutcome(decision)).toMatchObject({
+      type: "COMPLETED",
+      artifacts: [{ kind: "QA_REPORT", title: "Deterministic browser QA" }],
+    });
   });
 
   it("derives FAILED from a failed assertion and keeps its reproducible defect", () => {
     const decision = decideQACompletion({
       qaRun,
+      agentRun,
       expectedVersion: 1,
       currentTree: tree,
       result: measuredResult("FAILED"),
@@ -214,11 +226,16 @@ describe("deterministic Browser QA completion", () => {
       evidence: { verdict: "FAILED", defects: [{ severity: "HIGH" }] },
       requiresHumanRequest: true,
     });
+    expect(qaWorkflowOutcome(decision)).toMatchObject({
+      type: "NEEDS_HUMAN",
+      request: { title: "Browser QA found blocking defects" },
+    });
   });
 
   it("records a driver error without inventing measured evidence", () => {
     const decision = decideQACompletion({
       qaRun,
+      agentRun,
       expectedVersion: 1,
       currentTree: tree,
       result: {
@@ -236,12 +253,17 @@ describe("deterministic Browser QA completion", () => {
       evidence: null,
       requiresHumanRequest: true,
     });
+    expect(qaWorkflowOutcome(decision)).toMatchObject({
+      type: "NEEDS_HUMAN",
+      request: { title: "Browser QA could not prove the implementation" },
+    });
   });
 
   it("rejects stale trees and optimistic-version conflicts", () => {
     expect(() =>
       decideQACompletion({
         qaRun,
+        agentRun,
         expectedVersion: 1,
         currentTree: "c".repeat(40),
         result: measuredResult(),
@@ -252,6 +274,7 @@ describe("deterministic Browser QA completion", () => {
     expect(() =>
       decideQACompletion({
         qaRun,
+        agentRun,
         expectedVersion: 2,
         currentTree: tree,
         result: measuredResult(),
@@ -259,6 +282,17 @@ describe("deterministic Browser QA completion", () => {
         now: "2026-09-02T10:05:00.000Z",
       }),
     ).toThrow(expect.objectContaining<Partial<QACompletionError>>({ code: "QA_RUN_VERSION_CONFLICT" }));
+    expect(() =>
+      decideQACompletion({
+        qaRun,
+        agentRun: { ...agentRun, status: "SUCCEEDED", finishedAt: qaRun.startedAt, version: 2 },
+        expectedVersion: 1,
+        currentTree: tree,
+        result: measuredResult(),
+        finalizedAttachments: [],
+        now: "2026-09-02T10:05:00.000Z",
+      }),
+    ).toThrow(expect.objectContaining<Partial<QACompletionError>>({ code: "QA_AGENT_RUN_MISMATCH" }));
   });
 
   it("rejects missing matrix cells, reordered checks, and failures without defects", () => {
@@ -267,6 +301,7 @@ describe("deterministic Browser QA completion", () => {
     expect(() =>
       decideQACompletion({
         qaRun,
+        agentRun,
         expectedVersion: 1,
         currentTree: tree,
         result: { ...complete, executions: complete.executions.slice(0, 1) },
@@ -280,6 +315,7 @@ describe("deterministic Browser QA completion", () => {
     expect(() =>
       decideQACompletion({
         qaRun,
+        agentRun,
         expectedVersion: 1,
         currentTree: tree,
         result: {
@@ -298,6 +334,7 @@ describe("deterministic Browser QA completion", () => {
     expect(() =>
       decideQACompletion({
         qaRun,
+        agentRun,
         expectedVersion: 1,
         currentTree: tree,
         result: { ...failed, defects: [] },
@@ -323,6 +360,7 @@ describe("deterministic Browser QA completion", () => {
     expect(() =>
       decideQACompletion({
         qaRun,
+        agentRun,
         expectedVersion: 1,
         currentTree: tree,
         result: withAttachment,
@@ -333,6 +371,7 @@ describe("deterministic Browser QA completion", () => {
     expect(() =>
       decideQACompletion({
         qaRun,
+        agentRun,
         expectedVersion: 1,
         currentTree: tree,
         result: withAttachment,
