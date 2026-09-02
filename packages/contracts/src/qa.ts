@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-import { opaqueIdSchema, schemaVersionSchema, utcTimestampSchema } from "./shared.js";
+import {
+  actorSchema,
+  correlationIdSchema,
+  opaqueIdSchema,
+  schemaVersionSchema,
+  utcTimestampSchema,
+} from "./shared.js";
 
 export const MAX_QA_TARGETS = 24;
 export const MAX_QA_SCENARIOS = 20;
@@ -225,6 +231,13 @@ export const qaAttachmentRefSchema = qaAttachmentDraftSchema
   })
   .strict();
 
+export const qaFinalizedAttachmentSchema = z
+  .object({
+    handle: opaqueIdSchema,
+    ref: qaAttachmentRefSchema,
+  })
+  .strict();
+
 export const qaDefectDraftSchema = z
   .object({
     severity: qaDefectSeveritySchema,
@@ -285,6 +298,126 @@ export const qaDriverResultSchema = z.discriminatedUnion("outcome", [
   qaErroredDriverResultSchema,
 ]);
 
+export const qaEvidenceBundleSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    qaRunId: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    workItemId: opaqueIdSchema,
+    pipelineRunId: opaqueIdSchema,
+    stageAttemptId: opaqueIdSchema,
+    testedTree: treeShaSchema,
+    verdict: z.enum(["PASSED", "FAILED"]),
+    environment: qaEnvironmentSchema,
+    executions: z.array(qaScenarioExecutionSchema).min(1).max(MAX_QA_EXECUTIONS),
+    observations: z.array(qaObservationSchema).max(MAX_QA_OBSERVATIONS),
+    attachmentIds: z.array(opaqueIdSchema).max(MAX_QA_ATTACHMENTS),
+    defectIds: z.array(opaqueIdSchema).max(MAX_QA_DEFECTS),
+    createdAt: utcTimestampSchema,
+  })
+  .strict()
+  .superRefine((bundle, context) => {
+    if (new Set(bundle.attachmentIds).size !== bundle.attachmentIds.length) {
+      context.addIssue({ code: "custom", message: "QA evidence cannot repeat an attachment ID" });
+    }
+    if (new Set(bundle.defectIds).size !== bundle.defectIds.length) {
+      context.addIssue({ code: "custom", message: "QA evidence cannot repeat a defect ID" });
+    }
+    if (bundle.verdict === "PASSED" && bundle.defectIds.length !== 0) {
+      context.addIssue({ code: "custom", message: "Passed QA evidence cannot reference defects" });
+    }
+    if (bundle.verdict === "FAILED" && bundle.defectIds.length === 0) {
+      context.addIssue({ code: "custom", message: "Failed QA evidence requires a defect" });
+    }
+  });
+
+const qaEventBaseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    sequence: z.number().int().positive(),
+    id: opaqueIdSchema,
+    aggregateType: z.literal("WORK_ITEM"),
+    aggregateId: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    actor: actorSchema,
+    occurredAt: utcTimestampSchema,
+    correlationId: correlationIdSchema,
+  })
+  .strict();
+
+export const qaRunReservedEventSchema = qaEventBaseSchema.extend({
+  type: z.literal("QA_RUN_RESERVED"),
+  data: z.object({ qaRun: qaRunSchema }).strict(),
+});
+
+export const qaRunCompletedEventSchema = qaEventBaseSchema.extend({
+  type: z.literal("QA_RUN_COMPLETED"),
+  data: z
+    .object({
+      qaRun: qaRunSchema,
+      evidenceBundleId: opaqueIdSchema.nullable(),
+      defectIds: z.array(opaqueIdSchema).max(MAX_QA_DEFECTS),
+    })
+    .strict(),
+});
+
+const qaCommandBaseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    commandId: opaqueIdSchema,
+    correlationId: correlationIdSchema,
+    actor: actorSchema,
+  })
+  .strict();
+
+export const reserveQARunCommandSchema = qaCommandBaseSchema.extend({
+  type: z.literal("RESERVE_QA_RUN"),
+  payload: z
+    .object({
+      stageAttemptId: opaqueIdSchema,
+      agentRunId: opaqueIdSchema,
+      testedTree: treeShaSchema,
+      targetOrigin: qaTargetOriginSchema,
+      plan: qaPlanSnapshotSchema,
+    })
+    .strict(),
+});
+
+export const completeQARunCommandSchema = qaCommandBaseSchema.extend({
+  type: z.literal("COMPLETE_QA_RUN"),
+  payload: z
+    .object({
+      qaRunId: opaqueIdSchema,
+      expectedVersion: z.number().int().positive(),
+      currentTree: treeShaSchema,
+      result: qaDriverResultSchema,
+      finalizedAttachments: z.array(qaFinalizedAttachmentSchema).max(MAX_QA_ATTACHMENTS),
+    })
+    .strict(),
+});
+
+const qaCommandResultBaseSchema = z
+  .object({ schemaVersion: schemaVersionSchema, replayed: z.boolean() })
+  .strict();
+
+export const qaRunReservedResultSchema = qaCommandResultBaseSchema.extend({
+  type: z.literal("QA_RUN_RESERVED"),
+  workItemId: opaqueIdSchema,
+  qaRun: qaRunSchema,
+  event: qaRunReservedEventSchema,
+});
+
+export const qaRunCompletedResultSchema = qaCommandResultBaseSchema.extend({
+  type: z.literal("QA_RUN_COMPLETED"),
+  workItemId: opaqueIdSchema,
+  qaRun: qaRunSchema,
+  evidence: qaEvidenceBundleSchema.nullable(),
+  attachments: z.array(qaAttachmentRefSchema).max(MAX_QA_ATTACHMENTS),
+  defects: z.array(qaDefectSchema).max(MAX_QA_DEFECTS),
+  event: qaRunCompletedEventSchema,
+});
+
 export type BrowserDriverId = z.infer<typeof browserDriverIdSchema>;
 export type QARunStatus = z.infer<typeof qaRunStatusSchema>;
 export type QACheckStatus = z.infer<typeof qaCheckStatusSchema>;
@@ -295,6 +428,14 @@ export type QAScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;
 export type QAObservation = z.infer<typeof qaObservationSchema>;
 export type QAAttachmentDraft = z.infer<typeof qaAttachmentDraftSchema>;
 export type QAAttachmentRef = z.infer<typeof qaAttachmentRefSchema>;
+export type QAFinalizedAttachment = z.infer<typeof qaFinalizedAttachmentSchema>;
 export type QADefectDraft = z.infer<typeof qaDefectDraftSchema>;
 export type QADefect = z.infer<typeof qaDefectSchema>;
 export type QADriverResult = z.infer<typeof qaDriverResultSchema>;
+export type QAEvidenceBundle = z.infer<typeof qaEvidenceBundleSchema>;
+export type QARunReservedEvent = z.infer<typeof qaRunReservedEventSchema>;
+export type QARunCompletedEvent = z.infer<typeof qaRunCompletedEventSchema>;
+export type ReserveQARunCommand = z.infer<typeof reserveQARunCommandSchema>;
+export type CompleteQARunCommand = z.infer<typeof completeQARunCommandSchema>;
+export type QARunReservedResult = z.infer<typeof qaRunReservedResultSchema>;
+export type QARunCompletedResult = z.infer<typeof qaRunCompletedResultSchema>;

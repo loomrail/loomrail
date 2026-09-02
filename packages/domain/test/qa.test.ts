@@ -1,7 +1,7 @@
-import type { QADriverResult, QARun } from "@loomrail/contracts";
+import type { AgentRun, QADriverResult, QARun, ReserveQARunCommand, StageAttempt } from "@loomrail/contracts";
 import { describe, expect, it } from "vitest";
 
-import { decideQACompletion, QACompletionError } from "../src/qa.js";
+import { decideQACompletion, decideQAReservation, QACompletionError, QAReservationError } from "../src/qa.js";
 
 const tree = "a".repeat(40);
 
@@ -48,6 +48,57 @@ const environment = {
   browserVersion: "140.0",
 };
 
+const stageAttempt: StageAttempt = {
+  schemaVersion: 1,
+  id: qaRun.stageAttemptId,
+  projectId: qaRun.projectId,
+  workItemId: qaRun.workItemId,
+  pipelineRunId: qaRun.pipelineRunId,
+  stage: "QA",
+  attempt: 1,
+  status: "RUNNING",
+  startedAt: qaRun.startedAt,
+  finishedAt: null,
+  failureCode: null,
+  unproductiveSessions: 0,
+  packShareBackoffs: 0,
+  resultTree: null,
+  version: 1,
+};
+
+const agentRun: AgentRun = {
+  schemaVersion: 1,
+  id: qaRun.agentRunId,
+  projectId: qaRun.projectId,
+  workItemId: qaRun.workItemId,
+  pipelineRunId: qaRun.pipelineRunId,
+  stageAttemptId: qaRun.stageAttemptId,
+  ordinal: 1,
+  squadAssignmentId: "squad-1",
+  profile: { id: "builtin.browser-qa", revision: 1, role: "BROWSER_QA" },
+  provider: "CODEX",
+  status: "RUNNING",
+  policySnapshotHash: `sha256:${"d".repeat(64)}`,
+  startedAt: qaRun.startedAt,
+  finishedAt: null,
+  version: 1,
+};
+
+const reserveCommand: ReserveQARunCommand = {
+  schemaVersion: 1,
+  commandId: "reserve-qa-run-1",
+  correlationId: "correlation-reserve-qa-run-1",
+  actor: { type: "SYSTEM", id: "local-daemon" },
+  type: "RESERVE_QA_RUN",
+  payload: {
+    stageAttemptId: qaRun.stageAttemptId,
+    agentRunId: qaRun.agentRunId,
+    testedTree: tree,
+    targetOrigin: qaRun.targetOrigin,
+    plan: qaRun.plan,
+  },
+};
+
 const execution = (targetId: string, status: "PASSED" | "FAILED" = "PASSED") => ({
   targetId,
   scenarioId: "task-cockpit",
@@ -84,12 +135,52 @@ const measuredResult = (status: "PASSED" | "FAILED" = "PASSED"): QADriverResult 
 });
 
 describe("deterministic Browser QA completion", () => {
+  it("reserves QA only for the local daemon, current tree, and active Browser QA role", () => {
+    expect(
+      decideQAReservation(reserveCommand, {
+        newQARunId: "qa-run-reserved",
+        now: qaRun.startedAt,
+        currentTree: tree,
+        stageAttempt,
+        agentRun,
+      }),
+    ).toMatchObject({
+      id: "qa-run-reserved",
+      stageAttemptId: stageAttempt.id,
+      agentRunId: agentRun.id,
+      status: "RUNNING",
+      testedTree: tree,
+    });
+    expect(() =>
+      decideQAReservation(
+        { ...reserveCommand, actor: { type: "HUMAN", id: "owner-1" } },
+        {
+          newQARunId: "qa-run-refused",
+          now: qaRun.startedAt,
+          currentTree: tree,
+          stageAttempt,
+          agentRun,
+        },
+      ),
+    ).toThrow(expect.objectContaining<Partial<QAReservationError>>({ code: "QA_RUN_ACTOR_FORBIDDEN" }));
+    expect(() =>
+      decideQAReservation(reserveCommand, {
+        newQARunId: "qa-run-stale",
+        now: qaRun.startedAt,
+        currentTree: "e".repeat(40),
+        stageAttempt,
+        agentRun,
+      }),
+    ).toThrow(expect.objectContaining<Partial<QAReservationError>>({ code: "STALE_QA_TREE" }));
+  });
+
   it("derives PASSED only from a complete green matrix", () => {
     const decision = decideQACompletion({
       qaRun,
       expectedVersion: 1,
       currentTree: tree,
       result: measuredResult(),
+      finalizedAttachments: [],
       now: "2026-09-02T10:05:00.000Z",
     });
 
@@ -107,6 +198,7 @@ describe("deterministic Browser QA completion", () => {
       expectedVersion: 1,
       currentTree: tree,
       result: measuredResult("FAILED"),
+      finalizedAttachments: [],
       now: "2026-09-02T10:05:00.000Z",
     });
 
@@ -128,6 +220,7 @@ describe("deterministic Browser QA completion", () => {
         code: "TARGET_UNHEALTHY",
         summary: "The loopback target refused connections.",
       },
+      finalizedAttachments: [],
       now: "2026-09-02T10:05:00.000Z",
     });
 
@@ -146,6 +239,7 @@ describe("deterministic Browser QA completion", () => {
         expectedVersion: 1,
         currentTree: "c".repeat(40),
         result: measuredResult(),
+        finalizedAttachments: [],
         now: "2026-09-02T10:05:00.000Z",
       }),
     ).toThrow(expect.objectContaining<Partial<QACompletionError>>({ code: "STALE_QA_TREE" }));
@@ -155,6 +249,7 @@ describe("deterministic Browser QA completion", () => {
         expectedVersion: 2,
         currentTree: tree,
         result: measuredResult(),
+        finalizedAttachments: [],
         now: "2026-09-02T10:05:00.000Z",
       }),
     ).toThrow(expect.objectContaining<Partial<QACompletionError>>({ code: "QA_RUN_VERSION_CONFLICT" }));
@@ -169,6 +264,7 @@ describe("deterministic Browser QA completion", () => {
         expectedVersion: 1,
         currentTree: tree,
         result: { ...complete, executions: complete.executions.slice(0, 1) },
+        finalizedAttachments: [],
         now: "2026-09-02T10:05:00.000Z",
       }),
     ).toThrow(expect.objectContaining<Partial<QACompletionError>>({ code: "QA_MATRIX_INCOMPLETE" }));
@@ -187,6 +283,7 @@ describe("deterministic Browser QA completion", () => {
             secondExecution,
           ],
         },
+        finalizedAttachments: [],
         now: "2026-09-02T10:05:00.000Z",
       }),
     ).toThrow(expect.objectContaining<Partial<QACompletionError>>({ code: "QA_MATRIX_INCOMPLETE" }));
@@ -198,6 +295,59 @@ describe("deterministic Browser QA completion", () => {
         expectedVersion: 1,
         currentTree: tree,
         result: { ...failed, defects: [] },
+        finalizedAttachments: [],
+        now: "2026-09-02T10:05:00.000Z",
+      }),
+    ).toThrow(expect.objectContaining<Partial<QACompletionError>>({ code: "QA_EVIDENCE_INCONSISTENT" }));
+  });
+
+  it("rejects missing or mismatched finalized attachment metadata", () => {
+    const result = measuredResult();
+    if (result.outcome !== "MEASURED") throw new Error("Expected measured result fixture");
+    const draft = {
+      handle: "quarantine-screenshot-1",
+      kind: "SCREENSHOT" as const,
+      contentHash: `sha256:${"f".repeat(64)}`,
+      byteSize: 4_096,
+      targetId: "desktop-light-en",
+      scenarioId: "task-cockpit",
+      capturedAt: "2026-09-02T10:04:00.000Z",
+    };
+    const withAttachment: QADriverResult = { ...result, attachments: [draft] };
+    expect(() =>
+      decideQACompletion({
+        qaRun,
+        expectedVersion: 1,
+        currentTree: tree,
+        result: withAttachment,
+        finalizedAttachments: [],
+        now: "2026-09-02T10:05:00.000Z",
+      }),
+    ).toThrow(expect.objectContaining<Partial<QACompletionError>>({ code: "QA_EVIDENCE_INCONSISTENT" }));
+    expect(() =>
+      decideQACompletion({
+        qaRun,
+        expectedVersion: 1,
+        currentTree: tree,
+        result: withAttachment,
+        finalizedAttachments: [
+          {
+            handle: draft.handle,
+            ref: {
+              schemaVersion: 1,
+              id: "attachment-1",
+              qaRunId: qaRun.id,
+              kind: draft.kind,
+              contentHash: `sha256:${"0".repeat(64)}`,
+              byteSize: draft.byteSize,
+              targetId: draft.targetId,
+              scenarioId: draft.scenarioId,
+              capturedAt: draft.capturedAt,
+              retentionClass: "STANDARD_30_DAYS",
+              storageKey: "qa-run-1/screenshot.png",
+            },
+          },
+        ],
         now: "2026-09-02T10:05:00.000Z",
       }),
     ).toThrow(expect.objectContaining<Partial<QACompletionError>>({ code: "QA_EVIDENCE_INCONSISTENT" }));

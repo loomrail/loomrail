@@ -102,6 +102,7 @@ const migrations: readonly Migration[] = [
   },
   { version: 20, name: "agent_runs", filename: "0020_agent_runs.sql" },
   { version: 21, name: "independent_review", filename: "0021_independent_review.sql" },
+  { version: 22, name: "browser_qa_evidence", filename: "0022_browser_qa_evidence.sql" },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

@@ -13,7 +13,7 @@
 - [x] Добавить bounded runtime-схемы `QARun`, scenario matrix, assertions, observations, attachments и Defects.
 - [x] Разделить driver result и durable evidence: driver сообщает наблюдения, domain сам вычисляет verdict.
 - [x] Fail closed при пустом mandatory matrix, stale tree, неизвестном driver и превышении bounds.
-- [ ] Покрыть allowed/forbidden transitions, exact-version conflict и command idempotency.
+- [x] Покрыть allowed/forbidden transitions, exact-version conflict и command idempotency.
 
 ### Q1.2 — BrowserDriver boundary
 
@@ -25,7 +25,7 @@
 
 ### Q1.3 — Durable orchestration
 
-- [ ] Добавить новую migration для QARun, evidence bundle, observations, attachment refs и Defects.
+- [x] Добавить новую migration для QARun, evidence bundle, observations, attachment refs и Defects.
 - [ ] Резервировать QARun до запуска browser process вместе с active BROWSER_QA AgentRun.
 - [ ] Завершать QARun, AgentRun, evidence, HumanRequest/next dispatch, events и receipt одной транзакцией.
 - [ ] Хранить тяжёлые файлы вне SQLite через quarantine/finalize/recovery protocol.
@@ -47,7 +47,7 @@
 
 ## 2. Security gate
 
-- [ ] Обновить BrowserDriver-раздел threat model одновременно с первой capability.
+- [x] Обновить BrowserDriver-раздел threat model одновременно с первой capability.
 - [ ] Проверить loopback allowlist, redirects, DNS/rebinding assumptions и response-size limits.
 - [ ] Не передавать cookies, provider credentials, `.env`, Authorization headers и signed-in browser profile.
 - [ ] Не разрешать shell/Git mutation, arbitrary launch recipe, external origin и destructive UI action.

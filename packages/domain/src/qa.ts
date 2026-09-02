@@ -1,14 +1,101 @@
 import {
   qaDriverResultSchema,
   qaRunSchema,
-  type QAAttachmentDraft,
+  type AgentRun,
+  type QAAttachmentRef,
   type QADefectDraft,
   type QADriverResult,
+  type QAFinalizedAttachment,
   type QAEnvironment,
   type QAObservation,
   type QARun,
+  type ReserveQARunCommand,
   type QAScenarioExecution,
+  type StageAttempt,
 } from "@loomrail/contracts";
+
+export type QAReservationErrorCode =
+  "QA_RUN_ACTOR_FORBIDDEN" | "QA_STAGE_NOT_RUNNING" | "QA_AGENT_RUN_MISMATCH" | "STALE_QA_TREE";
+
+export class QAReservationError extends Error {
+  readonly code: QAReservationErrorCode;
+  readonly details: Readonly<Record<string, string | number>>;
+
+  constructor(
+    code: QAReservationErrorCode,
+    message: string,
+    details: Readonly<Record<string, string | number>> = {},
+  ) {
+    super(message);
+    this.name = "QAReservationError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
+/** Reserves the exact browser run the daemon may execute; no provider can manufacture one. */
+export const decideQAReservation = (
+  command: ReserveQARunCommand,
+  context: {
+    newQARunId: string;
+    now: string;
+    currentTree: string;
+    stageAttempt: StageAttempt;
+    agentRun: AgentRun;
+  },
+): QARun => {
+  if (command.actor.type !== "SYSTEM" || command.actor.id !== "local-daemon") {
+    throw new QAReservationError(
+      "QA_RUN_ACTOR_FORBIDDEN",
+      "Only the local daemon can reserve a deterministic browser QA run",
+    );
+  }
+  if (
+    context.stageAttempt.id !== command.payload.stageAttemptId ||
+    context.stageAttempt.stage !== "QA" ||
+    context.stageAttempt.status !== "RUNNING"
+  ) {
+    throw new QAReservationError(
+      "QA_STAGE_NOT_RUNNING",
+      "A browser QA run requires the matching running QA StageAttempt",
+    );
+  }
+  if (
+    context.agentRun.id !== command.payload.agentRunId ||
+    context.agentRun.stageAttemptId !== context.stageAttempt.id ||
+    context.agentRun.profile.role !== "BROWSER_QA" ||
+    context.agentRun.status !== "RUNNING"
+  ) {
+    throw new QAReservationError(
+      "QA_AGENT_RUN_MISMATCH",
+      "A browser QA run requires the active Browser QA AgentRun",
+    );
+  }
+  if (command.payload.testedTree !== context.currentTree) {
+    throw new QAReservationError("STALE_QA_TREE", "The reserved QA tree is not the current stable tree", {
+      testedTree: command.payload.testedTree,
+      currentTree: context.currentTree,
+    });
+  }
+  return qaRunSchema.parse({
+    schemaVersion: 1,
+    id: context.newQARunId,
+    projectId: context.stageAttempt.projectId,
+    workItemId: context.stageAttempt.workItemId,
+    pipelineRunId: context.stageAttempt.pipelineRunId,
+    stageAttemptId: context.stageAttempt.id,
+    agentRunId: context.agentRun.id,
+    driverId: "PLAYWRIGHT",
+    testedTree: command.payload.testedTree,
+    targetOrigin: command.payload.targetOrigin,
+    plan: command.payload.plan,
+    status: "RUNNING",
+    error: null,
+    startedAt: context.now,
+    completedAt: null,
+    version: 1,
+  });
+};
 
 export type QACompletionErrorCode =
   | "QA_RUN_VERSION_CONFLICT"
@@ -38,7 +125,7 @@ export type QAMeasuredEvidence = {
   environment: QAEnvironment;
   executions: readonly QAScenarioExecution[];
   observations: readonly QAObservation[];
-  attachments: readonly QAAttachmentDraft[];
+  attachments: readonly QAAttachmentRef[];
   defects: readonly QADefectDraft[];
 };
 
@@ -120,6 +207,55 @@ const validateMeasuredMatrix = (
   }
 };
 
+const validateFinalizedAttachments = (
+  run: QARun,
+  result: Extract<QADriverResult, { outcome: "MEASURED" }>,
+  finalized: readonly QAFinalizedAttachment[],
+): readonly QAAttachmentRef[] => {
+  if (finalized.length !== result.attachments.length) {
+    throw new QACompletionError(
+      "QA_EVIDENCE_INCONSISTENT",
+      "Every browser attachment must be finalized before QA completion",
+      { expected: result.attachments.length, actual: finalized.length },
+    );
+  }
+  if (
+    new Set(finalized.map(({ ref }) => ref.id)).size !== finalized.length ||
+    new Set(finalized.map(({ ref }) => ref.storageKey)).size !== finalized.length
+  ) {
+    throw new QACompletionError(
+      "QA_EVIDENCE_INCONSISTENT",
+      "Finalized browser attachments must have unique IDs and storage keys",
+    );
+  }
+  return result.attachments.map((draft, index) => {
+    const completed = finalized[index];
+    if (completed?.handle !== draft.handle) {
+      throw new QACompletionError(
+        "QA_EVIDENCE_INCONSISTENT",
+        "Finalized browser attachment metadata does not match the measured draft",
+        { attachmentIndex: index },
+      );
+    }
+    if (
+      completed.ref.qaRunId !== run.id ||
+      completed.ref.kind !== draft.kind ||
+      completed.ref.contentHash !== draft.contentHash ||
+      completed.ref.byteSize !== draft.byteSize ||
+      completed.ref.targetId !== draft.targetId ||
+      completed.ref.scenarioId !== draft.scenarioId ||
+      completed.ref.capturedAt !== draft.capturedAt
+    ) {
+      throw new QACompletionError(
+        "QA_EVIDENCE_INCONSISTENT",
+        "Finalized browser attachment metadata does not match the measured draft",
+        { attachmentIndex: index },
+      );
+    }
+    return completed.ref;
+  });
+};
+
 /**
  * Completes one durable QA reservation without trusting a provider or driver aggregate verdict.
  * The caller still owns IDs, persistence, attachment finalization and workflow transitions.
@@ -129,6 +265,7 @@ export const decideQACompletion = (input: {
   expectedVersion: number;
   currentTree: string;
   result: QADriverResult;
+  finalizedAttachments: readonly QAFinalizedAttachment[];
   now: string;
 }): QACompletionDecision => {
   const run = qaRunSchema.parse(input.qaRun);
@@ -151,6 +288,12 @@ export const decideQACompletion = (input: {
   }
   const result = qaDriverResultSchema.parse(input.result);
   if (result.outcome === "ERROR") {
+    if (input.finalizedAttachments.length !== 0) {
+      throw new QACompletionError(
+        "QA_EVIDENCE_INCONSISTENT",
+        "An errored browser run cannot publish finalized attachments",
+      );
+    }
     const qaRun = qaRunSchema.parse({
       ...run,
       status: "ERROR",
@@ -162,6 +305,7 @@ export const decideQACompletion = (input: {
   }
 
   validateMeasuredMatrix(run, result);
+  const attachments = validateFinalizedAttachments(run, result, input.finalizedAttachments);
   const failedCheck = result.executions.some(
     ({ steps, assertions }) =>
       steps.some(({ status }) => status === "FAILED") || assertions.some(({ status }) => status === "FAILED"),
@@ -186,7 +330,7 @@ export const decideQACompletion = (input: {
     environment: result.environment,
     executions: result.executions,
     observations: result.observations,
-    attachments: result.attachments,
+    attachments,
     defects: result.defects,
   };
   if (status === "FAILED") {

@@ -734,7 +734,7 @@ describe("SQLite local state", () => {
 
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -1564,6 +1564,205 @@ describe("SQLite local state", () => {
         attempt: 1,
         status: "QUEUED",
       });
+
+      const qaAgent = reopened.execute(startAgentRun("q1-browser-qa", qaDispatch.id));
+      if (qaAgent.type !== "AGENT_RUN_STARTED") throw new Error("Expected Browser QA AgentRun");
+      expect(qaAgent.run.profile.role).toBe("BROWSER_QA");
+      const qaPlan = {
+        schemaVersion: 1 as const,
+        revision: 1,
+        contentHash: `sha256:${"e".repeat(64)}`,
+        targets: [
+          {
+            id: "desktop-light-en",
+            viewport: { width: 1_280, height: 800 },
+            locale: "en-US",
+            theme: "LIGHT" as const,
+          },
+        ],
+        scenarios: [
+          {
+            id: "task-cockpit",
+            title: "Task Cockpit shows the current state",
+            steps: [{ id: "open", title: "Open the Task Cockpit" }],
+            assertions: [{ id: "state-visible", title: "Current state is visible" }],
+          },
+        ],
+      };
+      const reserveCommand = {
+        schemaVersion: 1 as const,
+        commandId: "reserve-q1-browser-qa",
+        correlationId: "correlation-reserve-q1-browser-qa",
+        actor: { type: "SYSTEM" as const, id: "local-daemon" },
+        type: "RESERVE_QA_RUN" as const,
+        payload: {
+          stageAttemptId: qaDispatch.stageAttemptId,
+          agentRunId: qaAgent.run.id,
+          testedTree: fixedTree,
+          targetOrigin: "http://127.0.0.1:4173",
+          plan: qaPlan,
+        },
+      };
+      expect(() =>
+        reopened.execute({ ...reserveCommand, actor: { type: "HUMAN", id: "local-owner" } }),
+      ).toThrow(expect.objectContaining({ code: "QA_RUN_ACTOR_FORBIDDEN" }));
+      const reserved = reopened.execute(reserveCommand);
+      if (reserved.type !== "QA_RUN_RESERVED") throw new Error("Expected durable QA reservation");
+      expect(reserved).toMatchObject({
+        replayed: false,
+        qaRun: {
+          agentRunId: qaAgent.run.id,
+          testedTree: fixedTree,
+          status: "RUNNING",
+          version: 1,
+        },
+        event: { type: "QA_RUN_RESERVED" },
+      });
+      expect(reopened.execute(reserveCommand)).toMatchObject({
+        type: "QA_RUN_RESERVED",
+        replayed: true,
+      });
+
+      const completionCommand = {
+        schemaVersion: 1 as const,
+        commandId: "complete-q1-browser-qa",
+        correlationId: "correlation-complete-q1-browser-qa",
+        actor: { type: "SYSTEM" as const, id: "local-daemon" },
+        type: "COMPLETE_QA_RUN" as const,
+        payload: {
+          qaRunId: reserved.qaRun.id,
+          expectedVersion: 1,
+          currentTree: fixedTree,
+          result: {
+            outcome: "MEASURED" as const,
+            environment: {
+              osFamily: "MACOS" as const,
+              runtimeName: "NODE" as const,
+              runtimeVersion: "24.7.0",
+              browserName: "CHROMIUM" as const,
+              browserVersion: "140.0",
+            },
+            executions: [
+              {
+                targetId: "desktop-light-en",
+                scenarioId: "task-cockpit",
+                durationMs: 80,
+                steps: [{ id: "open", status: "PASSED" as const, durationMs: 50 }],
+                assertions: [{ id: "state-visible", status: "PASSED" as const, details: null }],
+              },
+            ],
+            observations: [],
+            attachments: [
+              {
+                handle: "quarantine-screenshot-1",
+                kind: "SCREENSHOT" as const,
+                contentHash: `sha256:${"f".repeat(64)}`,
+                byteSize: 4_096,
+                targetId: "desktop-light-en",
+                scenarioId: "task-cockpit",
+                capturedAt: timestamp,
+              },
+            ],
+            defects: [],
+          },
+          finalizedAttachments: [
+            {
+              handle: "quarantine-screenshot-1",
+              ref: {
+                schemaVersion: 1 as const,
+                id: "qa-attachment-screenshot-1",
+                qaRunId: reserved.qaRun.id,
+                kind: "SCREENSHOT" as const,
+                contentHash: `sha256:${"f".repeat(64)}`,
+                byteSize: 4_096,
+                targetId: "desktop-light-en",
+                scenarioId: "task-cockpit",
+                capturedAt: timestamp,
+                retentionClass: "STANDARD_30_DAYS" as const,
+                storageKey: `${reserved.qaRun.id}/desktop-light-en/task-cockpit.png`,
+              },
+            },
+          ],
+        },
+      };
+      const measuredExecution = completionCommand.payload.result.executions[0];
+      if (!measuredExecution) throw new Error("Expected measured browser execution fixture");
+      expect(() =>
+        reopened.execute({
+          ...completionCommand,
+          commandId: "complete-q1-browser-qa-inconsistent",
+          correlationId: "correlation-complete-q1-browser-qa-inconsistent",
+          payload: {
+            ...completionCommand.payload,
+            result: {
+              ...completionCommand.payload.result,
+              executions: [
+                {
+                  ...measuredExecution,
+                  assertions: [
+                    {
+                      id: "state-visible",
+                      status: "FAILED" as const,
+                      details: "The current state was absent.",
+                    },
+                  ],
+                },
+              ],
+              defects: [],
+            },
+          },
+        }),
+      ).toThrow(expect.objectContaining({ code: "QA_EVIDENCE_INCONSISTENT" }));
+      const completed = reopened.execute(completionCommand);
+      expect(completed).toMatchObject({
+        type: "QA_RUN_COMPLETED",
+        replayed: false,
+        qaRun: { status: "PASSED", version: 2 },
+        evidence: { verdict: "PASSED", testedTree: fixedTree, defectIds: [] },
+        attachments: [
+          {
+            id: "qa-attachment-screenshot-1",
+            storageKey: `${reserved.qaRun.id}/desktop-light-en/task-cockpit.png`,
+          },
+        ],
+        defects: [],
+        event: { type: "QA_RUN_COMPLETED" },
+      });
+      expect(reopened.execute(completionCommand)).toMatchObject({
+        type: "QA_RUN_COMPLETED",
+        replayed: true,
+      });
+      expect(reopened.query({ type: "GET_QA_STATE", pipelineRunId: snapshot.snapshot.run.id })).toMatchObject(
+        {
+          type: "QA_STATE",
+          runs: [{ id: reserved.qaRun.id, status: "PASSED" }],
+          evidence: [{ verdict: "PASSED" }],
+          attachments: [{ id: "qa-attachment-screenshot-1" }],
+          defects: [],
+        },
+      );
+      reopened.close();
+      state = undefined;
+      const qaRestart = await open();
+      expect(qaRestart.query({ type: "GET_QA_RUN", qaRunId: reserved.qaRun.id })).toMatchObject({
+        type: "QA_RUN",
+        qaRun: { status: "PASSED", version: 2 },
+      });
+      qaRestart.close();
+      state = undefined;
+      const immutableQA = new DatabaseSync(databasePath);
+      expect(() => {
+        immutableQA.exec(
+          `UPDATE qa_runs SET tested_tree = '${"0".repeat(40)}' WHERE id = '${reserved.qaRun.id}'`,
+        );
+      }).toThrow(/only complete once/);
+      expect(() => {
+        immutableQA.exec("UPDATE qa_evidence_bundles SET verdict = 'FAILED'");
+      }).toThrow(/append-only/);
+      expect(() => {
+        immutableQA.exec("DELETE FROM qa_attachment_refs");
+      }).toThrow(/append-only/);
+      immutableQA.close();
     });
 
     it("persists one owner-authorized review round and prevents a fourth round after restart", async () => {

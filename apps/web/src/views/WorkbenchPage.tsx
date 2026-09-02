@@ -896,6 +896,26 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.agentRunFinished"),
         tone: event.data.run.status === "SUCCEEDED" ? "success" : "warning",
       };
+    case "QA_RUN_RESERVED":
+      return {
+        detail: t("event.qaRunReservedDetail", {
+          targets: event.data.qaRun.plan.targets.length,
+          scenarios: event.data.qaRun.plan.scenarios.length,
+        }),
+        icon: "sessions",
+        label: t("event.qaRunReserved"),
+        tone: "accent",
+      };
+    case "QA_RUN_COMPLETED":
+      return {
+        detail: t("event.qaRunCompletedDetail", {
+          status: event.data.qaRun.status,
+          defects: event.data.defectIds.length,
+        }),
+        icon: event.data.qaRun.status === "PASSED" ? "check" : "warning",
+        label: t("event.qaRunCompleted"),
+        tone: event.data.qaRun.status === "PASSED" ? "success" : "warning",
+      };
     case "PROVIDER_SESSION_STARTED":
       return {
         detail: t("event.providerSessionStartedDetail", { ordinal: event.data.session.ordinal }),

@@ -928,6 +928,19 @@ retry; redaction canaries; RU/EN, keyboard, light/dark E2E.
 - payments, publication, account/security and destructive actions require approval;
 - screenshot/trace retention and redaction.
 
+Q1 tightens the deterministic baseline further:
+
+- a durable `QARun` is reserved by `local-daemon` only for the active `BROWSER_QA` AgentRun and exact successful
+  implementation tree; provider output cannot reserve or complete it;
+- the baseline target is a bare literal loopback origin (`localhost`, `127/8` or `[::1]`), with redirects and every
+  subsequent request rechecked by the driver before delivery;
+- `PASSED`, `FAILED` and `ERROR` are derived from a complete bounded scenario matrix; a driver/provider aggregate
+  verdict is not part of the input schema;
+- screenshot/trace handles are not evidence. The daemon must quarantine, hash, size-check and atomically finalize each
+  file before `COMPLETE_QA_RUN`; the command accepts only matching relative storage refs and persists no absolute path;
+- a missing matrix cell, stale tree, mismatched attachment, off-origin navigation or unavailable target fails closed
+  and cannot open Acceptance.
+
 ### Plugins
 
 - separate process, signed/versioned manifest;

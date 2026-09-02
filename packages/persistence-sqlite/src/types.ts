@@ -19,6 +19,10 @@ import type {
   ProjectConstitutionSnapshot,
   ProjectConstitutionVersion,
   ProjectReadinessSnapshot,
+  QAAttachmentRef,
+  QADefect,
+  QAEvidenceBundle,
+  QARun,
   ReviewFinding,
   ReviewFindingStatus,
   ReviewReport,
@@ -60,6 +64,9 @@ export type StateStoreErrorCode =
   | "AGENT_RUN_ALREADY_ACTIVE"
   | "AGENT_RUN_NOT_ACTIVE"
   | "AGENT_RUN_CAPACITY_EXHAUSTED"
+  | "QA_RUN_ALREADY_EXISTS"
+  | "QA_RUN_NOT_FOUND"
+  | "QA_STABLE_TREE_MISSING"
   | "WORKSPACE_NOT_FOUND"
   // Storage invariant (migration 0011's UNIQUE on work_item_id, spec D1): the workspace belongs to
   // the WorkItem, and a second row for the same WorkItem would mean two writers past the lease.
@@ -118,6 +125,8 @@ export type StateQuery =
   | { type: "LIST_PENDING_DISPATCHES" }
   | { type: "GET_SQUAD_ASSIGNMENT"; pipelineRunId: string }
   | { type: "GET_AGENT_RUN"; agentRunId: string }
+  | { type: "GET_QA_RUN"; qaRunId: string }
+  | { type: "GET_QA_STATE"; pipelineRunId: string }
   | { type: "GET_LATEST_SUCCEEDED_DEVELOPER_AGENT_RUN"; pipelineRunId: string }
   | { type: "LIST_AGENT_RUNS"; status?: AgentRunStatus; limit?: number }
   | {
@@ -191,6 +200,14 @@ export type StateQueryResult =
   | { type: "WORKFLOW_DISPATCHES"; dispatches: WorkflowDispatch[] }
   | { type: "SQUAD_ASSIGNMENT"; assignment: SquadAssignment | null }
   | { type: "AGENT_RUNS"; runs: AgentRun[] }
+  | { type: "QA_RUN"; qaRun: QARun | null }
+  | {
+      type: "QA_STATE";
+      runs: QARun[];
+      evidence: QAEvidenceBundle[];
+      attachments: QAAttachmentRef[];
+      defects: QADefect[];
+    }
   | { type: "REVIEW_REPORTS"; reports: ReviewReport[] }
   | { type: "REVIEW_FINDINGS"; findings: ReviewFinding[] }
   | { type: "WORK_ITEMS"; workItems: WorkItem[] }
@@ -249,6 +266,10 @@ export type LocalStateIdKind =
   | "providerSession"
   | "squadAssignment"
   | "agentRun"
+  | "qaRun"
+  | "qaEvidenceBundle"
+  | "qaAttachment"
+  | "qaDefect"
   | "reviewReport"
   | "reviewFinding"
   | "contextPackRecipe"

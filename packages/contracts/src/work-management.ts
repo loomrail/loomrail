@@ -10,6 +10,14 @@ import {
 } from "./shared.js";
 import { reviewFindingOwnerDispositionSchema, reviewFindingSchema } from "./review.js";
 import {
+  completeQARunCommandSchema,
+  qaRunCompletedEventSchema,
+  qaRunCompletedResultSchema,
+  qaRunReservedEventSchema,
+  qaRunReservedResultSchema,
+  reserveQARunCommandSchema,
+} from "./qa.js";
+import {
   acceptanceRequestedEventSchema,
   acceptanceResolvedEventSchema,
   acceptanceResolvedResultSchema,
@@ -335,6 +343,8 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   squadAssignedEventSchema,
   agentRunStartedEventSchema,
   agentRunFinishedEventSchema,
+  qaRunReservedEventSchema,
+  qaRunCompletedEventSchema,
   pipelineStartedEventSchema,
   stageAttemptChangedEventSchema,
   humanRequestOpenedEventSchema,
@@ -526,6 +536,8 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   updateWorkItemCommandSchema,
   moveWorkItemCommandSchema,
   startAgentRunCommandSchema,
+  reserveQARunCommandSchema,
+  completeQARunCommandSchema,
   disposeReviewFindingCommandSchema,
   startMockPipelineCommandSchema,
   markWorkflowDispatchStartedCommandSchema,
@@ -625,6 +637,8 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   workItemUpdatedResultSchema,
   workItemMovedResultSchema,
   agentRunStartedResultSchema,
+  qaRunReservedResultSchema,
+  qaRunCompletedResultSchema,
   reviewFindingDisposedResultSchema,
   pipelineStartedResultSchema,
   workflowDispatchStartedResultSchema,

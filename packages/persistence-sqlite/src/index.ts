@@ -38,6 +38,10 @@ import {
   projectReadinessRunSchema,
   projectReadinessSnapshotSchema,
   projectProviderSelectionSchema,
+  qaAttachmentRefSchema,
+  qaDefectSchema,
+  qaEvidenceBundleSchema,
+  qaRunSchema,
   readinessAttestationSchema,
   readinessCheckSchema,
   sessionPauseFailureCodes,
@@ -84,6 +88,10 @@ import {
   type Project,
   type ProjectConstitutionVersion,
   type ProjectReadinessRun,
+  type QAAttachmentRef,
+  type QADefect,
+  type QAEvidenceBundle,
+  type QARun,
   type ReadinessAttestation,
   type ReadinessCheck,
   type ProviderSession,
@@ -113,6 +121,8 @@ import {
   decideProjectReadinessAssessment,
   decideProjectReadinessAttestation,
   decideReviewFindingDisposition,
+  decideQACompletion,
+  decideQAReservation,
   decideProjectProviderPreference,
   decideApproveBudgetOverride,
   decideAnswerHumanRequest,
@@ -152,6 +162,8 @@ import {
   ReadinessDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
+  QACompletionError,
+  QAReservationError,
   ReviewFindingDispositionError,
   ScaffoldDomainError,
   WorkItemDomainError,
@@ -620,6 +632,79 @@ const reviewFindingRowSchema = z.object({
   version: z.number().int(),
 });
 
+const qaRunRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  stage_attempt_id: z.string(),
+  agent_run_id: z.string(),
+  driver_id: z.string(),
+  tested_tree: z.string(),
+  target_origin: z.string(),
+  plan_json: z.string(),
+  status: z.string(),
+  error_code: z.string().nullable(),
+  error_summary: z.string().nullable(),
+  started_at: z.string(),
+  completed_at: z.string().nullable(),
+  version: z.number().int(),
+});
+
+const qaEvidenceBundleRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  qa_run_id: z.string(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  stage_attempt_id: z.string(),
+  tested_tree: z.string(),
+  verdict: z.string(),
+  environment_json: z.string(),
+  executions_json: z.string(),
+  observations_json: z.string(),
+  attachment_ids_json: z.string(),
+  defect_ids_json: z.string(),
+  created_at: z.string(),
+});
+
+const qaAttachmentRefRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  qa_run_id: z.string(),
+  kind: z.string(),
+  content_hash: z.string(),
+  byte_size: z.number().int(),
+  target_id: z.string(),
+  scenario_id: z.string(),
+  captured_at: z.string(),
+  retention_class: z.string(),
+  storage_key: z.string(),
+});
+
+const qaDefectRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  qa_run_id: z.string(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  tested_tree: z.string(),
+  ordinal: z.number().int(),
+  severity: z.string(),
+  status: z.string(),
+  title: z.string(),
+  description: z.string(),
+  reproduction_json: z.string(),
+  target_id: z.string(),
+  scenario_id: z.string(),
+  resolution_reason: z.string().nullable(),
+  created_at: z.string(),
+  resolved_at: z.string().nullable(),
+  version: z.number().int(),
+});
+
 const acceptancePackageRowSchema = z.object({
   id: z.string(),
   schema_version: z.number().int(),
@@ -805,6 +890,8 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LIST_PENDING_DISPATCHES") }).strict(),
   z.object({ type: z.literal("GET_SQUAD_ASSIGNMENT"), pipelineRunId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_AGENT_RUN"), agentRunId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_QA_RUN"), qaRunId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_QA_STATE"), pipelineRunId: opaqueIdSchema }).strict(),
   z
     .object({
       type: z.literal("GET_LATEST_SUCCEEDED_DEVELOPER_AGENT_RUN"),
@@ -1311,6 +1398,93 @@ const reviewFindingFromRow = (value: unknown): ReviewFinding => {
       row.resolved_by_type === null || row.resolved_by_id === null
         ? null
         : { type: row.resolved_by_type, id: row.resolved_by_id },
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at,
+    version: row.version,
+  });
+};
+
+const qaRunFromRow = (value: unknown): QARun => {
+  const row = qaRunRowSchema.parse(value);
+  return qaRunSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    stageAttemptId: row.stage_attempt_id,
+    agentRunId: row.agent_run_id,
+    driverId: row.driver_id,
+    testedTree: row.tested_tree,
+    targetOrigin: row.target_origin,
+    plan: parseJson(row.plan_json),
+    status: row.status,
+    error:
+      row.error_code === null || row.error_summary === null
+        ? null
+        : { code: row.error_code, summary: row.error_summary },
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    version: row.version,
+  });
+};
+
+const qaEvidenceBundleFromRow = (value: unknown): QAEvidenceBundle => {
+  const row = qaEvidenceBundleRowSchema.parse(value);
+  return qaEvidenceBundleSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    qaRunId: row.qa_run_id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    stageAttemptId: row.stage_attempt_id,
+    testedTree: row.tested_tree,
+    verdict: row.verdict,
+    environment: parseJson(row.environment_json),
+    executions: parseJson(row.executions_json),
+    observations: parseJson(row.observations_json),
+    attachmentIds: parseJson(row.attachment_ids_json),
+    defectIds: parseJson(row.defect_ids_json),
+    createdAt: row.created_at,
+  });
+};
+
+const qaAttachmentRefFromRow = (value: unknown): QAAttachmentRef => {
+  const row = qaAttachmentRefRowSchema.parse(value);
+  return qaAttachmentRefSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    qaRunId: row.qa_run_id,
+    kind: row.kind,
+    contentHash: row.content_hash,
+    byteSize: row.byte_size,
+    targetId: row.target_id,
+    scenarioId: row.scenario_id,
+    capturedAt: row.captured_at,
+    retentionClass: row.retention_class,
+    storageKey: row.storage_key,
+  });
+};
+
+const qaDefectFromRow = (value: unknown): QADefect => {
+  const row = qaDefectRowSchema.parse(value);
+  return qaDefectSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    qaRunId: row.qa_run_id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    testedTree: row.tested_tree,
+    ordinal: row.ordinal,
+    severity: row.severity,
+    status: row.status,
+    title: row.title,
+    description: row.description,
+    reproduction: parseJson(row.reproduction_json),
+    targetId: row.target_id,
+    scenarioId: row.scenario_id,
+    resolutionReason: row.resolution_reason,
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
     version: row.version,
@@ -2288,6 +2462,39 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const updateAgentRunStatus = database.prepare(
       `UPDATE agent_runs SET status = ?, finished_at = ?, version = ?
        WHERE id = ? AND version = ? AND status = 'RUNNING'`,
+    );
+    const selectQARunById = database.prepare("SELECT * FROM qa_runs WHERE id = ?");
+    const selectQARunByAgentRun = database.prepare("SELECT * FROM qa_runs WHERE agent_run_id = ?");
+    const insertQARun = database.prepare(
+      `INSERT INTO qa_runs (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+        agent_run_id, driver_id, tested_tree, target_origin, plan_json, status,
+        error_code, error_summary, started_at, completed_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const completeQARun = database.prepare(
+      `UPDATE qa_runs SET status = ?, error_code = ?, error_summary = ?, completed_at = ?, version = ?
+       WHERE id = ? AND version = ? AND status = 'RUNNING'`,
+    );
+    const insertQAEvidenceBundle = database.prepare(
+      `INSERT INTO qa_evidence_bundles (
+        id, schema_version, qa_run_id, project_id, work_item_id, pipeline_run_id,
+        stage_attempt_id, tested_tree, verdict, environment_json, executions_json,
+        observations_json, attachment_ids_json, defect_ids_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertQAAttachmentRef = database.prepare(
+      `INSERT INTO qa_attachment_refs (
+        id, schema_version, qa_run_id, kind, content_hash, byte_size, target_id,
+        scenario_id, captured_at, retention_class, storage_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertQADefect = database.prepare(
+      `INSERT INTO qa_defects (
+        id, schema_version, qa_run_id, project_id, work_item_id, tested_tree, ordinal,
+        severity, status, title, description, reproduction_json, target_id, scenario_id,
+        resolution_reason, created_at, resolved_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const selectAcceptancePackageById = database.prepare("SELECT * FROM acceptance_packages WHERE id = ?");
     const selectAcceptancePackageByRun = database.prepare(
@@ -3621,7 +3828,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     type AgentEventIntent =
       | { type: "SQUAD_ASSIGNED"; data: { assignment: SquadAssignment } }
       | { type: "AGENT_RUN_STARTED"; data: { run: AgentRun } }
-      | { type: "AGENT_RUN_FINISHED"; data: { run: AgentRun } };
+      | { type: "AGENT_RUN_FINISHED"; data: { run: AgentRun } }
+      | { type: "QA_RUN_RESERVED"; data: { qaRun: QARun } }
+      | {
+          type: "QA_RUN_COMPLETED";
+          data: { qaRun: QARun; evidenceBundleId: string | null; defectIds: string[] };
+        };
 
     const appendAgentEvent = (
       intent: AgentEventIntent,
@@ -5395,6 +5607,250 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "RESERVE_QA_RUN") {
+        const stageAttempt = readStageAttempt(command.payload.stageAttemptId);
+        const agentRunValue = selectAgentRunById.get(command.payload.agentRunId);
+        if (!stageAttempt || agentRunValue === undefined) {
+          throw new StateStoreError(
+            "QA_STABLE_TREE_MISSING",
+            "The QA StageAttempt or Browser QA AgentRun does not exist",
+          );
+        }
+        if (selectQARunByAgentRun.get(command.payload.agentRunId) !== undefined) {
+          throw new StateStoreError(
+            "QA_RUN_ALREADY_EXISTS",
+            "The Browser QA AgentRun already owns a durable QA run",
+          );
+        }
+        const treeValue = selectLatestSucceededImplementTree.get(stageAttempt.pipelineRunId);
+        if (treeValue === undefined) {
+          throw new StateStoreError(
+            "QA_STABLE_TREE_MISSING",
+            "The pipeline has no successful implementation tree to test",
+          );
+        }
+        const currentTree = resultTreeRowSchema.parse(treeValue).result_tree;
+        const qaRun = decideQAReservation(command, {
+          newQARunId: createId("qaRun"),
+          now: occurredAt,
+          currentTree,
+          stageAttempt,
+          agentRun: agentRunFromRow(agentRunValue),
+        });
+        insertQARun.run(
+          qaRun.id,
+          qaRun.schemaVersion,
+          qaRun.projectId,
+          qaRun.workItemId,
+          qaRun.pipelineRunId,
+          qaRun.stageAttemptId,
+          qaRun.agentRunId,
+          qaRun.driverId,
+          qaRun.testedTree,
+          qaRun.targetOrigin,
+          JSON.stringify(qaRun.plan),
+          qaRun.status,
+          null,
+          null,
+          qaRun.startedAt,
+          null,
+          qaRun.version,
+        );
+        const event = appendAgentEvent(
+          { type: "QA_RUN_RESERVED", data: { qaRun } },
+          {
+            workItemId: qaRun.workItemId,
+            projectId: qaRun.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "QA_RUN_RESERVED",
+          replayed: false,
+          workItemId: qaRun.workItemId,
+          qaRun,
+          event,
+        });
+      }
+
+      if (command.type === "COMPLETE_QA_RUN") {
+        if (command.actor.type !== "SYSTEM" || command.actor.id !== "local-daemon") {
+          throw new QAReservationError(
+            "QA_RUN_ACTOR_FORBIDDEN",
+            "Only the local daemon can complete a deterministic browser QA run",
+          );
+        }
+        const qaRunValue = selectQARunById.get(command.payload.qaRunId);
+        if (qaRunValue === undefined) {
+          throw new StateStoreError("QA_RUN_NOT_FOUND", "The QA run does not exist");
+        }
+        const current = qaRunFromRow(qaRunValue);
+        const treeValue = selectLatestSucceededImplementTree.get(current.pipelineRunId);
+        if (treeValue === undefined) {
+          throw new StateStoreError(
+            "QA_STABLE_TREE_MISSING",
+            "The pipeline no longer has a successful implementation tree",
+          );
+        }
+        const currentTree = resultTreeRowSchema.parse(treeValue).result_tree;
+        if (command.payload.currentTree !== currentTree) {
+          throw new QACompletionError("STALE_QA_TREE", "The measured current tree is no longer stable", {
+            testedTree: command.payload.currentTree,
+            currentTree,
+          });
+        }
+        const decision = decideQACompletion({
+          qaRun: current,
+          expectedVersion: command.payload.expectedVersion,
+          currentTree,
+          result: command.payload.result,
+          finalizedAttachments: command.payload.finalizedAttachments,
+          now: occurredAt,
+        });
+        const update = completeQARun.run(
+          decision.qaRun.status,
+          decision.qaRun.error?.code ?? null,
+          decision.qaRun.error?.summary ?? null,
+          decision.qaRun.completedAt,
+          decision.qaRun.version,
+          decision.qaRun.id,
+          current.version,
+        );
+        if (update.changes !== 1) {
+          throw new QACompletionError(
+            "QA_RUN_VERSION_CONFLICT",
+            "The QA run changed while completion was being recorded",
+            { expectedVersion: current.version },
+          );
+        }
+        const attachments = decision.evidence?.attachments ?? [];
+        for (const attachment of attachments) {
+          insertQAAttachmentRef.run(
+            attachment.id,
+            attachment.schemaVersion,
+            attachment.qaRunId,
+            attachment.kind,
+            attachment.contentHash,
+            attachment.byteSize,
+            attachment.targetId,
+            attachment.scenarioId,
+            attachment.capturedAt,
+            attachment.retentionClass,
+            attachment.storageKey,
+          );
+        }
+        const defects: QADefect[] =
+          decision.evidence?.defects.map((draft, index) =>
+            qaDefectSchema.parse({
+              ...draft,
+              schemaVersion: 1,
+              id: createId("qaDefect"),
+              qaRunId: decision.qaRun.id,
+              projectId: decision.qaRun.projectId,
+              workItemId: decision.qaRun.workItemId,
+              testedTree: decision.qaRun.testedTree,
+              ordinal: index + 1,
+              status: "OPEN",
+              resolutionReason: null,
+              createdAt: occurredAt,
+              resolvedAt: null,
+              version: 1,
+            }),
+          ) ?? [];
+        for (const defect of defects) {
+          insertQADefect.run(
+            defect.id,
+            defect.schemaVersion,
+            defect.qaRunId,
+            defect.projectId,
+            defect.workItemId,
+            defect.testedTree,
+            defect.ordinal,
+            defect.severity,
+            defect.status,
+            defect.title,
+            defect.description,
+            JSON.stringify(defect.reproduction),
+            defect.targetId,
+            defect.scenarioId,
+            null,
+            defect.createdAt,
+            null,
+            defect.version,
+          );
+        }
+        const evidence =
+          decision.evidence === null
+            ? null
+            : qaEvidenceBundleSchema.parse({
+                schemaVersion: 1,
+                id: createId("qaEvidenceBundle"),
+                qaRunId: decision.qaRun.id,
+                projectId: decision.qaRun.projectId,
+                workItemId: decision.qaRun.workItemId,
+                pipelineRunId: decision.qaRun.pipelineRunId,
+                stageAttemptId: decision.qaRun.stageAttemptId,
+                testedTree: decision.qaRun.testedTree,
+                verdict: decision.evidence.verdict,
+                environment: decision.evidence.environment,
+                executions: decision.evidence.executions,
+                observations: decision.evidence.observations,
+                attachmentIds: attachments.map(({ id }) => id),
+                defectIds: defects.map(({ id }) => id),
+                createdAt: occurredAt,
+              });
+        if (evidence) {
+          insertQAEvidenceBundle.run(
+            evidence.id,
+            evidence.schemaVersion,
+            evidence.qaRunId,
+            evidence.projectId,
+            evidence.workItemId,
+            evidence.pipelineRunId,
+            evidence.stageAttemptId,
+            evidence.testedTree,
+            evidence.verdict,
+            JSON.stringify(evidence.environment),
+            JSON.stringify(evidence.executions),
+            JSON.stringify(evidence.observations),
+            JSON.stringify(evidence.attachmentIds),
+            JSON.stringify(evidence.defectIds),
+            evidence.createdAt,
+          );
+        }
+        const event = appendAgentEvent(
+          {
+            type: "QA_RUN_COMPLETED",
+            data: {
+              qaRun: decision.qaRun,
+              evidenceBundleId: evidence?.id ?? null,
+              defectIds: defects.map(({ id }) => id),
+            },
+          },
+          {
+            workItemId: decision.qaRun.workItemId,
+            projectId: decision.qaRun.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "QA_RUN_COMPLETED",
+          replayed: false,
+          workItemId: decision.qaRun.workItemId,
+          qaRun: decision.qaRun,
+          evidence,
+          attachments,
+          defects,
+          event,
+        });
+      }
+
       if (command.type === "DISPOSE_REVIEW_FINDING") {
         const findingValue = selectReviewFindingById.get(command.payload.findingId);
         const decision = decideReviewFindingDisposition(command, {
@@ -6983,6 +7439,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           error instanceof McpDomainError ||
           error instanceof ReadinessDomainError ||
           error instanceof ProviderSelectionDomainError ||
+          error instanceof QACompletionError ||
+          error instanceof QAReservationError ||
           error instanceof ReviewFindingDispositionError ||
           error instanceof ScaffoldDomainError ||
           error instanceof WorkItemDomainError ||
@@ -7190,6 +7648,38 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           const value = selectAgentRunById.get(queryValue.agentRunId);
           return { type: "AGENT_RUNS", runs: value === undefined ? [] : [agentRunFromRow(value)] };
         }
+        case "GET_QA_RUN": {
+          const value = selectQARunById.get(queryValue.qaRunId);
+          return { type: "QA_RUN", qaRun: value === undefined ? null : qaRunFromRow(value) };
+        }
+        case "GET_QA_STATE":
+          return {
+            type: "QA_STATE",
+            runs: database
+              .prepare("SELECT * FROM qa_runs WHERE pipeline_run_id = ? ORDER BY started_at, id")
+              .all(queryValue.pipelineRunId)
+              .map(qaRunFromRow),
+            evidence: database
+              .prepare("SELECT * FROM qa_evidence_bundles WHERE pipeline_run_id = ? ORDER BY created_at, id")
+              .all(queryValue.pipelineRunId)
+              .map(qaEvidenceBundleFromRow),
+            attachments: database
+              .prepare(
+                `SELECT qa_attachment_refs.* FROM qa_attachment_refs
+                 INNER JOIN qa_runs ON qa_runs.id = qa_attachment_refs.qa_run_id
+                 WHERE qa_runs.pipeline_run_id = ? ORDER BY qa_attachment_refs.captured_at, qa_attachment_refs.id`,
+              )
+              .all(queryValue.pipelineRunId)
+              .map(qaAttachmentRefFromRow),
+            defects: database
+              .prepare(
+                `SELECT qa_defects.* FROM qa_defects
+                 INNER JOIN qa_runs ON qa_runs.id = qa_defects.qa_run_id
+                 WHERE qa_runs.pipeline_run_id = ? ORDER BY qa_defects.created_at, qa_defects.id`,
+              )
+              .all(queryValue.pipelineRunId)
+              .map(qaDefectFromRow),
+          };
         case "GET_LATEST_SUCCEEDED_DEVELOPER_AGENT_RUN": {
           const value = selectLatestSucceededDeveloperAgentRun.get(queryValue.pipelineRunId);
           return {
