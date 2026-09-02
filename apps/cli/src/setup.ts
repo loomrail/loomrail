@@ -38,6 +38,7 @@ export type SetupReadinessReport = {
     | "BACK_UP_DATA"
     | "INSTALL_CHROMIUM"
     | "CLEAR_PROVIDER_OVERRIDE"
+    | "REVIEW_PROVIDER_COMPATIBILITY"
     | "SIGN_IN_PROVIDER"
     | "RUN_START"
     | "INITIALIZE_DEMO_WORKSPACE"
@@ -99,7 +100,10 @@ const routeCheck = (
     : { status: "FAIL", code: "LIVE_PROVIDER_NOT_READY" };
 };
 
-const remediationActions = (checks: SetupReadinessReport["checks"]): SetupReadinessReport["nextActions"] => {
+const remediationActions = (
+  checks: SetupReadinessReport["checks"],
+  report: DoctorReport | null,
+): SetupReadinessReport["nextActions"] => {
   const actions: SetupReadinessReport["nextActions"][number][] = [];
   if (checks.system.code === "SYSTEM_BLOCKED" || checks.system.code === "SYSTEM_INSPECTION_UNAVAILABLE") {
     actions.push("RUN_DOCTOR");
@@ -107,7 +111,13 @@ const remediationActions = (checks: SetupReadinessReport["checks"]): SetupReadin
   if (checks.system.code === "DATA_BACKUP_REQUIRED") actions.push("BACK_UP_DATA");
   if (checks.browser.status === "FAIL") actions.push("INSTALL_CHROMIUM");
   if (checks.route.code === "PROVIDER_OVERRIDE_ACTIVE") actions.push("CLEAR_PROVIDER_OVERRIDE");
-  if (checks.route.code === "LIVE_PROVIDER_NOT_READY") actions.push("SIGN_IN_PROVIDER");
+  if (checks.route.code === "LIVE_PROVIDER_NOT_READY") {
+    const verifiedProviderNeedsAuthentication = report?.checks.providers.items.some(
+      ({ provider, compatibility, authentication }) =>
+        provider !== "MOCK" && compatibility === "VERIFIED" && authentication !== "AUTHENTICATED",
+    );
+    actions.push(verifiedProviderNeedsAuthentication ? "SIGN_IN_PROVIDER" : "REVIEW_PROVIDER_COMPATIBILITY");
+  }
   return actions;
 };
 
@@ -124,7 +134,7 @@ export const collectSetupReadiness = async (
     browser: browserCheck(browserInspection),
     route: routeCheck(route, doctor),
   };
-  const remediation = remediationActions(checks);
+  const remediation = remediationActions(checks, doctor);
   const status = Object.values(checks).some(({ status: checkStatus }) => checkStatus === "FAIL")
     ? "BLOCKED"
     : "READY";
@@ -150,6 +160,8 @@ const setupActionText: Readonly<Record<SetupReadinessReport["nextActions"][numbe
     "Stop Loomrail, back up the whole data directory, then follow the documented forward-upgrade procedure.",
   INSTALL_CHROMIUM: "Install the Browser QA prerequisite with `npx playwright install chromium`.",
   CLEAR_PROVIDER_OVERRIDE: "Unset LOOMRAIL_PROVIDER before using the guided setup route.",
+  REVIEW_PROVIDER_COMPATIBILITY:
+    "Review the exact provider version in the Loomrail compatibility matrix, then run setup again.",
   SIGN_IN_PROVIDER: "Install and sign in to a supported live provider CLI, then run setup again.",
   RUN_START: "Run `loomrail start`.",
   INITIALIZE_DEMO_WORKSPACE: "In the Workbench, initialize the bundled demo workspace.",

@@ -842,9 +842,9 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
 
     // Task 9 (milestone A2): before E1 a live adapter has no filesystem access, so it cannot serve
     // a stage it did not declare in `capabilities().stages` -- most notably IMPLEMENT. Task 10.5
-    // added the other half: `capabilities().start` is `false` when the adapter's CLI is not on this
-    // machine at all, and that must refuse every stage, not just the ones it happens not to
-    // declare -- an adapter with no executable still declares its normal `stages` (task 10.5
+    // added the other half: `capabilities().start` is `false` when the adapter is not ready for a
+    // new session, and that must refuse every stage, not just the ones it happens not to declare
+    // -- an unavailable adapter still declares its normal `stages` (task 10.5
     // deliberately keeps `start` and `stages` as separate claims; see provider-codex/provider-
     // claude-code's `capabilities()`), so checking `declaredStages` alone would have dispatched to
     // it anyway. Checked here, before a session ever opens: starting one anyway would either fail to

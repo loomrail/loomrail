@@ -24,6 +24,8 @@ const providers = (
       provider: "MOCK",
       installed: true,
       authentication: "AUTHENTICATED",
+      version: null,
+      compatibility: "BUILT_IN",
       ready: true,
       stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
       checkpointOnRequest: true,
@@ -34,6 +36,8 @@ const providers = (
       provider: "CODEX",
       installed: liveReady,
       authentication: liveReady ? "AUTHENTICATED" : "REQUIRED",
+      version: liveReady ? "0.152.1" : null,
+      compatibility: liveReady ? "VERIFIED" : "MISSING",
       ready: liveReady,
       stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
       checkpointOnRequest: true,
@@ -107,6 +111,8 @@ describe("Loomrail guided setup", () => {
     directories.push(parent);
     const missing = join(parent, "not-created");
     const report = await collectDoctorReport({
+      nodeVersion: "24.19.0",
+      platform: "darwin",
       dataLocation: { directory: missing, source: "ENVIRONMENT_OVERRIDE" },
       inspectGit: () => Promise.resolve("AVAILABLE"),
       inspectDataDirectory: () => Promise.resolve("NOT_CREATED"),
@@ -139,7 +145,25 @@ describe("Loomrail guided setup", () => {
     });
     expect(blocked.status).toBe("BLOCKED");
     expect(blocked.checks.route.code).toBe("LIVE_PROVIDER_NOT_READY");
-    expect(blocked.nextActions).toEqual(["SIGN_IN_PROVIDER"]);
+    expect(blocked.nextActions).toEqual(["REVIEW_PROVIDER_COMPATIBILITY"]);
+
+    const verifiedButSignedOut = doctor();
+    verifiedButSignedOut.checks.providers.items = verifiedButSignedOut.checks.providers.items.map((item) =>
+      item.provider === "CODEX"
+        ? {
+            ...item,
+            installed: true,
+            version: "0.152.1",
+            compatibility: "VERIFIED",
+            authentication: "REQUIRED",
+          }
+        : item,
+    );
+    const signInRequired = await collectSetupReadiness("LIVE", {
+      collectDoctor: () => Promise.resolve(verifiedButSignedOut),
+      inspectBrowser: () => Promise.resolve("AVAILABLE"),
+    });
+    expect(signInRequired.nextActions).toEqual(["SIGN_IN_PROVIDER"]);
 
     const ready = await collectSetupReadiness("LIVE", {
       collectDoctor: () => Promise.resolve(doctor({ liveReady: true, status: "PASS" })),

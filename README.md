@@ -26,9 +26,10 @@ the source of truth.
 </picture>
 
 > [!IMPORTANT]
-> Loomrail is public pre-alpha software. New projects use **Auto**: an installed, authenticated Codex or Claude Code
-> CLI can be selected for new sessions and spend provider quota. To guarantee a zero-quota first run, choose **Mock**
-> in **Settings → AI provider** before starting the workflow. Loomrail never installs or signs into a provider,
+> Loomrail is public pre-alpha software. New projects use **Auto**, but a live CLI is admitted only when its exact
+> version is verified and its provider-owned authentication succeeds. The current alpha.5 candidate has no verified
+> live row, so Auto remains on Mock and explicit live choices fail before spawn. Choose **Mock** in
+> **Settings → AI provider** before starting the workflow. Loomrail never installs or signs into a provider,
 > enables permission-bypass flags, commits, pushes, merges, or deploys for you. A task worktree is not an
 > operating-system sandbox.
 
@@ -92,14 +93,17 @@ change inspection, backup, recovery, diagnostics, upgrade, and uninstall:
 - [Owner guide](docs/guides/USER-GUIDE.md)
 - [Руководство владельца](docs/guides/USER-GUIDE.ru.md)
 - [Operations guide](docs/guides/OPERATIONS.md) · [Эксплуатация](docs/guides/OPERATIONS.ru.md)
+- [Provider compatibility](docs/guides/PROVIDER-COMPATIBILITY.md) · [Совместимость провайдеров](docs/guides/PROVIDER-COMPATIBILITY.ru.md)
 - [Reproducible full-route example](docs/examples/full-route/README.md)
 - [Security and trust boundaries](docs/security/THREAT-MODEL.md)
 
-Install and authenticate the provider CLI yourself, then start Loomrail normally. In **Settings → AI provider**, keep
-**Auto** to use an available signed-in CLI or choose Codex, Claude Code, or Mock explicitly for that project. Use
-**Check again** after installing or signing in; no extra launch command is required. `LOOMRAIL_PROVIDER` remains an
-optional process-wide override for automation and troubleshooting. Read the owner guide and threat model before
-exposing a repository to either live CLI.
+Install and authenticate the provider CLI yourself, then start Loomrail normally. In **Settings → AI provider**, use
+**Check again** to read its bounded version/auth status. Auto uses only an exact `VERIFIED` and signed-in CLI; an
+unverified or too-old explicit choice remains visible but fails before spawn. The current alpha.5 matrix has no
+verified live row, so use Mock until a version is promoted through cross-platform real-CLI evidence.
+`LOOMRAIL_PROVIDER` remains an optional process-wide override for automation and troubleshooting, but it does not
+bypass compatibility. Read the compatibility guide, owner guide, and threat model before exposing a repository to a
+live CLI.
 
 Context7 is different from an AI provider: its exact-pinned MCP server ships with Loomrail. In **Settings → MCP
 connections**, choose **Review bundled Context7**; no global install or `npx` command is needed. Loomrail still requires
@@ -109,7 +113,8 @@ machine, so never include secrets, personal data, or proprietary code.
 ## Current boundary
 
 - Local browser UI, loopback daemon, and local SQLite state.
-- Auto-discovered or explicitly selected providers, plus a deterministic Mock route with no provider quota.
+- Exact-version-gated provider discovery and explicit selection, plus a deterministic Mock route with no provider
+  quota. The current candidate admits no live CLI until a cross-platform matrix row is verified.
 - Up to three agent runs in parallel by default, with durable global, Project, provider, and workspace gates plus an
   Agent Fleet view of active roles and exact queue reasons.
 - Project-scoped local MCP connections and a bundled, owner-approved Context7 preset.

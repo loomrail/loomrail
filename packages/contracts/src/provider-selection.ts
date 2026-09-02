@@ -22,9 +22,18 @@ export const projectProviderSelectionSchema = z
   .strict();
 
 export const providerAuthenticationSchema = z.enum(["AUTHENTICATED", "REQUIRED", "UNKNOWN"]);
+export const providerCompatibilitySchema = z.enum([
+  "BUILT_IN",
+  "MISSING",
+  "UNLAUNCHABLE",
+  "VERSION_UNREADABLE",
+  "TOO_OLD",
+  "VERIFIED",
+  "UNVERIFIED",
+]);
 export const providerSelectionSourceSchema = z.enum(["AUTO", "PROJECT_PREFERENCE", "ENVIRONMENT_OVERRIDE"]);
 export const providerFallbackReasonSchema = z
-  .enum(["NO_AUTHENTICATED_LIVE_PROVIDER", "LIVE_PROVIDER_UNAVAILABLE"])
+  .enum(["NO_READY_LIVE_PROVIDER", "LIVE_PROVIDER_UNAVAILABLE"])
   .nullable();
 
 export const providerAvailabilitySchema = z
@@ -32,6 +41,8 @@ export const providerAvailabilitySchema = z
     provider: providerIdSchema,
     installed: z.boolean(),
     authentication: providerAuthenticationSchema,
+    version: z.string().min(1).max(48).nullable(),
+    compatibility: providerCompatibilitySchema,
     ready: z.boolean(),
     stages: z.array(workflowStageSchema).min(1).max(20),
     checkpointOnRequest: z.boolean(),
@@ -41,15 +52,42 @@ export const providerAvailabilitySchema = z
   .strict()
   .superRefine((availability, context) => {
     if (availability.provider === "MOCK") {
-      if (!availability.installed || availability.authentication !== "AUTHENTICATED" || !availability.ready) {
+      if (
+        !availability.installed ||
+        availability.authentication !== "AUTHENTICATED" ||
+        availability.version !== null ||
+        availability.compatibility !== "BUILT_IN" ||
+        !availability.ready
+      ) {
         context.addIssue({ code: "custom", message: "The Mock provider is always ready" });
       }
       return;
     }
-    if (availability.ready !== (availability.installed && availability.authentication === "AUTHENTICATED")) {
+    if (!availability.installed && availability.compatibility !== "MISSING") {
+      context.addIssue({ code: "custom", message: "A missing live provider must report MISSING" });
+    }
+    const reportsVersion = ["TOO_OLD", "VERIFIED", "UNVERIFIED"].includes(availability.compatibility);
+    if (reportsVersion !== (availability.version !== null)) {
       context.addIssue({
         code: "custom",
-        message: "Live provider readiness must match install and auth state",
+        message: "Live provider version presence must match its compatibility state",
+      });
+    }
+    if (availability.compatibility !== "VERIFIED" && availability.authentication !== "UNKNOWN") {
+      context.addIssue({
+        code: "custom",
+        message: "Authentication is observed only for an exact verified live provider",
+      });
+    }
+    if (
+      availability.ready !==
+      (availability.installed &&
+        availability.compatibility === "VERIFIED" &&
+        availability.authentication === "AUTHENTICATED")
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Live provider readiness must match install, compatibility and auth state",
       });
     }
   });
@@ -138,6 +176,7 @@ export const refreshProviderAvailabilityRequestSchema = z
 export type ProviderPreference = z.infer<typeof providerPreferenceSchema>;
 export type ProjectProviderSelection = z.infer<typeof projectProviderSelectionSchema>;
 export type ProviderAuthentication = z.infer<typeof providerAuthenticationSchema>;
+export type ProviderCompatibility = z.infer<typeof providerCompatibilitySchema>;
 export type ProviderSelectionSource = z.infer<typeof providerSelectionSourceSchema>;
 export type ProviderAvailability = z.infer<typeof providerAvailabilitySchema>;
 export type ProjectProviderSelectionResponse = z.infer<typeof projectProviderSelectionResponseSchema>;

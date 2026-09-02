@@ -7,6 +7,7 @@ import {
   providerPreferenceSchema,
   type ConstitutionPresetId,
   type ListedProject,
+  type ProviderAvailability,
   type ReadinessCheck,
   type SecurityFinding,
   type ProviderId,
@@ -400,6 +401,20 @@ const providerNames: Record<ProviderId, string> = {
   CLAUDE_CODE: "Claude Code",
 };
 
+const providerStatusKey = (provider: ProviderAvailability | undefined): TranslationKey => {
+  if (provider?.ready === true) return "settings.provider.status.ready";
+  if (provider?.installed === false || provider?.compatibility === "MISSING") {
+    return "settings.provider.status.notInstalled";
+  }
+  if (provider?.compatibility === "TOO_OLD") return "settings.provider.status.tooOld";
+  if (provider?.compatibility === "UNVERIFIED") return "settings.provider.status.unverified";
+  if (provider?.compatibility === "UNLAUNCHABLE" || provider?.compatibility === "VERSION_UNREADABLE") {
+    return "settings.provider.status.versionUnreadable";
+  }
+  if (provider?.authentication === "REQUIRED") return "settings.provider.status.authRequired";
+  return "settings.provider.status.unknown";
+};
+
 const ProjectProviderPanel = ({ project }: { project: ListedProject }): React.JSX.Element => {
   const { t } = useI18n();
   const selectionQuery = useProjectProviderSelection(project.id);
@@ -415,14 +430,7 @@ const ProjectProviderPanel = ({ project }: { project: ListedProject }): React.JS
         : selectionQuery.error instanceof Error
           ? selectionQuery.error
           : null;
-  const statusKey =
-    effective?.ready === true
-      ? "settings.provider.status.ready"
-      : effective?.installed === false
-        ? "settings.provider.status.notInstalled"
-        : effective?.authentication === "REQUIRED"
-          ? "settings.provider.status.authRequired"
-          : "settings.provider.status.unknown";
+  const statusKey = providerStatusKey(effective);
 
   return (
     <div className="provider-settings">
@@ -471,7 +479,7 @@ const ProjectProviderPanel = ({ project }: { project: ListedProject }): React.JS
               provider: providerNames[selection.effectiveProvider],
             })}
           </p>
-          {selection.fallbackReason === "NO_AUTHENTICATED_LIVE_PROVIDER" ? (
+          {selection.fallbackReason === "NO_READY_LIVE_PROVIDER" ? (
             <p>{t("settings.provider.fallback")}</p>
           ) : null}
           {selection.environmentOverrideLocked ? (
@@ -483,6 +491,19 @@ const ProjectProviderPanel = ({ project }: { project: ListedProject }): React.JS
                   })}
             </p>
           ) : null}
+          <ul aria-label={t("settings.provider.compatibility")} className="provider-settings__compatibility">
+            {selection.providers
+              .filter(({ provider }) => provider !== "MOCK")
+              .map((provider) => (
+                <li key={provider.provider}>
+                  <span>{providerNames[provider.provider]}</span>
+                  <span>
+                    {provider.version === null ? "" : `v${provider.version} · `}
+                    {t(providerStatusKey(provider))}
+                  </span>
+                </li>
+              ))}
+          </ul>
         </div>
       )}
 

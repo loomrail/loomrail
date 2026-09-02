@@ -68,6 +68,11 @@ describe("Project provider settings API", () => {
       env: {},
       adapters: { CODEX: codex, CLAUDE_CODE: claude },
       executableAvailable: () => true,
+      probeCompatibility: (provider) =>
+        Promise.resolve({
+          compatibility: "VERIFIED",
+          version: provider === "CODEX" ? "0.152.1" : "2.1.258",
+        }),
       probeAuthentication: () => Promise.resolve("AUTHENTICATED"),
     });
     await registry.refresh();
@@ -110,6 +115,79 @@ describe("Project provider settings API", () => {
     ).toBe("CODEX");
   });
 
+  it("probes auth only after exact compatibility and observes a verified version on refresh", async () => {
+    let codexVerified = false;
+    const authProbes: ProviderId[] = [];
+    const registry = createProviderRegistry({
+      env: {},
+      adapters: {
+        CODEX: inertAdapter("CODEX", stages),
+        CLAUDE_CODE: inertAdapter("CLAUDE_CODE", ["DISCOVERY", "PLAN", "REVIEW"]),
+      },
+      executableAvailable: () => true,
+      probeCompatibility: (provider) =>
+        Promise.resolve(
+          provider === "CODEX"
+            ? {
+                compatibility: codexVerified ? ("VERIFIED" as const) : ("UNVERIFIED" as const),
+                version: "0.152.1",
+              }
+            : { compatibility: "TOO_OLD" as const, version: "2.1.114" },
+        ),
+      probeAuthentication: (provider) => {
+        authProbes.push(provider);
+        return Promise.resolve("AUTHENTICATED");
+      },
+    });
+
+    await registry.refresh();
+    expect(authProbes).toEqual([]);
+    expect(registry.availability().find(({ provider }) => provider === "CODEX")).toMatchObject({
+      compatibility: "UNVERIFIED",
+      version: "0.152.1",
+      authentication: "UNKNOWN",
+      ready: false,
+    });
+    expect(registry.availability().find(({ provider }) => provider === "CLAUDE_CODE")).toMatchObject({
+      compatibility: "TOO_OLD",
+      version: "2.1.114",
+      authentication: "UNKNOWN",
+      ready: false,
+    });
+    const project: Project = {
+      schemaVersion: 1,
+      id: "project-unverified",
+      workspaceId: "workspace-local",
+      fixtureId: null,
+      name: "Unverified provider",
+      repositoryPath: directory,
+      providerPreference: "AUTO",
+      status: "ACTIVE",
+      version: 1,
+      createdAt: "2026-09-02T00:00:00.000Z",
+      updatedAt: "2026-09-02T00:00:00.000Z",
+    };
+    expect(registry.resolve(project).response).toMatchObject({
+      effectiveProvider: "MOCK",
+      fallbackReason: "NO_READY_LIVE_PROVIDER",
+    });
+    const explicit = registry.resolve({ ...project, providerPreference: "CODEX" });
+    expect(explicit.response).toMatchObject({
+      effectiveProvider: "CODEX",
+      fallbackReason: "LIVE_PROVIDER_UNAVAILABLE",
+    });
+    expect(explicit.adapter.capabilities().start).toBe(false);
+
+    codexVerified = true;
+    await registry.refresh();
+    expect(authProbes).toEqual(["CODEX"]);
+    expect(registry.availability().find(({ provider }) => provider === "CODEX")).toMatchObject({
+      compatibility: "VERIFIED",
+      authentication: "AUTHENTICATED",
+      ready: true,
+    });
+  });
+
   it("auto-selects the one authenticated live CLI and persists an explicit choice", async () => {
     let claudeAuthenticated = false;
     const registry = createProviderRegistry({
@@ -119,6 +197,11 @@ describe("Project provider settings API", () => {
         CLAUDE_CODE: inertAdapter("CLAUDE_CODE", ["DISCOVERY", "PLAN", "REVIEW"]),
       },
       executableAvailable: () => true,
+      probeCompatibility: (provider) =>
+        Promise.resolve({
+          compatibility: "VERIFIED",
+          version: provider === "CODEX" ? "0.152.1" : "2.1.258",
+        }),
       probeAuthentication: (provider) =>
         Promise.resolve(provider === "CODEX" || claudeAuthenticated ? "AUTHENTICATED" : "REQUIRED"),
     });
@@ -146,6 +229,8 @@ describe("Project provider settings API", () => {
     expect(initial.providers.find(({ provider }) => provider === "CLAUDE_CODE")).toMatchObject({
       installed: true,
       authentication: "REQUIRED",
+      version: "2.1.258",
+      compatibility: "VERIFIED",
       ready: false,
     });
 

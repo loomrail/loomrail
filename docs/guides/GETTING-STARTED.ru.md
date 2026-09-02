@@ -33,14 +33,18 @@ npx loomrail start
 ```
 
 Тег `next` явно выбирает публичный pre-alpha канал. Launcher слушает только `127.0.0.1` и открывает одноразовую
-авторизованную ссылку. Новый проект использует **Авто**, поэтому Loomrail может найти установленный CLI с активным
-входом; в следующем разделе вы переключите demo-проект на **Mock** до запуска workflow. Не закрывайте терминал.
+авторизованную ссылку. Новый проект использует **Авто**, но Loomrail допускает только exact verified CLI с активным
+входом. В текущем candidate нет verified live row, поэтому Авто остаётся на Mock; в следующем разделе вы также явно
+зафиксируете этот выбор до запуска workflow. Не закрывайте терминал.
 
 Chromium скачивается один раз как обязательная среда Browser QA и не использует ваш авторизованный browser profile.
 В setup prompt нажмите Enter для рекомендуемого **Mock walkthrough**. Setup объединяет read-only диагностику с
 проверками Chromium и выбранного маршрута; он ничего не меняет и не сохраняет. Новая база или отсутствующий
 live-provider login безопасны для Mock route. Machine-readable setup, коды диагностики, upgrade, rollback, backup и
 uninstall описаны в [operations guide](OPERATIONS.ru.md).
+
+Provider version проверяется fail closed независимо от setup. Перед любым live route прочитайте
+[compatibility matrix](PROVIDER-COMPATIBILITY.ru.md).
 
 Чтобы браузер не открывался автоматически:
 

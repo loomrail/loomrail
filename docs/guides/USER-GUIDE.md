@@ -57,21 +57,22 @@ a graceful shutdown and wait for the command to exit.
 
 Provider choice belongs to a Project. Open **Settings → AI provider** after selecting the project:
 
-| Choice      | What happens                                                                                                    |
-| ----------- | --------------------------------------------------------------------------------------------------------------- |
-| Auto        | Uses an installed, authenticated live CLI. If none is ready, new sessions use the clearly marked Mock fallback. |
-| Mock        | Deterministic test double for agent work. Browser QA is still measured by the local Playwright driver.          |
-| Codex       | The real `codex` CLI runs supported agent stages in the task's Git worktree. Browser QA stays daemon-owned.     |
-| Claude Code | The real `claude` CLI serves Discovery, Plan, and Review. Unsupported agent stages stop as a Human Request.     |
+| Choice      | What happens                                                                                                   |
+| ----------- | -------------------------------------------------------------------------------------------------------------- |
+| Auto        | Uses an exact verified, installed, authenticated live CLI. Otherwise it uses the clearly marked Mock fallback. |
+| Mock        | Deterministic test double for agent work. Browser QA is still measured by the local Playwright driver.         |
+| Codex       | The real `codex` CLI runs supported agent stages in the task's Git worktree. Browser QA stays daemon-owned.    |
+| Claude Code | The real `claude` CLI serves Discovery, Plan, and Review. Unsupported agent stages stop as a Human Request.    |
 
 Install and authenticate Codex or Claude Code with that provider's own CLI, then start Loomrail normally. Choose
-**Check again** after installing or signing in. Loomrail checks only whether the executable exists and whether the
-provider's status command succeeds; it does not capture credentials or status output. When both live CLIs are ready,
-Auto prefers the one with broader stage coverage. A change applies to new provider sessions; a running session keeps
-the adapter it started with.
+**Check again** after installing or signing in. Loomrail first runs a bounded `--version` probe and invokes the
+provider's output-free auth status only for an exact `VERIFIED` version. It does not capture credentials or raw
+status/version output. When both live CLIs are ready, Auto prefers the one with broader stage coverage. A change
+applies to new provider sessions; a running session keeps the adapter it started with.
 
-An explicit live choice that is not installed or authenticated is refused visibly rather than silently replaced by
-Mock. Start with **Mock** even if you plan to use Codex: it confirms installation, browser authentication,
+An explicit live choice that is missing, unverified, too old, unreadable, or not authenticated is refused visibly
+rather than silently replaced by Mock. The current alpha.5 candidate has no verified live row; see the
+[exact compatibility matrix](PROVIDER-COMPATIBILITY.md). Start with **Mock** even if you plan to use Codex: it confirms installation, browser authentication,
 persistence, Human Requests, budgets, and acceptance without spending provider quota.
 
 `LOOMRAIL_PROVIDER=MOCK|CODEX|CLAUDE_CODE` remains an optional, case-sensitive process-wide override for automation
@@ -223,9 +224,10 @@ the earlier decision in the audit history.
 ## 5. Run and inspect live work
 
 Install and sign into the provider CLI, open **Settings → AI provider**, choose **Auto** or the provider explicitly,
-and use **Check again**. Confirm that the panel names the effective live provider and shows **Ready**, then create a
-task in the registered project. No Loomrail restart or extra launch command is required. The brief and acceptance
-criteria are the durable instructions each session receives.
+and use **Check again**. Do not start live work unless the exact version row is `VERIFIED` and the panel shows
+**Ready**. The current alpha.5 candidate has no such row, so this section describes the gated route that becomes
+available only after a reviewed matrix promotion. No Loomrail restart or extra launch command is required after such
+a promotion. The brief and acceptance criteria are the durable instructions each session receives.
 
 For a bounded repository and exact brief you can safely discard afterwards, use the
 [reproducible Codex route](../examples/full-route/README.md).
@@ -326,9 +328,11 @@ records, Browser QA evidence, repositories, workspaces, or unknown neighboring f
 **The page says the local session ended.** The daemon stopped or the one-time session is no longer valid. Restart
 Loomrail and use the new authenticated tab. Refreshing an old tab cannot mint a new session.
 
-**The selected provider CLI was not found.** Install and authenticate that CLI using its own instructions, then choose
-**Settings → AI provider → Check again**. No extra Loomrail launch command is required. An explicit unavailable
-provider is refused rather than silently replaced by Mock; Auto may use the clearly labelled Mock fallback.
+**The selected provider CLI is not ready.** Install and authenticate that CLI using its own instructions, then choose
+**Settings → AI provider → Check again**. If the panel says the version is unverified, too old, or unreadable, stay on
+Mock and consult the [compatibility matrix](PROVIDER-COMPATIBILITY.md); installation or login cannot bypass that gate.
+An explicit unavailable provider is refused rather than silently replaced by Mock; Auto uses the clearly labelled
+Mock fallback.
 
 **The launcher fell back to mock.** Check the exact case-sensitive value: `MOCK`, `CODEX`, or `CLAUDE_CODE`.
 
@@ -355,7 +359,8 @@ instead of masquerading as an empty list.
 - The npm package is pre-alpha and there is no desktop installer.
 - The daemon is local-only; there is no remote or multi-user mode.
 - Provider preference is saved per Project; an optional process-wide environment override locks it until restart.
-- Claude Code has no validated write path for Implementation; Browser QA is daemon-owned.
+- No live provider version has a cross-platform verified matrix row in the current candidate; Browser QA is
+  daemon-owned.
 - Loomrail does not commit, squash, push, merge, or clean up the owner's result.
 - There is no supported online state export, retention UI, or portable workspace restore.
 - A worktree is collision isolation, not a complete security sandbox.

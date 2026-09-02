@@ -3314,9 +3314,9 @@ describe("stage capability gate", () => {
     }
   });
 
-  // Task 10.5's own half of this gate: `capabilities().start` is `false` when the adapter's CLI is
-  // not installed on this machine at all, and `decideDispatchStage` (packages/domain/src/workflow.ts)
-  // must refuse on that alone, before it ever looks at `declaredStages`. Every prior test of that
+  // Task 10.5's own half of this gate: `capabilities().start` is `false` when the adapter is not
+  // ready for a new session, and `decideDispatchStage` (packages/domain/src/workflow.ts) must refuse
+  // on that alone, before it ever looks at `declaredStages`. Every prior test of that
   // check (packages/domain/test/workflow.unit.test.ts) exercises the pure decision function
   // directly -- nothing before this test drove the actual wiring at the `session-loop.ts` call site
   // that reads `capabilities.start` and passes it through as `canStart`. Hardcoding `canStart: true`
@@ -3392,10 +3392,10 @@ describe("stage capability gate", () => {
       expect(request).toMatchObject({ status: "OPEN", kind: "FREE_TEXT", blocking: true });
       const wording = `${request?.title ?? ""} ${request?.context ?? ""}`;
       expect(wording).toContain("CODEX");
-      expect(wording).toContain("not installed");
+      expect(wording).toContain("not ready");
       // Distinguishes this from the sibling "stage not declared" refusal above -- reusing that
-      // branch's wording here would point the owner at the wrong fix (reassign the stage, when the
-      // actual fix is installing the CLI).
+      // branch's wording here would point the owner at the wrong fix (rewriting the workflow rather
+      // than reviewing provider readiness).
       expect(wording).not.toContain("cannot serve");
     } finally {
       await daemon.whenIdle();
@@ -3477,7 +3477,7 @@ describe("stage capability gate", () => {
       expect(request).toMatchObject({ status: "OPEN", kind: "FREE_TEXT", blocking: true });
       const wording = `${request?.title ?? ""} ${request?.context ?? ""}`;
       expect(wording).toContain("CODEX");
-      expect(wording).toContain("not installed");
+      expect(wording).toContain("not ready");
     } finally {
       await daemon.whenIdle();
       await daemon.close();

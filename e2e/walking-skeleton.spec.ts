@@ -3107,9 +3107,15 @@ test.describe("authenticated walking skeleton", () => {
   });
 
   test("selects and persists the Project AI provider from Settings", async ({ page }) => {
+    let codexVersion = "0.152.1";
     const providerRegistry = createProviderRegistry({
       env: {},
       executableAvailable: (provider) => provider === "CODEX",
+      probeCompatibility: () =>
+        Promise.resolve({
+          compatibility: codexVersion === "0.152.1" ? ("VERIFIED" as const) : ("UNVERIFIED" as const),
+          version: codexVersion,
+        }),
       probeAuthentication: (provider) => Promise.resolve(provider === "CODEX" ? "AUTHENTICATED" : "UNKNOWN"),
     });
     daemon = await startDaemon({
@@ -3126,6 +3132,20 @@ test.describe("authenticated walking skeleton", () => {
     const provider = settings.locator(".provider-settings");
     await expect(provider.getByText("New sessions use Codex.", { exact: true })).toBeVisible();
     await expect(provider.getByText("Ready", { exact: true })).toBeVisible();
+    const compatibility = provider.getByRole("list", { name: "Detected CLI compatibility" });
+    await expect(compatibility.getByRole("listitem").filter({ hasText: "Codex" })).toContainText(
+      "v0.152.1 · Ready",
+    );
+    await expect(compatibility.getByRole("listitem").filter({ hasText: "Claude Code" })).toContainText(
+      "Not installed",
+    );
+
+    codexVersion = "0.152.2";
+    await provider.getByRole("button", { name: "Check again" }).click();
+    await expect(provider.getByText("New sessions use Mock.", { exact: true })).toBeVisible();
+    await expect(compatibility.getByRole("listitem").filter({ hasText: "Codex" })).toContainText(
+      "v0.152.2 · Version not verified",
+    );
 
     const selector = provider.getByRole("combobox", { name: "Provider for new sessions" });
     await selector.focus();
@@ -3156,6 +3176,22 @@ test.describe("authenticated walking skeleton", () => {
     await expect(
       page.locator(".provider-settings").getByRole("heading", { name: "ИИ-провайдер" }),
     ).toBeVisible();
+    await expect(
+      page.locator(".provider-settings").getByRole("list", { name: "Совместимость найденных CLI" }),
+    ).toBeVisible();
+    const russianCompatibility = page
+      .locator(".provider-settings")
+      .getByRole("list", { name: "Совместимость найденных CLI" });
+    await expect(russianCompatibility.getByRole("listitem").filter({ hasText: "Codex" })).toContainText(
+      "v0.152.2 · Версия не проверена",
+    );
+    await expect(russianCompatibility.getByRole("listitem").filter({ hasText: "Claude Code" })).toContainText(
+      "Не установлен",
+    );
+
+    await page.setViewportSize({ width: 320, height: 720 });
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    expect(await page.locator("body").evaluate((body) => body.scrollWidth <= body.clientWidth)).toBe(true);
   });
 
   test("approves, probes, grants, persists and revokes an MCP connection in Settings", async ({ page }) => {

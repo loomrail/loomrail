@@ -50,10 +50,9 @@ describe("startup report", () => {
     expect(report).toContain("no real agent runs");
   });
 
-  // Selected and unable to run are different claims: `capabilities().start` is false when the CLI
-  // is not on this machine, and without this line the owner learns it from the first refused
-  // dispatch instead of from startup.
-  it("warns that a selected live adapter has no CLI on this machine", () => {
+  // Selected and ready are different claims: compatibility/auth can keep `capabilities().start`
+  // false, and without this line the owner learns it from the first refused dispatch.
+  it("warns that a selected live adapter is not ready for managed sessions", () => {
     const report = formatStartupReport({
       baseUrl,
       bootstrapUrl,
@@ -68,7 +67,8 @@ describe("startup report", () => {
     }).join("\n");
 
     expect(report).toContain("CODEX");
-    expect(report).toContain("not found on this machine");
+    expect(report).toContain("not ready for managed sessions");
+    expect(report).toContain("Settings");
   });
 
   // A live provider used to get strictly less than the mock: one bare line, "Provider: CODEX.",

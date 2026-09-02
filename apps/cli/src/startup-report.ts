@@ -1,7 +1,7 @@
 export type StartupProvider = {
   /** The adapter this daemon will dispatch every stage to, for its whole lifetime. */
   provider: string;
-  /** `capabilities().start` -- whether the adapter's CLI was actually found on this machine. */
+  /** `capabilities().start` -- whether the adapter is admitted to start a new managed session. */
   cliAvailable: boolean;
   /** `false` when LOOMRAIL_PROVIDER named something this daemon could not read. */
   recognised: boolean;
@@ -30,7 +30,7 @@ export type StartupReport = {
 
 // Which adapter is live is not a detail: MOCK completes every stage successfully, so an owner who
 // mistyped `LOOMRAIL_PROVIDER` can watch a whole delivery run and believe a live agent did it. And
-// an adapter whose CLI is missing is selected but cannot start -- something the owner would
+// a live adapter can remain selected but not ready -- something the owner would
 // otherwise learn only from the first refused dispatch. Both facts are stated here, at the one
 // moment the owner is definitely reading.
 //
@@ -61,7 +61,7 @@ const providerLines = ({
     provider === "MOCK"
       ? ["Provider: MOCK (the deterministic test double -- no real agent runs)."]
       : [
-          `Provider: ${provider}${cliAvailable ? "" : " -- but its CLI was not found on this machine, so dispatches will be refused"}.`,
+          `Provider: ${provider}${cliAvailable ? "" : " -- but it is not ready for managed sessions, so dispatches will be refused; review its exact status in Settings"}.`,
           `It serves ${stages.join(", ")}; any other stage is refused to you as a question rather than dispatched.`,
           worksInRepository
             ? "Each stage it runs works in a Git worktree cut for that task, outside your repository and on a branch of its own -- reading your code as well as changing it. Your working copy is untouched, and Loomrail pushes nothing."

@@ -8,6 +8,7 @@ import {
   type ProjectProviderSelectionResponse,
   type ProviderAuthentication,
   type ProviderAvailability,
+  type ProviderCompatibility,
   type ProviderId,
   type ProviderPreference,
   type WorkflowStage,
@@ -16,6 +17,8 @@ import type { ProviderAdapter } from "@loomrail/provider-core";
 import { createClaudeCodeProvider } from "@loomrail/provider-claude-code";
 import { createCodexProvider } from "@loomrail/provider-codex";
 import { createMockProvider } from "@loomrail/provider-mock";
+
+import { probeProviderVersion, type ProviderVersionObservation } from "./provider-compatibility.js";
 
 export const LOOMRAIL_PROVIDER_ENV_VAR = "LOOMRAIL_PROVIDER";
 export const LOOMRAIL_PROVIDER_VALUES = ["MOCK", "CODEX", "CLAUDE_CODE"] as const;
@@ -27,6 +30,7 @@ type LiveProviderId = (typeof LIVE_PROVIDER_IDS)[number];
 type ProviderAdapters = Readonly<Record<ProviderId, ProviderAdapter>>;
 
 export type ProviderAuthProbe = (provider: LiveProviderId) => Promise<ProviderAuthentication>;
+export type ProviderCompatibilityProbe = (provider: LiveProviderId) => Promise<ProviderVersionObservation>;
 
 export type ProviderResolution = {
   provider: ProviderId;
@@ -92,7 +96,7 @@ const isExecutableOnDisk = (
   const bases =
     isAbsolute(command) || command.includes(sep)
       ? [command]
-      : (env["PATH"] ?? "")
+      : (env["PATH"] ?? env["Path"] ?? "")
           .split(delimiter)
           .filter((directory) => directory.length > 0)
           .map((directory) => join(directory, command));
@@ -194,13 +198,18 @@ const availabilityFor = (
   adapter: ProviderAdapter,
   installed: boolean,
   authentication: ProviderAuthentication,
+  observation: { compatibility: ProviderCompatibility; version: string | null },
 ): ProviderAvailability => {
   const capabilities = adapter.capabilities();
-  const ready = provider === "MOCK" || (installed && authentication === "AUTHENTICATED");
+  const ready =
+    provider === "MOCK" ||
+    (installed && observation.compatibility === "VERIFIED" && authentication === "AUTHENTICATED");
   return {
     provider,
     installed,
     authentication,
+    version: observation.version,
+    compatibility: observation.compatibility,
     ready,
     stages: capabilities.stages,
     checkpointOnRequest: capabilities.checkpointOnRequest,
@@ -225,6 +234,7 @@ export const createProviderRegistry = (
     env?: Readonly<Record<string, string | undefined>>;
     adapters?: Partial<ProviderAdapters>;
     probeAuthentication?: ProviderAuthProbe;
+    probeCompatibility?: ProviderCompatibilityProbe;
     executableAvailable?: (provider: LiveProviderId) => boolean;
   } = {},
 ): ProviderRegistry => {
@@ -236,14 +246,26 @@ export const createProviderRegistry = (
     CLAUDE_CODE: options.adapters?.CLAUDE_CODE ?? createClaudeCodeProvider(),
   };
   const customAuthProbe = options.probeAuthentication;
+  const compatibilityProbe =
+    options.probeCompatibility ??
+    ((provider: LiveProviderId) => probeProviderVersion(provider, { environment: env }));
   const executableAvailable =
     options.executableAvailable ??
     ((provider: LiveProviderId): boolean => isExecutableOnDisk(statusCommand[provider].command, env));
   let firstRefresh = true;
   let availability: Readonly<Record<ProviderId, ProviderAvailability>> = {
-    MOCK: availabilityFor("MOCK", adapters.MOCK, true, "AUTHENTICATED"),
-    CODEX: availabilityFor("CODEX", adapters.CODEX, false, "UNKNOWN"),
-    CLAUDE_CODE: availabilityFor("CLAUDE_CODE", adapters.CLAUDE_CODE, false, "UNKNOWN"),
+    MOCK: availabilityFor("MOCK", adapters.MOCK, true, "AUTHENTICATED", {
+      compatibility: "BUILT_IN",
+      version: null,
+    }),
+    CODEX: availabilityFor("CODEX", adapters.CODEX, false, "UNKNOWN", {
+      compatibility: "MISSING",
+      version: null,
+    }),
+    CLAUDE_CODE: availabilityFor("CLAUDE_CODE", adapters.CLAUDE_CODE, false, "UNKNOWN", {
+      compatibility: "MISSING",
+      version: null,
+    }),
   };
 
   const refresh = async (): Promise<void> => {
@@ -252,18 +274,40 @@ export const createProviderRegistry = (
       CODEX: executableAvailable("CODEX"),
       CLAUDE_CODE: executableAvailable("CLAUDE_CODE"),
     } as const;
+    const [codexCompatibility, claudeCompatibility] = await Promise.all([
+      installed.CODEX
+        ? compatibilityProbe("CODEX")
+        : Promise.resolve({ compatibility: "MISSING" as const, version: null }),
+      installed.CLAUDE_CODE
+        ? compatibilityProbe("CLAUDE_CODE")
+        : Promise.resolve({ compatibility: "MISSING" as const, version: null }),
+    ]);
     const [codexAuthentication, claudeAuthentication] = await Promise.all([
-      installed.CODEX ? authProbe("CODEX") : Promise.resolve<ProviderAuthentication>("UNKNOWN"),
-      installed.CLAUDE_CODE ? authProbe("CLAUDE_CODE") : Promise.resolve<ProviderAuthentication>("UNKNOWN"),
+      codexCompatibility.compatibility === "VERIFIED"
+        ? authProbe("CODEX")
+        : Promise.resolve<ProviderAuthentication>("UNKNOWN"),
+      claudeCompatibility.compatibility === "VERIFIED"
+        ? authProbe("CLAUDE_CODE")
+        : Promise.resolve<ProviderAuthentication>("UNKNOWN"),
     ]);
     availability = {
-      MOCK: availabilityFor("MOCK", adapters.MOCK, true, "AUTHENTICATED"),
-      CODEX: availabilityFor("CODEX", adapters.CODEX, installed.CODEX, codexAuthentication),
+      MOCK: availabilityFor("MOCK", adapters.MOCK, true, "AUTHENTICATED", {
+        compatibility: "BUILT_IN",
+        version: null,
+      }),
+      CODEX: availabilityFor(
+        "CODEX",
+        adapters.CODEX,
+        installed.CODEX,
+        codexAuthentication,
+        codexCompatibility,
+      ),
       CLAUDE_CODE: availabilityFor(
         "CLAUDE_CODE",
         adapters.CLAUDE_CODE,
         installed.CLAUDE_CODE,
         claudeAuthentication,
+        claudeCompatibility,
       ),
     };
     firstRefresh = false;
@@ -299,7 +343,7 @@ export const createProviderRegistry = (
     const effectiveAvailability = availability[effectiveProvider];
     const fallbackReason =
       preferred === null && effectiveProvider === "MOCK"
-        ? "NO_AUTHENTICATED_LIVE_PROVIDER"
+        ? "NO_READY_LIVE_PROVIDER"
         : preferred !== null && !effectiveAvailability.ready
           ? "LIVE_PROVIDER_UNAVAILABLE"
           : null;

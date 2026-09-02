@@ -342,9 +342,9 @@ export type DispatchStageDecision =
  * Gates a stage against the adapter about to run it (milestone A2).
  *
  * Two separate reasons can make an adapter wrong for a stage, and they are checked in order
- * because they are different claims. `canStart: false` means the adapter's CLI is not on this
- * machine at all -- it cannot run *any* stage, not just this one (task 10.5: `capabilities().start`
- * is what an adapter's own missing-executable check feeds into). Before milestone E1, a live
+ * because they are different claims. `canStart: false` means the adapter is not ready for a new
+ * session -- its CLI may be missing, incompatible, unauthenticated, or otherwise unavailable --
+ * so it cannot run *any* stage, not just this one. Before milestone E1, a live
  * adapter that *can* start still runs its CLI in an empty temporary directory with no filesystem
  * access, so it cannot serve a stage it does not declare (see the comment on `stages` in
  * `@loomrail/provider-core`'s `ProviderCapabilities`) -- most notably IMPLEMENT, which needs
@@ -366,8 +366,8 @@ export type DispatchStageDecision =
  * outcome into an owner-facing question -- the caller completes the pending dispatch through that
  * same APPLY_PROVIDER_OUTCOME command, which is how the id and timestamps this pure function does
  * not have get attached and how the request reaches the owner. Each branch's request names the
- * actual reason: "something could not run" is not actionable, "CODEX is not installed on this
- * machine" and "CODEX cannot serve IMPLEMENT" each are, and they call for different fixes.
+ * actual reason: "something could not run" is not actionable, "CODEX is not ready for new
+ * sessions" and "CODEX cannot serve IMPLEMENT" each are, and they call for different fixes.
  */
 export const decideDispatchStage = (context: {
   stage: WorkflowStage;
@@ -380,14 +380,14 @@ export const decideDispatchStage = (context: {
       type: "STAGE_NOT_SERVED",
       request: {
         // Same FREE_TEXT/allowOther convention as the "stage not declared" branch below -- see
-        // its own comment for why: the right fix is out-of-band (install the CLI, or reassign),
+        // its own comment for why: the right fix is out-of-band (repair readiness, or reassign),
         // not a choice Loomrail can enumerate.
         kind: "FREE_TEXT",
         blocking: true,
-        title: `${context.provider} is not installed on this machine`,
-        context: `The ${context.provider} adapter could not find its CLI on this machine, so it cannot start a session for the ${context.stage} stage -- or any other stage. Loomrail refused to dispatch rather than starting a session that could only fail.`,
+        title: `${context.provider} is not ready for new sessions`,
+        context: `The ${context.provider} adapter is not currently admitted to start a session for the ${context.stage} stage -- or any other stage. Its CLI may be missing, incompatible, or unauthenticated. Loomrail refused to dispatch rather than starting a session that could only fail.`,
         recommendation:
-          "Install the provider's CLI on this machine, or reassign this stage to a different, available adapter.",
+          "Review this provider in Settings, resolve its exact compatibility or authentication status, or reassign this stage to a ready adapter.",
         options: [],
         allowOther: true,
       },

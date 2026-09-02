@@ -33,14 +33,18 @@ npx loomrail start
 ```
 
 `next` selects the public pre-alpha channel explicitly. The launcher binds to `127.0.0.1` and opens a one-time
-authenticated URL. New projects use **Auto**, which can find an installed, signed-in provider CLI; the next section
-switches the demo project to **Mock** before any workflow starts. Keep the terminal open.
+authenticated URL. New projects use **Auto**, which admits only an exact verified and signed-in provider CLI. The
+current candidate has no verified live row, so Auto remains on Mock; the next section also makes that choice explicit
+before any workflow starts. Keep the terminal open.
 
 The Chromium download is a one-time Browser QA prerequisite. It is isolated from your signed-in browser profile. In
 the setup prompt, press Enter for the recommended **Mock walkthrough**. Setup composes the read-only diagnostics with
 the Chromium and route checks; it changes and persists nothing. A new database or missing live-provider login is safe
 for the Mock route. See the [operations guide](OPERATIONS.md) for machine-readable setup, diagnostic codes, upgrade,
 rollback, backup, and uninstall.
+
+Provider versions are fail-closed independently of setup. Read the
+[compatibility matrix](PROVIDER-COMPATIBILITY.md) before any live-provider route.
 
 If the browser must not open automatically:
 

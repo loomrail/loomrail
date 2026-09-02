@@ -239,12 +239,33 @@ const run = async () => {
       encoding: "utf8",
     });
     const diagnostic = JSON.parse(diagnosticOutput);
+    const providerItems = diagnostic.checks?.providers?.items;
+    const liveProviderInvariantHolds =
+      Array.isArray(providerItems) &&
+      providerItems
+        .filter(({ provider }) => provider !== "MOCK")
+        .every(
+          ({ installed, version: providerVersion, compatibility, authentication, ready }) =>
+            typeof installed === "boolean" &&
+            (providerVersion === null || typeof providerVersion === "string") &&
+            typeof compatibility === "string" &&
+            ready === (installed && compatibility === "VERIFIED" && authentication === "AUTHENTICATED"),
+        );
+    const mockProvider = Array.isArray(providerItems)
+      ? providerItems.find(({ provider }) => provider === "MOCK")
+      : undefined;
     if (
       diagnostic.schemaVersion !== 1 ||
       !["PASS", "WARN"].includes(diagnostic.status) ||
+      !liveProviderInvariantHolds ||
+      mockProvider?.compatibility !== "BUILT_IN" ||
+      mockProvider.version !== null ||
+      mockProvider.ready !== true ||
       diagnosticOutput.includes(dataDirectory)
     ) {
-      throw new Error("the packaged read-only diagnostic report is invalid or leaks its data path");
+      throw new Error(
+        "the packaged read-only diagnostic report is invalid, violates provider compatibility, or leaks its data path",
+      );
     }
     const reportedDataPath = execFileSync(process.execPath, [binaryPath, "data-path"], {
       cwd: installDirectory,

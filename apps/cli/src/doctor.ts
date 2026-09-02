@@ -269,12 +269,13 @@ export const formatDoctorReport = (report: DoctorReport): readonly string[] => [
     "Providers",
     `${report.checks.providers.code} (override ${report.checks.providers.environmentOverride})`,
   ),
-  ...report.checks.providers.items.map(({ provider, installed, authentication, ready, stages }) =>
-    line(
-      ready ? "PASS" : "WARN",
-      `Provider ${provider}`,
-      `installed=${String(installed)}, authentication=${authentication}, stages=${stages.join(",")}`,
-    ),
+  ...report.checks.providers.items.map(
+    ({ provider, installed, version, compatibility, authentication, ready, stages }) =>
+      line(
+        ready ? "PASS" : "WARN",
+        `Provider ${provider}`,
+        `installed=${String(installed)}, version=${version ?? "none"}, compatibility=${compatibility}, authentication=${authentication}, stages=${stages.join(",")}`,
+      ),
   ),
   "Run `loomrail data-path` only when you need the exact local storage path.",
 ];

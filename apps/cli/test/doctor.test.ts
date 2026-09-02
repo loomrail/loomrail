@@ -23,6 +23,8 @@ const providerSnapshot = (
       provider: "MOCK",
       installed: true,
       authentication: "AUTHENTICATED",
+      version: null,
+      compatibility: "BUILT_IN",
       ready: true,
       stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
       checkpointOnRequest: true,
@@ -33,6 +35,8 @@ const providerSnapshot = (
       provider: "CODEX",
       installed: liveReady,
       authentication: liveReady ? "AUTHENTICATED" : "UNKNOWN",
+      version: liveReady ? "0.152.1" : null,
+      compatibility: liveReady ? "VERIFIED" : "MISSING",
       ready: liveReady,
       stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "ACCEPTANCE"],
       checkpointOnRequest: true,
@@ -43,6 +47,8 @@ const providerSnapshot = (
       provider: "CLAUDE_CODE",
       installed: false,
       authentication: "UNKNOWN",
+      version: null,
+      compatibility: "MISSING",
       ready: false,
       stages: ["DISCOVERY", "PLAN", "REVIEW"],
       checkpointOnRequest: true,
@@ -73,6 +79,7 @@ describe("Loomrail doctor", () => {
 
     expect(report.status).toBe("PASS");
     expect(report.checks.providers.code).toBe("LIVE_PROVIDER_READY");
+    expect(formatDoctorReport(report).join("\n")).toContain("version=0.152.1, compatibility=VERIFIED");
   });
 
   it("treats an uncreated installation and mock-only providers as safe warnings", async () => {

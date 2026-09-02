@@ -79,9 +79,9 @@ describe("decideDispatchStage", () => {
   });
 
   // Task 10.5: `capabilities().start` and `capabilities().stages` are separate claims -- an
-  // adapter whose CLI is not on this machine still declares its normal stages (see
-  // provider-codex's/provider-claude-code's `capabilities()`, which keep `stages` populated even
-  // when `start` is `false`), so checking `declaredStages` alone would dispatch to it anyway.
+  // adapter that is not ready still declares its normal stages (see provider selection, which
+  // keeps `stages` populated even when compatibility/auth makes `start` false), so checking
+  // `declaredStages` alone would dispatch to it anyway.
   // `stage: "PLAN"` is deliberately one CODEX *does* declare in `codexDeclaredStages`, so a
   // decision to dispatch here can only be explained by the gate ignoring `canStart`, not by the
   // stage being undeclared -- the mutation this test exists to catch.
@@ -96,8 +96,8 @@ describe("decideDispatchStage", () => {
   });
 
   // "CODEX cannot serve PLAN" would be actively misleading here: CODEX does declare PLAN, and the
-  // real reason is that its CLI is not on this machine -- a different fact calling for a different
-  // fix (install the CLI, not reassign the stage). The wording must say so, not merely refuse; and
+  // real reason is that the adapter is not ready -- a different fact calling for compatibility or
+  // auth repair rather than a workflow rewrite. The wording must say so, not merely refuse; and
   // it must not reuse the undeclared-stage branch's phrasing, which would point the owner at the
   // wrong fix.
   it("names the reason as unavailability, not as an undeclared stage, when the adapter cannot start", () => {
@@ -109,7 +109,7 @@ describe("decideDispatchStage", () => {
     });
     expect(decision.type).toBe("STAGE_NOT_SERVED");
     if (decision.type !== "STAGE_NOT_SERVED") throw new Error("unreachable: asserted above");
-    expect(decision.request.title).toContain("not installed");
+    expect(decision.request.title).toContain("not ready");
     expect(decision.request.title).toContain("CODEX");
     expect(decision.request.context).toContain("PLAN");
     expect(decision.request.context).not.toContain("cannot serve");

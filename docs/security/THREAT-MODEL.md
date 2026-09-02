@@ -14,9 +14,9 @@ The sentence "it does not execute shell/Git/provider/browser actions" stood here
 true of the provider, Git and browser surfaces**. A2 made Loomrail spawn real provider CLIs as daemon children, E1
 made it run bounded `git` operations and hand those CLIs writable worktrees, and Q1 added a bounded Playwright
 BrowserDriver for daemon-measured QA against loopback targets. Their deltas in §6 own those authorities; Loomrail still
-has no general-purpose product shell. New Projects default to `AUTO`: the daemon may select an installed, authenticated
-live CLI, while an owner can choose Mock explicitly for a zero-quota run. The provider-selection controls and probe
-boundaries are specified in T26.
+has no general-purpose product shell. New Projects default to `AUTO`: the daemon may select only an installed, exact
+verified and authenticated live CLI, while an owner can choose Mock explicitly for a zero-quota run. The
+provider-selection and compatibility controls are specified in T26 and T43.
 
 ## 2. Security objectives
 
@@ -107,6 +107,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T40 | Diagnostics leak local metadata or mutate state during inspection            | High     | closed allowlisted report; no raw paths/output/errors/env; argv/no-shell bounded probes; read-only SQLite; explicit path disclosure; no cleanup                                              | see Q4 local-diagnostics delta below                                              |
 | T41 | Release artifact is substituted or an unsigned checksum is called provenance | High     | closed receipt; tarball/file digests; clean CI source; trusted OIDC publish; registry signature verification                                                                                 | see Q6 release-integrity and supply-chain delta below                             |
 | T42 | Guided setup performs hidden actions or reports a false-safe route           | High     | zero-write setup report; exact route input; reuse read-only probes; stat-only browser check; no login/install/start; closed output                                                           | see Q8 guided-setup delta below                                                   |
+| T43 | Poisoned or drifted provider CLI is falsely admitted as compatible           | High     | version-before-auth; fixed argv/no shell/minimal env; stdout/deadline bounds; exact parser/allowlist; closed readiness invariant                                                             | see Q9 provider-compatibility delta below                                         |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -390,9 +391,38 @@ Required controls and verification:
   stable remediation order and no-create behavior. The clean-package gate runs setup after an explicit Chromium
   installation on macOS and Windows, then continues through doctor/start/log lifecycle checks.
 
-Residual risk remains: filesystem presence plus an authentication status exit code does not certify provider or
-browser version compatibility and can become stale immediately after the check. Setup is guidance for one local
-invocation, not an installation receipt, security attestation or future compatibility promise.
+Residual risk remains: browser presence and provider compatibility observations can become stale immediately after
+the check. Setup is guidance for one local invocation, not an installation receipt, security attestation or future
+compatibility promise.
+
+### Q9 provider-compatibility delta (T43)
+
+Q9 observes a locally installed provider executable before allowing a new live ProviderSession. A poisoned PATH
+entry could print a secret/path, flood stdout or never exit; a future official CLI could preserve `--version` and
+exit-code shapes while changing stream or final-result semantics. Rated **High** because a false-compatible status
+would enable an owner-privileged process with repository and provider-quota authority.
+
+Required controls and verification:
+
+- version observation precedes authentication and uses only fixed `codex --version` or `claude --version`, an argv
+  array, `shell:false`, closed stdin/stderr, a minimal non-credential environment, a three-second deadline and a
+  96-byte stdout limit;
+- exact parsers accept only documented product-owned shapes and expose at most a 48-character normalized semantic
+  version. Raw output, executable path, environment, account and exception text never cross the module boundary;
+- `ProviderAvailability` is runtime-validated: a live provider is ready only when installed, exact `VERIFIED`, and
+  authenticated. AUTO ignores every other live state; explicit selection stays visible but adapter start is false;
+- the initial live verified allowlist is empty. A recognized new version is `UNVERIFIED`; Claude Code below 2.1.214
+  is `TOO_OLD`. No package update, semver range, successful probe, setup or doctor invocation promotes a row;
+- promotion requires one reviewed change with sanitized real-CLI success/failure/workspace/MCP recordings, negative
+  stream corpus, independent final-result validation and matching macOS/Windows evidence for the exact version and
+  invocation contract;
+- unit/integration/browser tests cover missing, unlaunchable, unreadable, too-old, unverified, verified/auth,
+  refresh and canary paths. CI runs the synthetic process probe explicitly on macOS and Windows before repository-wide
+  lint, while real quota-bearing capture requires separate owner authorization.
+
+Residual risk remains: an executable can be replaced after observation, and exact version identity does not prove
+binary provenance or account/quota fitness. Runtime provider envelopes and final domain results remain independently
+validated; provider signing/attestation and authenticated real-provider dogfood remain release gaps.
 
 ### A4 Attention Inbox delta (T35)
 

@@ -18,7 +18,8 @@ flowchart LR
     D --> APP[Application commands and queries]
     APP --> DOMAIN[Domain state machines]
     APP --> WF[Workflow engine]
-    WF --> PC[Provider contract]
+    WF --> COMP[Provider compatibility registry]
+    COMP --> PC[Provider contract]
     PC --> MOCK[Mock provider]
     PC -. later .-> CODEX[Codex CLI]
     PC -. later .-> CLAUDE[Claude Code CLI]
@@ -49,6 +50,19 @@ Dashed components are outside Phase 0.
 | Git code state         | Git; Loomrail references exact snapshots in later phases              |
 | Project rules          | Versioned `.loomrail/` files plus immutable run snapshot              |
 | Secrets                | Existing user environment or OS credential store, never prompt/SQLite |
+
+## Provider compatibility boundary
+
+`apps/daemon/src/provider-compatibility.ts` owns the fixed live-provider version commands, bounded process
+observation, exact parsers, admission floors, and exact verified-version allowlist. It returns only normalized version
+and a closed compatibility state. The provider registry combines that observation with executable presence and
+provider-owned authentication; only `VERIFIED + AUTHENTICATED` can make a live adapter startable. Mock remains
+`BUILT_IN` and ready.
+
+Compatibility is transient admission policy for a new ProviderSession, not workflow authority or durable Project
+state. A refresh cannot change Project preference or reinterpret a running session. A new upstream CLI is
+`UNVERIFIED` until one reviewed matrix-row change carries sanitized real-stream evidence and macOS/Windows parity;
+no semver range or successful `--version` promotes it implicitly.
 
 ## Dependency rules
 

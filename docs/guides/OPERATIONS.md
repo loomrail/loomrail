@@ -80,8 +80,8 @@ npx loomrail doctor --json
 ```
 
 The report checks the declared Node range, Git launch, data-directory access, SQLite integrity and migration
-compatibility, and supported provider CLI installation/authentication. It does not start the daemon or browser,
-create the data directory, apply migrations, recover workflows, or change provider authentication.
+compatibility, and supported provider CLI version/installation/authentication. It does not start the daemon or
+browser, create the data directory, apply migrations, recover workflows, or change provider authentication.
 
 `PASS` and `WARN` exit with code 0. A new installation with no database or an installation using only Mock is a
 warning, not a failure. `FAIL` exits with code 1 and covers an unsupported runtime, missing/unlaunchable Git,
@@ -91,17 +91,19 @@ The JSON is deliberately allowlisted. It contains no current directory, home dir
 raw environment value, provider account, command output, credential, or exception message. Review it before sharing
 it anyway: provider presence and authentication state are still local machine metadata.
 
-Supported provider probes are bounded read-only status calls. Loomrail ignores their output and observes only the
-exit result:
+Supported provider observations start with a bounded read-only version call. Loomrail parses only the exact
+normalized version form; raw output is never returned. The auth call runs only for an exact `VERIFIED` version, and
+its output is ignored:
 
-| Provider    | Probe observed by Loomrail | Credential owner |
-| ----------- | -------------------------- | ---------------- |
-| Mock        | none; always ready         | none             |
-| Codex       | `codex login status`       | Codex CLI        |
-| Claude Code | `claude auth status`       | Claude Code CLI  |
+| Provider    | Version observation | Auth observation after `VERIFIED` | Credential owner |
+| ----------- | ------------------- | --------------------------------- | ---------------- |
+| Mock        | none; built in      | none; always ready                | none             |
+| Codex       | `codex --version`   | `codex login status`              | Codex CLI        |
+| Claude Code | `claude --version`  | `claude auth status`              | Claude Code CLI  |
 
-Loomrail does not install these CLIs, sign in for you, or persist their credentials. Provider versions are not yet a
-validated compatibility matrix; run `doctor` and the mock walkthrough after either CLI changes.
+Loomrail does not install, update, or downgrade these CLIs, sign in for you, or persist their credentials. The
+current alpha.5 candidate has no verified live matrix row, so live setup remains blocked and Mock remains available.
+See the [exact compatibility matrix](PROVIDER-COMPATIBILITY.md); `doctor` never promotes a version by observation.
 
 To reveal the exact local storage path explicitly:
 

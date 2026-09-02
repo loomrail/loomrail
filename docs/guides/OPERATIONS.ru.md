@@ -80,8 +80,9 @@ npx loomrail doctor --json
 ```
 
 Report проверяет объявленный диапазон Node, запуск Git, доступ к data directory, SQLite integrity/migration
-compatibility и installation/authentication поддерживаемых provider CLI. Он не запускает daemon или browser, не
-создаёт data directory, не применяет migrations, не восстанавливает workflows и не меняет provider authentication.
+compatibility и version/installation/authentication поддерживаемых provider CLI. Он не запускает daemon или browser,
+не создаёт data directory, не применяет migrations, не восстанавливает workflows и не меняет provider
+authentication.
 
 `PASS` и `WARN` возвращают exit code 0. Новая установка без базы и установка только с Mock — warnings, а не failure.
 `FAIL` возвращает 1: неподдерживаемый runtime, отсутствующий/незапускаемый Git, недоступное хранилище, corrupt,
@@ -91,16 +92,20 @@ JSON построен по allowlist. В нём нет cwd, home/data/repository
 command output, credential или exception message. Всё равно проверьте файл перед отправкой: наличие provider и
 authentication state — metadata локальной машины.
 
-Provider probes — bounded read-only status calls; Loomrail игнорирует output и наблюдает только exit result:
+Provider observation начинается с bounded read-only version call. Loomrail разбирает только exact normalized version
+form и никогда не возвращает raw output. Auth call запускается только для exact `VERIFIED` version, а его output
+игнорируется:
 
-| Provider    | Проверка Loomrail    | Владелец credential |
-| ----------- | -------------------- | ------------------- |
-| Mock        | нет; всегда готов    | нет                 |
-| Codex       | `codex login status` | Codex CLI           |
-| Claude Code | `claude auth status` | Claude Code CLI     |
+| Provider    | Наблюдение version | Auth после `VERIFIED` | Владелец credential |
+| ----------- | ------------------ | --------------------- | ------------------- |
+| Mock        | нет; встроен       | нет; всегда готов     | нет                 |
+| Codex       | `codex --version`  | `codex login status`  | Codex CLI           |
+| Claude Code | `claude --version` | `claude auth status`  | Claude Code CLI     |
 
-Loomrail не устанавливает эти CLI, не авторизуется вместо пользователя и не сохраняет их credentials. Проверенной
-version compatibility matrix пока нет; после изменения любого CLI выполните `doctor` и mock walkthrough.
+Loomrail не устанавливает, не обновляет и не понижает эти CLI, не авторизуется вместо пользователя и не сохраняет их
+credentials. В текущем alpha.5 candidate нет verified live matrix row, поэтому live setup остаётся blocked, а Mock
+доступен. См. [exact compatibility matrix](PROVIDER-COMPATIBILITY.ru.md); `doctor` не повышает статус version самим
+фактом наблюдения.
 
 Точный путь локального хранилища раскрывается отдельной командой:
 

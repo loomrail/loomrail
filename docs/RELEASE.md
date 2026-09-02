@@ -41,6 +41,16 @@ SQLite/WAL state must expose exactly one interruption report, no active provider
 Run this gate on both macOS and Windows; it is a separate CI step so repository-wide lint cannot hide crash evidence.
 It uses only a synthetic fixture and is not a substitute for the private dogfood recovery gate.
 
+Run the provider compatibility process gate separately as well:
+
+```bash
+pnpm exec vitest run apps/daemon/test/provider-compatibility.unit.test.ts
+```
+
+It exercises exact version parsing, timeout/output bounds and redaction through a real synthetic child process. CI
+runs it on macOS and Windows before repository-wide lint. This is admission-mechanism evidence, not a live-provider
+matrix row.
+
 ```bash
 pnpm test:release
 ```
@@ -121,6 +131,12 @@ For every authorized candidate:
 5. Human approval releases the dedicated trusted-publish job for that exact commit/version.
 6. Verify registry integrity, source commit/workflow provenance, signature audit, install, and startup before moving
    any default channel.
+
+Any release that claims a live provider version also requires one exact row in the
+[provider compatibility matrix](guides/PROVIDER-COMPATIBILITY.md). Add no semver range or `latest` promise: promotion
+must include sanitized real-CLI recordings, negative parser coverage and matching macOS/Windows evidence for that
+exact version and invocation contract. The current alpha.5 candidate has no verified live row and therefore admits
+only Mock.
 
 ### Pre-alpha channel
 

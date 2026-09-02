@@ -233,8 +233,8 @@ export type StartDaemonOptions = {
   // Injected so a test can drive the daemon's own dispatch drain with an adapter that hands off,
   // stalls, or runs into a wall. Without it the session-handoff paths are only ever reachable by
   // calling `runStageAttempt` directly, which is how a jam in the drain around those paths stayed
-  // invisible. Production leaves this unset and gets whatever `resolveDefaultProviderAdapter`
-  // resolves from the Project preference and safe CLI availability probes; an environment override is optional.
+  // invisible. Production leaves this unset and resolves from the Project preference plus safe
+  // compatibility/auth observations; an environment override is optional but cannot bypass admission.
   providerAdapter?: ProviderAdapter;
   /** Injected availability/routing seam for deterministic provider-selection integration tests. */
   providerRegistry?: ProviderRegistry;

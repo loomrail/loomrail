@@ -69,9 +69,17 @@ Versioned выбор Project: `AUTO`, конкретный live provider либ�
 _Не означает_: provider уже запущенной ProviderSession или разрешение ослабить permission policy.
 
 **Provider Availability**:
-Короткоживущее локальное наблюдение, найден ли provider CLI и подтверждает ли его read-only status command
-авторизацию.
+Короткоживущая closed-проекция installation, Provider Compatibility Observation и provider-owned auth state.
 _Не означает_: provider credential, account profile или durable domain state.
+
+**Provider Compatibility Observation**:
+Короткоживущий результат bounded fixed-argv `--version` probe с normalized version и closed compatibility state.
+_Не означает_: capability declaration, auth state, installation receipt или гарантию, что executable не изменился.
+
+**Provider Compatibility Matrix Row**:
+Reviewable allowlist entry одной exact CLI version, подтверждённая sanitized real-provider recordings, negative parser
+corpus и одинаковым macOS/Windows gate для текущего invocation contract.
+_Не означает_: semver range, upstream release note, успешный `--version` или автоматическое разрешение обновления.
 
 **Doctor Report**:
 Короткоживущая closed-проекция совместимости runtime, Git, data directory, SQLite migration/integrity и Provider

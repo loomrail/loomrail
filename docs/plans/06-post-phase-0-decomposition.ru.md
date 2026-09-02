@@ -2,7 +2,9 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
-**Статус:** Q8 guided setup и cross-platform gate закрыты; protected landing, private dogfood, provider compatibility и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** Q9 provider compatibility реализован локально с пустой live allowlist; cross-platform Q9 evidence,
+protected landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной
+версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -239,6 +241,14 @@ false-safe guidance. CLI 33/33 и clean tarball setup/doctor/start/log lifecycle
 [CI run 33680374866](https://github.com/loomrail/loomrail/actions/runs/33680374866): clean receipt, consumer audit,
 explicit Chromium prerequisite и browser smoke прошли на macOS/Windows. Оба Verify прошли fault gate и остановились
 только на трёх protected landing lint diagnostics, поэтому Q8 закрыт без изменения landing.
+Q9 реализует exact provider compatibility admission по
+[спецификации 63](63-q9-provider-compatibility-matrix-spec.ru.md) и
+[плану 64](64-q9-provider-compatibility-matrix-implementation-plan.ru.md). Bounded version-before-auth module
+возвращает только normalized version/closed status, а runtime invariant разрешает live start лишь для exact
+`VERIFIED` и authenticated CLI. Doctor, guided setup и RU/EN Settings различают missing, unlaunchable, unreadable,
+too-old и unverified state; AUTO остаётся на Mock, explicit incompatible provider fail closed до spawn. Initial live
+allowlist намеренно пуста: имеющиеся recordings не дают одинаковой macOS/Windows и successful MCP evidence. Local
+synthetic gates зелёные; cross-platform CI и отдельно owner-authorized quota-bearing promotion остаются открыты.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах
