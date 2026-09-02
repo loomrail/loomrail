@@ -3,7 +3,7 @@ import { access, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { QARun } from "@loomrail/contracts";
+import { MAX_QA_RESPONSE_BYTES, type QARun } from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -282,5 +282,168 @@ describe("Playwright BrowserDriver", () => {
 
     expect(execution.result).toMatchObject({ outcome: "ERROR", code: "EVIDENCE_INVALID" });
     await execution.dispose();
+  });
+
+  it("pins a verified localhost target to its resolved loopback address", async () => {
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end("<!doctype html><h1>Current work</h1><button>Continue</button>");
+    });
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-"));
+    resources.push({ server: fixture.server, directory });
+    const localhostOrigin = fixture.origin.replace("127.0.0.1", "localhost");
+
+    const execution = await createPlaywrightDriver({
+      artifactsDirectory: directory,
+      resolveHostname: () => Promise.resolve([{ address: "127.0.0.1", family: 4 }]),
+    }).run(qaRun(localhostOrigin));
+
+    expect(execution.result.outcome).toBe("MEASURED");
+    await execution.dispose();
+  });
+
+  it("rejects localhost when resolution includes a non-loopback address", async () => {
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end("<!doctype html><h1>Current work</h1><button>Continue</button>");
+    });
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-"));
+    resources.push({ server: fixture.server, directory });
+    const localhostOrigin = fixture.origin.replace("127.0.0.1", "localhost");
+
+    const execution = await createPlaywrightDriver({
+      artifactsDirectory: directory,
+      resolveHostname: () =>
+        Promise.resolve([
+          { address: "127.0.0.1", family: 4 },
+          { address: "203.0.113.10", family: 4 },
+        ]),
+    }).run(qaRun(localhostOrigin));
+
+    expect(execution.result).toEqual({
+      outcome: "ERROR",
+      code: "ORIGIN_FORBIDDEN",
+      summary: "The localhost QA target did not resolve exclusively to loopback addresses.",
+    });
+    await execution.dispose();
+  });
+
+  it("fails closed when a response exceeds the per-response limit", async () => {
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-length": (MAX_QA_RESPONSE_BYTES + 1).toString(),
+      });
+      response.end(Buffer.alloc(MAX_QA_RESPONSE_BYTES + 1, 97));
+    });
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-"));
+    resources.push({ server: fixture.server, directory });
+
+    const execution = await createPlaywrightDriver({ artifactsDirectory: directory }).run(
+      qaRun(fixture.origin),
+    );
+
+    expect(execution.result).toMatchObject({ outcome: "ERROR", code: "EVIDENCE_INVALID" });
+    await execution.dispose();
+  });
+
+  it("reports navigation timeouts distinctly and exposes no finalizable evidence", async () => {
+    const fixture = await startServer((_request, response) => {
+      setTimeout(() => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end("<!doctype html><h1>Current work</h1><button>Continue</button>");
+      }, 250);
+    });
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-"));
+    resources.push({ server: fixture.server, directory });
+
+    const execution = await createPlaywrightDriver({
+      artifactsDirectory: directory,
+      timeoutMs: 50,
+    }).run(qaRun(fixture.origin));
+
+    expect(execution.result).toMatchObject({ outcome: "ERROR", code: "TIMEOUT" });
+    await expect(
+      execution.finalizeAttachments({ qaRunId: "qa-run-1", createAttachmentId: () => "attachment-1" }),
+    ).resolves.toEqual([]);
+    await execution.dispose();
+  });
+
+  it("redacts secrets and personal paths before observations become durable", async () => {
+    const macOSPath = ["", "Users", "owner", "private.txt"].join("/");
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        "<!doctype html><h1>Current work</h1><button>Continue</button>" +
+          `<script>console.error('token=CANARY_TOKEN Bearer CANARY_BEARER ${macOSPath} C:\\\\Users\\\\owner\\\\secret.txt')</script>`,
+      );
+    });
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-"));
+    resources.push({ server: fixture.server, directory });
+
+    const execution = await createPlaywrightDriver({ artifactsDirectory: directory }).run(
+      qaRun(fixture.origin),
+    );
+
+    if (execution.result.outcome !== "MEASURED") throw new Error(JSON.stringify(execution.result));
+    const durableText = JSON.stringify({
+      observations: execution.result.observations,
+      defects: execution.result.defects,
+    });
+    expect(durableText).not.toContain("CANARY_TOKEN");
+    expect(durableText).not.toContain("CANARY_BEARER");
+    expect(durableText).not.toContain(macOSPath);
+    expect(durableText).not.toContain("C:\\\\Users\\\\owner");
+    expect(durableText).toContain("[redacted]");
+    expect(durableText).toContain("[local-path]");
+    await execution.dispose();
+  });
+
+  it("does not forward page-created credentials or persist target cookies", async () => {
+    const receivedCredentialHeaders: { path: string; authorization?: string; cookie?: string }[] = [];
+    const fixture = await startServer((request, response) => {
+      if (request.url === "/probe" || request.url === "/credential") {
+        receivedCredentialHeaders.push({
+          path: request.url,
+          ...(request.headers.authorization === undefined
+            ? {}
+            : { authorization: request.headers.authorization }),
+          ...(request.headers.cookie === undefined ? {} : { cookie: request.headers.cookie }),
+        });
+        response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        response.end("ready");
+        return;
+      }
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "set-cookie": "qa-secret=CANARY_COOKIE; Path=/",
+      });
+      response.end(
+        "<!doctype html><h1>Current work</h1><button>Continue</button>" +
+          "<script>fetch('/probe').then(()=>fetch('/credential',{headers:{authorization:'Bearer CANARY_AUTH'}}))</script>",
+      );
+    });
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-"));
+    resources.push({ server: fixture.server, directory });
+    const run = qaRun(fixture.origin);
+    const scenario = run.plan.scenarios[0];
+    if (!scenario) throw new Error("Expected a fixture scenario");
+    scenario.steps.push({
+      id: "wait-for-probe",
+      title: "Wait for the credential probe",
+      action: { type: "WAIT_FOR_IDLE" },
+    });
+
+    const execution = await createPlaywrightDriver({ artifactsDirectory: directory }).run(run);
+
+    expect(receivedCredentialHeaders).toEqual([{ path: "/probe" }]);
+    expect(execution.result).toMatchObject({ outcome: "ERROR", code: "EVIDENCE_INVALID" });
+    expect(JSON.stringify(execution.result)).not.toContain("CANARY_AUTH");
+    expect(JSON.stringify(execution.result)).not.toContain("CANARY_COOKIE");
+    await execution.dispose();
+  });
+
+  it("rejects unsafe runtime limits before launching Chromium", () => {
+    expect(() => createPlaywrightDriver({ artifactsDirectory: "/tmp/browser-qa", timeoutMs: 0 })).toThrow();
   });
 });

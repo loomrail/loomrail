@@ -9,7 +9,8 @@
 
 ## Встроенный demo-проект
 
-Для **Fixture web application** дополнительная команда не нужна. Его mock-реализация намеренно не меняет приложение,
+После однократного `npx playwright install chromium` для **Fixture web application** не нужна дополнительная команда
+запуска target. Его mock-реализация намеренно не меняет приложение,
 поэтому встроенный QA-план проверяет публичный readiness endpoint Loomrail на фактическом локальном порту. Так можно
 пройти весь маршрут доказательств и приёмки, не запуская Codex, Claude Code или второй dev server.
 
@@ -68,8 +69,9 @@
 }
 ```
 
-`targetOrigin` должен быть буквальным локальным HTTP origin: `127.x.x.x`, `localhost` или `[::1]`. В `NAVIGATE`
-указываются только пути; переходы на внешние origin блокируются. Доступны шаги `NAVIGATE`, `CLICK` и `PRESS` с
+`targetOrigin` должен быть буквальным локальным HTTP(S) origin: `127.x.x.x`, `localhost` или `[::1]`. Перед запуском
+Chromium имя `localhost` обязано разрешаться только в loopback-адреса и на время run закрепляется за одним проверенным
+адресом. В `NAVIGATE` указываются только пути; переходы и redirects на внешние origin блокируются. Доступны шаги `NAVIGATE`, `CLICK` и `PRESS` с
 семантическим locator, а также `WAIT_FOR_IDLE`. Проверки: `VISIBLE`, `TEXT_CONTAINS`, `URL_PATH`,
 `NO_HORIZONTAL_OVERFLOW` и `FOCUSED`. CSS selectors, XPath, произвольный JavaScript, downloads, dialogs, изменяющие
 запросы и авторизованный browser profile в этот baseline не входят.
@@ -92,5 +94,8 @@
 используйте предложенное повторное действие.
 
 Тяжёлые файлы хранятся в data directory Loomrail, вне репозитория и SQLite. Loomrail сохраняет retention class
-`STANDARD_30_DAYS` как metadata, но автоматическая очистка по возрасту ещё не реализована. В этой pre-alpha также
-нет пользовательского экрана retention/cleanup, поэтому через 30 дней файлы сейчас не удаляются.
+`STANDARD_30_DAYS` и удаляет screenshot/trace через 30 дней после последнего перехода работы в
+`DONE` или `CANCELLED`. Очистка идёт bounded batches при запуске daemon, записывает append-only результат и удаляет
+только точные пути из durable attachment refs. Она не делает recursive delete, не следует symlink, не трогает run с
+recovery marker и сохраняет неизвестные соседние файлы. Пользовательского экрана retention/cleanup в этой pre-alpha
+пока нет.

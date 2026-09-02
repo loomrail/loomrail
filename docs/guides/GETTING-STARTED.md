@@ -11,6 +11,7 @@ spends no provider quota.
 - Node.js `>=24.19 <25`
 - macOS or Windows; Linux is best effort
 - a browser on the same machine
+- the isolated Chromium build installed explicitly by Playwright
 
 Check Node before installing:
 
@@ -26,12 +27,15 @@ Create a separate evaluation directory. Do not begin inside a repository you car
 mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install loomrail@next
+npx playwright install chromium
 npx loomrail
 ```
 
 `next` selects the public pre-alpha channel explicitly. The launcher binds to `127.0.0.1` and opens a one-time
 authenticated URL. New projects use **Auto**, which can find an installed, signed-in provider CLI; the next section
 switches the demo project to **Mock** before any workflow starts. Keep the terminal open.
+
+The Chromium download is a one-time Browser QA prerequisite. It is isolated from your signed-in browser profile.
 
 If the browser must not open automatically:
 
@@ -41,8 +45,9 @@ npx loomrail --no-open --port 4176
 
 Open the printed URL in a browser on the same machine within 60 seconds. `--no-open` does not enable remote access.
 
-To put the launcher on your `PATH` instead, run `npm install -g loomrail@next` and then `loomrail`. The project-local
-installation above is recommended for evaluation because the selected pre-alpha channel remains visible.
+To put the launcher on your `PATH` instead, run `npm install -g loomrail@next`, then
+`npx playwright install chromium`, and then `loomrail`. The project-local installation above is recommended for
+evaluation because the selected pre-alpha channel remains visible.
 
 The package already includes the pinned Context7 MCP server. You do not need to install it globally or run `npx` for
 it; configuration remains an explicit owner action in **Settings → MCP connections** after the mock walkthrough.

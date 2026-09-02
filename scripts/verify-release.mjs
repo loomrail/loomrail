@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { execFileSync } from "node:child_process";
-import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -121,6 +121,19 @@ const run = async () => {
       throw new Error("the packaged launcher does not pin its bundled Context7 server");
     }
     const installedRequire = createRequire(binaryPath);
+    if (typeof installedManifest.dependencies?.playwright !== "string") {
+      throw new Error("the packaged launcher does not declare its Browser QA runtime");
+    }
+    const playwrightManifest = installedRequire.resolve("playwright/package.json");
+    await readFile(playwrightManifest, "utf8");
+    await access(
+      join(
+        installDirectory,
+        "node_modules",
+        ".bin",
+        process.platform === "win32" ? "playwright.cmd" : "playwright",
+      ),
+    );
     const context7Entrypoint = installedRequire.resolve("@upstash/context7-mcp/dist/index.js");
     await readFile(context7Entrypoint, "utf8");
     const consumerRequire = createRequire(join(installDirectory, "package.json"));

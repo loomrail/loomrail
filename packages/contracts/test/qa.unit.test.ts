@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_QA_ATTACHMENT_BYTES,
+  qaAttachmentDraftSchema,
   qaAttachmentRefSchema,
   qaDefectSchema,
   qaDriverResultSchema,
@@ -152,6 +154,23 @@ describe("browser QA contracts", () => {
     expect(qaAttachmentRefSchema.safeParse({ ...attachment, storageKey: "../trace.zip" }).success).toBe(
       false,
     );
+    expect(qaAttachmentRefSchema.safeParse({ ...attachment, storageKey: "qa-run-1/CON.zip" }).success).toBe(
+      false,
+    );
+    expect(
+      qaAttachmentRefSchema.safeParse({ ...attachment, storageKey: "qa-run-1/trace?.zip" }).success,
+    ).toBe(false);
+    expect(
+      qaAttachmentDraftSchema.safeParse({
+        handle: "trace",
+        kind: attachment.kind,
+        contentHash: attachment.contentHash,
+        byteSize: MAX_QA_ATTACHMENT_BYTES + 1,
+        targetId: attachment.targetId,
+        scenarioId: attachment.scenarioId,
+        capturedAt: attachment.capturedAt,
+      }).success,
+    ).toBe(false);
   });
 
   it("requires complete resolution data when a QA defect leaves OPEN", () => {

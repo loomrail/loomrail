@@ -49,20 +49,21 @@
 ## 2. Security gate
 
 - [x] Обновить BrowserDriver-раздел threat model одновременно с первой capability.
-- [ ] Проверить loopback allowlist, redirects, DNS/rebinding assumptions и response-size limits.
+- [x] Проверить loopback allowlist, redirects, DNS/rebinding assumptions и response-size limits.
 - [x] Не передавать cookies, provider credentials, `.env`, Authorization headers и signed-in browser profile.
 - [x] Не разрешать shell/Git mutation, arbitrary launch recipe, external origin и destructive UI action.
-- [ ] Проверить redaction, relative attachment keys, content hash/size и retention cleanup.
+- [x] Проверить redaction, relative attachment keys, content hash/size и retention cleanup.
 
 ## 3. Verification gate
 
 - [x] Unit: schemas, verdict derivation, bounds, stale tree и forbidden transitions.
 - [x] Persistence: atomic success/failure, restart, idempotency и expected-version conflict.
 - [x] Artifact recovery: committed marker, orphan quarantine и hash/size mismatch.
-- [ ] Daemon: green baseline, intentional assertion failure, driver error, off-origin redirect и timeout (green
-      baseline и project config готовы).
-- [ ] Browser: real green route и real failed route; Acceptance никогда не стартует на неподтверждённом pass.
-- [ ] Полные `pnpm verify`, production audit и clean npm tarball.
+- [x] Daemon: green baseline, intentional assertion failure, driver error, off-origin redirect и timeout.
+- [x] Browser: real green route и real failed route; Acceptance никогда не стартует на неподтверждённом pass.
+- [ ] Полный `pnpm verify` (локально остаются три lint-ошибки параллельного `apps/landing/src/main.ts`).
+- [x] Production audit без high-severity уязвимостей.
+- [x] Clean npm tarball устанавливается и запускается только из опубликованного layout.
 - [ ] Один и тот же baseline проходит на macOS и Windows.
 
 ## 4. Следующий срез

@@ -858,7 +858,7 @@ describe("SQLite local state", () => {
 
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -2105,7 +2105,17 @@ describe("SQLite local state", () => {
               },
             ],
             observations: [],
-            attachments: [],
+            attachments: [
+              {
+                handle: "failed-qa-screenshot",
+                kind: "SCREENSHOT" as const,
+                contentHash: `sha256:${"a".repeat(64)}`,
+                byteSize: 8,
+                targetId: "mobile-dark-ru",
+                scenarioId: "task-cockpit",
+                capturedAt: timestamp,
+              },
+            ],
             defects: [
               {
                 severity: "HIGH" as const,
@@ -2117,7 +2127,24 @@ describe("SQLite local state", () => {
               },
             ],
           },
-          finalizedAttachments: [],
+          finalizedAttachments: [
+            {
+              handle: "failed-qa-screenshot",
+              ref: {
+                schemaVersion: 1 as const,
+                id: "failed-qa-attachment",
+                qaRunId: reserved.qaRun.id,
+                kind: "SCREENSHOT" as const,
+                contentHash: `sha256:${"a".repeat(64)}`,
+                byteSize: 8,
+                targetId: "mobile-dark-ru",
+                scenarioId: "task-cockpit",
+                capturedAt: timestamp,
+                retentionClass: "STANDARD_30_DAYS" as const,
+                storageKey: `run-${"a".repeat(32)}/screenshot.png`,
+              },
+            },
+          ],
         },
       };
       const completed = localState.execute(completionCommand);
@@ -2144,6 +2171,63 @@ describe("SQLite local state", () => {
       expect(localState.query({ type: "LIST_PENDING_DISPATCHES" })).toMatchObject({
         type: "WORKFLOW_DISPATCHES",
         dispatches: [],
+      });
+      expect(localState.query({ type: "LIST_EXPIRED_QA_ATTACHMENTS", closedBefore: timestamp })).toEqual({
+        type: "QA_ATTACHMENTS",
+        attachments: [],
+      });
+      if (!failedSnapshot.snapshot.run) throw new Error("Expected the failed pipeline run");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "cancel-q1-failed-qa",
+        correlationId: "correlation-cancel-q1-failed-qa",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "CANCEL_PIPELINE",
+        payload: {
+          pipelineRunId: failedSnapshot.snapshot.run.id,
+          expectedVersion: failedSnapshot.snapshot.run.version,
+        },
+      });
+      expect(
+        localState.query({
+          type: "LIST_EXPIRED_QA_ATTACHMENTS",
+          closedBefore: "2026-08-22T17:59:59.000Z",
+        }),
+      ).toEqual({ type: "QA_ATTACHMENTS", attachments: [] });
+      expect(
+        localState.query({ type: "LIST_EXPIRED_QA_ATTACHMENTS", closedBefore: timestamp }),
+      ).toMatchObject({
+        type: "QA_ATTACHMENTS",
+        attachments: [{ id: "failed-qa-attachment" }],
+      });
+      const retentionCommand = {
+        schemaVersion: 1 as const,
+        commandId: "record-q1-retention",
+        correlationId: "correlation-record-q1-retention",
+        actor: { type: "SYSTEM" as const, id: "local-daemon" },
+        type: "RECORD_QA_ATTACHMENT_RETENTION" as const,
+        payload: { attachmentId: "failed-qa-attachment", outcome: "DELETED" as const },
+      };
+      expect(() =>
+        localState.execute({
+          ...retentionCommand,
+          commandId: "record-q1-retention-as-owner",
+          actor: { type: "HUMAN", id: "local-owner" },
+        }),
+      ).toThrow(expect.objectContaining({ code: "QA_RETENTION_ACTOR_FORBIDDEN" }));
+      expect(localState.execute(retentionCommand)).toMatchObject({
+        type: "QA_ATTACHMENT_RETENTION_RECORDED",
+        replayed: false,
+        attachmentId: "failed-qa-attachment",
+        outcome: "DELETED",
+      });
+      expect(localState.execute(retentionCommand)).toMatchObject({
+        type: "QA_ATTACHMENT_RETENTION_RECORDED",
+        replayed: true,
+      });
+      expect(localState.query({ type: "LIST_EXPIRED_QA_ATTACHMENTS", closedBefore: timestamp })).toEqual({
+        type: "QA_ATTACHMENTS",
+        attachments: [],
       });
       localState.close();
       state = undefined;

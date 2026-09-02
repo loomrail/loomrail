@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { lookup } from "node:dns/promises";
+import { open, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
   MAX_QA_DEFECTS,
+  MAX_QA_ATTACHMENT_BYTES,
   MAX_QA_OBSERVATIONS,
+  MAX_QA_REQUESTS,
+  MAX_QA_RESPONSE_BYTES,
+  MAX_QA_TOTAL_ATTACHMENT_BYTES,
+  MAX_QA_TOTAL_RESPONSE_BYTES,
   qaAttachmentDraftSchema,
   qaDriverResultSchema,
   qaFinalizedAttachmentSchema,
@@ -17,9 +23,16 @@ import {
   type QAObservation,
   type QARun,
 } from "@loomrail/contracts";
-import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
+import { chromium, type BrowserContext, type Locator, type Page, type Route } from "playwright";
+import { z } from "zod";
 
 import { confirmBrowserQAArtifacts, stageBrowserQAArtifacts } from "./artifact-recovery.js";
+
+export {
+  deleteExpiredBrowserQAArtifacts,
+  type BrowserQARetentionAction,
+  type BrowserQARetentionResult,
+} from "./artifact-retention.js";
 
 export {
   BROWSER_QA_RECOVERY_MARKER,
@@ -50,6 +63,7 @@ export type PlaywrightDriverOptions = {
   artifactsDirectory: string;
   timeoutMs?: number;
   slowRequestMs?: number;
+  resolveHostname?: (hostname: string) => Promise<readonly { address: string; family: number }[]>;
 };
 
 type PendingAttachment = {
@@ -61,7 +75,14 @@ type PendingAttachment = {
 const safeSummary = (value: string): string =>
   value
     .replaceAll(/([?&](?:token|key|secret|password|authorization)=)[^&\s]+/gi, "$1[redacted]")
+    .replaceAll(
+      /((?:api[_-]?key|token|secret|password|authorization)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      "$1[redacted]",
+    )
     .replaceAll(/Bearer\s+\S+/gi, "Bearer [redacted]")
+    .replaceAll(/(?:file:\/\/)?\/(?:Users|home)\/[^\s"']+/g, "[local-path]")
+    .replaceAll(/(?:file:\/\/)?\/(?:private\/)?(?:tmp|var\/folders)\/[^\s"']+/g, "[local-path]")
+    .replaceAll(/[A-Za-z]:[\\/](?:Users|Temp)[\\/][^\s"']+/g, "[local-path]")
     .slice(0, 1_000)
     .trim() || "Browser observation had no printable detail.";
 
@@ -84,13 +105,89 @@ const locatorFor = (page: Page, locator: QALocator): Locator => {
   }
 };
 
+class QAEvidenceLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QAEvidenceLimitError";
+  }
+}
+
+class QAOriginPolicyError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("The localhost QA target did not resolve exclusively to loopback addresses", options);
+    this.name = "QAOriginPolicyError";
+  }
+}
+
 const sha256File = async (path: string): Promise<{ contentHash: string; byteSize: number }> => {
-  const [content, metadata] = await Promise.all([readFile(path), stat(path)]);
+  const handle = await open(path, "r");
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.size <= 0) {
+      throw new Error("Browser QA evidence is not a non-empty regular file");
+    }
+    if (metadata.size > MAX_QA_ATTACHMENT_BYTES) {
+      throw new QAEvidenceLimitError("Browser QA evidence exceeded the per-file size limit");
+    }
+    const hash = createHash("sha256");
+    const buffer = Buffer.alloc(64 * 1_024);
+    let position = 0;
+    while (position < metadata.size) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        0,
+        Math.min(buffer.length, metadata.size - position),
+        position,
+      );
+      if (bytesRead === 0) throw new Error("Browser QA evidence was truncated while hashing");
+      hash.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    return { contentHash: `sha256:${hash.digest("hex")}`, byteSize: metadata.size };
+  } finally {
+    await handle.close();
+  }
+};
+
+const isLoopbackAddress = (address: string): boolean => {
+  if (address === "::1") return true;
+  const mapped = /^::ffff:(127(?:\.\d{1,3}){3})$/i.exec(address)?.[1];
+  const candidate = mapped ?? address;
+  const octets = candidate.split(".");
+  return (
+    octets.length === 4 &&
+    octets[0] === "127" &&
+    octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)
+  );
+};
+
+const resolveTargetNetworkPolicy = async (
+  targetOrigin: string,
+  resolveHostname: NonNullable<PlaywrightDriverOptions["resolveHostname"]>,
+): Promise<{ allowedOrigin: string; launchArgs: readonly string[] }> => {
+  const target = new URL(targetOrigin);
+  if (target.hostname !== "localhost") return { allowedOrigin: target.origin, launchArgs: [] };
+  let addresses;
+  try {
+    addresses = await resolveHostname(target.hostname);
+  } catch (error: unknown) {
+    throw new QAOriginPolicyError({ cause: error });
+  }
+  if (addresses.length === 0 || addresses.some(({ address }) => !isLoopbackAddress(address))) {
+    throw new QAOriginPolicyError();
+  }
+  const selected = addresses.find(({ family }) => family === 4) ?? addresses[0];
+  if (!selected) throw new QAOriginPolicyError();
+  const mappedAddress = selected.address.includes(":") ? `[${selected.address}]` : selected.address;
   return {
-    contentHash: `sha256:${createHash("sha256").update(content).digest("hex")}`,
-    byteSize: metadata.size,
+    allowedOrigin: target.origin,
+    launchArgs: [`--host-resolver-rules=MAP localhost ${mappedAddress}`],
   };
 };
+
+const isTimeoutError = (error: unknown): boolean =>
+  error instanceof Error &&
+  (error.name === "TimeoutError" || /(?:timeout|timed out).*\d+\s*ms/i.test(error.message));
 
 const errorSummary = (error: unknown): string =>
   safeSummary(
@@ -140,11 +237,28 @@ const bindEvidenceListeners = async (input: {
   currentScenarioId: () => string;
   observations: QAObservation[];
   slowRequestMs: number;
+  timeoutMs: number;
   onForbiddenOrigin: () => void;
   onUnsafeCapability: () => void;
+  onInvalidEvidence: () => void;
+  onTimeout: () => void;
 }): Promise<void> => {
   const readOnlyMethods = new Set(["GET", "HEAD", "OPTIONS"]);
   const started = new Map<string, number>();
+  let requestCount = 0;
+  let responseBytes = 0;
+  const rejectEvidence = async (route: Route, summary: string) => {
+    input.onInvalidEvidence();
+    observation(input.observations, {
+      kind: "NETWORK",
+      severity: "ERROR",
+      blocking: true,
+      targetId: input.targetId,
+      scenarioId: input.currentScenarioId(),
+      summary,
+    });
+    await route.abort("blockedbyclient");
+  };
   input.page.on("request", (request) => started.set(request.url(), Date.now()));
   input.page.on("response", (response) => {
     const status = response.status();
@@ -202,6 +316,11 @@ const bindEvidenceListeners = async (input: {
   });
   await input.context.route("**/*", async (route) => {
     const request = route.request();
+    requestCount += 1;
+    if (requestCount > MAX_QA_REQUESTS) {
+      await rejectEvidence(route, "Blocked request because the Browser QA request limit was exceeded.");
+      return;
+    }
     let origin = "";
     try {
       origin = new URL(request.url()).origin;
@@ -235,8 +354,33 @@ const bindEvidenceListeners = async (input: {
       await route.abort("blockedbyclient");
       return;
     }
-    const response = await route.fetch({ maxRedirects: 0 });
-    const location = response.headers()["location"];
+    const sensitiveRequestHeaders = new Set(["authorization", "cookie", "proxy-authorization"]);
+    const requestHeaders = await request.allHeaders();
+    if (
+      Object.entries(requestHeaders).some(
+        ([headerName, value]) => sensitiveRequestHeaders.has(headerName.toLowerCase()) && value.length > 0,
+      )
+    ) {
+      await rejectEvidence(route, "Blocked request carrying credentials outside the Browser QA capability.");
+      return;
+    }
+    let response;
+    try {
+      response = await route.fetch({
+        headers: requestHeaders,
+        maxRedirects: 0,
+        timeout: input.timeoutMs,
+      });
+    } catch (error: unknown) {
+      if (isTimeoutError(error)) input.onTimeout();
+      await route.abort("failed").catch(() => undefined);
+      return;
+    }
+    const responseHeaders = response.headers();
+    await input.context.clearCookies();
+    delete responseHeaders["set-cookie"];
+    delete responseHeaders["set-cookie2"];
+    const location = responseHeaders["location"];
     if (response.status() >= 300 && response.status() < 400 && location !== undefined) {
       let redirectedOrigin = "";
       try {
@@ -260,27 +404,64 @@ const bindEvidenceListeners = async (input: {
         return;
       }
     }
-    await route.fulfill({ response });
+    const declaredLength = responseHeaders["content-length"];
+    if (declaredLength !== undefined && /^\d+$/.test(declaredLength)) {
+      const byteSize = Number(declaredLength);
+      if (byteSize > MAX_QA_RESPONSE_BYTES || responseBytes + byteSize > MAX_QA_TOTAL_RESPONSE_BYTES) {
+        await rejectEvidence(route, "Blocked response because the Browser QA response limit was exceeded.");
+        return;
+      }
+    }
+    const body = await response.body();
+    if (
+      body.byteLength > MAX_QA_RESPONSE_BYTES ||
+      responseBytes + body.byteLength > MAX_QA_TOTAL_RESPONSE_BYTES
+    ) {
+      await rejectEvidence(route, "Blocked response because the Browser QA response limit was exceeded.");
+      return;
+    }
+    responseBytes += body.byteLength;
+    await route.fulfill({ status: response.status(), headers: responseHeaders, body });
   });
 };
 
+const playwrightDriverOptionsSchema = z
+  .object({
+    artifactsDirectory: z.string().trim().min(1).max(32_768),
+    timeoutMs: z.number().int().min(50).max(120_000).optional(),
+    slowRequestMs: z.number().int().min(1).max(60_000).optional(),
+  })
+  .strict();
+
 export const createPlaywrightDriver = (options: PlaywrightDriverOptions): BrowserDriver => {
-  const timeoutMs = options.timeoutMs ?? 10_000;
-  const slowRequestMs = options.slowRequestMs ?? 2_000;
+  const parsedOptions = playwrightDriverOptionsSchema.parse({
+    artifactsDirectory: options.artifactsDirectory,
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    ...(options.slowRequestMs === undefined ? {} : { slowRequestMs: options.slowRequestMs }),
+  });
+  if (options.resolveHostname !== undefined && typeof options.resolveHostname !== "function") {
+    throw new TypeError("Browser QA hostname resolver must be a function");
+  }
+  const timeoutMs = parsedOptions.timeoutMs ?? 10_000;
+  const slowRequestMs = parsedOptions.slowRequestMs ?? 2_000;
+  const resolveHostname =
+    options.resolveHostname ?? (async (hostname: string) => lookup(hostname, { all: true, verbatim: true }));
   return {
     id: "PLAYWRIGHT",
     run: async (input): Promise<BrowserDriverExecution> => {
       const qaRun = qaRunSchema.parse(input);
       const runStorageSegment = `run-${createHash("sha256").update(qaRun.id).digest("hex").slice(0, 32)}`;
-      const quarantineRoot = join(options.artifactsDirectory, ".quarantine");
+      const quarantineRoot = join(parsedOptions.artifactsDirectory, ".quarantine");
       await mkdir(quarantineRoot, { recursive: true });
       const quarantineDirectory = await mkdtemp(join(quarantineRoot, `${runStorageSegment}-`));
       const pendingAttachments: PendingAttachment[] = [];
       const executions: Extract<QADriverResult, { outcome: "MEASURED" }>["executions"] = [];
       const observations: QAObservation[] = [];
       const defects: QADefectDraft[] = [];
-      const securityViolations = new Set<"FORBIDDEN_ORIGIN" | "UNSAFE_CAPABILITY">();
+      const securityViolations = new Set<"FORBIDDEN_ORIGIN" | "UNSAFE_CAPABILITY" | "INVALID_EVIDENCE">();
       let targetUnavailable = false;
+      let timedOut = false;
+      let attachmentBytes = 0;
       let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
       let browserVersion = "unknown";
       let finalized = false;
@@ -288,7 +469,7 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
       const confirmAttachments = async (): Promise<void> => {
         if (!finalized) return;
         await confirmBrowserQAArtifacts({
-          artifactsDirectory: options.artifactsDirectory,
+          artifactsDirectory: parsedOptions.artifactsDirectory,
           runStorageSegment,
         });
       };
@@ -298,7 +479,8 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
       };
 
       try {
-        browser = await chromium.launch({ headless: true });
+        const networkPolicy = await resolveTargetNetworkPolicy(qaRun.targetOrigin, resolveHostname);
+        browser = await chromium.launch({ headless: true, args: [...networkPolicy.launchArgs] });
         browserVersion = browser.version();
         for (const [targetIndex, target] of qaRun.plan.targets.entries()) {
           const context = await browser.newContext({
@@ -306,6 +488,7 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
             locale: target.locale,
             colorScheme: target.theme === "DARK" ? "dark" : "light",
             acceptDownloads: false,
+            serviceWorkers: "block",
           });
           context.setDefaultTimeout(timeoutMs);
           await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
@@ -314,16 +497,23 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
           await bindEvidenceListeners({
             context,
             page,
-            allowedOrigin: qaRun.targetOrigin,
+            allowedOrigin: networkPolicy.allowedOrigin,
             targetId: target.id,
             currentScenarioId: () => scenarioId,
             observations,
             slowRequestMs,
+            timeoutMs,
             onForbiddenOrigin: () => {
               securityViolations.add("FORBIDDEN_ORIGIN");
             },
             onUnsafeCapability: () => {
               securityViolations.add("UNSAFE_CAPABILITY");
+            },
+            onInvalidEvidence: () => {
+              securityViolations.add("INVALID_EVIDENCE");
+            },
+            onTimeout: () => {
+              timedOut = true;
             },
           });
 
@@ -372,6 +562,7 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
                 }
               } catch (error: unknown) {
                 status = "FAILED";
+                if (isTimeoutError(error)) timedOut = true;
                 if (step.action.type === "NAVIGATE") {
                   targetUnavailable = true;
                   executionBlocked = true;
@@ -443,6 +634,10 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
             try {
               await page.screenshot({ path: screenshotPath, fullPage: true });
               const metadata = await sha256File(screenshotPath);
+              if (attachmentBytes + metadata.byteSize > MAX_QA_TOTAL_ATTACHMENT_BYTES) {
+                throw new QAEvidenceLimitError("Browser QA evidence exceeded the per-run size limit");
+              }
+              attachmentBytes += metadata.byteSize;
               const draft = qaAttachmentDraftSchema.parse({
                 handle: `screenshot:${target.id}:${scenario.id}`,
                 kind: "SCREENSHOT",
@@ -453,6 +648,9 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
               });
               pendingAttachments.push({ draft, filename: screenshotFilename, path: screenshotPath });
             } catch (error: unknown) {
+              if (error instanceof QAEvidenceLimitError) {
+                securityViolations.add("INVALID_EVIDENCE");
+              }
               defect(defects, {
                 severity: "HIGH",
                 title: `Screenshot capture failed: ${scenario.title}`,
@@ -476,6 +674,10 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
           try {
             await context.tracing.stop({ path: tracePath });
             const metadata = await sha256File(tracePath);
+            if (attachmentBytes + metadata.byteSize > MAX_QA_TOTAL_ATTACHMENT_BYTES) {
+              throw new QAEvidenceLimitError("Browser QA evidence exceeded the per-run size limit");
+            }
+            attachmentBytes += metadata.byteSize;
             const firstScenario = qaRun.plan.scenarios[0];
             if (!firstScenario) throw new Error("QA plan has no scenario for trace attribution");
             const draft = qaAttachmentDraftSchema.parse({
@@ -488,6 +690,9 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
             });
             pendingAttachments.push({ draft, filename: traceFilename, path: tracePath });
           } catch (error: unknown) {
+            if (error instanceof QAEvidenceLimitError) {
+              securityViolations.add("INVALID_EVIDENCE");
+            }
             const firstScenario = qaRun.plan.scenarios[0];
             if (firstScenario) {
               defect(defects, {
@@ -506,8 +711,11 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
         await browser?.close().catch(() => undefined);
         const result = qaDriverResultSchema.parse({
           outcome: "ERROR",
-          code: "DRIVER_CRASHED",
-          summary: errorSummary(error),
+          code: error instanceof QAOriginPolicyError ? "ORIGIN_FORBIDDEN" : "DRIVER_CRASHED",
+          summary:
+            error instanceof QAOriginPolicyError
+              ? "The localhost QA target did not resolve exclusively to loopback addresses."
+              : errorSummary(error),
         });
         return {
           result,
@@ -534,31 +742,43 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
                 code: "EVIDENCE_INVALID",
                 summary: "The page attempted a dialog or download outside the read-only QA capability.",
               }
-            : targetUnavailable
+            : securityViolations.has("INVALID_EVIDENCE")
               ? {
                   outcome: "ERROR",
-                  code: "TARGET_UNHEALTHY",
-                  summary: "The loopback QA target was unavailable.",
+                  code: "EVIDENCE_INVALID",
+                  summary: "Browser QA evidence exceeded a deterministic safety limit.",
                 }
-              : {
-                  outcome: "MEASURED",
-                  environment: {
-                    osFamily:
-                      process.platform === "darwin"
-                        ? "MACOS"
-                        : process.platform === "win32"
-                          ? "WINDOWS"
-                          : "LINUX",
-                    runtimeName: "NODE",
-                    runtimeVersion: process.versions.node,
-                    browserName: "CHROMIUM",
-                    browserVersion,
-                  },
-                  executions,
-                  observations,
-                  attachments: pendingAttachments.map(({ draft }) => draft),
-                  defects,
-                },
+              : timedOut
+                ? {
+                    outcome: "ERROR",
+                    code: "TIMEOUT",
+                    summary: "Browser QA exceeded its deterministic execution timeout.",
+                  }
+                : targetUnavailable
+                  ? {
+                      outcome: "ERROR",
+                      code: "TARGET_UNHEALTHY",
+                      summary: "The loopback QA target was unavailable.",
+                    }
+                  : {
+                      outcome: "MEASURED",
+                      environment: {
+                        osFamily:
+                          process.platform === "darwin"
+                            ? "MACOS"
+                            : process.platform === "win32"
+                              ? "WINDOWS"
+                              : "LINUX",
+                        runtimeName: "NODE",
+                        runtimeVersion: process.versions.node,
+                        browserName: "CHROMIUM",
+                        browserVersion,
+                      },
+                      executions,
+                      observations,
+                      attachments: pendingAttachments.map(({ draft }) => draft),
+                      defects,
+                    },
       );
 
       const finalizeAttachments = async (input: {
@@ -591,7 +811,7 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
           }),
         );
         await stageBrowserQAArtifacts({
-          artifactsDirectory: options.artifactsDirectory,
+          artifactsDirectory: parsedOptions.artifactsDirectory,
           quarantineDirectory,
           runStorageSegment,
           qaRunId: qaRun.id,

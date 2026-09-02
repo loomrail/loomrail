@@ -17,6 +17,7 @@ export const releaseName = "loomrail";
 const runtimeWorkspacePackages = [
   "apps/cli",
   "apps/daemon",
+  "packages/browser-qa",
   "packages/context-assembly",
   "packages/contracts",
   "packages/domain",

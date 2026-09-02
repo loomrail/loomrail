@@ -932,8 +932,15 @@ Q1 tightens the deterministic baseline further:
 
 - a durable `QARun` is reserved by `local-daemon` only for the active `BROWSER_QA` AgentRun and exact successful
   implementation tree; provider output cannot reserve or complete it;
-- the baseline target is a bare literal loopback origin (`localhost`, `127/8` or `[::1]`), with redirects and every
-  subsequent request rechecked by the driver before delivery;
+- the baseline target is a bare literal loopback origin (`localhost`, `127/8` or `[::1]`). `localhost` resolution must
+  contain only loopback addresses and Chromium pins it to one verified address for the run; exact origin is rechecked
+  for every request and redirect. A fresh context blocks service workers, drops response cookies, and rejects requests
+  carrying Cookie, Authorization or Proxy-Authorization;
+- one target context delivers at most 250 requests, 8 MiB per response and 64 MiB across responses. One screenshot or
+  trace is capped at 32 MiB and one run at 256 MiB; files are hashed incrementally rather than loaded whole. Limit
+  breaches, malformed runtime options and timeouts fail closed without finalizable evidence;
+- console/error summaries redact bearer values, secret-like assignments/query parameters and common absolute personal
+  path forms before they can enter normalized evidence or Defects;
 - `PASSED`, `FAILED` and `ERROR` are derived from a complete bounded scenario matrix; a driver/provider aggregate
   verdict is not part of the input schema;
 - screenshot/trace handles are not evidence. The daemon must quarantine, hash, size-check and atomically finalize each
@@ -945,9 +952,10 @@ Q1 tightens the deterministic baseline further:
 - the authenticated attachment route first scopes the id through the requested WorkItem and its current PipelineRun,
   rejects symlinked directories/files, opens one descriptor, and verifies its size and SHA-256 before streaming; the
   response contains no storage key or absolute path and is never cached;
-- attachment metadata records `STANDARD_30_DAYS`, but automatic age-based retention cleanup is not implemented in
-  Q1 yet. Files are therefore not currently deleted after 30 days; the cleanup policy remains an explicit open
-  security/release gate and must not recursively delete an unresolved path;
+- attachment metadata records `STANDARD_30_DAYS`. Bounded startup cleanup selects attachments only after the latest
+  audited transition that closed their WorkItem as `DONE` or `CANCELLED` is 30 days old, unlinks only an exact portable
+  two-segment managed path, and writes an append-only outcome. It does not recurse, follow symlinks, touch a pending
+  recovery marker or remove unknown siblings; unsafe or failed candidates stay in place and are logged;
 - only the exact bundled `web-app-a` fixture may fall back when its config file is absent, and only to the current
   daemon's validated loopback origin plus public readiness route. An invalid fixture config and every missing user
   Project config still fail closed, so the exception cannot silently redirect real-project QA;
@@ -997,6 +1005,10 @@ HumanRequest is never a secret-input channel.
 - localhost HTTP does not provide transport encryption, so the boundary relies on loopback, session and browser origin
   protections;
 - provider-native browser/session tools may expose authenticated data after explicit user grant;
+- Playwright's `route.fetch()` buffers a response before Loomrail can apply the post-fetch body bound. Declared sizes
+  are rejected and oversized bytes are never delivered into the page or durable evidence, but a hostile loopback
+  server using a false or absent length can still consume transient Browser QA process memory before rejection; a
+  streaming proxy boundary is required to eliminate that local availability risk;
 - dependency compromise cannot be eliminated, only reduced through pinning, review and provenance;
 - LLM output remains untrusted even after independent review;
 - the untrusted-checkpoint delimiter framing (`packages/context-assembly/src/render.ts`) is plain string

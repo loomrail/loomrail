@@ -18,13 +18,16 @@ directory rather than inside a repository you care about:
 mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install loomrail@next
+npx playwright install chromium
 npx loomrail
 ```
 
-The `next` tag keeps the pre-alpha channel explicit. To put the launcher on your `PATH` instead:
+The explicit Chromium download is a one-time prerequisite for isolated Browser QA; Loomrail does not reuse a signed-in
+browser profile. The `next` tag keeps the pre-alpha channel explicit. To put the launcher on your `PATH` instead:
 
 ```bash
 npm install -g loomrail@next
+npx playwright install chromium
 loomrail
 ```
 

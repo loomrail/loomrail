@@ -17,12 +17,27 @@ export const MAX_QA_OBSERVATIONS = 100;
 export const MAX_QA_ATTACHMENTS = 50;
 export const MAX_QA_DEFECTS = 50;
 export const MAX_QA_RUN_HISTORY = 20;
+export const MAX_QA_ATTACHMENT_BYTES = 32 * 1_024 * 1_024;
+export const MAX_QA_STORED_ATTACHMENT_BYTES = 1_024 * 1_024 * 1_024;
+export const MAX_QA_TOTAL_ATTACHMENT_BYTES = 256 * 1_024 * 1_024;
+export const MAX_QA_RESPONSE_BYTES = 8 * 1_024 * 1_024;
+export const MAX_QA_TOTAL_RESPONSE_BYTES = 64 * 1_024 * 1_024;
+export const MAX_QA_REQUESTS = 250;
 
 const titleSchema = z.string().trim().min(1).max(200);
 const descriptionSchema = z.string().trim().min(1).max(4_000);
 const shortDescriptionSchema = z.string().trim().min(1).max(1_000);
 const treeShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
 const contentHashSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+const portableStorageSegmentSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, "Storage key segment is not portable")
+  .refine(
+    (value) => !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(value),
+    "Storage key segment is reserved on Windows",
+  );
 
 const isLoopbackHostname = (hostname: string): boolean => {
   if (hostname === "localhost" || hostname === "[::1]") return true;
@@ -61,6 +76,7 @@ export const qaObservationKindSchema = z.enum(["CONSOLE", "NETWORK"]);
 export const qaObservationSeveritySchema = z.enum(["INFO", "WARNING", "ERROR"]);
 export const qaAttachmentKindSchema = z.enum(["SCREENSHOT", "TRACE"]);
 export const qaRetentionClassSchema = z.literal("STANDARD_30_DAYS");
+export const qaAttachmentRetentionOutcomeSchema = z.enum(["DELETED", "ALREADY_ABSENT"]);
 export const qaDefectSeveritySchema = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
 export const qaDefectStatusSchema = z.enum(["OPEN", "RESOLVED", "WAIVED"]);
 export const qaDriverErrorCodeSchema = z.enum([
@@ -288,7 +304,7 @@ export const qaAttachmentDraftSchema = z
     handle: opaqueIdSchema,
     kind: qaAttachmentKindSchema,
     contentHash: contentHashSchema,
-    byteSize: z.number().int().positive().max(1_073_741_824),
+    byteSize: z.number().int().positive().max(MAX_QA_ATTACHMENT_BYTES),
     targetId: opaqueIdSchema,
     scenarioId: opaqueIdSchema,
     capturedAt: utcTimestampSchema,
@@ -301,6 +317,9 @@ export const qaAttachmentRefSchema = qaAttachmentDraftSchema
     schemaVersion: schemaVersionSchema,
     id: opaqueIdSchema,
     qaRunId: opaqueIdSchema,
+    // Existing databases created by migration 0022 allowed refs up to 1 GiB. New driver drafts are
+    // capped at MAX_QA_ATTACHMENT_BYTES; the wider read bound preserves those append-only rows.
+    byteSize: z.number().int().positive().max(MAX_QA_STORED_ATTACHMENT_BYTES),
     retentionClass: qaRetentionClassSchema,
     storageKey: z
       .string()
@@ -310,7 +329,7 @@ export const qaAttachmentRefSchema = qaAttachmentDraftSchema
       .refine((value) => !value.startsWith("/") && !value.includes("\\"), "Storage key must be relative")
       .refine(
         (value) =>
-          value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== ".."),
+          value.split("/").every((segment) => portableStorageSegmentSchema.safeParse(segment).success),
         "Storage key must contain only portable segments",
       ),
   })
@@ -484,6 +503,16 @@ export const completeQARunCommandSchema = qaCommandBaseSchema.extend({
     .strict(),
 });
 
+export const recordQAAttachmentRetentionCommandSchema = qaCommandBaseSchema.extend({
+  type: z.literal("RECORD_QA_ATTACHMENT_RETENTION"),
+  payload: z
+    .object({
+      attachmentId: opaqueIdSchema,
+      outcome: qaAttachmentRetentionOutcomeSchema,
+    })
+    .strict(),
+});
+
 const qaCommandResultBaseSchema = z
   .object({ schemaVersion: schemaVersionSchema, replayed: z.boolean() })
   .strict();
@@ -503,6 +532,13 @@ export const qaRunCompletedResultSchema = qaCommandResultBaseSchema.extend({
   attachments: z.array(qaAttachmentRefSchema).max(MAX_QA_ATTACHMENTS),
   defects: z.array(qaDefectSchema).max(MAX_QA_DEFECTS),
   event: qaRunCompletedEventSchema,
+});
+
+export const qaAttachmentRetentionRecordedResultSchema = qaCommandResultBaseSchema.extend({
+  type: z.literal("QA_ATTACHMENT_RETENTION_RECORDED"),
+  attachmentId: opaqueIdSchema,
+  outcome: qaAttachmentRetentionOutcomeSchema,
+  recordedAt: utcTimestampSchema,
 });
 
 export const qaStateResponseSchema = z
@@ -538,6 +574,8 @@ export type QARunReservedEvent = z.infer<typeof qaRunReservedEventSchema>;
 export type QARunCompletedEvent = z.infer<typeof qaRunCompletedEventSchema>;
 export type ReserveQARunCommand = z.infer<typeof reserveQARunCommandSchema>;
 export type CompleteQARunCommand = z.infer<typeof completeQARunCommandSchema>;
+export type RecordQAAttachmentRetentionCommand = z.infer<typeof recordQAAttachmentRetentionCommandSchema>;
 export type QARunReservedResult = z.infer<typeof qaRunReservedResultSchema>;
 export type QARunCompletedResult = z.infer<typeof qaRunCompletedResultSchema>;
+export type QAAttachmentRetentionRecordedResult = z.infer<typeof qaAttachmentRetentionRecordedResultSchema>;
 export type QAStateResponse = z.infer<typeof qaStateResponseSchema>;

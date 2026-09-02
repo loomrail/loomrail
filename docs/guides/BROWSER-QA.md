@@ -9,7 +9,8 @@ page works cannot advance the workflow to acceptance.
 
 ## The built-in demo
 
-The bundled **Fixture web application** needs no extra command. Its mock implementation deliberately changes no app,
+After the one-time `npx playwright install chromium` prerequisite, the bundled **Fixture web application** needs no
+extra target command. Its mock implementation deliberately changes no app,
 so its built-in QA plan measures Loomrail's public readiness endpoint on the actual loopback port. This verifies the
 complete evidence and acceptance route without starting Codex, Claude Code, or a second development server.
 
@@ -68,8 +69,9 @@ Minimal example:
 }
 ```
 
-`targetOrigin` must be a literal HTTP loopback origin using `127.x.x.x`, `localhost`, or `[::1]`. Put only paths in
-`NAVIGATE`; external origins are blocked. The supported step actions are `NAVIGATE`, semantic-locator `CLICK`,
+`targetOrigin` must be a literal HTTP(S) loopback origin using `127.x.x.x`, `localhost`, or `[::1]`. `localhost` is
+resolved before Chromium starts, must resolve only to loopback addresses, and is pinned to one verified address for
+the run. Put only paths in `NAVIGATE`; external origins and redirects are blocked. The supported step actions are `NAVIGATE`, semantic-locator `CLICK`,
 semantic-locator `PRESS`, and `WAIT_FOR_IDLE`. Assertions are `VISIBLE`, `TEXT_CONTAINS`, `URL_PATH`,
 `NO_HORIZONTAL_OVERFLOW`, and `FOCUSED`. CSS selectors, XPath, arbitrary JavaScript, downloads, dialogs, mutations,
 and signed-in browser profiles are not available to this baseline.
@@ -91,5 +93,8 @@ or invalid config, unhealthy target, forbidden origin, unsafe capability, timeou
 Neither outcome opens acceptance. Fix the named condition, keep the target running, and use the offered retry action.
 
 Evidence files live under Loomrail's data directory, outside the repository and SQLite. Loomrail records the
-`STANDARD_30_DAYS` retention class as metadata, but automatic age-based cleanup is not implemented yet. This
-pre-alpha also has no end-user retention or cleanup screen, so the files are not currently deleted after 30 days.
+`STANDARD_30_DAYS` retention class and removes screenshot/trace files after 30 days from the latest
+transition that closed the work as `DONE` or `CANCELLED`. Cleanup runs in bounded batches at daemon startup, records
+an append-only outcome, and unlinks only exact durable attachment paths. It never recursively removes a directory,
+follows a symlink, touches a recovery-marker-bound run, or deletes an unknown neighboring file. This pre-alpha has no
+end-user retention or cleanup screen yet.

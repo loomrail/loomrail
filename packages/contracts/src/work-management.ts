@@ -11,10 +11,12 @@ import {
 import { reviewFindingOwnerDispositionSchema, reviewFindingSchema } from "./review.js";
 import {
   completeQARunCommandSchema,
+  qaAttachmentRetentionRecordedResultSchema,
   qaRunCompletedEventSchema,
   qaRunCompletedResultSchema,
   qaRunReservedEventSchema,
   qaRunReservedResultSchema,
+  recordQAAttachmentRetentionCommandSchema,
   reserveQARunCommandSchema,
 } from "./qa.js";
 import {
@@ -538,6 +540,7 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   startAgentRunCommandSchema,
   reserveQARunCommandSchema,
   completeQARunCommandSchema,
+  recordQAAttachmentRetentionCommandSchema,
   disposeReviewFindingCommandSchema,
   startMockPipelineCommandSchema,
   markWorkflowDispatchStartedCommandSchema,
@@ -639,6 +642,7 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   agentRunStartedResultSchema,
   qaRunReservedResultSchema,
   qaRunCompletedResultSchema,
+  qaAttachmentRetentionRecordedResultSchema,
   reviewFindingDisposedResultSchema,
   pipelineStartedResultSchema,
   workflowDispatchStartedResultSchema,

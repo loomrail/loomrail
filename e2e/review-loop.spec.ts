@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { passingBrowserQADriver } from "../apps/daemon/test/browser-qa-fixture.js";
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
 import type { ProviderAdapter } from "../packages/provider-core/dist/index.js";
 
@@ -347,6 +348,7 @@ test.describe("independent review cockpit", () => {
       logger: false,
       providerAdapter: adapter,
       webRoot: resolve("apps/web/dist"),
+      browserQADriver: passingBrowserQADriver(),
     });
     await page.goto(daemon.bootstrapUrl);
     await initializeWorkspace(page);
@@ -365,7 +367,9 @@ test.describe("independent review cockpit", () => {
     await expect(review.getByText("Separate run, same provider", { exact: true })).toBeVisible();
     await expect(review.getByText("Stale update is accepted", { exact: true })).toBeVisible();
     await expect(review.getByText("Resolved", { exact: true })).toBeVisible();
-    await expect(inspector.getByText("R1 browser-route QA", { exact: true })).toBeVisible();
+    const browserQA = inspector.getByRole("region", { name: "Browser QA" });
+    await expect(browserQA.getByText("Passed", { exact: true }).first()).toBeVisible();
+    await expect(inspector.getByText("R1 browser-route QA", { exact: true })).toHaveCount(0);
     expect(seenStages).toEqual([
       "DISCOVERY:1",
       "PLAN:1",
@@ -373,7 +377,6 @@ test.describe("independent review cockpit", () => {
       "REVIEW:1",
       "IMPLEMENT:2",
       "REVIEW:2",
-      "QA:1",
       "ACCEPTANCE:1",
     ]);
   });

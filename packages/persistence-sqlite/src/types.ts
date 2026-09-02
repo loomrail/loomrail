@@ -67,6 +67,8 @@ export type StateStoreErrorCode =
   | "QA_RUN_ALREADY_EXISTS"
   | "QA_RUN_NOT_FOUND"
   | "QA_STABLE_TREE_MISSING"
+  | "QA_ATTACHMENT_NOT_FOUND"
+  | "QA_RETENTION_ACTOR_FORBIDDEN"
   | "WORKSPACE_NOT_FOUND"
   // Storage invariant (migration 0011's UNIQUE on work_item_id, spec D1): the workspace belongs to
   // the WorkItem, and a second row for the same WorkItem would mean two writers past the lease.
@@ -127,6 +129,7 @@ export type StateQuery =
   | { type: "GET_AGENT_RUN"; agentRunId: string }
   | { type: "GET_QA_RUN"; qaRunId: string }
   | { type: "GET_QA_STATE"; pipelineRunId: string }
+  | { type: "LIST_EXPIRED_QA_ATTACHMENTS"; closedBefore: string; limit?: number }
   | { type: "GET_LATEST_SUCCEEDED_DEVELOPER_AGENT_RUN"; pipelineRunId: string }
   | { type: "LIST_AGENT_RUNS"; status?: AgentRunStatus; limit?: number }
   | {
@@ -208,6 +211,7 @@ export type StateQueryResult =
       attachments: QAAttachmentRef[];
       defects: QADefect[];
     }
+  | { type: "QA_ATTACHMENTS"; attachments: QAAttachmentRef[] }
   | { type: "REVIEW_REPORTS"; reports: ReviewReport[] }
   | { type: "REVIEW_FINDINGS"; findings: ReviewFinding[] }
   | { type: "WORK_ITEMS"; workItems: WorkItem[] }

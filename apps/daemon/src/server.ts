@@ -137,6 +137,7 @@ import { z, ZodError } from "zod";
 import { broadcastingState } from "./broadcasting-state.js";
 import { resolveProjectBrowserQAConfig, type BrowserQAConfigResolver } from "./browser-qa-config.js";
 import { reconcileBrowserQAArtifacts } from "./browser-qa-recovery.js";
+import { cleanupExpiredBrowserQAArtifacts } from "./browser-qa-retention.js";
 import { createBrowserQAStageRunner } from "./browser-qa-runner.js";
 import { buildAgentFleet } from "./agent-fleet.js";
 import {
@@ -794,6 +795,12 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   await reconcileBrowserQAArtifacts({
     state: localState,
     artifactsDirectory: browserQAArtifactsDirectory,
+    logger: app.log,
+  });
+  await cleanupExpiredBrowserQAArtifacts({
+    state: localState,
+    artifactsDirectory: browserQAArtifactsDirectory,
+    now: now(),
     logger: app.log,
   });
 

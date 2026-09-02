@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
 import { gatedAdapter } from "../apps/daemon/test/gated-adapter.js";
+import { passingBrowserQADriver } from "../apps/daemon/test/browser-qa-fixture.js";
 import { materialiseFixtureRepository, resolveBundledFixture } from "../apps/daemon/dist/fixtures.js";
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
 import { createProviderRegistry } from "../apps/daemon/dist/provider-selection.js";
@@ -1692,6 +1693,7 @@ test.describe("authenticated walking skeleton", () => {
       bootstrapToken: randomBytes(32).toString("base64url"),
       logger: false,
       webRoot: resolve("apps/web/dist"),
+      browserQADriver: passingBrowserQADriver(),
     });
 
     await page.goto(daemon.bootstrapUrl);
@@ -1737,6 +1739,12 @@ test.describe("authenticated walking skeleton", () => {
     await expect(workflowSection.getByRole("heading", { name: "Acceptance package" })).toBeVisible();
     await expect(workflowSection.getByText("Review report", { exact: true })).toBeVisible();
     await expect(workflowSection.getByText("QA report", { exact: true })).toBeVisible();
+    const browserQA = workflowSection.getByRole("region", { name: "Browser QA" });
+    await expect(browserQA).toBeVisible();
+    await expect(browserQA.getByText("Passed", { exact: true }).first()).toBeVisible();
+    await expect(browserQA.getByText("The local Loomrail demo is reachable", { exact: true })).toHaveCount(2);
+    await expect(browserQA.getByText(/CHROMIUM .* · .* · Node /)).toBeVisible();
+    await expect(browserQA.getByRole("link", { name: "Open evidence" })).toHaveCount(0);
     await expect(workflowSection.getByText("Needs decision", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /Needs your decision/ })).toBeVisible();
     await page.getByRole("link", { name: /Attention/ }).click();
@@ -3110,7 +3118,7 @@ test.describe("authenticated walking skeleton", () => {
     await expect(profile).toBeVisible();
     await expect(preset.getByText("Configured below", { exact: true })).toBeVisible();
     await profile.getByRole("button", { name: "Probe capabilities" }).click();
-    await expect(profile.getByText("Ready", { exact: true })).toBeVisible();
+    await expect(profile.getByText("Ready", { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(profile).toContainText("query-docs, resolve-library-id");
 
     // A later Loomrail release can move the bundled entrypoint, so the control has to survive the

@@ -108,6 +108,11 @@ const migrations: readonly Migration[] = [
     name: "measured_qa_artifact_provenance",
     filename: "0023_measured_qa_artifact_provenance.sql",
   },
+  {
+    version: 24,
+    name: "qa_attachment_retention",
+    filename: "0024_qa_attachment_retention.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

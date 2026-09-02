@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { passingBrowserQADriver } from "../apps/daemon/test/browser-qa-fixture.js";
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
 
 /**
@@ -93,6 +94,7 @@ const openWorkbench = async (page: Page, title: string): Promise<Locator> => {
     bootstrapToken: randomBytes(32).toString("base64url"),
     logger: false,
     webRoot: resolve("apps/web/dist"),
+    browserQADriver: passingBrowserQADriver(),
   });
   await page.goto(daemon.bootstrapUrl);
   await initializeWorkspace(page);

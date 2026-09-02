@@ -57,6 +57,7 @@ import {
   stateCommandResultSchema,
   stateCommandSchema,
   usageRecordSchema,
+  utcTimestampSchema,
   workflowDispatchSchema,
   workflowSnapshotSchema,
   workflowTemplateSchema,
@@ -688,6 +689,12 @@ const qaAttachmentRefRowSchema = z.object({
   storage_key: z.string(),
 });
 
+const qaAttachmentRetentionRowSchema = z.object({
+  attachment_id: z.string(),
+  outcome: z.enum(["DELETED", "ALREADY_ABSENT"]),
+  recorded_at: z.string(),
+});
+
 const qaDefectRowSchema = z.object({
   id: z.string(),
   schema_version: z.number().int(),
@@ -896,6 +903,13 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("GET_AGENT_RUN"), agentRunId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_QA_RUN"), qaRunId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_QA_STATE"), pipelineRunId: opaqueIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal("LIST_EXPIRED_QA_ATTACHMENTS"),
+      closedBefore: utcTimestampSchema,
+      limit: z.number().int().min(1).max(1_000).default(200),
+    })
+    .strict(),
   z
     .object({
       type: z.literal("GET_LATEST_SUCCEEDED_DEVELOPER_AGENT_RUN"),
@@ -2496,6 +2510,38 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         id, schema_version, qa_run_id, kind, content_hash, byte_size, target_id,
         scenario_id, captured_at, retention_class, storage_key
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectQAAttachmentRefById = database.prepare("SELECT * FROM qa_attachment_refs WHERE id = ?");
+    const selectQAAttachmentRetentionById = database.prepare(
+      "SELECT * FROM qa_attachment_retention_log WHERE attachment_id = ?",
+    );
+    const insertQAAttachmentRetention = database.prepare(
+      `INSERT INTO qa_attachment_retention_log (attachment_id, outcome, recorded_at)
+       VALUES (?, ?, ?)`,
+    );
+    const selectExpiredQAAttachmentRefs = database.prepare(
+      `SELECT qa_attachment_refs.* FROM qa_attachment_refs
+       INNER JOIN qa_runs ON qa_runs.id = qa_attachment_refs.qa_run_id
+       INNER JOIN work_items ON work_items.id = qa_runs.work_item_id
+       LEFT JOIN qa_attachment_retention_log
+         ON qa_attachment_retention_log.attachment_id = qa_attachment_refs.id
+       INNER JOIN events AS closure_event ON closure_event.sequence = (
+         SELECT MAX(history.sequence) FROM events AS history
+         WHERE history.aggregate_id = work_items.id
+           AND (
+             history.type IN ('PIPELINE_CANCELLED', 'PIPELINE_COMPLETED')
+             OR (
+               history.type = 'WORK_ITEM_STATE_CHANGED'
+               AND json_extract(history.data_json, '$.workItem.state') IN ('DONE', 'CANCELLED')
+             )
+           )
+       )
+       WHERE qa_attachment_refs.retention_class = 'STANDARD_30_DAYS'
+         AND qa_attachment_retention_log.attachment_id IS NULL
+         AND work_items.state IN ('DONE', 'CANCELLED')
+         AND closure_event.occurred_at <= ?
+       ORDER BY closure_event.occurred_at, qa_attachment_refs.captured_at, qa_attachment_refs.id
+       LIMIT ?`,
     );
     const insertQADefect = database.prepare(
       `INSERT INTO qa_defects (
@@ -5651,6 +5697,38 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "RECORD_QA_ATTACHMENT_RETENTION") {
+        if (command.actor.type !== "SYSTEM" || command.actor.id !== "local-daemon") {
+          throw new StateStoreError(
+            "QA_RETENTION_ACTOR_FORBIDDEN",
+            "Only the local daemon can record Browser QA retention cleanup",
+          );
+        }
+        if (selectQAAttachmentRefById.get(command.payload.attachmentId) === undefined) {
+          throw new StateStoreError("QA_ATTACHMENT_NOT_FOUND", "The Browser QA attachment does not exist");
+        }
+        const existing = selectQAAttachmentRetentionById.get(command.payload.attachmentId);
+        const retention =
+          existing === undefined
+            ? {
+                attachment_id: command.payload.attachmentId,
+                outcome: command.payload.outcome,
+                recorded_at: occurredAt,
+              }
+            : qaAttachmentRetentionRowSchema.parse(existing);
+        if (existing === undefined) {
+          insertQAAttachmentRetention.run(retention.attachment_id, retention.outcome, retention.recorded_at);
+        }
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "QA_ATTACHMENT_RETENTION_RECORDED",
+          replayed: false,
+          attachmentId: retention.attachment_id,
+          outcome: retention.outcome,
+          recordedAt: retention.recorded_at,
+        });
+      }
+
       if (command.type === "RESERVE_QA_RUN") {
         const stageAttempt = readStageAttempt(command.payload.stageAttemptId);
         const agentRunValue = selectAgentRunById.get(command.payload.agentRunId);
@@ -7813,6 +7891,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               )
               .all(queryValue.pipelineRunId)
               .map(qaDefectFromRow),
+          };
+        case "LIST_EXPIRED_QA_ATTACHMENTS":
+          return {
+            type: "QA_ATTACHMENTS",
+            attachments: selectExpiredQAAttachmentRefs
+              .all(queryValue.closedBefore, queryValue.limit)
+              .map(qaAttachmentRefFromRow),
           };
         case "GET_LATEST_SUCCEEDED_DEVELOPER_AGENT_RUN": {
           const value = selectLatestSucceededDeveloperAgentRun.get(queryValue.pipelineRunId);

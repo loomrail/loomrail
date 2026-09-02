@@ -34,7 +34,8 @@ the source of truth.
 
 ## Install and run safely
 
-Requirements: Node.js `>=24.19 <25`, macOS or Windows, and a browser on the same machine. Linux is best effort.
+Requirements: Node.js `>=24.19 <25`, macOS or Windows, a browser on the same machine, and the isolated Chromium build
+managed by the installed Playwright package. Linux is best effort.
 
 Start in a new empty directory, not inside a repository you care about:
 
@@ -42,8 +43,12 @@ Start in a new empty directory, not inside a repository you care about:
 mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install loomrail@next
+npx playwright install chromium
 npx loomrail
 ```
+
+The Chromium download is an explicit one-time installation for deterministic Browser QA. Loomrail never reuses your
+signed-in browser profile.
 
 The launcher binds to `127.0.0.1`, opens a one-time authenticated URL, and stores state in local SQLite. Keep the
 terminal open and stop Loomrail with `Ctrl+C`.
@@ -56,8 +61,8 @@ npx loomrail --no-open --port 4176
 
 Open the printed URL on the same machine within 60 seconds. `--no-open` does not enable remote access.
 
-For a global launcher, use `npm install -g loomrail@next` and then `loomrail`. The project-local route above is
-recommended for evaluation because it keeps the selected pre-alpha channel visible.
+For a global launcher, use `npm install -g loomrail@next`, run `npx playwright install chromium`, and then `loomrail`.
+The project-local route above is recommended for evaluation because it keeps the selected pre-alpha channel visible.
 
 ## First run
 

@@ -19,13 +19,16 @@ Loomrail работает локально, но не является security 
 mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install loomrail@next
+npx playwright install chromium
 npx loomrail
 ```
 
-Тег `next` оставляет pre-alpha канал явным. Чтобы добавить launcher в `PATH`:
+Явная загрузка Chromium нужна один раз для изолированного Browser QA; Loomrail не использует авторизованный browser
+profile. Тег `next` оставляет pre-alpha канал явным. Чтобы добавить launcher в `PATH`:
 
 ```bash
 npm install -g loomrail@next
+npx playwright install chromium
 loomrail
 ```
 
