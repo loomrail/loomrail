@@ -167,11 +167,13 @@ mock-маршруте», а D2 всё равно ждёт E1.5.
   подходе к D3;
 - где живут примеры из D2 — в этом репозитории рядом с fixture-проектами или отдельным репозиторием — там же.
 
-Текущий checkpoint: C1, C3, C2, B4 и A4 реализованы; A3 завершён и запушен: scheduler kernel, durable AgentRun
-lifecycle, transactional limits/workspace claim, bounded daemon pool и Agent Fleet projection/UI. Clean install
-release candidate прошёл на macOS/Windows; общий source gate ждёт отдельно разрабатываемый landing. Следующий
-продуктовый эпик — R1 independent review loop: спецификация [45](45-r1-independent-review-loop-spec.ru.md), план
-[46](46-r1-independent-review-loop-implementation-plan.ru.md).
+Текущий checkpoint: C1, C3, C2, B4, A4, A3 и R1 реализованы и запушены. R1 добавил independent author/reviewer
+AgentRuns, structured findings, bounded fix/re-review rounds, owner-authorized final round и реальные browser routes
+для green и exhausted сценариев. Его implementation gate зелёный; общий release gate всё ещё ждёт отдельно
+разрабатываемый landing и повторный macOS/Windows clean-install прогон. Следующий продуктовый эпик — Q1
+deterministic Browser QA evidence: спецификация [47](47-q1-deterministic-browser-qa-spec.ru.md), план
+[48](48-q1-deterministic-browser-qa-implementation-plan.ru.md). Он заменяет provider-утверждение `QA_REPORT`
+измеряемым Playwright baseline, не затрагивая отдельную работу над лендингом.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах
