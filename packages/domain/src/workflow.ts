@@ -53,6 +53,7 @@ import { MAX_TOTAL_REVIEW_ROUNDS } from "@loomrail/contracts";
 import { nextWorkflowStage, validateWorkflowTemplate } from "@loomrail/workflow-engine";
 
 import { isSessionPauseFailureCode } from "./session-pause.js";
+import { bindAcceptanceCriteria } from "./acceptance.js";
 import { decideReviewLoop, ReviewLoopError } from "./review.js";
 import { assertQACorrectionAcceptanceLineage } from "./qa-correction.js";
 
@@ -844,6 +845,12 @@ export const decideApplyProviderOutcome = (
     if (!context.humanRequestId || !context.acceptancePackageId) {
       throw new WorkflowDomainError("ACCEPTANCE_NOT_FOUND", "Durable acceptance IDs were not supplied");
     }
+    if (acceptanceOutcome.criteria === undefined) {
+      throw new WorkflowDomainError(
+        "ACCEPTANCE_NOT_READY",
+        "Owner acceptance requires criterion-bound Review and QA claims",
+      );
+    }
     const measuredQA = context.measuredQA;
     const qaArtifact =
       measuredQA === undefined
@@ -971,6 +978,15 @@ export const decideApplyProviderOutcome = (
       resolvedAt: null,
     };
     const artifactIds = [reviewArtifact.id, qaArtifact.id];
+    const boundCriteria = bindAcceptanceCriteria({
+      acceptanceCriteria: workItem.acceptanceCriteria,
+      claims: acceptanceOutcome.criteria,
+      reviewArtifact,
+      qaArtifact,
+    });
+    if (boundCriteria.type === "INVALID") {
+      throw new WorkflowDomainError("ACCEPTANCE_NOT_READY", boundCriteria.reason);
+    }
     const acceptancePackage: AcceptancePackage = {
       schemaVersion: 1,
       id: context.acceptancePackageId,
@@ -980,17 +996,7 @@ export const decideApplyProviderOutcome = (
       stageAttemptId: stageAttempt.id,
       humanRequestId: request.id,
       status: "PENDING",
-      criteria: workItem.acceptanceCriteria.map((criterion, index) => ({
-        criterion,
-        implementation: "The implementation stage completed under the approved budget policy.",
-        reviewArtifactId: reviewArtifact.id,
-        qaArtifactId: qaArtifact.id,
-        verification:
-          acceptanceOutcome.verifyInstructions.at(index) ??
-          acceptanceOutcome.verifyInstructions[0] ??
-          "Run the recorded verification suite.",
-        knownRisk: null,
-      })),
+      criteria: [...boundCriteria.criteria],
       artifactIds,
       releaseNote: acceptanceOutcome.releaseNote,
       verifyInstructions: [...acceptanceOutcome.verifyInstructions],

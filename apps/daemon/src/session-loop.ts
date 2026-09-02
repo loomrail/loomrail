@@ -1371,6 +1371,13 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             dispatch: deps.dispatch,
             session: providerSessionRef(providerSession, attempt),
             contextPack: assembled.pack,
+            acceptanceInput:
+              attempt.stage === "ACCEPTANCE"
+                ? {
+                    criteria: sources.sources.workItemBrief.acceptanceCriteria,
+                    evidence: sources.sources.evidence.map(({ kind, checks }) => ({ kind, checks })),
+                  }
+                : null,
             humanRequests,
             mcpConnections,
             ...invocationWorkspace,

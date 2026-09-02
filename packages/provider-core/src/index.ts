@@ -117,6 +117,18 @@ export type ProviderInvocation = {
   session: ProviderSessionRef;
   contextPack: ContextPack;
   /**
+   * A structured copy of the criterion/check text rendered into this same pack, present only for
+   * Acceptance. It carries no authority IDs: adapters may propose a mapping without parsing prose,
+   * while the domain still resolves and verifies every durable reference itself.
+   */
+  acceptanceInput: {
+    criteria: readonly string[];
+    evidence: readonly {
+      kind: "REVIEW_REPORT" | "QA_REPORT";
+      checks: readonly string[];
+    }[];
+  } | null;
+  /**
    * Whether this StageAttempt may open a provider-authored owner gate.
    *
    * The daemon derives this from durable HumanRequests attached to the attempt. Adapters must use

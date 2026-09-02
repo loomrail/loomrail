@@ -76,6 +76,9 @@ const createTask = async (page: Page, title: string): Promise<void> => {
   await dialog
     .getByPlaceholder("Outcome, constraints, relevant files…")
     .fill("Persisted through the authenticated local API.");
+  await dialog
+    .getByPlaceholder("The owner can verify the delivered outcome…")
+    .fill("The task remains durable after reload.");
   await expect(submit).toBeEnabled();
   await submit.click();
   await expect(dialog).toBeHidden();

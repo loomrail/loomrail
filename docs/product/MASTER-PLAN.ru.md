@@ -1241,6 +1241,15 @@ session/Origin/CSRF boundary. Локально прошли 52/52 browser E2E, p
 release gate остаётся красным только на трёх lint-ошибках параллельно разрабатываемого landing и ждёт нового
 macOS/Windows CI-прогона. Новая npm-версия до полного зелёного gate не публикуется.
 
+Q3 criterion-bound Acceptance Package и read-only release summary export реализованы по планам 51–52. Provider
+предлагает ordered criterion claims без authority IDs; domain требует exact total mapping и существующие checks
+current Review/measured QA evidence. Task Cockpit показывает полную matrix и legacy-unbound state, а authenticated
+download выдаёт deterministic escaped Markdown с PENDING/resolved status, allowlisted QA attachment metadata и полным
+bounded audit. Cross-boundary lineage, raw HTML, absolute paths, storage keys, incomplete audit и >512 KiB output
+fail closed; threat T39, restart/history/idempotency и Q2 correction-to-download browser path покрыты. Локально зелёны
+full build/typecheck/unit, 52/52 E2E, production audit и clean-install tarball. Phase 7 implementation deliverables
+закрыты, но exit gate остаётся открыт до private dogfood run и общего macOS/Windows `verify`; npm publish запрещён.
+
 ### Phase 8 — Public Alpha hardening (3–4 недели)
 
 **Outcome:** внешний solo developer может безопасно установить и dogfood продукт.

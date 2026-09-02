@@ -6,6 +6,7 @@ import {
   storeCsrfToken,
   waiveQADefect,
   workItemQAAttachmentUrl,
+  workItemAcceptanceExportUrl,
 } from "./api";
 
 const passThroughSchema = { parse: (value: unknown): unknown => value };
@@ -95,6 +96,12 @@ describe("local API client", () => {
   it("keeps QA attachment identifiers inside the authenticated same-origin route", () => {
     expect(workItemQAAttachmentUrl("work item/1", "attachment?1")).toBe(
       "/api/v1/work-items/work%20item%2F1/qa/attachments/attachment%3F1",
+    );
+  });
+
+  it("keeps acceptance export identifiers inside the authenticated same-origin route", () => {
+    expect(workItemAcceptanceExportUrl("work item/1", "package:1")).toBe(
+      "/api/v1/work-items/work%20item%2F1/acceptance/package%3A1/export",
     );
   });
 

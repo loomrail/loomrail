@@ -68,6 +68,7 @@ export const sampleSources = (): ContextSources => ({
       kind: "QA_REPORT",
       title: "Parser regression suite",
       summary: "See the full run log at /Users/local owner/My Reports/qa-run.json",
+      checks: ["Malformed upload rejected", "Timeout remained bounded"],
     },
   ],
   activity: [

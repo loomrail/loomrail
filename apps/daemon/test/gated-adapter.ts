@@ -82,10 +82,26 @@ export const gatedAdapter = (
       // needs those fixtures or it would stall for a reason unrelated to the test's actual subject.
       const { stage } = invocation.session;
       if (stage === "ACCEPTANCE") {
+        const acceptanceInput = invocation.acceptanceInput;
+        const reviewCheck = acceptanceInput?.evidence.filter(({ kind }) => kind === "REVIEW_REPORT").at(-1)
+          ?.checks[0];
+        const qaCheck = acceptanceInput?.evidence.filter(({ kind }) => kind === "QA_REPORT").at(-1)
+          ?.checks[0];
+        if (!acceptanceInput || !reviewCheck || !qaCheck) {
+          throw new Error("Acceptance requires current criteria and evidence checks");
+        }
         return {
           type: "READY_FOR_ACCEPTANCE",
           releaseNote: "The gated delivery is ready for its owner.",
           verifyInstructions: ["Inspect the recorded Review and QA evidence."],
+          criteria: acceptanceInput.criteria.map((criterion) => ({
+            criterion,
+            implementation: "The gated workflow completed its bounded implementation.",
+            reviewCheck,
+            qaCheck,
+            ownerVerification: "Inspect the recorded Review and QA evidence.",
+            knownRisk: null,
+          })),
         };
       }
       const artifacts =

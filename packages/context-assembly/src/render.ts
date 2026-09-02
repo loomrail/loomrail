@@ -85,7 +85,14 @@ export type ContextSources = {
       criterion: string | null;
     }[];
   } | null;
-  evidence: readonly { id: string; version: number; kind: string; title: string; summary: string }[];
+  evidence: readonly {
+    id: string;
+    version: number;
+    kind: "REVIEW_REPORT" | "QA_REPORT";
+    title: string;
+    summary: string;
+    checks: readonly string[];
+  }[];
   activity: readonly { id: string; version: number; occurredAt: string; description: string }[];
 };
 
@@ -290,6 +297,7 @@ const renderEvidence = (sources: ContextSources): RenderedBody => {
       : sources.evidence.flatMap((item) => [
           `- [${item.id} v${String(item.version)}] ${item.kind}: ${item.title}`,
           `  ${item.summary}`,
+          ...item.checks.map((check) => `  - Check: ${check}`),
         ]);
   return {
     text: block("Evidence", lines),

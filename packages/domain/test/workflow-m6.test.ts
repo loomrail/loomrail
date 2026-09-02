@@ -344,6 +344,16 @@ describe("M6 acceptance decisions", () => {
             type: "READY_FOR_ACCEPTANCE",
             releaseNote: "Review and QA evidence are ready.",
             verifyInstructions: ["Run pnpm verify."],
+            criteria: [
+              {
+                criterion: workItem.acceptanceCriteria[0] ?? "missing criterion",
+                implementation: "The owner-facing evidence flow was implemented.",
+                reviewCheck: "Synthetic check passed.",
+                qaCheck: "Synthetic check passed.",
+                ownerVerification: "Run pnpm verify.",
+                knownRisk: null,
+              },
+            ],
           },
         },
       },

@@ -1,7 +1,7 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-09-01
+**Updated:** 2026-09-02
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
@@ -11,12 +11,12 @@ Later surfaces are listed so current contracts do not make them impossible to se
 require Phase-specific threat deltas.
 
 The sentence "it does not execute shell/Git/provider/browser actions" stood here through Phase 0 and is **no longer
-true of two of the four**. A2 made Loomrail spawn real provider CLIs as child processes of the daemon, and E1 made it
-run `git` and hand one of those CLIs a writable worktree for every stage it serves but the owner's own
-acceptance decision. Both are covered by their deltas in §6 rather than by this
-paragraph. Browser actions are still not executed. New Projects default to `AUTO`: the daemon may select an installed,
-authenticated live CLI, while an owner can choose Mock explicitly for a zero-quota run. The provider-selection controls
-and probe boundaries are specified in T26.
+true of the provider, Git and browser surfaces**. A2 made Loomrail spawn real provider CLIs as daemon children, E1
+made it run bounded `git` operations and hand those CLIs writable worktrees, and Q1 added a bounded Playwright
+BrowserDriver for daemon-measured QA against loopback targets. Their deltas in §6 own those authorities; Loomrail still
+has no general-purpose product shell. New Projects default to `AUTO`: the daemon may select an installed, authenticated
+live CLI, while an owner can choose Mock explicitly for a zero-quota run. The provider-selection controls and probe
+boundaries are specified in T26.
 
 ## 2. Security objectives
 
@@ -103,6 +103,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T36 | Parallel scheduling oversubscribes capacity or crosses workspace authority | High     | bounded deterministic plan; transactional AgentRun/limit/lease claim; stable checkpoint; exact profile/provider snapshot; no automatic interrupted-run retry                                 | see A3 scheduling delta below                               |
 | T37 | Reviewer forges independence, closes findings, or reviews a stale tree     | High     | distinct durable AgentRuns; daemon-owned relation/IDs; exact tree compare; closed reports; owner-only dispositions; bounded rounds                                                           | see R1 independent-review delta below                       |
 | T38 | Provider or hostile page waives a QA defect or turns waiver into evidence  | High     | HUMAN-only optimistic command; session/Origin/CSRF; reason; atomic disposition/Event/receipt; waiver cannot create pass/evidence/Acceptance                                                  | see Q2 QA-defect lifecycle delta below                      |
+| T39 | Acceptance export leaks local authority or turns untrusted prose active    | High     | authenticated exact-correlation read; domain-validated allowlist; escaped Markdown and path redaction; attachment+nosniff; audit/byte bounds; complete-or-error                              | see Q3 Acceptance export delta below                        |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -199,9 +200,47 @@ The first executable slice is bounded to one transition, `OPEN -> WAIVED`, with 
   for OPEN defects and version conflicts return through the normal reconnect/retry surface.
 
 Focused contract/domain/storage/daemon/client tests cover invalid input, SYSTEM refusal, stale and repeated commands,
-restart persistence, session/Origin/CSRF enforcement, and the absence of pass/evidence/Acceptance side effects.
-SYSTEM-only resolution and automatic correction transitions remain disabled until their exact passing-retest lineage
-transaction and tests land; the waiver route grants neither capability.
+restart persistence, session/Origin/CSRF enforcement, and the absence of pass/evidence/Acceptance side effects from a
+waiver. The completed correction loop adds separate immutable authority: failed QA can start only automatic correction
+1 or 2; the exhausted gate allows only the owner to authorize final correction 3 or cancel; an ERROR retries the same
+correction/stage/scope; every fix requires a fresh Review and exact scoped retest. Only a passing retest may close source
+defects and Q2 acceptance-lineage validation requires the complete correction/review/retest chain on the current tree.
+
+### Q3 Acceptance export delta (T39)
+
+Q3 makes provider-authored acceptance prose, measured QA metadata and an audit projection downloadable as one file.
+A weak lookup could export another package; a broad projection could disclose repository paths, attachment storage
+keys, provider transcripts or Event payloads; and raw Markdown/HTML or a hostile filename could turn stored text into
+active content on open. Rated **High** because the export deliberately concentrates durable evidence and owner
+decisions in a portable artifact.
+
+Required controls and verification:
+
+- the route is an authenticated, read-only `GET` under the existing HttpOnly SameSite session and accepts no actor,
+  repository path, storage key or output format. It creates no command, Event, receipt or mutable export record, so a
+  CSRF token would add no mutation protection;
+- both path IDs use closed opaque-ID schemas. The daemon loads the exact WorkItem snapshot and rejects a missing or
+  mismatched AcceptancePackage before rendering; the pure domain renderer independently checks Project, WorkItem,
+  PipelineRun, artifact kind, selected check, QARun and QAEvidenceBundle correlations;
+- the renderer uses an explicit field allowlist. It never receives attachment `storageKey`, repository/worktree path,
+  provider session payload or Event `data`; attachment output contains only bounded public metadata. Absolute path
+  spellings in allowed prose are redacted as defence in depth;
+- every prose field is HTML-escaped and Markdown punctuation is escaped. Opaque IDs already use a portable closed
+  alphabet; the attachment filename is derived from the package ID through a stricter portable replacement. The
+  response is `text/markdown`, `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff` and
+  `Cache-Control: private, no-store`;
+- audit reads are ascending and paged, with a hard total of 1000 Events. The renderer has a 512 KiB UTF-8 ceiling;
+  an incomplete audit, missing attachment metadata, inconsistent lineage or oversize result produces an error and no
+  partial body;
+- after assembling the snapshot, the daemon re-reads package identity, version, status and resolution time. One race
+  retries from the beginning; a second inconsistency fails closed. A stable snapshot produces byte-identical output;
+- pre-Q3 criterion rows remain readable but are explicitly labelled `LEGACY_UNBOUND`; they cannot be mistaken for the
+  new exact Review/QA check binding.
+
+Focused domain, persistence, daemon and browser tests cover mapping completeness, stale/cross-boundary evidence,
+escaping and path redaction, historical package reads, transaction rollback, authentication, headers, pending and
+resolved exports, and downloaded content. The export is still sensitive owner data: path redaction is not a general
+secret scanner, so Loomrail does not publish, upload or share it automatically.
 
 ### A4 Attention Inbox delta (T35)
 

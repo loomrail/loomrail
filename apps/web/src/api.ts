@@ -522,6 +522,9 @@ export const getWorkItemQA = async (workItemId: string) =>
 export const workItemQAAttachmentUrl = (workItemId: string, attachmentId: string): string =>
   `/api/v1/work-items/${encodeURIComponent(workItemId)}/qa/attachments/${encodeURIComponent(attachmentId)}`;
 
+export const workItemAcceptanceExportUrl = (workItemId: string, acceptancePackageId: string): string =>
+  `/api/v1/work-items/${encodeURIComponent(workItemId)}/acceptance/${encodeURIComponent(acceptancePackageId)}/export`;
+
 export const registerFixtureProject = async (fixtureId: FixtureProjectId): Promise<void> => {
   await requestLocalApi("/api/v1/projects/fixtures/register", stateCommandResultSchema, {
     method: "POST",
@@ -585,6 +588,7 @@ export const retryNewProjectScaffold = async (operation: ScaffoldOperation): Pro
 };
 
 export type CreateWorkItemInput = {
+  acceptanceCriteria: readonly string[];
   description: string;
   priority: WorkItem["priority"];
   projectId: string;
@@ -606,7 +610,7 @@ export const createWorkItem = async (input: CreateWorkItemInput): Promise<WorkIt
       description: input.description,
       priority: input.priority,
       risk: input.risk,
-      acceptanceCriteria: [],
+      acceptanceCriteria: input.acceptanceCriteria,
     }),
   });
 

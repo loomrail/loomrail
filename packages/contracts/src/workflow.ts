@@ -553,16 +553,39 @@ export const evidenceArtifactSchema = providerArtifactDraftSchema
     }
   });
 
+export const acceptanceCriterionClaimSchema = z
+  .object({
+    criterion: z.string().trim().min(1).max(500),
+    implementation: descriptionSchema,
+    reviewCheck: z.string().trim().min(1).max(500),
+    qaCheck: z.string().trim().min(1).max(500),
+    ownerVerification: descriptionSchema,
+    knownRisk: descriptionSchema.nullable(),
+  })
+  .strict();
+
 export const acceptanceCriterionEvidenceSchema = z
   .object({
     criterion: z.string().trim().min(1).max(500),
     implementation: descriptionSchema,
     reviewArtifactId: opaqueIdSchema,
     qaArtifactId: opaqueIdSchema,
+    // Added after the first M6 packages had already been persisted. Both are absent only on those
+    // legacy rows; every new package is required to bind them by the domain decision.
+    reviewCheck: z.string().trim().min(1).max(500).optional(),
+    qaCheck: z.string().trim().min(1).max(500).optional(),
     verification: descriptionSchema,
     knownRisk: descriptionSchema.nullable(),
   })
-  .strict();
+  .strict()
+  .superRefine((criterion, context) => {
+    if ((criterion.reviewCheck === undefined) !== (criterion.qaCheck === undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "Criterion evidence must bind both Review and QA checks or be a legacy unbound row",
+      });
+    }
+  });
 
 export const acceptancePackageSchema = z
   .object({
@@ -718,6 +741,9 @@ export const providerOutcomeSchema = z.discriminatedUnion("type", [
       type: z.literal("READY_FOR_ACCEPTANCE"),
       releaseNote: descriptionSchema,
       verifyInstructions: z.array(descriptionSchema).min(1).max(20),
+      // Optional only so commands persisted before Q3 remain readable. Provider adapters require
+      // this field, and the domain rejects every new READY_FOR_ACCEPTANCE command that omits it.
+      criteria: z.array(acceptanceCriterionClaimSchema).min(1).max(50).optional(),
     })
     .strict(),
   z
@@ -1716,6 +1742,8 @@ export type RecoveryReport = z.infer<typeof recoveryReportSchema>;
 export type EvidenceArtifact = z.infer<typeof evidenceArtifactSchema>;
 export type ProviderArtifactDraft = z.infer<typeof providerArtifactDraftSchema>;
 export type AcceptancePackage = z.infer<typeof acceptancePackageSchema>;
+export type AcceptanceCriterionClaim = z.infer<typeof acceptanceCriterionClaimSchema>;
+export type AcceptanceCriterionEvidence = z.infer<typeof acceptanceCriterionEvidenceSchema>;
 export type AcceptanceAction = z.infer<typeof acceptanceActionSchema>;
 export type HumanRequest = z.infer<typeof humanRequestSchema>;
 export type HumanRequestStatus = z.infer<typeof humanRequestStatusSchema>;

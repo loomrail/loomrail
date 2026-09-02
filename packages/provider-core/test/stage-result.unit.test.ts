@@ -12,6 +12,15 @@ const checkpoint = {
   openQuestions: [],
 };
 
+const acceptanceCriterion = {
+  criterion: "The retry policy is verified.",
+  implementation: "The bounded retry policy was implemented.",
+  reviewCheck: "Policy reviewed",
+  qaCheck: "Retry scenario passed",
+  ownerVerification: "Inspect the recorded retry evidence.",
+  knownRisk: null,
+};
+
 const expectEveryObjectFieldRequired = (candidate: unknown): void => {
   if (Array.isArray(candidate)) {
     for (const entry of candidate) expectEveryObjectFieldRequired(entry);
@@ -80,6 +89,7 @@ describe("provider stage result contract", () => {
           type: "READY_FOR_ACCEPTANCE",
           releaseNote: "The bounded change is ready for owner review.",
           verifyInstructions: ["Run the repository test."],
+          criteria: [acceptanceCriterion],
         },
       }),
     ).toEqual({
@@ -88,6 +98,7 @@ describe("provider stage result contract", () => {
         type: "READY_FOR_ACCEPTANCE",
         releaseNote: "The bounded change is ready for owner review.",
         verifyInstructions: ["Run the repository test."],
+        criteria: [acceptanceCriterion],
       },
     });
   });
@@ -259,6 +270,7 @@ describe("provider stage result contract", () => {
             type: "READY_FOR_ACCEPTANCE",
             releaseNote: "The delivery is ready for its separate owner acceptance gate.",
             verifyInstructions: ["Inspect the recorded evidence."],
+            criteria: [acceptanceCriterion],
           },
         },
         { humanRequests: "DISALLOWED" },

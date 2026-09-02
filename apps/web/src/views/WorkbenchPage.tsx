@@ -71,7 +71,7 @@ import {
 } from "@loomrail/ui";
 
 import { ChangesSection } from "./ChangesSection";
-import { workItemQAAttachmentUrl } from "../api";
+import { workItemAcceptanceExportUrl, workItemQAAttachmentUrl } from "../api";
 import {
   defaultBoardView,
   isBoardOrdering,
@@ -1910,14 +1910,24 @@ const AcceptancePanel = ({
   return (
     <div className="acceptance-package">
       <div className="acceptance-package__heading">
-        <div>
+        <div className="acceptance-package__title">
           <span>{t("acceptance.eyebrow")}</span>
           <h3>{t("acceptance.title")}</h3>
         </div>
-        <Status
-          label={t(acceptanceStatusLabelKeys[acceptancePackage.status])}
-          tone={acceptanceStatusTones[acceptancePackage.status]}
-        />
+        <div className="acceptance-package__heading-actions">
+          <Status
+            label={t(acceptanceStatusLabelKeys[acceptancePackage.status])}
+            tone={acceptanceStatusTones[acceptancePackage.status]}
+          />
+          <a
+            className="acceptance-package__export"
+            download
+            href={workItemAcceptanceExportUrl(item.id, acceptancePackage.id)}
+          >
+            <Icon name="external" size={13} />
+            {t("acceptance.export")}
+          </a>
+        </div>
       </div>
       <p>{acceptancePackage.releaseNote}</p>
 
@@ -1942,15 +1952,46 @@ const AcceptancePanel = ({
         <strong>{t("acceptance.matrix")}</strong>
         {acceptancePackage.criteria.length > 0 ? (
           <ol>
-            {acceptancePackage.criteria.map((criterion) => (
-              <li key={criterion.criterion}>
-                <div>
-                  <Icon name="check" size={13} />
-                  <strong>{criterion.criterion}</strong>
-                </div>
-                <span>{criterion.verification}</span>
-              </li>
-            ))}
+            {acceptancePackage.criteria.map((criterion, index) => {
+              const bound = criterion.reviewCheck !== undefined && criterion.qaCheck !== undefined;
+              return (
+                <li key={`${index.toString()}:${criterion.criterion}`}>
+                  <div>
+                    <Icon name={bound ? "check" : "warning"} size={13} />
+                    <strong>{criterion.criterion}</strong>
+                  </div>
+                  {!bound ? (
+                    <span className="acceptance-matrix__legacy">{t("acceptance.legacyEvidence")}</span>
+                  ) : null}
+                  <dl>
+                    <div>
+                      <dt>{t("acceptance.implementation")}</dt>
+                      <dd>{criterion.implementation}</dd>
+                    </div>
+                    {bound ? (
+                      <>
+                        <div>
+                          <dt>{t("acceptance.reviewCheck")}</dt>
+                          <dd>{criterion.reviewCheck}</dd>
+                        </div>
+                        <div>
+                          <dt>{t("acceptance.qaCheck")}</dt>
+                          <dd>{criterion.qaCheck}</dd>
+                        </div>
+                      </>
+                    ) : null}
+                    <div>
+                      <dt>{t("acceptance.ownerVerification")}</dt>
+                      <dd>{criterion.verification}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("acceptance.knownRisk")}</dt>
+                      <dd>{criterion.knownRisk ?? t("acceptance.noKnownRisk")}</dd>
+                    </div>
+                  </dl>
+                </li>
+              );
+            })}
           </ol>
         ) : (
           <span>{t("acceptance.noCriteria")}</span>

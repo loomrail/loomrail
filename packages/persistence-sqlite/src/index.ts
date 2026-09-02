@@ -3411,6 +3411,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           kind: artifact.kind,
           title: artifact.title,
           summary: artifact.summary,
+          checks: artifact.checks,
         }));
 
         // Reads id/type/occurred_at straight off the row -- NOT through eventFromRow, which runs

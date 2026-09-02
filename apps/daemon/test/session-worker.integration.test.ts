@@ -522,10 +522,26 @@ describe("session worker", () => {
         }
         if (stage === "ACCEPTANCE") {
           acceptanceHadWorkspace = "workspace" in invocation;
+          const acceptanceInput = invocation.acceptanceInput;
+          const reviewCheck = acceptanceInput?.evidence.filter(({ kind }) => kind === "REVIEW_REPORT").at(-1)
+            ?.checks[0];
+          const qaCheck = acceptanceInput?.evidence.filter(({ kind }) => kind === "QA_REPORT").at(-1)
+            ?.checks[0];
+          if (!acceptanceInput || !reviewCheck || !qaCheck) {
+            throw new Error("Acceptance requires current criteria and evidence checks");
+          }
           return {
             type: "READY_FOR_ACCEPTANCE",
             releaseNote: "Adds the bounded D2 result after Review and QA.",
             verifyInstructions: ["Inspect d2-live-result.txt in the worktree."],
+            criteria: acceptanceInput.criteria.map((criterion) => ({
+              criterion,
+              implementation: "The bounded D2 result was written to the leased worktree.",
+              reviewCheck,
+              qaCheck,
+              ownerVerification: "Inspect d2-live-result.txt in the worktree.",
+              knownRisk: null,
+            })),
           };
         }
         return {

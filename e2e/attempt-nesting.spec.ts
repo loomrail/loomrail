@@ -77,6 +77,9 @@ const createTask = async (page: Page, title: string): Promise<void> => {
   await dialog
     .getByPlaceholder("Outcome, constraints, relevant files…")
     .fill("Exercises the attempt header.");
+  await dialog
+    .getByPlaceholder("The owner can verify the delivered outcome…")
+    .fill("The attempt hierarchy remains visible.");
   await expect(submit).toBeEnabled();
   await submit.click();
   await expect(dialog).toBeHidden();

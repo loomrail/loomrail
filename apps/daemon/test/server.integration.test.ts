@@ -1520,6 +1520,43 @@ describe("local daemon session and state boundary", () => {
     if (!acceptancePackage || !awaitingAcceptance.run) {
       throw new Error("Expected a pending AcceptancePackage");
     }
+    expect(acceptancePackage.criteria).toHaveLength(1);
+    const acceptanceCriterion = acceptancePackage.criteria[0];
+    if (acceptanceCriterion === undefined) throw new Error("Expected a bound acceptance criterion");
+    expect(acceptanceCriterion.criterion).toBe(
+      "The owner can verify the delivered outcome after the pipeline completes.",
+    );
+    expect(typeof acceptanceCriterion.reviewCheck).toBe("string");
+    expect(typeof acceptanceCriterion.qaCheck).toBe("string");
+    expect(typeof acceptanceCriterion.verification).toBe("string");
+    const acceptanceExportUrl = `${daemon.baseUrl}/api/v1/work-items/${workItemId}/acceptance/${acceptancePackage.id}/export`;
+    expect((await fetch(acceptanceExportUrl)).status).toBe(401);
+    const unrelatedExport = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${workItemId}/acceptance/unrelated-package/export`,
+      { headers: { cookie: secondSession.cookie } },
+    );
+    expect(unrelatedExport.status).toBe(404);
+    expect(apiErrorResponseSchema.parse(await unrelatedExport.json()).error.code).toBe(
+      "ACCEPTANCE_NOT_FOUND",
+    );
+    const pendingExport = await fetch(acceptanceExportUrl, {
+      headers: { cookie: secondSession.cookie },
+    });
+    expect(pendingExport.status).toBe(200);
+    expect(pendingExport.headers.get("cache-control")).toBe("private, no-store");
+    expect(pendingExport.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
+    expect(pendingExport.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(pendingExport.headers.get("content-disposition")).toBe(
+      `attachment; filename="loomrail-acceptance-${acceptancePackage.id}.md"`,
+    );
+    const pendingMarkdown = await pendingExport.text();
+    expect(pendingMarkdown).toContain("# Loomrail Release Summary");
+    expect(pendingMarkdown).toContain("- Status: `PENDING`");
+    expect(pendingMarkdown).toContain("Evidence binding: `BOUND`");
+    expect(pendingMarkdown).toContain("## Audit trail");
+    expect(pendingMarkdown).not.toContain(browserQAArtifactsDirectory);
+    expect(pendingMarkdown).not.toContain("fixture-screenshot.png");
+    expect(pendingMarkdown).not.toContain("storageKey");
     const qaResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/qa`, {
       headers: { cookie: secondSession.cookie },
     });
@@ -1624,6 +1661,14 @@ describe("local daemon session and state boundary", () => {
       stage: "ACCEPTANCE",
       status: "SUCCEEDED",
     });
+    const acceptedExport = await fetch(acceptanceExportUrl, {
+      headers: { cookie: secondSession.cookie },
+    });
+    expect(acceptedExport.status).toBe(200);
+    const acceptedMarkdown = await acceptedExport.text();
+    expect(acceptedMarkdown).toContain("- Status: `ACCEPTED`");
+    expect(acceptedMarkdown).toContain("- Actor: `HUMAN:local-owner`");
+    expect(acceptedMarkdown).toContain("Synthetic acceptance evidence is sufficient\\.");
     const acceptedWorkItemResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}`, {
       headers: { cookie: secondSession.cookie },
     });
@@ -1652,6 +1697,34 @@ describe("local daemon session and state boundary", () => {
     expect(await repeated.json()).toMatchObject({
       error: { code: "HUMAN_REQUEST_ALREADY_RESOLVED" },
     });
+    const overflowState = await openLocalState({ databasePath: stateDatabasePath });
+    const overflowWorkItem = overflowState.query({ type: "GET_WORK_ITEM", workItemId });
+    if (overflowWorkItem.type !== "WORK_ITEM" || !overflowWorkItem.workItem) {
+      throw new Error("Expected the completed WorkItem before the audit overflow fixture");
+    }
+    let overflowVersion = overflowWorkItem.workItem.version;
+    for (let index = 0; index < 1_001; index += 1) {
+      const updated = overflowState.execute({
+        schemaVersion: 1,
+        commandId: `release-overflow-${index.toString().padStart(4, "0")}`,
+        correlationId: `correlation-release-overflow-${index.toString().padStart(4, "0")}`,
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "UPDATE_WORK_ITEM",
+        payload: {
+          workItemId,
+          expectedVersion: overflowVersion,
+          patch: { description: index % 2 === 0 ? "Audit overflow A." : "Audit overflow B." },
+        },
+      });
+      if (updated.type !== "WORK_ITEM_UPDATED") throw new Error("Expected an audit overflow update");
+      overflowVersion = updated.workItem.version;
+    }
+    overflowState.close();
+    const overflowExport = await fetch(acceptanceExportUrl, {
+      headers: { cookie: secondSession.cookie },
+    });
+    expect(overflowExport.status).toBe(409);
+    expect(apiErrorResponseSchema.parse(await overflowExport.json()).error.code).toBe("ACCEPTANCE_NOT_READY");
     // This run reaches IMPLEMENT, which cuts a real worktree: a couple of dozen `git` subprocesses
     // on top of two daemons, which outlives vitest's 5s default under a loaded `pnpm test`.
   }, 30_000);

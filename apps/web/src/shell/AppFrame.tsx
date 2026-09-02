@@ -65,6 +65,16 @@ const NewTaskDialog = (): React.JSX.Element => {
   const [requestedProjectId, setRequestedProjectId] = useState<string | null>(null);
   const [priority, setPriority] = useState<WorkItem["priority"]>("MEDIUM");
   const [title, setTitle] = useState("");
+  const [criteriaText, setCriteriaText] = useState("");
+  const acceptanceCriteria = criteriaText
+    .split("\n")
+    .map((criterion) => criterion.trim())
+    .filter(Boolean);
+  const criteriaValid =
+    acceptanceCriteria.length > 0 &&
+    acceptanceCriteria.length <= 50 &&
+    new Set(acceptanceCriteria).size === acceptanceCriteria.length &&
+    acceptanceCriteria.every((criterion) => criterion.length <= 500);
   const projectId =
     projects.find((project) => project.id === requestedProjectId)?.id ?? selectedProject?.id ?? "";
 
@@ -76,10 +86,11 @@ const NewTaskDialog = (): React.JSX.Element => {
     const descriptionValue = form.get("description");
     const title = typeof titleValue === "string" ? titleValue.trim() : "";
     const description = typeof descriptionValue === "string" ? descriptionValue.trim() : "";
-    if (!title || !projectId) return;
+    if (!title || !projectId || !criteriaValid) return;
 
     createMutation.mutate(
       {
+        acceptanceCriteria,
         description,
         priority,
         projectId,
@@ -90,6 +101,7 @@ const NewTaskDialog = (): React.JSX.Element => {
       {
         onSuccess: () => {
           formElement.reset();
+          setCriteriaText("");
           setTitle("");
           setOpen(false);
         },
@@ -112,7 +124,7 @@ const NewTaskDialog = (): React.JSX.Element => {
             {t("action.cancel")}
           </Button>
           <Button
-            disabled={!title.trim() || !projectId}
+            disabled={!title.trim() || !projectId || !criteriaValid}
             loading={createMutation.isPending}
             onClick={() => {
               formRef.current?.requestSubmit();
@@ -167,6 +179,25 @@ const NewTaskDialog = (): React.JSX.Element => {
             name="description"
             placeholder={t("task.create.briefPlaceholder")}
             rows={5}
+          />
+        </Field>
+        <Field
+          description={t("task.create.criteriaDescription")}
+          {...(criteriaText.trim() && !criteriaValid ? { error: t("task.create.criteriaError") } : {})}
+          htmlFor="new-task-criteria"
+          label={t("task.create.criteria")}
+          required
+        >
+          <Textarea
+            id="new-task-criteria"
+            name="acceptanceCriteria"
+            onChange={(event) => {
+              setCriteriaText(event.currentTarget.value);
+            }}
+            placeholder={t("task.create.criteriaPlaceholder")}
+            required
+            rows={3}
+            value={criteriaText}
           />
         </Field>
         <div className="new-task-form__row">

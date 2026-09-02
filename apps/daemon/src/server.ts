@@ -83,6 +83,7 @@ import {
   workItemWorkspaceResponseSchema,
   workflowSnapshotSchema,
   type ApiErrorResponse,
+  type DomainEvent,
   type PublishedWorkItemWorkspace,
   type Project,
   type QAAttachmentRef,
@@ -93,12 +94,14 @@ import {
 } from "@loomrail/contracts";
 import {
   adapterWorksInWorkspace,
+  MAX_RELEASE_SUMMARY_AUDIT_EVENTS,
   ConstitutionDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
   QADefectDispositionError,
   QACorrectionError,
   ReadinessDomainError,
+  renderReleaseSummary,
   ReviewFindingDispositionError,
   ScaffoldDomainError,
   WorkflowDomainError,
@@ -3112,6 +3115,107 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           throw new StateStoreError("PERSISTENCE_FAILURE", "The workflow snapshot could not be loaded");
         }
         return workflowSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/work-items/:workItemId/acceptance/:acceptancePackageId/export", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = acceptanceParamsSchema.parse(request.params);
+        for (let readAttempt = 0; readAttempt < 2; readAttempt += 1) {
+          const workItemResult = localState.query({
+            type: "GET_WORK_ITEM",
+            workItemId: params.workItemId,
+          });
+          if (workItemResult.type !== "WORK_ITEM" || !workItemResult.workItem) {
+            throw new WorkItemDomainError("WORK_ITEM_NOT_FOUND", "The WorkItem does not exist");
+          }
+          const snapshotResult = localState.query({
+            type: "GET_WORKFLOW_SNAPSHOT",
+            workItemId: params.workItemId,
+          });
+          const snapshot = snapshotResult.type === "WORKFLOW_SNAPSHOT" ? snapshotResult.snapshot : undefined;
+          const acceptancePackage = snapshot?.acceptancePackage;
+          if (!snapshot || acceptancePackage?.id !== params.acceptancePackageId || snapshot.run === null) {
+            throw new WorkflowDomainError("ACCEPTANCE_NOT_FOUND", "The AcceptancePackage does not exist");
+          }
+
+          const qaResult = localState.query({ type: "GET_QA_STATE", pipelineRunId: snapshot.run.id });
+          if (qaResult.type !== "QA_STATE") {
+            throw new StateStoreError("PERSISTENCE_FAILURE", "The Browser QA state could not be loaded");
+          }
+
+          const events: DomainEvent[] = [];
+          let afterSequence = 0;
+          let auditComplete = false;
+          while (events.length < MAX_RELEASE_SUMMARY_AUDIT_EVENTS) {
+            const page = localState.query({
+              type: "LIST_EVENTS",
+              aggregateId: params.workItemId,
+              direction: "ASC",
+              afterSequence,
+              limit: Math.min(500, MAX_RELEASE_SUMMARY_AUDIT_EVENTS - events.length),
+            });
+            if (page.type !== "EVENTS") {
+              throw new StateStoreError(
+                "PERSISTENCE_FAILURE",
+                "The WorkItem audit trail could not be loaded",
+              );
+            }
+            events.push(...page.events);
+            afterSequence = page.nextSequence;
+            if (!page.hasMore) {
+              auditComplete = true;
+              break;
+            }
+          }
+
+          const rendered = renderReleaseSummary({
+            workItem: workItemResult.workItem,
+            acceptancePackage,
+            artifacts: snapshot.artifacts,
+            qaEvidence: qaResult.evidence,
+            qaAttachments: qaResult.attachments.map(publishQAAttachment),
+            decisions: snapshot.decisions,
+            events,
+            auditComplete,
+          });
+          const confirmation = localState.query({
+            type: "GET_WORKFLOW_SNAPSHOT",
+            workItemId: params.workItemId,
+          });
+          const confirmedPackage =
+            confirmation.type === "WORKFLOW_SNAPSHOT" ? confirmation.snapshot.acceptancePackage : null;
+          const stable =
+            confirmedPackage?.id === acceptancePackage.id &&
+            confirmedPackage.version === acceptancePackage.version &&
+            confirmedPackage.status === acceptancePackage.status &&
+            confirmedPackage.resolvedAt === acceptancePackage.resolvedAt;
+          if (!stable) {
+            if (readAttempt === 0) continue;
+            throw new WorkflowDomainError(
+              "ACCEPTANCE_NOT_READY",
+              "The AcceptancePackage changed while its release summary was being assembled",
+            );
+          }
+          if (rendered.type !== "RENDERED") {
+            throw new WorkflowDomainError("ACCEPTANCE_NOT_READY", rendered.reason);
+          }
+          const portableId = acceptancePackage.id.replace(/[^A-Za-z0-9._-]/gu, "-");
+          return reply
+            .header("cache-control", "private, no-store")
+            .header("content-disposition", `attachment; filename="loomrail-acceptance-${portableId}.md"`)
+            .header("x-content-type-options", "nosniff")
+            .type("text/markdown; charset=utf-8")
+            .send(rendered.markdown);
+        }
+        throw new WorkflowDomainError(
+          "ACCEPTANCE_NOT_READY",
+          "The AcceptancePackage could not be read consistently",
+        );
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }

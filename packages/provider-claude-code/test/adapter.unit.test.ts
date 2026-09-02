@@ -190,6 +190,7 @@ const fixtureInvocation = (
     text: "Discover the requirements for the payments retry policy.",
     contentHash: `sha256:${"0".repeat(64)}`,
   },
+  acceptanceInput: null,
   humanRequests,
   mcpConnections,
 });

@@ -244,6 +244,7 @@ const fixtureInvocation = (
     text: "Discover the requirements for the payments retry policy.",
     contentHash: `sha256:${"0".repeat(64)}`,
   },
+  acceptanceInput: null,
   humanRequests,
   mcpConnections,
   // Omitted rather than set to undefined: `exactOptionalPropertyTypes` makes those different
@@ -787,6 +788,16 @@ describe("createCodexProvider", () => {
                 type: "READY_FOR_ACCEPTANCE",
                 releaseNote: "The bounded delivery is ready for owner review.",
                 verifyInstructions: ["Run the repository test."],
+                criteria: [
+                  {
+                    criterion: "The retry policy is verified.",
+                    implementation: "The bounded retry policy was implemented.",
+                    reviewCheck: "Policy reviewed",
+                    qaCheck: "Retry scenario passed",
+                    ownerVerification: "Inspect the recorded retry evidence.",
+                    knownRisk: null,
+                  },
+                ],
               },
             }),
           },

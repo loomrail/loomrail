@@ -1,4 +1,5 @@
 import {
+  acceptanceCriterionClaimSchema,
   checkpointDraftSchema,
   humanRequestDraftSchema,
   providerOutcomeSchema,
@@ -49,6 +50,7 @@ const acceptanceReadySchema = z
     type: z.literal("READY_FOR_ACCEPTANCE"),
     releaseNote: z.string().trim().min(1).max(4_000),
     verifyInstructions: z.array(z.string().trim().min(1).max(4_000)).min(1).max(20),
+    criteria: z.array(acceptanceCriterionClaimSchema).min(1).max(50),
   })
   .strict()
   .describe(

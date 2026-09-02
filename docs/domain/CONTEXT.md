@@ -243,6 +243,21 @@ Acceptance — отдельный owner gate: обычный ответ на Hum
 versioned `Accept`, `Return to work` или `Reject` закрывают AcceptancePackage; лишь `Accept` переводит WorkItem в
 `DONE`. Review/QA evidence остаётся append-only, AcceptancePackage меняется только optimistic-versioned transition.
 
+**AcceptanceCriterionClaim**:
+Bounded provider proposal для одной exact acceptance criterion: implementation, selected current Review/QA checks,
+owner verification и known risk. Loomrail проверяет ordered total mapping и сам назначает authority artifact IDs.
+_Не означает_: право провайдера выбрать evidence row, tree, verdict, criterion text или принять delivery.
+
+**Criterion-bound AcceptancePackage**:
+Новый package, где каждая criterion связана с exact current Review/QA artifacts и существующими selected checks;
+legacy package без selected checks остаётся читаемым, но явно не считается criterion-bound.
+_Не означает_: что Loomrail семантически доказал достаточность test, или что package разрешает release/deploy.
+
+**ReleaseSummary**:
+Детерминированная read-only Markdown projection одного AcceptancePackage, его allowlisted evidence и полного bounded
+WorkItem audit trail. Может быть скачана до или после owner resolution.
+_Не означает_: отдельный mutable artifact, публикацию, подпись, Git/repository export или новый источник workflow state.
+
 Review также имеет отдельную доменную развилку. Fresh CODE_REVIEWER AgentRun не совпадает с latest successful
 DEVELOPER AgentRun; AUTO предпочитает другой ready provider, explicit preference остаётся lock. Reviewer получает
 stable tree, implementation handoff и OPEN findings, но не checkpoint/transcript автора. Первый

@@ -23,6 +23,9 @@ const createTask = async (page: Page, title: string): Promise<void> => {
   await dialog
     .getByPlaceholder("Outcome, constraints, relevant files…")
     .fill("Exercise the independent review cockpit.");
+  await dialog
+    .getByPlaceholder("The owner can verify the delivered outcome…")
+    .fill("Stale updates fail closed.");
   await dialog.getByRole("button", { name: "Create task" }).click();
   await expect(dialog).toBeHidden();
 };
@@ -129,10 +132,26 @@ const reviewRouteAdapter = (
         };
       }
       if (stage === "ACCEPTANCE") {
+        const acceptanceInput = invocation.acceptanceInput;
+        const reviewCheck = acceptanceInput?.evidence.filter(({ kind }) => kind === "REVIEW_REPORT").at(-1)
+          ?.checks[0];
+        const qaCheck = acceptanceInput?.evidence.filter(({ kind }) => kind === "QA_REPORT").at(-1)
+          ?.checks[0];
+        if (!acceptanceInput || !reviewCheck || !qaCheck) {
+          throw new Error("Acceptance requires current criteria and evidence checks");
+        }
         return {
           type: "READY_FOR_ACCEPTANCE",
           releaseNote: "The defect was fixed, independently re-reviewed, and verified by QA.",
           verifyInstructions: ["Inspect the two review rounds and the QA evidence."],
+          criteria: acceptanceInput.criteria.map((criterion) => ({
+            criterion,
+            implementation: "The stale update path now enforces the expected version.",
+            reviewCheck,
+            qaCheck,
+            ownerVerification: "Inspect the two review rounds and the measured QA evidence.",
+            knownRisk: null,
+          })),
         };
       }
       return { type: "COMPLETED", summary: `${stage} completed for the R1 browser route.` };

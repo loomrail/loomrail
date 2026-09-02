@@ -126,6 +126,9 @@ const createTask = async (page: Page, title: string): Promise<Locator> => {
   await dialog
     .getByPlaceholder("Outcome, constraints, relevant files…")
     .fill("Prove that failed measured Browser QA remains visible and blocks Acceptance.");
+  await dialog
+    .getByPlaceholder("The owner can verify the delivered outcome…")
+    .fill("Measured browser QA proves the current task state.");
   await dialog.getByRole("button", { name: "Create task" }).click();
   await expect(dialog).toBeHidden();
   return page.getByRole("complementary", { name: title });

@@ -38,6 +38,13 @@ const invocation = (
       attempt: options.attempt ?? 1,
     },
     contextPack: contextPack(),
+    acceptanceInput: {
+      criteria: ["State is durable"],
+      evidence: [
+        { kind: "REVIEW_REPORT", checks: ["Requirements traced"] },
+        { kind: "QA_REPORT", checks: ["Primary journey passed"] },
+      ],
+    },
     humanRequests: "ALLOWED",
     mcpConnections: [],
   };

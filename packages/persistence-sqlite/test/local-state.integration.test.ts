@@ -653,11 +653,84 @@ describe("SQLite local state", () => {
       ],
     });
     completeMeasuredQA(localState, "acceptance", acceptedTree);
-    applyNext({
+    const pendingAcceptance = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+    if (pendingAcceptance.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
+    const acceptanceDispatch = pendingAcceptance.dispatches[0];
+    if (!acceptanceDispatch) throw new Error("Expected an Acceptance dispatch");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: `mark-${acceptanceDispatch.id}`,
+      correlationId: `correlation-mark-${acceptanceDispatch.id}`,
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "MARK_WORKFLOW_DISPATCH_STARTED",
+      payload: { dispatchId: acceptanceDispatch.id },
+    });
+    const beforeInvalid = localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    const beforeInvalidEvents = localState.query({
+      type: "LIST_EVENTS",
+      aggregateId: created.workItem.id,
+    });
+    const acceptanceOutcome: ApplyProviderOutcomeCommand["payload"]["outcome"] = {
       type: "READY_FOR_ACCEPTANCE",
       releaseNote: "The bounded fixture is ready for owner acceptance.",
       verifyInstructions: ["Run pnpm verify."],
-    });
+      criteria: [
+        {
+          criterion: "State is durable",
+          implementation: "The durable acceptance flow was implemented.",
+          reviewCheck: "Contract review passed.",
+          qaCheck: "1 required assertions passed.",
+          ownerVerification: "Run pnpm verify.",
+          knownRisk: null,
+        },
+      ],
+    };
+    expect(() =>
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-invalid-acceptance-mapping",
+        correlationId: "correlation-apply-invalid-acceptance-mapping",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: acceptanceDispatch.id,
+          provider: "CODEX",
+          template: acceptanceTemplate,
+          outcome: {
+            ...acceptanceOutcome,
+            criteria: acceptanceOutcome.criteria?.map((criterion) => ({
+              ...criterion,
+              qaCheck: "A stale QA check from another run.",
+            })),
+          },
+          resultTree: null,
+        },
+      }),
+    ).toThrow(expect.objectContaining({ code: "ACCEPTANCE_NOT_READY" }));
+    expect(localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: created.workItem.id })).toEqual(
+      beforeInvalid,
+    );
+    expect(localState.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id })).toEqual(
+      beforeInvalidEvents,
+    );
+    const applyAcceptanceCommand: ApplyProviderOutcomeCommand = {
+      schemaVersion: 1,
+      commandId: `apply-${acceptanceDispatch.id}`,
+      correlationId: `correlation-apply-${acceptanceDispatch.id}`,
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "APPLY_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId: acceptanceDispatch.id,
+        provider: "CODEX",
+        template: acceptanceTemplate,
+        outcome: acceptanceOutcome,
+        resultTree: null,
+      },
+    };
+    localState.execute(applyAcceptanceCommand);
 
     const pendingSnapshot = localState.query({
       type: "GET_WORKFLOW_SNAPSHOT",
@@ -715,6 +788,13 @@ describe("SQLite local state", () => {
       throw new Error("Expected the acceptance snapshot after restart");
     }
     expect(restored.snapshot.artifacts).toHaveLength(2);
+    expect(restored.snapshot.acceptancePackage.criteria).toEqual([
+      expect.objectContaining({
+        criterion: "State is durable",
+        reviewCheck: "Contract review passed.",
+        qaCheck: "1 required assertions passed.",
+      }),
+    ]);
     expect(acceptanceState.query({ type: "GET_ATTENTION_INBOX" })).toMatchObject({
       type: "ATTENTION_INBOX",
       inbox: {
@@ -788,6 +868,92 @@ describe("SQLite local state", () => {
     ).toThrow(/provider/);
     expect(() => raw.prepare("UPDATE evidence_artifacts SET title = ?").run("Tampered")).toThrow();
     raw.close();
+
+    const historical = new DatabaseSync(databasePath);
+    historical.exec("DROP TRIGGER events_are_append_only_update");
+    historical.exec("DROP TRIGGER commands_are_append_only_update");
+    historical
+      .prepare(
+        `UPDATE acceptance_packages
+         SET criteria_json = json_remove(
+           criteria_json,
+           '$[0].reviewCheck',
+           '$[0].qaCheck'
+         )
+         WHERE id = ?`,
+      )
+      .run(acceptancePackage.id);
+    historical.exec(`
+      UPDATE events
+      SET data_json = json_remove(
+        data_json,
+        '$.acceptancePackage.criteria[0].reviewCheck',
+        '$.acceptancePackage.criteria[0].qaCheck'
+      )
+      WHERE type = 'ACCEPTANCE_REQUESTED'
+    `);
+    historical
+      .prepare(
+        `UPDATE commands
+         SET result_json = json_remove(
+           result_json,
+           '$.acceptancePackage.criteria[0].reviewCheck',
+           '$.acceptancePackage.criteria[0].qaCheck'
+         )
+         WHERE command_id = ?`,
+      )
+      .run(applyAcceptanceCommand.commandId);
+    historical.exec(`
+      CREATE TRIGGER events_are_append_only_update
+      BEFORE UPDATE ON events
+      BEGIN
+        SELECT RAISE(ABORT, 'events are append-only');
+      END;
+      CREATE TRIGGER commands_are_append_only_update
+      BEFORE UPDATE ON commands
+      BEGIN
+        SELECT RAISE(ABORT, 'command receipts are append-only');
+      END;
+    `);
+    historical.close();
+
+    const legacyState = await open();
+    const legacySnapshot = legacyState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    if (legacySnapshot.type !== "WORKFLOW_SNAPSHOT" || !legacySnapshot.snapshot.acceptancePackage) {
+      throw new Error("Expected a legacy AcceptancePackage after restart");
+    }
+    expect(legacySnapshot.snapshot.acceptancePackage.criteria).toHaveLength(1);
+    expect(
+      legacySnapshot.snapshot.acceptancePackage.criteria.every(
+        ({ reviewCheck, qaCheck }) => reviewCheck === undefined && qaCheck === undefined,
+      ),
+    ).toBe(true);
+    const legacyEvents = legacyState.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id });
+    if (legacyEvents.type !== "EVENTS") throw new Error("Expected legacy acceptance Events");
+    const requestedEvent = legacyEvents.events.find(({ type }) => type === "ACCEPTANCE_REQUESTED");
+    if (requestedEvent?.type !== "ACCEPTANCE_REQUESTED") {
+      throw new Error("Expected a historical acceptance request Event");
+    }
+    expect(requestedEvent.data.acceptancePackage.criteria).toHaveLength(1);
+    expect(
+      requestedEvent.data.acceptancePackage.criteria.every(
+        ({ reviewCheck, qaCheck }) => reviewCheck === undefined && qaCheck === undefined,
+      ),
+    ).toBe(true);
+    const legacyReceipt = legacyState.execute(applyAcceptanceCommand);
+    if (legacyReceipt.type !== "MOCK_PROVIDER_OUTCOME_APPLIED" || !legacyReceipt.acceptancePackage) {
+      throw new Error("Expected the historical Acceptance command receipt");
+    }
+    expect(legacyReceipt.replayed).toBe(true);
+    expect(legacyReceipt.acceptancePackage.criteria).toHaveLength(1);
+    expect(
+      legacyReceipt.acceptancePackage.criteria.every(
+        ({ reviewCheck, qaCheck }) => reviewCheck === undefined && qaCheck === undefined,
+      ),
+    ).toBe(true);
   });
 
   it("widens the evidence provider without changing rows written before migration 0014", async () => {
@@ -4553,6 +4719,16 @@ describe("SQLite local state", () => {
       type: "READY_FOR_ACCEPTANCE",
       releaseNote: "Ready for owner acceptance.",
       verifyInstructions: ["Run pnpm verify."],
+      criteria: [
+        {
+          criterion: "State is durable",
+          implementation: "The durable acceptance flow was implemented.",
+          reviewCheck: "Contract review passed.",
+          qaCheck: "1 required assertions passed.",
+          ownerVerification: "Run pnpm verify.",
+          knownRisk: null,
+        },
+      ],
     });
 
     const pending = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: created.workItem.id });
@@ -7262,6 +7438,7 @@ describe("SQLite local state", () => {
           kind: "REVIEW_REPORT",
           title: "Review report",
           summary: "Looks good.",
+          checks: ["Contract review passed."],
         },
       ]);
       expect(sources.decisions).toEqual([

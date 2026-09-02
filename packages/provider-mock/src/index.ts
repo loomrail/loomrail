@@ -89,8 +89,14 @@ const complete = (invocation: ProviderInvocation) =>
         : {}),
   });
 
-const requestAcceptance = () =>
-  providerOutcomeSchema.parse({
+const requestAcceptance = (invocation: ProviderInvocation) => {
+  const input = invocation.acceptanceInput;
+  const reviewCheck = input?.evidence.filter(({ kind }) => kind === "REVIEW_REPORT").at(-1)?.checks[0];
+  const qaCheck = input?.evidence.filter(({ kind }) => kind === "QA_REPORT").at(-1)?.checks[0];
+  if (!input || !reviewCheck || !qaCheck) {
+    throw new Error("Acceptance requires criterion, Review, and QA input from the current context snapshot");
+  }
+  return providerOutcomeSchema.parse({
     type: "READY_FOR_ACCEPTANCE",
     releaseNote: "Completes the deterministic mock delivery flow with budget, review, QA, and owner control.",
     verifyInstructions: [
@@ -98,7 +104,16 @@ const requestAcceptance = () =>
       "Run pnpm test:e2e.",
       "Inspect the acceptance evidence in Loomrail.",
     ],
+    criteria: input.criteria.map((criterion) => ({
+      criterion,
+      implementation: "The bounded mock implementation completed under the approved budget policy.",
+      reviewCheck,
+      qaCheck,
+      ownerVerification: "Inspect the recorded Review and measured QA evidence for this criterion.",
+      knownRisk: null,
+    })),
   });
+};
 
 const exhaustInitialImplementationBudget = () =>
   providerOutcomeSchema.parse({
@@ -121,7 +136,7 @@ const outcomeFor = (invocation: ProviderInvocation): ProviderOutcome => {
   if (stage === "IMPLEMENT" && attempt === 1) {
     return exhaustInitialImplementationBudget();
   }
-  if (stage === "ACCEPTANCE") return requestAcceptance();
+  if (stage === "ACCEPTANCE") return requestAcceptance(invocation);
   return complete(invocation);
 };
 

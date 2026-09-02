@@ -14,7 +14,7 @@ import {
 import { materialiseFixtureRepository, resolveBundledFixture } from "../apps/daemon/dist/fixtures.js";
 import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
 import { createProviderRegistry } from "../apps/daemon/dist/provider-selection.js";
-import { attentionInboxResponseSchema } from "../packages/contracts/dist/index.js";
+import { attentionInboxResponseSchema, workflowSnapshotSchema } from "../packages/contracts/dist/index.js";
 import { openLocalState, type LocalState } from "../packages/persistence-sqlite/dist/index.js";
 import { mockDeliveryTemplate } from "../packages/workflow-engine/dist/index.js";
 import { addWorktree, inspectRepository } from "../packages/workspace/dist/index.js";
@@ -780,6 +780,9 @@ const createTask = async (
   await expect(submit).toBeDisabled();
   await dialog.getByPlaceholder("What should the team deliver?").fill(title);
   await dialog.getByPlaceholder("Outcome, constraints, relevant files…").fill(description);
+  await dialog
+    .getByPlaceholder("The owner can verify the delivered outcome…")
+    .fill("The persisted task satisfies its recorded goal.");
   await expect(submit).toBeEnabled();
   await submit.click();
   await expect(dialog).toBeHidden();
@@ -1824,6 +1827,52 @@ test.describe("authenticated walking skeleton", () => {
     await expect(workflowSection.getByRole("heading", { name: "Acceptance package" })).toBeVisible({
       timeout: BUDGET_WALL_MS,
     });
+    const acceptance = workflowSection.locator(".acceptance-package");
+    await expect(
+      acceptance.getByText("The persisted task satisfies its recorded goal.", { exact: true }),
+    ).toBeVisible();
+    await expect(acceptance.getByText("Implementation", { exact: true })).toBeVisible();
+    await expect(acceptance.getByText("Selected review check", { exact: true })).toBeVisible();
+    await expect(acceptance.getByText("Selected QA check", { exact: true })).toBeVisible();
+    await expect(acceptance.getByText("Owner verification", { exact: true })).toBeVisible();
+    await expect(acceptance.getByText("Known risk", { exact: true })).toBeVisible();
+    const exportLink = acceptance.getByRole("link", { name: "Download release summary" });
+    await exportLink.focus();
+    await expect(exportLink).toBeFocused();
+    const downloadPromise = page.waitForEvent("download");
+    await exportLink.click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toMatch(/^loomrail-acceptance-[A-Za-z0-9._-]+\.md$/);
+    const downloadPath = await download.path();
+    const releaseSummary = await readFile(downloadPath, "utf8");
+    expect(releaseSummary).toContain("# Loomrail Release Summary");
+    expect(releaseSummary).toContain("Evidence binding: `BOUND`");
+    expect(releaseSummary).toContain("The persisted task satisfies its recorded goal\\.");
+    expect(releaseSummary).toContain("`QA_CORRECTION_STARTED`");
+    expect(releaseSummary).toContain("`QA_CORRECTION_PASSED`");
+    expect(releaseSummary).not.toContain("storageKey");
+    expect(releaseSummary).not.toContain("/Users/");
+    await page.route("**/api/v1/work-items/*/workflow", async (route) => {
+      const response = await route.fetch();
+      const snapshot = workflowSnapshotSchema.parse(await response.json());
+      const legacyPackage =
+        snapshot.acceptancePackage === null
+          ? null
+          : {
+              ...snapshot.acceptancePackage,
+              criteria: snapshot.acceptancePackage.criteria.map((criterion) => {
+                const legacy = { ...criterion };
+                delete legacy.reviewCheck;
+                delete legacy.qaCheck;
+                return legacy;
+              }),
+            };
+      await route.fulfill({ response, json: { ...snapshot, acceptancePackage: legacyPackage } });
+    });
+    await page.reload();
+    await expect(
+      acceptance.getByText("Legacy package — checks are not bound per criterion", { exact: true }),
+    ).toBeVisible();
     const browserQA = workflowSection.getByRole("region", { name: "Browser QA" });
     await expect(browserQA.getByText("Correction timeline", { exact: true })).toBeVisible();
     await expect(browserQA.getByText("Correction 1", { exact: true })).toBeVisible();
@@ -1841,6 +1890,11 @@ test.describe("authenticated walking skeleton", () => {
     await expect(russianQA.getByText("История коррекций", { exact: true })).toBeVisible();
     await expect(russianQA.getByText("Коррекция 1", { exact: true })).toBeVisible();
     await expect(russianQA.getByText("регрессия", { exact: true })).toBeVisible();
+    await expect(
+      inspector
+        .locator(".acceptance-package")
+        .getByText("Legacy-пакет — проверки не привязаны к каждому критерию", { exact: true }),
+    ).toBeVisible();
 
     await page.setViewportSize({ width: 320, height: 800 });
     await russianQA.scrollIntoViewIfNeeded();
@@ -2548,6 +2602,9 @@ test.describe("authenticated walking skeleton", () => {
 
     await dialog.getByPlaceholder("What should the team deliver?").fill("Aligned persisted task");
     await dialog.getByPlaceholder("Outcome, constraints, relevant files…").fill("Verify timeline alignment.");
+    await dialog
+      .getByPlaceholder("The owner can verify the delivered outcome…")
+      .fill("The timeline remains visually aligned.");
     await expect(submit).toBeEnabled();
     await submit.click();
     await expect(dialog).toBeHidden();

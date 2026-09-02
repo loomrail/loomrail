@@ -104,6 +104,7 @@ export const createReadyWorkItem = async (
       projectId: "project-fixture-web-app-a",
       type: "TASK",
       title,
+      acceptanceCriteria: ["The owner can verify the delivered outcome after the pipeline completes."],
     }),
   });
   const created = stateCommandResultSchema.parse(await createResponse.json());

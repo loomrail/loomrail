@@ -130,9 +130,10 @@ D3 and ADR-0002.
 - deterministic, clock/ID injected, infrastructure-free tests.
 
 The deterministic interfaces include `decideWorkItemCommand`, workflow lifecycle decisions,
-`decideReviewLoop`, `decideReviewFindingDisposition`, `decideResolveAcceptance`, and `buildAttentionInbox`. They own
-WorkItem/run transitions, budgets, recovery, the bounded review/fix/owner gate, the owner-only `DONE` gate, and the
-bounded global Attention classification without knowing SQLite or HTTP.
+`decideReviewLoop`, `decideReviewFindingDisposition`, `bindAcceptanceCriteria`, `decideResolveAcceptance`,
+`renderReleaseSummary`, and `buildAttentionInbox`. They own WorkItem/run transitions, budgets, recovery, the bounded
+review/fix/owner gate, exact criterion-to-evidence binding, the owner-only `DONE` gate, the allowlisted deterministic
+release projection, and bounded global Attention classification without knowing SQLite or HTTP.
 
 ### `packages/contracts`
 
@@ -151,6 +152,11 @@ bounded global Attention classification without knowing SQLite or HTTP.
 `openLocalState()` remains the deep persistence module with `execute`, `query` and `close`. Migration checksums,
 online backup, prepared SQL, optimistic concurrency, idempotency receipts, append-only evidence, mutable versioned
 AcceptancePackages, current state and Event append stay behind that interface.
+
+The Acceptance provider receives criterion and evidence-check text already present in its exact ContextPack snapshot,
+but no artifact, report, run or tree IDs. The domain binds its ordered claims to current durable Review and measured QA
+authority. The daemon's export route only gathers a bounded snapshot; the infrastructure-free renderer checks every
+correlation and emits escaped Markdown without storage keys, paths, transcripts or mutable export state.
 
 Independent review uses the same boundary: persistence derives author/reviewer identity and provider relation from
 AgentRuns, compares the reported tree with the latest successful IMPLEMENT tree, and atomically stores ReviewReport,

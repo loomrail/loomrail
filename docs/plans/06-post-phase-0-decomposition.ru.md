@@ -189,6 +189,13 @@ fail → correction → fresh review → scoped retest → Acceptance, отде�
 Локально прошли non-landing lint/typecheck/unit, 52/52 browser E2E, production audit и clean-install tarball
 `0.1.0-alpha.5`. Он не опубликован: полный release gate всё ещё ждёт исправления landing lint его отдельной сессией и
 нового macOS/Windows CI-прогона Q2.
+Q3 criterion-bound Acceptance/export реализован по [спецификации 51](51-q3-criterion-bound-acceptance-export-spec.ru.md)
+и [плану 52](52-q3-criterion-bound-acceptance-export-implementation-plan.ru.md): exact ordered claims связываются
+domain-модулем с current Review/measured QA checks, historical package/Event/receipt остаются читаемыми как
+`LEGACY_UNBOUND`, а authenticated read-only Markdown export имеет exact correlation, allowlist, escaping/path
+redaction, 1000-Event/512-KiB bounds и complete-or-error semantics. Полный Q2 correction browser path скачивает
+реальный summary в RU/EN, dark и 320 px states; unit, persistence, daemon, 52/52 E2E, audit и clean-install локально
+зелёны. Phase 7 implementation deliverables закрыты, но dogfood exit gate и общий cross-platform `verify` ещё нет.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах
