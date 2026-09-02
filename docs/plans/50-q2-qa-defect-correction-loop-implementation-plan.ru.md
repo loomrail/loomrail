@@ -1,0 +1,65 @@
+# Q2 — План реализации QA Defect correction loop
+
+**Дата:** 2026-09-02
+
+**Статус:** ready; implementation waits for full Q1 gate
+
+**Спецификация:** [49-q2-qa-defect-correction-loop-spec.ru.md](49-q2-qa-defect-correction-loop-spec.ru.md)
+
+## 1. Порядок работы
+
+### Q2.1 — Contracts и чистый domain
+
+- [ ] Добавить bounded `CorrectionRun`, `QARetestPlan`, cell reasons и full/retest QARun lineage schemas.
+- [ ] Добавить nullable correction lineage StageAttempt, ReviewReport/Finding и evidence artifacts.
+- [ ] Реализовать pure derivation affected cells + deterministic regression subset.
+- [ ] Реализовать pure correction-loop transition: start, supersede, pass, exhaust, owner final/cancel.
+- [ ] Добавить owner-only optimistic QADefect waiver; SYSTEM resolution остаётся только outcome passing retest.
+- [ ] Проверить два независимых bounds: R1 rounds локально на correction и 2 automatic + 1 owner Q2 runs.
+
+### Q2.2 — Durable state и migration
+
+- [ ] Добавить additive migration `correction_runs` и append-only `qa_retest_plans`.
+- [ ] Backfill existing StageAttempt/QARun/Review rows как initial cycle без correction identity.
+- [ ] Перестроить review/evidence uniqueness на per-cycle/per-authority без потери append-only истории.
+- [ ] Атомарно писать FAILED evidence/defects + next CorrectionRun/retest plan/IMPLEMENT dispatch или HumanRequest.
+- [ ] Атомарно писать passing retest + SYSTEM defect resolutions + correction pass + ACCEPTANCE dispatch.
+- [ ] Покрыть command receipt, optimistic version, duplicate completion, restart и parallel-active rejection.
+
+### Q2.3 — Orchestration и locked context
+
+- [ ] Передать correction Developer bounded source/Open Defects, source tree/evidence и locked plan hash.
+- [ ] Запускать fresh correction REVIEW с локальным round и actual correction diff.
+- [ ] Резервировать retest QARun только по active CorrectionRun/QARetestPlan, не по provider payload.
+- [ ] На ERROR возобновлять QA StageAttempt без расходования correction ordinal.
+- [ ] Исполнять sparse cells в baseline order с полными шагами/assertions и тем же BrowserDriver isolation.
+
+### Q2.4 — Acceptance и Task Cockpit
+
+- [ ] Валидировать full-baseline → sequential corrections → current passing retest lineage.
+- [ ] Выбирать current-tree Review/QA artifacts, а не первый/произвольный PASSED artifact.
+- [ ] Показать correction ordinal/status, source failure, affected/regression scope и evidence chain.
+- [ ] Показать OPEN/RESOLVED/WAIVED defects и owner waiver/final-cycle/cancel actions без raw JSON.
+- [ ] Добавить RU/EN, light/dark, keyboard, 320 px и reconnect/version-conflict recovery.
+
+## 2. Security gate
+
+- [ ] Обновить threat model одновременно с первой executable correction capability.
+- [ ] Проверить locked plan/hash/origin и запрет provider-selected/changed retest scope.
+- [ ] Проверить SYSTEM-only resolution, HUMAN-only waiver/final authorization и CSRF/Origin/session controls.
+- [ ] Проверить stale tree/review/evidence lineage и отсутствие acceptance через старый full pass.
+- [ ] Проверить bounds context/defects/cells/events и отсутствие secrets/absolute paths.
+
+## 3. Verification gate
+
+- [ ] Unit: scope derivation, independent counters, transitions, invalid/stale/waiver-only paths.
+- [ ] Persistence: atomic first/next/pass/exhaust/cancel, idempotency, restart и migrations from Q1 DB.
+- [ ] Daemon: fail → correction → review → scoped pass; repeated failure; ERROR retry.
+- [ ] Browser: happy correction route, exhausted owner route, defect waiver, responsive/localized UI.
+- [ ] Full non-landing lint/typecheck/unit/E2E, production audit и clean tarball.
+- [ ] Полный `pnpm verify` и macOS/Windows CI; publish остаётся запрещён до общего release gate.
+
+## 4. Первый implementation slice
+
+После полного Q1 gate начать с contracts + pure `deriveQARetestPlan`/`decideQACorrectionLoop` и focused tests. До
+закрытия этого slice persistence, daemon и UI не должны самостоятельно интерпретировать correction transitions.

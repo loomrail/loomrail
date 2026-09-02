@@ -93,6 +93,29 @@ _Не означает_: право provider самому закрыть зам�
 IMPLEMENT, второй останавливается на HumanRequest, а владелец может разрешить ровно один финальный bounded round.
 _Не означает_: continuation writer session, бесконечный retry или смену explicit Project provider preference.
 
+**QARun**:
+Durable измерение одного BrowserDriver над точным Git tree и выбранным QA scope; только оно владеет verdict
+`PASSED | FAILED | ERROR`.
+_Не означает_: provider-отчёт, workflow stage или бессрочное доказательство для изменившегося tree.
+
+**QAEvidenceBundle**:
+Append-only нормализованные executions, observations и ссылки на verified attachments одного measured QARun.
+_Не означает_: raw browser log, абсолютный filesystem path или разрешение перейти в Acceptance без проверки lineage.
+
+**QADefect**:
+Durable воспроизводимая проблема, обнаруженная measured QARun, с lifecycle `OPEN -> RESOLVED | WAIVED`.
+_Не означает_: ReviewFinding, driver error или право provider выбрать disposition.
+
+**CorrectionRun**:
+Один bounded цикл исправления после measured QA failure: fix, независимый review и scoped retest; имеет собственный
+ordinal внутри PipelineRun и immutable source QA failure.
+_Не означает_: AgentRun, StageAttempt, R1 review round или повтор environment после QARun ERROR.
+
+**QARetestPlan**:
+Неизменяемый детерминированно выведенный список target/scenario cells для одного CorrectionRun: все cells, связанные
+с failure и OPEN Defects, плюс regression subset из исходного locked QA plan.
+_Не означает_: новый provider-authored evaluator, полный cartesian baseline или разрешение исключить неудобный defect.
+
 ## MCP connections
 
 **MCP Profile Proposal**:
@@ -191,6 +214,11 @@ WorkItem
         │           └── ProviderSession
         ├── ReviewReport
         │     └── ReviewFinding
+        ├── QARun
+        │     ├── QAEvidenceBundle
+        │     └── QADefect
+        ├── CorrectionRun
+        │     └── QARetestPlan
         ├── EvidenceArtifact (Review / QA)
         ├── AcceptancePackage
         └── HumanRequest
