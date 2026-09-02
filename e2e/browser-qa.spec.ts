@@ -208,7 +208,9 @@ test.describe("measured Browser QA cockpit", () => {
     await waiverReason.fill("Accepted for this bounded browser fixture.");
     await qa.getByRole("button", { name: "Record waiver" }).click();
     await expect(qa.getByText("Risk accepted", { exact: true })).toBeVisible();
-    await expect(qa.getByText("Accepted for this bounded browser fixture.", { exact: true })).toBeVisible();
+    await expect(qa.locator("p.qa-defect__resolution")).toHaveText(
+      "Accepted for this bounded browser fixture.",
+    );
     await expect(workflow.getByRole("heading", { name: "Acceptance package" })).toHaveCount(0);
 
     await page.reload();
