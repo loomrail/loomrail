@@ -1,6 +1,6 @@
 # Декомпозиция работ после Phase 0
 
-**Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-01
+**Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-02
 
 **Статус:** утверждённая последовательность до B4 и A4 реализована; `0.1.0-alpha.4` опубликована
 **Нормативные входы:**
@@ -167,21 +167,18 @@ mock-маршруте», а D2 всё равно ждёт E1.5.
   подходе к D3;
 - где живут примеры из D2 — в этом репозитории рядом с fixture-проектами или отдельным репозиторием — там же.
 
-Текущий checkpoint: C1, C3, C2, B4, A4, A3 и R1 реализованы и запушены. Q1 deterministic Browser QA evidence
-находится в реализации: готовы runtime contracts, чистое derivation verdict, durable QARun/evidence/attachment/Defect
-хранилище и isolated Playwright BrowserDriver с typed manifest, loopback/read-only guard, screenshots и trace.
-Durable orchestration резервирует QARun вместе с active BROWSER_QA AgentRun и одной транзакцией завершает run,
-evidence, Defects, HumanRequest/следующий dispatch и audit; daemon worker запускает isolated Playwright по bounded
-`.loomrail/browser-qa.json`, provider-owned `QA_REPORT` больше не может пройти gate, а Acceptance принимает только
-current measured pass. Screenshot/trace проходят marker-bound quarantine/finalize: restart подтверждает только exact
-SQLite metadata + hash/size, а orphan/повреждённый каталог изолирует без удаления неизвестных файлов. Task Cockpit
-показывает matrix/environment/Defects и открывает проверенные файлы через authenticated route без absolute path;
-встроенный web-demo использует безопасный readiness fallback на фактическом порту daemon, а пользовательский Project
-по-прежнему fail-closed без своего config. Следующий срез Q1 — закрыть security/verification matrix, production audit
-и clean-package platform gate. Спецификация —
+Текущий checkpoint: C1, C3, C2, B4, A4, A3 и R1 реализованы и запушены. Реализация Q1 deterministic Browser QA
+evidence завершена: runtime contracts, чистое derivation verdict, durable QARun/evidence/attachment/Defect хранилище,
+isolated Playwright BrowserDriver, marker-bound artifact lifecycle, retention cleanup и Task Cockpit проходят focused,
+browser и release-package gates. Independent browser baseline дал 50/50 green на macOS и Windows, а clean npm
+tarball установился и запустился на обеих платформах в
+[GitHub Actions run 33617720338](https://github.com/loomrail/loomrail/actions/runs/33617720338); production audit также
+зелёный. Общий Q1 release gate остаётся открыт только потому, что полный `pnpm verify` останавливают три lint-ошибки в
+параллельно разрабатываемом `apps/landing/src/main.ts`; Q1 не меняет этот каталог и не маскирует его failure.
+Спецификация —
 [47](47-q1-deterministic-browser-qa-spec.ru.md), план —
-[48](48-q1-deterministic-browser-qa-implementation-plan.ru.md). Работа не затрагивает отдельно разрабатываемый
-landing; общий release gate после Q1 всё ещё требует повторного macOS/Windows clean-install прогона.
+[48](48-q1-deterministic-browser-qa-implementation-plan.ru.md). Следующая доменная граница после полного зелёного
+Q1 gate — Q2: отдельный correction-run counter, durable Defect lifecycle и scoped retest с bounded regression subset.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

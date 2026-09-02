@@ -64,7 +64,8 @@
 - [ ] Полный `pnpm verify` (локально остаются три lint-ошибки параллельного `apps/landing/src/main.ts`).
 - [x] Production audit без high-severity уязвимостей.
 - [x] Clean npm tarball устанавливается и запускается только из опубликованного layout.
-- [ ] Один и тот же baseline проходит на macOS и Windows.
+- [x] Один и тот же baseline проходит на macOS и Windows: independent browser jobs дали 50/50 green в
+  [GitHub Actions run 33617720338](https://github.com/loomrail/loomrail/actions/runs/33617720338).
 
 ## 4. Следующий срез
 
