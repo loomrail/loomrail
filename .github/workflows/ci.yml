@@ -53,6 +53,12 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod --audit-level high
 
+      # The named fault matrix includes the real Playwright BrowserDriver suite. A fresh runner has
+      # the package but no browser binary; keep that prerequisite explicit instead of weakening the
+      # suite into a skip or treating a missing executable as crash-recovery evidence.
+      - name: Install Chromium for fault injection
+        run: pnpm exec playwright install chromium
+
       # Runs before repository-wide lint so an unrelated source failure cannot hide crash evidence.
       - name: Verify crash and fault recovery
         run: pnpm test:fault-injection

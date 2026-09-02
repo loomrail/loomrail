@@ -35,6 +35,8 @@
 - [ ] macOS/Windows CI named gate; общий verify может оставаться blocked только protected landing.
 
 Локальное evidence: [Q5-CRASH-FAULT-INJECTION-EVIDENCE.md](../evidence/phase-8/Q5-CRASH-FAULT-INJECTION-EVIDENCE.md).
+Первый Q5 CI run обнаружил missing Chromium prerequisite в новом Verify step; CI теперь устанавливает Chromium перед
+матрицей, не ослабляя browser-qa suite и не превращая отсутствие executable в recovery evidence.
 
 ## 3. Release boundary
 

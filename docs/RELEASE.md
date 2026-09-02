@@ -23,6 +23,7 @@ Git and must never be committed.
 Before packaging, run the named crash and fault-injection gate:
 
 ```bash
+pnpm exec playwright install chromium
 pnpm test:fault-injection
 ```
 

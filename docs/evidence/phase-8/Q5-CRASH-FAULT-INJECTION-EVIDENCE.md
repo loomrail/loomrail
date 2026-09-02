@@ -75,3 +75,8 @@ outcome was unknown.
 This local run does not certify power-loss/filesystem corruption, real provider crashes or Windows process
 semantics. The CI matrix must show this named gate green on both macOS and Windows. Phase 8's private dogfood exit
 gate and the repository-wide release gate remain separate requirements.
+
+CI run 33657047573 proved the production audit and clean-install path but initially failed the named macOS fault step
+because a fresh Verify runner had the Playwright package without its Chromium binary. The gate correctly refused to
+reinterpret that `DRIVER_CRASHED` result as BrowserDriver fault evidence. CI now installs Chromium explicitly before
+the unchanged matrix; replacement cross-platform evidence remains pending.
