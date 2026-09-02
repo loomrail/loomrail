@@ -11,6 +11,7 @@ import {
   projectProviderSelectionResponseSchema,
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
+  qaDefectWaivedResultSchema,
   qaStateResponseSchema,
   projectConstitutionSnapshotSchema,
   projectReadinessSnapshotSchema,
@@ -38,6 +39,7 @@ import {
   type ConstitutionPublication,
   type ListedProject,
   type ProjectReadinessRun,
+  type QADefect,
   type ScaffoldOperation,
   type ScaffoldProposal,
   type ProviderPreference,
@@ -702,6 +704,23 @@ export const disposeReviewFinding = async (
     },
   );
   return result.finding;
+};
+
+export const waiveQADefect = async (defect: QADefect, reason: string): Promise<QADefect> => {
+  const result = await requestLocalApi(
+    `/api/v1/qa-defects/${encodeURIComponent(defect.id)}/waive`,
+    qaDefectWaivedResultSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedVersion: defect.version,
+        reason,
+      }),
+    },
+  );
+  return result.defect;
 };
 
 export type PipelineControlAction = "pause" | "resume" | "cancel";

@@ -11,7 +11,9 @@ import {
   qaRetestPlanSchema,
   qaRunSchema,
   qaTargetOriginSchema,
+  waiveQADefectRequestSchema,
 } from "../src/qa.js";
+import { stateCommandSchema } from "../src/work-management.js";
 
 const plan = {
   schemaVersion: 1 as const,
@@ -222,6 +224,45 @@ describe("browser QA contracts", () => {
         resolutionReason: "Fixed and verified by the scoped retest.",
         resolvedAt: "2026-09-02T11:00:00.000Z",
         version: 2,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("requires a bounded reason and optimistic version for an owner QA defect waiver", () => {
+    const request = {
+      schemaVersion: 1,
+      commandId: "waive-defect-1",
+      expectedVersion: 1,
+      reason: "The owner accepts this documented risk for the bounded release.",
+    } as const;
+    expect(waiveQADefectRequestSchema.safeParse(request).success).toBe(true);
+    expect(waiveQADefectRequestSchema.safeParse({ ...request, reason: "" }).success).toBe(false);
+    expect(waiveQADefectRequestSchema.safeParse({ ...request, expectedVersion: 0 }).success).toBe(false);
+    expect(
+      stateCommandSchema.safeParse({
+        ...request,
+        correlationId: "correlation-waive-defect-1",
+        actor: { type: "HUMAN", id: "owner-1" },
+        type: "WAIVE_QA_DEFECT",
+        payload: {
+          defectId: "defect-1",
+          expectedVersion: request.expectedVersion,
+          reason: request.reason,
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      stateCommandSchema.safeParse({
+        schemaVersion: 1,
+        commandId: request.commandId,
+        correlationId: "correlation-waive-defect-1",
+        actor: { type: "HUMAN", id: "owner-1" },
+        type: "WAIVE_QA_DEFECT",
+        payload: {
+          defectId: "defect-1",
+          expectedVersion: request.expectedVersion,
+          reason: request.reason,
+        },
       }).success,
     ).toBe(true);
   });

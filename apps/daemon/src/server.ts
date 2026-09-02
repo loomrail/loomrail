@@ -45,7 +45,9 @@ import {
   projectsResponseSchema,
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
+  qaDefectWaivedResultSchema,
   qaStateResponseSchema,
+  waiveQADefectRequestSchema,
   proposeContext7PresetRequestSchema,
   proposeMcpProfileRequestSchema,
   confirmMcpProfileRequestSchema,
@@ -92,6 +94,7 @@ import {
   ConstitutionDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
+  QADefectDispositionError,
   ReadinessDomainError,
   ReviewFindingDispositionError,
   ScaffoldDomainError,
@@ -335,6 +338,7 @@ const publishQAAttachment = (attachment: QAAttachmentRef): QAAttachmentSummary =
 const stageAttemptParamsSchema = z.object({ stageAttemptId: opaqueIdSchema }).strict();
 const humanRequestParamsSchema = z.object({ humanRequestId: opaqueIdSchema }).strict();
 const reviewFindingParamsSchema = z.object({ findingId: opaqueIdSchema }).strict();
+const qaDefectParamsSchema = z.object({ defectId: opaqueIdSchema }).strict();
 const acceptanceParamsSchema = z
   .object({ workItemId: opaqueIdSchema, acceptancePackageId: opaqueIdSchema })
   .strict();
@@ -575,6 +579,10 @@ const sendOperationError = (
   }
   if (error instanceof ReviewFindingDispositionError) {
     const status = error.code === "REVIEW_FINDING_NOT_FOUND" ? 404 : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof QADefectDispositionError) {
+    const status = error.code === "QA_DEFECT_NOT_FOUND" ? 404 : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
   if (error instanceof WorkflowDomainError) {
@@ -2975,6 +2983,31 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
               findingId: params.findingId,
               expectedVersion: body.expectedVersion,
               disposition: body.disposition,
+              reason: body.reason,
+            },
+          }),
+        );
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/qa-defects/:defectId/waive", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = qaDefectParamsSchema.parse(request.params);
+        const body = waiveQADefectRequestSchema.parse(request.body);
+        return qaDefectWaivedResultSchema.parse(
+          localState.execute({
+            schemaVersion: 1,
+            commandId: body.commandId,
+            correlationId,
+            actor: { type: "HUMAN", id: "local-owner" },
+            type: "WAIVE_QA_DEFECT",
+            payload: {
+              defectId: params.defectId,
+              expectedVersion: body.expectedVersion,
               reason: body.reason,
             },
           }),

@@ -9,11 +9,79 @@ import {
   qaRunSchema,
   type QACorrectionRun,
   type QADefect,
+  type QADefectWaivedEvent,
   type QAEvidenceBundle,
   type QARetestCellReason,
   type QARetestPlan,
   type QARun,
+  type WaiveQADefectCommand,
 } from "@loomrail/contracts";
+
+export type QADefectDispositionErrorCode =
+  | "QA_DEFECT_NOT_FOUND"
+  | "QA_DEFECT_ACTOR_FORBIDDEN"
+  | "QA_DEFECT_VERSION_CONFLICT"
+  | "QA_DEFECT_ALREADY_CLOSED";
+
+export class QADefectDispositionError extends Error {
+  readonly code: QADefectDispositionErrorCode;
+  readonly details: Readonly<Record<string, string | number>>;
+
+  constructor(
+    code: QADefectDispositionErrorCode,
+    message: string,
+    details: Readonly<Record<string, string | number>> = {},
+  ) {
+    super(message);
+    this.name = "QADefectDispositionError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export type QADefectDispositionDecision = {
+  defect: QADefect;
+  events: readonly {
+    type: QADefectWaivedEvent["type"];
+    data: QADefectWaivedEvent["data"];
+  }[];
+};
+
+/** Records the owner's risk acceptance without changing the measured QA outcome or evidence. */
+export const decideQADefectWaiver = (
+  command: WaiveQADefectCommand,
+  context: { defect?: QADefect | undefined; now: string },
+): QADefectDispositionDecision => {
+  if (command.actor.type !== "HUMAN") {
+    throw new QADefectDispositionError("QA_DEFECT_ACTOR_FORBIDDEN", "Only the owner can waive a QA defect");
+  }
+  if (context.defect?.id !== command.payload.defectId) {
+    throw new QADefectDispositionError("QA_DEFECT_NOT_FOUND", "The QA defect does not exist");
+  }
+  if (context.defect.version !== command.payload.expectedVersion) {
+    throw new QADefectDispositionError(
+      "QA_DEFECT_VERSION_CONFLICT",
+      "The QA defect changed before the waiver was recorded",
+      { expectedVersion: command.payload.expectedVersion, actualVersion: context.defect.version },
+    );
+  }
+  if (context.defect.status !== "OPEN") {
+    throw new QADefectDispositionError("QA_DEFECT_ALREADY_CLOSED", "Only an open QA defect can be waived", {
+      status: context.defect.status,
+    });
+  }
+  const defect: QADefect = {
+    ...context.defect,
+    status: "WAIVED",
+    resolutionReason: command.payload.reason,
+    resolvedAt: context.now,
+    version: context.defect.version + 1,
+  };
+  return {
+    defect,
+    events: [{ type: "QA_DEFECT_WAIVED", data: { defect } }],
+  };
+};
 
 export type QACorrectionErrorCode =
   | "QA_CORRECTION_SOURCE_INVALID"

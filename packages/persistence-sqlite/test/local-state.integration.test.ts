@@ -923,7 +923,7 @@ describe("SQLite local state", () => {
 
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -1455,6 +1455,92 @@ describe("SQLite local state", () => {
       reviewReportId: "q2-correction-review-report",
       testedTree,
     });
+
+    const waiverCommand = {
+      schemaVersion: 1 as const,
+      commandId: "waive-q2-source-defect",
+      correlationId: "correlation-waive-q2-source-defect",
+      actor: { type: "HUMAN" as const, id: "local-owner" },
+      type: "WAIVE_QA_DEFECT" as const,
+      payload: {
+        defectId: "q2-source-defect",
+        expectedVersion: 1,
+        reason: "The owner accepts the documented responsive-layout risk for this bounded delivery.",
+      },
+    };
+    expect(() =>
+      reopened.execute({
+        ...waiverCommand,
+        commandId: "provider-waive-q2-source-defect",
+        actor: { type: "SYSTEM", id: "provider" },
+      }),
+    ).toThrow(expect.objectContaining({ code: "QA_DEFECT_ACTOR_FORBIDDEN" }));
+    expect(() =>
+      reopened.execute({
+        ...waiverCommand,
+        commandId: "stale-waive-q2-source-defect",
+        payload: { ...waiverCommand.payload, expectedVersion: 2 },
+      }),
+    ).toThrow(expect.objectContaining({ code: "QA_DEFECT_VERSION_CONFLICT" }));
+    expect(reopened.execute(waiverCommand)).toMatchObject({
+      type: "QA_DEFECT_WAIVED",
+      replayed: false,
+      defect: {
+        id: "q2-source-defect",
+        status: "WAIVED",
+        resolutionReason:
+          "The owner accepts the documented responsive-layout risk for this bounded delivery.",
+        version: 2,
+      },
+      event: {
+        type: "QA_DEFECT_WAIVED",
+        actor: { type: "HUMAN", id: "local-owner" },
+      },
+    });
+    expect(reopened.execute(waiverCommand)).toMatchObject({
+      type: "QA_DEFECT_WAIVED",
+      replayed: true,
+      defect: { status: "WAIVED", version: 2 },
+    });
+    expect(reopened.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id })).toMatchObject({
+      type: "QA_STATE",
+      runs: [
+        { id: "q2-baseline-qa-run", status: "FAILED" },
+        { id: "q2-retest-qa-run", status: "RUNNING" },
+      ],
+      defects: [{ id: "q2-source-defect", status: "WAIVED", version: 2 }],
+    });
+    const afterWaiver = reopened.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    expect(afterWaiver).toMatchObject({
+      type: "WORKFLOW_SNAPSHOT",
+      snapshot: { artifacts: [{}, {}], acceptancePackage: null },
+    });
+    reopened.close();
+    state = undefined;
+
+    const waiverRestart = await open();
+    expect(waiverRestart.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id })).toMatchObject({
+      type: "QA_STATE",
+      defects: [{ id: "q2-source-defect", status: "WAIVED", version: 2 }],
+    });
+    expect(() =>
+      waiverRestart.execute({
+        ...waiverCommand,
+        commandId: "waive-q2-source-defect-again",
+        payload: { ...waiverCommand.payload, expectedVersion: 2 },
+      }),
+    ).toThrow(expect.objectContaining({ code: "QA_DEFECT_ALREADY_CLOSED" }));
+    waiverRestart.close();
+    state = undefined;
+
+    const durable = new DatabaseSync(databasePath, { readOnly: true });
+    expect(
+      durable.prepare("SELECT status FROM qa_correction_runs WHERE id = ?").get("q2-correction-1"),
+    ).toEqual({ status: "ACTIVE" });
+    durable.close();
   });
 
   it("backfills Q2 lineage in strict Events and command receipts", async () => {

@@ -121,6 +121,7 @@ import {
   canonicalMcpProfileSource,
   decideProjectReadinessAssessment,
   decideProjectReadinessAttestation,
+  decideQADefectWaiver,
   decideReviewFindingDisposition,
   decideQACompletion,
   decideQAReservation,
@@ -165,6 +166,7 @@ import {
   McpDomainError,
   ProviderSelectionDomainError,
   QACompletionError,
+  QADefectDispositionError,
   QAReservationError,
   ReviewFindingDispositionError,
   ScaffoldDomainError,
@@ -188,6 +190,7 @@ import {
   type McpProfileConsentedIntent,
   type PipelineControlDecision,
   type RecoveryDecision,
+  type QADefectDispositionDecision,
   type ReviewFindingDispositionDecision,
   type StageAttemptPauseDecision,
   type StartWorkflowDecision,
@@ -2480,6 +2483,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        WHERE pipeline_run_id = ? AND status = 'OPEN' ORDER BY created_at, id LIMIT 200`,
     );
     const selectReviewFindingById = database.prepare("SELECT * FROM review_findings WHERE id = ?");
+    const selectQADefectById = database.prepare("SELECT * FROM qa_defects WHERE id = ?");
     const selectRunningAgentRuns = database.prepare(
       "SELECT * FROM agent_runs WHERE status = 'RUNNING' ORDER BY started_at, id",
     );
@@ -3837,6 +3841,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       | PipelineControlDecision["events"][number]
       | BudgetOverrideDecision["events"][number]
       | RecoveryDecision["events"][number]
+      | QADefectDispositionDecision["events"][number]
       | ReviewFindingDispositionDecision["events"][number]
       | AcceptanceResolutionDecision["events"][number]
       | StageAttemptPauseDecision["events"][number];
@@ -4478,6 +4483,29 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         throw new StateStoreError(
           "PERSISTENCE_FAILURE",
           "The review Finding changed while its disposition was being recorded",
+        );
+      }
+    };
+
+    const updateQADefect = (defect: QADefect): void => {
+      const update = database
+        .prepare(
+          `UPDATE qa_defects SET
+            status = ?, resolution_reason = ?, resolved_at = ?, version = ?
+           WHERE id = ? AND version = ? AND status = 'OPEN'`,
+        )
+        .run(
+          defect.status,
+          defect.resolutionReason,
+          defect.resolvedAt,
+          defect.version,
+          defect.id,
+          defect.version - 1,
+        );
+      if (update.changes !== 1) {
+        throw new StateStoreError(
+          "PERSISTENCE_FAILURE",
+          "The QA defect changed while its waiver was being recorded",
         );
       }
     };
@@ -6104,6 +6132,34 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "WAIVE_QA_DEFECT") {
+        const defectValue = selectQADefectById.get(command.payload.defectId);
+        const decision = decideQADefectWaiver(command, {
+          defect: defectValue === undefined ? undefined : qaDefectFromRow(defectValue),
+          now: occurredAt,
+        });
+        updateQADefect(decision.defect);
+        const events = appendWorkflowEvents(decision.events, {
+          workItemId: decision.defect.workItemId,
+          projectId: decision.defect.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        const event = events.at(0);
+        if (event === undefined) {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The QA defect waiver event was not recorded");
+        }
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "QA_DEFECT_WAIVED",
+          replayed: false,
+          workItemId: decision.defect.workItemId,
+          defect: decision.defect,
+          event,
+        });
+      }
+
       if (command.type === "APPLY_MOCK_PROVIDER_OUTCOME" || command.type === "APPLY_PROVIDER_OUTCOME") {
         const dispatch = readWorkflowDispatch(command.payload.dispatchId);
         if (!dispatch) {
@@ -7684,6 +7740,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           error instanceof ReadinessDomainError ||
           error instanceof ProviderSelectionDomainError ||
           error instanceof QACompletionError ||
+          error instanceof QADefectDispositionError ||
           error instanceof QAReservationError ||
           error instanceof ReviewFindingDispositionError ||
           error instanceof ScaffoldDomainError ||

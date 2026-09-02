@@ -480,6 +480,46 @@ describe("local daemon session and state boundary", () => {
     });
   });
 
+  it("protects the owner-only QA defect waiver route", async () => {
+    const token = bootstrapToken();
+    daemon = await startDaemon({ bootstrapToken: token, logger: false });
+    const session = await authenticate(daemon, token);
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      commandId: "waive-missing-qa-defect",
+      expectedVersion: 1,
+      reason: "The owner accepts this bounded synthetic risk.",
+    });
+
+    const missingCsrf = await fetch(`${daemon.baseUrl}/api/v1/qa-defects/missing-qa-defect/waive`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: session.cookie,
+        origin: daemon.baseUrl,
+      },
+      body,
+    });
+    expect(missingCsrf.status).toBe(403);
+
+    const foreignOrigin = await fetch(`${daemon.baseUrl}/api/v1/qa-defects/missing-qa-defect/waive`, {
+      method: "POST",
+      headers: { ...mutationHeaders(daemon, session), origin: "https://example.com" },
+      body,
+    });
+    expect(foreignOrigin.status).toBe(403);
+
+    const missingDefect = await fetch(`${daemon.baseUrl}/api/v1/qa-defects/missing-qa-defect/waive`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body,
+    });
+    expect(missingDefect.status).toBe(404);
+    expect(apiErrorResponseSchema.parse(await missingDefect.json())).toMatchObject({
+      error: { code: "QA_DEFECT_NOT_FOUND" },
+    });
+  });
+
   it("rejects a non-catalog fixture identifier at the HTTP boundary", async () => {
     const token = bootstrapToken();
     daemon = await startDaemon({ bootstrapToken: token, logger: false });

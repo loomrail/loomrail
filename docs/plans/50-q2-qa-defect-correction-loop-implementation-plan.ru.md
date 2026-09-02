@@ -16,7 +16,7 @@
 - [x] Добавить correction/authority lineage evidence artifacts.
 - [x] Реализовать pure derivation affected cells + deterministic regression subset.
 - [x] Реализовать pure correction-loop transition: start, supersede, pass, exhaust, owner final/cancel.
-- [ ] Добавить owner-only optimistic QADefect waiver; SYSTEM resolution остаётся только outcome passing retest.
+- [x] Добавить owner-only optimistic QADefect waiver; SYSTEM resolution остаётся только outcome passing retest.
 - [ ] Проверить два независимых bounds: R1 rounds локально на correction и 2 automatic + 1 owner Q2 runs.
 
 ### Q2.2 — Durable state и migration
@@ -48,7 +48,7 @@
 
 ## 2. Security gate
 
-- [ ] Обновить threat model одновременно с первой executable correction capability.
+- [x] Обновить threat model одновременно с первой executable correction capability.
 - [ ] Проверить locked plan/hash/origin и запрет provider-selected/changed retest scope.
 - [ ] Проверить SYSTEM-only resolution, HUMAN-only waiver/final authorization и CSRF/Origin/session controls.
 - [ ] Проверить stale tree/review/evidence lineage и отсутствие acceptance через старый full pass.
@@ -65,9 +65,11 @@
 
 ## 4. Первый implementation slice
 
-Contracts + pure `deriveQARetestPlan`/`decideQACorrectionLoop`, lineage contracts и migrations 0025–0026 завершены с
+Contracts + pure `deriveQARetestPlan`/`decideQACorrectionLoop`, lineage contracts и migrations 0025–0027 завершены с
 focused tests. Они хранят bounded CorrectionRun/immutable QARetestPlan, различают FULL/RETEST QARun, делают
 StageAttempt attempt и ReviewReport round локальными для initial/correction cycle, привязывают compact evidence к
-exact ReviewReport либо QARun/EvidenceBundle и ремонтируют старые strict JSON Events/receipts. Следующий slice —
-атомарные correction commands; daemon и UI до этой transaction boundary не должны самостоятельно интерпретировать
-correction transitions.
+exact ReviewReport либо QARun/EvidenceBundle и ремонтируют старые strict JSON Events/receipts. Owner waiver теперь
+проходит отдельной HUMAN-only optimistic command через SQLite transaction и защищённый daemon route; Task Cockpit
+показывает OPEN/RESOLVED/WAIVED и reason, не превращая waiver в PASSED evidence. Следующий slice — атомарные
+correction commands; daemon и UI до этой transaction boundary не должны самостоятельно интерпретировать correction
+transitions.

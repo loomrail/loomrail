@@ -102,6 +102,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T35 | Global Attention read leaks cross-Project text or weakens acceptance       | High     | authenticated bounded projection; closed schemas; referential validation; React text rendering; acceptance only deep-links to its exact owner gate                                           | see A4 Attention delta below                                |
 | T36 | Parallel scheduling oversubscribes capacity or crosses workspace authority | High     | bounded deterministic plan; transactional AgentRun/limit/lease claim; stable checkpoint; exact profile/provider snapshot; no automatic interrupted-run retry                                 | see A3 scheduling delta below                               |
 | T37 | Reviewer forges independence, closes findings, or reviews a stale tree     | High     | distinct durable AgentRuns; daemon-owned relation/IDs; exact tree compare; closed reports; owner-only dispositions; bounded rounds                                                           | see R1 independent-review delta below                       |
+| T38 | Provider or hostile page waives a QA defect or turns waiver into evidence  | High     | HUMAN-only optimistic command; session/Origin/CSRF; reason; atomic disposition/Event/receipt; waiver cannot create pass/evidence/Acceptance                                                  | see Q2 QA-defect lifecycle delta below                      |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -176,6 +177,31 @@ Required controls and verification:
 Residual risk: two separate runs of the same provider are weaker independence than cross-provider review, and an LLM
 review remains fallible. Loomrail records this relation explicitly; it does not claim reviewer consensus or a complete
 security audit.
+
+### Q2 QA-defect lifecycle delta (T38)
+
+Q2 makes an owner waiver executable. A compromised provider could otherwise close its own measured defect, while a
+hostile website could try to forge the owner's risk acceptance. Even a legitimate waiver becomes a false-acceptance
+path if it rewrites the failed QARun, manufactures passing evidence, skips the correction review/retest, or opens
+Acceptance. Rated **High** because the mutation sits next to the evidence gate and records an explicit owner decision.
+
+The first executable slice is bounded to one transition, `OPEN -> WAIVED`, with these controls:
+
+- the public route uses the existing authenticated local session, exact Origin and session-bound CSRF checks; it
+  supplies the fixed local owner actor rather than accepting an actor from request JSON;
+- the state command still rejects every non-HUMAN actor, requires a bounded non-empty reason and exact positive
+  expected version, and rejects missing, stale or already terminal defects;
+- SQLite updates only `status`, `resolution_reason`, `resolved_at` and `version` under `id + version + OPEN`, then
+  appends `QA_DEFECT_WAIVED` and the idempotent command receipt in the same transaction;
+- no waiver code path updates QARun, QAEvidenceBundle, CorrectionRun, StageAttempt, EvidenceArtifact or
+  AcceptancePackage. A failed run remains failed and an active correction remains active;
+- the Task Cockpit renders defect text, lifecycle status and owner reason as React text. The action is offered only
+  for OPEN defects and version conflicts return through the normal reconnect/retry surface.
+
+Focused contract/domain/storage/daemon/client tests cover invalid input, SYSTEM refusal, stale and repeated commands,
+restart persistence, session/Origin/CSRF enforcement, and the absence of pass/evidence/Acceptance side effects.
+SYSTEM-only resolution and automatic correction transitions remain disabled until their exact passing-retest lineage
+transaction and tests land; the waiver route grants neither capability.
 
 ### A4 Attention Inbox delta (T35)
 

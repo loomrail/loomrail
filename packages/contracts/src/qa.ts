@@ -571,6 +571,11 @@ export const qaRunCompletedEventSchema = qaEventBaseSchema.extend({
     .strict(),
 });
 
+export const qaDefectWaivedEventSchema = qaEventBaseSchema.extend({
+  type: z.literal("QA_DEFECT_WAIVED"),
+  data: z.object({ defect: qaDefectSchema }).strict(),
+});
+
 const qaCommandBaseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -617,6 +622,26 @@ export const recordQAAttachmentRetentionCommandSchema = qaCommandBaseSchema.exte
     .strict(),
 });
 
+export const waiveQADefectCommandSchema = qaCommandBaseSchema.extend({
+  type: z.literal("WAIVE_QA_DEFECT"),
+  payload: z
+    .object({
+      defectId: opaqueIdSchema,
+      expectedVersion: z.number().int().positive(),
+      reason: descriptionSchema,
+    })
+    .strict(),
+});
+
+export const waiveQADefectRequestSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    commandId: opaqueIdSchema,
+    expectedVersion: z.number().int().positive(),
+    reason: descriptionSchema,
+  })
+  .strict();
+
 const qaCommandResultBaseSchema = z
   .object({ schemaVersion: schemaVersionSchema, replayed: z.boolean() })
   .strict();
@@ -643,6 +668,13 @@ export const qaAttachmentRetentionRecordedResultSchema = qaCommandResultBaseSche
   attachmentId: opaqueIdSchema,
   outcome: qaAttachmentRetentionOutcomeSchema,
   recordedAt: utcTimestampSchema,
+});
+
+export const qaDefectWaivedResultSchema = qaCommandResultBaseSchema.extend({
+  type: z.literal("QA_DEFECT_WAIVED"),
+  workItemId: opaqueIdSchema,
+  defect: qaDefectSchema,
+  event: qaDefectWaivedEventSchema,
 });
 
 export const qaStateResponseSchema = z
@@ -682,10 +714,14 @@ export type QADriverResult = z.infer<typeof qaDriverResultSchema>;
 export type QAEvidenceBundle = z.infer<typeof qaEvidenceBundleSchema>;
 export type QARunReservedEvent = z.infer<typeof qaRunReservedEventSchema>;
 export type QARunCompletedEvent = z.infer<typeof qaRunCompletedEventSchema>;
+export type QADefectWaivedEvent = z.infer<typeof qaDefectWaivedEventSchema>;
 export type ReserveQARunCommand = z.infer<typeof reserveQARunCommandSchema>;
 export type CompleteQARunCommand = z.infer<typeof completeQARunCommandSchema>;
 export type RecordQAAttachmentRetentionCommand = z.infer<typeof recordQAAttachmentRetentionCommandSchema>;
+export type WaiveQADefectCommand = z.infer<typeof waiveQADefectCommandSchema>;
+export type WaiveQADefectRequest = z.infer<typeof waiveQADefectRequestSchema>;
 export type QARunReservedResult = z.infer<typeof qaRunReservedResultSchema>;
 export type QARunCompletedResult = z.infer<typeof qaRunCompletedResultSchema>;
 export type QAAttachmentRetentionRecordedResult = z.infer<typeof qaAttachmentRetentionRecordedResultSchema>;
+export type QADefectWaivedResult = z.infer<typeof qaDefectWaivedResultSchema>;
 export type QAStateResponse = z.infer<typeof qaStateResponseSchema>;

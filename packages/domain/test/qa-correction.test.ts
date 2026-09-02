@@ -1,11 +1,20 @@
-import type { QACorrectionRun, QADefect, QAEvidenceBundle, QAPlanSnapshot, QARun } from "@loomrail/contracts";
+import type {
+  QACorrectionRun,
+  QADefect,
+  QAEvidenceBundle,
+  QAPlanSnapshot,
+  QARun,
+  WaiveQADefectCommand,
+} from "@loomrail/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   decideQACorrectionLoop,
   decideQACorrectionOwnerAction,
+  decideQADefectWaiver,
   deriveQARetestPlan,
   QACorrectionError,
+  QADefectDispositionError,
 } from "../src/qa-correction.js";
 
 const now = "2026-09-02T12:00:00.000Z";
@@ -135,6 +144,79 @@ const defects = [
 ];
 const firstDefect = defects.at(0);
 if (firstDefect === undefined) throw new Error("Expected the primary defect fixture");
+
+const waiveDefectCommand = (overrides: Partial<WaiveQADefectCommand> = {}): WaiveQADefectCommand => ({
+  schemaVersion: 1,
+  commandId: "waive-defect-1",
+  correlationId: "correlation-waive-defect-1",
+  actor: { type: "HUMAN", id: "owner-1" },
+  type: "WAIVE_QA_DEFECT",
+  payload: {
+    defectId: firstDefect.id,
+    expectedVersion: 1,
+    reason: "The owner accepts this documented risk for the bounded release.",
+  },
+  ...overrides,
+});
+
+describe("QA defect owner disposition", () => {
+  it("records an attributed audit intent without changing measured QA state", () => {
+    const decision = decideQADefectWaiver(waiveDefectCommand(), {
+      defect: firstDefect,
+      now,
+    });
+
+    expect(decision).toEqual({
+      defect: {
+        ...firstDefect,
+        status: "WAIVED",
+        resolutionReason: "The owner accepts this documented risk for the bounded release.",
+        resolvedAt: now,
+        version: 2,
+      },
+      events: [{ type: "QA_DEFECT_WAIVED", data: { defect: decision.defect } }],
+    });
+  });
+
+  it("rejects system actors, stale versions, missing and already-closed defects", () => {
+    expect(() =>
+      decideQADefectWaiver(waiveDefectCommand({ actor: { type: "SYSTEM", id: "provider" } }), {
+        defect: firstDefect,
+        now,
+      }),
+    ).toThrow(
+      expect.objectContaining<Partial<QADefectDispositionError>>({ code: "QA_DEFECT_ACTOR_FORBIDDEN" }),
+    );
+    expect(() =>
+      decideQADefectWaiver(
+        waiveDefectCommand({ payload: { ...waiveDefectCommand().payload, expectedVersion: 2 } }),
+        { defect: firstDefect, now },
+      ),
+    ).toThrow(
+      expect.objectContaining<Partial<QADefectDispositionError>>({ code: "QA_DEFECT_VERSION_CONFLICT" }),
+    );
+    expect(() => decideQADefectWaiver(waiveDefectCommand(), { now })).toThrow(
+      expect.objectContaining<Partial<QADefectDispositionError>>({ code: "QA_DEFECT_NOT_FOUND" }),
+    );
+    expect(() =>
+      decideQADefectWaiver(
+        waiveDefectCommand({ payload: { ...waiveDefectCommand().payload, expectedVersion: 2 } }),
+        {
+          defect: {
+            ...firstDefect,
+            status: "RESOLVED",
+            resolutionReason: "A passing scoped retest resolved this defect.",
+            resolvedAt: completedAt,
+            version: 2,
+          },
+          now,
+        },
+      ),
+    ).toThrow(
+      expect.objectContaining<Partial<QADefectDispositionError>>({ code: "QA_DEFECT_ALREADY_CLOSED" }),
+    );
+  });
+});
 
 const correction = (ordinal: 1 | 2 | 3): QACorrectionRun => ({
   schemaVersion: 1,

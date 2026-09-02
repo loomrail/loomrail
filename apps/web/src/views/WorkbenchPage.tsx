@@ -99,6 +99,7 @@ import {
   useStageAttemptSessions,
   useStartMockPipeline,
   useUpdateWorkItem,
+  useWaiveQADefect,
   useWorkspace,
   useWorkItemEvents,
   useWorkItemQA,
@@ -922,6 +923,13 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.qaRunCompleted"),
         tone: event.data.qaRun.status === "PASSED" ? "success" : "warning",
       };
+    case "QA_DEFECT_WAIVED":
+      return {
+        detail: event.data.defect.title,
+        icon: "check",
+        label: t("event.qaDefectWaived"),
+        tone: "warning",
+      };
     case "PROVIDER_SESSION_STARTED":
       return {
         detail: t("event.providerSessionStartedDetail", { ordinal: event.data.session.ordinal }),
@@ -1439,9 +1447,18 @@ const qaDefectTones: Record<QADefect["severity"], BadgeTone> = {
   CRITICAL: "danger",
 };
 
+const qaDefectStatusTones: Record<QADefect["status"], BadgeTone> = {
+  OPEN: "danger",
+  RESOLVED: "success",
+  WAIVED: "warning",
+};
+
 const BrowserQAPanel = ({ item }: { item: WorkItem }): React.JSX.Element | null => {
   const { t } = useI18n();
   const qaQuery = useWorkItemQA(item.id);
+  const waiverMutation = useWaiveQADefect();
+  const [selectedDefect, setSelectedDefect] = useState<QADefect | null>(null);
+  const [waiverReason, setWaiverReason] = useState("");
   if (qaQuery.error) {
     return (
       <LocalConnectionRecovery
@@ -1459,8 +1476,22 @@ const BrowserQAPanel = ({ item }: { item: WorkItem }): React.JSX.Element | null 
   if (qa === undefined || latest === undefined) return null;
   const evidence = qa.evidence.find(({ qaRunId }) => qaRunId === latest.id);
   const attachments = qa.attachments.filter(({ qaRunId }) => qaRunId === latest.id);
-  const defects = qa.defects.filter(({ qaRunId }) => qaRunId === latest.id);
+  const defects = qa.defects;
   const environment = evidence?.environment;
+
+  const submitWaiver = (event: SyntheticEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    if (selectedDefect === null || waiverReason.trim().length === 0) return;
+    waiverMutation.mutate(
+      { defect: selectedDefect, reason: waiverReason.trim() },
+      {
+        onSuccess: () => {
+          setSelectedDefect(null);
+          setWaiverReason("");
+        },
+      },
+    );
+  };
 
   return (
     <section aria-label={t("qa.title")} className="qa-panel">
@@ -1579,15 +1610,78 @@ const BrowserQAPanel = ({ item }: { item: WorkItem }): React.JSX.Element | null 
               <li key={defect.id}>
                 <div>
                   <strong>{defect.title}</strong>
-                  <Badge tone={qaDefectTones[defect.severity]}>
-                    {t(`review.severity.${defect.severity}`)}
-                  </Badge>
+                  <span className="qa-defect__badges">
+                    <Badge tone={qaDefectTones[defect.severity]}>
+                      {t(`review.severity.${defect.severity}`)}
+                    </Badge>
+                    <Badge tone={qaDefectStatusTones[defect.status]}>
+                      {t(`qa.defectStatus.${defect.status}`)}
+                    </Badge>
+                  </span>
                 </div>
                 <p>{defect.description}</p>
                 <span>
                   <strong>{t("qa.reproduction")}: </strong>
                   {defect.reproduction.join(" · ")}
                 </span>
+                {defect.status === "OPEN" ? (
+                  <div className="qa-defect__actions">
+                    <Button
+                      onClick={() => {
+                        waiverMutation.reset();
+                        setWaiverReason("");
+                        setSelectedDefect(defect);
+                      }}
+                      size="sm"
+                      variant="secondary"
+                    >
+                      {t("qa.waive")}
+                    </Button>
+                  </div>
+                ) : defect.resolutionReason ? (
+                  <p className="qa-defect__resolution">{defect.resolutionReason}</p>
+                ) : null}
+                {selectedDefect?.id === defect.id ? (
+                  <form className="qa-defect-waiver" onSubmit={submitWaiver}>
+                    <Field htmlFor={`qa-defect-waiver-${defect.id}`} label={t("qa.waiverReason")}>
+                      <Textarea
+                        autoFocus
+                        id={`qa-defect-waiver-${defect.id}`}
+                        maxLength={4_000}
+                        onChange={(event) => {
+                          setWaiverReason(event.currentTarget.value);
+                        }}
+                        placeholder={t("qa.waiverReasonPlaceholder")}
+                        rows={3}
+                        value={waiverReason}
+                      />
+                    </Field>
+                    {waiverMutation.error ? <LocalConnectionRecovery error={waiverMutation.error} /> : null}
+                    <div>
+                      <Button
+                        disabled={waiverReason.trim().length === 0}
+                        loading={waiverMutation.isPending}
+                        size="sm"
+                        type="submit"
+                        variant="primary"
+                      >
+                        {t("qa.confirmWaive")}
+                      </Button>
+                      <Button
+                        disabled={waiverMutation.isPending}
+                        onClick={() => {
+                          setSelectedDefect(null);
+                          setWaiverReason("");
+                        }}
+                        size="sm"
+                        type="button"
+                        variant="secondary"
+                      >
+                        {t("action.cancel")}
+                      </Button>
+                    </div>
+                  </form>
+                ) : null}
               </li>
             ))}
           </ol>

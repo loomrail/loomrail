@@ -103,8 +103,10 @@ Append-only нормализованные executions, observations и ссыл�
 _Не означает_: raw browser log, абсолютный filesystem path или разрешение перейти в Acceptance без проверки lineage.
 
 **QADefect**:
-Durable воспроизводимая проблема, обнаруженная measured QARun, с lifecycle `OPEN -> RESOLVED | WAIVED`.
-_Не означает_: ReviewFinding, driver error или право provider выбрать disposition.
+Durable воспроизводимая проблема, обнаруженная measured QARun, с versioned lifecycle
+`OPEN -> RESOLVED | WAIVED`. Только passing scoped retest может дать SYSTEM resolution; владелец может отдельно
+зафиксировать `WAIVED` с reason и expected version, не меняя исходный QARun/evidence и не открывая Acceptance.
+_Не означает_: ReviewFinding, driver error, passing evidence или право provider выбрать disposition.
 
 **CorrectionRun**:
 Один bounded цикл исправления после measured QA failure: fix, независимый review и scoped retest; имеет собственный

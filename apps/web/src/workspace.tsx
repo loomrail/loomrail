@@ -17,6 +17,7 @@ import type {
   McpProfileRevision,
   ProjectReadinessRun,
   ProviderPreference,
+  QADefect,
   ReadinessAttestationOutcome,
   ReadinessCheck,
   ReviewFinding,
@@ -76,6 +77,7 @@ import {
   setProjectProviderPreference,
   revokeMcpProfile,
   updateWorkItem,
+  waiveQADefect,
   type CreateWorkItemInput,
   type PipelineControlAction,
   type UpdateWorkItemPatch,
@@ -717,6 +719,22 @@ export const useDisposeReviewFinding = () => {
         queryClient.invalidateQueries({ queryKey: workItemReviewsKey(finding.workItemId) }),
         queryClient.invalidateQueries({
           queryKey: workItemEventsKey(finding.projectId, finding.workItemId),
+        }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
+      ]);
+    },
+  });
+};
+
+export const useWaiveQADefect = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ defect, reason }: { defect: QADefect; reason: string }) => waiveQADefect(defect, reason),
+    onSuccess: async (defect) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workItemQAKey(defect.workItemId) }),
+        queryClient.invalidateQueries({
+          queryKey: workItemEventsKey(defect.projectId, defect.workItemId),
         }),
         queryClient.invalidateQueries({ queryKey: attentionKey }),
       ]);
