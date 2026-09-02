@@ -1343,12 +1343,15 @@ sample baseline; оба Verify остановились только на protec
 [run 33690688589](https://github.com/loomrail/loomrail/actions/runs/33690688589). Q10 закрыт; landing, provider matrix и
 npm publish не менялись.
 
-Q11 public issue intake/roadmap локально реализован по планам 67–68. Public chooser содержит только closed bug и
+Q11 public issue intake/roadmap реализован по планам 67–68. Public chooser содержит только closed bug и
 product-proposal forms, отключает blank external issues и направляет security reports в включённый GitHub Private
 Vulnerability Reporting. Required public-data acknowledgements и отсутствие upload/log prompts снижают риск
 accidental disclosure; issue text не импортируется в runtime и не получает priority/release authority. Корневой
-roadmap показывает Now/Next/Later без dates и promises и ссылается на normative product decisions/master plan.
-Standard-library verifier и пять mutation/policy tests зелёные локально; macOS/Windows evidence ещё открыт.
+roadmap показывает Now/Next/Later без dates и promises и ссылается на normative product decisions/master plan. Live
+GitHub UI отрисовывает обе формы, private reporting включён, а standard-library verifier и пять policy tests проходят
+на macOS/Windows вместе с fault, clean-package и browser gates в
+[run 33692732443](https://github.com/loomrail/loomrail/actions/runs/33692732443). Оба Verify остановились только на
+protected landing lint; Q11 закрыт.
 
 ### Оценка первого цикла
 

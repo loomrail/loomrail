@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-03
 
-**Scope:** local source policy and live repository configuration; macOS/Windows CI pending
+**Scope:** local source policy, live GitHub configuration/UI, macOS and Windows CI
 
 ## Public repository observations
 
@@ -10,6 +10,11 @@ The exact public `loomrail/loomrail` repository has Issues enabled. Its previous
 Reporting route was disabled, so an external reporter could not use the canonical `security/advisories/new` path.
 The repository setting is now enabled and a read-back reports `{"enabled":true}`. No issue, advisory, label, project,
 assignee or release was created.
+
+An authenticated read-only UI check confirms that GitHub renders `Bug report` and `Product proposal`, the private
+security and roadmap contact routes, and a blank route only as `Maintainers only`. Both forms open without a schema
+error. The bug form renders every required reproduction field and the proposal form renders Problem, Desired outcome,
+Acceptance evidence and Security and privacy impact. No form was filled or submitted.
 
 The committed source adds two issue forms and one chooser config. Bug intake requires version/commit, OS, install and
 provider routes, current/expected behavior and synthetic reproduction steps. Product proposals require a problem,
@@ -43,8 +48,25 @@ implementation plans remain engineering records rather than a competing public r
   protected `apps/landing/src/main.ts` ESLint findings on lines 630, 631 and 634.
 - Q11 changes no runtime API/state, package tarball, provider adapter, npm publication or `apps/landing/**` file.
 
-## Remaining evidence
+## Cross-platform verification
 
-The named community gate must still pass on macOS and Windows. Repository-wide Verify may remain red only for the
-separately developed protected landing. Q11 does not close telemetry, final security review, exact live-provider row,
-private dogfood, trusted registry provenance or the stable-release gate.
+GitHub Actions [run 33692732443](https://github.com/loomrail/loomrail/actions/runs/33692732443) records:
+
+| Gate                               | macOS                       | Windows                     |
+| ---------------------------------- | --------------------------- | --------------------------- |
+| Production dependency audit        | pass                        | pass                        |
+| Bundled sample gate                | pass                        | pass                        |
+| Public issue intake and roadmap    | pass                        | pass                        |
+| Provider compatibility probe       | pass                        | pass                        |
+| Fault/restart matrix               | pass                        | pass                        |
+| Receipt-checked clean installation | pass                        | pass                        |
+| Browser smoke                      | pass                        | pass                        |
+| Repository-wide Verify             | protected landing lint only | protected landing lint only |
+
+Both Verify jobs pass format, the 616-file public-tree gate, pinned toolchain and full build, then report only the
+three protected `apps/landing/src/main.ts` ESLint findings on lines 630, 631 and 634.
+
+## Remaining release evidence
+
+Q11 is complete. It does not close telemetry, final security review, exact live-provider row, private dogfood,
+trusted registry provenance or the stable-release gate.

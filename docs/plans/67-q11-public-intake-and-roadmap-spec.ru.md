@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-03
 
-**Статус:** implemented locally; macOS/Windows evidence pending
+**Статус:** complete; live GitHub UI и macOS/Windows evidence recorded
 
 **Предшественники:** R1, Q4, Q6, Q7, Q9, Q10
 

@@ -2,9 +2,8 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-03
 
-**Статус:** Q11 public issue intake/roadmap реализован локально; macOS/Windows Q11 evidence, exact live row, protected
-landing, private dogfood, telemetry и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной
-версией
+**Статус:** Q11 public issue intake/roadmap закрыт на live GitHub и macOS/Windows; exact live row, protected landing,
+private dogfood, telemetry и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -263,7 +262,10 @@ Q11 реализует public issue templates/roadmap по [спецификац
 [плану 68](68-q11-public-intake-and-roadmap-implementation-plan.ru.md). Closed bug/proposal forms требуют
 public-data acknowledgement, security reports уходят в реально включённый GitHub Private Vulnerability Reporting,
 blank external issues выключены, а roadmap не содержит dates/promises и не заменяет normative plans. Local verifier
-и пять policy tests зелёные; macOS/Windows evidence ещё открыт.
+и пять policy tests зелёные. Live GitHub UI отрисовывает обе формы и private route; community, fault, clean-package и
+browser gates прошли на macOS/Windows в
+[run 33692732443](https://github.com/loomrail/loomrail/actions/runs/33692732443). Оба Verify остановились только на
+protected landing lint; Q11 закрыт.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

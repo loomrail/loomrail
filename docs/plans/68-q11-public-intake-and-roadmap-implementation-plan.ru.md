@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-03
 
-**Статус:** local implementation and policy gates complete; macOS/Windows evidence pending
+**Статус:** complete; local, live GitHub UI и macOS/Windows gates recorded
 
 **Спецификация:** [67-q11-public-intake-and-roadmap-spec.ru.md](67-q11-public-intake-and-roadmap-spec.ru.md)
 
@@ -25,7 +25,7 @@
 - [x] Добавить closed standard-library verifier и mutation tests.
 - [x] Добавить named macOS/Windows CI gate до общего lint.
 - [x] Обновить T45 и Phase 8 evidence/status.
-- [ ] Получить local и cross-platform evidence; общий Verify может быть blocked только protected landing.
+- [x] Получить local и cross-platform evidence; общий Verify blocked только protected landing.
 
 ## 2. Module seam
 
