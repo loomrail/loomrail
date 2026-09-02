@@ -113,6 +113,12 @@ const migrations: readonly Migration[] = [
     name: "qa_attachment_retention",
     filename: "0024_qa_attachment_retention.sql",
   },
+  {
+    version: 25,
+    name: "qa_correction_lineage",
+    filename: "0025_qa_correction_lineage.sql",
+    rebuildsAReferencedTable: true,
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

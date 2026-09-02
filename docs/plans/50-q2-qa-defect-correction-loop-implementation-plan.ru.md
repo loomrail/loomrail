@@ -21,9 +21,11 @@
 
 ### Q2.2 — Durable state и migration
 
-- [ ] Добавить additive migration `correction_runs` и append-only `qa_retest_plans`.
-- [ ] Backfill existing StageAttempt/QARun/Review rows как initial cycle без correction identity.
-- [ ] Перестроить review/evidence uniqueness на per-cycle/per-authority без потери append-only истории.
+- [x] Добавить additive migration `correction_runs` и append-only `qa_retest_plans`.
+- [x] Backfill existing StageAttempt/QARun/Review rows и strict Event/receipt payloads как initial cycle без
+      correction identity.
+- [x] Перестроить StageAttempt/ReviewReport uniqueness на per-cycle без потери append-only истории.
+- [ ] Перестроить evidence uniqueness на per-authority и сохранить старые compact artifacts.
 - [ ] Атомарно писать FAILED evidence/defects + next CorrectionRun/retest plan/IMPLEMENT dispatch или HumanRequest.
 - [ ] Атомарно писать passing retest + SYSTEM defect resolutions + correction pass + ACCEPTANCE dispatch.
 - [ ] Покрыть command receipt, optimistic version, duplicate completion, restart и parallel-active rejection.
@@ -63,6 +65,8 @@
 
 ## 4. Первый implementation slice
 
-Contracts + pure `deriveQARetestPlan`/`decideQACorrectionLoop` и StageAttempt/Review/QARun lineage завершены с
-focused tests. Следующий slice — additive migration для CorrectionRun/RetestPlan и реальных lineage columns; daemon и
-UI до этой transaction boundary не должны самостоятельно интерпретировать correction transitions.
+Contracts + pure `deriveQARetestPlan`/`decideQACorrectionLoop`, lineage contracts и migration 0025 завершены с
+focused tests. Migration хранит bounded CorrectionRun/immutable QARetestPlan, различает FULL/RETEST QARun, делает
+StageAttempt attempt и ReviewReport round локальными для initial/correction cycle и ремонтирует старые strict JSON
+Events/receipts. Следующий slice — correction/authority provenance compact evidence и атомарные commands; daemon и UI
+до этой transaction boundary не должны самостоятельно интерпретировать correction transitions.

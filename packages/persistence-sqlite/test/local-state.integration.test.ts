@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -110,6 +110,59 @@ const countLegacyResultTrees = (raw: DatabaseSync): { events: number; commands: 
            WHERE tree.key IN ('stageAttempt', 'previousStageAttempt')
              AND tree.type = 'object'
              AND json_type(tree.value, '$.resultTree') IS NULL`,
+        )
+        .get() as { count: number }
+    ).count;
+  return { events: count("events", "data_json"), commands: count("commands", "result_json") };
+};
+
+const withoutQ2Lineage = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(withoutQ2Lineage);
+  if (value === null || typeof value !== "object") return value;
+  const result = Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, nested]) => [key, withoutQ2Lineage(nested)]),
+  );
+  if (
+    ("stage" in result && "attempt" in result && "pipelineRunId" in result) ||
+    ("providerRelation" in result && "reviewerAgentRunId" in result && "reviewedTree" in result) ||
+    ("reviewArtifactId" in result && "severity" in result && "reviewedTree" in result)
+  ) {
+    delete result["correctionRunId"];
+  }
+  if ("driverId" in result && "targetOrigin" in result && "plan" in result) {
+    delete result["scope"];
+  }
+  return result;
+};
+
+const countLegacyQ2Lineage = (raw: DatabaseSync): { events: number; commands: number } => {
+  const count = (table: "events" | "commands", column: "data_json" | "result_json"): number =>
+    (
+      raw
+        .prepare(
+          `SELECT COUNT(*) AS count FROM ${table}, json_tree(${table}.${column}) AS tree
+           WHERE tree.type = 'object' AND (
+             (
+               json_type(tree.value, '$.correctionRunId') IS NULL
+               AND (
+                 (json_type(tree.value, '$.stage') IS NOT NULL
+                   AND json_type(tree.value, '$.attempt') IS NOT NULL
+                   AND json_type(tree.value, '$.pipelineRunId') IS NOT NULL)
+                 OR (json_type(tree.value, '$.providerRelation') IS NOT NULL
+                   AND json_type(tree.value, '$.reviewerAgentRunId') IS NOT NULL
+                   AND json_type(tree.value, '$.reviewedTree') IS NOT NULL)
+                 OR (json_type(tree.value, '$.reviewArtifactId') IS NOT NULL
+                   AND json_type(tree.value, '$.severity') IS NOT NULL
+                   AND json_type(tree.value, '$.reviewedTree') IS NOT NULL)
+               )
+             )
+             OR (
+               json_type(tree.value, '$.scope') IS NULL
+               AND json_type(tree.value, '$.driverId') IS NOT NULL
+               AND json_type(tree.value, '$.targetOrigin') IS NOT NULL
+               AND json_type(tree.value, '$.plan') = 'object'
+             )
+           )`,
         )
         .get() as { count: number }
     ).count;
@@ -859,7 +912,7 @@ describe("SQLite local state", () => {
 
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -869,12 +922,662 @@ describe("SQLite local state", () => {
     backup.close();
   });
 
+  it("persists bounded QA correction lineage and local cycle numbering", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-q2-lineage"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-q2-lineage", created.workItem.id, 1, "READY"));
+    const qaOnlyTemplate: StartMockPipelineCommand["payload"]["template"] = {
+      schemaVersion: 1,
+      id: "q2-lineage-v1",
+      version: 1,
+      name: "Q2 lineage fixture",
+      stages: [{ stage: "QA", ordinal: 0, contextPack }],
+    };
+    const pipeline = localState.execute({
+      schemaVersion: 1,
+      commandId: "pipeline-q2-lineage",
+      correlationId: "correlation-pipeline-q2-lineage",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: qaOnlyTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    localState.close();
+    state = undefined;
+
+    const testedTree = "c".repeat(40);
+    const planHash = `sha256:${"d".repeat(64)}`;
+    const plan = {
+      schemaVersion: 1,
+      revision: 1,
+      contentHash: planHash,
+      targets: [
+        {
+          id: "mobile-dark-ru",
+          viewport: { width: 320, height: 720 },
+          locale: "ru-RU",
+          theme: "DARK",
+        },
+      ],
+      scenarios: [
+        {
+          id: "task-cockpit",
+          title: "Task Cockpit remains usable on mobile",
+          steps: [
+            {
+              id: "open",
+              title: "Open the Task Cockpit",
+              action: { type: "NAVIGATE", path: "/" },
+            },
+          ],
+          assertions: [
+            {
+              id: "no-overflow",
+              title: "The page does not overflow horizontally",
+              rule: { type: "NO_HORIZONTAL_OVERFLOW" },
+            },
+          ],
+        },
+      ],
+    };
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("PRAGMA foreign_keys = ON");
+    const assignment = raw
+      .prepare("SELECT id FROM squad_assignments WHERE pipeline_run_id = ?")
+      .get(pipeline.run.id) as { id: string };
+    const insertAgentRun = raw.prepare(
+      `INSERT INTO agent_runs (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id, ordinal,
+        squad_assignment_id, profile_id, profile_revision, profile_role, provider, status,
+        policy_snapshot_hash, started_at, finished_at, version
+      ) VALUES (?, 1, ?, ?, ?, ?, 1, ?, 'builtin.browser-qa', 1, 'BROWSER_QA', 'CODEX', ?, ?, ?, ?, ?)`,
+    );
+    insertAgentRun.run(
+      "q2-baseline-agent",
+      created.workItem.projectId,
+      created.workItem.id,
+      pipeline.run.id,
+      pipeline.stageAttempt.id,
+      assignment.id,
+      "SUCCEEDED",
+      `sha256:${"a".repeat(64)}`,
+      timestamp,
+      timestamp,
+      2,
+    );
+    raw
+      .prepare(
+        `INSERT INTO qa_runs (
+          id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+          agent_run_id, driver_id, tested_tree, target_origin, plan_json, correction_run_id,
+          retest_plan_id, status, error_code, error_summary, started_at, completed_at, version
+        ) VALUES (?, 1, ?, ?, ?, ?, ?, 'PLAYWRIGHT', ?, ?, ?, NULL, NULL,
+          'FAILED', NULL, NULL, ?, ?, 2)`,
+      )
+      .run(
+        "q2-baseline-qa-run",
+        created.workItem.projectId,
+        created.workItem.id,
+        pipeline.run.id,
+        pipeline.stageAttempt.id,
+        "q2-baseline-agent",
+        testedTree,
+        "http://127.0.0.1:4173",
+        JSON.stringify(plan),
+        timestamp,
+        timestamp,
+      );
+    raw
+      .prepare(
+        `INSERT INTO qa_defects (
+          id, schema_version, qa_run_id, project_id, work_item_id, tested_tree, ordinal,
+          severity, status, title, description, reproduction_json, target_id, scenario_id,
+          resolution_reason, created_at, resolved_at, version
+        ) VALUES (?, 1, ?, ?, ?, ?, 1, 'HIGH', 'OPEN', ?, ?, ?, ?, ?, NULL, ?, NULL, 1)`,
+      )
+      .run(
+        "q2-source-defect",
+        "q2-baseline-qa-run",
+        created.workItem.projectId,
+        created.workItem.id,
+        testedTree,
+        "Task Cockpit overflows on mobile",
+        "The page width exceeds the viewport.",
+        JSON.stringify(["Open the Task Cockpit at 320x720."]),
+        "mobile-dark-ru",
+        "task-cockpit",
+        timestamp,
+      );
+    raw
+      .prepare(
+        `INSERT INTO qa_evidence_bundles (
+          id, schema_version, qa_run_id, project_id, work_item_id, pipeline_run_id,
+          stage_attempt_id, tested_tree, verdict, environment_json, executions_json,
+          observations_json, attachment_ids_json, defect_ids_json, created_at
+        ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, 'FAILED', ?, ?, '[]', '[]', ?, ?)`,
+      )
+      .run(
+        "q2-source-evidence",
+        "q2-baseline-qa-run",
+        created.workItem.projectId,
+        created.workItem.id,
+        pipeline.run.id,
+        pipeline.stageAttempt.id,
+        testedTree,
+        JSON.stringify({
+          osFamily: "MACOS",
+          runtimeName: "NODE",
+          runtimeVersion: "24.7.0",
+          browserName: "CHROMIUM",
+          browserVersion: "140.0",
+        }),
+        JSON.stringify([
+          {
+            targetId: "mobile-dark-ru",
+            scenarioId: "task-cockpit",
+            durationMs: 90,
+            steps: [{ id: "open", status: "PASSED", durationMs: 40 }],
+            assertions: [{ id: "no-overflow", status: "FAILED", details: "24px overflow" }],
+          },
+        ]),
+        JSON.stringify(["q2-source-defect"]),
+        timestamp,
+      );
+    raw
+      .prepare(
+        `INSERT INTO qa_correction_runs (
+          id, schema_version, project_id, work_item_id, pipeline_run_id, ordinal,
+          source_qa_run_id, baseline_qa_run_id, source_evidence_bundle_id, source_tested_tree,
+          defect_ids_json, status, created_at, completed_at, version
+        ) VALUES (?, 1, ?, ?, ?, 1, ?, ?, ?, ?, ?, 'ACTIVE', ?, NULL, 1)`,
+      )
+      .run(
+        "q2-correction-1",
+        created.workItem.projectId,
+        created.workItem.id,
+        pipeline.run.id,
+        "q2-baseline-qa-run",
+        "q2-baseline-qa-run",
+        "q2-source-evidence",
+        testedTree,
+        JSON.stringify(["q2-source-defect"]),
+        timestamp,
+      );
+    raw
+      .prepare(
+        `INSERT INTO qa_retest_plans (
+          id, schema_version, project_id, work_item_id, pipeline_run_id, correction_run_id,
+          baseline_qa_run_id, source_qa_run_id, source_evidence_bundle_id,
+          baseline_plan_revision, baseline_plan_content_hash, cells_json, created_at
+        ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+      )
+      .run(
+        "q2-retest-plan-1",
+        created.workItem.projectId,
+        created.workItem.id,
+        pipeline.run.id,
+        "q2-correction-1",
+        "q2-baseline-qa-run",
+        "q2-baseline-qa-run",
+        "q2-source-evidence",
+        planHash,
+        JSON.stringify([
+          {
+            targetId: "mobile-dark-ru",
+            scenarioId: "task-cockpit",
+            reasons: ["FAILED_CHECK", "OPEN_DEFECT"],
+          },
+        ]),
+        timestamp,
+      );
+    raw
+      .prepare(
+        `INSERT INTO stage_attempts (
+          id, pipeline_run_id, project_id, work_item_id, correction_run_id, stage, attempt,
+          status, version, started_at, finished_at, failure_code, unproductive_sessions,
+          pack_share_backoffs, result_tree
+        ) VALUES (?, ?, ?, ?, ?, 'QA', 1, 'RUNNING', 1, ?, NULL, NULL, 0, 0, NULL)`,
+      )
+      .run(
+        "q2-correction-qa-attempt",
+        pipeline.run.id,
+        created.workItem.projectId,
+        created.workItem.id,
+        "q2-correction-1",
+        timestamp,
+      );
+    const insertReviewAttempt = raw.prepare(
+      `INSERT INTO stage_attempts (
+        id, pipeline_run_id, project_id, work_item_id, correction_run_id, stage, attempt,
+        status, version, started_at, finished_at, failure_code, unproductive_sessions,
+        pack_share_backoffs, result_tree
+      ) VALUES (?, ?, ?, ?, ?, 'REVIEW', 1, 'SUCCEEDED', 2, ?, ?, NULL, 0, 0, ?)`,
+    );
+    insertReviewAttempt.run(
+      "q2-initial-review-attempt",
+      pipeline.run.id,
+      created.workItem.projectId,
+      created.workItem.id,
+      null,
+      timestamp,
+      timestamp,
+      testedTree,
+    );
+    insertReviewAttempt.run(
+      "q2-correction-review-attempt",
+      pipeline.run.id,
+      created.workItem.projectId,
+      created.workItem.id,
+      "q2-correction-1",
+      timestamp,
+      timestamp,
+      testedTree,
+    );
+    const insertReviewAgentRun = raw.prepare(
+      `INSERT INTO agent_runs (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id, ordinal,
+        squad_assignment_id, profile_id, profile_revision, profile_role, provider, status,
+        policy_snapshot_hash, started_at, finished_at, version
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'SUCCEEDED', ?, ?, ?, 2)`,
+    );
+    const reviewAgents = [
+      ["q2-initial-review-author", "q2-initial-review-attempt", 1, "builtin.developer", "DEVELOPER", "CODEX"],
+      [
+        "q2-initial-reviewer",
+        "q2-initial-review-attempt",
+        2,
+        "builtin.code-reviewer",
+        "CODE_REVIEWER",
+        "CLAUDE_CODE",
+      ],
+      [
+        "q2-correction-review-author",
+        "q2-correction-review-attempt",
+        1,
+        "builtin.developer",
+        "DEVELOPER",
+        "CODEX",
+      ],
+      [
+        "q2-correction-reviewer",
+        "q2-correction-review-attempt",
+        2,
+        "builtin.code-reviewer",
+        "CODE_REVIEWER",
+        "CLAUDE_CODE",
+      ],
+    ] as const;
+    for (const [id, stageAttemptId, ordinal, profileId, profileRole, provider] of reviewAgents) {
+      insertReviewAgentRun.run(
+        id,
+        created.workItem.projectId,
+        created.workItem.id,
+        pipeline.run.id,
+        stageAttemptId,
+        ordinal,
+        assignment.id,
+        profileId,
+        profileRole,
+        provider,
+        `sha256:${"e".repeat(64)}`,
+        timestamp,
+        timestamp,
+      );
+    }
+    const insertReviewReport = raw.prepare(
+      `INSERT INTO review_reports (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+        correction_run_id, author_agent_run_id, reviewer_agent_run_id, provider_relation,
+        reviewed_tree, round, title, summary, checks_json, verdict, finding_ids_json, created_at
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, 'CROSS_PROVIDER', ?, 1, ?, ?, ?, 'PASSED', '[]', ?)`,
+    );
+    insertReviewReport.run(
+      "q2-initial-review-report",
+      created.workItem.projectId,
+      created.workItem.id,
+      pipeline.run.id,
+      "q2-initial-review-attempt",
+      null,
+      "q2-initial-review-author",
+      "q2-initial-reviewer",
+      testedTree,
+      "Initial review",
+      "The initial review passed.",
+      JSON.stringify(["Reviewed the initial delivery tree."]),
+      timestamp,
+    );
+    insertReviewReport.run(
+      "q2-correction-review-report",
+      created.workItem.projectId,
+      created.workItem.id,
+      pipeline.run.id,
+      "q2-correction-review-attempt",
+      "q2-correction-1",
+      "q2-correction-review-author",
+      "q2-correction-reviewer",
+      testedTree,
+      "Correction review",
+      "The correction review passed.",
+      JSON.stringify(["Reviewed the correction tree independently."]),
+      timestamp,
+    );
+    insertAgentRun.run(
+      "q2-retest-agent",
+      created.workItem.projectId,
+      created.workItem.id,
+      pipeline.run.id,
+      "q2-correction-qa-attempt",
+      assignment.id,
+      "RUNNING",
+      `sha256:${"b".repeat(64)}`,
+      timestamp,
+      null,
+      1,
+    );
+    raw
+      .prepare(
+        `INSERT INTO qa_runs (
+          id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+          agent_run_id, driver_id, tested_tree, target_origin, plan_json, correction_run_id,
+          retest_plan_id, status, error_code, error_summary, started_at, completed_at, version
+        ) VALUES (?, 1, ?, ?, ?, ?, ?, 'PLAYWRIGHT', ?, ?, ?, ?, ?,
+          'RUNNING', NULL, NULL, ?, NULL, 1)`,
+      )
+      .run(
+        "q2-retest-qa-run",
+        created.workItem.projectId,
+        created.workItem.id,
+        pipeline.run.id,
+        "q2-correction-qa-attempt",
+        "q2-retest-agent",
+        testedTree,
+        "http://127.0.0.1:4173",
+        JSON.stringify(plan),
+        "q2-correction-1",
+        "q2-retest-plan-1",
+        timestamp,
+      );
+
+    expect(() => {
+      raw.exec(`UPDATE qa_retest_plans SET cells_json = '[]' WHERE id = 'q2-retest-plan-1'`);
+    }).toThrow(/append-only/);
+    expect(() => {
+      raw.exec(`
+        INSERT INTO stage_attempts (
+          id, pipeline_run_id, project_id, work_item_id, correction_run_id, stage, attempt,
+          status, version, started_at, finished_at, failure_code, unproductive_sessions,
+          pack_share_backoffs, result_tree
+        ) SELECT
+          'q2-duplicate-cycle-attempt', pipeline_run_id, project_id, work_item_id,
+          correction_run_id, stage, attempt, status, version, started_at, finished_at,
+          failure_code, unproductive_sessions, pack_share_backoffs, result_tree
+        FROM stage_attempts WHERE id = 'q2-correction-qa-attempt'
+      `);
+    }).toThrow(/UNIQUE constraint failed/);
+    expect(() => {
+      raw.exec(`
+        INSERT INTO qa_correction_runs (
+          id, schema_version, project_id, work_item_id, pipeline_run_id, ordinal,
+          source_qa_run_id, baseline_qa_run_id, source_evidence_bundle_id, source_tested_tree,
+          defect_ids_json, status, created_at, completed_at, version
+        ) SELECT
+          'q2-correction-2', schema_version, project_id, work_item_id, pipeline_run_id, 2,
+          source_qa_run_id, baseline_qa_run_id, source_evidence_bundle_id, source_tested_tree,
+          defect_ids_json, status, created_at, completed_at, version
+        FROM qa_correction_runs WHERE id = 'q2-correction-1'
+      `);
+    }).toThrow(/UNIQUE constraint failed/);
+    expect(() => {
+      raw
+        .prepare(
+          `INSERT INTO qa_runs (
+            id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+            agent_run_id, driver_id, tested_tree, target_origin, plan_json, correction_run_id,
+            retest_plan_id, status, error_code, error_summary, started_at, completed_at, version
+          ) VALUES ('q2-half-scoped-run', 1, ?, ?, ?, ?, 'missing-agent', 'PLAYWRIGHT', ?, ?, ?, ?,
+            NULL, 'RUNNING', NULL, NULL, ?, NULL, 1)`,
+        )
+        .run(
+          created.workItem.projectId,
+          created.workItem.id,
+          pipeline.run.id,
+          "q2-correction-qa-attempt",
+          testedTree,
+          "http://127.0.0.1:4173",
+          JSON.stringify(plan),
+          "q2-correction-1",
+          timestamp,
+        );
+    }).toThrow(/correction scope is invalid/);
+    expect(raw.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    raw.close();
+
+    const reopened = await open();
+    expect(reopened.query({ type: "GET_QA_RUN", qaRunId: "q2-retest-qa-run" })).toMatchObject({
+      type: "QA_RUN",
+      qaRun: {
+        scope: {
+          type: "RETEST",
+          correctionRunId: "q2-correction-1",
+          retestPlanId: "q2-retest-plan-1",
+        },
+      },
+    });
+    const reviewReports = reopened.query({
+      type: "LIST_REVIEW_REPORTS",
+      pipelineRunId: pipeline.run.id,
+    });
+    if (reviewReports.type !== "REVIEW_REPORTS") throw new Error("Expected review reports");
+    expect(reviewReports.reports).toHaveLength(2);
+    expect(reviewReports.reports.find(({ id }) => id === "q2-initial-review-report")).toMatchObject({
+      correctionRunId: null,
+      round: 1,
+    });
+    expect(reviewReports.reports.find(({ id }) => id === "q2-correction-review-report")).toMatchObject({
+      correctionRunId: "q2-correction-1",
+      round: 1,
+    });
+    const snapshot = reopened.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    if (snapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected workflow snapshot");
+    expect(
+      snapshot.snapshot.stageAttempts.filter(({ stage, attempt }) => stage === "QA" && attempt === 1),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: pipeline.stageAttempt.id, correctionRunId: null }),
+        expect.objectContaining({
+          id: "q2-correction-qa-attempt",
+          correctionRunId: "q2-correction-1",
+        }),
+      ]),
+    );
+  });
+
+  it("backfills Q2 lineage in strict Events and command receipts", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-pre-q2-history"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-pre-q2-history", created.workItem.id, 1, "READY"));
+    const startCommand: StartMockPipelineCommand = {
+      schemaVersion: 1,
+      commandId: "pipeline-pre-q2-history",
+      correlationId: "correlation-pipeline-pre-q2-history",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: mockTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    };
+    const started = localState.execute(startCommand);
+    if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    const qaRun = {
+      schemaVersion: 1,
+      id: "pre-q2-qa-run",
+      projectId: created.workItem.projectId,
+      workItemId: created.workItem.id,
+      pipelineRunId: started.run.id,
+      stageAttemptId: started.stageAttempt.id,
+      agentRunId: "pre-q2-agent-run",
+      driverId: "PLAYWRIGHT",
+      testedTree: "a".repeat(40),
+      targetOrigin: "http://127.0.0.1:4173",
+      plan: {
+        schemaVersion: 1,
+        revision: 1,
+        contentHash: `sha256:${"b".repeat(64)}`,
+        targets: [
+          {
+            id: "desktop-light-en",
+            viewport: { width: 1280, height: 800 },
+            locale: "en-US",
+            theme: "LIGHT",
+          },
+        ],
+        scenarios: [
+          {
+            id: "task-cockpit",
+            title: "Task Cockpit opens",
+            steps: [
+              {
+                id: "open",
+                title: "Open Task Cockpit",
+                action: { type: "NAVIGATE", path: "/" },
+              },
+            ],
+            assertions: [
+              {
+                id: "visible",
+                title: "Task Cockpit is visible",
+                rule: { type: "VISIBLE", locator: { by: "TEXT", value: "Current work" } },
+              },
+            ],
+          },
+        ],
+      },
+      scope: { type: "FULL" },
+      status: "RUNNING",
+      error: null,
+      startedAt: timestamp,
+      completedAt: null,
+      version: 1,
+    };
+    localState.close();
+    state = undefined;
+
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("DROP TRIGGER events_are_append_only_update");
+    raw.exec("DROP TRIGGER commands_are_append_only_update");
+    raw
+      .prepare(
+        `INSERT INTO events (
+          id, schema_version, type, aggregate_type, aggregate_id, project_id,
+          actor_type, actor_id, occurred_at, correlation_id, data_json
+        ) VALUES (?, 1, 'QA_RUN_RESERVED', 'WORK_ITEM', ?, ?, 'SYSTEM', 'local-daemon', ?, ?, ?)`,
+      )
+      .run(
+        "event-pre-q2-qa-run",
+        created.workItem.id,
+        created.workItem.projectId,
+        timestamp,
+        "correlation-pre-q2-qa-run",
+        JSON.stringify({ qaRun }),
+      );
+    raw
+      .prepare(
+        `INSERT INTO commands (command_id, command_type, input_hash, result_json, created_at)
+         VALUES (?, 'LEGACY_QA_FIXTURE', ?, ?, ?)`,
+      )
+      .run("receipt-pre-q2-qa-run", "c".repeat(64), JSON.stringify({ qaRun }), timestamp);
+    for (const row of raw.prepare("SELECT sequence, data_json FROM events").all() as {
+      sequence: number;
+      data_json: string;
+    }[]) {
+      const legacy = JSON.stringify(withoutQ2Lineage(JSON.parse(row.data_json)));
+      raw.prepare("UPDATE events SET data_json = ? WHERE sequence = ?").run(legacy, row.sequence);
+    }
+    for (const row of raw.prepare("SELECT command_id, result_json FROM commands").all() as {
+      command_id: string;
+      result_json: string;
+    }[]) {
+      const legacy = JSON.stringify(withoutQ2Lineage(JSON.parse(row.result_json)));
+      raw.prepare("UPDATE commands SET result_json = ? WHERE command_id = ?").run(legacy, row.command_id);
+    }
+    const before = countLegacyQ2Lineage(raw);
+    expect(before.events).toBeGreaterThan(1);
+    expect(before.commands).toBeGreaterThan(1);
+    raw.exec(`
+      CREATE TRIGGER events_are_append_only_update
+      BEFORE UPDATE ON events BEGIN
+        SELECT RAISE(ABORT, 'events are append-only');
+      END;
+      CREATE TRIGGER commands_are_append_only_update
+      BEFORE UPDATE ON commands BEGIN
+        SELECT RAISE(ABORT, 'command receipts are append-only');
+      END;
+    `);
+    raw.close();
+
+    const skipped = await open();
+    expect(skipped.startup.appliedMigrations).toEqual([]);
+    expect(() => skipped.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id })).toThrow(
+      StateStoreError,
+    );
+    expect(() => skipped.execute(startCommand)).toThrow();
+    skipped.close();
+    state = undefined;
+
+    const migration = await readFile(
+      new URL("../migrations/0025_qa_correction_lineage.sql", import.meta.url),
+      "utf8",
+    );
+    const historyMarker = "-- Required fields were added to strict JSON contracts";
+    const historyOffset = migration.indexOf(historyMarker);
+    expect(historyOffset).toBeGreaterThan(0);
+    const repair = new DatabaseSync(databasePath);
+    repair.exec(migration.slice(historyOffset));
+    expect(countLegacyQ2Lineage(repair)).toEqual({ events: 0, commands: 0 });
+    repair.close();
+
+    const migrated = await open();
+    const events = migrated.query({ type: "LIST_EVENTS", aggregateId: created.workItem.id });
+    if (events.type !== "EVENTS") throw new Error("Expected repaired events");
+    expect(events.events.find(({ id }) => id === "event-pre-q2-qa-run")).toMatchObject({
+      type: "QA_RUN_RESERVED",
+      data: { qaRun: { scope: { type: "FULL" } } },
+    });
+    expect(migrated.execute(startCommand)).toMatchObject({
+      type: "PIPELINE_STARTED",
+      replayed: true,
+      stageAttempt: { correctionRunId: null },
+    });
+  });
+
   it("migrates and reads bounded independent review reports and findings", async () => {
     const localState = await open();
     localState.execute(registerProject());
     const created = localState.execute(createWorkItem());
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
     localState.execute(moveWorkItem("ready-review-state", created.workItem.id, 1, "READY"));
+    const reviewOnlyTemplate: StartMockPipelineCommand["payload"]["template"] = {
+      schemaVersion: 1,
+      id: "review-state-v1",
+      version: 1,
+      name: "Review state fixture",
+      stages: [{ stage: "REVIEW", ordinal: 0, contextPack }],
+    };
     localState.execute({
       schemaVersion: 1,
       commandId: "start-review-state",
@@ -884,7 +1587,7 @@ describe("SQLite local state", () => {
       payload: {
         workItemId: created.workItem.id,
         expectedVersion: 2,
-        template: mockTemplate,
+        template: reviewOnlyTemplate,
         budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
       },
     });

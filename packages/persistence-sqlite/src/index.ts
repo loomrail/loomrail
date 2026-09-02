@@ -596,6 +596,7 @@ const reviewReportRowSchema = z.object({
   work_item_id: z.string(),
   pipeline_run_id: z.string(),
   stage_attempt_id: z.string(),
+  correction_run_id: z.string().nullable(),
   author_agent_run_id: z.string(),
   reviewer_agent_run_id: z.string(),
   provider_relation: z.string(),
@@ -616,6 +617,7 @@ const reviewFindingRowSchema = z.object({
   work_item_id: z.string(),
   pipeline_run_id: z.string(),
   stage_attempt_id: z.string(),
+  correction_run_id: z.string().nullable(),
   review_artifact_id: z.string(),
   reviewed_tree: z.string(),
   ordinal: z.number().int(),
@@ -637,25 +639,32 @@ const reviewFindingRowSchema = z.object({
   version: z.number().int(),
 });
 
-const qaRunRowSchema = z.object({
-  id: z.string(),
-  schema_version: z.number().int(),
-  project_id: z.string(),
-  work_item_id: z.string(),
-  pipeline_run_id: z.string(),
-  stage_attempt_id: z.string(),
-  agent_run_id: z.string(),
-  driver_id: z.string(),
-  tested_tree: z.string(),
-  target_origin: z.string(),
-  plan_json: z.string(),
-  status: z.string(),
-  error_code: z.string().nullable(),
-  error_summary: z.string().nullable(),
-  started_at: z.string(),
-  completed_at: z.string().nullable(),
-  version: z.number().int(),
-});
+const qaRunRowSchema = z
+  .object({
+    id: z.string(),
+    schema_version: z.number().int(),
+    project_id: z.string(),
+    work_item_id: z.string(),
+    pipeline_run_id: z.string(),
+    stage_attempt_id: z.string(),
+    agent_run_id: z.string(),
+    driver_id: z.string(),
+    tested_tree: z.string(),
+    target_origin: z.string(),
+    plan_json: z.string(),
+    correction_run_id: z.string().nullable(),
+    retest_plan_id: z.string().nullable(),
+    status: z.string(),
+    error_code: z.string().nullable(),
+    error_summary: z.string().nullable(),
+    started_at: z.string(),
+    completed_at: z.string().nullable(),
+    version: z.number().int(),
+  })
+  .refine(
+    (row) => (row.correction_run_id === null) === (row.retest_plan_id === null),
+    "Stored QA correction scope lineage must be complete",
+  );
 
 const qaEvidenceBundleRowSchema = z.object({
   id: z.string(),
@@ -742,6 +751,7 @@ const stageAttemptRowSchema = z.object({
   pipeline_run_id: z.string(),
   project_id: z.string(),
   work_item_id: z.string(),
+  correction_run_id: z.string().nullable(),
   stage: z.string(),
   attempt: z.number().int(),
   status: z.string(),
@@ -1378,7 +1388,7 @@ const reviewReportFromRow = (value: unknown): ReviewReport => {
     workItemId: row.work_item_id,
     pipelineRunId: row.pipeline_run_id,
     stageAttemptId: row.stage_attempt_id,
-    correctionRunId: null,
+    correctionRunId: row.correction_run_id,
     authorAgentRunId: row.author_agent_run_id,
     reviewerAgentRunId: row.reviewer_agent_run_id,
     providerRelation: row.provider_relation,
@@ -1402,7 +1412,7 @@ const reviewFindingFromRow = (value: unknown): ReviewFinding => {
     workItemId: row.work_item_id,
     pipelineRunId: row.pipeline_run_id,
     stageAttemptId: row.stage_attempt_id,
-    correctionRunId: null,
+    correctionRunId: row.correction_run_id,
     reviewArtifactId: row.review_artifact_id,
     reviewedTree: row.reviewed_tree,
     ordinal: row.ordinal,
@@ -1441,7 +1451,14 @@ const qaRunFromRow = (value: unknown): QARun => {
     testedTree: row.tested_tree,
     targetOrigin: row.target_origin,
     plan: parseJson(row.plan_json),
-    scope: { type: "FULL" },
+    scope:
+      row.correction_run_id === null && row.retest_plan_id === null
+        ? { type: "FULL" }
+        : {
+            type: "RETEST",
+            correctionRunId: row.correction_run_id,
+            retestPlanId: row.retest_plan_id,
+          },
     status: row.status,
     error:
       row.error_code === null || row.error_summary === null
@@ -1584,7 +1601,7 @@ const stageAttemptFromRow = (value: unknown): StageAttempt => {
     pipelineRunId: row.pipeline_run_id,
     projectId: row.project_id,
     workItemId: row.work_item_id,
-    correctionRunId: null,
+    correctionRunId: row.correction_run_id,
     stage: row.stage,
     attempt: row.attempt,
     status: row.status,
@@ -2493,9 +2510,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const insertQARun = database.prepare(
       `INSERT INTO qa_runs (
         id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
-        agent_run_id, driver_id, tested_tree, target_origin, plan_json, status,
-        error_code, error_summary, started_at, completed_at, version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        agent_run_id, driver_id, tested_tree, target_origin, plan_json, correction_run_id,
+        retest_plan_id, status, error_code, error_summary, started_at, completed_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const completeQARun = database.prepare(
       `UPDATE qa_runs SET status = ?, error_code = ?, error_summary = ?, completed_at = ?, version = ?
@@ -4177,16 +4194,17 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       database
         .prepare(
           `INSERT INTO stage_attempts (
-            id, pipeline_run_id, project_id, work_item_id, stage, attempt, status, version,
+            id, pipeline_run_id, project_id, work_item_id, correction_run_id, stage, attempt, status, version,
             started_at, finished_at, failure_code, unproductive_sessions, pack_share_backoffs,
             result_tree
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           attempt.id,
           attempt.pipelineRunId,
           attempt.projectId,
           attempt.workItemId,
+          attempt.correctionRunId,
           attempt.stage,
           attempt.attempt,
           attempt.status,
@@ -4366,9 +4384,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO review_reports (
             id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
-            author_agent_run_id, reviewer_agent_run_id, provider_relation, reviewed_tree, round,
-            title, summary, checks_json, verdict, finding_ids_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            correction_run_id, author_agent_run_id, reviewer_agent_run_id, provider_relation,
+            reviewed_tree, round, title, summary, checks_json, verdict, finding_ids_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           report.id,
@@ -4377,6 +4395,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           report.workItemId,
           report.pipelineRunId,
           report.stageAttemptId,
+          report.correctionRunId,
           report.authorAgentRunId,
           report.reviewerAgentRunId,
           report.providerRelation,
@@ -4396,10 +4415,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO review_findings (
             id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
-            review_artifact_id, reviewed_tree, ordinal, severity, status, title, description,
+            correction_run_id, review_artifact_id, reviewed_tree, ordinal, severity, status, title, description,
             path, start_line, end_line, reproduction, criterion, suggested_fix, resolution_reason,
             resolved_by_type, resolved_by_id, created_at, resolved_at, version
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           finding.id,
@@ -4408,6 +4427,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           finding.workItemId,
           finding.pipelineRunId,
           finding.stageAttemptId,
+          finding.correctionRunId,
           finding.reviewArtifactId,
           finding.reviewedTree,
           finding.ordinal,
@@ -5775,6 +5795,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           qaRun.testedTree,
           qaRun.targetOrigin,
           JSON.stringify(qaRun.plan),
+          qaRun.scope.type === "RETEST" ? qaRun.scope.correctionRunId : null,
+          qaRun.scope.type === "RETEST" ? qaRun.scope.retestPlanId : null,
           qaRun.status,
           null,
           null,

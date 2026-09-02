@@ -1232,8 +1232,9 @@ human acceptance; у каждого criterion есть evidence.
 **Implementation checkpoint (2026-09-02):** Q1 deterministic Playwright baseline реализован и прошёл independent
 browser/clean-install gates на macOS и Windows; общий release gate остаётся красным только на lint параллельно
 разрабатываемого landing. Q2 durable Defect correction loop активен: отдельный от R1 `CorrectionRun`, locked scoped
-retest + regression subset и bounded 2 automatic + 1 owner cycle зафиксированы в ADR-0008 и планах 49–50. Новая
-npm-версия до полного зелёного gate не публикуется.
+retest + regression subset и bounded 2 automatic + 1 owner cycle зафиксированы в ADR-0008 и планах 49–50. Migration
+0025 уже сохраняет CorrectionRun/QARetestPlan и явную StageAttempt/Review/QARun lineage, включая безопасный backfill
+старых strict Events/command receipts. Новая npm-версия до полного зелёного gate не публикуется.
 
 ### Phase 8 — Public Alpha hardening (3–4 недели)
 
