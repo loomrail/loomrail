@@ -78,8 +78,8 @@ Named gate последовательно запускает:
 - `daemon`: worker/provider/scaffold/MCP/QA failures, startup reconciliation, idempotency and HTTP fail-closed paths;
 - process drill: real daemon `SIGKILL` → new process → durable exactly-once interruption.
 
-Это не новый parallel test runner: suites идут последовательно, чтобы shared OS process/SQLite timing не превращал
-reliability gate в flaky resource race.
+Это не новый parallel test runner: suites идут последовательно, а daemon Vitest files используют один worker, чтобы
+shared OS process/SQLite timing не превращал reliability gate в flaky resource race.
 
 ## 6. Security and recovery boundaries
 

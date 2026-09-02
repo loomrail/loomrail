@@ -23,7 +23,14 @@ for (const workspace of [
   "@loomrail/browser-qa",
   "@loomrail/daemon",
 ]) {
-  runPnpm(["--filter", workspace, "test"]);
+  if (workspace === "@loomrail/daemon") {
+    // Daemon files each own real SQLite/process/server lifecycles. Running those files concurrently
+    // made the Windows release runner exhaust otherwise-valid per-test deadlines under contention,
+    // which is the resource race this reliability gate is meant to avoid rather than measure.
+    runPnpm(["--filter", workspace, "exec", "vitest", "run", "--maxWorkers=1"]);
+  } else {
+    runPnpm(["--filter", workspace, "test"]);
+  }
 }
 
 execFileSync(process.execPath, [resolve(repositoryRoot, "scripts/verify-crash-recovery.mjs")], {

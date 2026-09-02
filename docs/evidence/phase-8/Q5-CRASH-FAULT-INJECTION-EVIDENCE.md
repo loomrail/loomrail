@@ -80,3 +80,9 @@ CI run 33657047573 proved the production audit and clean-install path but initia
 because a fresh Verify runner had the Playwright package without its Chromium binary. The gate correctly refused to
 reinterpret that `DRIVER_CRASHED` result as BrowserDriver fault evidence. CI now installs Chromium explicitly before
 the unchanged matrix; replacement cross-platform evidence remains pending.
+
+Replacement run 33657337447 proved the macOS fault gate and every clean-install/browser job. Its Windows daemon suite
+passed 183 of 188 tests but reported three failures, including one setup hook, after existing deadlines were exhausted
+while test files competed for SQLite/process/server resources. The Q5 runner now executes daemon files with one
+Vitest worker, matching the specification's sequential reliability boundary without lengthening test deadlines. A
+replacement Windows result remains pending.
