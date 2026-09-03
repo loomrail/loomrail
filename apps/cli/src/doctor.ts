@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, constants, stat } from "node:fs/promises";
+import { access, constants, readFile, stat } from "node:fs/promises";
 import { platform as runtimePlatform } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -143,9 +143,55 @@ export const inspectGit = (
     });
   });
 
-const runtimeCheck = (nodeVersion: string): DoctorReport["checks"]["runtime"] => {
-  const [major = 0, minor = 0] = nodeVersion.split(".").map(Number);
-  const supported = major === 24 && minor >= 19;
+type SupportedNodeRange = {
+  minimum: readonly [major: number, minor: number];
+  maximumMajorExclusive: number;
+};
+
+const parseSupportedNodeRange = (value: unknown): SupportedNodeRange | null => {
+  if (typeof value !== "string") return null;
+  const match = /^>=(\d+)\.(\d+) <(\d+)$/.exec(value);
+  if (match === null) return null;
+  const [, minimumMajorText, minimumMinorText, maximumMajorText] = match;
+  if (minimumMajorText === undefined || minimumMinorText === undefined || maximumMajorText === undefined) {
+    return null;
+  }
+  const minimumMajor = Number(minimumMajorText);
+  const minimumMinor = Number(minimumMinorText);
+  const maximumMajorExclusive = Number(maximumMajorText);
+  if (maximumMajorExclusive <= minimumMajor) return null;
+  return { minimum: [minimumMajor, minimumMinor], maximumMajorExclusive };
+};
+
+const readSupportedNodeRange = async (): Promise<SupportedNodeRange | null> => {
+  try {
+    // Both the workspace build and the installed package keep this file at apps/cli/dist. The
+    // package manifest is therefore three levels above the executing module in either layout.
+    // Doctor reads the supported range from that authority instead of restating its numeric floor.
+    const raw = await readFile(new URL("../../../package.json", import.meta.url), "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || !("engines" in parsed)) return null;
+    const engines = parsed.engines;
+    if (typeof engines !== "object" || engines === null || !("node" in engines)) return null;
+    return parseSupportedNodeRange(engines.node);
+  } catch {
+    return null;
+  }
+};
+
+const runtimeCheck = (
+  nodeVersion: string,
+  range: SupportedNodeRange | null,
+): DoctorReport["checks"]["runtime"] => {
+  const version = /^(\d+)\.(\d+)\.(\d+)/.exec(nodeVersion);
+  const major = Number(version?.[1] ?? Number.NaN);
+  const minor = Number(version?.[2] ?? Number.NaN);
+  const supported =
+    range !== null &&
+    Number.isFinite(major) &&
+    Number.isFinite(minor) &&
+    major < range.maximumMajorExclusive &&
+    (major > range.minimum[0] || (major === range.minimum[0] && minor >= range.minimum[1]));
   return {
     status: supported ? "PASS" : "FAIL",
     code: supported ? "RUNTIME_SUPPORTED" : "RUNTIME_UNSUPPORTED",
@@ -222,14 +268,15 @@ const reportStatus = (statuses: readonly CheckStatus[]): CheckStatus =>
 export const collectDoctorReport = async (dependencies: DoctorDependencies = {}): Promise<DoctorReport> => {
   const environment = dependencies.environment ?? process.env;
   const dataLocation = dependencies.dataLocation ?? resolveLoomrailDataLocation({ environment });
-  const [git, dataDirectory, stateDatabase, providers] = await Promise.all([
+  const [git, dataDirectory, stateDatabase, providers, supportedNodeRange] = await Promise.all([
     (dependencies.inspectGit ?? (() => inspectGit(environment)))(),
     (dependencies.inspectDataDirectory ?? inspectDataDirectory)(dataLocation.directory),
     (dependencies.inspectStateDatabase ?? inspectStateDatabase)(join(dataLocation.directory, "state.sqlite")),
     (dependencies.inspectProviders ?? (() => inspectProviderAvailability(environment)))().catch(() => null),
+    readSupportedNodeRange(),
   ]);
   const checks: DoctorReport["checks"] = {
-    runtime: runtimeCheck(dependencies.nodeVersion ?? process.versions.node),
+    runtime: runtimeCheck(dependencies.nodeVersion ?? process.versions.node, supportedNodeRange),
     git: gitCheck(git),
     dataDirectory: dataDirectoryCheck(dataDirectory, dataLocation.source),
     stateDatabase: stateDatabaseCheck(stateDatabase),
