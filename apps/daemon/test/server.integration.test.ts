@@ -2891,6 +2891,11 @@ describe("local daemon session and state boundary", () => {
 // costs nothing in the passing case, since a correct answer arrives near-instantly; only a genuinely
 // regressed handler ever waits it out.
 const BOOT_ANSWER_BUDGET_MS = 15_000;
+// This outer budget includes fixture repository creation, daemon startup, the behavioural race and
+// Windows handle cleanup. Keep it separate from BOOT_ANSWER_BUDGET_MS: a handler that waits for the
+// gated stage still fails after 15 seconds, while a contended runner gets enough time to reach that
+// assertion and close SQLite before Vitest interrupts `finally`.
+const WORKER_TEST_LIFECYCLE_TIMEOUT_MS = 60_000;
 
 // Task 8 (A1.5 spec D4-D6): the dispatch queue moved off the startup path and the four mutation
 // handlers onto a background `SessionWorker`. Every test here uses `gatedAdapter` (test/gated-
@@ -2898,9 +2903,9 @@ const BOOT_ANSWER_BUDGET_MS = 15_000;
 // regressed back to awaiting the drain in-line would leave its test hanging on the same gate the
 // adapter is held by, rather than answering early -- the whole point of this milestone.
 //
-// The describe-level timeout (well above BOOT_ANSWER_BUDGET_MS) exists so a regression is reported
-// by the race's own assertion, not by vitest's blanket per-test timeout winning the tie against it.
-describe("background session worker wiring", { timeout: 20_000 }, () => {
+// The describe-level timeout exists so a regression is reported by the race's own assertion, not
+// by Vitest interrupting slow cross-platform fixture setup or cleanup around that assertion.
+describe("background session worker wiring", { timeout: WORKER_TEST_LIFECYCLE_TIMEOUT_MS }, () => {
   const temporaryDirectories: string[] = [];
   let databasePath = "";
   let token = "";
@@ -3240,7 +3245,7 @@ describe("background session worker wiring", { timeout: 20_000 }, () => {
       // real worktree; that is `git` subprocesses on top of two daemons, and outlives vitest's 5s
       // default under a loaded `pnpm test`. The race above still bounds the behaviour under test.
     },
-    30_000,
+    WORKER_TEST_LIFECYCLE_TIMEOUT_MS,
   );
 
   it("closes while an attempt is still in flight and asks it to abort", async () => {
