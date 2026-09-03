@@ -20,6 +20,7 @@
     "test:unit": "pnpm -r --sort --if-present test:unit",
     "test:integration": "pnpm -r --sort --if-present test:integration",
     "test:fault-injection": "node scripts/run-fault-injection.mjs",
+    "test:provider-compatibility": "pnpm --filter \"@loomrail/provider-codex...\" --filter \"@loomrail/provider-claude-code...\" build && pnpm exec vitest run packages/provider-codex/test/diagnostics.unit.test.ts packages/provider-claude-code/test/diagnostics.unit.test.ts",
     "test:community": "node scripts/verify-community-files.mjs",
     "test:reporting": "pnpm build && pnpm --dir packages/contracts exec vitest run test/reporting.unit.test.ts && pnpm --dir packages/domain exec vitest run test/reporting.unit.test.ts && pnpm --dir packages/persistence-sqlite exec vitest run test/local-state.integration.test.ts -t \"privacy-safe reporting facts\" && pnpm --dir apps/daemon exec vitest run test/reporting.unit.test.ts test/server.integration.test.ts -t \"reporting runtime categories|privacy-safe local Insights|bounded crash preview\" --maxWorkers=1 && pnpm --dir apps/web exec vitest run src/reportDownload.test.ts",
     "test:samples": "node scripts/verify-samples.mjs",

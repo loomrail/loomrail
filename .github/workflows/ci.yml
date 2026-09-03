@@ -65,7 +65,7 @@ jobs:
       # Exercise the fixed-argv child-process boundary on both supported platforms before a
       # protected source lint failure can hide the compatibility evidence.
       - name: Verify provider compatibility probes
-        run: pnpm exec vitest run apps/daemon/test/provider-compatibility.unit.test.ts
+        run: pnpm test:provider-compatibility
 
       # Reporting is a privacy boundary. Run its exact schema/domain/SQLite/daemon/web tests on both
       # platforms before protected landing lint can prevent the repository-wide suite from starting.
