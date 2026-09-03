@@ -105,6 +105,7 @@ export const contextSourceKindSchema = z.enum([
   "QA_EVIDENCE_BUNDLE",
   "QA_RETEST_PLAN",
   "QA_DEFECT",
+  "PROJECT_CONSTITUTION_VERSION",
 ]);
 export const contextPackSpecSourceSchema = z.enum(["WORKFLOW_TEMPLATE", "ROLE_PLAYBOOK"]);
 export const contextPackOmittedReasonSchema = z.literal("CONTEXT_BUDGET");

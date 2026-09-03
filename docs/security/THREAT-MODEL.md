@@ -824,7 +824,7 @@ correction.
 **T19 — a write-enabled, network-enabled agent runs in a tree carrying the owner's uncommitted work.** Rated
 High, and accepted by the owner in that knowledge (spec D3 and D8). Since the stage-list correction above, the
 carried-in content is present for five of a run's six stages rather than two, while the write access and the
-network key of this threat's own title remain IMPLEMENT's and QA's alone. The rating is unchanged: the tree,
+network key of this threat's own title remain IMPLEMENT's alone. The rating is unchanged: the tree,
 and every secret the carry-in put in it, is the same for all five, and a read-only session can read every byte
 of it. The three parts of it, each verified in
 code:
@@ -958,7 +958,9 @@ boundary and the HTTP surface:
 - a summary is capped at 2,000 files and one body at 512 KiB, with explicit `truncated` and
   `omittedBytes`; Git stdout for one file is retained only up to that byte cap while the remaining stream is drained,
   counted and discarded, so the cap also bounds daemon memory rather than applying after accumulation. REVIEW uses
-  tighter per-file and total limits and exposes only a closed `ReviewDiffReadError` failure contract. Refreshes of
+  tighter per-file and total limits and exposes only a closed `ReviewDiffReadError` failure contract. Its status and
+  numstat readers likewise retain only bounded records/bytes before parsing, instead of first accumulating every path.
+  Refreshes of
   the expensive subtree are coalesced to the measured 1,600-ms window,
   while closed cards have no active read;
 - the routes require the same local session as every other GET. Diff content is returned only to
@@ -1302,6 +1304,8 @@ Q1 tightens the deterministic baseline further:
   when a callback supplied an instance of the exported class. Startup artifact recovery exposes a separate closed
   scan error and daemon logs only its code. An `ENOENT` scan is accepted as an absent managed child only after the
   artifact root is verified as absent or a directory, because Windows can report `ENOENT` for a child below a file.
+  Recovery refuses symlinked `qa`/run directories, requires their canonical paths to remain inside the artifact root,
+  and rechecks directory identity immediately before marker removal or quarantine rename.
   The daemon still fails closed on a contract-violating adapter;
 - the baseline target is a bare literal loopback origin (`localhost`, `127/8` or `[::1]`). `localhost` resolution must
   contain only loopback addresses and Chromium pins it to one verified address for the run; exact origin is rechecked

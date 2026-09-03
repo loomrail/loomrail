@@ -1,11 +1,5 @@
 import type { ContextSources } from "@loomrail/context-assembly";
-import {
-  MAX_REVIEW_DIFF_CONTENT_FILES,
-  MAX_REVIEW_DIFF_FILES,
-  MAX_REVIEW_DIFF_PATCH_BYTES_PER_FILE,
-  MAX_REVIEW_DIFF_PATCH_BYTES_TOTAL,
-} from "@loomrail/context-assembly";
-import type { WorkItemWorkspace } from "@loomrail/contracts";
+import { reviewDiffLimits, type WorkItemWorkspace } from "@loomrail/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { prepareReviewContext, type ReviewDiffReader } from "../src/review-context.js";
@@ -30,6 +24,7 @@ const sources = (): ContextSources => ({
     attempt: 1,
     sessionOrdinal: 1,
   },
+  projectConstitution: null,
   qaCorrection: null,
   decisions: [],
   latestCheckpoint: null,
@@ -92,10 +87,10 @@ describe("stable REVIEW context preparation", () => {
     expect(readDiff).toHaveBeenCalledWith({
       worktreePath: "/tmp/loomrail-worktree",
       baseline,
-      maxFiles: MAX_REVIEW_DIFF_FILES,
-      maxContentFiles: MAX_REVIEW_DIFF_CONTENT_FILES,
-      maxPatchBytesPerFile: MAX_REVIEW_DIFF_PATCH_BYTES_PER_FILE,
-      maxPatchBytesTotal: MAX_REVIEW_DIFF_PATCH_BYTES_TOTAL,
+      maxFiles: reviewDiffLimits.maxFiles,
+      maxContentFiles: reviewDiffLimits.maxContentFiles,
+      maxPatchBytesPerFile: reviewDiffLimits.maxPatchBytesPerFile,
+      maxPatchBytesTotal: reviewDiffLimits.maxPatchBytesTotal,
     });
     expect(result).toMatchObject({
       type: "READY",

@@ -278,12 +278,14 @@ Q13 выполняется по [спецификации 71](71-q13-final-secur
 [плану 72](72-q13-final-security-reliability-review-implementation-plan.ru.md). После первых corrective commits
 immutable AgentRun policy теперь реально ограничивает capabilities/workspace/network/MCP/session/budget, а live
 provider usage сохраняется один раз на сессию, нормализуется между Codex/Claude, атомарно попадает в общий ledger и
-hard-pause-ит workflow до следующей сессии. REVIEW получает bounded actual diff из одного tree-checked temporary
-index; BrowserDriver нормализует async rejections в закрытый error vocabulary. Audit также снял overclaim: stable
+hard-pause-ит workflow до следующей сессии. REVIEW получает exact active Constitution и bounded actual diff из одного
+tree-checked temporary index; BrowserDriver нормализует async rejections в runtime-checked закрытый error vocabulary.
+Audit также снял overclaim: stable
 создаёт одну immutable SquadAssignment revision при старте PipelineRun и не предоставляет post-start composition
 editing; stable role refinement принадлежит exact built-in AgentProfile, а не отсутствующему project editor.
 Следующий review round дополнительно закрыл read-only/offline policy Browser QA, фильтрацию неэффективных MCP
-revisions, untrusted framing provider evidence, fixed BrowserDriver/recovery errors и pre-buffer Git patch bounds.
+revisions, untrusted framing provider evidence, fixed BrowserDriver/recovery errors, canonical recovery containment и
+pre-buffer Git patch/status/numstat bounds.
 Final review и release gates остаются открыты; landing и npm publish не меняются.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean

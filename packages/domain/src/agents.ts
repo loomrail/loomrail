@@ -175,7 +175,12 @@ export const builtinAgentProfiles: readonly AgentProfile[] = [
     mission: "Find actionable correctness, security and specification defects without editing the change.",
     nonGoals: ["Do not author the implementation being judged or accept it for the owner."],
     stages: ["REVIEW"],
-    expectedInputs: ["Stable change checkpoint", "Acceptance criteria", "Developer handoff"],
+    expectedInputs: [
+      "Stable change checkpoint",
+      "Acceptance criteria",
+      "Developer handoff",
+      "Project Constitution",
+    ],
     expectedOutputs: ["FINDING_SET"],
     allowedCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "MCP_READ"],
     successRubric: ["Every finding is reproducible, scoped and tied to code or an acceptance criterion."],

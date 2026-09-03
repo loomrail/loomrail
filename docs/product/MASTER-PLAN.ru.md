@@ -1366,11 +1366,13 @@ Q13 final security/reliability review идёт по планам 71–72. Correc
 manifest-derived runtime floor, adapter-owned diagnostics, built-in profile role-playbook provenance и immutable AgentRun effective
 policy. Текущий срез добавляет один digest-verified cumulative ProviderUsageReport на сессию, нормализует Claude
 cache input, атомарно проводит token spend через общий ledger и hard-pause до следующей сессии, а также показывает
-owner-у per-session attribution. REVIEW теперь получает tree-checked bounded actual diff из одного temporary index,
-включая unified-diff fragments, ограниченные ещё во время drain Git stdout для filesystem-isolated reviewer.
+owner-у per-session attribution. REVIEW теперь получает exact active Project Constitution version и tree-checked
+bounded actual diff из одного temporary index, включая unified-diff fragments и status/numstat metadata, ограниченные
+ещё во время drain Git stdout для filesystem-isolated reviewer.
 Browser QA effective policy read-only/offline, неэффективные MCP revisions отбрасываются, а provider evidence
-заключается в untrusted-data frame. BrowserDriver async boundary теперь
-экспортирует один error type с закрытыми кодами и не пропускает raw rejection detail. Stable scope честно создаёт один
+заключается в untrusted-data frame. BrowserDriver async boundary теперь экспортирует один error type с
+runtime-checked закрытыми кодами и не пропускает raw rejection detail; startup recovery не следует через symlinked
+managed roots. Stable scope честно создаёт один
 immutable SquadAssignment при старте PipelineRun: post-start composition editing остаётся non-goal и потребует новой
 assignment revision с новым AgentRun policy snapshot. До закрытия остальных Q13 findings, private dogfood, exact
 live-provider promotion, protected landing и registry provenance stable npm publish запрещён.

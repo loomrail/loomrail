@@ -20,6 +20,11 @@
       untrusted evidence framing и fixed code→message BrowserDriver normalization.
 - [x] Ограничить patch stdout до накопления в памяти и закрыть public async review/recovery error contracts.
 - [x] Уточнить stable role-playbook scope: built-in profile refinement реализован, project-authored editor/import — нет.
+- [x] Включить exact active Project Constitution в REVIEW context с versioned provenance и owner-policy framing.
+- [x] Ограничить status/numstat до накопления и парсинга и свести review diff contract/limits к одному public type.
+- [x] Запретить recovery проходить через symlinked `qa`/run roots и повторно проверить identity перед mutation.
+- [x] Закрыть runtime BrowserDriver code allowlist и typed CLI setup question failures.
+- [x] Синхронизировать architecture/threat claims с фактическими QA permissions и live runtime.
 - [ ] Выполнить финальный Standards/Spec review и закрыть все P0/P1.
 - [ ] Прогнать full non-landing source gates, fault injection, audit, clean package и browser matrix.
 - [ ] Запушить Q13, дождаться macOS/Windows CI и записать evidence.

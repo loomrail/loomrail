@@ -336,6 +336,24 @@ const changeStatusSchema = z.enum(["ADDED", "MODIFIED", "DELETED", "RENAMED"]);
 // file that is really there. A contract that renames what it reports cannot be round-tripped.
 const changedPathSchema = z.string().min(1).max(4_096);
 
+export type ReviewDiffLimits = {
+  maxFiles: number;
+  maxContentFiles: number;
+  maxPatchBytesPerFile: number;
+  maxPatchBytesTotal: number;
+  maxRenderedPathBytes: number;
+};
+
+// One authority for the intrinsic REVIEW bounds used by Git capture, context assembly and daemon
+// orchestration. The public shape stays numeric so focused tests can exercise tighter boundaries.
+export const reviewDiffLimits = Object.freeze({
+  maxFiles: 50,
+  maxContentFiles: 16,
+  maxPatchBytesPerFile: 4_096,
+  maxPatchBytesTotal: 32_768,
+  maxRenderedPathBytes: 512,
+}) satisfies ReviewDiffLimits;
+
 // A line count from a work item's change summary. Nullable, never defaulted to zero: a binary
 // file's `insertions`/`deletions` are null because there is no line count to report, and reporting
 // zero would read as "nothing changed in it" -- spec §4, D8, and the Task 3 brief's own worked
@@ -420,6 +438,17 @@ export type WorkspaceLeaseReleasedResult = z.infer<typeof workspaceLeaseReleased
 export type WorkItemWorkspaceOrphanedResult = z.infer<typeof workItemWorkspaceOrphanedResultSchema>;
 export type ChangeStatus = z.infer<typeof changeStatusSchema>;
 export type ChangedFile = z.infer<typeof changedFileSchema>;
+export type ReviewDiffContent =
+  | { type: "BINARY" }
+  | { type: "TEXT"; patch: string; truncated: boolean; omittedBytes: number }
+  | { type: "OMITTED"; reason: "FILE_LIMIT" | "TOTAL_BYTE_LIMIT" };
+export type ReviewChangedFile = ChangedFile & { content: ReviewDiffContent };
+export type ReviewChangeSummary = {
+  files: readonly ReviewChangedFile[];
+  baseline: string;
+  tree: string;
+  truncated: boolean;
+};
 export type WorkItemChangeSummary = z.infer<typeof workItemChangeSummarySchema>;
 export type FileDiff = z.infer<typeof fileDiffSchema>;
 export type WorkItemChangesResponse = z.infer<typeof workItemChangesResponseSchema>;

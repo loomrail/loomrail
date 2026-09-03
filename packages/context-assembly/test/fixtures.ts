@@ -25,6 +25,13 @@ export const sampleSources = (): ContextSources => ({
     attempt: 1,
     sessionOrdinal: 2,
   },
+  projectConstitution: {
+    id: "constitution_01",
+    version: 2,
+    ordinal: 1,
+    contentDigest: "c".repeat(64),
+    renderedMarkdown: "# Project Constitution\n\n- Keep parser failures typed.",
+  },
   qaCorrection: null,
   decisions: [
     { id: "dec_01", version: 1, question: "Which parser library?", answer: "Use pdf-lib for extraction." },

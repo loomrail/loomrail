@@ -206,6 +206,25 @@ describe("session handoff contracts", () => {
     ).toBeTruthy();
   });
 
+  it("accepts an exact Project Constitution version as review provenance", () => {
+    expect(
+      contextPackRecipeSchema.parse(
+        recipe({
+          sections: [
+            {
+              id: "REVIEW_INPUT",
+              sources: [
+                { kind: "PROJECT_CONSTITUTION_VERSION", id: "constitution-1", version: 2 },
+                { kind: "STAGE_ATTEMPT", id: "implement-attempt-1", version: 3 },
+              ],
+              bytes: 480,
+            },
+          ],
+        }),
+      ),
+    ).toBeTruthy();
+  });
+
   it("rejects a content hash missing the sha256 prefix", () => {
     expect(() => contextPackRecipeSchema.parse(recipe({ contentHash: "a".repeat(64) }))).toThrow();
   });

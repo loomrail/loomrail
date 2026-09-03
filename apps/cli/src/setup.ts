@@ -5,6 +5,23 @@ import { collectDoctorReport } from "./doctor.js";
 
 export type SetupRoute = "MOCK" | "LIVE";
 
+export type SetupRouteSelectionErrorCode = "INVALID_CHOICE" | "QUESTION_FAILED";
+
+export class SetupRouteSelectionError extends Error {
+  readonly code: SetupRouteSelectionErrorCode;
+
+  constructor(code: SetupRouteSelectionErrorCode, cause?: unknown) {
+    super(
+      code === "INVALID_CHOICE"
+        ? "Setup choice must be 1, 2, mock, or live"
+        : "The setup route question could not be completed safely",
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = "SetupRouteSelectionError";
+    this.code = code;
+  }
+}
+
 type SetupCheckStatus = "PASS" | "WARN" | "FAIL";
 
 type SetupCheck<Code extends string> = {
@@ -191,12 +208,21 @@ export const setupRoutePrompt = (): readonly string[] => [
 ];
 
 export const parseSetupRouteChoice = (answer: string): SetupRoute => {
-  if (answer.length > 16) throw new Error("Setup choice must be 1, 2, mock, or live");
+  if (answer.length > 16) throw new SetupRouteSelectionError("INVALID_CHOICE");
   const normalized = answer.trim().toLowerCase();
   if (normalized === "" || normalized === "1" || normalized === "mock") return "MOCK";
   if (normalized === "2" || normalized === "live") return "LIVE";
-  throw new Error("Setup choice must be 1, 2, mock, or live");
+  throw new SetupRouteSelectionError("INVALID_CHOICE");
 };
 
-export const selectSetupRoute = async (question: (prompt: string) => Promise<string>): Promise<SetupRoute> =>
-  parseSetupRouteChoice(await question("Select route [1]: "));
+/** Rejects only with SetupRouteSelectionError. */
+export const selectSetupRoute = async (
+  question: (prompt: string) => Promise<string>,
+): Promise<SetupRoute> => {
+  try {
+    return parseSetupRouteChoice(await question("Select route [1]: "));
+  } catch (error: unknown) {
+    if (error instanceof SetupRouteSelectionError) throw error;
+    throw new SetupRouteSelectionError("QUESTION_FAILED", error);
+  }
+};

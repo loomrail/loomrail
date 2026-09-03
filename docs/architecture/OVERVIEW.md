@@ -1,7 +1,7 @@
 # Loomrail architecture overview
 
-**Status:** public pre-alpha; A3 durable parallel execution and Fleet UI implemented locally
-**Updated:** 2026-09-02
+**Status:** public pre-alpha; local stable-scope runtime implemented through Q13
+**Updated:** 2026-09-03
 
 Loomrail separates deterministic product authority from non-deterministic agent work. The daemon owns state,
 permissions, budgets, transitions and recovery. Providers produce proposals, tool activity and artifacts; they do not
@@ -21,8 +21,8 @@ flowchart LR
     WF --> COMP[Provider compatibility registry]
     COMP --> PC[Provider contract]
     PC --> MOCK[Mock provider]
-    PC -. later .-> CODEX[Codex CLI]
-    PC -. later .-> CLAUDE[Claude Code CLI]
+    PC --> CODEX[Codex CLI adapter]
+    PC --> CLAUDE[Claude Code CLI adapter]
 
     APP --> PORT[Persistence ports]
     PORT --> DB[(SQLite current state)]
@@ -30,12 +30,13 @@ flowchart LR
     PORT --> QUEUE[(Durable dispatch queue)]
     PORT --> EVIDENCE[(Evidence + acceptance packages)]
 
-    D -. later .-> ART[(Filesystem artifact store)]
-    D -. later .-> GIT[Git/worktree adapter]
-    D -. later .-> BROWSER[BrowserDriver layer]
+    D --> ART[(Bounded filesystem artifact store)]
+    D --> GIT[Git/worktree adapter]
+    D --> BROWSER[Playwright BrowserDriver]
 ```
 
-Dashed components are outside Phase 0.
+The diagram shows the implemented local runtime. Future plugin execution, remote access, cloud sync and desktop
+packaging remain outside the stable scope.
 
 ## Authority boundaries
 
@@ -47,8 +48,8 @@ Dashed components are outside Phase 0.
 | Final acceptance       | Human-only acceptance command after durable Review and QA evidence    |
 | Provider/model output  | Artifact or proposal, never direct state mutation                     |
 | Realtime UI            | Projection of committed events, never source of truth                 |
-| Git code state         | Git; Loomrail references exact snapshots in later phases              |
-| Project rules          | Versioned `.loomrail/` files plus immutable run snapshot              |
+| Git code state         | Git worktree plus exact baseline/result-tree snapshots                |
+| Project rules          | Active Project Constitution plus exact context-recipe version         |
 | Secrets                | Existing user environment or OS credential store, never prompt/SQLite |
 
 ## Provider compatibility boundary

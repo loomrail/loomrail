@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -26,6 +26,9 @@ import { isSameFile, RUN_STORAGE_SEGMENT } from "./artifact-layout.js";
 
 export const BROWSER_QA_RECOVERY_MARKER = ".loomrail-pending.json";
 const MAX_RECOVERY_MARKER_BYTES = 128 * 1_024;
+
+const hasCode = (error: unknown, code: string): boolean =>
+  typeof error === "object" && error !== null && "code" in error && error.code === code;
 
 const recoveryMarkerSchema = z
   .object({
@@ -133,14 +136,80 @@ const markerFilesMatch = async (
     )
   ).every(Boolean);
 
+const ensureManagedChildDirectory = async (
+  parentPath: string,
+  canonicalParent: string,
+  child: string,
+): Promise<{ path: string; canonicalPath: string }> => {
+  const path = join(parentPath, child);
+  try {
+    await mkdir(path);
+  } catch (error: unknown) {
+    if (!hasCode(error, "EEXIST")) throw error;
+  }
+  const [metadata, canonicalPath] = await Promise.all([lstat(path), realpath(path)]);
+  if (
+    !metadata.isDirectory() ||
+    metadata.isSymbolicLink() ||
+    canonicalPath !== join(canonicalParent, child)
+  ) {
+    throw new Error("Browser QA quarantine directory is outside the managed artifact store");
+  }
+  return { path, canonicalPath };
+};
+
 const quarantine = async (
   artifactsDirectory: string,
+  canonicalArtifactsDirectory: string,
   qaDirectory: string,
   runStorageSegment: string,
 ): Promise<void> => {
-  const orphanRoot = join(artifactsDirectory, ".quarantine", "orphaned");
-  await mkdir(orphanRoot, { recursive: true });
-  await rename(qaDirectory, join(orphanRoot, `${runStorageSegment}-${randomUUID()}`));
+  const quarantineRoot = await ensureManagedChildDirectory(
+    artifactsDirectory,
+    canonicalArtifactsDirectory,
+    ".quarantine",
+  );
+  const orphanRoot = await ensureManagedChildDirectory(
+    quarantineRoot.path,
+    quarantineRoot.canonicalPath,
+    "orphaned",
+  );
+  await rename(qaDirectory, join(orphanRoot.path, `${runStorageSegment}-${randomUUID()}`));
+};
+
+const artifactRootIsAbsentOrDirectory = async (artifactsDirectory: string): Promise<boolean> => {
+  let metadata;
+  try {
+    metadata = await lstat(artifactsDirectory);
+  } catch (error: unknown) {
+    if (hasCode(error, "ENOENT")) return true;
+    throw error;
+  }
+  if (metadata.isDirectory()) return true;
+  if (!metadata.isSymbolicLink()) return false;
+  try {
+    return (await stat(artifactsDirectory)).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+const managedDirectoryStillMatches = async (input: {
+  path: string;
+  canonicalPath: string;
+  metadata: Stats;
+}): Promise<boolean> => {
+  try {
+    const [metadata, canonicalPath] = await Promise.all([lstat(input.path), realpath(input.path)]);
+    return (
+      metadata.isDirectory() &&
+      !metadata.isSymbolicLink() &&
+      canonicalPath === input.canonicalPath &&
+      isSameFile(metadata, input.metadata)
+    );
+  } catch {
+    return false;
+  }
 };
 
 export const stageBrowserQAArtifacts = async (input: {
@@ -294,15 +363,35 @@ export const recoverBrowserQAArtifacts = async (input: {
 }): Promise<BrowserQAArtifactRecovery[]> => {
   const finalRoot = join(input.artifactsDirectory, "qa");
   let entries;
+  let canonicalArtifactsDirectory: string;
+  let canonicalFinalRoot: string;
+  let finalRootMetadata: Stats;
   try {
+    [canonicalArtifactsDirectory, canonicalFinalRoot, finalRootMetadata] = await Promise.all([
+      realpath(input.artifactsDirectory),
+      realpath(finalRoot),
+      lstat(finalRoot),
+    ]);
+    if (
+      !finalRootMetadata.isDirectory() ||
+      finalRootMetadata.isSymbolicLink() ||
+      canonicalFinalRoot !== join(canonicalArtifactsDirectory, "qa")
+    ) {
+      throw new Error("Browser QA recovery root is outside the managed artifact store");
+    }
     entries = await readdir(finalRoot, { withFileTypes: true });
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (hasCode(error, "ENOENT")) {
       try {
-        const artifactsMetadata = await stat(input.artifactsDirectory);
-        if (artifactsMetadata.isDirectory()) return [];
+        let finalRootIsAbsent = false;
+        try {
+          await lstat(finalRoot);
+        } catch (finalRootError: unknown) {
+          if (hasCode(finalRootError, "ENOENT")) finalRootIsAbsent = true;
+          else if (!hasCode(finalRootError, "ENOTDIR")) throw finalRootError;
+        }
+        if (finalRootIsAbsent && (await artifactRootIsAbsentOrDirectory(input.artifactsDirectory))) return [];
       } catch (artifactsError: unknown) {
-        if ((artifactsError as NodeJS.ErrnoException).code === "ENOENT") return [];
         throw new BrowserQAArtifactRecoveryError(artifactsError);
       }
     }
@@ -313,14 +402,45 @@ export const recoverBrowserQAArtifacts = async (input: {
   for (const entry of entries) {
     if (!entry.isDirectory() || !RUN_STORAGE_SEGMENT.test(entry.name)) continue;
     const directory = join(finalRoot, entry.name);
+    let directoryMetadata: Stats;
+    let canonicalDirectory: string;
+    try {
+      [directoryMetadata, canonicalDirectory] = await Promise.all([lstat(directory), realpath(directory)]);
+      if (
+        !directoryMetadata.isDirectory() ||
+        directoryMetadata.isSymbolicLink() ||
+        canonicalDirectory !== join(canonicalFinalRoot, entry.name)
+      ) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    const managedRootsStillMatch = (): Promise<boolean> =>
+      Promise.all([
+        managedDirectoryStillMatches({
+          path: finalRoot,
+          canonicalPath: canonicalFinalRoot,
+          metadata: finalRootMetadata,
+        }),
+        managedDirectoryStillMatches({
+          path: directory,
+          canonicalPath: canonicalDirectory,
+          metadata: directoryMetadata,
+        }),
+      ]).then((matches) => matches.every(Boolean));
     const markerPath = join(directory, BROWSER_QA_RECOVERY_MARKER);
     let marker: BrowserQARecoveryMarker;
     try {
       marker = await readBoundedMarker(markerPath);
     } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      if (hasCode(error, "ENOENT")) continue;
       try {
-        await quarantine(input.artifactsDirectory, directory, entry.name);
+        if (!(await managedRootsStillMatch())) {
+          recoveries.push({ qaRunId: null, runStorageSegment: entry.name, action: "LEFT_PENDING" });
+          continue;
+        }
+        await quarantine(input.artifactsDirectory, canonicalArtifactsDirectory, directory, entry.name);
         recoveries.push({ qaRunId: null, runStorageSegment: entry.name, action: "QUARANTINED_INVALID" });
       } catch {
         recoveries.push({ qaRunId: null, runStorageSegment: entry.name, action: "LEFT_PENDING" });
@@ -338,6 +458,10 @@ export const recoverBrowserQAArtifacts = async (input: {
 
     if (committed && (await markerFilesMatch(directory, entry.name, marker))) {
       try {
+        if (!(await managedRootsStillMatch())) {
+          recoveries.push({ qaRunId: marker.qaRunId, runStorageSegment: entry.name, action: "LEFT_PENDING" });
+          continue;
+        }
         await unlink(markerPath);
         recoveries.push({ qaRunId: marker.qaRunId, runStorageSegment: entry.name, action: "CONFIRMED" });
       } catch {
@@ -347,7 +471,11 @@ export const recoverBrowserQAArtifacts = async (input: {
     }
 
     try {
-      await quarantine(input.artifactsDirectory, directory, entry.name);
+      if (!(await managedRootsStillMatch())) {
+        recoveries.push({ qaRunId: marker.qaRunId, runStorageSegment: entry.name, action: "LEFT_PENDING" });
+        continue;
+      }
+      await quarantine(input.artifactsDirectory, canonicalArtifactsDirectory, directory, entry.name);
       recoveries.push({
         qaRunId: marker.qaRunId,
         runStorageSegment: entry.name,

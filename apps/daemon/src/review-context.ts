@@ -1,23 +1,20 @@
 import type { ContextSources } from "@loomrail/context-assembly";
 import {
-  MAX_REVIEW_DIFF_CONTENT_FILES,
-  MAX_REVIEW_DIFF_FILES,
-  MAX_REVIEW_DIFF_PATCH_BYTES_PER_FILE,
-  MAX_REVIEW_DIFF_PATCH_BYTES_TOTAL,
-} from "@loomrail/context-assembly";
-import type { HumanRequestDraft, WorkItemWorkspace } from "@loomrail/contracts";
+  reviewDiffLimits,
+  type HumanRequestDraft,
+  type ReviewDiffLimits,
+  type WorkItemWorkspace,
+} from "@loomrail/contracts";
 import type { ReviewChangeSummary } from "@loomrail/workspace";
 
 import { changeBaselineOf } from "./workspace-changes.js";
 
-export type ReviewDiffReader = (input: {
-  worktreePath: string;
-  baseline: string;
-  maxFiles: number;
-  maxContentFiles: number;
-  maxPatchBytesPerFile: number;
-  maxPatchBytesTotal: number;
-}) => Promise<ReviewChangeSummary>;
+export type ReviewDiffReader = (
+  input: {
+    worktreePath: string;
+    baseline: string;
+  } & Omit<ReviewDiffLimits, "maxRenderedPathBytes">,
+) => Promise<ReviewChangeSummary>;
 
 export type ReviewContextPreparation =
   | { type: "READY"; sources: ContextSources }
@@ -96,10 +93,10 @@ export const prepareReviewContext = async (input: {
     summary = await input.readDiff({
       worktreePath: input.workspace.worktreePath,
       baseline,
-      maxFiles: MAX_REVIEW_DIFF_FILES,
-      maxContentFiles: MAX_REVIEW_DIFF_CONTENT_FILES,
-      maxPatchBytesPerFile: MAX_REVIEW_DIFF_PATCH_BYTES_PER_FILE,
-      maxPatchBytesTotal: MAX_REVIEW_DIFF_PATCH_BYTES_TOTAL,
+      maxFiles: reviewDiffLimits.maxFiles,
+      maxContentFiles: reviewDiffLimits.maxContentFiles,
+      maxPatchBytesPerFile: reviewDiffLimits.maxPatchBytesPerFile,
+      maxPatchBytesTotal: reviewDiffLimits.maxPatchBytesTotal,
     });
   } catch (error: unknown) {
     return refusal(

@@ -382,7 +382,11 @@ importers:
         specifier: workspace:*
         version: link:../contracts
 
-  packages/workspace: {}
+  packages/workspace:
+    dependencies:
+      '@loomrail/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
 packages:
 

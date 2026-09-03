@@ -47,23 +47,16 @@ export {
   type BrowserQARecoveryMarker,
 } from "./artifact-recovery.js";
 
-export type BrowserDriverErrorCode =
-  | "INVALID_INPUT"
-  | "DRIVER_SETUP_FAILED"
-  | "ATTACHMENT_FINALIZATION_FAILED"
-  | "ATTACHMENT_CONFIRMATION_FAILED"
-  | "QUARANTINE_DISPOSAL_FAILED";
+const browserDriverErrorCodes = [
+  "INVALID_INPUT",
+  "DRIVER_SETUP_FAILED",
+  "ATTACHMENT_FINALIZATION_FAILED",
+  "ATTACHMENT_CONFIRMATION_FAILED",
+  "QUARANTINE_DISPOSAL_FAILED",
+] as const;
 
-/** The complete rejection vocabulary for public asynchronous BrowserDriver operations. */
-export class BrowserDriverError extends Error {
-  readonly code: BrowserDriverErrorCode;
-
-  constructor(code: BrowserDriverErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "BrowserDriverError";
-    this.code = code;
-  }
-}
+export type BrowserDriverErrorCode = (typeof browserDriverErrorCodes)[number];
+const browserDriverErrorCodeSet: ReadonlySet<string> = new Set(browserDriverErrorCodes);
 
 const browserDriverErrorMessages = {
   INVALID_INPUT: "The Browser QA run input is invalid.",
@@ -72,6 +65,21 @@ const browserDriverErrorMessages = {
   ATTACHMENT_CONFIRMATION_FAILED: "Browser QA attachments could not be confirmed safely.",
   QUARANTINE_DISPOSAL_FAILED: "The Browser QA quarantine could not be disposed safely.",
 } as const satisfies Record<BrowserDriverErrorCode, string>;
+
+const isBrowserDriverErrorCode = (value: unknown): value is BrowserDriverErrorCode =>
+  typeof value === "string" && browserDriverErrorCodeSet.has(value);
+
+/** The complete rejection vocabulary for public asynchronous BrowserDriver operations. */
+export class BrowserDriverError extends Error {
+  readonly code: BrowserDriverErrorCode;
+
+  constructor(code: BrowserDriverErrorCode, message: string, options?: ErrorOptions) {
+    const normalizedCode = isBrowserDriverErrorCode(code) ? code : "DRIVER_SETUP_FAILED";
+    super(isBrowserDriverErrorCode(code) ? message : browserDriverErrorMessages[normalizedCode], options);
+    this.name = "BrowserDriverError";
+    this.code = normalizedCode;
+  }
+}
 
 export type BrowserDriverExecution = {
   result: QADriverResult;
@@ -106,7 +114,8 @@ type PendingAttachment = {
 };
 
 const normalizeBrowserDriverError = (code: BrowserDriverErrorCode, error: unknown): BrowserDriverError => {
-  const normalizedCode = error instanceof BrowserDriverError ? error.code : code;
+  const normalizedCode =
+    error instanceof BrowserDriverError && isBrowserDriverErrorCode(error.code) ? error.code : code;
   return new BrowserDriverError(normalizedCode, browserDriverErrorMessages[normalizedCode], {
     cause: error,
   });

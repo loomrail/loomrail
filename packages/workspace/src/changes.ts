@@ -3,7 +3,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
+import type {
+  ReviewChangedFile,
+  ReviewChangeSummary,
+  ReviewDiffContent,
+  ReviewDiffLimits,
+} from "@loomrail/contracts";
+
 import { runGitWithIndex } from "./git.js";
+
+export type { ReviewChangedFile, ReviewChangeSummary, ReviewDiffContent } from "@loomrail/contracts";
 
 export type ChangeStatus = "ADDED" | "MODIFIED" | "DELETED" | "RENAMED";
 
@@ -23,23 +32,6 @@ export type ChangeSummary = {
   files: readonly ChangedFile[];
   // `write-tree` over the very same temporary index the files were read from, so the two can
   // never disagree (spec D3).
-  tree: string;
-  truncated: boolean;
-};
-
-export type ReviewDiffContent =
-  | { type: "BINARY" }
-  | { type: "TEXT"; patch: string; truncated: boolean; omittedBytes: number }
-  | { type: "OMITTED"; reason: "FILE_LIMIT" | "TOTAL_BYTE_LIMIT" };
-
-export type ReviewChangedFile = ChangedFile & { content: ReviewDiffContent };
-
-export type ReviewChangeSummary = {
-  files: readonly ReviewChangedFile[];
-  // The baseline is carried on the reading so callers cannot accidentally render these patches
-  // beside a comparison point obtained elsewhere.
-  baseline: string;
-  // Written from the exact temporary index that produced both the file list and every patch.
   tree: string;
   truncated: boolean;
 };
@@ -73,6 +65,33 @@ const readArgs = [
 
 const splitNul = (text: string): readonly string[] => text.split("\0").filter((part) => part.length > 0);
 
+// changedFileSchema is the public boundary for these paths. Four UTF-8 bytes per accepted
+// character plus both names of a rename gives the Git capture a hard upper bound while still
+// leaving room for every record that the boundary could represent.
+const MAX_CHANGED_PATH_CHARACTERS = 4_096;
+const MAX_CHANGED_PATH_UTF8_BYTES = MAX_CHANGED_PATH_CHARACTERS * 4;
+const MAX_CHANGE_SUMMARY_FILES = 2_000;
+const MAX_CHANGE_METADATA_RECORD_BYTES = MAX_CHANGED_PATH_UTF8_BYTES * 2 + 128;
+const MAX_CHANGE_METADATA_STDERR_BYTES = 16_384;
+
+const boundedNulTokens = (text: string, maxTokens: number): readonly string[] => {
+  const tokens: string[] = [];
+  let cursor = 0;
+  while (tokens.length < maxTokens) {
+    const end = text.indexOf("\0", cursor);
+    if (end === -1) break;
+    if (end > cursor) tokens.push(text.slice(cursor, end));
+    cursor = end + 1;
+  }
+  return tokens;
+};
+
+const assertChangedPath = (path: string): void => {
+  if (path.length === 0 || path.length > MAX_CHANGED_PATH_CHARACTERS) {
+    throw new Error("git reported a changed path outside the public path bound");
+  }
+};
+
 // One `--numstat -z` record, before it is joined with the status that names what happened.
 type CountedFile = {
   path: string;
@@ -98,12 +117,13 @@ const parseCount = (field: string, record: string): number | null => {
 // rename is a token `ins\tdel\t` with an empty third field followed by TWO further tokens -- the
 // old path and then the new one. The old path is read only to stay in step with the stream; which
 // file a rename came from is taken from `--name-status`, the reading that names statuses.
-const parseNumstat = (stdout: string): readonly CountedFile[] => {
-  const tokens = splitNul(stdout);
+const parseNumstat = (stdout: string, maxRecords?: number): readonly CountedFile[] => {
+  const tokens =
+    maxRecords === undefined ? splitNul(stdout) : boundedNulTokens(stdout, Math.max(1, maxRecords) * 3);
   const counted: CountedFile[] = [];
 
   let cursor = 0;
-  while (cursor < tokens.length) {
+  while (cursor < tokens.length && (maxRecords === undefined || counted.length < maxRecords)) {
     const record = tokens[cursor] ?? "";
     cursor += 1;
 
@@ -131,6 +151,7 @@ const parseNumstat = (stdout: string): readonly CountedFile[] => {
       cursor += 2;
       subject = newPath;
     }
+    assertChangedPath(subject);
 
     const binary = insertions === "-" || deletions === "-";
     counted.push({
@@ -152,12 +173,13 @@ type StatusRecord = {
 // Parses `--name-status -z`: a status token (`A`, `M`, `D`, `T`, or `R` with a similarity score)
 // followed by one path, or by two paths -- old then new -- when it is a rename. Keyed by the new
 // path, which is the only name both readings agree on.
-const parseNameStatus = (stdout: string): ReadonlyMap<string, StatusRecord> => {
-  const tokens = splitNul(stdout);
+const parseNameStatus = (stdout: string, maxRecords?: number): ReadonlyMap<string, StatusRecord> => {
+  const tokens =
+    maxRecords === undefined ? splitNul(stdout) : boundedNulTokens(stdout, Math.max(1, maxRecords) * 3);
   const statuses = new Map<string, StatusRecord>();
 
   let cursor = 0;
-  while (cursor < tokens.length) {
+  while (cursor < tokens.length && (maxRecords === undefined || statuses.size < maxRecords)) {
     const code = tokens[cursor] ?? "";
     cursor += 1;
 
@@ -168,6 +190,8 @@ const parseNameStatus = (stdout: string): ReadonlyMap<string, StatusRecord> => {
         throw new Error(`git --name-status ended mid-rename after ${JSON.stringify(code)}`);
       }
       cursor += 2;
+      assertChangedPath(oldPath);
+      assertChangedPath(newPath);
       statuses.set(newPath, { status: "RENAMED", previousPath: oldPath });
       continue;
     }
@@ -177,6 +201,7 @@ const parseNameStatus = (stdout: string): ReadonlyMap<string, StatusRecord> => {
       throw new Error(`git --name-status ended without a path after ${JSON.stringify(code)}`);
     }
     cursor += 1;
+    assertChangedPath(path);
 
     // `T` is a type change (a file replaced by a symlink and the like). It is a modification of
     // that path and is reported as one; every other letter is a status this reading was never
@@ -271,6 +296,9 @@ export const summariseChanges = async (context: {
   maxFiles: number;
 }): Promise<ChangeSummary> => {
   const { worktreePath, baseline, maxFiles } = context;
+  if (!Number.isSafeInteger(maxFiles) || maxFiles < 0 || maxFiles > MAX_CHANGE_SUMMARY_FILES) {
+    throw new Error(`maxFiles must be between 0 and ${MAX_CHANGE_SUMMARY_FILES.toString()}`);
+  }
 
   return withTemporaryIndex({ worktreePath, baseline, prefix: "loomrail-changes-" }, (indexFile) =>
     readChangeSummaryFromIndex({ worktreePath, baseline, maxFiles, indexFile }),
@@ -284,17 +312,37 @@ const readChangeSummaryFromIndex = async (context: {
   indexFile: string;
 }): Promise<ChangeSummary> => {
   const { worktreePath, baseline, maxFiles, indexFile } = context;
+  const maxRecords = maxFiles + 1;
+  const maxMetadataBytes = maxRecords * MAX_CHANGE_METADATA_RECORD_BYTES;
   const writeTree = await runGitWithIndex(["write-tree"], worktreePath, indexFile);
   expectSuccess(writeTree, "write-tree");
 
-  const numstat = await runGitWithIndex([...readArgs, "--numstat", baseline], worktreePath, indexFile);
+  const numstat = await runGitWithIndex([...readArgs, "--numstat", baseline], worktreePath, indexFile, {
+    maxStdoutBytes: maxMetadataBytes,
+    maxStderrBytes: MAX_CHANGE_METADATA_STDERR_BYTES,
+  });
   expectSuccess(numstat, "diff-index --numstat");
+  const countedFiles = parseNumstat(numstat.stdout, maxRecords);
+  if (numstat.stdoutTruncated && countedFiles.length < maxRecords) {
+    throw new Error("git --numstat exceeded the metadata bound before a complete file prefix was read");
+  }
 
-  const nameStatus = await runGitWithIndex([...readArgs, "--name-status", baseline], worktreePath, indexFile);
+  const nameStatus = await runGitWithIndex(
+    [...readArgs, "--name-status", baseline],
+    worktreePath,
+    indexFile,
+    {
+      maxStdoutBytes: maxMetadataBytes,
+      maxStderrBytes: MAX_CHANGE_METADATA_STDERR_BYTES,
+    },
+  );
   expectSuccess(nameStatus, "diff-index --name-status");
+  const statuses = parseNameStatus(nameStatus.stdout, maxRecords);
+  if (nameStatus.stdoutTruncated && statuses.size < maxRecords) {
+    throw new Error("git --name-status exceeded the metadata bound before a complete file prefix was read");
+  }
 
-  const statuses = parseNameStatus(nameStatus.stdout);
-  const files = parseNumstat(numstat.stdout).map((counted): ChangedFile => {
+  const files = countedFiles.map((counted): ChangedFile => {
     const record = statuses.get(counted.path);
     if (record === undefined) {
       // Two readings of one index that disagree about which paths changed. Refusing beats
@@ -314,7 +362,7 @@ const readChangeSummaryFromIndex = async (context: {
   return {
     files: files.slice(0, maxFiles),
     tree: writeTree.stdout.trim(),
-    truncated: files.length > maxFiles,
+    truncated: files.length > maxFiles || numstat.stdoutTruncated || nameStatus.stdoutTruncated,
   };
 };
 
@@ -772,14 +820,12 @@ const reviewPatchFromIndex = async (context: {
  * per-file/remaining-total limit are counted and discarded. Files beyond `maxContentFiles` start
  * no patch process at all.
  */
-export const readReviewDiff = async (context: {
-  worktreePath: string;
-  baseline: string;
-  maxFiles: number;
-  maxContentFiles: number;
-  maxPatchBytesPerFile: number;
-  maxPatchBytesTotal: number;
-}): Promise<ReviewChangeSummary> => {
+export const readReviewDiff = async (
+  context: {
+    worktreePath: string;
+    baseline: string;
+  } & Omit<ReviewDiffLimits, "maxRenderedPathBytes">,
+): Promise<ReviewChangeSummary> => {
   const { worktreePath, baseline, maxFiles, maxContentFiles, maxPatchBytesPerFile, maxPatchBytesTotal } =
     context;
   const limits = { maxFiles, maxContentFiles, maxPatchBytesPerFile, maxPatchBytesTotal };
@@ -788,7 +834,8 @@ export const readReviewDiff = async (context: {
     worktreePath.trim().length === 0 ||
     typeof baseline !== "string" ||
     baseline.trim().length === 0 ||
-    Object.values(limits).some((value) => !Number.isSafeInteger(value) || value < 0)
+    Object.values(limits).some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    maxFiles > MAX_CHANGE_SUMMARY_FILES
   ) {
     throw new ReviewDiffReadError("INVALID_INPUT", "The review diff request is invalid.");
   }

@@ -12,6 +12,7 @@ import {
   parseSetupRouteChoice,
   selectSetupRoute,
   serializeSetupReadiness,
+  SetupRouteSelectionError,
 } from "../src/setup.js";
 
 const providers = (
@@ -104,6 +105,18 @@ describe("Loomrail guided setup", () => {
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).not.toContain(secretCanary);
     }
+    expect(() => parseSetupRouteChoice("unknown")).toThrow(SetupRouteSelectionError);
+    await expect(selectSetupRoute(() => Promise.reject(new Error(secretCanary)))).rejects.toEqual(
+      expect.objectContaining({
+        name: "SetupRouteSelectionError",
+        code: "QUESTION_FAILED",
+        message: "The setup route question could not be completed safely",
+      }),
+    );
+    await expect(selectSetupRoute(() => Promise.reject(new Error(secretCanary)))).rejects.not.toHaveProperty(
+      "message",
+      expect.stringContaining(secretCanary),
+    );
   });
 
   it("keeps a new mock installation ready without provider login or state creation", async () => {

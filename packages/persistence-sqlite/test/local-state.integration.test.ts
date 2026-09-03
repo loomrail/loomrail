@@ -6811,6 +6811,39 @@ describe("SQLite local state", () => {
         );
     };
 
+    const seedActiveProjectConstitution = (raw: DatabaseSync, projectId: string): void => {
+      const contentDigest = "c".repeat(64);
+      const sourceDigest = "d".repeat(64);
+      const renderedMarkdown = "# Project Constitution\n\n- Keep persistence reads coherent.";
+      raw
+        .prepare(
+          `INSERT INTO constitution_proposals (
+            id, schema_version, project_id, project_version, status, preset_id, preset_version,
+            recommended_preset_id, scan_json, sections_json, rendered_markdown, content_digest,
+            version, created_at, adopted_at
+          ) VALUES (?, 1, ?, 1, 'ADOPTED', 'repository-baseline', 1, 'repository-baseline',
+            '{}', '[]', ?, ?, 3, ?, ?)`,
+        )
+        .run("proposal-context-sources", projectId, renderedMarkdown, contentDigest, timestamp, timestamp);
+      raw
+        .prepare(
+          `INSERT INTO project_constitution_versions (
+            id, schema_version, project_id, proposal_id, ordinal, preset_id, preset_version,
+            source_digest, content_digest, rendered_markdown, status, version, created_at, activated_at
+          ) VALUES (?, 1, ?, ?, 1, 'repository-baseline', 1, ?, ?, ?, 'ACTIVE', 2, ?, ?)`,
+        )
+        .run(
+          "constitution-context-sources",
+          projectId,
+          "proposal-context-sources",
+          sourceDigest,
+          contentDigest,
+          renderedMarkdown,
+          timestamp,
+          timestamp,
+        );
+    };
+
     it("rejects a ProviderSession for a StageAttempt that does not exist, writing nothing", async () => {
       // No StageAttempt is ever created with this id: the FK on provider_sessions rejects the
       // insert. This is a real, useful guard on its own, but note what it does NOT prove: the
@@ -7680,6 +7713,7 @@ describe("SQLite local state", () => {
       state = undefined;
 
       const raw = new DatabaseSync(databasePath);
+      seedActiveProjectConstitution(raw, projectId);
       seedEvidenceArtifact(raw, {
         id: "evidence-context-sources",
         projectId,
@@ -7708,6 +7742,13 @@ describe("SQLite local state", () => {
         stage: "DISCOVERY",
         attempt: 1,
         sessionOrdinal: 2,
+      });
+      expect(sources.projectConstitution).toEqual({
+        id: "constitution-context-sources",
+        version: 2,
+        ordinal: 1,
+        contentDigest: "c".repeat(64),
+        renderedMarkdown: "# Project Constitution\n\n- Keep persistence reads coherent.",
       });
       expect(sources.latestCheckpoint).toMatchObject({
         summary: "Implemented the size guard and added a regression test.",

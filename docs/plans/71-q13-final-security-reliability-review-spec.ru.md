@@ -73,8 +73,10 @@ worktree-содержимое добавляется через `add -A`, а `wr
 
 Intrinsic bounds не зависят от provider window: не более 50 file records, тела не более первых 16 records, до
 4096 patch bytes на файл и 32768 patch bytes суммарно, до 512 UTF-8 bytes на rendered path. Binary body, file/content
-limit и truncation всегда обозначаются явно. Patch stdout ограничивается во время drain Git process: хвост
-подсчитывается и отбрасывается до накопления в daemon memory, а `omittedBytes` остаётся точным. Context renderer
+limit и truncation всегда обозначаются явно. Patch, status и numstat stdout ограничиваются во время drain Git
+process: хвост подсчитывается и отбрасывается до накопления в daemon memory, а `omittedBytes` для patch остаётся
+точным. Metadata parser получает не более `maxFiles + 1` bounded records, поэтому truncation определяется без
+неограниченного массива. Context renderer
 повторно применяет bounds и заключает все repository
 paths/patches в untrusted-data frame, поэтому внутренний shape drift не снимает ограничение и repository text не
 может закрыть delimiter. Это также даёт Claude REVIEW фактический diff без расширения его filesystem authority:
@@ -91,7 +93,8 @@ provider/browser message или callback secret. Обычные измеренн
 экспортируемого класса не сохраняет произвольный message. Публичное startup recovery также переводит scan failure
 в `BrowserQAArtifactRecoveryError` с фиксированным кодом, а daemon логирует только этот код. Если платформа сообщает
 `ENOENT` для дочернего пути под file-valued artifact root, recovery отдельно проверяет root и не принимает invalid
-layout за допустимо отсутствующий `qa` directory.
+layout за допустимо отсутствующий `qa` directory. Recovery также запрещает symlinked `qa` и run roots, проверяет
+canonical containment и повторно сверяет directory identity непосредственно перед unlink/rename.
 
 ### D8 — Post-start SquadAssignment revision не входит в stable scope
 
@@ -111,6 +114,7 @@ revision для будущих StageAttempt, снято. Revision остаётс
   capabilities;
 - provider-authored evidence заключён в ту же untrusted-data frame, что checkpoint/review output;
 - REVIEW context получает bounded actual diff summary, а не только tree label (D6);
+- REVIEW context получает exact active Project Constitution version с owner-policy framing и provenance;
 - public async BrowserDriver errors имеют closed typed contract (D7);
 - post-start SquadAssignment revision явно остаётся non-goal stable scope без overclaim (D8).
 

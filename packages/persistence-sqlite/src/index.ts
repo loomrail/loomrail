@@ -3514,6 +3514,18 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               })()
             : null;
 
+        const activeConstitution = readActiveProjectConstitution(workItem.projectId);
+        const projectConstitution =
+          activeConstitution === null
+            ? null
+            : {
+                id: activeConstitution.id,
+                version: activeConstitution.version,
+                ordinal: activeConstitution.ordinal,
+                contentDigest: activeConstitution.contentDigest,
+                renderedMarkdown: activeConstitution.renderedMarkdown,
+              };
+
         const qaCorrection =
           stageAttempt.correctionRunId === null
             ? null
@@ -3628,6 +3640,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             attempt: stageAttempt.attempt,
             sessionOrdinal,
           },
+          projectConstitution,
           qaCorrection,
           decisions,
           latestCheckpoint,

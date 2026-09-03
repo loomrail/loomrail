@@ -1,5 +1,5 @@
 import { createServer, type RequestListener, type Server } from "node:http";
-import { access, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +10,7 @@ import {
   BROWSER_QA_RECOVERY_MARKER,
   BrowserQAArtifactRecoveryError,
   BrowserDriverError,
+  type BrowserDriverErrorCode,
   createPlaywrightDriver,
   recoverBrowserQAArtifacts,
 } from "../src/index.js";
@@ -326,6 +327,38 @@ describe("Playwright BrowserDriver", () => {
     ).resolves.toEqual([]);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "refuses a symlinked recovery root without mutating its external target",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-symlink-root-"));
+      const external = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-external-root-"));
+      resources.push({ directory }, { directory: external });
+      const segment = `run-${"a".repeat(32)}`;
+      const externalRun = join(external, segment);
+      await mkdir(externalRun);
+      const marker = join(externalRun, BROWSER_QA_RECOVERY_MARKER);
+      await writeFile(marker, "not-json", "utf8");
+      await symlink(external, join(directory, "qa"));
+
+      await expect(
+        recoverBrowserQAArtifacts({ artifactsDirectory: directory, isCommitted: () => false }),
+      ).rejects.toBeInstanceOf(BrowserQAArtifactRecoveryError);
+      await expect(access(marker)).resolves.toBeUndefined();
+      await expect(access(externalRun)).resolves.toBeUndefined();
+      await expect(access(join(directory, ".quarantine"))).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("refuses a dangling symlink at the recovery root", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-dangling-root-"));
+    resources.push({ directory });
+    await symlink(join(directory, "missing-target"), join(directory, "qa"));
+
+    await expect(
+      recoverBrowserQAArtifacts({ artifactsDirectory: directory, isCommitted: () => false }),
+    ).rejects.toBeInstanceOf(BrowserQAArtifactRecoveryError);
+  });
+
   it("blocks off-origin redirects and exposes no finalizable evidence", async () => {
     const destination = await startServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html" });
@@ -597,5 +630,31 @@ describe("Playwright BrowserDriver", () => {
       }),
     );
     await expect(rejection).rejects.not.toHaveProperty("message", expect.stringContaining("CANARY_SECRET"));
+
+    const runtimeOpenCode = new BrowserDriverError(
+      "CANARY_SECRET" as BrowserDriverErrorCode,
+      "CANARY_SECRET_FROM_CODE",
+    );
+    Object.defineProperty(runtimeOpenCode, "code", { value: "CANARY_SECRET" });
+    const hostileCodeRun = qaRun("http://127.0.0.1:4173");
+    Object.defineProperty(hostileCodeRun, "id", {
+      get: () => {
+        throw runtimeOpenCode;
+      },
+    });
+    const hostileCodeRejection = createPlaywrightDriver({ artifactsDirectory: directory }).run(
+      hostileCodeRun,
+    );
+    await expect(hostileCodeRejection).rejects.toEqual(
+      expect.objectContaining({
+        name: "BrowserDriverError",
+        code: "DRIVER_SETUP_FAILED",
+        message: "The Browser QA driver could not start safely.",
+      }),
+    );
+    await expect(hostileCodeRejection).rejects.not.toHaveProperty(
+      "message",
+      expect.stringContaining("CANARY_SECRET"),
+    );
   });
 });
