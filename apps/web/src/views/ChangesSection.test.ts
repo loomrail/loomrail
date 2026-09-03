@@ -58,7 +58,7 @@ describe("ChangesSection event refresh", () => {
     vi.useFakeTimers();
     const queryClient = new QueryClient();
     const read = vi.fn().mockResolvedValue({ changes: null });
-    await queryClient.prefetchQuery({
+    await queryClient.query({
       queryKey: ["work-items", "work-item-1", "changes"],
       queryFn: read,
     });
