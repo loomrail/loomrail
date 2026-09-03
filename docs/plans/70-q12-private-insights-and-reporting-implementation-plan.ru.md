@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-03
 
-**Статус:** implementation complete; macOS/Windows gate pending
+**Статус:** закрыт; implementation и macOS/Windows gate завершены
 
 **Спецификация:** [69-q12-private-insights-and-reporting-spec.ru.md](69-q12-private-insights-and-reporting-spec.ru.md)
 
@@ -31,7 +31,7 @@
 
 - [x] Прогнать focused tests, build, typecheck, format и landing-excluded lint.
 - [x] Прогнать full test/release/browser gates без изменения `apps/landing/**`.
-- [ ] Прогнать named `test:reporting` на macOS/Windows, записать evidence и обновить Phase 8 status.
+- [x] Прогнать named `test:reporting` на macOS/Windows, записать evidence и обновить Phase 8 status.
 
 ## 2. Module interface
 

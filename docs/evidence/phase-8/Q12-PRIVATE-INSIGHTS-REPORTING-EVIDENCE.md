@@ -4,6 +4,8 @@
 
 **Implementation commit:** `4bfa789`
 
+**Cross-platform gate commits:** `95c57ad`, `cee6c3d`
+
 **Scope:** deterministic aggregate reporting, authenticated local Insights, owner-initiated exact JSON download
 
 ## Product and privacy boundary
@@ -45,7 +47,7 @@ ADR-0009 requires a new decision and threat review before any direct transport.
 - the complete browser suite passes 53/53;
 - the fault-injection gate passes every focused suite and the process crash drill: one interrupted run, no replay and
   one durable recovery report;
-- the public-tree gate passes 631 files with Node 24.19.0 and pnpm 11.21.0;
+- the public-tree gate passes 632 files with Node 24.19.0 and pnpm 11.21.0;
 - production dependency audit reports no known vulnerabilities;
 - `0.1.0-alpha.5` receipt/tarball verification installs 189 packages with scripts disabled, reports zero
   vulnerabilities, checks exact installed files and passes samples, setup, launcher and log lifecycle;
@@ -57,8 +59,27 @@ stable release.
 
 ## Cross-platform verification
 
-Pending the GitHub Actions run for implementation commit `4bfa789`. Q12 remains open until the macOS and Windows
-reporting, fault, clean-package and browser lanes finish and the exact run is recorded here.
+[GitHub Actions run 33697965100](https://github.com/loomrail/loomrail/actions/runs/33697965100) verifies the Q12
+implementation and named gate on macOS and Windows:
+
+| Evidence                                           | macOS                             | Windows                           |
+| -------------------------------------------------- | --------------------------------- | --------------------------------- |
+| Private Insights reporting                         | pass                              | pass                              |
+| Production dependency audit                        | pass                              | pass                              |
+| Bundled samples, community and provider policy     | pass                              | pass                              |
+| Crash and fault recovery                           | pass                              | pass                              |
+| Receipt-checked clean install                      | pass                              | pass                              |
+| Browser smoke, including Insights preview/download | 53/53                             | 53/53                             |
+| Repository source verify                           | protected landing lint only (3/3) | protected landing lint only (3/3) |
+
+The first cross-platform run, `33696723198`, exposed contention in two existing Windows worker integration tests:
+their Vitest timeout included fixture startup and cleanup as well as the 15-second response invariant. Commit
+`cee6c3d` gives the test lifecycle a separate 60-second budget while retaining the exact 15-second behavioral
+deadline, preventing an interrupted cleanup from leaving a locked temporary directory. The repeated fault gate above
+passes on Windows and macOS. Both repository source jobs build successfully and stop only at the three separately
+owned `apps/landing/src/main.ts` lint findings at lines 630, 631 and 634; Q12 does not modify or suppress them.
+
+Q12 is closed without a remote collector, provider execution, package publication or stable-release claim.
 
 ## Remaining release evidence
 

@@ -1353,6 +1353,15 @@ GitHub UI отрисовывает обе формы, private reporting вклю
 [run 33692732443](https://github.com/loomrail/loomrail/actions/runs/33692732443). Оба Verify остановились только на
 protected landing lint; Q11 закрыт.
 
+Q12 private Insights/reporting реализован по планам 69–70. Один deterministic domain-модуль строит local metrics и
+строгие aggregate/crash payloads только из numeric/enum facts одного SQLite statement; crash report существует
+только при durable `DAEMON_RESTART` recovery. Authenticated Insights полностью показывает exact JSON до явного
+one-shot download из того же объекта. Collector, background sender, installation ID, persistent consent и внешний
+reporting endpoint отсутствуют; новый transport потребует отдельного решения и threat review. Named reporting,
+production audit, fault recovery, clean-package и 53/53 browser gates прошли на macOS/Windows в
+[run 33697965100](https://github.com/loomrail/loomrail/actions/runs/33697965100). Оба Verify собрали исходники и
+остановились только на трёх protected landing lint findings; Q12 закрыт без изменения landing и без stable claim.
+
 ### Оценка первого цикла
 
 - internal dogfood alpha: примерно 12–16 недель;

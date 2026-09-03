@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-03
 
-**Статус:** implementation complete; macOS/Windows gate pending
+**Статус:** закрыт; implementation и macOS/Windows gate завершены
 
 **Предшественники:** Q4, Q5, Q7, Q11
 

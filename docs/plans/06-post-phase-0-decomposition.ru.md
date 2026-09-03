@@ -2,8 +2,8 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-03
 
-**Статус:** Q11 public issue intake/roadmap закрыт на live GitHub и macOS/Windows; exact live row, protected landing,
-private dogfood, telemetry и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** Q12 private Insights/reporting закрыт на macOS/Windows; final security review, exact live row, protected
+landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -266,6 +266,14 @@ blank external issues выключены, а roadmap не содержит dates
 browser gates прошли на macOS/Windows в
 [run 33692732443](https://github.com/loomrail/loomrail/actions/runs/33692732443). Оба Verify остановились только на
 protected landing lint; Q11 закрыт.
+Q12 реализует private Insights/reporting по [спецификации 69](69-q12-private-insights-and-reporting-spec.ru.md) и
+[плану 70](70-q12-private-insights-and-reporting-implementation-plan.ru.md). Coherent SQLite read отдаёт одному
+deterministic domain-модулю только numeric/enum facts; strict aggregate/crash schemas запрещают IDs, paths, text,
+logs, timestamps и stack traces. Authenticated Insights показывает local metrics и exact report до owner-initiated
+download тех же bytes; collector, external endpoint, background sender и persistent consent отсутствуют. Named
+reporting, production audit, fault, clean-package и 53/53 browser gates зелёные на macOS/Windows в
+[run 33697965100](https://github.com/loomrail/loomrail/actions/runs/33697965100). Оба Verify остановились только на
+protected landing lint; Q12 закрыт без stable claim.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах
