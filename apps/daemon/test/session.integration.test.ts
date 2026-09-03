@@ -730,6 +730,7 @@ describe("stage attempt session loop", () => {
           templateId: mockDeliveryTemplate.id,
           templateVersion: mockDeliveryTemplate.version,
           specSource: "WORKFLOW_TEMPLATE",
+          roleProfile: null,
           sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
           omitted: [],
           contentHash: `sha256:${"0".repeat(64)}`,

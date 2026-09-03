@@ -15,6 +15,9 @@
 
 - [x] Добавить versioned built-in AgentProfile и immutable SquadAssignment contracts.
 - [x] Добавить AgentRun state machine и role-playbook refinement без ослабления WorkflowTemplate.
+- [x] Применять playbook точной ревизии активного AgentRun к provider Context Pack и сохранять
+      `ROLE_PLAYBOOK + profile id/revision` в append-only recipe; migration 30 оставляет historical provenance
+      честным.
 - [x] Добавить additive migration, сохранив historical ProviderSession без выдуманного AgentRun backfill.
 - [x] Реализовать transactional `START_AGENT_RUN`/terminal transitions с повторной проверкой limits и lease.
 - [x] Добавить restart/recovery, idempotency, storage uniqueness и 3+1 capacity coverage.

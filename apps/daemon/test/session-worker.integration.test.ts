@@ -241,6 +241,7 @@ describe("session worker", () => {
           templateId: mockDeliveryTemplate.id,
           templateVersion: mockDeliveryTemplate.version,
           specSource: "WORKFLOW_TEMPLATE",
+          roleProfile: null,
           sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
           omitted: [],
           contentHash: `sha256:${"0".repeat(64)}`,
@@ -253,6 +254,41 @@ describe("session worker", () => {
     if (running.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a running session");
     return { ...seeded, dispatch: dispatched.dispatch };
   };
+
+  it("applies the assigned role playbook and records its exact profile revision", async () => {
+    const localState = state();
+    const adapter = gatedAdapter();
+    const worker = createSessionWorker({
+      state: localState,
+      adapter,
+      template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
+      createCommandId,
+      logger: createRecordingLogger(),
+    });
+    const seeded = seedQueuedAttempt(localState);
+
+    worker.wake();
+    await adapter.whenStarted(1);
+
+    const sessionState = localState.query({
+      type: "LIST_PROVIDER_SESSIONS",
+      stageAttemptId: seeded.stageAttemptId,
+    });
+    if (sessionState.type !== "PROVIDER_SESSIONS") throw new Error("Expected provider sessions");
+    expect(sessionState.recipes[0]).toMatchObject({
+      specSource: "ROLE_PLAYBOOK",
+      roleProfile: { id: "builtin.product-analyst", revision: 1 },
+    });
+    expect(sessionState.recipes[0]?.sections.map(({ id }) => id).slice(0, 3)).toEqual([
+      "WORK_ITEM_BRIEF",
+      "DECISIONS",
+      "ACTIVITY",
+    ]);
+
+    adapter.release();
+    await awaitIdle(worker);
+  }, 20_000);
 
   it("starts at most three attempts and does not oversubscribe on wakes mid-flight", async () => {
     const localState = state();

@@ -143,8 +143,12 @@ Required mitigations and verification:
 - provider handoff stays inside one AgentRun and one capacity slot. Shutdown aborts every live ProviderSession;
   startup reconciliation marks orphan sessions/runs interrupted before scheduling and never retries them
   automatically;
-- role-playbook and permission composition is intersection-only: a lower layer cannot remove required context or
-  add a capability denied above it. Browser input cannot submit provider argv, workspace paths or slot claims;
+- role-playbook composition is intersection-only: the exact built-in AgentProfile revision captured by the active
+  AgentRun may add or reprioritize optional context, but cannot remove required WorkflowTemplate sections. Every new
+  recipe records `ROLE_PLAYBOOK` plus that profile id/revision; migration 30 preserves historical recipes as
+  `WORKFLOW_TEMPLATE` with null profile provenance and restores their append-only guards. Permission composition
+  remains a separate effective-policy boundary: a lower layer cannot add a capability denied above it. Browser input
+  cannot submit provider argv, workspace paths or slot claims;
 - required gates before enabling the pool: concurrent claim race, 3+1 capacity, per-Project/provider isolation,
   writer/read conflict, same-checkpoint readers, handoff, blocking HumanRequest isolation, shutdown and restart on
   macOS and Windows.

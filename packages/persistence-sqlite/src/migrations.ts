@@ -144,6 +144,11 @@ const migrations: readonly Migration[] = [
     name: "qa_defect_resolution_provenance",
     filename: "0029_qa_defect_resolution_provenance.sql",
   },
+  {
+    version: 30,
+    name: "role_playbook_recipes",
+    filename: "0030_role_playbook_recipes.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

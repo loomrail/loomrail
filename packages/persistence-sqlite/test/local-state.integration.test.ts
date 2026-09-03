@@ -1159,7 +1159,7 @@ describe("SQLite local state", () => {
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-      29,
+      29, 30,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -2813,6 +2813,7 @@ describe("SQLite local state", () => {
             templateId: mockTemplate.id,
             templateVersion: mockTemplate.version,
             specSource: "WORKFLOW_TEMPLATE",
+            roleProfile: null,
             sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
             omitted: [],
             contentHash: `sha256:${"0".repeat(64)}`,
@@ -6178,6 +6179,107 @@ describe("SQLite local state", () => {
       raw.close();
     });
 
+    it("migrates historical workflow-template recipes to the role-aware schema without weakening append-only", async () => {
+      const localState = await open();
+      const { stageAttemptId } = startWorkflow(
+        localState,
+        "start-pre-role-recipe",
+        "create-pre-role-recipe-item",
+      );
+      const started = localState.execute({
+        schemaVersion: 1,
+        commandId: "start-pre-role-provider-session",
+        correlationId: "correlation-pre-role-provider-session",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "START_PROVIDER_SESSION",
+        payload: {
+          stageAttemptId,
+          recipe: {
+            schemaVersion: 1,
+            templateId: mockTemplate.id,
+            templateVersion: mockTemplate.version,
+            specSource: "WORKFLOW_TEMPLATE",
+            roleProfile: null,
+            sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
+            omitted: [],
+            contentHash: `sha256:${"1".repeat(64)}`,
+            estimatedTokens: 10,
+            budgetTokens: 100,
+            estimateQuality: "LOOMRAIL_ESTIMATE",
+          },
+        },
+      });
+      if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+      localState.close();
+      state = undefined;
+
+      const raw = new DatabaseSync(databasePath);
+      raw.exec(`
+        DROP TRIGGER context_pack_recipes_are_append_only_update;
+        DROP TRIGGER context_pack_recipes_are_append_only_delete;
+        ALTER TABLE context_pack_recipes RENAME TO context_pack_recipes_v30;
+        CREATE TABLE context_pack_recipes (
+          id TEXT PRIMARY KEY,
+          schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+          provider_session_id TEXT NOT NULL UNIQUE REFERENCES provider_sessions(id) ON DELETE RESTRICT,
+          template_id TEXT NOT NULL,
+          template_version INTEGER NOT NULL CHECK (template_version > 0),
+          spec_source TEXT NOT NULL CHECK (spec_source = 'WORKFLOW_TEMPLATE'),
+          sections_json TEXT NOT NULL CHECK (json_valid(sections_json)),
+          omitted_json TEXT NOT NULL CHECK (json_valid(omitted_json)),
+          content_hash TEXT NOT NULL CHECK (content_hash LIKE 'sha256:%'),
+          estimated_tokens INTEGER NOT NULL CHECK (estimated_tokens >= 0),
+          budget_tokens INTEGER NOT NULL CHECK (budget_tokens > 0),
+          estimate_quality TEXT NOT NULL
+            CHECK (estimate_quality IN ('ACTUAL', 'PROVIDER_ESTIMATE', 'LOOMRAIL_ESTIMATE')),
+          created_at TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO context_pack_recipes (
+          id, schema_version, provider_session_id, template_id, template_version, spec_source,
+          sections_json, omitted_json, content_hash, estimated_tokens, budget_tokens,
+          estimate_quality, created_at
+        )
+        SELECT
+          id, schema_version, provider_session_id, template_id, template_version, spec_source,
+          sections_json, omitted_json, content_hash, estimated_tokens, budget_tokens,
+          estimate_quality, created_at
+        FROM context_pack_recipes_v30;
+        DROP TABLE context_pack_recipes_v30;
+        CREATE TRIGGER context_pack_recipes_are_append_only_update
+        BEFORE UPDATE ON context_pack_recipes BEGIN
+          SELECT RAISE(ABORT, 'context pack recipes are append-only');
+        END;
+        CREATE TRIGGER context_pack_recipes_are_append_only_delete
+        BEFORE DELETE ON context_pack_recipes BEGIN
+          SELECT RAISE(ABORT, 'context pack recipes are append-only');
+        END;
+        DELETE FROM schema_migrations WHERE version = 30;
+      `);
+      raw.close();
+
+      const migrated = await open();
+      expect(migrated.startup.appliedMigrations).toEqual([30]);
+      const sessions = migrated.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId });
+      if (sessions.type !== "PROVIDER_SESSIONS") throw new Error("Expected provider sessions");
+      expect(sessions.recipes).toMatchObject([
+        {
+          id: started.recipe.id,
+          specSource: "WORKFLOW_TEMPLATE",
+          roleProfile: null,
+        },
+      ]);
+      migrated.close();
+      state = undefined;
+
+      const after = new DatabaseSync(databasePath);
+      expect(() =>
+        after
+          .prepare("UPDATE context_pack_recipes SET template_version = 2 WHERE id = ?")
+          .run(started.recipe.id),
+      ).toThrow(/append-only/);
+      after.close();
+    });
+
     it("accepts the five new session-handoff event types under the rebuilt Events CHECK", async () => {
       const localState = await open();
       const registered = localState.execute(registerProject());
@@ -6272,6 +6374,7 @@ describe("SQLite local state", () => {
             templateId: mockTemplate.id,
             templateVersion: mockTemplate.version,
             specSource: "WORKFLOW_TEMPLATE",
+            roleProfile: null,
             sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
             omitted: [],
             contentHash: `sha256:${"0".repeat(64)}`,
@@ -6396,14 +6499,14 @@ describe("SQLite local state", () => {
           SELECT RAISE(ABORT, 'events are append-only');
         END;
       `);
-      // 0009, 0010 and 0020 all add columns or relations to the table 0006 creates, so a database
-      // that predates 0006 predates them too. All four migrations must be pending for the
+      // 0009, 0010, 0020 and 0030 all add columns or relations to the tables 0006 creates, so a database
+      // that predates 0006 predates them too. All five migrations must be pending for the
       // reconstruction to be honest.
-      raw.prepare("DELETE FROM schema_migrations WHERE version IN (6, 9, 10, 20)").run();
+      raw.prepare("DELETE FROM schema_migrations WHERE version IN (6, 9, 10, 20, 30)").run();
       raw.close();
 
       const migrated = await open();
-      expect(migrated.startup.appliedMigrations).toEqual([6, 9, 10, 20]);
+      expect(migrated.startup.appliedMigrations).toEqual([6, 9, 10, 20, 30]);
 
       const after = migrated.query({ type: "LIST_EVENTS" });
       if (after.type !== "EVENTS") throw new Error("Expected events");
@@ -6476,6 +6579,7 @@ describe("SQLite local state", () => {
           templateId: mockTemplate.id,
           templateVersion: mockTemplate.version,
           specSource: "WORKFLOW_TEMPLATE",
+          roleProfile: null,
           sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
           omitted: [],
           contentHash: `sha256:${"0".repeat(64)}`,

@@ -4,6 +4,7 @@ import {
   squadAssignmentSchema,
   type AgentCapability,
   type AgentProfile,
+  type AgentProfileRef,
   type AgentRole,
   type AgentRun,
   type AgentRunStatus,
@@ -224,6 +225,14 @@ export const builtinAgentProfiles: readonly AgentProfile[] = [
     },
   }),
 ] as const;
+
+export const findBuiltinAgentProfile = (reference: AgentProfileRef): AgentProfile | null =>
+  builtinAgentProfiles.find(
+    (profile) =>
+      profile.id === reference.id &&
+      profile.revision === reference.revision &&
+      profile.role === reference.role,
+  ) ?? null;
 
 const profileForRole = (role: AgentRole): AgentProfile => {
   const profile = builtinAgentProfiles.find((candidate) => candidate.role === role);

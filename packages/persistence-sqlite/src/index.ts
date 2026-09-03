@@ -122,7 +122,6 @@ import {
 import {
   ConstitutionDomainError,
   buildAttentionInbox,
-  builtinAgentProfiles,
   canonicalMcpProfileSource,
   decideProjectReadinessAssessment,
   decideProjectReadinessAttestation,
@@ -153,6 +152,7 @@ import {
   createAgentRun,
   createStandardSquadAssignment,
   finishAgentRun,
+  findBuiltinAgentProfile,
   decideMarkWorkflowDispatchStarted,
   decideMcpCapabilitySnapshot,
   decideMcpProfileConfirmation,
@@ -920,6 +920,8 @@ const contextPackRecipeRowSchema = z.object({
   template_id: z.string(),
   template_version: z.number().int(),
   spec_source: z.string(),
+  role_profile_id: z.string().nullable(),
+  role_profile_revision: z.number().int().nullable(),
   sections_json: z.string(),
   omitted_json: z.string(),
   content_hash: z.string(),
@@ -1822,6 +1824,10 @@ const contextPackRecipeFromRow = (value: unknown): ContextPackRecipe => {
     templateId: row.template_id,
     templateVersion: row.template_version,
     specSource: row.spec_source,
+    roleProfile:
+      row.role_profile_id === null || row.role_profile_revision === null
+        ? null
+        : { id: row.role_profile_id, revision: row.role_profile_revision },
     sections: parseJson(row.sections_json),
     omitted: parseJson(row.omitted_json),
     contentHash: row.content_hash,
@@ -2862,9 +2868,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const insertContextPackRecipe = database.prepare(
       `INSERT INTO context_pack_recipes (
         id, schema_version, provider_session_id, template_id, template_version, spec_source,
-        sections_json, omitted_json, content_hash, estimated_tokens, budget_tokens,
-        estimate_quality, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        role_profile_id, role_profile_revision, sections_json, omitted_json, content_hash,
+        estimated_tokens, budget_tokens, estimate_quality, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const selectProviderSessionsForAttempt = database.prepare(
       "SELECT * FROM provider_sessions WHERE stage_attempt_id = ? ORDER BY ordinal",
@@ -6048,11 +6054,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           selectMaxAgentRunOrdinal.get(stageAttempt.id),
         ).max_ordinal;
         const stageProfile = assignment.stages.find(({ stage }) => stage === stageAttempt.stage)?.profile;
-        const profile = stageProfile
-          ? builtinAgentProfiles.find(
-              (candidate) => candidate.id === stageProfile.id && candidate.revision === stageProfile.revision,
-            )
-          : undefined;
+        const profile = stageProfile === undefined ? null : findBuiltinAgentProfile(stageProfile);
         if (!profile) {
           throw new StateStoreError(
             "PERSISTENCE_FAILURE",
@@ -7573,6 +7575,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           recipe.templateId,
           recipe.templateVersion,
           recipe.specSource,
+          recipe.roleProfile?.id ?? null,
+          recipe.roleProfile?.revision ?? null,
           JSON.stringify(recipe.sections),
           JSON.stringify(recipe.omitted),
           recipe.contentHash,

@@ -106,7 +106,7 @@ export const contextSourceKindSchema = z.enum([
   "QA_RETEST_PLAN",
   "QA_DEFECT",
 ]);
-export const contextPackSpecSourceSchema = z.literal("WORKFLOW_TEMPLATE"); // A3 adds ROLE_PLAYBOOK
+export const contextPackSpecSourceSchema = z.enum(["WORKFLOW_TEMPLATE", "ROLE_PLAYBOOK"]);
 export const contextPackOmittedReasonSchema = z.literal("CONTEXT_BUDGET");
 
 const titleSchema = z.string().trim().min(1).max(200);
@@ -195,7 +195,7 @@ export const contextPackRecipeOmittedSectionSchema = z
 // fields (id, providerSessionId, templateId, templateVersion, specSource, contentHash,
 // estimateQuality, createdAt) are added by the persistence layer that writes the recipe alongside
 // the session and the PROVIDER_SESSION_STARTED event.
-export const contextPackRecipeSchema = z
+const contextPackRecipeObjectSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
     id: opaqueIdSchema,
@@ -203,6 +203,11 @@ export const contextPackRecipeSchema = z
     templateId: opaqueIdSchema,
     templateVersion: z.number().int().positive(),
     specSource: contextPackSpecSourceSchema,
+    roleProfile: z
+      .object({ id: opaqueIdSchema, revision: z.number().int().positive() })
+      .strict()
+      .nullable()
+      .default(null),
     sections: z.array(contextPackRecipeSectionSchema).min(1).max(20),
     omitted: z.array(contextPackRecipeOmittedSectionSchema).max(20),
     contentHash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
@@ -212,6 +217,18 @@ export const contextPackRecipeSchema = z
     createdAt: utcTimestampSchema,
   })
   .strict();
+
+const recipeProfileMatchesSource = (recipe: {
+  specSource: "WORKFLOW_TEMPLATE" | "ROLE_PLAYBOOK";
+  roleProfile: { id: string; revision: number } | null;
+}): boolean => (recipe.specSource === "ROLE_PLAYBOOK") === (recipe.roleProfile !== null);
+
+const roleProfileMessage =
+  "A role-playbook recipe must name the exact profile revision and no other recipe may";
+
+export const contextPackRecipeSchema = contextPackRecipeObjectSchema.refine(recipeProfileMatchesSource, {
+  message: roleProfileMessage,
+});
 
 // The OS pid of the child process a live session actually spawned. Shared between
 // `providerSessionSchema` (what a session carries once one is known) and
@@ -1174,11 +1191,13 @@ export const resolveAcceptanceCommandSchema = commandBaseSchema.extend({
 // shapes sharing a concept (10 fields here vs. 4 there), and collapsing the names would send a
 // reader through StartProviderSessionCommand["payload"]["recipe"] to find this instead of
 // importing it directly.
-export const contextPackRecipeInputSchema = contextPackRecipeSchema.omit({
-  id: true,
-  providerSessionId: true,
-  createdAt: true,
-});
+export const contextPackRecipeInputSchema = contextPackRecipeObjectSchema
+  .omit({
+    id: true,
+    providerSessionId: true,
+    createdAt: true,
+  })
+  .refine(recipeProfileMatchesSource, { message: roleProfileMessage });
 
 export const startProviderSessionCommandSchema = commandBaseSchema.extend({
   type: z.literal("START_PROVIDER_SESSION"),

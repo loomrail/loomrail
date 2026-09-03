@@ -7,6 +7,7 @@ import {
   createAgentRun,
   createStandardSquadAssignment,
   effectiveAgentCapabilities,
+  findBuiltinAgentProfile,
   finishAgentRun,
   refineContextPackForRole,
   validateAgentProfile,
@@ -40,6 +41,9 @@ describe("agent team domain", () => {
       { stage: "QA", role: "BROWSER_QA" },
     ]);
     expect(squad.stages.some(({ stage }) => stage === "ACCEPTANCE")).toBe(false);
+    const developer = squad.stages.find(({ stage }) => stage === "IMPLEMENT")?.profile;
+    expect(developer === undefined ? null : findBuiltinAgentProfile(developer)?.role).toBe("DEVELOPER");
+    expect(findBuiltinAgentProfile({ id: "builtin.developer", revision: 2, role: "DEVELOPER" })).toBeNull();
   });
 
   it("refuses duplicate profile authority and playbook entries", () => {

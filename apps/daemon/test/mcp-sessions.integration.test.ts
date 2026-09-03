@@ -192,6 +192,7 @@ describe("daemon MCP session orchestration", () => {
           templateId: discoveryTemplate.id,
           templateVersion: discoveryTemplate.version,
           specSource: "WORKFLOW_TEMPLATE",
+          roleProfile: null,
           sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
           omitted: [],
           contentHash: `sha256:${"0".repeat(64)}`,

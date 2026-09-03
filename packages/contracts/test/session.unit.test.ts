@@ -166,6 +166,24 @@ describe("session handoff contracts", () => {
     expect(contextPackRecipeSchema.parse(recipe({}))).toBeTruthy();
   });
 
+  it("binds a role-playbook recipe to one exact profile revision", () => {
+    expect(
+      contextPackRecipeSchema.parse(
+        recipe({
+          specSource: "ROLE_PLAYBOOK",
+          roleProfile: { id: "builtin.developer", revision: 1 },
+        }),
+      ),
+    ).toMatchObject({
+      specSource: "ROLE_PLAYBOOK",
+      roleProfile: { id: "builtin.developer", revision: 1 },
+    });
+    expect(() => contextPackRecipeSchema.parse(recipe({ specSource: "ROLE_PLAYBOOK" }))).toThrow();
+    expect(() =>
+      contextPackRecipeSchema.parse(recipe({ roleProfile: { id: "builtin.developer", revision: 1 } })),
+    ).toThrow();
+  });
+
   it("accepts exact QA correction authority as workflow-position provenance", () => {
     expect(
       contextPackRecipeSchema.parse(

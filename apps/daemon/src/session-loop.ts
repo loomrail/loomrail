@@ -9,6 +9,7 @@ import {
   maxCarriedPaths,
   providerSessionProcessPidSchema,
   providerUsageSchema,
+  type AgentProfile,
   type CheckpointDraft,
   type ContextPackSpec,
   type EndProviderSessionCommand,
@@ -26,7 +27,9 @@ import {
   decideDispatchStage,
   decideProvisionWorkspace,
   decideSessionWorkspace,
+  findBuiltinAgentProfile,
   provisionRefusalRequest,
+  refineContextPackForRole,
   stageRequiresWorkspace,
   stageRunsInWorkspace,
   stageWritesInWorkspace,
@@ -192,6 +195,18 @@ const contextPackSpecFor = (template: WorkflowTemplate, stage: StageAttempt["sta
     throw new Error(`The workflow template declares no context pack for the ${stage} stage`);
   }
   return declared.contextPack;
+};
+
+const activeAgentProfile = (deps: RunStageAttemptDeps, stageAttemptId: string): AgentProfile | null => {
+  const result = deps.state.query({ type: "LIST_AGENT_RUNS", status: "RUNNING", limit: 200 });
+  if (result.type !== "AGENT_RUNS") throw new Error("The active AgentRun could not be read");
+  const run = result.runs.find((candidate) => candidate.stageAttemptId === stageAttemptId);
+  if (run === undefined) return null;
+  const profile = findBuiltinAgentProfile(run.profile);
+  if (profile === null) {
+    throw new StateStoreError("PERSISTENCE_FAILURE", "The active AgentRun profile revision is unavailable");
+  }
+  return profile;
 };
 
 const readStageAttemptState = (
@@ -828,6 +843,12 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
   const scheduleDeadline = deps.scheduleHandoffDeadline ?? defaultScheduleHandoffDeadline;
   const capabilities = deps.adapter.capabilities();
   const stageAttemptId = deps.dispatch.stageAttemptId;
+  const roleProfile = activeAgentProfile(deps, stageAttemptId);
+  const templateContextSpec = contextPackSpecFor(deps.template, readStageAttemptState(deps).attempt.stage);
+  const contextSpec =
+    roleProfile === null
+      ? templateContextSpec
+      : refineContextPackForRole(templateContextSpec, roleProfile.playbook);
   let lastSessionOrdinal = 0;
 
   for (let session = 0; session < MAX_SESSIONS_PER_ATTEMPT; session += 1) {
@@ -1079,7 +1100,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     const budgetTokens = Math.max(1, Math.floor(capabilities.contextWindowTokens * packShare));
     const assembled = assembleContextPack({
       sources: sources.sources,
-      spec: contextPackSpecFor(deps.template, attempt.stage),
+      spec: contextSpec,
       budgetTokens,
       bytesPerToken: BYTES_PER_TOKEN,
     });
@@ -1126,7 +1147,8 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           schemaVersion: 1,
           templateId: deps.template.id,
           templateVersion: deps.template.version,
-          specSource: "WORKFLOW_TEMPLATE",
+          specSource: roleProfile === null ? "WORKFLOW_TEMPLATE" : "ROLE_PLAYBOOK",
+          roleProfile: roleProfile === null ? null : { id: roleProfile.id, revision: roleProfile.revision },
           sections: assembled.recipe.sections,
           omitted: assembled.recipe.omitted,
           contentHash: assembled.pack.contentHash,
