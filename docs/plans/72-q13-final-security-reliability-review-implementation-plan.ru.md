@@ -13,7 +13,7 @@
 - [x] Сохранить immutable AgentRun effective policy и применить capability/workspace/network/MCP/session gates.
 - [x] Довести durable live-provider usage: atomic ledger/hard pause, Claude cache normalization, owner-visible
       attribution, restart/idempotency/append-only и abort tests.
-- [ ] Добавить bounded actual-diff summary в REVIEW context и проверить отсутствие path/content overflow.
+- [x] Добавить bounded actual-diff summary в REVIEW context и проверить отсутствие path/content overflow.
 - [ ] Закрыть BrowserDriver async errors typed result/error contract.
 - [ ] Проверить SquadAssignment revision claim и устранить реализацию либо документационный overclaim.
 - [ ] Выполнить финальный Standards/Spec review и закрыть все P0/P1.

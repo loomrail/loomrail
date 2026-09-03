@@ -27,6 +27,23 @@ export type ChangeSummary = {
   truncated: boolean;
 };
 
+export type ReviewDiffContent =
+  | { type: "BINARY" }
+  | { type: "TEXT"; patch: string; truncated: boolean; omittedBytes: number }
+  | { type: "OMITTED"; reason: "FILE_LIMIT" | "TOTAL_BYTE_LIMIT" };
+
+export type ReviewChangedFile = ChangedFile & { content: ReviewDiffContent };
+
+export type ReviewChangeSummary = {
+  files: readonly ReviewChangedFile[];
+  // The baseline is carried on the reading so callers cannot accidentally render these patches
+  // beside a comparison point obtained elsewhere.
+  baseline: string;
+  // Written from the exact temporary index that produced both the file list and every patch.
+  tree: string;
+  truncated: boolean;
+};
+
 // The flags that make git's answer independent of the owner's config (spec D4). `-M` is passed
 // explicitly rather than relying on `diff.renames`, and `core.quotepath=false` keeps non-ASCII
 // paths as themselves instead of escape sequences. `--no-ext-diff` keeps the owner's external
@@ -243,44 +260,50 @@ export const summariseChanges = async (context: {
 }): Promise<ChangeSummary> => {
   const { worktreePath, baseline, maxFiles } = context;
 
-  return withTemporaryIndex({ worktreePath, baseline, prefix: "loomrail-changes-" }, async (indexFile) => {
-    const writeTree = await runGitWithIndex(["write-tree"], worktreePath, indexFile);
-    expectSuccess(writeTree, "write-tree");
+  return withTemporaryIndex({ worktreePath, baseline, prefix: "loomrail-changes-" }, (indexFile) =>
+    readChangeSummaryFromIndex({ worktreePath, baseline, maxFiles, indexFile }),
+  );
+};
 
-    const numstat = await runGitWithIndex([...readArgs, "--numstat", baseline], worktreePath, indexFile);
-    expectSuccess(numstat, "diff-index --numstat");
+const readChangeSummaryFromIndex = async (context: {
+  worktreePath: string;
+  baseline: string;
+  maxFiles: number;
+  indexFile: string;
+}): Promise<ChangeSummary> => {
+  const { worktreePath, baseline, maxFiles, indexFile } = context;
+  const writeTree = await runGitWithIndex(["write-tree"], worktreePath, indexFile);
+  expectSuccess(writeTree, "write-tree");
 
-    const nameStatus = await runGitWithIndex(
-      [...readArgs, "--name-status", baseline],
-      worktreePath,
-      indexFile,
-    );
-    expectSuccess(nameStatus, "diff-index --name-status");
+  const numstat = await runGitWithIndex([...readArgs, "--numstat", baseline], worktreePath, indexFile);
+  expectSuccess(numstat, "diff-index --numstat");
 
-    const statuses = parseNameStatus(nameStatus.stdout);
-    const files = parseNumstat(numstat.stdout).map((counted): ChangedFile => {
-      const record = statuses.get(counted.path);
-      if (record === undefined) {
-        // Two readings of one index that disagree about which paths changed. Refusing beats
-        // inventing a status for a file whose fate is unknown.
-        throw new Error(`git reported line counts for ${JSON.stringify(counted.path)} but no status`);
-      }
-      return {
-        path: counted.path,
-        previousPath: record.previousPath,
-        status: record.status,
-        insertions: counted.insertions,
-        deletions: counted.deletions,
-        binary: counted.binary,
-      };
-    });
+  const nameStatus = await runGitWithIndex([...readArgs, "--name-status", baseline], worktreePath, indexFile);
+  expectSuccess(nameStatus, "diff-index --name-status");
 
+  const statuses = parseNameStatus(nameStatus.stdout);
+  const files = parseNumstat(numstat.stdout).map((counted): ChangedFile => {
+    const record = statuses.get(counted.path);
+    if (record === undefined) {
+      // Two readings of one index that disagree about which paths changed. Refusing beats
+      // inventing a status for a file whose fate is unknown.
+      throw new Error(`git reported line counts for ${JSON.stringify(counted.path)} but no status`);
+    }
     return {
-      files: files.slice(0, maxFiles),
-      tree: writeTree.stdout.trim(),
-      truncated: files.length > maxFiles,
+      path: counted.path,
+      previousPath: record.previousPath,
+      status: record.status,
+      insertions: counted.insertions,
+      deletions: counted.deletions,
+      binary: counted.binary,
     };
   });
+
+  return {
+    files: files.slice(0, maxFiles),
+    tree: writeTree.stdout.trim(),
+    truncated: files.length > maxFiles,
+  };
 };
 
 /**
@@ -687,6 +710,91 @@ export const readFileDiff = async (context: {
       expectSuccess(patch, "diff-index -p");
 
       return { path: relativePath, baseline, binary: false, ...clipPatch(patch.stdout, maxBytes) };
+    },
+  );
+};
+
+const reviewPatchFromIndex = async (context: {
+  worktreePath: string;
+  baseline: string;
+  file: ChangedFile;
+  maxBytes: number;
+  indexFile: string;
+}): Promise<Extract<ReviewDiffContent, { type: "TEXT" }>> => {
+  const { worktreePath, baseline, file, maxBytes, indexFile } = context;
+  const pathspecs =
+    file.previousPath === null
+      ? [literalPathspec(file.path)]
+      : [literalPathspec(file.previousPath), literalPathspec(file.path)];
+  const patch = await runGitWithIndex(
+    [...readArgs.filter((arg) => arg !== "-z"), "-p", baseline, "--", ...pathspecs],
+    worktreePath,
+    indexFile,
+  );
+  expectSuccess(patch, "diff-index -p for review");
+  return { type: "TEXT", ...clipPatch(patch.stdout, maxBytes) };
+};
+
+/**
+ * A bounded, content-bearing REVIEW handoff read from one immutable temporary Git index.
+ *
+ * A changed-file stat alone cannot support an independent review by an adapter that intentionally
+ * has no filesystem access. Conversely, putting an unrestricted repository patch into a required
+ * context section makes the provider window and daemon memory depend on repository size. This
+ * reading keeps the useful middle: all returned metadata and patch fragments describe one tree,
+ * while four caller-supplied limits bound path count, patch-process count, each patch fragment and
+ * their combined bytes. Omission is explicit per file; it is never rendered as an empty patch.
+ *
+ * Git still buffers one file's complete textual patch before clipping, matching {@link readFileDiff}
+ * and its documented one-file memory bound. It never buffers an unrestricted whole-repository
+ * patch, and files beyond `maxContentFiles` start no patch process at all.
+ */
+export const readReviewDiff = async (context: {
+  worktreePath: string;
+  baseline: string;
+  maxFiles: number;
+  maxContentFiles: number;
+  maxPatchBytesPerFile: number;
+  maxPatchBytesTotal: number;
+}): Promise<ReviewChangeSummary> => {
+  const { worktreePath, baseline, maxFiles, maxContentFiles, maxPatchBytesPerFile, maxPatchBytesTotal } =
+    context;
+
+  return withTemporaryIndex(
+    { worktreePath, baseline, prefix: "loomrail-review-diff-" },
+    async (indexFile) => {
+      const summary = await readChangeSummaryFromIndex({ worktreePath, baseline, maxFiles, indexFile });
+      let patchBytes = 0;
+      const files: ReviewChangedFile[] = [];
+
+      for (const [index, file] of summary.files.entries()) {
+        if (file.binary) {
+          files.push({ ...file, content: { type: "BINARY" } });
+          continue;
+        }
+        if (index >= maxContentFiles) {
+          files.push({ ...file, content: { type: "OMITTED", reason: "FILE_LIMIT" } });
+          continue;
+        }
+
+        const remainingBytes = Math.max(0, maxPatchBytesTotal - patchBytes);
+        if (remainingBytes === 0) {
+          files.push({ ...file, content: { type: "OMITTED", reason: "TOTAL_BYTE_LIMIT" } });
+          continue;
+        }
+
+        const content = await reviewPatchFromIndex({
+          worktreePath,
+          baseline,
+          file,
+          maxBytes: Math.min(maxPatchBytesPerFile, remainingBytes),
+          indexFile,
+        });
+        patchBytes += Buffer.byteLength(content.patch, "utf8");
+        files.push({ ...file, content });
+      }
+
+      return { baseline, tree: summary.tree, files, truncated: summary.truncated };
     },
   );
 };

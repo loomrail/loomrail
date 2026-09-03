@@ -1366,8 +1366,9 @@ Q13 final security/reliability review идёт по планам 71–72. Пер
 manifest-derived runtime floor, adapter-owned diagnostics, role playbook provenance и immutable AgentRun effective
 policy. Текущий срез добавляет один digest-verified cumulative ProviderUsageReport на сессию, нормализует Claude
 cache input, атомарно проводит token spend через общий ledger и hard-pause до следующей сессии, а также показывает
-owner-у per-session attribution. До закрытия остальных Q13 findings, private dogfood, exact live-provider promotion,
-protected landing и registry provenance stable npm publish запрещён.
+owner-у per-session attribution. REVIEW теперь получает tree-checked bounded actual diff из одного temporary index,
+включая ограниченные unified-diff fragments для filesystem-isolated reviewer. До закрытия остальных Q13 findings,
+private dogfood, exact live-provider promotion, protected landing и registry provenance stable npm publish запрещён.
 
 ### Оценка первого цикла
 

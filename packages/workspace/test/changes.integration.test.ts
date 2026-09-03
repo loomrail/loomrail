@@ -9,6 +9,7 @@ import {
   PathOutsideWorktreeError,
   PathUnresolvableError,
   readFileDiff,
+  readReviewDiff,
   resolveWorktreeRelativePath,
   summariseChanges,
   treeOfWorktree,
@@ -224,6 +225,64 @@ describe("summariseChanges", () => {
       "pkg/pic2.bin",
       "renamed-to.txt",
     ]);
+  });
+});
+
+describe("readReviewDiff", () => {
+  it("reads file metadata, patch content and the result tree from one bounded review snapshot", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+    const review = await readReviewDiff({
+      worktreePath,
+      baseline,
+      maxFiles: 50,
+      maxContentFiles: 20,
+      maxPatchBytesPerFile: 8_192,
+      maxPatchBytesTotal: 65_536,
+    });
+
+    expect(review.baseline).toBe(baseline);
+    expect(review.tree).toMatch(/^[0-9a-f]{40}$/);
+    expect(review.files.find(({ path }) => path === "added.txt")).toMatchObject({
+      status: "ADDED",
+      content: { type: "TEXT", truncated: false, omittedBytes: 0 },
+    });
+    const added = review.files.find(({ path }) => path === "added.txt");
+    expect(added?.content.type === "TEXT" ? added.content.patch : "").toContain("+added");
+    expect(review.files.find(({ path }) => path === "pic.bin")).toMatchObject({
+      binary: true,
+      content: { type: "BINARY" },
+    });
+    expect(await listTreePaths(worktreePath, review.tree)).toContain("added.txt");
+  });
+
+  it("bounds file bodies independently from metadata and makes every omission visible", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+    const review = await readReviewDiff({
+      worktreePath,
+      baseline,
+      maxFiles: 4,
+      maxContentFiles: 1,
+      maxPatchBytesPerFile: 64,
+      maxPatchBytesTotal: 64,
+    });
+
+    expect(review.files).toHaveLength(4);
+    expect(review.truncated).toBe(true);
+    expect(review.files[0]?.content).toMatchObject({ type: "TEXT", truncated: true });
+    expect(
+      review.files
+        .slice(1)
+        .filter(({ binary }) => !binary)
+        .map(({ content }) => content),
+    ).toEqual(expect.arrayContaining([{ type: "OMITTED", reason: "FILE_LIMIT" }]));
+    const includedPatchBytes = review.files.reduce(
+      (total, { content }) =>
+        total + (content.type === "TEXT" ? Buffer.byteLength(content.patch, "utf8") : 0),
+      0,
+    );
+    expect(includedPatchBytes).toBeLessThanOrEqual(64);
   });
 });
 

@@ -179,8 +179,12 @@ Required controls and verification:
 - author and reviewer are read from durable AgentRuns in the same PipelineRun; their IDs must differ, the reviewer
   role must be `CODE_REVIEWER`, and provider relation is derived by the daemon rather than accepted from output;
 - the report names the exact result tree and is rejected when it differs from the latest successful IMPLEMENT tree.
-  A REVIEW first session receives a fresh bounded pack with that tree, author handoff and OPEN findings, but never the
-  author's checkpoint or transcript;
+  A REVIEW first session receives a fresh bounded pack with that tree, author handoff, actual unified-diff fragments
+  and OPEN findings, but never the author's checkpoint or transcript. File stats, patches and `write-tree` come from
+  one temporary index and are refused before spawn when its tree differs from the durable IMPLEMENT result;
+- repository diff text stays inside the untrusted-data frame. The renderer independently caps 50 file records,
+  content for 16 records, 4096 patch bytes per file, 32768 patch bytes total and 512 UTF-8 bytes per path; binary,
+  file/content-limit and byte truncation are explicit. Claude receives those fragments without filesystem access;
 - report and finding drafts use closed runtime schemas and bounded text/counts. IDs, lifecycle status, attribution and
   resolution time are created by Loomrail; relative paths remain display data and are never used as read authority;
 - a passing later review may resolve OPEN findings. `WAIVED` and `FALSE_POSITIVE` require an authenticated HUMAN

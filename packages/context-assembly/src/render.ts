@@ -1,4 +1,5 @@
 import type {
+  ChangedFile,
   ContextSectionId,
   ProviderId,
   QACorrectionRun,
@@ -6,6 +7,24 @@ import type {
   QARetestPlan,
   ReviewFindingSeverity,
 } from "@loomrail/contracts";
+
+// REVIEW_INPUT is required, so its diff summary must have a tighter intrinsic bound than the
+// provider window: otherwise a repository with many deeply nested paths could turn a useful review
+// handoff into a context-floor pause. The daemon asks Git for the same file count and this renderer
+// independently slices/clips again because ContextSources is an internal TypeScript shape, not a
+// runtime trust boundary.
+export const MAX_REVIEW_DIFF_FILES = 50;
+export const MAX_REVIEW_DIFF_CONTENT_FILES = 16;
+export const MAX_REVIEW_DIFF_PATH_BYTES = 512;
+export const MAX_REVIEW_DIFF_PATCH_BYTES_PER_FILE = 4_096;
+export const MAX_REVIEW_DIFF_PATCH_BYTES_TOTAL = 32_768;
+
+export type ReviewDiffContent =
+  | { type: "BINARY" }
+  | { type: "TEXT"; patch: string; truncated: boolean; omittedBytes: number }
+  | { type: "OMITTED"; reason: "FILE_LIMIT" | "TOTAL_BYTE_LIMIT" };
+
+export type ReviewChangedFile = ChangedFile & { content: ReviewDiffContent };
 
 export type ContextSources = {
   workItemBrief: {
@@ -72,6 +91,14 @@ export type ContextSources = {
   reviewInput: {
     implementationAttempt: { id: string; version: number; attempt: number; resultTree: string };
     authorAgentRun: { id: string; version: number; provider: ProviderId };
+    // Persistence owns the coherent durable state snapshot and therefore leaves this null. The
+    // daemon fills it from the exact leased worktree immediately before assembly, after verifying
+    // the measured tree still equals implementationAttempt.resultTree.
+    diffSummary: {
+      baseline: string;
+      files: readonly ReviewChangedFile[];
+      truncated: boolean;
+    } | null;
     openFindings: readonly {
       id: string;
       version: number;
@@ -118,6 +145,82 @@ const block = (title: string, lines: readonly string[]): string => [`## ${title}
 
 const list = (items: readonly string[], empty: string): readonly string[] =>
   items.length === 0 ? [empty] : items.map((item) => `- ${item}`);
+
+const utf8Prefix = (text: string, maxBytes: number): string => {
+  let bytes = 0;
+  let prefix = "";
+  for (const character of text) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes > maxBytes) break;
+    prefix += character;
+    bytes += characterBytes;
+  }
+  return prefix;
+};
+
+const boundedReviewPath = (path: string): string => {
+  const pathBytes = Buffer.byteLength(path, "utf8");
+  if (pathBytes <= MAX_REVIEW_DIFF_PATH_BYTES) return path;
+  const suffix = `… (${(pathBytes - MAX_REVIEW_DIFF_PATH_BYTES).toString()}+ path bytes omitted)`;
+  return `${utf8Prefix(path, MAX_REVIEW_DIFF_PATH_BYTES - Buffer.byteLength(suffix, "utf8"))}${suffix}`;
+};
+
+const renderChangedFileSummary = (file: ChangedFile): string => {
+  const path = boundedReviewPath(file.path);
+  const location =
+    file.status === "RENAMED" && file.previousPath !== null
+      ? `${boundedReviewPath(file.previousPath)} -> ${path}`
+      : path;
+  const counts =
+    file.binary || file.insertions === null || file.deletions === null
+      ? "binary"
+      : `+${file.insertions.toString()} -${file.deletions.toString()}`;
+  return `- ${file.status} ${location} (${counts})`;
+};
+
+const safeOmittedBytes = (value: number): number => (Number.isSafeInteger(value) && value >= 0 ? value : 0);
+
+const renderReviewDiffFiles = (files: readonly ReviewChangedFile[]): readonly string[] => {
+  let renderedPatchBytes = 0;
+
+  return files.slice(0, MAX_REVIEW_DIFF_FILES).flatMap((file, index) => {
+    const summary = renderChangedFileSummary(file);
+    if (file.binary || file.content.type === "BINARY") {
+      return [summary, "  Patch: binary content is not included."];
+    }
+    if (index >= MAX_REVIEW_DIFF_CONTENT_FILES) {
+      return [summary, "  Patch: omitted by the review content-file bound."];
+    }
+    if (file.content.type === "OMITTED") {
+      const reason =
+        file.content.reason === "FILE_LIMIT" ? "review content-file bound" : "review total byte bound";
+      return [summary, `  Patch: omitted by the ${reason}.`];
+    }
+
+    const availableBytes = Math.max(0, MAX_REVIEW_DIFF_PATCH_BYTES_TOTAL - renderedPatchBytes);
+    if (availableBytes === 0) {
+      return [summary, "  Patch: omitted by the review total byte bound."];
+    }
+
+    const sourceBytes = Buffer.byteLength(file.content.patch, "utf8");
+    const permittedBytes = Math.min(MAX_REVIEW_DIFF_PATCH_BYTES_PER_FILE, availableBytes);
+    const patch = utf8Prefix(file.content.patch, permittedBytes);
+    const patchBytes = Buffer.byteLength(patch, "utf8");
+    renderedPatchBytes += patchBytes;
+    const omittedBytes = safeOmittedBytes(file.content.omittedBytes) + Math.max(0, sourceBytes - patchBytes);
+    const patchLines = patch.replace(/\r\n?/g, "\n").split("\n");
+    if (patchLines.at(-1) === "") patchLines.pop();
+
+    return [
+      summary,
+      "  Unified diff:",
+      ...(patchLines.length === 0 ? ["  (empty textual patch)"] : patchLines),
+      ...(file.content.truncated || omittedBytes > 0
+        ? [`  … (${omittedBytes.toString()} patch bytes omitted)`]
+        : []),
+    ];
+  });
+};
 
 // Spec §8: a checkpoint is provider output, i.e. untrusted input by AGENTS.md. It reaches the
 // next session's context and survives a provider change, so it is wrapped as data describing
@@ -339,16 +442,32 @@ const renderReviewInput = (sources: ContextSources): RenderedBody => {
             `  Criterion: ${finding.criterion ?? "(not linked)"}`,
           ];
         });
+  const boundedDiffFiles = input.diffSummary?.files.slice(0, MAX_REVIEW_DIFF_FILES) ?? [];
+  const diffTruncated =
+    input.diffSummary !== null &&
+    (input.diffSummary.truncated || input.diffSummary.files.length > MAX_REVIEW_DIFF_FILES);
+  const diffLines =
+    input.diffSummary === null
+      ? ["Measured diff summary: unavailable"]
+      : [
+          `Diff baseline: ${input.diffSummary.baseline}`,
+          "Changed files and bounded unified-diff fragments:",
+          ...(boundedDiffFiles.length === 0
+            ? ["(no changed files against the recorded baseline)"]
+            : renderReviewDiffFiles(boundedDiffFiles)),
+          ...(diffTruncated ? ["- Additional changed files were omitted by the review-context bound."] : []),
+        ];
   const body = [
     `Implementation attempt: ${input.implementationAttempt.attempt.toString()}`,
     `Stable result tree: ${input.implementationAttempt.resultTree}`,
     `Author AgentRun: ${input.authorAgentRun.id} (${input.authorAgentRun.provider})`,
+    ...diffLines,
     "Open findings from earlier rounds:",
     ...findings,
   ].join("\n");
   return {
     text: block("Independent Review Input", [
-      "Review the current worktree independently. Inspect the actual implementation and tests; do not trust an author's claim of completion.",
+      "Review the stable implementation independently. Inspect the supplied diff and tests; when a read-only worktree is available, use it for surrounding context. Do not trust an author's claim of completion.",
       untrusted(body),
     ]),
     sources: [

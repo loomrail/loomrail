@@ -63,6 +63,21 @@ Budget pause не создаёт Human Request и сохраняет `failureCod
 Task Cockpit показывает для каждой сессии total/input/output, quality и reported USD cost, если он существует.
 Общий budget progress продолжает читаться из единого UsageRecord ledger. Raw provider output не сохраняется.
 
+### D6 — Stable bounded actual diff для REVIEW
+
+Первый REVIEW session получает не только durable result-tree label и file stats. Daemon строит file list и
+unified-diff fragments из одного временного Git index: recorded baseline загружается через `read-tree`, текущее
+worktree-содержимое добавляется через `add -A`, а `write-tree`, status/numstat и patch reads используют этот же index.
+Измеренный tree обязан совпасть с immutable result tree последнего IMPLEMENT; иначе provider session не стартует и
+владелец получает blocking retry request.
+
+Intrinsic bounds не зависят от provider window: не более 50 file records, тела не более первых 16 records, до
+4096 patch bytes на файл и 32768 patch bytes суммарно, до 512 UTF-8 bytes на rendered path. Binary body, file/content
+limit и truncation всегда обозначаются явно. Context renderer повторно применяет bounds и заключает все repository
+paths/patches в untrusted-data frame, поэтому внутренний shape drift не снимает ограничение и repository text не
+может закрыть delimiter. Это также даёт Claude REVIEW фактический diff без расширения его filesystem authority:
+adapter по-прежнему работает в пустом temporary directory под `permission-mode plan`.
+
 ## 4. Другие обязательные findings Q13
 
 - untrusted repository/provider text не может закрыть собственную context section delimiter;
@@ -70,7 +85,7 @@ Task Cockpit показывает для каждой сессии total/input/o
 - provider diagnostics принадлежат adapter, не daemon;
 - role playbook реально участвует в context recipe с exact profile revision;
 - AgentRun хранит и применяет immutable effective capabilities, workspace/network, budget/session и MCP revisions;
-- REVIEW context получает bounded actual diff summary, а не только tree label;
+- REVIEW context получает bounded actual diff summary, а не только tree label (D6);
 - public async BrowserDriver errors имеют closed typed contract;
 - post-start SquadAssignment revision либо реализована с новым AgentRun snapshot, либо явно остаётся non-goal stable
   scope без overclaim.

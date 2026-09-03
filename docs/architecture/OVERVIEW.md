@@ -230,8 +230,11 @@ correlation and emits escaped Markdown without storage keys, paths, transcripts 
 Independent review uses the same boundary: persistence derives author/reviewer identity and provider relation from
 AgentRuns, compares the reported tree with the latest successful IMPLEMENT tree, and atomically stores ReviewReport,
 ReviewFinding lifecycle changes, the next dispatch or HumanRequest, events and command receipt. Review first-session
-context is assembled from the stable implementation attempt, its author and OPEN findings; author checkpoints and
-transcripts are not sources for a new review round.
+context is assembled from the stable implementation attempt, its author, OPEN findings and a bounded actual diff.
+The daemon derives stats, patch fragments and tree from one temporary Git index, refuses a mismatch with the durable
+IMPLEMENT tree before provider spawn, and the renderer reapplies file/path/per-file/total-content bounds inside an
+untrusted-data frame. A filesystem-isolated provider therefore sees actual changed code without receiving repository
+authority. Author checkpoints and transcripts are not sources for a new review round.
 
 ### `packages/workflow-engine`
 

@@ -55,9 +55,12 @@ import {
   deleteBranchIfUnmoved,
   inspectRepository,
   removeWorktree,
+  readReviewDiff,
   treeOfWorktree,
   type AddWorktreeRefusal,
 } from "@loomrail/workspace";
+
+import { prepareReviewContext, type ReviewContextPreparation } from "./review-context.js";
 
 /**
  * The share of the provider's context window handed to the assembled pack. The rest is the agent's
@@ -911,7 +914,13 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     // same outcome: a stage that did not start, and a question explaining why. They stay separate
     // variants of `DispatchStageDecision` because their fixes differ, and the log line names which
     // one happened.
-    const refuseDispatch = (decision: Exclude<DispatchStageDecision, { type: "DISPATCH" }>): void => {
+    type PreSessionRefusal =
+      | Exclude<DispatchStageDecision, { type: "DISPATCH" }>
+      | ({ type: "REVIEW_CONTEXT_UNAVAILABLE" } & Omit<
+          Extract<ReviewContextPreparation, { type: "REFUSED" }>,
+          "type"
+        >);
+    const refuseDispatch = (decision: PreSessionRefusal): void => {
       deps.state.execute({
         schemaVersion: 1,
         commandId: deps.createCommandId(),
@@ -935,11 +944,16 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           stage: attempt.stage,
           provider: capabilities.provider,
           canStart: String(capabilities.start),
-          reason: decision.type,
+          reason: decision.type === "REVIEW_CONTEXT_UNAVAILABLE" ? decision.reason : decision.type,
+          ...(decision.type === "REVIEW_CONTEXT_UNAVAILABLE" && decision.cause !== null
+            ? { error: errorName(decision.cause) }
+            : {}),
         },
         decision.type === "STAGE_NOT_SERVED"
           ? "The adapter refused this dispatch; the owner was asked"
-          : "No workspace could be prepared for this stage; the owner was asked",
+          : decision.type === "WORKSPACE_NOT_PROVISIONED"
+            ? "No workspace could be prepared for this stage; the owner was asked"
+            : "The stable review diff could not be measured; the owner was asked",
       );
     };
 
@@ -966,9 +980,13 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     //
     // `adapterWorksInWorkspace` is the other half, and it is about the owner's repository rather
     // than about this stage: cutting a worktree writes a ref, a commit and a `.git/worktrees` entry
-    // into it, and an adapter that reads `invocation.workspace` nowhere would have all of that done
-    // on its behalf and then discard it. Today that is `provider-claude-code`, which serves
-    // DISCOVERY, PLAN and REVIEW out of its own temporary directory.
+    // into it, and an adapter that reads `invocation.workspace` nowhere would ordinarily have all
+    // of that done on its behalf and then discard it. Today that is `provider-claude-code`, which
+    // serves its sessions out of its own temporary directory. REVIEW is the deliberate exception:
+    // the daemon itself needs the completed implementation's recorded workspace to build the
+    // bounded diff that gives a filesystem-isolated reviewer actual code. In an ordinary pipeline
+    // that workspace already exists from IMPLEMENT; acquiring it here holds the single-writer
+    // lease while the stable review snapshot is taken and judged.
     // Why this stage has no workspace, when it has none -- kept rather than acted on here.
     //
     // Whether the LACK of a workspace ends the dispatch is one decision and it is made in one
@@ -982,7 +1000,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     if (
       lease.workspace === null &&
       stageRunsInWorkspace(attempt.stage) &&
-      adapterWorksInWorkspace(capabilities.stages)
+      (adapterWorksInWorkspace(capabilities.stages) || attempt.stage === "REVIEW")
     ) {
       const prepared = await prepareWorkspaceSafely(deps);
       if (prepared.type === "REFUSED") {
@@ -1119,8 +1137,21 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
 
     const sessionOrdinal = sessions.nextOrdinal;
     lastSessionOrdinal = sessionOrdinal;
-    const sources = deps.state.query({ type: "READ_CONTEXT_SOURCES", stageAttemptId, sessionOrdinal });
-    if (sources.type !== "CONTEXT_SOURCES") throw new Error("The context sources could not be read");
+    const contextSnapshot = deps.state.query({
+      type: "READ_CONTEXT_SOURCES",
+      stageAttemptId,
+      sessionOrdinal,
+    });
+    if (contextSnapshot.type !== "CONTEXT_SOURCES") throw new Error("The context sources could not be read");
+    const reviewContext = await prepareReviewContext({
+      sources: contextSnapshot.sources,
+      workspace: lease.workspace,
+      readDiff: readReviewDiff,
+    });
+    if (reviewContext.type === "REFUSED") {
+      refuseDispatch({ ...reviewContext, type: "REVIEW_CONTEXT_UNAVAILABLE" });
+      return;
+    }
 
     // Spec §6.1 step 2: a share of the window declared by the adapter, never the whole window.
     // The share is derived from the attempt's own durable backoff count, not from a local variable:
@@ -1129,7 +1160,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     const packShare = MAX_PACK_SHARE - attempt.packShareBackoffs * PACK_SHARE_BACKOFF;
     const budgetTokens = Math.max(1, Math.floor(capabilities.contextWindowTokens * packShare));
     const assembled = assembleContextPack({
-      sources: sources.sources,
+      sources: reviewContext.sources,
       spec: contextSpec,
       budgetTokens,
       bytesPerToken: BYTES_PER_TOKEN,
@@ -1440,8 +1471,8 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             acceptanceInput:
               attempt.stage === "ACCEPTANCE"
                 ? {
-                    criteria: sources.sources.workItemBrief.acceptanceCriteria,
-                    evidence: sources.sources.evidence.map(({ kind, checks }) => ({ kind, checks })),
+                    criteria: reviewContext.sources.workItemBrief.acceptanceCriteria,
+                    evidence: reviewContext.sources.evidence.map(({ kind, checks }) => ({ kind, checks })),
                   }
                 : null,
             humanRequests,

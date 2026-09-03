@@ -3491,6 +3491,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                     version: authorAgentRun.version,
                     provider: authorAgentRun.provider,
                   },
+                  // Git and the leased worktree are infrastructure concerns. The daemon fills this
+                  // derived field after this coherent durable snapshot commits and refuses REVIEW
+                  // if the measured tree no longer matches implementationAttempt.resultTree.
+                  diffSummary: null,
                   openFindings: selectOpenReviewFindingsForCycle
                     .all(run.id, stageAttempt.correctionRunId)
                     .map(reviewFindingFromRow)

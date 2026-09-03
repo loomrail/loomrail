@@ -140,7 +140,30 @@ const proseOnlyAdapter = (onStart: (invocation: ProviderInvocation) => void): Pr
     }),
   start: (invocation: ProviderInvocation): Promise<ProviderOutcome> => {
     onStart(invocation);
-    return Promise.resolve({ type: "COMPLETED", summary: "The prose session finished the stage." });
+    return Promise.resolve({
+      type: "COMPLETED",
+      summary: "The prose session finished the stage.",
+      ...(invocation.session.stage === "REVIEW"
+        ? {
+            artifacts: [
+              {
+                kind: "REVIEW_REPORT" as const,
+                title: "Isolated review",
+                summary: "The bounded implementation diff was reviewed.",
+                checks: ["Stable diff inspected"],
+              },
+            ],
+            reviewReport: {
+              kind: "REVIEW_REPORT" as const,
+              title: "Isolated review",
+              summary: "The bounded implementation diff was reviewed.",
+              checks: ["Stable diff inspected"],
+              verdict: "PASSED" as const,
+              findings: [],
+            },
+          }
+        : {}),
+    });
   },
   requestHandoff: () => Promise.resolve(),
   abortSession: () => Promise.resolve(),
@@ -204,7 +227,7 @@ describe("session loop workspace provisioning", () => {
   // `runStageAttempt` expects to be handed.
   const seedAttempt = (
     localState: LocalState,
-    options: { template?: WorkflowTemplate; registerProject?: boolean } = {},
+    options: { template?: WorkflowTemplate; registerProject?: boolean; startAgentRun?: boolean } = {},
   ): SeededAttempt => {
     const template = options.template ?? implementOnlyTemplate;
     // A second attempt under the same Project registers nothing: REGISTER_PROJECT refuses a
@@ -265,19 +288,37 @@ describe("session loop workspace provisioning", () => {
       },
     });
     if (startedPipeline.type !== "PIPELINE_STARTED") throw new Error("Expected a started pipeline");
-    const dispatched = localState.execute({
-      schemaVersion: 1,
-      commandId: createCommandId(),
-      correlationId: "correlation-seed-dispatch",
-      actor: { type: "SYSTEM", id: "session-loop" },
-      type: "MARK_WORKFLOW_DISPATCH_STARTED",
-      payload: { dispatchId: startedPipeline.dispatch.id },
-    });
-    if (dispatched.type !== "WORKFLOW_DISPATCH_STARTED") throw new Error("Expected a started dispatch");
+    let dispatch = startedPipeline.dispatch;
+    if (options.startAgentRun === true) {
+      const agent = localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-seed-agent-run",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "START_AGENT_RUN",
+        payload: {
+          dispatchId: startedPipeline.dispatch.id,
+          provider: "MOCK",
+          limits: { global: 3, project: 3, provider: 3 },
+        },
+      });
+      if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected a started AgentRun");
+    } else {
+      const dispatched = localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-seed-dispatch",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: startedPipeline.dispatch.id },
+      });
+      if (dispatched.type !== "WORKFLOW_DISPATCH_STARTED") throw new Error("Expected a started dispatch");
+      dispatch = dispatched.dispatch;
+    }
     return {
       workItemId: created.workItem.id,
       stageAttemptId: startedPipeline.stageAttempt.id,
-      dispatch: dispatched.dispatch,
+      dispatch,
     };
   };
 
@@ -609,6 +650,93 @@ describe("session loop workspace provisioning", () => {
       // A row is not evidence about a disk: this is the directory the adapter would launch its CLI
       // in, so it has to be the real worktree and not merely a string that matches the row.
       expect(await pathExists(join(received?.workspace?.path ?? "", ".git"))).toBe(true);
+      expect(snapshotOf(localState, seeded.workItemId).humanRequests).toHaveLength(0);
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "gives REVIEW a bounded measured diff for exactly the completed IMPLEMENT tree",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const reviewStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "REVIEW");
+      if (!reviewStage) throw new Error("The mock delivery template no longer declares REVIEW");
+      const implementReviewTemplate: WorkflowTemplate = {
+        ...mockDeliveryTemplate,
+        id: "workspace-implement-review-v1",
+        name: "Workspace implement and review",
+        stages: [
+          { ...implementStage, ordinal: 0 },
+          { ...reviewStage, ordinal: 1 },
+        ],
+      };
+      const seeded = seedAttempt(localState, {
+        template: implementReviewTemplate,
+        startAgentRun: true,
+      });
+      const fileBody = "export const reviewedValue = 42;\n";
+      const implementationAdapter = completingAdapter(async (_count, invocation) => {
+        const path = invocation.workspace?.path;
+        if (path === undefined) throw new Error("IMPLEMENT did not receive its worktree");
+        await writeFile(join(path, "review-target.ts"), fileBody);
+      });
+
+      await runStageAttempt({
+        ...depsFor(localState, seeded, implementationAdapter),
+        template: implementReviewTemplate,
+      });
+
+      const implementationSnapshot = snapshotOf(localState, seeded.workItemId);
+      const implementationAttempt = implementationSnapshot.stageAttempts.find(
+        ({ stage }) => stage === "IMPLEMENT",
+      );
+      expect(implementationAttempt).toMatchObject({ status: "SUCCEEDED" });
+      expect(implementationAttempt?.resultTree).toMatch(/^[0-9a-f]{40}$/);
+      const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (pending.type !== "WORKFLOW_DISPATCHES" || pending.dispatches.length !== 1) {
+        throw new Error("Expected the REVIEW dispatch");
+      }
+      const reviewDispatch = pending.dispatches[0];
+      if (reviewDispatch === undefined) throw new Error("Expected the REVIEW dispatch");
+      const reviewer = localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-start-reviewer",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "START_AGENT_RUN",
+        payload: {
+          dispatchId: reviewDispatch.id,
+          provider: "CLAUDE_CODE",
+          limits: { global: 3, project: 3, provider: 3 },
+        },
+      });
+      if (reviewer.type !== "AGENT_RUN_STARTED") throw new Error("Expected the reviewer AgentRun");
+      let reviewPack = "";
+      let reviewWorkspaceAccess = "";
+      const reviewAdapter = proseOnlyAdapter((invocation) => {
+        reviewPack = invocation.contextPack.text;
+        reviewWorkspaceAccess = invocation.workspace?.access ?? "NONE";
+      });
+
+      await runStageAttempt({
+        ...depsFor(
+          localState,
+          {
+            workItemId: seeded.workItemId,
+            stageAttemptId: reviewDispatch.stageAttemptId,
+            dispatch: reviewDispatch,
+          },
+          reviewAdapter,
+        ),
+        template: implementReviewTemplate,
+      });
+
+      expect(reviewPack).toContain(`Stable result tree: ${implementationAttempt?.resultTree ?? ""}`);
+      expect(reviewPack).toContain("Changed files and bounded unified-diff fragments");
+      expect(reviewPack).toContain("- ADDED review-target.ts (+1 -0)");
+      expect(reviewPack).toContain(fileBody.trim());
+      expect(reviewWorkspaceAccess).toBe("READ_ONLY");
       expect(snapshotOf(localState, seeded.workItemId).humanRequests).toHaveLength(0);
     },
     GIT_TIMEOUT_MS,

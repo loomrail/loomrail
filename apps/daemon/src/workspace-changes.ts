@@ -22,9 +22,9 @@ export const MAX_PATCH_BYTES = 512 * 1_024;
  * plausible-looking file list that is a lie. That is the exact failure this milestone exists to
  * prevent, so it is not a preference.
  *
- * It lives in one module because it has two callers, both in `server.ts`: the two change handles
- * that answer the owner. Restating it a second time there is how the two would come to measure
- * from different points without anyone noticing.
+ * It lives in one module because the two owner-facing change handles and the REVIEW context use
+ * the same baseline. Restating it at either boundary is how the cockpit and reviewer would
+ * silently assess different changes.
  *
  * The stage-end tree label in `session-loop.ts` is NOT a third caller, on purpose. That label
  * comes from `treeOfWorktree` (`@loomrail/workspace`), which has no baseline parameter at all: an

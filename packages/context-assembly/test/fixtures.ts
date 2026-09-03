@@ -46,6 +46,26 @@ export const sampleSources = (): ContextSources => ({
       resultTree: "a".repeat(40),
     },
     authorAgentRun: { id: "agent_run_author_01", version: 2, provider: "CODEX" },
+    diffSummary: {
+      baseline: "b".repeat(40),
+      files: [
+        {
+          path: "packages/parser/src/retry.ts",
+          previousPath: null,
+          status: "MODIFIED",
+          insertions: 12,
+          deletions: 3,
+          binary: false,
+          content: {
+            type: "TEXT",
+            patch: "@@ -20,3 +20,4 @@\n const timeout = 5_000;\n+await withTimeout(parse(), timeout);\n",
+            truncated: false,
+            omittedBytes: 0,
+          },
+        },
+      ],
+      truncated: false,
+    },
     openFindings: [
       {
         id: "finding_01",
