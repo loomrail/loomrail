@@ -21,6 +21,8 @@ import {
 } from "@loomrail/provider-core";
 import { z } from "zod";
 
+export { codexProviderDiagnostics } from "./diagnostics.js";
+
 import { parseCodexEvent, TERMINAL_TURN_EVENT } from "./stream.js";
 
 export type { CodexEvent } from "./stream.js";

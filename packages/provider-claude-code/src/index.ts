@@ -21,6 +21,8 @@ import {
 } from "@loomrail/provider-core";
 import { z } from "zod";
 
+export { claudeCodeProviderDiagnostics } from "./diagnostics.js";
+
 import { parseClaudeEvent } from "./stream.js";
 
 export type { ClaudeEvent } from "./stream.js";

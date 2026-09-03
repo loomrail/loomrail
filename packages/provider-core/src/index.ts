@@ -19,6 +19,12 @@ export type { UnproductiveSessionReason, UnproductiveSessionReport } from "./ses
 export { describeUnproductiveSession } from "./session-diagnosis.js";
 export type { DecodedProviderStageResult, ProviderStageResultPolicy } from "./stage-result.js";
 export { decodeProviderStageResult, providerStageResultSchemaFor } from "./stage-result.js";
+export type {
+  CliProviderDiagnostics,
+  ProviderDiagnosticProbeOptions,
+  ProviderVersionObservation,
+} from "./diagnostics.js";
+export { createCliProviderDiagnostics } from "./diagnostics.js";
 
 // The set of adapters Loomrail can dispatch to. A live adapter is not a MOCK wearing a different
 // label -- it is a distinct identity the daemon and the audit trail key on, so the enum is closed

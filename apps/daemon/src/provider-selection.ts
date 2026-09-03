@@ -1,7 +1,3 @@
-import { spawn } from "node:child_process";
-import { accessSync, constants as fsConstants } from "node:fs";
-import { delimiter, isAbsolute, join, sep } from "node:path";
-
 import {
   projectProviderSelectionResponseSchema,
   type Project,
@@ -13,12 +9,14 @@ import {
   type ProviderPreference,
   type WorkflowStage,
 } from "@loomrail/contracts";
-import type { ProviderAdapter } from "@loomrail/provider-core";
-import { createClaudeCodeProvider } from "@loomrail/provider-claude-code";
-import { createCodexProvider } from "@loomrail/provider-codex";
+import type {
+  CliProviderDiagnostics,
+  ProviderAdapter,
+  ProviderVersionObservation,
+} from "@loomrail/provider-core";
+import { claudeCodeProviderDiagnostics, createClaudeCodeProvider } from "@loomrail/provider-claude-code";
+import { codexProviderDiagnostics, createCodexProvider } from "@loomrail/provider-codex";
 import { createMockProvider } from "@loomrail/provider-mock";
-
-import { probeProviderVersion, type ProviderVersionObservation } from "./provider-compatibility.js";
 
 export const LOOMRAIL_PROVIDER_ENV_VAR = "LOOMRAIL_PROVIDER";
 export const LOOMRAIL_PROVIDER_VALUES = ["MOCK", "CODEX", "CLAUDE_CODE"] as const;
@@ -28,6 +26,11 @@ const LIVE_PROVIDER_IDS = ["CODEX", "CLAUDE_CODE"] as const;
 
 type LiveProviderId = (typeof LIVE_PROVIDER_IDS)[number];
 type ProviderAdapters = Readonly<Record<ProviderId, ProviderAdapter>>;
+
+const providerDiagnostics: Readonly<Record<LiveProviderId, CliProviderDiagnostics>> = {
+  CODEX: codexProviderDiagnostics,
+  CLAUDE_CODE: claudeCodeProviderDiagnostics,
+};
 
 export type ProviderAuthProbe = (provider: LiveProviderId) => Promise<ProviderAuthentication>;
 export type ProviderCompatibilityProbe = (provider: LiveProviderId) => Promise<ProviderVersionObservation>;
@@ -72,107 +75,8 @@ const requestedEnvironmentProvider = (
     : { override: null, invalid: true, requested };
 };
 
-// Windows installs `codex` and `claude` as `codex.cmd`/`claude.cmd` (or `.exe`), and the file
-// carrying the bare name usually does not exist at all, so probing the name alone reports every
-// Windows machine as "not installed". `PATHEXT` is what the shell and `child_process.spawn`
-// themselves append, so it is what a lookup that claims to answer "would this launch" must append
-// too. The empty extension stays first for the POSIX case and for a name the owner already spelled
-// with its extension.
-const pathExtensions = (env: Readonly<Record<string, string | undefined>>): readonly string[] =>
-  process.platform === "win32"
-    ? [
-        "",
-        ...(env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD")
-          .split(";")
-          .map((extension) => extension.trim())
-          .filter((extension) => extension.length > 0),
-      ]
-    : [""];
-
-const isExecutableOnDisk = (
-  command: string,
-  env: Readonly<Record<string, string | undefined>> = process.env,
-): boolean => {
-  const bases =
-    isAbsolute(command) || command.includes(sep)
-      ? [command]
-      : (env["PATH"] ?? env["Path"] ?? "")
-          .split(delimiter)
-          .filter((directory) => directory.length > 0)
-          .map((directory) => join(directory, command));
-  const extensions = pathExtensions(env);
-  return bases.some((base) =>
-    extensions.some((extension) => {
-      try {
-        accessSync(`${base}${extension}`, fsConstants.X_OK);
-        return true;
-      } catch {
-        return false;
-      }
-    }),
-  );
-};
-
-// Only filesystem/auth locations needed by an official status command cross into the probe.
-// API keys and arbitrary project environment never do. stdout/stderr are ignored below, so the
-// daemon learns only the exit outcome and cannot accidentally retain account metadata.
-const probeEnvironment = (
-  env: Readonly<Record<string, string | undefined>> = process.env,
-): NodeJS.ProcessEnv => {
-  const allowed = [
-    "PATH",
-    "HOME",
-    "USERPROFILE",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "XDG_CONFIG_HOME",
-    "CODEX_HOME",
-    "CLAUDE_CONFIG_DIR",
-    "SystemRoot",
-    "TEMP",
-    "TMP",
-    "TMPDIR",
-  ] as const;
-  return Object.fromEntries(
-    allowed.flatMap((key) => {
-      const value = env[key];
-      return value === undefined ? [] : [[key, value]];
-    }),
-  );
-};
-
-const statusCommand: Readonly<Record<LiveProviderId, { command: string; args: readonly string[] }>> = {
-  CODEX: { command: "codex", args: ["login", "status"] },
-  CLAUDE_CODE: { command: "claude", args: ["auth", "status"] },
-};
-
 export const probeProviderAuthentication: ProviderAuthProbe = (provider) =>
-  new Promise((resolve) => {
-    const command = statusCommand[provider];
-    const child = spawn(command.command, command.args, {
-      env: probeEnvironment(),
-      shell: false,
-      stdio: "ignore",
-    });
-    let settled = false;
-    const finish = (result: ProviderAuthentication): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish("UNKNOWN");
-    }, AUTH_PROBE_DEADLINE_MS);
-    timer.unref();
-    child.once("error", () => {
-      finish("UNKNOWN");
-    });
-    child.once("exit", (code) => {
-      finish(code === 0 ? "AUTHENTICATED" : code === 1 ? "REQUIRED" : "UNKNOWN");
-    });
-  });
+  providerDiagnostics[provider].probeAuthentication({ deadlineMs: AUTH_PROBE_DEADLINE_MS });
 
 // One process may open many in-memory daemons in integration tests. Re-running two real CLI probes
 // for every instance would make unrelated suites depend on local login latency. Production opens
@@ -248,10 +152,10 @@ export const createProviderRegistry = (
   const customAuthProbe = options.probeAuthentication;
   const compatibilityProbe =
     options.probeCompatibility ??
-    ((provider: LiveProviderId) => probeProviderVersion(provider, { environment: env }));
+    ((provider: LiveProviderId) => providerDiagnostics[provider].probeVersion({ environment: env }));
   const executableAvailable =
     options.executableAvailable ??
-    ((provider: LiveProviderId): boolean => isExecutableOnDisk(statusCommand[provider].command, env));
+    ((provider: LiveProviderId): boolean => providerDiagnostics[provider].executableAvailable(env));
   let firstRefresh = true;
   let availability: Readonly<Record<ProviderId, ProviderAvailability>> = {
     MOCK: availabilityFor("MOCK", adapters.MOCK, true, "AUTHENTICATED", {
