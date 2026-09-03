@@ -746,5 +746,38 @@ describe("Playwright BrowserDriver", () => {
         message: "The Browser QA driver could not start safely.",
       }),
     );
+
+    let codeReads = 0;
+    const changingGetterError = new BrowserDriverError("INVALID_INPUT", "CANARY_SECRET_FROM_CHANGING_GETTER");
+    Object.defineProperty(changingGetterError, "code", {
+      get: () => {
+        codeReads += 1;
+        if (codeReads === 1) return "INVALID_INPUT";
+        return {
+          [Symbol.toPrimitive]: () => {
+            throw new Error("CANARY_SECRET_FROM_SECOND_CODE_READ");
+          },
+        };
+      },
+    });
+    const changingGetterRun = qaRun("http://127.0.0.1:4173");
+    Object.defineProperty(changingGetterRun, "id", {
+      get: () => {
+        throw changingGetterError;
+      },
+    });
+    let changingGetterRejection: unknown;
+    try {
+      await createPlaywrightDriver({ artifactsDirectory: directory }).run(changingGetterRun);
+    } catch (error: unknown) {
+      changingGetterRejection = error;
+    }
+    expect(changingGetterRejection).toBeInstanceOf(BrowserDriverError);
+    if (!(changingGetterRejection instanceof BrowserDriverError)) {
+      throw new Error("Expected a normalized BrowserDriverError");
+    }
+    expect(changingGetterRejection.code).toBe("INVALID_INPUT");
+    expect(changingGetterRejection.message).toBe("The Browser QA run input is invalid.");
+    expect(codeReads).toBe(1);
   });
 });

@@ -121,8 +121,11 @@ type PendingAttachment = {
 const normalizeBrowserDriverError = (code: BrowserDriverErrorCode, error: unknown): BrowserDriverError => {
   let normalizedCode = code;
   try {
-    if (error instanceof BrowserDriverError && isBrowserDriverErrorCode(error.code)) {
-      normalizedCode = error.code;
+    if (error instanceof BrowserDriverError) {
+      const candidateCode: unknown = error.code;
+      if (isBrowserDriverErrorCode(candidateCode)) {
+        normalizedCode = candidateCode;
+      }
     }
   } catch {
     // A rejected value is untrusted at this boundary; even an accessor on `code` may throw.
