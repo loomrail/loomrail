@@ -755,9 +755,10 @@ export const decideRecordProviderUsage = (context: {
     );
   }
   if (
-    stageAttempt.status !== "RUNNING" ||
-    run.status !== "RUNNING" ||
-    dispatch.status !== "PENDING" ||
+    !(
+      (stageAttempt.status === "RUNNING" && run.status === "RUNNING" && dispatch.status === "PENDING") ||
+      (stageAttempt.status === "SOFT_PAUSED" && run.status === "SOFT_PAUSED" && dispatch.status === "FAILED")
+    ) ||
     providerSession.status !== "RUNNING" ||
     agentRun.status !== "RUNNING"
   ) {
@@ -904,7 +905,10 @@ export const decideRecordProviderUsage = (context: {
     workItem: blockedWorkItem,
     run: pausedRun,
     stageAttempt: pausedAttempt,
-    dispatch: completeDispatch(dispatch, context.now),
+    // Soft Pause already withdrew the pending dispatch. A terminal usage report from the allowed
+    // in-flight turn may still strengthen that pause to HARD, but it must not try to complete the
+    // already-failed dispatch a second time.
+    dispatch: dispatch.status === "FAILED" ? dispatch : completeDispatch(dispatch, context.now),
     report,
     usageRecord,
     cumulativeAmount,

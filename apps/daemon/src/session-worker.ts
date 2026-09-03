@@ -21,6 +21,10 @@ export const DISPATCH_CYCLE_LIMIT = 20;
 
 export type SessionWorker = {
   wake: () => void;
+  /** Revoke only work that has not opened a ProviderSession; a live Soft Pause turn keeps running. */
+  pausePipeline: (pipelineRunId: string) => void;
+  /** Revoke provider start authority and resolve only after every registered child has stopped. */
+  revokePipeline: (pipelineRunId: string) => Promise<readonly string[]>;
   whenIdle: () => Promise<void>;
   stop: () => Promise<void>;
 };
@@ -68,7 +72,15 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
   let running = false;
   let pending = false;
   let stopping = false;
-  const liveSessions = new Map<string, { adapter: ProviderAdapter; providerSessionId: string }>();
+  const activeExecutions = new Map<
+    string,
+    {
+      adapter: ProviderAdapter;
+      providerSessionId: string | null;
+      pipelineRunId: string;
+      authority: AbortController;
+    }
+  >();
   type DispatchTaskResult = { dispatchId: string; moved: boolean };
   const activeTasks = new Map<string, Promise<DispatchTaskResult>>();
   const idleWaiters: (() => void)[] = [];
@@ -81,6 +93,14 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
     dispatch: WorkflowDispatch,
     adapter: ProviderAdapter,
   ): Promise<DispatchTaskResult> => {
+    const authority = new AbortController();
+    const execution = {
+      adapter,
+      providerSessionId: null as string | null,
+      pipelineRunId: dispatch.pipelineRunId,
+      authority,
+    };
+    activeExecutions.set(dispatch.id, execution);
     try {
       const snapshotResult = deps.state.query({
         type: "GET_WORKFLOW_SNAPSHOT",
@@ -95,54 +115,42 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         throw new StateStoreError("PERSISTENCE_FAILURE", "A pending workflow dispatch is incomplete");
       }
 
-      let agentRunId: string | undefined;
+      let agentRunId: string;
 
-      // A3 reservations replace the old mark-only transition for executable agent stages.
-      // ACCEPTANCE remains the owner gate and therefore has no synthetic AgentRun.
+      // Every provider invocation is owned by one immutable AgentRun. ACCEPTANCE is preparation
+      // by the bounded Acceptance Manager; the separate owner-only package decision remains a
+      // domain gate after that run finishes.
       if (stageAttempt.status !== "RUNNING") {
-        if (stageAttempt.stage === "ACCEPTANCE") {
-          const started = deps.state.execute({
-            schemaVersion: 1,
-            commandId: `mark-started-${dispatch.id}`,
-            correlationId: `dispatch-${dispatch.id}`,
-            actor: { type: "SYSTEM", id: "local-daemon" },
-            type: "MARK_WORKFLOW_DISPATCH_STARTED",
-            payload: { dispatchId: dispatch.id },
-          });
-          if (started.type !== "WORKFLOW_DISPATCH_STARTED") {
-            throw new StateStoreError("PERSISTENCE_FAILURE", "The owner-acceptance dispatch did not start");
-          }
-        } else {
-          const provider = adapter.capabilities().provider;
-          const started = deps.state.execute({
-            schemaVersion: 1,
-            commandId: `start-agent-run-${dispatch.id}`,
-            correlationId: `dispatch-${dispatch.id}`,
-            actor: { type: "SYSTEM", id: "local-daemon" },
-            type: "START_AGENT_RUN",
-            payload: {
-              dispatchId: dispatch.id,
-              provider,
-              limits: agentRunClaimLimits(schedulingLimits, dispatch.projectId, provider),
-            },
-          });
-          if (started.type !== "AGENT_RUN_STARTED") {
-            throw new StateStoreError("PERSISTENCE_FAILURE", "The AgentRun reservation did not start");
-          }
-          agentRunId = started.run.id;
+        const provider = adapter.capabilities().provider;
+        const started = deps.state.execute({
+          schemaVersion: 1,
+          commandId: `start-agent-run-${dispatch.id}`,
+          correlationId: `dispatch-${dispatch.id}`,
+          actor: { type: "SYSTEM", id: "local-daemon" },
+          type: "START_AGENT_RUN",
+          payload: {
+            dispatchId: dispatch.id,
+            provider,
+            limits: agentRunClaimLimits(schedulingLimits, dispatch.projectId, provider),
+          },
+        });
+        if (started.type !== "AGENT_RUN_STARTED") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The AgentRun reservation did not start");
         }
-      } else if (stageAttempt.stage !== "ACCEPTANCE") {
+        agentRunId = started.run.id;
+      } else {
         const active = deps.state.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" });
-        agentRunId =
+        const activeAgentRunId =
           active.type === "AGENT_RUNS"
             ? active.runs.find(({ stageAttemptId }) => stageAttemptId === stageAttempt.id)?.id
             : undefined;
-        if (agentRunId === undefined) {
+        if (activeAgentRunId === undefined) {
           throw new StateStoreError(
             "PERSISTENCE_FAILURE",
             "A running executable StageAttempt has no active AgentRun authority",
           );
         }
+        agentRunId = activeAgentRunId;
       }
 
       if (stageAttempt.stage === "QA" && deps.browserQA !== undefined) {
@@ -152,7 +160,7 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
             ({ stage, status, resultTree }) =>
               stage === "IMPLEMENT" && status === "SUCCEEDED" && resultTree !== null,
           )?.resultTree;
-        if (agentRunId === undefined || testedTree === undefined || testedTree === null) {
+        if (testedTree === undefined || testedTree === null) {
           throw new StateStoreError(
             "QA_STABLE_TREE_MISSING",
             "Browser QA requires an active AgentRun and a successful implementation tree",
@@ -179,10 +187,10 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         createCommandId: deps.createCommandId,
         correlationId: `dispatch-${dispatch.id}`,
         logger: deps.logger,
+        authoritySignal: authority.signal,
         ...(deps.openMcpConnections === undefined ? {} : { openMcpConnections: deps.openMcpConnections }),
         onSessionLive: (providerSessionId) => {
-          if (providerSessionId === null) liveSessions.delete(dispatch.id);
-          else liveSessions.set(dispatch.id, { adapter, providerSessionId });
+          execution.providerSessionId = providerSessionId;
         },
       });
     } catch (error: unknown) {
@@ -191,7 +199,7 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         "A background AgentRun could not finish",
       );
     } finally {
-      liveSessions.delete(dispatch.id);
+      activeExecutions.delete(dispatch.id);
     }
 
     const queued = deps.state.query({ type: "LIST_PENDING_DISPATCHES" });
@@ -312,6 +320,38 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         );
       });
     },
+    pausePipeline: (pipelineRunId) => {
+      for (const execution of activeExecutions.values()) {
+        if (execution.pipelineRunId !== pipelineRunId || execution.providerSessionId !== null) continue;
+        // The state transaction found no live ProviderSession and already closed any pre-claim
+        // AgentRun. Prevent its stale async preparation from claiming the run created by Resume.
+        execution.authority.abort();
+      }
+    },
+    revokePipeline: async (pipelineRunId) => {
+      // Snapshot every mutable field before the first await. `onSessionLive(null)` can clear the
+      // execution record as the revoked start settles, but the session id whose adapter stop we
+      // just requested remains the proof the cancellation boundary needs to finalize durable state.
+      const matching = [...activeExecutions.values()]
+        .filter(({ pipelineRunId: livePipelineRunId }) => livePipelineRunId === pipelineRunId)
+        .map(({ adapter, providerSessionId, authority }) => ({ adapter, providerSessionId, authority }));
+      for (const { authority } of matching) {
+        // Synchronous first: adapters check this signal immediately before spawn. If a child was
+        // already registered, abortSession owns the other side of the same race.
+        authority.abort();
+      }
+      // A cancellation must not make the durable writer lease available until every adapter has
+      // confirmed its registered child exited. Rejections propagate so the control command keeps
+      // the lease and active state fail-closed rather than claiming a stop that was not proven.
+      await Promise.all(
+        matching.flatMap(({ adapter, providerSessionId }) =>
+          providerSessionId === null ? [] : [adapter.abortSession(providerSessionId)],
+        ),
+      );
+      return matching.flatMap(({ providerSessionId }) =>
+        providerSessionId === null ? [] : [providerSessionId],
+      );
+    },
     whenIdle: () =>
       stopping || (!running && !pending && activeTasks.size === 0)
         ? Promise.resolve()
@@ -321,12 +361,13 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
     stop: async () => {
       stopping = true;
       pending = false;
-      // Spec D5: the provider is told to stop, and we do not wait to be told it did. `abortSession`
-      // resolving is not proof the run ended -- that gap is the next milestone's, where there will
-      // finally be an adapter capable of failing to stop.
+      // Shutdown uses the same adapter boundary as cancellation. Built-in process adapters resolve
+      // only after the registered child exits; errors are suppressed here because shutdown is
+      // already terminal and startup reconciliation owns any remaining durable RUNNING rows.
+      for (const { authority } of activeExecutions.values()) authority.abort();
       await Promise.all(
-        [...liveSessions.values()].map(({ adapter, providerSessionId }) =>
-          adapter.abortSession(providerSessionId).catch(() => undefined),
+        [...activeExecutions.values()].flatMap(({ adapter, providerSessionId }) =>
+          providerSessionId === null ? [] : [adapter.abortSession(providerSessionId).catch(() => undefined)],
         ),
       );
       settleIdle();

@@ -39,6 +39,7 @@ const implementInvocation = (): ProviderInvocation => {
     acceptanceInput: null,
     humanRequests: "ALLOWED",
     mcpConnections: [],
+    authoritySignal: new AbortController().signal,
   };
 };
 
@@ -55,6 +56,14 @@ const listener = () => {
 };
 
 describe("mock provider session behaviour", () => {
+  it("refuses a session whose AgentRun authority was revoked before work", async () => {
+    const authority = new AbortController();
+    authority.abort();
+    await expect(
+      createMockProvider().start({ ...implementInvocation(), authoritySignal: authority.signal }, listener()),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("reports occupancy that grows every turn", async () => {
     const sink = listener();
     const provider = createMockProvider({ contextWindowTokens: 1_000, tokensPerTurn: 100 });

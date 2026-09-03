@@ -46,17 +46,18 @@ the same deterministic state machine. The current pre-alpha does not offer workf
 
 The standard squad dispatches one versioned profile for each provider-run stage:
 
-| Stage     | Assigned built-in role |
-| --------- | ---------------------- |
-| Discovery | Product Analyst        |
-| Plan      | Software Architect     |
-| Implement | Developer              |
-| Review    | Code Reviewer          |
-| QA        | Browser QA             |
+| Stage                  | Assigned built-in role |
+| ---------------------- | ---------------------- |
+| Discovery              | Product Analyst        |
+| Plan                   | Software Architect     |
+| Implement              | Developer              |
+| Review                 | Code Reviewer          |
+| QA                     | Browser QA             |
+| Acceptance preparation | Acceptance Manager     |
 
-Lead PM and Acceptance Manager are also versioned built-in profiles, but the current standard squad does not
-dispatch them. Loomrail assembles the criterion-bound Acceptance Package deterministically from current Review and QA
-evidence. Only the owner can Accept, Return, or Reject it.
+Lead PM remains a versioned built-in profile that this linear squad does not dispatch. Acceptance Manager proposes
+the criterion-bound package under an artifact-only AgentRun; Loomrail deterministically binds it to current Review
+and QA evidence. Only the owner can Accept, Return, or Reject it.
 
 A recipe cannot change a role's capabilities, budget, provider selection, Project Constitution, or approval gates.
 Those remain Loomrail state and owner decisions rather than instructions hidden in sample text.

@@ -203,6 +203,47 @@ describe("durable provider usage", () => {
     ).toMatchObject({ usageReports: [{ totalTokens: 60, usageDigest: recorded.report.usageDigest }] });
   });
 
+  it("records terminal usage from the in-flight turn after Soft Pause withdrew its dispatch", async () => {
+    const localState = await open();
+    const execution = startExecution(localState, 200);
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "pause-before-provider-usage",
+      correlationId: "correlation-pause-before-provider-usage",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "PAUSE_PIPELINE",
+      payload: {
+        pipelineRunId: execution.pipeline.run.id,
+        expectedVersion: execution.pipeline.run.version,
+      },
+    });
+
+    const recorded = localState.execute({
+      schemaVersion: 1,
+      commandId: "record-soft-paused-provider-usage",
+      correlationId: "correlation-record-soft-paused-provider-usage",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "RECORD_PROVIDER_USAGE",
+      payload: {
+        providerSessionId: execution.session.session.id,
+        usage: { inputTokens: 10, outputTokens: 10, quality: "ACTUAL" },
+      },
+    });
+
+    expect(recorded).toMatchObject({
+      type: "PROVIDER_USAGE_RECORDED",
+      hardPaused: false,
+      cumulativeAmount: 20,
+      stageAttempt: { status: "SOFT_PAUSED" },
+    });
+    expect(
+      localState.query({
+        type: "LIST_PROVIDER_SESSIONS",
+        stageAttemptId: execution.pipeline.stageAttempt.id,
+      }),
+    ).toMatchObject({ usageReports: [{ totalTokens: 20 }] });
+  });
+
   it("keeps a zero-token final report without inventing a positive ledger row", async () => {
     const localState = await open();
     const execution = startExecution(localState, 200);
@@ -235,7 +276,7 @@ describe("durable provider usage", () => {
     ).toMatchObject({ usageReports: [{ totalTokens: 0, usageRecordId: null }] });
   });
 
-  it("atomically hard-pauses workflow and AgentRun before the session can end", async () => {
+  it("hard-pauses workflow but keeps AgentRun authority until the session ends", async () => {
     const localState = await open();
     const execution = startExecution(localState, 100);
     const recorded = localState.execute({
@@ -261,7 +302,7 @@ describe("durable provider usage", () => {
       },
     });
     expect(localState.query({ type: "GET_AGENT_RUN", agentRunId: execution.agent.run.id })).toMatchObject({
-      runs: [{ status: "HARD_PAUSED" }],
+      runs: [{ status: "RUNNING" }],
     });
     expect(localState.query({ type: "LIST_PENDING_DISPATCHES" })).toMatchObject({ dispatches: [] });
 
@@ -282,6 +323,9 @@ describe("durable provider usage", () => {
       stageAttempt: { status: "HARD_PAUSED" },
       request: null,
       nextSessionOrdinal: null,
+    });
+    expect(localState.query({ type: "GET_AGENT_RUN", agentRunId: execution.agent.run.id })).toMatchObject({
+      runs: [{ status: "HARD_PAUSED" }],
     });
   });
 

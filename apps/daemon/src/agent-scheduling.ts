@@ -6,7 +6,7 @@ import type {
   WorkflowDispatch,
   WorkflowSnapshot,
 } from "@loomrail/contracts";
-import { stageWritesInWorkspace } from "@loomrail/domain";
+import { stageRunsInWorkspace, stageWritesInWorkspace } from "@loomrail/domain";
 import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter } from "@loomrail/provider-core";
 import type { ActiveAgentRun, SchedulerCandidate, SchedulerWorkspaceClaim } from "@loomrail/scheduler";
@@ -34,6 +34,7 @@ const workspaceClaim = (
   stage: StageAttempt["stage"],
   checkpoint: string | null,
 ): SchedulerWorkspaceClaim => {
+  if (!stageRunsInWorkspace(stage)) return { type: "NONE" };
   const result = state.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
   const workspace = result.type === "WORKSPACE" ? result.workspace : null;
   if (workspace === null) return { type: "NONE" };

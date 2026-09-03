@@ -48,6 +48,7 @@ const invocation = (
     },
     humanRequests: "ALLOWED",
     mcpConnections: [],
+    authoritySignal: new AbortController().signal,
   };
 };
 

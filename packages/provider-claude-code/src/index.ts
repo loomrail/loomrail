@@ -308,6 +308,9 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         let linesReceived = 0;
         let linesUnused = 0;
 
+        // See provider-codex's identical gate. Scratch/MCP config preparation may yield, so the
+        // revocation signal is checked only after it and immediately before the synchronous spawn.
+        invocation.authoritySignal.throwIfAborted();
         const run = runProcess({
           command: resolved.command,
           args: [...resolved.commandArgsPrefix, ...args],

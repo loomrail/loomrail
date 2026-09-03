@@ -223,11 +223,16 @@ describe("session loop workspace provisioning", () => {
   };
 
   // A project pointed at a real repository, a READY work item under it, and a pipeline whose first
-  // (and only) stage is IMPLEMENT, with its dispatch already marked started -- which is the shape
-  // `runStageAttempt` expects to be handed.
+  // (and only) stage is IMPLEMENT. By default its immutable AgentRun is already reserved, which is
+  // the only shape `runStageAttempt` may execute.
   const seedAttempt = (
     localState: LocalState,
-    options: { template?: WorkflowTemplate; registerProject?: boolean; startAgentRun?: boolean } = {},
+    options: {
+      template?: WorkflowTemplate;
+      registerProject?: boolean;
+      startAgentRun?: boolean;
+      leaveQueued?: boolean;
+    } = {},
   ): SeededAttempt => {
     const template = options.template ?? implementOnlyTemplate;
     // A second attempt under the same Project registers nothing: REGISTER_PROJECT refuses a
@@ -289,7 +294,7 @@ describe("session loop workspace provisioning", () => {
     });
     if (startedPipeline.type !== "PIPELINE_STARTED") throw new Error("Expected a started pipeline");
     let dispatch = startedPipeline.dispatch;
-    if (options.startAgentRun === true) {
+    if (options.leaveQueued !== true && options.startAgentRun !== false) {
       const agent = localState.execute({
         schemaVersion: 1,
         commandId: createCommandId(),
@@ -303,7 +308,7 @@ describe("session loop workspace provisioning", () => {
         },
       });
       if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected a started AgentRun");
-    } else {
+    } else if (options.leaveQueued !== true) {
       const dispatched = localState.execute({
         schemaVersion: 1,
         commandId: createCommandId(),
@@ -389,6 +394,26 @@ describe("session loop workspace provisioning", () => {
     if (result.type !== "WORKSPACE") throw new Error("Expected a workspace query result");
     return result.workspace;
   };
+
+  it("refuses to open a provider session without active AgentRun authority", async () => {
+    repositoryPath = await throwawayRepository(makeThrowawayRepo);
+    const localState = openState();
+    const seeded = seedAttempt(localState, { startAgentRun: false });
+    let started = false;
+    const adapter = completingAdapter(() => {
+      started = true;
+    });
+
+    await expect(runStageAttempt(depsFor(localState, seeded, adapter))).rejects.toMatchObject({
+      code: "PERSISTENCE_FAILURE",
+    });
+    expect(started).toBe(false);
+    const sessions = localState.query({
+      type: "LIST_PROVIDER_SESSIONS",
+      stageAttemptId: seeded.stageAttemptId,
+    });
+    expect(sessions.type === "PROVIDER_SESSIONS" ? sessions.sessions : []).toHaveLength(0);
+  });
 
   it(
     "cuts the worktree, carrying uncommitted work into it, before the session that edits it starts",
@@ -490,7 +515,7 @@ describe("session loop workspace provisioning", () => {
     async () => {
       repositoryPath = await throwawayRepository(makeThrowawayRepo);
       const localState = openState();
-      const seeded = seedAttempt(localState);
+      const seeded = seedAttempt(localState, { leaveQueued: true });
       const candidate = {
         profileId: null,
         name: "Local docs",
@@ -545,6 +570,19 @@ describe("session loop workspace provisioning", () => {
         },
       });
       if (granted.type !== "MCP_GRANT_CHANGED") throw new Error("Expected an MCP grant");
+      const agent = localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-mcp-agent-run",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "START_AGENT_RUN",
+        payload: {
+          dispatchId: seeded.dispatch.id,
+          provider: "MOCK",
+          limits: { global: 3, project: 3, provider: 3 },
+        },
+      });
+      if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected an MCP-authorized AgentRun");
 
       let openedSnapshots: readonly McpSessionSnapshot[] = [];
       let leaseClosed = false;
@@ -623,9 +661,25 @@ describe("session loop workspace provisioning", () => {
       const seeded = seedAttempt(localState, { template: reviewOnlyTemplate });
 
       let received: ProviderInvocation | undefined;
-      const adapter = completingAdapter((_count, invocation) => {
-        received = invocation;
-      });
+      const baseAdapter = completingAdapter(() => undefined);
+      const adapter: ProviderAdapter = {
+        ...baseAdapter,
+        start: (invocation) => {
+          received = invocation;
+          return Promise.resolve({
+            type: "NEEDS_HUMAN",
+            request: {
+              kind: "FREE_TEXT",
+              blocking: true,
+              title: "Provide the missing review fixture",
+              context: "This focused workspace test has no implementation author lineage.",
+              recommendation: "Use the full implementation-to-review test below.",
+              options: [],
+              allowOther: true,
+            },
+          });
+        },
+      };
 
       await runStageAttempt({ ...depsFor(localState, seeded, adapter), template: reviewOnlyTemplate });
 
@@ -650,7 +704,7 @@ describe("session loop workspace provisioning", () => {
       // A row is not evidence about a disk: this is the directory the adapter would launch its CLI
       // in, so it has to be the real worktree and not merely a string that matches the row.
       expect(await pathExists(join(received?.workspace?.path ?? "", ".git"))).toBe(true);
-      expect(snapshotOf(localState, seeded.workItemId).humanRequests).toHaveLength(0);
+      expect(snapshotOf(localState, seeded.workItemId).humanRequests).toHaveLength(1);
     },
     GIT_TIMEOUT_MS,
   );
@@ -746,13 +800,12 @@ describe("session loop workspace provisioning", () => {
     GIT_TIMEOUT_MS,
   );
 
-  // ACCEPTANCE is the one stage left out, and not on the reasoning R11 removed: it is the owner's
-  // decision about whether the work is done, not an agent's reading of the tree. The field must be
-  // OMITTED rather than carry an empty value -- `exactOptionalPropertyTypes` makes absent and
-  // `undefined` different things, and absent is what the contract defines and what an adapter's
-  // read-only branch keys on.
+  // The Acceptance Manager prepares the package from durable context; it does not read the
+  // worktree and cannot take the owner's later decision. The field must be OMITTED rather than
+  // carry an empty value -- `exactOptionalPropertyTypes` makes absent and `undefined` different
+  // things, and absent is what the contract defines.
   it(
-    "leaves the workspace out entirely for the owner's own acceptance decision",
+    "leaves the workspace out of bounded Acceptance Manager preparation",
     async () => {
       repositoryPath = await throwawayRepository(makeThrowawayRepo);
       const localState = openState();

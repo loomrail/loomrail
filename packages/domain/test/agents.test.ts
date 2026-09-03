@@ -11,6 +11,7 @@ import {
   finishAgentRun,
   refineContextPackForRole,
   resolveAgentRunPolicy,
+  upgradeLegacyStandardSquadForAcceptance,
   validateAgentProfile,
 } from "../src/agents.js";
 
@@ -48,7 +49,7 @@ const implementationPolicy = () => {
 };
 
 describe("agent team domain", () => {
-  it("ships a unique complete roster but assigns only executable non-owner stages", () => {
+  it("ships a unique complete roster and assigns every provider-executed stage", () => {
     expect(builtinAgentProfiles).toHaveLength(7);
     expect(new Set(builtinAgentProfiles.map(({ id }) => id)).size).toBe(7);
     expect(new Set(builtinAgentProfiles.map(({ role }) => role)).size).toBe(7);
@@ -60,8 +61,8 @@ describe("agent team domain", () => {
       { stage: "IMPLEMENT", role: "DEVELOPER" },
       { stage: "REVIEW", role: "CODE_REVIEWER" },
       { stage: "QA", role: "BROWSER_QA" },
+      { stage: "ACCEPTANCE", role: "ACCEPTANCE_MANAGER" },
     ]);
-    expect(squad.stages.some(({ stage }) => stage === "ACCEPTANCE")).toBe(false);
     const developer = squad.stages.find(({ stage }) => stage === "IMPLEMENT")?.profile;
     expect(developer === undefined ? null : findBuiltinAgentProfile(developer)?.role).toBe("DEVELOPER");
     expect(findBuiltinAgentProfile({ id: "builtin.developer", revision: 2, role: "DEVELOPER" })).toBeNull();
@@ -191,6 +192,71 @@ describe("agent team domain", () => {
     expect(policy.mcpProfileRevisionIds).toEqual([]);
   });
 
+  it("bounds Acceptance Manager to context-only artifact preparation", () => {
+    const profile = builtinAgentProfiles.find(({ role }) => role === "ACCEPTANCE_MANAGER");
+    if (profile === undefined) throw new Error("Expected the built-in Acceptance Manager profile");
+    const policy = resolveAgentRunPolicy({
+      assignment: assignment(),
+      profile,
+      stage: "ACCEPTANCE",
+      provider: "CODEX",
+      claimLimits: { global: 3, project: 3, provider: 3 },
+      pipelineBudget: { id: "budget-1", revision: 1, maxEstimatedTokens: 100_000 },
+      usedEstimatedTokens: 0,
+      mcpProfileRevisionIds: ["mcp-revision-not-authorized"],
+      projectConstitution: null,
+    });
+
+    expect(policy).toMatchObject({
+      profile: { role: "ACCEPTANCE_MANAGER" },
+      effectiveCapabilities: ["ARTIFACT_WRITE"],
+      modelTier: "STANDARD",
+      budget: { maxEstimatedTokens: 60_000, maxProviderSessions: 4 },
+      workspace: { access: "NONE", networkAccess: false },
+      mcpProfileRevisionIds: [],
+    });
+  });
+
+  it("adds an Acceptance Manager revision only to the exact legacy Standard squad", () => {
+    const current = assignment();
+    const legacy = {
+      ...current,
+      stages: current.stages.filter(({ stage }) => stage !== "ACCEPTANCE"),
+    };
+    const upgraded = upgradeLegacyStandardSquadForAcceptance({
+      assignment: legacy,
+      id: "squad-2",
+      now: later,
+    });
+
+    expect(upgraded).toMatchObject({ id: "squad-2", revision: 2, createdAt: later });
+    expect(upgraded.stages.at(-1)).toEqual({
+      stage: "ACCEPTANCE",
+      profile: { id: "builtin.acceptance-manager", revision: 1, role: "ACCEPTANCE_MANAGER" },
+    });
+    expect(() =>
+      upgradeLegacyStandardSquadForAcceptance({
+        assignment: {
+          ...legacy,
+          stages: legacy.stages.map((candidate) =>
+            candidate.stage === "REVIEW"
+              ? { ...candidate, profile: { ...candidate.profile, id: "tampered-reviewer" } }
+              : candidate,
+          ),
+        },
+        id: "squad-3",
+        now: later,
+      }),
+    ).toThrow(/revision 1 legacy Standard squad/u);
+    expect(() =>
+      upgradeLegacyStandardSquadForAcceptance({
+        assignment: { ...legacy, revision: 2 },
+        id: "squad-4",
+        now: later,
+      }),
+    ).toThrow(/revision 1 legacy Standard squad/u);
+  });
+
   it("creates one run from the assigned profile revision and only finishes it once", () => {
     const run = createAgentRun({
       id: "agent-run-1",
@@ -213,7 +279,7 @@ describe("agent team domain", () => {
     expect(() => finishAgentRun(finished, "FAILED", later)).toThrow(/Only a running AgentRun/u);
   });
 
-  it("fails closed when an assignment crosses workflow scope or omits the stage", () => {
+  it("fails closed when an assignment crosses workflow scope", () => {
     expect(() =>
       createAgentRun({
         id: "agent-run-1",
@@ -231,19 +297,23 @@ describe("agent team domain", () => {
       }),
     ).toThrow(/does not belong/u);
 
+    const withoutQA = {
+      ...assignment(),
+      stages: assignment().stages.filter(({ stage }) => stage !== "QA"),
+    };
     expect(() =>
       createAgentRun({
-        id: "agent-run-1",
+        id: "agent-run-2",
         projectId: "project-1",
         workItemId: "work-1",
         pipelineRunId: "pipeline-1",
-        stageAttemptId: "attempt-1",
+        stageAttemptId: "attempt-2",
         ordinal: 1,
-        stage: "ACCEPTANCE",
-        assignment: assignment(),
+        stage: "QA",
+        assignment: withoutQA,
         provider: "CODEX",
         policySnapshot: implementationPolicy(),
-        policySnapshotHash: `sha256:${"a".repeat(64)}`,
+        policySnapshotHash: `sha256:${"b".repeat(64)}`,
         now,
       }),
     ).toThrow(/no profile/u);

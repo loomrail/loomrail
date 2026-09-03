@@ -65,15 +65,19 @@ capability/budget/workspace policy. Он не притворяется hash вс
 ### D2 — SquadAssignment фиксирует состав, а не запускает весь roster
 
 Squad — immutable набор `profileId + revision + stages`, выбранный при старте approved PipelineRun. Встроенный
-Standard workflow назначает только роли стадиям, которые реально исполняются агентом; ACCEPTANCE принадлежит
-владельцу и AgentRun не создаёт. Маленькая задача не запускает Lead PM, Analyst и Architect одновременно только
-потому, что такие профили существуют.
+Standard workflow назначает только роли стадиям, которые реально исполняются provider-ом, включая bounded
+Acceptance Manager. Он предлагает criterion/evidence package, но не принимает решение: отдельный final
+`Accept | Return | Reject` принадлежит владельцу. Маленькая задача не запускает Lead PM и весь roster одновременно
+только потому, что такие профили существуют.
 
 Stable scope создаёт ровно один `SquadAssignment(revision = 1)` при старте PipelineRun и не предоставляет command,
 HTTP/UI boundary или transition для изменения состава после старта. Поле revision сохраняет точную identity
 immutable snapshot и оставляет additive schema seam, но не является обещанием уже реализованного editing flow.
 Будущее изменение состава потребует отдельного решения: новая immutable assignment revision сможет действовать
 только на ещё не начавшиеся StageAttempt, а каждый новый AgentRun обязан сохранить именно её в policy snapshot.
+Единственное compatibility-исключение — exact revision 1 пятистадийный Standard assignment, сохранённый до Q13: при
+первом claim ещё не начатой ACCEPTANCE daemon добавляет одну immutable revision только с built-in Acceptance Manager и
+пишет `SQUAD_ASSIGNED`. Неизвестный или изменённый состав fail-closed не обновляется.
 
 ### D3 — Scheduler планирует, transaction резервирует
 
@@ -164,11 +168,17 @@ Scheduler deferral reasons: `NOT_READY`, `BUDGET_BLOCKED`, `CHECKPOINT_NOT_STABL
 5. Успешный claim при необходимости создаёт и durable-leases workspace до provider spawn; проигравший claim
    перечитывает очередь.
 6. Provider handoff меняет только ProviderSession внутри того же AgentRun.
-7. Terminal/pause/human outcome завершает AgentRun и освобождает capacity/lease одной durable transition; resume
-   создаёт следующий ordinal, а не воскрешает старый run.
+7. Terminal/human outcome завершает AgentRun и освобождает capacity/lease одной durable transition. Owner cancel
+   сначала durable-фиксирует validated cancellation без освобождения live authority, затем синхронно отзывает
+   daemon-owned start signal и ждёт подтверждённого выхода зарегистрированного child. Только после подтверждения
+   `END_PROVIDER_SESSION` атомарно закрывает session/run и lease. Soft Pause запрещает новый dispatch, но текущий turn
+   не убивает: его session/run закрываются после natural outcome. Resume создаёт следующий ordinal, а не воскрешает
+   старый run.
 8. Completion будит scheduler; блокировка одного WorkItem не останавливает независимые runs.
 9. Shutdown посылает abort каждой live ProviderSession и не начинает новые claims.
-10. Startup reconciliation завершает orphan sessions/runs как interrupted до первого scheduling pass.
+10. Startup reconciliation завершает orphan sessions/runs как interrupted до первого scheduling pass; если kill или
+    identity probe не подтвердил отсутствие старого child, session и writer lease остаются активными до следующей
+    успешной reconciliation.
 
 ## 7. Security delta
 

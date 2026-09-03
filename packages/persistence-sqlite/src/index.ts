@@ -161,6 +161,8 @@ import {
   finishAgentRun,
   findBuiltinAgentProfile,
   resolveAgentRunPolicy,
+  stageRunsInWorkspace,
+  upgradeLegacyStandardSquadForAcceptance,
   decideMarkWorkflowDispatchStarted,
   decideMcpCapabilitySnapshot,
   decideMcpProfileConfirmation,
@@ -2132,34 +2134,32 @@ const killOrphanedSessionProcess = (context: {
   processStartedAt: (pid: number) => Date | null;
   signalProcess: (pid: number, signal: "SIGKILL") => void;
   report: (event: OrphanProcessEvent) => void;
-}): void => {
+}): OrphanProcessEvent => {
   const { pid, sessionId } = context;
   // Even the reporting is contained: a logger that throws must not be the thing that stops the
   // daemon from starting, having been installed to make this very code observable.
-  const report = (event: OrphanProcessEvent): void => {
+  const report = (event: OrphanProcessEvent): OrphanProcessEvent => {
     try {
       context.report(event);
     } catch {
       // Nothing left to report it to.
     }
+    return event;
   };
   try {
     if (!isProcessAlive(pid)) {
-      report({ pid, sessionId, action: "SKIPPED", reason: "ALREADY_GONE" });
-      return;
+      return report({ pid, sessionId, action: "SKIPPED", reason: "ALREADY_GONE" });
     }
     const startedAt = context.processStartedAt(pid);
     if (startedAt === null) {
-      report({ pid, sessionId, action: "SKIPPED", reason: "START_TIME_UNKNOWN" });
-      return;
+      return report({ pid, sessionId, action: "SKIPPED", reason: "START_TIME_UNKNOWN" });
     }
     const sessionStartedAtMs = Date.parse(context.sessionStartedAt);
     if (
       Number.isNaN(sessionStartedAtMs) ||
       startedAt.getTime() > sessionStartedAtMs + PID_IDENTITY_TOLERANCE_MS
     ) {
-      report({ pid, sessionId, action: "SKIPPED", reason: "STARTED_AFTER_SESSION" });
-      return;
+      return report({ pid, sessionId, action: "SKIPPED", reason: "STARTED_AFTER_SESSION" });
     }
     try {
       context.signalProcess(pid, "SIGKILL");
@@ -2169,24 +2169,29 @@ const killOrphanedSessionProcess = (context: {
       // recorded as one, and a pid that vanished mid-probe is worth the one line it costs.
       // Anything else (EPERM above all) says the pid now belongs to a process this daemon may not
       // signal, i.e. the identity guard was wrong, which is louder still.
-      report({
+      return report({
         pid,
         sessionId,
         action: "FAILED",
         reason: errorCodeOf(cause) === "ESRCH" ? "VANISHED_BEFORE_SIGNAL" : "SIGNAL_REFUSED",
       });
-      return;
     }
     // Reported after the signal landed, never before it: the previous version announced the kill
     // and then attempted it, so a kill that threw was logged as a kill that happened.
-    report({ pid, sessionId, action: "KILLED", reason: "IDENTITY_CONFIRMED" });
+    return report({ pid, sessionId, action: "KILLED", reason: "IDENTITY_CONFIRMED" });
   } catch {
     // The liveness check and the default start-time probe both contain their own failures, so this
     // is only reachable through an injected probe -- but "only reachable through" is not "cannot
     // happen", and the cost of being wrong about that is a daemon that will not start.
-    report({ pid, sessionId, action: "FAILED", reason: "PROBE_FAILED" });
+    return report({ pid, sessionId, action: "FAILED", reason: "PROBE_FAILED" });
   }
 };
+
+const orphanProcessNoLongerOwnsAuthority = (event: OrphanProcessEvent): boolean =>
+  event.action === "KILLED" ||
+  event.reason === "ALREADY_GONE" ||
+  event.reason === "STARTED_AFTER_SESSION" ||
+  event.reason === "VANISHED_BEFORE_SIGNAL";
 
 // The default `listProjectWorktrees`: runs `git worktree list --porcelain` synchronously (`execute`
 // runs its whole transaction without ever awaiting anything, so `@loomrail/workspace`'s own async
@@ -2933,6 +2938,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     );
     const selectRunningProviderSession = database.prepare(
       "SELECT id FROM provider_sessions WHERE stage_attempt_id = ? AND status = 'RUNNING' LIMIT 1",
+    );
+    const selectLatestDispatchByStageAttempt = database.prepare(
+      "SELECT * FROM workflow_dispatches WHERE stage_attempt_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
     );
     const selectMaxProviderSessionOrdinal = database.prepare(
       "SELECT COALESCE(MAX(ordinal), 0) AS max_ordinal FROM provider_sessions WHERE stage_attempt_id = ?",
@@ -6193,7 +6201,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         );
 
         const storedAssignment = selectLatestSquadAssignment.get(workflowRun.id);
-        const assignment =
+        let assignment =
           storedAssignment === undefined
             ? createStandardSquadAssignment({
                 id: createId("squadAssignment"),
@@ -6204,8 +6212,20 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 now: occurredAt,
               })
             : squadAssignmentFromRow(storedAssignment);
-        const assignmentWasCreated = storedAssignment === undefined;
-        if (assignmentWasCreated) {
+        let assignmentWasInserted = storedAssignment === undefined;
+        if (
+          storedAssignment !== undefined &&
+          stageAttempt.stage === "ACCEPTANCE" &&
+          !assignment.stages.some(({ stage }) => stage === "ACCEPTANCE")
+        ) {
+          assignment = upgradeLegacyStandardSquadForAcceptance({
+            assignment,
+            id: createId("squadAssignment"),
+            now: occurredAt,
+          });
+          assignmentWasInserted = true;
+        }
+        if (assignmentWasInserted) {
           insertSquadAssignment.run(
             assignment.id,
             assignment.schemaVersion,
@@ -6311,7 +6331,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           agentRun.version,
         );
 
-        if (existingWorkspace) {
+        if (existingWorkspace && stageRunsInWorkspace(stageAttempt.stage)) {
           if (existingWorkspace.status !== "READY") {
             throw new StateStoreError(
               "WORKSPACE_NOT_READY",
@@ -6337,7 +6357,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           correlationId: command.correlationId,
         };
         const events: DomainEvent[] = [];
-        if (assignmentWasCreated) {
+        if (assignmentWasInserted) {
           events.push(appendAgentEvent({ type: "SQUAD_ASSIGNED", data: { assignment } }, metadata));
         }
         events.push(...appendWorkflowEvents(decision.events, metadata));
@@ -7247,6 +7267,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (!run || !stageAttempt || !workItem) {
           throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow state is incomplete");
         }
+        if (
+          command.type === "RESUME_PIPELINE" &&
+          (selectRunningAgentRunForStageAttempt.get(stageAttempt.id) !== undefined ||
+            selectRunningProviderSession.get(stageAttempt.id) !== undefined)
+        ) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_CONTROL_NOT_ALLOWED",
+            "The soft-paused provider turn must finish before the pipeline can resume",
+          );
+        }
         const pendingDispatch = readPendingDispatch(stageAttempt.id);
         const currentCorrection = readCurrentQACorrectionRun(run.id);
         const correctionCancellation =
@@ -7309,7 +7339,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           correlationId: command.correlationId,
         };
         const agentStatus = terminalAgentRunStatus(decision.stageAttempt.status);
-        if (agentStatus) finishActiveAgentRun(decision.stageAttempt.id, agentStatus, metadata);
+        const providerTurnStillRunning =
+          (decision.action === "PAUSE" || decision.action === "CANCEL") &&
+          selectRunningProviderSession.get(decision.stageAttempt.id) !== undefined;
+        if (agentStatus && !providerTurnStillRunning) {
+          finishActiveAgentRun(decision.stageAttempt.id, agentStatus, metadata);
+        }
         const events = appendWorkflowEvents(
           [...decision.events, ...(correctionCancellation?.events ?? [])],
           metadata,
@@ -7376,11 +7411,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
       if (command.type === "RECONCILE_WORKFLOWS") {
         const interruptedSessions: ProviderSession[] = [];
+        const interruptedAgentRunLeases: { stageAttemptId: string; workItemId: string }[] = [];
         // AgentRun is the A3 concurrency authority. Every RUNNING row at startup is orphaned even
         // when no ProviderSession was created yet; ending all of them first frees capacity and
         // ensures the dispatch-level recovery below never resurrects one implicitly.
         for (const runRow of selectRunningAgentRuns.all()) {
           const current = agentRunFromRow(runRow);
+          interruptedAgentRunLeases.push({
+            stageAttemptId: current.stageAttemptId,
+            workItemId: current.workItemId,
+          });
           const interrupted = finishAgentRun(current, "INTERRUPTED", occurredAt);
           const update = updateAgentRunStatus.run(
             interrupted.status,
@@ -7434,11 +7474,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const recoveryReports: RecoveryReport[] = [];
         const events: DomainEvent[] = [];
 
-        // A session still marked RUNNING at startup is orphaned by definition. The session ends as
-        // ENDED/INTERRUPTED, and its pending dispatch is deliberately left for the dispatch-level
-        // recovery below. A3 forbids automatic retry of an interrupted AgentRun; historical
-        // sessions with no AgentRun must fail closed the same way instead of resuming under
-        // nullable policy fallbacks that could observe current grants or configuration.
+        // A session still marked RUNNING at startup is orphaned by definition. It only ends as
+        // ENDED/INTERRUPTED once recovery knows its recorded process is gone or the pid was reused.
+        // A failed or inconclusive identity/signal check leaves both the session and writer lease
+        // in place for the next startup pass: freeing either would let another writer overlap a
+        // child that may still be touching the worktree. A3 forbids automatic retry of an
+        // interrupted AgentRun; historical sessions with no AgentRun fail closed the same way.
         for (const sessionRow of selectOrphanedRunningSessions.all()) {
           const current = providerSessionFromRow(sessionRow);
           const sessionAttempt = readStageAttempt(current.stageAttemptId);
@@ -7450,15 +7491,20 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           }
           // Kill first, mark second (see killOrphanedSessionProcess): a session with no recorded
           // pid never reached the point of having a process to kill, and is simply marked ENDED.
-          if (current.pid !== null) {
-            killOrphanedSessionProcess({
-              pid: current.pid,
-              sessionId: current.id,
-              sessionStartedAt: current.startedAt,
-              processStartedAt,
-              signalProcess,
-              report: reportOrphanProcess,
-            });
+          if (
+            current.pid !== null &&
+            !orphanProcessNoLongerOwnsAuthority(
+              killOrphanedSessionProcess({
+                pid: current.pid,
+                sessionId: current.id,
+                sessionStartedAt: current.startedAt,
+                processStartedAt,
+                signalProcess,
+                report: reportOrphanProcess,
+              }),
+            )
+          ) {
+            continue;
           }
           const session = providerSessionSchema.parse({
             ...current,
@@ -7495,6 +7541,42 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               },
             ),
           );
+
+          // A prior inconclusive recovery may already have interrupted the AgentRun, so it will no
+          // longer appear in `interruptedAgentRunLeases` on this pass. Release its lease here once
+          // this pass has finally established that the process no longer owns writer authority.
+          const workspace = readWorkItemWorkspaceByWorkItemId(sessionAttempt.workItemId);
+          if (workspace?.leaseHolder === sessionAttempt.id) {
+            const release = releaseWorkItemWorkspaceLease.run(
+              workspace.id,
+              workspace.version,
+              sessionAttempt.id,
+            );
+            if (release.changes !== 1) {
+              throw new StateStoreError(
+                "PERSISTENCE_FAILURE",
+                "An interrupted ProviderSession workspace lease changed during startup recovery",
+              );
+            }
+          }
+        }
+
+        // A RUNNING AgentRun found at startup has no daemon loop left to release its workspace.
+        // Do this only when no ProviderSession still claims that attempt: an inconclusive process
+        // probe deliberately leaves the session RUNNING, which must fence the writer lease until a
+        // later reconciliation confirms the child is gone. This also covers a Soft Pause whose
+        // allowed in-flight turn was interrupted by the daemon restart.
+        for (const { stageAttemptId, workItemId } of interruptedAgentRunLeases) {
+          if (selectRunningProviderSession.get(stageAttemptId) !== undefined) continue;
+          const workspace = readWorkItemWorkspaceByWorkItemId(workItemId);
+          if (workspace?.leaseHolder !== stageAttemptId) continue;
+          const release = releaseWorkItemWorkspaceLease.run(workspace.id, workspace.version, stageAttemptId);
+          if (release.changes !== 1) {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "An interrupted AgentRun workspace lease changed during startup recovery",
+            );
+          }
         }
 
         // A StageAttempt this loop recovers to INTERRUPTED is never coming back to reclaim a
@@ -7567,11 +7649,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           //
           // `stageAttemptIsTerminal` (@loomrail/domain) is what "dead" means, and its own comment
           // says why WAITING_HUMAN and the two paused statuses are NOT on that list: those attempts
-          // are expected back, in this same worktree.
+          // are expected back, in this same worktree. A still-RUNNING ProviderSession is a stronger
+          // process-authority fence even when recovery just made the attempt itself terminal.
           const leaseHolder = workspace.leaseHolder;
           const leaseHolderAttempt = leaseHolder === null ? null : readStageAttempt(leaseHolder);
           const leaseHolderIsDead =
             leaseHolder !== null &&
+            selectRunningProviderSession.get(leaseHolder) === undefined &&
             (attemptsRecoveredToInterrupted.has(leaseHolder) ||
               (leaseHolderAttempt !== null && stageAttemptIsTerminal(leaseHolderAttempt.status)));
           if (leaseHolder !== null && leaseHolderIsDead) {
@@ -7700,18 +7784,31 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             "The StageAttempt already has a running ProviderSession",
           );
         }
+        const stageAttempt = readStageAttempt(command.payload.stageAttemptId);
+        if (stageAttempt === null) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The StageAttempt does not exist");
+        }
+        const activeAgentRunValue = selectRunningAgentRunForStageAttempt.get(stageAttempt.id);
+        if (stageAttempt.status !== "RUNNING" || activeAgentRunValue === undefined) {
+          throw new StateStoreError(
+            "AGENT_RUN_NOT_ACTIVE",
+            "A ProviderSession requires a running StageAttempt with an active AgentRun",
+          );
+        }
+        const activeAgentRun = agentRunFromRow(activeAgentRunValue);
+        if (activeAgentRun.policySnapshot === null) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "A running AgentRun has no effective policy snapshot",
+          );
+        }
         const maxOrdinal = maxOrdinalRowSchema.parse(
           selectMaxProviderSessionOrdinal.get(command.payload.stageAttemptId),
         ).max_ordinal;
-        const activeAgentRunValue = database
-          .prepare("SELECT * FROM agent_runs WHERE stage_attempt_id = ? AND status = 'RUNNING' LIMIT 1")
-          .get(command.payload.stageAttemptId);
-        const activeAgentRun =
-          activeAgentRunValue === undefined ? null : agentRunFromRow(activeAgentRunValue);
         const session = providerSessionSchema.parse({
           schemaVersion: 1,
           id: createId("providerSession"),
-          agentRunId: activeAgentRun?.id ?? null,
+          agentRunId: activeAgentRun.id,
           stageAttemptId: command.payload.stageAttemptId,
           ordinal: maxOrdinal + 1,
           status: "RUNNING",
@@ -7725,9 +7822,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           // `null` a caller who knows there is no process would pass explicitly.
           pid: command.payload.pid ?? null,
         });
-        // No existence pre-check on stageAttemptId: the FK on provider_sessions.stage_attempt_id
-        // rejects a non-existent StageAttempt right here, inside this command's transaction, which
-        // is what makes "the write rolls back completely" provable rather than merely asserted.
+        // All authority reads above and these writes share the command's SQLite transaction. A
+        // pause/cancel that commits before this claim has already ended the AgentRun and is refused
+        // above. After the claim, cancellation closes this session/run atomically; Soft Pause keeps
+        // both authorities until the current turn naturally ends them.
         insertProviderSession.run(
           session.id,
           session.schemaVersion,
@@ -7765,30 +7863,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           recipe.estimateQuality,
           recipe.createdAt,
         );
-        const stageAttempt = readStageAttempt(session.stageAttemptId);
-        if (!stageAttempt) {
-          throw new StateStoreError(
-            "PERSISTENCE_FAILURE",
-            "The StageAttempt disappeared after its ProviderSession was inserted",
-          );
-        }
-        if (activeAgentRun !== null && activeAgentRun.policySnapshot === null) {
-          throw new StateStoreError(
-            "PERSISTENCE_FAILURE",
-            "A running AgentRun has no effective policy snapshot",
-          );
-        }
-        const pinnedMcpRevisions =
-          activeAgentRun === null
-            ? null
-            : new Set(activeAgentRun.policySnapshot?.mcpProfileRevisionIds ?? []);
+        const pinnedMcpRevisions = new Set(activeAgentRun.policySnapshot.mcpProfileRevisionIds);
         const enabledGrants = selectEnabledLatestMcpGrantsForProject
           .all(stageAttempt.projectId)
           .map(mcpGrantFromRow)
-          .filter(
-            ({ profileRevisionId }) =>
-              pinnedMcpRevisions === null || pinnedMcpRevisions.has(profileRevisionId),
-          );
+          .filter(({ profileRevisionId }) => pinnedMcpRevisions.has(profileRevisionId));
         const revisions = enabledGrants.map((grant) => {
           const revision = readMcpProfileRevision(grant.profileRevisionId);
           if (!revision) {
@@ -7898,7 +7977,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const agentRun = agentRunFromRow(agentRunValue);
         const run = readPipelineRun(stageAttempt.pipelineRunId);
         const workItem = readWorkItem(stageAttempt.workItemId);
-        const dispatch = readPendingDispatchForAttempt(stageAttempt.id);
+        const pendingDispatch = readPendingDispatchForAttempt(stageAttempt.id);
+        const latestDispatchValue =
+          stageAttempt.status === "SOFT_PAUSED"
+            ? selectLatestDispatchByStageAttempt.get(stageAttempt.id)
+            : undefined;
+        const dispatch =
+          pendingDispatch ??
+          (latestDispatchValue === undefined ? null : workflowDispatchFromRow(latestDispatchValue));
         if (run === null || workItem === null || dispatch === null) {
           throw new WorkflowDomainError(
             "WORKFLOW_NOT_FOUND",
@@ -7944,7 +8030,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           correlationId: command.correlationId,
         };
         const events = appendWorkflowEvents(decision.events, metadata);
-        if (decision.hardPaused) finishActiveAgentRun(stageAttempt.id, "HARD_PAUSED", metadata);
+        // The active session still owns the provider process and, for writer stages, its workspace.
+        // The loop awaits abort and END_PROVIDER_SESSION finishes the AgentRun/releases the lease;
+        // doing that here would advertise a free writer before the child has stopped.
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "PROVIDER_USAGE_RECORDED",
@@ -8090,7 +8178,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         // audit, but its unproductive-session transition must not run against an attempt that has
         // already left RUNNING or manufacture a second pause/request.
         if (
-          stageAttempt.status !== "HARD_PAUSED" &&
+          stageAttempt.status === "RUNNING" &&
           session.endReason !== "CANCELLED" &&
           command.payload.providerStarted
         ) {

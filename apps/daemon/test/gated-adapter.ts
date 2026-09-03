@@ -76,6 +76,9 @@ export const gatedAdapter = (
         }
       }
       await gate;
+      // Trusted adapters must refuse work that was revoked while their asynchronous preparation
+      // was in flight. Real adapters perform this same check immediately before child spawn.
+      invocation.authoritySignal.throwIfAborted();
       // No session id or checkpoint travels on COMPLETED; those are session-level outcomes
       // (HANDED_OFF, CONTEXT_EXHAUSTED). REVIEW and QA need typed evidence, and a scheduled REVIEW
       // also needs the structured independent-review report. A caller that drains the real workflow

@@ -176,8 +176,8 @@ const seededRecipe = (workItemId: string) => ({
 
 /**
  * Registers the fixture project, creates one WorkItem, moves it to Ready, and starts its mock
- * pipeline's first stage attempt -- through to a RUNNING dispatch, one step short of its first
- * ProviderSession. Shared by both session-loop fixtures below.
+ * pipeline's first stage attempt -- through an authoritative AgentRun claim, one step short of its
+ * first ProviderSession. Shared by both session-loop fixtures below.
  *
  * Seeded through direct commands against the same database file the daemon will later open,
  * exactly like `seedLongActivity` above -- not by driving `runStageAttempt`, whose mock adapter
@@ -242,15 +242,19 @@ const seedRunningStageAttempt = (
   });
   if (started.type !== "PIPELINE_STARTED") throw new Error("The seeded pipeline did not start");
 
-  const dispatched = localState.execute({
+  const claimed = localState.execute({
     schemaVersion: 1,
-    commandId: "seed-mark-dispatch-started",
-    correlationId: "correlation-seed-mark-dispatch-started",
-    actor: sessionLoopActor,
-    type: "MARK_WORKFLOW_DISPATCH_STARTED",
-    payload: { dispatchId: started.dispatch.id },
+    commandId: "seed-start-agent-run",
+    correlationId: "correlation-seed-start-agent-run",
+    actor: { type: "SYSTEM", id: "local-daemon" },
+    type: "START_AGENT_RUN",
+    payload: {
+      dispatchId: started.dispatch.id,
+      provider: "MOCK",
+      limits: { global: 3, project: 3, provider: 3 },
+    },
   });
-  if (dispatched.type !== "WORKFLOW_DISPATCH_STARTED") throw new Error("The seeded dispatch did not start");
+  if (claimed.type !== "AGENT_RUN_STARTED") throw new Error("The seeded AgentRun did not start");
 
   return {
     dispatchId: started.dispatch.id,

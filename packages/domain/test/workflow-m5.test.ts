@@ -224,6 +224,46 @@ describe("M5 workflow decisions", () => {
     expect(decision.events.map(({ type }) => type)).toContain("PIPELINE_PAUSED");
   });
 
+  it("records terminal usage from the current turn after Soft Pause", () => {
+    const paused = decidePausePipeline(
+      {
+        schemaVersion: 1,
+        commandId: "pause-before-terminal-usage",
+        correlationId: "correlation-pause-before-terminal-usage",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "PAUSE_PIPELINE",
+        payload: { pipelineRunId: run.id, expectedVersion: run.version },
+      },
+      { now, workItem, run, stageAttempt, pendingDispatch: dispatch },
+    );
+    if (paused.previousDispatch === null) throw new Error("Expected the withdrawn dispatch");
+
+    const decision = decideRecordProviderUsage({
+      now,
+      workItem: paused.workItem,
+      run: paused.run,
+      stageAttempt: paused.stageAttempt,
+      dispatch: paused.previousDispatch,
+      providerSession,
+      agentRun,
+      budgetPolicy,
+      existingUsageRecords: [],
+      existingAgentUsageTotal: 0,
+      usage: { inputTokens: 10, outputTokens: 10, quality: "ACTUAL" },
+      reportId: "provider-usage-soft-pause",
+      usageRecordId: "usage-soft-pause",
+      usageDigest: `sha256:${"e".repeat(64)}`,
+    });
+
+    expect(decision).toMatchObject({
+      hardPaused: false,
+      run: { status: "SOFT_PAUSED" },
+      stageAttempt: { status: "SOFT_PAUSED" },
+      dispatch: { status: "FAILED" },
+      report: { totalTokens: 20 },
+    });
+  });
+
   it("refuses usage whose session is not owned by the active AgentRun", () => {
     expect(() =>
       decideRecordProviderUsage({

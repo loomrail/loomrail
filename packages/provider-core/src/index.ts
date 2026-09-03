@@ -164,6 +164,12 @@ export type ProviderInvocation = {
   humanRequests: ProviderStageResultPolicy["humanRequests"];
   /** Required closed set. An empty array means this session has no MCP connections. */
   mcpConnections: readonly ProviderMcpConnection[];
+  /**
+   * Daemon-owned revocation signal for the durable AgentRun authority behind this invocation.
+   * A trusted adapter must check it immediately before spawning provider work. The daemon also
+   * calls `abortSession` when cancellation revokes an already-spawned session.
+   */
+  authoritySignal: AbortSignal;
   // The Git worktree this session may write in (spec E1 D8), or absent when there is none.
   //
   // Absent means the read-only path every session took before this milestone: the adapter runs its

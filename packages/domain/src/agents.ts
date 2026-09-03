@@ -224,7 +224,7 @@ export const builtinAgentProfiles: readonly AgentProfile[] = [
     stages: ["ACCEPTANCE"],
     expectedInputs: ["Acceptance criteria", "Review findings", "QA evidence"],
     expectedOutputs: ["ACCEPTANCE_PACKAGE"],
-    allowedCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ"],
+    allowedCapabilities: ["ARTIFACT_WRITE"],
     successRubric: ["Every criterion has a visible evidence state and unresolved gaps are explicit."],
     escalationConditions: ["A criterion lacks independent evidence or conflicts with the delivered change."],
     handoffContract: "Publish the evidence matrix and leave the final decision to the owner gate.",
@@ -258,6 +258,7 @@ const standardStageRoles: readonly { stage: WorkflowStage; role: AgentRole }[] =
   { stage: "IMPLEMENT", role: "DEVELOPER" },
   { stage: "REVIEW", role: "CODE_REVIEWER" },
   { stage: "QA", role: "BROWSER_QA" },
+  { stage: "ACCEPTANCE", role: "ACCEPTANCE_MANAGER" },
 ];
 
 export const standardAgentProfileForStage = (stage: WorkflowStage): AgentProfile | null => {
@@ -292,6 +293,63 @@ export const createStandardSquadAssignment = (input: {
     }),
     createdAt: input.now,
   });
+
+/**
+ * Upgrades only the exact five-stage Standard assignment shipped before Acceptance preparation
+ * received AgentRun authority. The old immutable row remains audit history; the additive revision
+ * can authorize only the still-unstarted Acceptance stage.
+ */
+export const upgradeLegacyStandardSquadForAcceptance = (input: {
+  assignment: SquadAssignment;
+  id: string;
+  now: string;
+}): SquadAssignment => {
+  const expectedLegacyStages = standardStageRoles
+    .filter(({ stage }) => stage !== "ACCEPTANCE")
+    .map(({ stage, role }) => {
+      const profile = profileForRole(role);
+      return {
+        stage,
+        profile: { id: profile.id, revision: profile.revision, role: profile.role },
+      };
+    });
+  const matchesLegacyStandard =
+    input.assignment.revision === 1 &&
+    input.assignment.stages.length === expectedLegacyStages.length &&
+    input.assignment.stages.every((candidate, index) => {
+      const expected = expectedLegacyStages[index];
+      return (
+        candidate.stage === expected?.stage &&
+        candidate.profile.id === expected.profile.id &&
+        candidate.profile.revision === expected.profile.revision &&
+        candidate.profile.role === expected.profile.role
+      );
+    });
+  if (!matchesLegacyStandard) {
+    throw new AgentDomainError(
+      "PROFILE_STAGE_MISMATCH",
+      "Only the exact revision 1 legacy Standard squad can receive the Acceptance Manager compatibility revision",
+    );
+  }
+  const acceptance = standardStageRoles.find(({ stage }) => stage === "ACCEPTANCE");
+  if (acceptance === undefined) {
+    throw new AgentDomainError("PROFILE_NOT_FOUND", "The standard Acceptance stage is missing");
+  }
+  const profile = profileForRole(acceptance.role);
+  return squadAssignmentSchema.parse({
+    ...input.assignment,
+    id: input.id,
+    revision: input.assignment.revision + 1,
+    stages: [
+      ...input.assignment.stages,
+      {
+        stage: acceptance.stage,
+        profile: { id: profile.id, revision: profile.revision, role: profile.role },
+      },
+    ],
+    createdAt: input.now,
+  });
+};
 
 export const refineContextPackForRole = (
   templateSpec: ContextPackSpec,

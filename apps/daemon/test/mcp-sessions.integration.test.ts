@@ -179,6 +179,19 @@ describe("daemon MCP session orchestration", () => {
       },
     });
     if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Pipeline was not started");
+    const agent = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-agent-run",
+      correlationId: "mcp-session-setup",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: pipeline.dispatch.id,
+        provider: "CODEX",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (agent.type !== "AGENT_RUN_STARTED") throw new Error("AgentRun was not started");
     const session = localState.execute({
       schemaVersion: 1,
       commandId: "start-provider-session",
@@ -191,8 +204,8 @@ describe("daemon MCP session orchestration", () => {
           schemaVersion: 1,
           templateId: discoveryTemplate.id,
           templateVersion: discoveryTemplate.version,
-          specSource: "WORKFLOW_TEMPLATE",
-          roleProfile: null,
+          specSource: "ROLE_PLAYBOOK",
+          roleProfile: { id: agent.run.profile.id, revision: agent.run.profile.revision },
           sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
           omitted: [],
           contentHash: `sha256:${"0".repeat(64)}`,

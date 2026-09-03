@@ -23,11 +23,14 @@ updated change-diff fixture remain green.
 
 ## Workflow and role observations
 
-The public EN/RU catalog names the one shipped `mock-delivery-v1` revision 4 sequence and the five roles dispatched by
-the standard squad. It also states that Lead PM and Acceptance Manager are catalogued but not dispatched, that the
-Acceptance Package is deterministic, and that only the owner may Accept, Return or Reject. README, both quick starts
-and both Browser QA guides distinguish the executable sample from the no-second-server Mock readiness plan and the
-quota-bearing D2 live route.
+At the Q10 evidence point, the public EN/RU catalog named the shipped `mock-delivery-v1` revision 4 sequence and five
+dispatched roles. It described Lead PM and Acceptance Manager as catalogued but not dispatched, kept the Acceptance
+Package deterministic, and reserved Accept, Return or Reject for the owner. README, both quick starts and both Browser
+QA guides distinguished the executable sample from the no-second-server Mock readiness plan and the quota-bearing D2
+live route.
+
+Q13 later superseded only the dispatch detail: Acceptance Manager now prepares the package in a bounded artifact-only
+AgentRun, while deterministic evidence binding and the owner-only Accept/Return/Reject boundary remain unchanged.
 
 ## Package and repository gates
 

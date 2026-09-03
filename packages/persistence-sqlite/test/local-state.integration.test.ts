@@ -726,13 +726,64 @@ describe("SQLite local state", () => {
     if (pendingAcceptance.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
     const acceptanceDispatch = pendingAcceptance.dispatches[0];
     if (!acceptanceDispatch) throw new Error("Expected an Acceptance dispatch");
-    localState.execute({
+    const currentAssignment = localState.query({
+      type: "GET_SQUAD_ASSIGNMENT",
+      pipelineRunId: acceptanceDispatch.pipelineRunId,
+    });
+    if (currentAssignment.type !== "SQUAD_ASSIGNMENT" || currentAssignment.assignment === null) {
+      throw new Error("Expected the current Standard squad");
+    }
+    const legacyStages = currentAssignment.assignment.stages.filter(({ stage }) => stage !== "ACCEPTANCE");
+    const legacyDatabase = new DatabaseSync(databasePath);
+    // Simulate the exact historical database shape: before Q13, the one immutable revision 1 row
+    // had five stages. Current migrations install the six-stage row, so this fixture temporarily
+    // removes only the append-only guard while restoring that historical payload.
+    legacyDatabase.exec("DROP TRIGGER squad_assignments_are_immutable_update");
+    legacyDatabase
+      .prepare("UPDATE squad_assignments SET stages_json = ? WHERE id = ? AND revision = 1")
+      .run(JSON.stringify(legacyStages), currentAssignment.assignment.id);
+    legacyDatabase.exec(`
+      CREATE TRIGGER squad_assignments_are_immutable_update
+      BEFORE UPDATE ON squad_assignments BEGIN
+        SELECT RAISE(ABORT, 'squad assignments are immutable');
+      END;
+    `);
+    legacyDatabase.close();
+    const acceptanceRun = localState.execute({
       schemaVersion: 1,
-      commandId: `mark-${acceptanceDispatch.id}`,
-      correlationId: `correlation-mark-${acceptanceDispatch.id}`,
-      actor: { type: "SYSTEM", id: "mock-provider" },
-      type: "MARK_WORKFLOW_DISPATCH_STARTED",
-      payload: { dispatchId: acceptanceDispatch.id },
+      commandId: `start-agent-${acceptanceDispatch.id}`,
+      correlationId: `correlation-start-agent-${acceptanceDispatch.id}`,
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: acceptanceDispatch.id,
+        provider: "CODEX",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (acceptanceRun.type !== "AGENT_RUN_STARTED") throw new Error("Expected the Acceptance AgentRun");
+    expect(acceptanceRun).toMatchObject({
+      assignment: {
+        revision: 2,
+        stages: [
+          {},
+          {},
+          {},
+          {},
+          {},
+          {
+            stage: "ACCEPTANCE",
+            profile: { role: "ACCEPTANCE_MANAGER" },
+          },
+        ],
+      },
+      run: {
+        profile: { role: "ACCEPTANCE_MANAGER" },
+        policySnapshot: {
+          effectiveCapabilities: ["ARTIFACT_WRITE"],
+          workspace: { access: "NONE", networkAccess: false },
+        },
+      },
     });
     const beforeInvalid = localState.query({
       type: "GET_WORKFLOW_SNAPSHOT",
@@ -6222,6 +6273,7 @@ describe("SQLite local state", () => {
       localState: LocalState,
       commandId: string,
       workItemCommandId: string,
+      claimAgent = true,
     ): { workItemId: string; stageAttemptId: string; projectId: string } => {
       localState.execute(registerProject());
       const created = localState.execute(createWorkItem(workItemCommandId));
@@ -6241,6 +6293,21 @@ describe("SQLite local state", () => {
         },
       });
       if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+      if (claimAgent) {
+        const agent = localState.execute({
+          schemaVersion: 1,
+          commandId: `agent-${commandId}`,
+          correlationId: `correlation-agent-${commandId}`,
+          actor: { type: "SYSTEM", id: "local-daemon" },
+          type: "START_AGENT_RUN",
+          payload: {
+            dispatchId: started.dispatch.id,
+            provider: "CODEX",
+            limits: { global: 3, project: 3, provider: 3 },
+          },
+        });
+        if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun start");
+      }
       return {
         workItemId: created.workItem.id,
         stageAttemptId: started.stageAttempt.id,
@@ -6431,7 +6498,12 @@ describe("SQLite local state", () => {
 
     it("adds nullable policy snapshots without inventing policy for historical AgentRuns", async () => {
       const localState = await open();
-      const { workItemId } = startWorkflow(localState, "start-historical-policy", "create-historical-policy");
+      const { workItemId } = startWorkflow(
+        localState,
+        "start-historical-policy",
+        "create-historical-policy",
+        false,
+      );
       const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
       if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected pending dispatches");
       const dispatch = pending.dispatches.find((candidate) => candidate.workItemId === workItemId);
@@ -6635,6 +6707,7 @@ describe("SQLite local state", () => {
         localState,
         "start-pre-m6-migration",
         "create-pre-m6-migration-item",
+        false,
       );
       const before = localState.query({ type: "LIST_EVENTS" });
       if (before.type !== "EVENTS") throw new Error("Expected events");
@@ -6753,6 +6826,7 @@ describe("SQLite local state", () => {
       localState: LocalState,
       commandId: string,
       workItemCommandId: string,
+      claimAgent = true,
     ): { workItemId: string; stageAttemptId: string; projectId: string } => {
       localState.execute(registerProject());
       const created = localState.execute(createWorkItem(workItemCommandId));
@@ -6772,6 +6846,21 @@ describe("SQLite local state", () => {
         },
       });
       if (started.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+      if (claimAgent) {
+        const agent = localState.execute({
+          schemaVersion: 1,
+          commandId: `agent-${commandId}`,
+          correlationId: `correlation-agent-${commandId}`,
+          actor: { type: "SYSTEM", id: "local-daemon" },
+          type: "START_AGENT_RUN",
+          payload: {
+            dispatchId: started.dispatch.id,
+            provider: "CODEX",
+            limits: { global: 3, project: 3, provider: 3 },
+          },
+        });
+        if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun start");
+      }
       return {
         workItemId: created.workItem.id,
         stageAttemptId: started.stageAttempt.id,
@@ -6950,11 +7039,10 @@ describe("SQLite local state", () => {
     };
 
     it("rejects a ProviderSession for a StageAttempt that does not exist, writing nothing", async () => {
-      // No StageAttempt is ever created with this id: the FK on provider_sessions rejects the
-      // insert. This is a real, useful guard on its own, but note what it does NOT prove: the
-      // very first write attempted by this command fails, so a command that never wrote anything
-      // at all would pass these same assertions. It cannot tell a working ROLLBACK apart from no
-      // transaction existing in the first place -- see the next test for that.
+      // No StageAttempt is ever created with this id. The authority check refuses it before any
+      // insert; this cannot by itself distinguish a working ROLLBACK from no transaction existing
+      // in the first place, so the later recipe-collision test still exercises rollback after a
+      // successful session-row write.
       const localState = await open();
 
       expect(() =>
@@ -6969,6 +7057,177 @@ describe("SQLite local state", () => {
       expect(countContextPackRecipes(raw)).toBe(0);
       expect(countEventsOfType(raw, "PROVIDER_SESSION_STARTED")).toBe(0);
       raw.close();
+    });
+
+    it("atomically refuses a ProviderSession when cancellation wins the AgentRun race", async () => {
+      const localState = await open();
+      const { workItemId, stageAttemptId } = startWorkflow(
+        localState,
+        "start-cancel-session-race",
+        "create-cancel-session-race-item",
+      );
+      const before = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+      if (before.type !== "WORKFLOW_SNAPSHOT" || before.snapshot.run === null) {
+        throw new Error("Expected the running workflow");
+      }
+
+      // This is the serialised order of the real race: the daemon has already read a RUNNING
+      // AgentRun, then CANCEL_PIPELINE commits before its START_PROVIDER_SESSION transaction.
+      // The session command must re-check both authorities in its own transaction rather than
+      // trusting the daemon's stale read.
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "cancel-before-provider-session",
+        correlationId: "correlation-cancel-before-provider-session",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "CANCEL_PIPELINE",
+        payload: {
+          pipelineRunId: before.snapshot.run.id,
+          expectedVersion: before.snapshot.run.version,
+        },
+      });
+
+      expect(() =>
+        localState.execute(startProviderSessionCommand("start-after-cancel", stageAttemptId)),
+      ).toThrow(expect.objectContaining({ code: "AGENT_RUN_NOT_ACTIVE" }));
+      expect(localState.query({ type: "LIST_AGENT_RUNS", status: "CANCELLED" })).toMatchObject({
+        type: "AGENT_RUNS",
+        runs: [{ stageAttemptId }],
+      });
+
+      localState.close();
+      state = undefined;
+      const raw = new DatabaseSync(databasePath);
+      expect(countProviderSessions(raw)).toBe(0);
+      expect(countContextPackRecipes(raw)).toBe(0);
+      expect(countEventsOfType(raw, "PROVIDER_SESSION_STARTED")).toBe(0);
+      raw.close();
+    });
+
+    it("retains live authority until the cancelled ProviderSession is explicitly ended", async () => {
+      const localState = await open();
+      const { workItemId, stageAttemptId } = startWorkflow(
+        localState,
+        "start-cancel-active-session",
+        "create-cancel-active-session-item",
+      );
+      const started = localState.execute(
+        startProviderSessionCommand("start-session-before-cancel", stageAttemptId),
+      );
+      if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected ProviderSession start");
+      const before = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+      if (before.type !== "WORKFLOW_SNAPSHOT" || before.snapshot.run === null) {
+        throw new Error("Expected the running workflow");
+      }
+
+      const cancelled = localState.execute({
+        schemaVersion: 1,
+        commandId: "cancel-active-provider-session",
+        correlationId: "correlation-cancel-active-provider-session",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "CANCEL_PIPELINE",
+        payload: {
+          pipelineRunId: before.snapshot.run.id,
+          expectedVersion: before.snapshot.run.version,
+        },
+      });
+
+      expect(cancelled).toMatchObject({
+        type: "PIPELINE_CONTROL_APPLIED",
+        action: "CANCEL",
+      });
+      if (cancelled.type !== "PIPELINE_CONTROL_APPLIED") {
+        throw new Error("Expected cancelled pipeline control");
+      }
+      expect(localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId })).toMatchObject({
+        type: "PROVIDER_SESSIONS",
+        sessions: [{ id: started.session.id, status: "RUNNING", endReason: null }],
+      });
+      expect(localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" })).toMatchObject({
+        type: "AGENT_RUNS",
+        runs: [{ stageAttemptId }],
+      });
+
+      localState.execute(
+        endProviderSessionCommand("end-session-after-cancel", started.session.id, "CANCELLED"),
+      );
+      expect(localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId })).toMatchObject({
+        type: "PROVIDER_SESSIONS",
+        sessions: [{ id: started.session.id, status: "ENDED", endReason: "CANCELLED" }],
+      });
+      expect(localState.query({ type: "LIST_AGENT_RUNS", status: "CANCELLED" })).toMatchObject({
+        type: "AGENT_RUNS",
+        runs: [{ stageAttemptId }],
+      });
+    });
+
+    it("lets a soft-paused turn finish before closing its AgentRun", async () => {
+      const localState = await open();
+      const { workItemId, stageAttemptId } = startWorkflow(
+        localState,
+        "start-pause-active-session",
+        "create-pause-active-session-item",
+      );
+      const started = localState.execute(
+        startProviderSessionCommand("start-session-before-pause", stageAttemptId),
+      );
+      if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected ProviderSession start");
+      const before = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+      if (before.type !== "WORKFLOW_SNAPSHOT" || before.snapshot.run === null) {
+        throw new Error("Expected the running workflow");
+      }
+
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "pause-active-provider-session",
+        correlationId: "correlation-pause-active-provider-session",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "PAUSE_PIPELINE",
+        payload: {
+          pipelineRunId: before.snapshot.run.id,
+          expectedVersion: before.snapshot.run.version,
+        },
+      });
+      expect(localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId })).toMatchObject({
+        type: "PROVIDER_SESSIONS",
+        sessions: [{ id: started.session.id, status: "RUNNING" }],
+      });
+      expect(localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" })).toMatchObject({
+        type: "AGENT_RUNS",
+        runs: [{ stageAttemptId }],
+      });
+      const paused = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+      if (paused.type !== "WORKFLOW_SNAPSHOT" || paused.snapshot.run === null) {
+        throw new Error("Expected the soft-paused workflow");
+      }
+      const pausedRun = paused.snapshot.run;
+      expect(() =>
+        localState.execute({
+          schemaVersion: 1,
+          commandId: "resume-before-soft-paused-turn-ended",
+          correlationId: "correlation-resume-before-soft-paused-turn-ended",
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "RESUME_PIPELINE",
+          payload: {
+            pipelineRunId: pausedRun.id,
+            expectedVersion: pausedRun.version,
+          },
+        }),
+      ).toThrow(expect.objectContaining({ code: "WORKFLOW_CONTROL_NOT_ALLOWED" }));
+
+      const ended = localState.execute(
+        endProviderSessionCommand("end-soft-paused-session", started.session.id, "COMPLETED"),
+      );
+      expect(ended).toMatchObject({
+        type: "PROVIDER_SESSION_ENDED",
+        session: { status: "ENDED", endReason: "COMPLETED" },
+        stageAttempt: { status: "SOFT_PAUSED" },
+        nextSessionOrdinal: null,
+      });
+      expect(localState.query({ type: "LIST_AGENT_RUNS", status: "SOFT_PAUSED" })).toMatchObject({
+        type: "AGENT_RUNS",
+        runs: [{ stageAttemptId }],
+      });
     });
 
     it("rolls back a session's own successful insert when its recipe write fails afterward", async () => {
@@ -7381,6 +7640,7 @@ describe("SQLite local state", () => {
         localState,
         "start-orphaned-session",
         "create-orphaned-session-item",
+        false,
       );
       const queued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
       if (queued.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected the dispatch queue");
@@ -7583,13 +7843,43 @@ describe("SQLite local state", () => {
       // whose child the process is decides whether its pid can disappear mid-`execute` at all --
       // see `spawnReparentedProbeChild`.
       spawnOrphan: () => number = spawnProbeChild,
-    ): Promise<{ pid: number; sessionId: string; reported: OrphanProcessEvent[] }> => {
+      leaseWorkspace = false,
+    ): Promise<{
+      pid: number;
+      sessionId: string;
+      stageAttemptId: string;
+      workItemId: string;
+      reported: OrphanProcessEvent[];
+    }> => {
       const before = await open();
-      const { stageAttemptId } = startWorkflow(before, names.session, names.item);
+      const { stageAttemptId, workItemId, projectId } = startWorkflow(before, names.session, names.item);
       const started = before.execute(
         startProviderSessionCommand(`${names.session}-provider`, stageAttemptId),
       );
       if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+
+      if (leaseWorkspace) {
+        const workspace = before.execute({
+          schemaVersion: 1,
+          commandId: `${names.session}-workspace`,
+          correlationId: `correlation-${names.session}-workspace`,
+          actor: { type: "SYSTEM", id: "workspace-manager" },
+          type: "CREATE_WORK_ITEM_WORKSPACE",
+          payload: {
+            workItemId,
+            projectId,
+            branch: `loomrail/${workItemId}`,
+            worktreePath: join(temporaryDirectory, "worktrees", workItemId),
+            baseCommit: null,
+            snapshotCommit: null,
+            carriedPaths: [],
+            initialLeaseHolder: stageAttemptId,
+          },
+        });
+        if (workspace.type !== "WORK_ITEM_WORKSPACE_CREATED") {
+          throw new Error("Expected a leased workspace");
+        }
+      }
 
       const pid = spawnOrphan();
       orphanPids.push(pid);
@@ -7605,7 +7895,7 @@ describe("SQLite local state", () => {
       });
       const reconciled = after.execute(reconcileWorkflowsCommand(names.reconcile));
       if (reconciled.type !== "WORKFLOWS_RECONCILED") throw new Error("Expected reconciliation");
-      return { pid, sessionId: started.session.id, reported };
+      return { pid, sessionId: started.session.id, stageAttemptId, workItemId, reported };
     };
 
     // The claim reconciliation makes is "killed first, marked second". Proven with a REAL detached
@@ -7700,21 +7990,36 @@ describe("SQLite local state", () => {
     // Fail safe. `ps` can be absent (Windows), refuse, or print something unparseable. An orphan
     // that survives is self-healing at the next daemon start; a SIGKILL to the wrong process is not.
     it("leaves the orphan alone, and says so, when it cannot tell when the process started", async () => {
-      const { pid, sessionId, reported } = await orphanAndReconcile(
+      const { pid, sessionId, stageAttemptId, workItemId, reported } = await orphanAndReconcile(
         {
           session: "start-orphan-unknown-session",
           item: "create-orphan-unknown-item",
           reconcile: "reconcile-orphan-unknown-session",
         },
-        () => ({ processStartedAt: () => null }),
+        () => ({ processStartedAt: () => null, listProjectWorktrees: () => null }),
+        spawnProbeChild,
+        true,
       );
       try {
         expect(isProcessAlive(pid)).toBe(true);
         expect(reported).toEqual([{ pid, sessionId, action: "SKIPPED", reason: "START_TIME_UNKNOWN" }]);
-        expect(readProviderSessionRow(sessionId).status).toBe("ENDED");
+        expect(readProviderSessionRow(sessionId).status).toBe("RUNNING");
+        const held = state?.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+        expect(held?.type === "WORKSPACE" ? held.workspace : null).toMatchObject({
+          leaseHolder: stageAttemptId,
+        });
       } finally {
         process.kill(pid, "SIGKILL");
+        await waitUntilProcessExits(pid, PROCESS_EXIT_CONFIRMATION_TIMEOUT_MS);
       }
+
+      const retried = state?.execute(reconcileWorkflowsCommand("retry-orphan-unknown-session"));
+      expect(retried?.type).toBe("WORKFLOWS_RECONCILED");
+      expect(readProviderSessionRow(sessionId).status).toBe("ENDED");
+      const released = state?.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(released?.type === "WORKSPACE" ? released.workspace : null).toMatchObject({
+        leaseHolder: null,
+      });
     });
 
     // The liveness check and the signal are not one atomic act: the identity guard runs a real
@@ -7777,17 +8082,80 @@ describe("SQLite local state", () => {
           processStartedAt: () => {
             throw new Error("ps is not available on this machine");
           },
+          listProjectWorktrees: () => null,
         }),
+        spawnProbeChild,
+        true,
       );
 
       await expect(reconciled).resolves.toMatchObject({
         reported: [{ action: "FAILED", reason: "PROBE_FAILED" }],
       });
-      const { pid, sessionId, reported } = await reconciled;
+      const { pid, sessionId, stageAttemptId, workItemId, reported } = await reconciled;
       expect(reported).toEqual([{ pid, sessionId, action: "FAILED", reason: "PROBE_FAILED" }]);
-      // Fail safe in the direction that matters: nothing was signalled.
-      expect(isProcessAlive(pid)).toBe(true);
+      try {
+        // Fail safe in the direction that matters: nothing was signalled and no second writer can
+        // enter while the process remains unclassified.
+        expect(isProcessAlive(pid)).toBe(true);
+        expect(readProviderSessionRow(sessionId).status).toBe("RUNNING");
+        const held = state?.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+        expect(held?.type === "WORKSPACE" ? held.workspace : null).toMatchObject({
+          leaseHolder: stageAttemptId,
+        });
+      } finally {
+        process.kill(pid, "SIGKILL");
+        await waitUntilProcessExits(pid, PROCESS_EXIT_CONFIRMATION_TIMEOUT_MS);
+      }
+
+      const retried = state?.execute(reconcileWorkflowsCommand("retry-orphan-probe-failure-session"));
+      expect(retried?.type).toBe("WORKFLOWS_RECONCILED");
       expect(readProviderSessionRow(sessionId).status).toBe("ENDED");
+      const released = state?.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(released?.type === "WORKSPACE" ? released.workspace : null).toMatchObject({
+        leaseHolder: null,
+      });
+    });
+
+    it("retains process and writer authority when the kernel refuses the orphan signal", async () => {
+      const { pid, sessionId, stageAttemptId, workItemId, reported } = await orphanAndReconcile(
+        {
+          session: "start-orphan-signal-refused-session",
+          item: "create-orphan-signal-refused-item",
+          reconcile: "reconcile-orphan-signal-refused-session",
+        },
+        () => ({
+          processStartedAt: () => new Date(Date.parse(timestamp) - 1_000),
+          signalProcess: () => {
+            const refused = new Error("Operation not permitted") as Error & { code: string };
+            refused.code = "EPERM";
+            throw refused;
+          },
+          listProjectWorktrees: () => null,
+        }),
+        spawnProbeChild,
+        true,
+      );
+
+      expect(reported).toEqual([{ pid, sessionId, action: "FAILED", reason: "SIGNAL_REFUSED" }]);
+      try {
+        expect(isProcessAlive(pid)).toBe(true);
+        expect(readProviderSessionRow(sessionId).status).toBe("RUNNING");
+        const held = state?.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+        expect(held?.type === "WORKSPACE" ? held.workspace : null).toMatchObject({
+          leaseHolder: stageAttemptId,
+        });
+      } finally {
+        process.kill(pid, "SIGKILL");
+        await waitUntilProcessExits(pid, PROCESS_EXIT_CONFIRMATION_TIMEOUT_MS);
+      }
+
+      const retried = state?.execute(reconcileWorkflowsCommand("retry-orphan-signal-refused-session"));
+      expect(retried?.type).toBe("WORKFLOWS_RECONCILED");
+      expect(readProviderSessionRow(sessionId).status).toBe("ENDED");
+      const released = state?.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId });
+      expect(released?.type === "WORKSPACE" ? released.workspace : null).toMatchObject({
+        leaseHolder: null,
+      });
     });
 
     it("assembles the context sources snapshot from a published Checkpoint, Evidence, and a Decision", async () => {
@@ -7796,7 +8164,30 @@ describe("SQLite local state", () => {
         localState,
         "start-context-sources",
         "create-context-sources-item",
+        false,
       );
+      const constitutionDatabase = new DatabaseSync(databasePath);
+      seedActiveProjectConstitution(constitutionDatabase, projectId);
+      constitutionDatabase.close();
+      const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      const dispatch =
+        pending.type === "WORKFLOW_DISPATCHES"
+          ? pending.dispatches.find((candidate) => candidate.stageAttemptId === stageAttemptId)
+          : undefined;
+      if (dispatch === undefined) throw new Error("Expected the context-source dispatch");
+      const agent = localState.execute({
+        schemaVersion: 1,
+        commandId: "start-context-agent",
+        correlationId: "correlation-start-context-agent",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "START_AGENT_RUN",
+        payload: {
+          dispatchId: dispatch.id,
+          provider: "CODEX",
+          limits: { global: 3, project: 3, provider: 3 },
+        },
+      });
+      if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected the context AgentRun");
       const snapshot = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
       if (snapshot.type !== "WORKFLOW_SNAPSHOT" || !snapshot.snapshot.run) {
         throw new Error("Expected a running PipelineRun");
@@ -7828,7 +8219,6 @@ describe("SQLite local state", () => {
       state = undefined;
 
       const raw = new DatabaseSync(databasePath);
-      seedActiveProjectConstitution(raw, projectId);
       seedEvidenceArtifact(raw, {
         id: "evidence-context-sources",
         projectId,

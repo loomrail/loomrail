@@ -33,7 +33,6 @@ import {
   refineContextPackForRole,
   stageRequiresWorkspace,
   stageRunsInWorkspace,
-  stageWritesInWorkspace,
   workspaceBranchName,
   type DispatchStageDecision,
   type ProvisionRefusal,
@@ -94,16 +93,7 @@ const PACK_SHARE_BACKOFF = 0.1;
  */
 const BYTES_PER_TOKEN = 4;
 
-/**
- * The bound on how many ProviderSessions one StageAttempt may run.
- *
- * Spec §6.5's guard is the unproductive-session counter, and it only catches a provider that stops
- * making progress. Live usage now backs it up when the adapter can report spend, but the capability
- * is optional and a sequence of zero-cost/provider-unmeasured handoffs still needs a deterministic
- * bound. Reaching it is therefore terminal (hard pause, dispatch withdrawn, question to the owner),
- * not a log line that leaves the dispatch PENDING for the drain to hand straight back.
- */
-const MAX_SESSIONS_PER_ATTEMPT = 50;
+const isAuthorityRevoked = (signal: AbortSignal): boolean => signal.aborted;
 
 export type SessionLoopLogger = {
   info: (details: Record<string, string | number>, message: string) => void;
@@ -149,6 +139,8 @@ export type RunStageAttemptDeps = {
   scheduleHandoffDeadline?: ScheduleHandoffDeadline;
   /** Opens daemon-owned MCP servers for the immutable snapshots captured at session start. */
   openMcpConnections?: OpenMcpConnections;
+  /** Revoked synchronously when owner cancellation removes this AgentRun's authority. */
+  authoritySignal?: AbortSignal;
   /**
    * Called with the live session's id when one opens and with `null` when it closes.
    *
@@ -855,21 +847,25 @@ const readStageResultTree = async (
  * invocation carries (`ProviderWorkspace` in `@loomrail/provider-core`), and re-reading the row for
  * them at each session would re-read a row this attempt already holds the lease on.
  */
-type WorkspaceLeaseSlot = { workspace: WorkItemWorkspace | null };
+type WorkspaceLeaseSlot = { workspace: WorkItemWorkspace | null; releaseOnExit: boolean };
 
 const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLeaseSlot): Promise<void> => {
   const scheduleDeadline = deps.scheduleHandoffDeadline ?? defaultScheduleHandoffDeadline;
+  const authoritySignal = deps.authoritySignal ?? new AbortController().signal;
   const capabilities = deps.adapter.capabilities();
   const stageAttemptId = deps.dispatch.stageAttemptId;
   const executionPolicy = activeAgentExecutionPolicy(deps, stageAttemptId);
-  const roleProfile = executionPolicy?.profile ?? null;
-  const maxSessions = executionPolicy?.snapshot.budget.maxProviderSessions ?? MAX_SESSIONS_PER_ATTEMPT;
-  const agentRunId = executionPolicy?.agentRunId ?? null;
+  if (executionPolicy === null) {
+    throw new StateStoreError(
+      "PERSISTENCE_FAILURE",
+      "A provider session cannot start without an active AgentRun authority",
+    );
+  }
+  const roleProfile = executionPolicy.profile;
+  const maxSessions = executionPolicy.snapshot.budget.maxProviderSessions;
+  const agentRunId = executionPolicy.agentRunId;
   const templateContextSpec = contextPackSpecFor(deps.template, readStageAttemptState(deps).attempt.stage);
-  const contextSpec =
-    roleProfile === null
-      ? templateContextSpec
-      : refineContextPackForRole(templateContextSpec, roleProfile.playbook);
+  const contextSpec = refineContextPackForRole(templateContextSpec, roleProfile.playbook);
   const initialSessions = readAttemptSessions(deps, agentRunId);
   if (initialSessions.running) {
     deps.logger.info(
@@ -881,6 +877,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
   let lastSessionOrdinal = initialSessions.nextOrdinal - 1;
 
   for (let session = initialSessions.agentRunSessionCount; session < maxSessions; session += 1) {
+    if (isAuthorityRevoked(authoritySignal)) return;
     const { attempt, humanRequests } = readStageAttemptState(deps);
     if (attempt.status !== "RUNNING") {
       deps.logger.info(
@@ -964,8 +961,9 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
 
     // Spec §6: the workspace is cut before the first session opens, never alongside it. Which stages
     // run in one is a property of the stage (`stagesRunningInWorkspace` in `@loomrail/domain`), read
-    // from there rather than compared against stage names here -- every stage an agent runs except
-    // ACCEPTANCE, which is the owner's decision rather than a reading of the tree. Done once per
+    // from there rather than compared against stage names here -- every repository-reading stage.
+    // ACCEPTANCE preparation is an AgentRun too, but it reads the durable pack and leaves the later
+    // decision to the owner, so it does not receive or lease the tree. Done once per
     // attempt: `lease.workspace` is set as soon as this attempt holds the lease, and every later
     // session in the same attempt writes in the same worktree (spec D1).
     //
@@ -1070,9 +1068,8 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     // `branch` and `baseCommit` travel with it because they say WHICH work this worktree holds --
     // the base a later step diffs against, and the branch the change lives on -- and a consumer
     // that had to re-derive them would shell out to git against a directory that may have moved on.
-    const policyWorkspace = executionPolicy?.snapshot.workspace;
-    const workspaceAccess =
-      policyWorkspace?.access ?? (stageWritesInWorkspace(attempt.stage) ? "READ_WRITE" : "READ_ONLY");
+    const policyWorkspace = executionPolicy.snapshot.workspace;
+    const workspaceAccess = policyWorkspace.access;
     const invocationWorkspace: { workspace?: ProviderWorkspace } =
       lease.workspace === null || workspaceAccess === "NONE"
         ? {}
@@ -1088,7 +1085,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
               // a workspace is what put DISCOVERY, PLAN and REVIEW under `-s workspace-write` with
               // the network opened.
               access: workspaceAccess,
-              networkAccess: policyWorkspace?.networkAccess ?? stageWritesInWorkspace(attempt.stage),
+              networkAccess: policyWorkspace.networkAccess,
             },
           };
 
@@ -1193,6 +1190,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       return;
     }
 
+    if (isAuthorityRevoked(authoritySignal)) return;
     const started = deps.state.execute({
       schemaVersion: 1,
       commandId: deps.createCommandId(),
@@ -1208,8 +1206,8 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           schemaVersion: 1,
           templateId: deps.template.id,
           templateVersion: deps.template.version,
-          specSource: roleProfile === null ? "WORKFLOW_TEMPLATE" : "ROLE_PLAYBOOK",
-          roleProfile: roleProfile === null ? null : { id: roleProfile.id, revision: roleProfile.revision },
+          specSource: "ROLE_PLAYBOOK",
+          roleProfile: { id: roleProfile.id, revision: roleProfile.revision },
           sections: assembled.recipe.sections,
           omitted: assembled.recipe.omitted,
           contentHash: assembled.pack.contentHash,
@@ -1239,7 +1237,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       checkpointWriteFailed: false,
       usageReported: false,
       budgetPaused: false,
-      budgetAbort: null as Promise<void> | null,
+      budgetAbort: null as Promise<boolean> | null,
       // Every integer percent already reported to state for this session. At most 101 entries.
       // See the comment on `reportedPercent` in `onContextWindow`.
       reportedPercents: new Set<number>(),
@@ -1280,7 +1278,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
 
     const listener: ProviderSessionListener = {
       onContextWindow: (reported) => {
-        if (live.closed || live.handoffRequested) return;
+        if (live.closed || isAuthorityRevoked(authoritySignal) || live.handoffRequested) return;
         // Provider output is untrusted input: a report that does not satisfy the contract is
         // recorded and dropped rather than driving a cut.
         const usage = contextWindowUsageSchema.safeParse(reported);
@@ -1295,7 +1293,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         // in the append-only `commands` table -- it already did, because the receipt is written
         // outside the branch that decided the report changed nothing. With the mock that is a
         // handful of rows; a live adapter streams occupancy continuously across up to
-        // MAX_SESSIONS_PER_ATTEMPT sessions, and most of those rows say only "not yet".
+        // the immutable AgentProfile session cap, and most of those rows say only "not yet".
         //
         // So a report is sent once per integer percentage point of the window, which is exactly
         // the resolution the cockpit renders: 101 rows per session at the very worst, and the
@@ -1351,7 +1349,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         deadline = scheduleDeadline(HANDOFF_DEADLINE_MS, () => signalDeadline?.());
       },
       onCheckpoint: (draft) => {
-        if (live.closed) return;
+        if (live.closed || isAuthorityRevoked(authoritySignal)) return;
         // Spec §7: an invalid checkpoint is rejected rather than half-accepted -- the next pack is
         // built on it. The session then simply published nothing, which §6.5 already accounts for.
         const validated = checkpointDraftSchema.safeParse(draft);
@@ -1368,7 +1366,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       // session. Its deterministic command id and the report table's UNIQUE(session) invariant are
       // independent backstops against callback retries charging the budget twice.
       onUsage: (reported) => {
-        if (live.closed || live.usageReported) return;
+        if (live.closed || isAuthorityRevoked(authoritySignal) || live.usageReported) return;
         const usage = providerUsageSchema.safeParse(reported);
         if (!usage.success) {
           deps.logger.warn(
@@ -1402,12 +1400,16 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             : "The provider usage was recorded",
         );
         if (recorded.hardPaused) {
-          live.budgetAbort = deps.adapter.abortSession(providerSession.id).catch((error: unknown) => {
-            deps.logger.warn(
-              { providerSessionId: providerSession.id, error: errorName(error) },
-              "The budget-paused provider session could not be aborted; it may still be running",
-            );
-          });
+          live.budgetAbort = deps.adapter.abortSession(providerSession.id).then(
+            () => true,
+            (error: unknown) => {
+              deps.logger.warn(
+                { providerSessionId: providerSession.id, error: errorName(error) },
+                "The budget-paused provider session could not be aborted; it may still be running",
+              );
+              return false;
+            },
+          );
         }
       },
       // Spec §8 follow-up: the durable half of `ProviderSessionListener.onProcessStarted`
@@ -1419,7 +1421,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       // because a pid is reported at most once per session, so there is nothing to distinguish
       // repeat reports by.
       onProcessStarted: (pid) => {
-        if (live.closed) return;
+        if (live.closed || isAuthorityRevoked(authoritySignal)) return;
         const validated = providerSessionProcessPidSchema.safeParse(pid);
         if (!validated.success) {
           deps.logger.warn(
@@ -1463,12 +1465,13 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           mcpLease = await openMcpConnections(started.mcpSnapshots);
         }
         const mcpConnections = mcpLease.connections;
+        authoritySignal.throwIfAborted();
         const outcome = await deps.adapter.start(
           {
             dispatch: deps.dispatch,
             session: providerSessionRef(providerSession, attempt),
             contextPack: assembled.pack,
-            modelTier: executionPolicy?.snapshot.modelTier ?? "STANDARD",
+            modelTier: executionPolicy.snapshot.modelTier,
             acceptanceInput:
               attempt.stage === "ACCEPTANCE"
                 ? {
@@ -1478,6 +1481,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
                 : null,
             humanRequests,
             mcpConnections,
+            authoritySignal,
             ...invocationWorkspace,
           },
           listener,
@@ -1502,155 +1506,189 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
 
     const result: SessionOutcome = await Promise.race([startSession(), deadlineReached]);
     live.closed = true;
-    deps.onSessionLive?.(null);
     deadline?.cancel();
 
-    if (live.budgetPaused) {
-      if (live.budgetAbort !== null) await live.budgetAbort;
-      deps.state.execute(endSessionCommand(deps, providerSession.id, "INTERRUPTED"));
-      deps.logger.warn(
-        { providerSessionId: providerSession.id, stageAttemptId },
-        "The active provider token budget was exhausted; the workflow is hard-paused",
-      );
-      return;
-    }
+    try {
+      // Owner cancellation owns all terminal writes: its durable transition blocks new work first,
+      // then the HTTP boundary ends this ProviderSession/AgentRun only after the worker confirms the
+      // adapter stopped. This revoked loop must not race that finalization with a second outcome.
+      // Soft Pause does not revoke this signal: its current turn is allowed to finish.
+      if (isAuthorityRevoked(authoritySignal)) return;
 
-    if (result.type === "FAILED") {
-      // `providerStarted: false`: the adapter refused the invocation, so this session never had a
-      // chance to publish anything and §6.5's guard does not apply to it. §7's branches below own
-      // this case, and pausing twice for one failure would ask the owner two questions about it.
-      deps.state.execute(endSessionCommand(deps, providerSession.id, "INTERRUPTED", false));
-      // Only a size rejection is something Loomrail can act on by itself (spec §7). Any other
-      // failure is the provider's, and shrinking the pack in response would treat a transient error
-      // as an estimation mistake and then ask the owner a question about a context size that had
-      // nothing to do with it.
-      const packWasTooLarge = result.error instanceof ProviderPackTooLargeError;
-      const canRetrySmaller =
-        packWasTooLarge && attempt.packShareBackoffs === 0 && packShare - PACK_SHARE_BACKOFF > 0;
-      if (canRetrySmaller) {
+      if (live.budgetPaused) {
+        const stopped = live.budgetAbort === null ? false : await live.budgetAbort;
+        if (isAuthorityRevoked(authoritySignal)) return;
+        if (!stopped) {
+          // Keep the durable session/run/lease active for startup recovery. Ending them here would
+          // make another writer eligible while the failed abort may have left this child alive.
+          lease.releaseOnExit = false;
+          return;
+        }
+        deps.state.execute(endSessionCommand(deps, providerSession.id, "INTERRUPTED"));
+        deps.logger.warn(
+          { providerSessionId: providerSession.id, stageAttemptId },
+          "The active provider token budget was exhausted; the workflow is hard-paused",
+        );
+        return;
+      }
+
+      if (result.type === "FAILED") {
+        // `providerStarted: false`: the adapter refused the invocation, so this session never had a
+        // chance to publish anything and §6.5's guard does not apply to it. §7's branches below own
+        // this case, and pausing twice for one failure would ask the owner two questions about it.
+        const failedEnd = deps.state.execute(
+          endSessionCommand(deps, providerSession.id, "INTERRUPTED", false),
+        );
+        if (failedEnd.type !== "PROVIDER_SESSION_ENDED") {
+          throw new Error("The failed ProviderSession did not end");
+        }
+        if (failedEnd.stageAttempt.status !== "RUNNING") return;
+        // Only a size rejection is something Loomrail can act on by itself (spec §7). Any other
+        // failure is the provider's, and shrinking the pack in response would treat a transient error
+        // as an estimation mistake and then ask the owner a question about a context size that had
+        // nothing to do with it.
+        const packWasTooLarge = result.error instanceof ProviderPackTooLargeError;
+        const canRetrySmaller =
+          packWasTooLarge && attempt.packShareBackoffs === 0 && packShare - PACK_SHARE_BACKOFF > 0;
+        if (canRetrySmaller) {
+          deps.state.execute({
+            schemaVersion: 1,
+            commandId: deps.createCommandId(),
+            correlationId: deps.correlationId,
+            actor,
+            type: "REDUCE_CONTEXT_PACK_SHARE",
+            payload: { stageAttemptId },
+          });
+          deps.logger.warn(
+            { stageAttemptId, sessionOrdinal, error: errorName(result.error) },
+            "The provider rejected the assembled pack; retrying once with a smaller pack share",
+          );
+          continue;
+        }
         deps.state.execute({
           schemaVersion: 1,
           commandId: deps.createCommandId(),
           correlationId: deps.correlationId,
           actor,
-          type: "REDUCE_CONTEXT_PACK_SHARE",
-          payload: { stageAttemptId },
+          type: "HARD_PAUSE_STAGE_ATTEMPT",
+          payload: {
+            stageAttemptId,
+            reason: {
+              type: packWasTooLarge ? "PROVIDER_REJECTED_PACK" : "PROVIDER_START_FAILED",
+              sessionOrdinal,
+            },
+          },
         });
         deps.logger.warn(
           { stageAttemptId, sessionOrdinal, error: errorName(result.error) },
-          "The provider rejected the assembled pack; retrying once with a smaller pack share",
+          packWasTooLarge
+            ? "The provider rejected the assembled pack after a retry; the attempt is hard-paused"
+            : "The provider session failed to start; the attempt is hard-paused",
         );
-        continue;
+        return;
       }
-      deps.state.execute({
-        schemaVersion: 1,
-        commandId: deps.createCommandId(),
-        correlationId: deps.correlationId,
-        actor,
-        type: "HARD_PAUSE_STAGE_ATTEMPT",
-        payload: {
-          stageAttemptId,
-          reason: {
-            type: packWasTooLarge ? "PROVIDER_REJECTED_PACK" : "PROVIDER_START_FAILED",
-            sessionOrdinal,
-          },
-        },
-      });
-      deps.logger.warn(
-        { stageAttemptId, sessionOrdinal, error: errorName(result.error) },
-        packWasTooLarge
-          ? "The provider rejected the assembled pack after a retry; the attempt is hard-paused"
-          : "The provider session failed to start; the attempt is hard-paused",
-      );
-      return;
-    }
 
-    let endReason: ProviderSessionEndReason;
-    let stageResult: ProviderOutcome | null = null;
-    if (result.type === "DEADLINE") {
-      // Spec §7: the wind-down request was ignored, so the session is cut hard. Awaited, unlike
-      // `requestHandoff`: the next session must not open while this one is still running. Loomrail
-      // records the end either way -- a provider that cannot be reached to be stopped is exactly the
-      // case the owner has to be able to see -- but it stops as soon as the abort settles rather
-      // than leaving two live sessions on one StageAttempt.
-      try {
-        await deps.adapter.abortSession(providerSession.id);
-      } catch (error: unknown) {
-        deps.logger.warn(
-          { providerSessionId: providerSession.id, error: errorName(error) },
-          "The cut session could not be aborted; it may still be running on the provider",
-        );
-      }
-      endReason = "CONTEXT_EXHAUSTED";
-      deps.logger.warn(
-        { providerSessionId: providerSession.id, deadlineMs: HANDOFF_DEADLINE_MS },
-        "The provider did not wind down before the handoff deadline; the session was cut",
-      );
-    } else if (result.outcome.type === "HANDED_OFF" || result.outcome.type === "CONTEXT_EXHAUSTED") {
-      const carried = result.outcome.checkpoint;
-      if (carried !== undefined && !sameCheckpoint(lastPublished, carried)) {
-        const validated = checkpointDraftSchema.safeParse(carried);
-        if (validated.success) {
-          publishCheckpoint(validated.data);
-        } else {
+      let endReason: ProviderSessionEndReason;
+      let stageResult: ProviderOutcome | null = null;
+      if (result.type === "DEADLINE") {
+        // Spec §7: the wind-down request was ignored, so the session is cut hard. Awaited, unlike
+        // `requestHandoff`: the next session must not open while this one is still running. Loomrail
+        // records the end either way -- a provider that cannot be reached to be stopped is exactly the
+        // case the owner has to be able to see -- but it stops as soon as the abort settles rather
+        // than leaving two live sessions on one StageAttempt.
+        try {
+          await deps.adapter.abortSession(providerSession.id);
+        } catch (error: unknown) {
           deps.logger.warn(
-            { providerSessionId: providerSession.id },
-            "The provider's final checkpoint does not satisfy the contract; it was rejected",
+            { providerSessionId: providerSession.id, error: errorName(error) },
+            "The cut session could not be aborted; it may still be running on the provider",
           );
+          lease.releaseOnExit = false;
+          return;
         }
+        if (isAuthorityRevoked(authoritySignal)) return;
+        endReason = "CONTEXT_EXHAUSTED";
+        deps.logger.warn(
+          { providerSessionId: providerSession.id, deadlineMs: HANDOFF_DEADLINE_MS },
+          "The provider did not wind down before the handoff deadline; the session was cut",
+        );
+      } else if (result.outcome.type === "HANDED_OFF" || result.outcome.type === "CONTEXT_EXHAUSTED") {
+        const carried = result.outcome.checkpoint;
+        if (carried !== undefined && !sameCheckpoint(lastPublished, carried)) {
+          const validated = checkpointDraftSchema.safeParse(carried);
+          if (validated.success) {
+            publishCheckpoint(validated.data);
+          } else {
+            deps.logger.warn(
+              { providerSessionId: providerSession.id },
+              "The provider's final checkpoint does not satisfy the contract; it was rejected",
+            );
+          }
+        }
+        endReason = result.outcome.type === "HANDED_OFF" ? "HANDOFF" : "CONTEXT_EXHAUSTED";
+      } else {
+        endReason = "COMPLETED";
+        stageResult = result.outcome;
       }
-      endReason = result.outcome.type === "HANDED_OFF" ? "HANDOFF" : "CONTEXT_EXHAUSTED";
-    } else {
-      endReason = "COMPLETED";
-      stageResult = result.outcome;
-    }
-    // Only when the session ended without a stage result. §6.2 cuts a session whose checkpoint
-    // could not be persisted because the *next* session's pack would be assembled without it -- and
-    // a session that finished the stage has no next session on this attempt, so nothing is carried
-    // forward and nothing is lost. Rewriting the reason there would also route a completed stage
-    // through §6.5, hard-pause the attempt on the second occurrence, and then hand
-    // APPLY_PROVIDER_OUTCOME an attempt that is no longer RUNNING.
-    if (live.checkpointWriteFailed && stageResult === null) endReason = "INTERRUPTED";
+      // Only when the session ended without a stage result. §6.2 cuts a session whose checkpoint
+      // could not be persisted because the *next* session's pack would be assembled without it -- and
+      // a session that finished the stage has no next session on this attempt, so nothing is carried
+      // forward and nothing is lost. Rewriting the reason there would also route a completed stage
+      // through §6.5, hard-pause the attempt on the second occurrence, and then hand
+      // APPLY_PROVIDER_OUTCOME an attempt that is no longer RUNNING.
+      if (live.checkpointWriteFailed && stageResult === null) endReason = "INTERRUPTED";
 
-    const ended = deps.state.execute(endSessionCommand(deps, providerSession.id, endReason));
-    if (ended.type !== "PROVIDER_SESSION_ENDED") throw new Error("The ProviderSession did not end");
+      const ended = deps.state.execute(endSessionCommand(deps, providerSession.id, endReason));
+      if (ended.type !== "PROVIDER_SESSION_ENDED") throw new Error("The ProviderSession did not end");
 
-    if (stageResult !== null) {
-      // Spec §6 step 5: the tree is measured HERE, immediately before the command that ends the
-      // stage, so that what the label names is the worktree as the stage left it -- and so that the
-      // label and the ending land in one transaction (the domain writes it onto the succeeding
-      // attempt). Measured before the command rather than inside it because reading a worktree
-      // means running `git`, and `execute` is synchronous by design.
-      //
-      // `lease.workspace` rather than a fresh read: this attempt holds the lease on that row, so
-      // nothing else could have moved the worktree under it, and re-reading would only add a way
-      // for the two to differ.
-      const resultTree = await readStageResultTree(deps, lease.workspace);
-      // The stage-level result. The outcome is untrusted provider output and is validated where it
-      // is written: `execute` parses the whole command, outcome included, before touching state.
-      deps.state.execute({
-        schemaVersion: 1,
-        commandId: deps.createCommandId(),
-        correlationId: deps.correlationId,
-        actor,
-        type: "APPLY_PROVIDER_OUTCOME",
-        payload: {
-          dispatchId: deps.dispatch.id,
-          provider: capabilities.provider,
-          outcome: stageResult,
-          template: deps.template,
-          resultTree,
-        },
-      });
-      return;
-    }
+      // Soft Pause lets the in-flight turn persist checkpoints and reach a natural outcome, but it
+      // forbids that stale outcome from advancing the paused workflow. END_PROVIDER_SESSION above
+      // closes the session and its AgentRun before the attempt releases its workspace lease.
+      if (ended.stageAttempt.status !== "RUNNING") return;
 
-    if (ended.nextSessionOrdinal === null) {
-      deps.logger.info(
-        { stageAttemptId, status: ended.stageAttempt.status },
-        "The stage attempt stopped producing sessions",
-      );
-      return;
+      if (stageResult !== null) {
+        // Spec §6 step 5: the tree is measured HERE, immediately before the command that ends the
+        // stage, so that what the label names is the worktree as the stage left it -- and so that the
+        // label and the ending land in one transaction (the domain writes it onto the succeeding
+        // attempt). Measured before the command rather than inside it because reading a worktree
+        // means running `git`, and `execute` is synchronous by design.
+        //
+        // `lease.workspace` rather than a fresh read: this attempt holds the lease on that row, so
+        // nothing else could have moved the worktree under it, and re-reading would only add a way
+        // for the two to differ.
+        const resultTree = await readStageResultTree(deps, lease.workspace);
+        if (isAuthorityRevoked(authoritySignal)) return;
+        // The stage-level result. The outcome is untrusted provider output and is validated where it
+        // is written: `execute` parses the whole command, outcome included, before touching state.
+        deps.state.execute({
+          schemaVersion: 1,
+          commandId: deps.createCommandId(),
+          correlationId: deps.correlationId,
+          actor,
+          type: "APPLY_PROVIDER_OUTCOME",
+          payload: {
+            dispatchId: deps.dispatch.id,
+            provider: capabilities.provider,
+            outcome: stageResult,
+            template: deps.template,
+            resultTree,
+          },
+        });
+        return;
+      }
+
+      if (ended.nextSessionOrdinal === null) {
+        deps.logger.info(
+          { stageAttemptId, status: ended.stageAttempt.status },
+          "The stage attempt stopped producing sessions",
+        );
+        return;
+      }
+    } finally {
+      // Keep the session registered through every awaited internal stop. Owner cancellation must
+      // be able to find and await it until either this loop has persisted its terminal state or a
+      // revoked loop has handed terminal ownership back to the cancelling boundary.
+      deps.onSessionLive?.(null);
     }
   }
 
@@ -1694,10 +1732,20 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
  * lease left behind is a workspace the *next* stage of this work item can never write in.
  */
 export const runStageAttempt = async (deps: RunStageAttemptDeps): Promise<void> => {
-  const lease: WorkspaceLeaseSlot = { workspace: null };
+  const lease: WorkspaceLeaseSlot = { workspace: null, releaseOnExit: true };
   try {
     await runProviderSessions(deps, lease);
   } finally {
-    if (lease.workspace !== null) releaseWorkspaceLease(deps, lease.workspace.id);
+    // A revoked loop is not the authority that proves the child stopped. Successful cancellation
+    // releases this lease when END_PROVIDER_SESSION commits after awaited adapter shutdown; failed
+    // shutdown and daemon stop leave it held for startup reconciliation instead of advertising a
+    // free writer.
+    if (
+      lease.workspace !== null &&
+      lease.releaseOnExit &&
+      (deps.authoritySignal === undefined || !isAuthorityRevoked(deps.authoritySignal))
+    ) {
+      releaseWorkspaceLease(deps, lease.workspace.id);
+    }
   }
 };

@@ -69,10 +69,12 @@ Discovery → Plan → Implement → Review → QA → Acceptance
 Это versioned `mock-delivery-v1` revision 4, несмотря на историческое имя: Mock и live adapters исполняют одну
 domain-owned последовательность. Catalog не обещает runtime workflow selection.
 
-Stage assignment использует существующие versioned profiles Product Analyst, Software Architect, Developer, Code
-Reviewer и Browser QA. Lead PM и Acceptance Manager входят в built-in profile catalog, но текущий standard squad их
-не dispatch-ит; Acceptance Package собирает deterministic domain path, а owner остаётся единственным субъектом final
-Accept/Return/Reject. Sample recipes не подменяют profiles provider prompts и не меняют их budgets/capabilities.
+Stage assignment использует versioned profiles Product Analyst, Software Architect, Developer, Code Reviewer,
+Browser QA и artifact-only Acceptance Manager. Последний только предлагает package; deterministic domain связывает
+его claims с evidence, а owner остаётся единственным субъектом final Accept/Return/Reject. Lead PM входит в built-in
+catalog, но линейный standard squad его не dispatch-ит. Sample recipes не подменяют profiles provider prompts и не
+меняют их budgets/capabilities. Это Q13-уточнение заменяет исходное утверждение Q10, что Acceptance Manager не
+dispatch-ится.
 
 ## 5. Verification
 

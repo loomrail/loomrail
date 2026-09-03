@@ -528,6 +528,13 @@ BrowserDriver, а не provider session.
 identity snapshot; будущий editing flow потребует новую assignment revision только для ещё не начавшихся
 StageAttempt и новый exact AgentRun policy snapshot.
 
+Acceptance разделён на две разные authority. `Acceptance Manager` является provider-executed ролью: он только
+готовит criterion-bound package и поэтому, как любая фактическая agent work, получает отдельный AgentRun с immutable
+profile/model/budget/capability snapshot. Этот run не получает workspace, network, MCP или право принять результат.
+Следующий `Accept | Return | Reject` остаётся отдельным optimistic-versioned owner gate по HD-003. Для exact
+revision 1 пятистадийных Standard assignments, созданных до этой коррекции, daemon может добавить ровно одну immutable
+compatibility revision с Acceptance Manager; произвольное post-start редактирование состава по-прежнему отсутствует.
+
 Default global concurrency — 3. Параллельные readers одного workspace допустимы только на одном immutable
 checkpoint; любой writer конфликтует и с writer, и с reader. Shutdown/restart не создаёт automatic retry
 оборванного AgentRun. Полный контракт —

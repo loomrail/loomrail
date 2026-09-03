@@ -140,19 +140,23 @@ const seedImplementAttempt = (localState: LocalState, projectId: string): Seeded
     },
   });
   if (started.type !== "PIPELINE_STARTED") throw new Error("Expected a started pipeline");
-  const dispatched = localState.execute({
+  const agent = localState.execute({
     schemaVersion: 1,
     commandId: commandId(),
-    correlationId: "correlation-seed-implement-dispatch",
-    actor: { type: "SYSTEM", id: "session-loop" },
-    type: "MARK_WORKFLOW_DISPATCH_STARTED",
-    payload: { dispatchId: started.dispatch.id },
+    correlationId: "correlation-seed-implement-agent-run",
+    actor: { type: "SYSTEM", id: "local-daemon" },
+    type: "START_AGENT_RUN",
+    payload: {
+      dispatchId: started.dispatch.id,
+      provider: "MOCK",
+      limits: { global: 3, project: 3, provider: 3 },
+    },
   });
-  if (dispatched.type !== "WORKFLOW_DISPATCH_STARTED") throw new Error("Expected a started dispatch");
+  if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected a started AgentRun");
   return {
     workItemId: created.workItem.id,
     stageAttemptId: started.stageAttempt.id,
-    dispatch: dispatched.dispatch,
+    dispatch: started.dispatch,
   };
 };
 
@@ -3040,6 +3044,190 @@ describe("background session worker wiring", { timeout: WORKER_TEST_LIFECYCLE_TI
     }
   });
 
+  it(
+    "lets a live turn finish on Soft Pause and starts the next session on resume",
+    async () => {
+      const adapter = gatedAdapter();
+      const daemon = await startDaemon({
+        bootstrapToken: token,
+        stateDatabasePath: databasePath,
+        logger: false,
+        providerAdapter: adapter,
+      });
+      try {
+        const session = await authenticate(daemon, token);
+        const workItemId = await createReadyWorkItem(daemon, session, "pipeline-soft-pause-live");
+        await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
+          method: "POST",
+          headers: mutationHeaders(daemon, session),
+          body: JSON.stringify({
+            schemaVersion: 1,
+            commandId: "start-before-soft-pause",
+            expectedVersion: 2,
+          }),
+        });
+        await adapter.started;
+        const running = await fetchWorkflowSnapshot(daemon, session.cookie, workItemId);
+        if (running.run === null) throw new Error("Expected the running PipelineRun");
+
+        const pauseResponse = await fetch(
+          `${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/pause`,
+          {
+            method: "POST",
+            headers: mutationHeaders(daemon, session),
+            body: JSON.stringify({
+              schemaVersion: 1,
+              commandId: "soft-pause-live-provider",
+              expectedVersion: running.run.version,
+            }),
+          },
+        );
+        expect(pauseResponse.status).toBe(200);
+        const paused = workflowSnapshotSchema.parse(await pauseResponse.json());
+        expect(paused.run?.status).toBe("SOFT_PAUSED");
+        expect(adapter.abortedSessions).toHaveLength(0);
+        expect(await sessionRows(databasePath, running.run.currentStageAttemptId)).toMatchObject({
+          sessions: [{ status: "RUNNING" }],
+        });
+        if (paused.run === null) throw new Error("Expected the soft-paused PipelineRun");
+        const earlyResume = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/resume`, {
+          method: "POST",
+          headers: mutationHeaders(daemon, session),
+          body: JSON.stringify({
+            schemaVersion: 1,
+            commandId: "resume-before-live-turn-ended",
+            expectedVersion: paused.run.version,
+          }),
+        });
+        expect(earlyResume.status).toBe(409);
+        expect(apiErrorResponseSchema.parse(await earlyResume.json()).error.code).toBe(
+          "WORKFLOW_CONTROL_NOT_ALLOWED",
+        );
+
+        adapter.release();
+        await daemon.whenIdle();
+        expect(await sessionRows(databasePath, running.run.currentStageAttemptId)).toMatchObject({
+          sessions: [{ status: "ENDED", endReason: "COMPLETED" }],
+        });
+        const resumeResponse = await fetch(
+          `${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/resume`,
+          {
+            method: "POST",
+            headers: mutationHeaders(daemon, session),
+            body: JSON.stringify({
+              schemaVersion: 1,
+              commandId: "resume-after-live-soft-pause",
+              expectedVersion: paused.run.version,
+            }),
+          },
+        );
+        expect(resumeResponse.status).toBe(200);
+        await adapter.whenStarted(2);
+        expect(
+          (await sessionRows(databasePath, running.run.currentStageAttemptId)).sessions.length,
+        ).toBeGreaterThan(1);
+      } finally {
+        adapter.release();
+        await daemon.whenIdle();
+        await daemon.close();
+      }
+    },
+    WORKER_TEST_LIFECYCLE_TIMEOUT_MS,
+  );
+
+  it(
+    "validates cancellation before abort and waits for stop before releasing authority",
+    async () => {
+      const adapter = gatedAdapter();
+      let announceAbort: () => void = () => undefined;
+      const abortRequested = new Promise<void>((resolve) => {
+        announceAbort = resolve;
+      });
+      let releaseAbort: () => void = () => undefined;
+      const abortFinished = new Promise<void>((resolve) => {
+        releaseAbort = resolve;
+      });
+      const immediateAbort = adapter.abortSession.bind(adapter);
+      adapter.abortSession = async (providerSessionId) => {
+        await immediateAbort(providerSessionId);
+        announceAbort();
+        await abortFinished;
+      };
+      const daemon = await startDaemon({
+        bootstrapToken: token,
+        stateDatabasePath: databasePath,
+        logger: false,
+        providerAdapter: adapter,
+      });
+      try {
+        const session = await authenticate(daemon, token);
+        const workItemId = await createReadyWorkItem(daemon, session, "pipeline-cancel-live");
+        await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
+          method: "POST",
+          headers: mutationHeaders(daemon, session),
+          body: JSON.stringify({
+            schemaVersion: 1,
+            commandId: "start-before-live-cancel",
+            expectedVersion: 2,
+          }),
+        });
+        await adapter.started;
+        const running = await fetchWorkflowSnapshot(daemon, session.cookie, workItemId);
+        if (running.run === null) throw new Error("Expected the running PipelineRun");
+
+        const stale = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/cancel`, {
+          method: "POST",
+          headers: mutationHeaders(daemon, session),
+          body: JSON.stringify({
+            schemaVersion: 1,
+            commandId: "stale-cancel-live-provider",
+            expectedVersion: running.run.version + 1,
+          }),
+        });
+        expect(stale.status).toBe(409);
+        expect(adapter.abortedSessions).toHaveLength(0);
+        expect(await sessionRows(databasePath, running.run.currentStageAttemptId)).toMatchObject({
+          sessions: [{ status: "RUNNING", endReason: null }],
+        });
+
+        let answered = false;
+        const responsePending = fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/cancel`, {
+          method: "POST",
+          headers: mutationHeaders(daemon, session),
+          body: JSON.stringify({
+            schemaVersion: 1,
+            commandId: "cancel-live-provider",
+            expectedVersion: running.run.version,
+          }),
+        }).then((response) => {
+          answered = true;
+          return response;
+        });
+        await abortRequested;
+        await Promise.resolve();
+        expect(answered).toBe(false);
+        expect(await sessionRows(databasePath, running.run.currentStageAttemptId)).toMatchObject({
+          sessions: [{ status: "RUNNING", endReason: null }],
+        });
+
+        releaseAbort();
+        const response = await responsePending;
+        expect(response.status).toBe(200);
+        expect(workflowSnapshotSchema.parse(await response.json()).run?.status).toBe("CANCELLED");
+        expect(adapter.abortedSessions).toHaveLength(1);
+        expect(await sessionRows(databasePath, running.run.currentStageAttemptId)).toMatchObject({
+          sessions: [{ status: "ENDED", endReason: "CANCELLED" }],
+        });
+      } finally {
+        releaseAbort();
+        adapter.release();
+        await daemon.whenIdle();
+        await daemon.close();
+      }
+    },
+    WORKER_TEST_LIFECYCLE_TIMEOUT_MS,
+  );
+
   // State a case's `act` needs, prepared before the gated daemon under test ever opens the database
   // (`prepare`), and handed to `act` once that daemon is up. `workItemId` is set for every case;
   // `humanRequestId`/`humanRequestVersion` only for the case that needs one.
@@ -3124,6 +3312,48 @@ describe("background session worker wiring", { timeout: WORKER_TEST_LIFECYCLE_TI
     }
   };
 
+  // Seed the pause directly through the deterministic state boundary before the daemon starts.
+  // Starting and pausing through a live daemon races its background claim: once a ProviderSession
+  // exists, Soft Pause intentionally lets that turn finish and Resume must refuse until it does.
+  const seedSoftPause: Prepare = async (stateDatabasePath) => {
+    const localState = await openLocalState({ databasePath: stateDatabasePath });
+    let nextCommandId = 0;
+    const createCommandId = (): string => `seed-soft-pause-${(nextCommandId += 1).toString()}`;
+    try {
+      const seeded = seedQueuedAttempt(
+        localState,
+        createCommandId,
+        dirname(stateDatabasePath),
+        "project-web",
+        mockDeliveryTemplate,
+      );
+      const snapshot = localState.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: seeded.workItemId,
+      });
+      if (snapshot.type !== "WORKFLOW_SNAPSHOT" || snapshot.snapshot.run === null) {
+        throw new Error("Expected the queued workflow");
+      }
+      const paused = localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-seed-soft-pause",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "PAUSE_PIPELINE",
+        payload: {
+          pipelineRunId: snapshot.snapshot.run.id,
+          expectedVersion: snapshot.snapshot.run.version,
+        },
+      });
+      if (paused.type !== "PIPELINE_CONTROL_APPLIED" || paused.action !== "PAUSE") {
+        throw new Error("Expected the pipeline to be soft-paused");
+      }
+      return { workItemId: seeded.workItemId };
+    } finally {
+      localState.close();
+    }
+  };
+
   const startPipeline: Act = async (daemon, session) => {
     const workItemId = await createReadyWorkItem(daemon, session, "pipeline-start-each");
     return fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
@@ -3133,32 +3363,10 @@ describe("background session worker wiring", { timeout: WORKER_TEST_LIFECYCLE_TI
     });
   };
 
-  // SOFT_PAUSED is reachable without any session ever running: `PAUSE_PIPELINE` only requires the
-  // current StageAttempt to be QUEUED/RUNNING/RECOVERING (packages/domain/src/workflow.ts), which it
-  // already is the instant `START_MOCK_PIPELINE` returns. So this drives start-then-pause live
-  // against the very daemon under test -- both are synchronous domain commands the gated adapter
-  // never sees -- and only the final `resume` call is the one being tested.
-  const resumePipeline: Act = async (daemon, session) => {
-    const workItemId = await createReadyWorkItem(daemon, session, "pipeline-resume-each");
-    const startResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
-      method: "POST",
-      headers: mutationHeaders(daemon, session),
-      body: JSON.stringify({ schemaVersion: 1, commandId: "start-for-resume-each", expectedVersion: 2 }),
-    });
-    const started = workflowSnapshotSchema.parse(await startResponse.json());
-    if (!started.run) throw new Error("Expected a PipelineRun");
-    const pauseResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/pause`, {
-      method: "POST",
-      headers: mutationHeaders(daemon, session),
-      body: JSON.stringify({
-        schemaVersion: 1,
-        commandId: "pause-for-resume-each",
-        expectedVersion: started.run.version,
-      }),
-    });
-    const paused = workflowSnapshotSchema.parse(await pauseResponse.json());
+  const resumePipeline: Act = async (daemon, session, fixture) => {
+    const paused = await fetchWorkflowSnapshot(daemon, session.cookie, fixture.workItemId);
     if (!paused.run) throw new Error("Expected a paused PipelineRun");
-    return fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/pipeline/resume`, {
+    return fetch(`${daemon.baseUrl}/api/v1/work-items/${fixture.workItemId}/pipeline/resume`, {
       method: "POST",
       headers: mutationHeaders(daemon, session),
       body: JSON.stringify({
@@ -3208,7 +3416,7 @@ describe("background session worker wiring", { timeout: WORKER_TEST_LIFECYCLE_TI
   // not by vitest's blanket per-test timeout.
   it.each<[string, Prepare, Act]>([
     ["pipeline start", noPreparation, startPipeline],
-    ["pipeline resume", noPreparation, resumePipeline],
+    ["pipeline resume", seedSoftPause, resumePipeline],
     ["budget override", seedBudgetHardPause, approveBudgetOverride],
     ["human request answer", seedOpenHumanRequest, answerOpenRequest],
   ])(

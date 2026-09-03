@@ -218,6 +218,7 @@ const runSession = async (
   options: ResolvedMockProviderOptions,
   runningSessions: Map<string, SessionRuntime>,
 ): Promise<ProviderOutcome> => {
+  invocation.authoritySignal.throwIfAborted();
   const sessionId = invocation.session.id;
   const runtime: SessionRuntime = { handoffRequested: false, aborted: false };
   runningSessions.set(sessionId, runtime);
@@ -236,6 +237,7 @@ const runSession = async (
       // (the pattern every handoff test uses) gets a chance to register before this turn reads
       // the flag it sets. No timers and no randomness -- this is a plain microtask tick.
       await Promise.resolve();
+      invocation.authoritySignal.throwIfAborted();
 
       // A hard cut, unlike `requestHandoff` above: the run really stops rather than being asked
       // to. Checked before the turn does anything, so an aborted session bills for no further
@@ -309,10 +311,13 @@ export const createMockProvider = (options?: MockProviderOptions): ProviderAdapt
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
       }),
-    start: (invocation, listener) =>
-      sessionBehaviourEnabled
-        ? runSession(invocation, listener, resolvedOptions, runningSessions)
-        : Promise.resolve(outcomeFor(invocation)),
+    start: async (invocation, listener) => {
+      invocation.authoritySignal.throwIfAborted();
+      if (sessionBehaviourEnabled) {
+        return runSession(invocation, listener, resolvedOptions, runningSessions);
+      }
+      return outcomeFor(invocation);
+    },
     requestHandoff: (sessionId) => {
       const runtime = runningSessions.get(sessionId);
       if (runtime) runtime.handoffRequested = true;

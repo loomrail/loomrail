@@ -91,7 +91,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T14 | Theme/UI hides critical state                                                | Medium   | text/icon semantics, contrast, no color-only gates                                                                                                                                           | M1–M3 light/dark, keyboard and state browser checks                               |
 | T15 | Checkpoint steers the next provider session across a swap                    | High     | schema-validated checkpoint, explicit untrusted-data delimiters in the pack, full text visible to owner (see A1 delta below)                                                                 | see A1 delta below                                                                |
 | T16 | Live adapter spawns an owner-privileged child process                        | High     | argv array to `child_process.spawn`, no shell interpolation; never enable a provider's permission-bypass flag automatically (SD-001)                                                         | see A2 delta below                                                                |
-| T17 | Child process orphaned by a dead daemon outlives it                          | Medium   | pid recorded on the `ProviderSession`; startup reconciliation kills it before the session is marked ended                                                                                    | see A2 and Q5 recovery deltas below                                               |
+| T17 | Child process orphaned by a dead daemon outlives it                          | Medium   | pid recorded on the `ProviderSession`; startup recovery ends authority only after kill/confirmed absence and otherwise retains session plus writer lease                                     | see A2 and Q5 recovery deltas below                                               |
 | T18 | Untrusted provider stream carries the owner's own hook output                | High     | only typed fields cross the adapter boundary; no raw wire line is retained anywhere a caller can observe                                                                                     | see A2 delta below                                                                |
 | T21 | Client path expands a diff read or exhausts the daemon                       | Medium   | authenticated route; canonical worktree boundary; literal Git pathspec plus exact name match; file-count and byte limits; summary debounce                                                   | see E1.5 change-visibility delta below                                            |
 | T22 | Live provider bypasses typed evidence or owner acceptance                    | High     | stage-specific strict result schema; daemon-owned provider attribution; Review/QA typed artifacts; domain rejects ordinary Acceptance completion                                             | see D2 live-route delta below                                                     |
@@ -143,13 +143,28 @@ Required mitigations and verification:
   Each ProviderSession separately retains the exact ContextPackRecipe content hash, so a handoff cannot make a
   run-level hash falsely attest to changing provider input;
 - stable runtime creates one immutable `SquadAssignment(revision = 1)` with the PipelineRun and exposes no post-start
-  assignment mutation command or transport. A future revision flow must bind a new immutable assignment only to an
-  unstarted StageAttempt and capture it in a new AgentRun policy snapshot before spawn;
+  assignment mutation command or transport. The exact historical revision 1 five-stage Standard shape may receive
+  one additive Acceptance Manager compatibility revision for its still-unstarted ACCEPTANCE; unknown composition or
+  any later revision fails closed.
+  Any other future revision flow must bind a new immutable assignment only to an unstarted StageAttempt and capture
+  it in a new AgentRun policy snapshot before spawn;
 - multiple read-only claims may share a workspace only when they name the same immutable checkpoint. Any writer
   conflicts with every same-workspace claim; the existing E1 storage lease remains a backstop;
+- `START_PROVIDER_SESSION` re-checks the RUNNING StageAttempt and active immutable-policy AgentRun in the same SQLite
+  transaction that inserts the session. A concurrent cancellation or pre-claim Soft Pause that commits first cannot
+  open a nullable session from stale daemon authority;
+- after that claim, owner cancellation first commits a validated cancellation transition without releasing live
+  authority, then synchronously revokes the daemon-owned invocation signal. Trusted adapters check it after
+  asynchronous scratch/MCP/workspace preparation and immediately before spawn; if the child is already registered,
+  the worker calls `abortSession` and waits for confirmed exit before `END_PROVIDER_SESSION` atomically ends the
+  ProviderSession/AgentRun and releases its writer lease. No await exists between the final signal check and spawn;
+- Soft Pause never impersonates process kill: it blocks new dispatch while the current turn may still publish bounded
+  checkpoints and terminal usage, then naturally ends its ProviderSession/AgentRun and lease before resume creates a
+  new ordinal;
 - provider handoff stays inside one AgentRun and one capacity slot. Shutdown aborts every live ProviderSession;
-  startup reconciliation marks orphan sessions/runs interrupted before scheduling and never retries them
-  automatically;
+  startup reconciliation never retries orphan work automatically. It marks a session ended and releases its writer
+  lease only after kill, confirmed absence or safe pid-reuse detection; inconclusive/failed process checks retain the
+  RUNNING session and lease for the next reconciliation pass;
 - role-playbook composition is intersection-only: the exact built-in AgentProfile revision captured by the active
   AgentRun may add or reprioritize optional context, but cannot remove required WorkflowTemplate sections. Every new
   recipe records `ROLE_PLAYBOOK` plus that profile id/revision; migration 30 preserves historical recipes as
@@ -157,9 +172,12 @@ Required mitigations and verification:
   remains a separate effective-policy boundary: a lower layer cannot add a capability denied above it. Browser input
   cannot submit provider argv, workspace paths or slot claims;
 - daemon invocation consumes the stored workspace/network rule, Browser QA requires `BROWSER_READ`, and the handoff
-  loop uses the profile's stored `maxProviderSessions` rather than the global 50-session safety ceiling. New MCP
+  loop uses the profile's stored `maxProviderSessions` within the closed schema ceiling of 50. New MCP
   session snapshots are the intersection of current grants and the revisions pinned at AgentRun start, so a later
   grant cannot widen a running agent while a revoke still fails closed;
+- Acceptance preparation is provider execution and therefore cannot use a nullable-policy path. Its exact
+  Acceptance Manager AgentRun permits only artifact output with no workspace/network/MCP; the proposed package still
+  passes deterministic evidence binding and a separate owner-only final gate;
 - required gates before enabling the pool: concurrent claim race, 3+1 capacity, per-Project/provider isolation,
   writer/read conflict, same-checkpoint readers, handoff, blocking HumanRequest isolation, shutdown and restart on
   macOS and Windows.
@@ -709,8 +727,9 @@ its session. Mitigation, verified in code:
   `apps/daemon/src/session-loop.ts`), and startup reconciliation
   (`RECONCILE_WORKFLOWS`, `packages/persistence-sqlite/src/index.ts`'s `killOrphanedSessionProcess`) sends it
   `SIGKILL` before the session is marked `ENDED` — kill first, mark second, so a crash between the two steps
-  can never commit a session that reads as over while its process is still running. Verified against a real
-  detached child process, not a mock, by
+  can never commit a session that reads as over while its process is still running. An inconclusive or failed
+  probe/signal leaves both the session `RUNNING` and its writer lease held instead of exposing the worktree to a
+  second writer. Verified against a real detached child process, not a mock, by
   `packages/persistence-sqlite/test/local-state.integration.test.ts`'s "kills a process orphaned by a daemon
   restart before ending its session", and the ordering itself by that file's "still has the session marked
   RUNNING at the moment it kills the process", which reads the row through the store's own connection from
@@ -720,10 +739,11 @@ its session. Mitigation, verified in code:
   a crash or a power-off, which usually means a reboot — and after a reboot pid allocation restarts and walks
   back up through the recorded range, so a reused pid is a live risk, bounded to the same OS user (`process.kill(pid, 0)`
   throws `EPERM` for another user's process, and the liveness check already reads that as "not alive"). Start
-  time is read with a synchronous `ps -o etime=` probe; when it cannot be determined for any reason — `ps`
-  absent, non-zero exit, unparseable output, or Windows, where the probe does not run at all — **the kill is
-  skipped**. An orphan that survives is self-healing at the next daemon start; a `SIGKILL` to the owner's
-  editor or build is not. Both directions are pinned by
+  time is read with a synchronous platform probe (`ps -o etime=` on Unix, PowerShell/CIM on Windows); when it cannot
+  be determined for any reason — probe absent, non-zero exit or unparseable output — **the kill is
+  skipped and durable process/writer authority stays fenced**. Reconciliation retries while the session remains
+  `RUNNING`; once a later pass observes the child gone it ends the session and releases the lease. A `SIGKILL` to
+  the owner's editor or build is not an acceptable alternative. Both directions are pinned by
   `packages/persistence-sqlite/test/local-state.integration.test.ts`'s "leaves a reused pid alone…" and
   "leaves the orphan alone, and says so, when it cannot tell when the process started";
 - **every decision is recorded**, kill or skip, with the pid and the session id, through an `onOrphanProcess`
@@ -755,10 +775,11 @@ report now enters one transaction through `RECORD_PROVIDER_USAGE`. Migration 003
 digest-verified `provider_usage_reports` row per ProviderSession with exact Project/WorkItem/PipelineRun/
 StageAttempt/AgentRun lineage and links its positive `input + output` total to the existing append-only
 UsageRecord ledger. A duplicate callback cannot charge the session twice: command replay is idempotent and a
-different command meets `UNIQUE(provider_session_id)`. Reaching either the pipeline limit or the immutable
-AgentRun envelope stores usage/events, blocks WorkItem, hard-pauses run/attempt, withdraws dispatch, finishes
-AgentRun and releases its workspace lease atomically; only then does the daemon abort and end the still-live
-ProviderSession. Restart therefore cannot start another session between accounting and pause.
+different command meets `UNIQUE(provider_session_id)`. Reaching either the pipeline limit or the immutable AgentRun
+envelope stores usage/events, blocks WorkItem, hard-pauses run/attempt and withdraws dispatch atomically while
+retaining the live ProviderSession/AgentRun and its workspace lease. The daemon aborts next; only a confirmed stop
+lets `END_PROVIDER_SESSION` finish the AgentRun and release the lease. A failed abort therefore cannot advertise a
+free writer, and restart recovery retains the same fence until it can prove the orphan is gone.
 
 Provider-neutral `inputTokens` includes every input class. Codex already reports cached input as a subdivision
 of total input; Claude reports ordinary input, cache creation and cache read separately, so its adapter sums all
@@ -781,9 +802,10 @@ that its REVIEW could find no repository and no implementation to assess, on a w
 had just edited a file in the worktree. Producing prose is not needing no input: a review reads the change it
 is judging, and a discovery or a plan on a real codebase is worth having only when it can read that codebase.
 `stagesRunningInWorkspace` (`packages/domain/src/workspace.ts`) is now DISCOVERY, PLAN, IMPLEMENT, REVIEW and
-QA — every stage dispatched to an agent except ACCEPTANCE, which is the owner's decision rather than a reading
-of the tree. **The worktree therefore exists for five stages of a run, not two**: it is cut, carrying the owner's
-uncommitted work, at a work item's FIRST agent stage rather than at IMPLEMENT.
+QA. ACCEPTANCE Manager is also an AgentRun, but prepares a package from durable context and receives no tree;
+the later decision remains owner-only. **The worktree therefore exists for five stages of a run, not two**: it is
+cut, carrying the owner's uncommitted work, at a work item's FIRST repository-reading agent stage rather than at
+IMPLEMENT.
 
 **Write access did not widen with it, and that was a second correction.** Which stages are GIVEN the worktree
 and which may WRITE in it are separate questions with separate answers — `stageRunsInWorkspace` and

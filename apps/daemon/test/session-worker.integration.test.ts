@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { WorkflowTemplate } from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter, ProviderInvocation } from "@loomrail/provider-core";
 import { createMockProvider } from "@loomrail/provider-mock";
@@ -23,6 +24,16 @@ import {
 } from "./state-fixtures.js";
 
 const timestamp = "2026-08-26T00:00:00.000Z";
+
+const implementStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "IMPLEMENT");
+if (!implementStage) throw new Error("The mock delivery template no longer declares IMPLEMENT");
+const implementOnlyTemplate: WorkflowTemplate = {
+  ...mockDeliveryTemplate,
+  id: "worker-implement-only-v1",
+  version: 1,
+  name: "Worker implementation lease",
+  stages: [{ ...implementStage, ordinal: 0 }],
+};
 
 type RecordedLog = { level: string; msg: string; details?: Record<string, unknown> };
 type RecordingLogger = FastifyBaseLogger & { records: RecordedLog[] };
@@ -473,20 +484,23 @@ describe("session worker", () => {
     const seenHumanRequestPolicies: ProviderInvocation["humanRequests"][] = [];
     let discoveryResumeContext = "";
     let acceptanceHadWorkspace = true;
+    let acceptanceModelTier: ProviderInvocation["modelTier"] | undefined;
+    let acceptanceAgentRunId: string | undefined;
+    let acceptanceWorkspaceLeaseHolder: string | null | undefined;
     const adapter: ProviderAdapter = {
       capabilities: () => ({
         provider: "CODEX",
         start: true,
         interrupt: true,
         eventStream: false,
-        usageReporting: false,
+        usageReporting: true,
         contextWindowReporting: false,
         checkpointOnRequest: false,
         contextWindowTokens: 128_000,
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
       }),
-      start: async (invocation) => {
+      start: async (invocation, listener) => {
         const stage = invocation.session.stage;
         seenStages.push(stage);
         seenHumanRequestPolicies.push(invocation.humanRequests);
@@ -560,6 +574,20 @@ describe("session worker", () => {
         }
         if (stage === "ACCEPTANCE") {
           acceptanceHadWorkspace = "workspace" in invocation;
+          acceptanceModelTier = invocation.modelTier;
+          const active = localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" });
+          acceptanceAgentRunId =
+            active.type === "AGENT_RUNS"
+              ? active.runs.find(({ stageAttemptId }) => stageAttemptId === invocation.session.stageAttemptId)
+                  ?.id
+              : undefined;
+          const workspace = localState.query({
+            type: "GET_WORKSPACE_BY_WORK_ITEM",
+            workItemId: seeded.workItemId,
+          });
+          acceptanceWorkspaceLeaseHolder =
+            workspace.type === "WORKSPACE" ? workspace.workspace?.leaseHolder : undefined;
+          listener.onUsage({ inputTokens: 40, outputTokens: 20, quality: "ACTUAL" });
           const acceptanceInput = invocation.acceptanceInput;
           const reviewCheck = acceptanceInput?.evidence.filter(({ kind }) => kind === "REVIEW_REPORT").at(-1)
             ?.checks[0];
@@ -661,6 +689,42 @@ describe("session worker", () => {
       acceptancePackage: { status: "PENDING" },
     });
     expect(acceptanceHadWorkspace).toBe(false);
+    expect(acceptanceModelTier).toBe("STANDARD");
+    expect(acceptanceAgentRunId).toMatch(/^agentRun-/u);
+    expect(acceptanceWorkspaceLeaseHolder).toBeNull();
+
+    const acceptanceAttempt = completed.stageAttempts.find(({ stage }) => stage === "ACCEPTANCE");
+    if (acceptanceAttempt === undefined || acceptanceAgentRunId === undefined) {
+      throw new Error("Expected Acceptance AgentRun evidence");
+    }
+    const runs = localState.query({ type: "LIST_AGENT_RUNS", status: "WAITING_HUMAN" });
+    if (runs.type !== "AGENT_RUNS") throw new Error("Expected AgentRuns");
+    const acceptanceRun = runs.runs.find(({ id }) => id === acceptanceAgentRunId);
+    expect(acceptanceRun).toMatchObject({
+      id: acceptanceAgentRunId,
+      profile: { id: "builtin.acceptance-manager", revision: 1, role: "ACCEPTANCE_MANAGER" },
+    });
+    expect(acceptanceRun?.policySnapshot).toMatchObject({
+      effectiveCapabilities: ["ARTIFACT_WRITE"],
+      modelTier: "STANDARD",
+      budget: { maxEstimatedTokens: 60_000, maxProviderSessions: 4 },
+      workspace: { access: "NONE", networkAccess: false },
+      mcpProfileRevisionIds: [],
+    });
+    const acceptanceSessions = localState.query({
+      type: "LIST_PROVIDER_SESSIONS",
+      stageAttemptId: acceptanceAttempt.id,
+    });
+    if (acceptanceSessions.type !== "PROVIDER_SESSIONS") throw new Error("Expected provider sessions");
+    expect(acceptanceSessions.usageReports).toMatchObject([
+      { agentRunId: acceptanceAgentRunId, inputTokens: 40, outputTokens: 20, totalTokens: 60 },
+    ]);
+    expect(acceptanceSessions.recipes).toMatchObject([
+      {
+        specSource: "ROLE_PLAYBOOK",
+        roleProfile: { id: "builtin.acceptance-manager", revision: 1 },
+      },
+    ]);
 
     const workspaceResult = localState.query({
       type: "GET_WORKSPACE_BY_WORK_ITEM",
@@ -869,6 +933,291 @@ describe("session worker", () => {
 
     expect(adapter.abortedSessions).toHaveLength(3);
     adapter.release();
+  }, 20_000);
+
+  it("keeps the writer lease until cancellation has confirmed the provider stopped", async () => {
+    const localState = state();
+    await makeThrowawayRepo(join(temporaryDirectory, "project-web"));
+    const adapter = gatedAdapter();
+    let announceAbort: () => void = () => undefined;
+    const abortRequested = new Promise<void>((resolve) => {
+      announceAbort = resolve;
+    });
+    let releaseAbort: () => void = () => undefined;
+    const abortFinished = new Promise<void>((resolve) => {
+      releaseAbort = resolve;
+    });
+    const immediateAbort = adapter.abortSession.bind(adapter);
+    adapter.abortSession = async (providerSessionId) => {
+      await immediateAbort(providerSessionId);
+      announceAbort();
+      await abortFinished;
+    };
+    const worker = createSessionWorker({
+      state: localState,
+      adapter,
+      template: implementOnlyTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
+      createCommandId,
+      logger: createRecordingLogger(),
+    });
+    const seeded = seedQueuedAttemptFixture(
+      localState,
+      createCommandId,
+      temporaryDirectory,
+      "project-web",
+      implementOnlyTemplate,
+    );
+
+    worker.wake();
+    await adapter.started;
+    const before = localState.query({
+      type: "GET_WORKSPACE_BY_WORK_ITEM",
+      workItemId: seeded.workItemId,
+    });
+    expect(before).toMatchObject({
+      type: "WORKSPACE",
+      workspace: { leaseHolder: seeded.stageAttemptId },
+    });
+
+    const workflow = snapshotOf(localState, seeded.workItemId);
+    if (workflow.run === null) throw new Error("Expected the running PipelineRun");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-cancel-before-provider-exit",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CANCEL_PIPELINE",
+      payload: {
+        pipelineRunId: workflow.run.id,
+        expectedVersion: workflow.run.version,
+      },
+    });
+
+    let revoked = false;
+    const revocation = worker.revokePipeline(seeded.dispatch.pipelineRunId);
+    const observedRevocation = revocation.finally(() => {
+      revoked = true;
+    });
+    await abortRequested;
+    await Promise.resolve();
+    expect(revoked).toBe(false);
+    expect(
+      localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId: seeded.workItemId }),
+    ).toMatchObject({
+      type: "WORKSPACE",
+      workspace: { leaseHolder: seeded.stageAttemptId },
+    });
+
+    // Let the provider start settle first, so `onSessionLive(null)` clears the mutable execution
+    // record before abortSession resolves. revokePipeline must still return the id it snapshotted.
+    adapter.release();
+    releaseAbort();
+    const stoppedSessionIds = await observedRevocation;
+    const sessions = localState.query({
+      type: "LIST_PROVIDER_SESSIONS",
+      stageAttemptId: seeded.stageAttemptId,
+    });
+    if (sessions.type !== "PROVIDER_SESSIONS") throw new Error("Expected provider sessions");
+    const runningSession = sessions.sessions.find(({ status }) => status === "RUNNING");
+    if (runningSession === undefined || !stoppedSessionIds.includes(runningSession.id)) {
+      throw new Error("Expected the confirmed stopped ProviderSession");
+    }
+    localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-end-cancelled-provider",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "END_PROVIDER_SESSION",
+      payload: {
+        providerSessionId: runningSession.id,
+        endReason: "CANCELLED",
+        providerStarted: true,
+      },
+    });
+    expect(
+      localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId: seeded.workItemId }),
+    ).toMatchObject({ type: "WORKSPACE", workspace: { leaseHolder: null } });
+    expect(
+      localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId: seeded.stageAttemptId }),
+    ).toMatchObject({
+      type: "PROVIDER_SESSIONS",
+      sessions: [{ status: "ENDED", endReason: "CANCELLED" }],
+    });
+
+    await awaitIdle(worker);
+  }, 20_000);
+
+  it("keeps provider and writer authority when a budget abort is not confirmed", async () => {
+    const localState = state();
+    await makeThrowawayRepo(join(temporaryDirectory, "project-web"));
+    let aborts = 0;
+    const adapter: ProviderAdapter = {
+      capabilities: () => ({
+        provider: "MOCK",
+        start: true,
+        interrupt: true,
+        eventStream: true,
+        usageReporting: true,
+        contextWindowReporting: false,
+        checkpointOnRequest: false,
+        contextWindowTokens: 200_000,
+        stages: ["IMPLEMENT"],
+        costReporting: false,
+      }),
+      start: (_invocation, listener) => {
+        listener.onUsage({ inputTokens: 110_000, outputTokens: 10_000, quality: "ACTUAL" });
+        return Promise.resolve({
+          type: "COMPLETED",
+          summary: "The provider reported its terminal usage before the abort failed.",
+        });
+      },
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => {
+        aborts += 1;
+        return Promise.reject(new Error("synthetic provider stop refusal"));
+      },
+    };
+    const worker = createSessionWorker({
+      state: localState,
+      adapter,
+      template: implementOnlyTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
+      createCommandId,
+      logger: createRecordingLogger(),
+    });
+    const seeded = seedQueuedAttemptFixture(
+      localState,
+      createCommandId,
+      temporaryDirectory,
+      "project-web",
+      implementOnlyTemplate,
+    );
+
+    worker.wake();
+    await awaitIdle(worker);
+
+    expect(aborts).toBe(1);
+    expect(snapshotOf(localState, seeded.workItemId)).toMatchObject({
+      run: { status: "HARD_PAUSED" },
+      stageAttempts: [{ status: "HARD_PAUSED" }],
+    });
+    expect(localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" })).toMatchObject({
+      type: "AGENT_RUNS",
+      runs: [{ stageAttemptId: seeded.stageAttemptId }],
+    });
+    expect(
+      localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId: seeded.stageAttemptId }),
+    ).toMatchObject({
+      type: "PROVIDER_SESSIONS",
+      sessions: [{ status: "RUNNING", endReason: null }],
+      usageReports: [{ totalTokens: 120_000 }],
+    });
+    expect(
+      localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId: seeded.workItemId }),
+    ).toMatchObject({
+      type: "WORKSPACE",
+      workspace: { leaseHolder: seeded.stageAttemptId },
+    });
+  }, 20_000);
+
+  it("keeps a budget-stopping session registered for concurrent owner cancellation", async () => {
+    const localState = state();
+    await makeThrowawayRepo(join(temporaryDirectory, "project-web"));
+    let announceBudgetAbort: () => void = () => undefined;
+    const budgetAbortRequested = new Promise<void>((resolve) => {
+      announceBudgetAbort = resolve;
+    });
+    let releaseBudgetAbort: () => void = () => undefined;
+    const budgetAbortFinished = new Promise<void>((resolve) => {
+      releaseBudgetAbort = resolve;
+    });
+    const abortedSessions: string[] = [];
+    const adapter: ProviderAdapter = {
+      capabilities: () => ({
+        provider: "MOCK",
+        start: true,
+        interrupt: true,
+        eventStream: true,
+        usageReporting: true,
+        contextWindowReporting: false,
+        checkpointOnRequest: false,
+        contextWindowTokens: 200_000,
+        stages: ["IMPLEMENT"],
+        costReporting: false,
+      }),
+      start: (_invocation, listener) => {
+        listener.onUsage({ inputTokens: 110_000, outputTokens: 10_000, quality: "ACTUAL" });
+        return Promise.resolve({ type: "COMPLETED", summary: "The over-budget turn settled." });
+      },
+      requestHandoff: () => Promise.resolve(),
+      abortSession: (providerSessionId) => {
+        abortedSessions.push(providerSessionId);
+        if (abortedSessions.length === 1) {
+          announceBudgetAbort();
+          return budgetAbortFinished;
+        }
+        return Promise.resolve();
+      },
+    };
+    const worker = createSessionWorker({
+      state: localState,
+      adapter,
+      template: implementOnlyTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
+      createCommandId,
+      logger: createRecordingLogger(),
+    });
+    const seeded = seedQueuedAttemptFixture(
+      localState,
+      createCommandId,
+      temporaryDirectory,
+      "project-web",
+      implementOnlyTemplate,
+    );
+
+    worker.wake();
+    await budgetAbortRequested;
+    const paused = snapshotOf(localState, seeded.workItemId);
+    if (paused.run === null) throw new Error("Expected the hard-paused PipelineRun");
+    expect(paused.run.status).toBe("HARD_PAUSED");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-cancel-during-budget-abort",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CANCEL_PIPELINE",
+      payload: {
+        pipelineRunId: paused.run.id,
+        expectedVersion: paused.run.version,
+      },
+    });
+
+    const stoppedSessionIds = await worker.revokePipeline(seeded.dispatch.pipelineRunId);
+    expect(stoppedSessionIds).toHaveLength(1);
+    expect(abortedSessions).toEqual([stoppedSessionIds[0], stoppedSessionIds[0]]);
+    const providerSessionId = stoppedSessionIds[0];
+    if (providerSessionId === undefined) throw new Error("Expected the stopped ProviderSession id");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-end-budget-cancelled-provider",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "END_PROVIDER_SESSION",
+      payload: { providerSessionId, endReason: "CANCELLED", providerStarted: true },
+    });
+    releaseBudgetAbort();
+    await awaitIdle(worker);
+
+    expect(
+      localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId: seeded.stageAttemptId }),
+    ).toMatchObject({
+      type: "PROVIDER_SESSIONS",
+      sessions: [{ status: "ENDED", endReason: "CANCELLED" }],
+    });
+    expect(
+      localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId: seeded.workItemId }),
+    ).toMatchObject({ type: "WORKSPACE", workspace: { leaseHolder: null } });
   }, 20_000);
 
   it("aborts through the adapter captured by the live session after selection changes", async () => {

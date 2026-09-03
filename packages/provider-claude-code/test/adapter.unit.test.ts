@@ -201,6 +201,7 @@ const fixtureInvocation = (
   acceptanceInput: null,
   humanRequests,
   mcpConnections,
+  authoritySignal: new AbortController().signal,
 });
 
 const noopListener = (): ProviderSessionListener => ({
@@ -317,6 +318,17 @@ describe("createClaudeCodeProvider", () => {
     delete process.env["FAKE_CLAUDE_RECORD_PATH"];
     delete process.env["FAKE_CLAUDE_OUTPUT_FILE"];
     delete process.env["FAKE_CLAUDE_HANG_MARKER_PATH"];
+  });
+
+  it("does not spawn when AgentRun authority is revoked during preparation", async () => {
+    const authority = new AbortController();
+    authority.abort();
+    await expect(
+      createFakeClaudeProvider().start(
+        { ...fixtureInvocation(), authoritySignal: authority.signal },
+        noopListener(),
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("declares itself as Claude Code and reports cost, which Codex cannot", () => {

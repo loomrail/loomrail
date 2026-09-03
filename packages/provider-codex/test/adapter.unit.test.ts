@@ -258,6 +258,7 @@ const fixtureInvocation = (
   acceptanceInput: null,
   humanRequests,
   mcpConnections,
+  authoritySignal: new AbortController().signal,
   // Omitted rather than set to undefined: `exactOptionalPropertyTypes` makes those different
   // things, and the adapter reads absence as "this session was never meant to change anything".
   ...(workspace === undefined ? {} : { workspace }),
@@ -452,6 +453,17 @@ describe("createCodexProvider", () => {
     delete process.env["FAKE_CODEX_HANG_MARKER_PATH"];
     delete process.env["FAKE_CODEX_EXIT_CODE"];
     delete process.env["FAKE_CODEX_KILL_SELF"];
+  });
+
+  it("does not spawn when AgentRun authority is revoked during preparation", async () => {
+    const authority = new AbortController();
+    authority.abort();
+    await expect(
+      createFakeCodexProvider().start(
+        { ...fixtureInvocation(), authoritySignal: authority.signal },
+        noopListener(),
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
   });
 
   // IMPLEMENT and QA were withheld for exactly one reason -- the adapter ran in an empty temporary

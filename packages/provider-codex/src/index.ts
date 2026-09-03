@@ -387,6 +387,11 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // to the type checker, which would make the test below dead code by its own reckoning.
         let completedTurn: ProviderUsage | undefined;
 
+        // All asynchronous scratch/worktree preparation happens before this last authority gate.
+        // There is no await between the check and child_process.spawn inside runProcess, so the
+        // daemon cannot commit a cancellation in the gap; if it commits later, abortSession owns
+        // the already-registered child.
+        invocation.authoritySignal.throwIfAborted();
         const run = runProcess({
           command: resolved.command,
           args: [...resolved.commandArgsPrefix, ...args],

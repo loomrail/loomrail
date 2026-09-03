@@ -2841,6 +2841,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             expectedVersion: body.expectedVersion,
           },
         });
+        worker.pausePipeline(snapshot.snapshot.run.id);
         const result = localState.query({
           type: "GET_WORKFLOW_SNAPSHOT",
           workItemId: params.workItemId,
@@ -2892,7 +2893,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
-    app.post("/api/v1/work-items/:workItemId/pipeline/cancel", (request, reply) => {
+    app.post("/api/v1/work-items/:workItemId/pipeline/cancel", async (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!authorizeMutation(request, reply, correlationId)) return;
       try {
@@ -2905,7 +2906,9 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         if (snapshot.type !== "WORKFLOW_SNAPSHOT" || !snapshot.snapshot.run) {
           throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow does not exist");
         }
-        localState.execute({
+        // Validate and commit the cancellation first, while retaining any live session/run/lease.
+        // Only a successfully applied (or idempotently replayed) command may stop the provider.
+        const cancelled = localState.execute({
           schemaVersion: 1,
           commandId: body.commandId,
           correlationId,
@@ -2916,6 +2919,41 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             expectedVersion: body.expectedVersion,
           },
         });
+        if (cancelled.type !== "PIPELINE_CONTROL_APPLIED" || cancelled.action !== "CANCEL") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The pipeline cancellation was not applied");
+        }
+        const sessions = localState.query({
+          type: "LIST_PROVIDER_SESSIONS",
+          stageAttemptId: cancelled.stageAttempt.id,
+        });
+        if (sessions.type !== "PROVIDER_SESSIONS") {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The cancelled provider sessions could not be read",
+          );
+        }
+        const runningSessions = sessions.sessions.filter(({ status }) => status === "RUNNING");
+        const stoppedSessionIds = new Set(await worker.revokePipeline(cancelled.run.id));
+        if (runningSessions.some(({ id }) => !stoppedSessionIds.has(id))) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "A cancelled ProviderSession has no registered child-stop authority",
+          );
+        }
+        for (const providerSession of runningSessions) {
+          localState.execute({
+            schemaVersion: 1,
+            commandId: `cancel-session-${providerSession.id}`,
+            correlationId,
+            actor: { type: "SYSTEM", id: "session-loop" },
+            type: "END_PROVIDER_SESSION",
+            payload: {
+              providerSessionId: providerSession.id,
+              endReason: "CANCELLED",
+              providerStarted: true,
+            },
+          });
+        }
         const result = localState.query({
           type: "GET_WORKFLOW_SNAPSHOT",
           workItemId: params.workItemId,

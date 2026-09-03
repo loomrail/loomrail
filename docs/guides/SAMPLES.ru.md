@@ -46,17 +46,18 @@ Discovery → Plan → Implement → Review → QA → Acceptance
 
 Standard squad назначает один versioned profile каждой стадии с provider run:
 
-| Стадия    | Назначенная встроенная роль |
-| --------- | --------------------------- |
-| Discovery | Product Analyst             |
-| Plan      | Software Architect          |
-| Implement | Developer                   |
-| Review    | Code Reviewer               |
-| QA        | Browser QA                  |
+| Стадия                | Назначенная встроенная роль |
+| --------------------- | --------------------------- |
+| Discovery             | Product Analyst             |
+| Plan                  | Software Architect          |
+| Implement             | Developer                   |
+| Review                | Code Reviewer               |
+| QA                    | Browser QA                  |
+| Подготовка Acceptance | Acceptance Manager          |
 
-Lead PM и Acceptance Manager также входят в versioned built-in catalog, но текущий standard squad их не dispatch-ит.
-Criterion-bound Acceptance Package Loomrail детерминированно собирает из актуальных Review и QA evidence. Только
-владелец может принять, вернуть или отклонить его.
+Lead PM остаётся versioned built-in profile, который линейный squad не dispatch-ит. Acceptance Manager предлагает
+criterion-bound package в artifact-only AgentRun, а Loomrail детерминированно связывает его с актуальными Review и QA
+evidence. Только владелец может принять, вернуть или отклонить его.
 
 Recipe не может изменить capabilities роли, budget, выбор provider, Project Constitution или approval gates. Это
 остаётся состоянием Loomrail и решениями владельца, а не скрытыми инструкциями sample text.

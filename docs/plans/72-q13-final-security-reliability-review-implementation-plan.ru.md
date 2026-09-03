@@ -1,6 +1,6 @@
 # Q13 — Final security and reliability review implementation plan
 
-**Статус:** active
+**Статус:** local implementation verified; CI и external gates pending
 
 **Спецификация:** [71-q13-final-security-reliability-review-spec.ru.md](71-q13-final-security-reliability-review-spec.ru.md)
 
@@ -31,8 +31,15 @@
 - [x] Запретить публичному review-diff API расширять intrinsic limits, ограничить recovery scan и проверить полную
       managed Browser QA directory chain.
 - [x] Распространить managed-root checks на retention и fail-closed прервать legacy session без AgentRun authority.
-- [ ] Выполнить финальный Standards/Spec review и закрыть все P0/P1.
-- [ ] Прогнать full non-landing source gates, fault injection, audit, clean package и browser matrix.
+- [x] Привязать provider-executed Acceptance Manager к immutable AgentRun, usage/model/budget/capability snapshot и
+      оставить `Accept | Return | Reject` отдельным owner-only gate.
+- [x] Атомарно перепроверять RUNNING StageAttempt и AgentRun в `START_PROVIDER_SESSION`; stale daemon read не может
+      создать nullable session. При owner cancel сначала durable-фиксировать validated cancellation без release live
+      authority, затем отзывать pre-spawn signal, ждать остановки process и через `END_PROVIDER_SESSION` transaction
+      закрывать session/run/lease; Soft Pause сохраняет текущий turn. Legacy squad upgrade допускает только exact
+      revision 1.
+- [x] Выполнить финальный Standards/Spec review и закрыть все P0/P1.
+- [x] Прогнать full non-landing source gates, fault injection, audit, clean package и browser matrix.
 - [ ] Запушить Q13, дождаться macOS/Windows CI и записать evidence.
 - [ ] Провести оставшиеся owner-authorized private dogfood/live-provider/landing/provenance gates.
 - [ ] Только после всех gates подготовить отдельное решение о stable tag/publish.

@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import type {
   Checkpoint,
@@ -134,21 +135,81 @@ describe("stage attempt session loop", () => {
   const queuedAttempt = (localState: LocalState): SeededAttempt =>
     seedQueuedAttempt(localState, createCommandId, temporaryDirectory);
 
-  // The same fixture with its dispatch already marked started, i.e. what `runStageAttempt` expects
-  // to be handed. Tests that go through the daemon use the queued form instead and let the daemon's
-  // own drain mark it.
+  // The same fixture with its immutable AgentRun already reserved, i.e. what `runStageAttempt`
+  // expects to be handed. Tests that go through the daemon use the queued form instead and let the
+  // worker claim it.
   const seedRunningAttempt = (localState: LocalState): SeededAttempt => {
+    const seeded = queuedAttempt(localState);
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-seed-agent-run",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: seeded.dispatch.id,
+        provider: "MOCK",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (started.type !== "AGENT_RUN_STARTED") throw new Error("Expected a started AgentRun");
+    return seeded;
+  };
+
+  const seedLegacyRunningAttempt = (localState: LocalState): SeededAttempt => {
     const seeded = queuedAttempt(localState);
     const dispatched = localState.execute({
       schemaVersion: 1,
       commandId: createCommandId(),
-      correlationId: "correlation-seed-dispatch",
+      correlationId: "correlation-seed-legacy-dispatch",
       actor: { type: "SYSTEM", id: "session-loop" },
       type: "MARK_WORKFLOW_DISPATCH_STARTED",
       payload: { dispatchId: seeded.dispatch.id },
     });
-    if (dispatched.type !== "WORKFLOW_DISPATCH_STARTED") throw new Error("Expected a started dispatch");
+    if (dispatched.type !== "WORKFLOW_DISPATCH_STARTED") throw new Error("Expected a legacy dispatch");
     return { ...seeded, dispatch: dispatched.dispatch };
+  };
+
+  const seedHistoricalNullableSession = (stageAttemptId: string, suffix: string, summary: string): string => {
+    const sessionId = `legacy-session-${suffix}`;
+    const raw = new DatabaseSync(databasePath);
+    raw
+      .prepare(
+        `INSERT INTO provider_sessions (
+          id, schema_version, agent_run_id, stage_attempt_id, ordinal, status, end_reason,
+          handoff_requested_at, started_at, ended_at, version, process_pid
+        ) VALUES (?, 1, NULL, ?, 1, 'RUNNING', NULL, NULL, ?, NULL, 1, NULL)`,
+      )
+      .run(sessionId, stageAttemptId, timestamp);
+    raw
+      .prepare(
+        `INSERT INTO context_pack_recipes (
+          id, schema_version, provider_session_id, template_id, template_version, spec_source,
+          role_profile_id, role_profile_revision, sections_json, omitted_json, content_hash,
+          estimated_tokens, budget_tokens, estimate_quality, created_at
+        ) VALUES (?, 1, ?, ?, ?, 'WORKFLOW_TEMPLATE', NULL, NULL, ?, '[]', ?, 1, 4000,
+          'LOOMRAIL_ESTIMATE', ?)`,
+      )
+      .run(
+        `legacy-recipe-${suffix}`,
+        sessionId,
+        mockDeliveryTemplate.id,
+        mockDeliveryTemplate.version,
+        JSON.stringify([{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 1 }]),
+        `sha256:${"a".repeat(64)}`,
+        timestamp,
+      );
+    raw
+      .prepare(
+        `INSERT INTO checkpoints (
+          id, schema_version, stage_attempt_id, provider_session_id, ordinal, summary,
+          completed_json, remaining_json, dead_ends_json, open_questions_json, created_at
+        ) VALUES (?, 1, ?, ?, 1, ?, '["Read the brief."]', '["Finish the implementation."]',
+          '[]', '[]', ?)`,
+      )
+      .run(`legacy-checkpoint-${suffix}`, stageAttemptId, sessionId, summary, timestamp);
+    raw.close();
+    return sessionId;
   };
 
   const depsFor = (
@@ -369,46 +430,13 @@ describe("stage attempt session loop", () => {
     // historical pre-A3 session has no immutable run policy to carry across restart, so it is
     // retained as interrupted history and cannot be resumed with a newly configured adapter.
     const localState = await open();
-    const seeded = seedRunningAttempt(localState);
+    const seeded = seedLegacyRunningAttempt(localState);
 
-    let checkpointDelivered: (() => void) | undefined;
-    const checkpointPublished = new Promise<void>((resolve) => {
-      checkpointDelivered = resolve;
-    });
-    const firstAdapter = recording({
-      capabilities: () =>
-        providerCapabilitiesSchema.parse({
-          provider: "MOCK",
-          start: true,
-          interrupt: true,
-          eventStream: true,
-          usageReporting: true,
-          contextWindowReporting: true,
-          checkpointOnRequest: true,
-          contextWindowTokens: 4_000,
-          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
-          costReporting: false,
-        }),
-      // Never resolves: the first provider's process is gone before it ends itself, exactly the
-      // orphaned-session case "survives a daemon restart mid-attempt" already covers.
-      start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) =>
-        new Promise<ProviderOutcome>(() => {
-          listener.onCheckpoint({
-            summary: "The first provider made progress before the swap.",
-            completed: ["Read the brief."],
-            remaining: ["Finish the implementation."],
-            deadEnds: [],
-            openQuestions: [],
-          });
-          checkpointDelivered?.();
-        }),
-      requestHandoff: () => Promise.resolve(),
-      abortSession: () => Promise.resolve(),
-    });
-
-    void runStageAttempt(depsFor(localState, seeded, firstAdapter)).catch(() => undefined);
-    await checkpointPublished;
-
+    seedHistoricalNullableSession(
+      seeded.stageAttemptId,
+      "provider-swap",
+      "The first provider made progress before the swap.",
+    );
     // What a fresh daemon process does at startup, before it drains the dispatch queue.
     localState.execute({
       schemaVersion: 1,
@@ -420,12 +448,13 @@ describe("stage attempt session loop", () => {
     });
 
     const secondAdapter = recording(finishingAdapter(8_000));
-    await runStageAttempt(depsFor(localState, seeded, secondAdapter));
+    await expect(runStageAttempt(depsFor(localState, seeded, secondAdapter))).rejects.toMatchObject({
+      code: "PERSISTENCE_FAILURE",
+    });
 
     const { sessions, checkpoints } = sessionRows(localState, seeded.stageAttemptId);
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.endReason).toBe("INTERRUPTED");
-    expect(firstAdapter.startedSessionIds).toEqual([sessions[0]?.id]);
     expect(secondAdapter.startedSessionIds).toEqual([]);
     expect(checkpoints).toHaveLength(1);
     expect(snapshotOf(localState, seeded.workItemId).stageAttempts.at(0)?.status).toBe("INTERRUPTED");
@@ -827,10 +856,10 @@ describe("stage attempt session loop", () => {
     expect(snapshot.humanRequests).toHaveLength(0);
   });
 
-  it("hard-pauses and withdraws the dispatch when the attempt reaches the session backstop", async () => {
+  it("hard-pauses and withdraws the dispatch at the immutable profile session cap", async () => {
     // A provider that hands off productively forever never trips §6.5's unproductive counter, and
     // never moves the token budget either -- usage is recorded only for a BUDGET_LIMIT_REACHED
-    // outcome. The backstop is the only bound, so it has to end the attempt the way every other
+    // outcome. The immutable profile cap is the only bound, so it has to end the attempt the way every other
     // terminal path does. Logging and returning left the dispatch PENDING, and the drain came
     // straight back until it raised its own safety-limit error -- from startup, that rejected
     // `startDaemon`.
@@ -845,9 +874,9 @@ describe("stage attempt session loop", () => {
     await runStageAttempt(depsFor(localState, seeded, neverFinishing));
 
     const { sessions, checkpoints } = sessionRows(localState, seeded.stageAttemptId);
-    expect(sessions).toHaveLength(50);
+    expect(sessions).toHaveLength(6);
     // Every one of them was productive, so nothing but the backstop could have stopped this.
-    expect(checkpoints.length).toBeGreaterThanOrEqual(50);
+    expect(checkpoints.length).toBeGreaterThanOrEqual(6);
     expect(sessions.every(({ endReason }) => endReason === "HANDOFF")).toBe(true);
 
     const snapshot = snapshotOf(localState, seeded.workItemId);
@@ -899,43 +928,9 @@ describe("stage attempt session loop", () => {
 
   it("retains a checkpoint but never replays a legacy attempt after daemon restart", async () => {
     const localState = await open();
-    const seeded = seedRunningAttempt(localState);
-    let checkpointDelivered: (() => void) | undefined;
-    const publishedCheckpoint = new Promise<void>((resolve) => {
-      checkpointDelivered = resolve;
-    });
-    const crashing: ProviderAdapter = {
-      capabilities: () =>
-        providerCapabilitiesSchema.parse({
-          provider: "MOCK",
-          start: true,
-          interrupt: true,
-          eventStream: true,
-          usageReporting: true,
-          contextWindowReporting: true,
-          checkpointOnRequest: true,
-          contextWindowTokens: 4_000,
-          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
-          costReporting: false,
-        }),
-      start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) =>
-        new Promise<ProviderOutcome>(() => {
-          listener.onCheckpoint({
-            summary: "Half of the mock work is done.",
-            completed: ["Read the brief."],
-            remaining: ["Finish the implementation."],
-            deadEnds: [],
-            openQuestions: [],
-          });
-          checkpointDelivered?.();
-        }),
-      requestHandoff: () => Promise.resolve(),
-      abortSession: () => Promise.resolve(),
-    };
+    const seeded = seedLegacyRunningAttempt(localState);
 
-    // Never resolves: the process is supposed to die while this session is still running.
-    void runStageAttempt(depsFor(localState, seeded, crashing)).catch(() => undefined);
-    await publishedCheckpoint;
+    seedHistoricalNullableSession(seeded.stageAttemptId, "daemon-restart", "Half of the mock work is done.");
     localState.close();
     state = undefined;
 

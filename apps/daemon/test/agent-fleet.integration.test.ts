@@ -238,6 +238,50 @@ describe("Agent Fleet projection", () => {
     expect([...scheduling.contexts.values()][0]?.adapter).toBe(claude);
   });
 
+  it("projects queued Acceptance preparation as the bounded Acceptance Manager", async () => {
+    const localState = await open();
+    const acceptanceStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "ACCEPTANCE");
+    if (acceptanceStage === undefined) throw new Error("Expected the Acceptance stage");
+    const acceptanceTemplate: WorkflowTemplate = {
+      ...mockDeliveryTemplate,
+      id: "fleet-acceptance-v1",
+      name: "Fleet acceptance",
+      stages: [{ ...acceptanceStage, ordinal: 0 }],
+    };
+    const seeded = seedQueuedAttempt(
+      localState,
+      createCommandId,
+      temporaryDirectory,
+      "project-web",
+      acceptanceTemplate,
+    );
+    const fleet = buildAgentFleet({
+      state: localState,
+      resolveAdapter: () => gatedAdapter(200_000, { provider: "CODEX" }),
+      schedulingLimits: validateSchedulerLimits(),
+    });
+
+    expect(fleet).toMatchObject({
+      capacity: { active: 0, globalLimit: 3 },
+      entries: [
+        {
+          dispatchId: seeded.dispatch.id,
+          stageAttemptId: seeded.stageAttemptId,
+          agentRunId: null,
+          profile: {
+            id: "builtin.acceptance-manager",
+            revision: 1,
+            role: "ACCEPTANCE_MANAGER",
+          },
+          stage: "ACCEPTANCE",
+          provider: "CODEX",
+          status: "READY",
+          waitReason: null,
+        },
+      ],
+    });
+  });
+
   it("keeps the Fleet endpoint authenticated and returns its bounded wire contract", async () => {
     const token = randomBytes(32).toString("base64url");
     daemon = await startDaemon({ bootstrapToken: token, logger: false });

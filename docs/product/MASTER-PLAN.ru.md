@@ -1374,7 +1374,10 @@ Browser QA effective policy read-only/offline, неэффективные MCP re
 runtime-checked закрытыми кодами и не пропускает raw rejection detail; startup recovery не следует через symlinked
 managed roots. Stable scope честно создаёт один
 immutable SquadAssignment при старте PipelineRun: post-start composition editing остаётся non-goal и потребует новой
-assignment revision с новым AgentRun policy snapshot. До закрытия остальных Q13 findings, private dogfood, exact
+assignment revision с новым AgentRun policy snapshot. Acceptance Manager preparation теперь также получает exact
+artifact-only AgentRun с usage/model/budget lineage без workspace/network/MCP, а final решение остаётся за owner.
+Единственная additive revision в текущем runtime — fail-closed compatibility upgrade exact revision 1 старого
+Standard assignment без Acceptance Manager. До закрытия остальных Q13 findings, private dogfood, exact
 live-provider promotion, protected landing и registry provenance stable npm publish запрещён.
 
 ### Оценка первого цикла

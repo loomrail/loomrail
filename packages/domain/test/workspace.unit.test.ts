@@ -159,8 +159,8 @@ describe("stagesRunningInWorkspace", () => {
     // The stage the defect was found on: REVIEW reads the implementation it is judging.
     expect(stageRunsInWorkspace("REVIEW")).toBe(true);
     expect(stageRunsInWorkspace("QA")).toBe(true);
-    // Not an omission, and not "it produces prose": acceptance is the owner's decision, not an
-    // agent's reading of the tree.
+    // Not an omission: the Acceptance Manager reads the durable evidence pack, while the owner
+    // makes the later decision. Neither operation reads the tree.
     expect(stageRunsInWorkspace("ACCEPTANCE")).toBe(false);
   });
 });

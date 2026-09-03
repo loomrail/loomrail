@@ -209,8 +209,15 @@ that interface.
 Live provider spend crosses the same interface once per ProviderSession. A detailed immutable
 `ProviderUsageReport` preserves input/output/cache/reasoning/cost/quality and execution lineage, while its positive
 normalized token total projects into the existing UsageRecord ledger. The domain decides threshold crossings and
-the effective pipeline/AgentRun hard pause; persistence commits report, ledger, state, dispatch, audit and AgentRun
-finish together before the daemon aborts the provider process.
+the effective pipeline hard pause; persistence commits report, ledger, state, dispatch and audit together while the
+live ProviderSession/AgentRun/lease remain authoritative. The daemon then awaits provider abort; only a confirmed
+stop allows `END_PROVIDER_SESSION` to finish the AgentRun and release its writer lease.
+Owner cancellation first commits a validated cancellation transition that blocks new work without releasing live
+authority, then revokes the daemon-owned invocation signal and awaits confirmed child exit. A following
+`END_PROVIDER_SESSION` transaction atomically closes the ProviderSession/AgentRun and releases its writer lease.
+Built-in adapters also check that signal immediately before spawn after asynchronous preparation. Soft Pause does
+not kill the child: it blocks new dispatch, lets the current turn finish, then closes its session/run before an
+explicit resume can create the next ordinal.
 
 `inspectStateDatabase()` is a separate read-only public contract for CLI diagnostics. It opens no missing database,
 applies no migration and runs no recovery; it returns only closed integrity/migration states after `quick_check` and
@@ -223,10 +230,12 @@ same SQLite/WAL state. The public API must then show one interrupted run/stage, 
 active ProviderSession or AgentRun. A second restart must neither add another report nor replay the provider. The
 fixture changes composition only under daemon tests; there is no product crash endpoint or automatic-resume seam.
 
-The Acceptance provider receives criterion and evidence-check text already present in its exact ContextPack snapshot,
-but no artifact, report, run or tree IDs. The domain binds its ordered claims to current durable Review and measured QA
-authority. The daemon's export route only gathers a bounded snapshot; the infrastructure-free renderer checks every
-correlation and emits escaped Markdown without storage keys, paths, transcripts or mutable export state.
+The Acceptance Manager runs under its own immutable AgentRun policy with artifact-only capability, no workspace,
+network or MCP authority, and exact model/budget bounds. Its provider receives criterion and evidence-check text
+already present in the exact ContextPack snapshot, but no artifact, report, run or tree IDs. The domain binds its
+ordered claims to current durable Review and measured QA authority, then opens a separate owner-only decision gate.
+The daemon's export route only gathers a bounded snapshot; the infrastructure-free renderer checks every correlation
+and emits escaped Markdown without storage keys, paths, transcripts or mutable export state.
 
 Independent review uses the same boundary: persistence derives author/reviewer identity and provider relation from
 AgentRuns, compares the reported tree with the latest successful IMPLEMENT tree, and atomically stores ReviewReport,

@@ -88,7 +88,7 @@ export const buildAgentFleet = (input: {
   for (const candidate of scheduling.candidates) {
     if (activeStageAttemptIds.has(candidate.stageAttemptId)) continue;
     const context = scheduling.contexts.get(candidate.dispatchId);
-    if (context === undefined || context.attempt.stage === "ACCEPTANCE") continue;
+    if (context === undefined) continue;
     const profile = profileRefFor(input.state, context.dispatch.pipelineRunId, context.attempt.stage);
     if (profile === null) continue;
     const waitReason = deferrals.get(candidate.dispatchId) ?? null;

@@ -51,9 +51,10 @@ provenance без фиктивной положительной ledger row.
 ### D4 — Hard pause предшествует следующей сессии
 
 В одной SQLite transaction записываются report, UsageRecord, Events и при исчерпании effective cap — BLOCKED
-WorkItem, HARD_PAUSED PipelineRun/StageAttempt, completed dispatch и finished AgentRun с release workspace lease.
-Cap равен более строгому из текущего pipeline budget и immutable AgentRun envelope. Session loop затем abort-ит
-живой process и закрывает ProviderSession как INTERRUPTED; restart не создаёт окно для следующей сессии.
+WorkItem, HARD_PAUSED PipelineRun/StageAttempt и withdrawn dispatch. Live ProviderSession/AgentRun и workspace lease
+остаются authority до подтверждённой остановки process; только последующий `END_PROVIDER_SESSION` атомарно закрывает
+session/run и освобождает lease. Cap равен более строгому из текущего pipeline budget и immutable AgentRun envelope.
+Failed abort оставляет authority fenced для startup reconciliation, поэтому окно для следующего writer не возникает.
 
 Budget pause не создаёт Human Request и сохраняет `failureCode = null`: продолжение возможно только через
 существующий versioned owner Budget Override.
@@ -124,6 +125,23 @@ entries и fail-closed отклоняет symlink/layout swap. Финальны�
 `ENDED/INTERRUPTED`, но её StageAttempt и dispatch также переходят в durable `INTERRUPTED` recovery state. Daemon не
 создаёт для неё следующую session и не применяет nullable-policy fallback, текущие grants либо новую provider config.
 
+`START_PROVIDER_SESSION` повторно проверяет RUNNING StageAttempt и активный AgentRun внутри той же SQLite transaction,
+которая пишет session/recipe/event. Если concurrent cancel либо pre-claim Soft Pause завершил run после daemon read,
+session start fail-closed отклоняется. После session claim owner cancel сначала durable-фиксирует validated
+cancellation без освобождения live authority, затем синхронно отзывает daemon-owned signal: Codex/Claude проверяют
+его после async scratch/MCP/workspace preparation прямо перед spawn без промежуточного await, а уже
+зарегистрированный process получает `abortSession`. HTTP boundary ждёт подтверждённого выхода и только затем
+`END_PROVIDER_SESSION` transaction закрывает ProviderSession/AgentRun и writer lease; отозванный loop не пишет
+второй outcome.
+Soft Pause signal не отзывает: он запрещает новый dispatch, позволяет текущему turn закончить session, а resume
+открывает следующий AgentRun/session ordinal только после durable закрытия старого.
+
+Provider-executed подготовка ACCEPTANCE также обязана иметь immutable AgentRun. Built-in Acceptance Manager получает
+только `ARTIFACT_WRITE`, `workspace = NONE`, no network/MCP, собственный session/token envelope и exact model tier.
+Его `READY_FOR_ACCEPTANCE` остаётся предложением: deterministic domain связывает claims с current evidence и только
+затем открывает отдельный owner-only package gate. Исторический exact revision 1 Standard assignment без этой роли
+получает одну additive immutable compatibility revision; arbitrary post-start composition editing не появляется.
+
 ## 4. Другие обязательные findings Q13
 
 - untrusted repository/provider text не может закрыть собственную context section delimiter;
@@ -141,6 +159,7 @@ entries и fail-closed отклоняет symlink/layout swap. Финальны�
 - post-start SquadAssignment revision явно остаётся non-goal stable scope без overclaim (D8);
 - model tier применяется к явному provider model, а публичные review limits и Browser QA managed layout нельзя
   расширить в обход канонической policy; pre-AgentRun session не возобновляется автоматически (D9).
+- Acceptance Manager preparation не использует nullable-policy fallback и не подменяет final owner authority (D9).
 
 ## 5. Verification и exit
 

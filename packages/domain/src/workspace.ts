@@ -23,8 +23,9 @@ import type { HumanRequestDraft, WorkflowStage } from "@loomrail/contracts";
  * worth having only when they can read the code they are reasoning about instead of paraphrasing
  * the brief. All five are dispatched into the same worktree, cut once for the work item.
  *
- * ACCEPTANCE is the single exception, and not on the old grounds: it is the owner's decision about
- * whether the work is done, not an agent's reading of the tree. Nothing it decides comes off disk.
+ * ACCEPTANCE is the single exception: its bounded manager prepares a criterion/evidence package
+ * from durable context, while the later decision remains owner-only. It neither reads nor changes
+ * the worktree.
  *
  * This is what a stage is GIVEN when there is a worktree to give it. What happens when there is not
  * -- a Project whose path is no longer a repository, one mid-rebase, a worktree that vanished -- is
