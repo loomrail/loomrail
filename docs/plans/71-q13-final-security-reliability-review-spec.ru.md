@@ -103,6 +103,23 @@ HTTP/UI boundary или transition для замены состава, поэт�
 revision для будущих StageAttempt, снято. Revision остаётся частью точной snapshot identity. Будущая реализация
 потребует отдельной команды, новой immutable assignment и нового AgentRun policy snapshot до provider spawn.
 
+### D9 — Constitution и model tier привязаны к AgentRun
+
+Новый AgentRun snapshot хранит exact `ProjectConstitution(id, version, contentDigest)` либо явный `null`. Context
+для этого run читает именно сохранённую версию и проверяет digest, поэтому последующая owner activation другой
+Constitution не меняет уже начатый run. Отсутствующее поле остаётся только migration-compatible поведением для
+исторических snapshot и использует прежний current-active lookup.
+
+Логический `FAST`/`STANDARD`/`DEEP` tier из того же immutable snapshot передаётся в каждую ProviderInvocation.
+Adapter применяет schema-validated provider-local mapping и запускает Codex/Claude с явным `--model`; значения
+mapping можно заменить только через trusted daemon construction, а repository/provider text не участвует в выборе.
+Exact live-provider promotion по-прежнему требует отдельной проверенной compatibility matrix row.
+
+Публичный `readReviewDiff` не принимает limits шире канонических D6, даже если внутренний caller попробует их
+передать. Browser QA дополнительно проверяет всю цепочку managed directories, ограничивает recovery scan 10 000
+entries и fail-closed отклоняет symlink/layout swap. Финальный syscall не объявляется sandbox от уже полностью
+скомпрометированного same-user process согласно threat boundary.
+
 ## 4. Другие обязательные findings Q13
 
 - untrusted repository/provider text не может закрыть собственную context section delimiter;
@@ -114,9 +131,12 @@ revision для будущих StageAttempt, снято. Revision остаётс
   capabilities;
 - provider-authored evidence заключён в ту же untrusted-data frame, что checkpoint/review output;
 - REVIEW context получает bounded actual diff summary, а не только tree label (D6);
-- REVIEW context получает exact active Project Constitution version с owner-policy framing и provenance;
+- REVIEW context получает exact Project Constitution version, привязанную к AgentRun, с owner-policy framing и
+  provenance (D9);
 - public async BrowserDriver errors имеют closed typed contract (D7);
-- post-start SquadAssignment revision явно остаётся non-goal stable scope без overclaim (D8).
+- post-start SquadAssignment revision явно остаётся non-goal stable scope без overclaim (D8);
+- model tier применяется к явному provider model, а публичные review limits и Browser QA managed layout нельзя
+  расширить в обход канонической policy (D9).
 
 ## 5. Verification и exit
 

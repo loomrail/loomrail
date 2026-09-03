@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type {
   ContextWindowUsage,
   HumanRequestDraft,
+  ModelTier,
   ProviderOutcome,
   ProviderUsage,
 } from "@loomrail/contracts";
@@ -13,6 +14,7 @@ import type {
   ProviderAdapter,
   ProviderInvocation,
   ProviderMcpConnection,
+  ProviderModelMapping,
   ProviderSessionListener,
 } from "@loomrail/provider-core";
 import { contextWindowUsageSchema } from "@loomrail/contracts";
@@ -26,7 +28,11 @@ const fakeClaudePath = fileURLToPath(new URL("./fixtures/fake-claude.mjs", impor
 // contract. Run the same fixture through this test process's Node binary on every platform so the
 // process boundary is real and the adapter's argv still arrives untouched after the script path.
 const createFakeClaudeProvider = (
-  options: { contextWindowTokens?: number; maxBudgetUsd?: number } = {},
+  options: {
+    contextWindowTokens?: number;
+    maxBudgetUsd?: number;
+    models?: Partial<ProviderModelMapping>;
+  } = {},
 ): ProviderAdapter =>
   createClaudeCodeProvider({
     command: process.execPath,
@@ -165,6 +171,7 @@ const fixtureInvocation = (
   stage: ProviderInvocation["session"]["stage"] = "DISCOVERY",
   humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
   mcpConnections: readonly ProviderMcpConnection[] = [],
+  modelTier: ModelTier = "STANDARD",
 ): ProviderInvocation => ({
   dispatch: {
     schemaVersion: 1,
@@ -190,6 +197,7 @@ const fixtureInvocation = (
     text: "Discover the requirements for the payments retry policy.",
     contentHash: `sha256:${"0".repeat(64)}`,
   },
+  modelTier,
   acceptanceInput: null,
   humanRequests,
   mcpConnections,
@@ -208,9 +216,13 @@ const startWith = async (
   adapter: ProviderAdapter,
   humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
   mcpConnections: readonly ProviderMcpConnection[] = [],
+  modelTier: ModelTier = "STANDARD",
 ): Promise<ProviderOutcome> => {
   const outcome = await withEnv("FAKE_CLAUDE_RECORD_PATH", spawned.recordPath, () =>
-    adapter.start(fixtureInvocation("session-1", "DISCOVERY", humanRequests, mcpConnections), noopListener()),
+    adapter.start(
+      fixtureInvocation("session-1", "DISCOVERY", humanRequests, mcpConnections, modelTier),
+      noopListener(),
+    ),
   );
   const recorded = JSON.parse(readFileSync(spawned.recordPath, "utf8")) as {
     args: string[];
@@ -318,6 +330,20 @@ describe("createClaudeCodeProvider", () => {
   // capability false rather than build an unverified injection path.
   it("declares no mid-session handoff channel", () => {
     expect(createClaudeCodeProvider().capabilities().checkpointOnRequest).toBe(false);
+  });
+
+  it("maps every immutable model tier to the configured explicit CLI model", async () => {
+    const models = {
+      FAST: "claude-fast-test",
+      STANDARD: "claude-standard-test",
+      DEEP: "claude-deep-test",
+    } as const satisfies ProviderModelMapping;
+    for (const tier of ["FAST", "STANDARD", "DEEP"] as const) {
+      const spawned = recordSpawn();
+      await startWith(spawned, createFakeClaudeProvider({ models }), "ALLOWED", [], tier);
+      expect(spawned.args[spawned.args.indexOf("--model") + 1]).toBe(models[tier]);
+    }
+    expect(() => createClaudeCodeProvider({ models: { DEEP: "--unsafe-flag" } })).toThrow();
   });
 
   // SD-001 again. Every named spelling is checked, not just the ones this adapter happens to

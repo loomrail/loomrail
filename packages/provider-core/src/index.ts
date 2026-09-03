@@ -2,6 +2,7 @@ import type {
   CheckpointDraft,
   ContextPack,
   ContextWindowUsage,
+  ModelTier,
   ProviderOutcome,
   ProviderId,
   ProviderUsage,
@@ -76,6 +77,22 @@ export const providerCapabilitiesSchema = z
 
 export type ProviderCapabilities = z.infer<typeof providerCapabilitiesSchema>;
 
+export const providerModelIdSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+
+export const providerModelMappingSchema = z
+  .object({
+    FAST: providerModelIdSchema,
+    STANDARD: providerModelIdSchema,
+    DEEP: providerModelIdSchema,
+  })
+  .strict();
+
+export type ProviderModelMapping = Readonly<Record<ModelTier, string>>;
+
 // `stage` is kept on the session reference on purpose: choosing a model tier and a tool set is
 // legitimate adapter work and needs something to key on. `attempt` is kept for the same reason,
 // and for one more: it is the durable, persisted `StageAttempt.attempt` (spec §6.5), passed
@@ -122,6 +139,8 @@ export type ProviderInvocation = {
   dispatch: WorkflowDispatch;
   session: ProviderSessionRef;
   contextPack: ContextPack;
+  /** Immutable logical tier from the active AgentRun policy; the adapter resolves its exact model. */
+  modelTier: ModelTier;
   /**
    * A structured copy of the criterion/check text rendered into this same pack, present only for
    * Acceptance. It carries no authority IDs: adapters may propose a mapping without parsing prose,

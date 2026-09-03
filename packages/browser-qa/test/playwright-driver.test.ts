@@ -1,9 +1,9 @@
 import { createServer, type RequestListener, type Server } from "node:http";
-import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { MAX_QA_RESPONSE_BYTES, type QARun } from "@loomrail/contracts";
+import { MAX_QA_RESPONSE_BYTES, type QAAttachmentRef, type QARun } from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -12,6 +12,7 @@ import {
   BrowserDriverError,
   type BrowserDriverErrorCode,
   createPlaywrightDriver,
+  openVerifiedBrowserQAArtifact,
   recoverBrowserQAArtifacts,
 } from "../src/index.js";
 
@@ -359,6 +360,73 @@ describe("Playwright BrowserDriver", () => {
     ).rejects.toBeInstanceOf(BrowserQAArtifactRecoveryError);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "refuses symlinked setup and finalization roots without mutating their targets",
+    async () => {
+      const setupRoot = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-setup-root-"));
+      const setupExternal = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-setup-external-"));
+      resources.push({ directory: setupRoot }, { directory: setupExternal });
+      const sentinel = join(setupExternal, "sentinel.txt");
+      await writeFile(sentinel, "preserve me", "utf8");
+      await symlink(setupExternal, join(setupRoot, ".quarantine"));
+
+      await expect(
+        createPlaywrightDriver({ artifactsDirectory: setupRoot }).run(qaRun("http://127.0.0.1:4173")),
+      ).rejects.toMatchObject({ code: "DRIVER_SETUP_FAILED" });
+      await expect(readFile(sentinel, "utf8")).resolves.toBe("preserve me");
+
+      const fixture = await startServer((_request, response) => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(
+          "<!doctype html><html><body><main><h1>Current work</h1><button>Continue</button></main></body></html>",
+        );
+      });
+      const finalRoot = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-final-root-"));
+      const finalExternal = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-final-external-"));
+      resources.push({ server: fixture.server, directory: finalRoot }, { directory: finalExternal });
+      const execution = await createPlaywrightDriver({ artifactsDirectory: finalRoot }).run(
+        qaRun(fixture.origin),
+      );
+      await symlink(finalExternal, join(finalRoot, "qa"));
+      await expect(
+        execution.finalizeAttachments({ qaRunId: "qa-run-1", createAttachmentId: () => "attachment-1" }),
+      ).rejects.toMatchObject({ code: "ATTACHMENT_FINALIZATION_FAILED" });
+      await expect(readdir(finalExternal)).resolves.toEqual([]);
+      await execution.dispose();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses to open matching evidence through a symlinked QA root",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-open-root-"));
+      const external = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-open-external-"));
+      resources.push({ directory }, { directory: external });
+      const segment = `run-${"a".repeat(32)}`;
+      await mkdir(join(external, segment));
+      await writeFile(join(external, segment, "evidence.txt"), "evidence", "utf8");
+      await symlink(external, join(directory, "qa"));
+      const value: QAAttachmentRef = {
+        schemaVersion: 1,
+        id: "attachment-1",
+        qaRunId: "qa-run-1",
+        kind: "SCREENSHOT",
+        contentHash: `sha256:${"a".repeat(64)}`,
+        byteSize: 8,
+        targetId: "desktop-light-en",
+        scenarioId: "current-work",
+        capturedAt: "2026-09-03T09:00:00.000Z",
+        retentionClass: "STANDARD_30_DAYS",
+        storageKey: `${segment}/evidence.txt`,
+      };
+
+      await expect(
+        openVerifiedBrowserQAArtifact({ artifactsDirectory: directory, attachment: value }),
+      ).rejects.toMatchObject({ code: "STORAGE_LAYOUT_INVALID" });
+      await expect(readFile(join(external, segment, "evidence.txt"), "utf8")).resolves.toBe("evidence");
+    },
+  );
+
   it("blocks off-origin redirects and exposes no finalizable evidence", async () => {
     const destination = await startServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html" });
@@ -655,6 +723,28 @@ describe("Playwright BrowserDriver", () => {
     await expect(hostileCodeRejection).rejects.not.toHaveProperty(
       "message",
       expect.stringContaining("CANARY_SECRET"),
+    );
+
+    const hostileGetterError = new BrowserDriverError("INVALID_INPUT", "CANARY_SECRET_FROM_GETTER");
+    Object.defineProperty(hostileGetterError, "code", {
+      get: () => {
+        throw new Error("CANARY_SECRET_FROM_CODE_GETTER");
+      },
+    });
+    const hostileGetterRun = qaRun("http://127.0.0.1:4173");
+    Object.defineProperty(hostileGetterRun, "id", {
+      get: () => {
+        throw hostileGetterError;
+      },
+    });
+    await expect(
+      createPlaywrightDriver({ artifactsDirectory: directory }).run(hostileGetterRun),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "BrowserDriverError",
+        code: "DRIVER_SETUP_FAILED",
+        message: "The Browser QA driver could not start safely.",
+      }),
     );
   });
 });

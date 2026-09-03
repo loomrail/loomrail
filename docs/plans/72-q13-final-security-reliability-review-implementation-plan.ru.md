@@ -25,6 +25,11 @@
 - [x] Запретить recovery проходить через symlinked `qa`/run roots и повторно проверить identity перед mutation.
 - [x] Закрыть runtime BrowserDriver code allowlist и typed CLI setup question failures.
 - [x] Синхронизировать architecture/threat claims с фактическими QA permissions и live runtime.
+- [x] Привязать exact Project Constitution к immutable AgentRun snapshot и доказать неизменность context после
+      активации следующей версии.
+- [x] Применить immutable model tier через schema-validated provider mapping и явный CLI `--model`.
+- [x] Запретить публичному review-diff API расширять intrinsic limits, ограничить recovery scan и проверить полную
+      managed Browser QA directory chain.
 - [ ] Выполнить финальный Standards/Spec review и закрыть все P0/P1.
 - [ ] Прогнать full non-landing source gates, fault injection, audit, clean package и browser matrix.
 - [ ] Запушить Q13, дождаться macOS/Windows CI и записать evidence.

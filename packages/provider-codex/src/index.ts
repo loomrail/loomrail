@@ -4,18 +4,21 @@ import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, sep } from "node:path";
 
 import type { ProviderOutcome, ProviderUsage, WorkflowStage } from "@loomrail/contracts";
+import { modelTierSchema } from "@loomrail/contracts";
 import {
   decodeProviderStageResult,
   describeUnproductiveSession,
   providerStageResultSchemaFor,
   providerCapabilitiesSchema,
   providerMcpConnectionSchema,
+  providerModelMappingSchema,
   runProcess,
   ProcessSpawnError,
   type DecodedProviderStageResult,
   type ProcessExitOutcome,
   type ProviderAdapter,
   type ProviderInvocation,
+  type ProviderModelMapping,
   type ProviderSessionListener,
   type ProviderStageResultPolicy,
 } from "@loomrail/provider-core";
@@ -44,6 +47,11 @@ const SESSION_DEADLINE_MS = 600_000;
 // ProviderPackTooLargeError branch), which is a worse failure than assembling a pack smaller than
 // the window actually allows.
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
+const DEFAULT_MODELS = {
+  FAST: "gpt-5.6-luna",
+  STANDARD: "gpt-5.6-terra",
+  DEEP: "gpt-5.6-sol",
+} as const satisfies ProviderModelMapping;
 
 export type CreateCodexProviderOptions = {
   // The `codex` executable to spawn. Overridable so tests can point it at a stand-in without
@@ -53,18 +61,21 @@ export type CreateCodexProviderOptions = {
   // shell-free (tests use `node <fixture>`) while leaving the default CLI invocation unchanged.
   commandArgsPrefix?: readonly string[];
   contextWindowTokens?: number;
+  models?: Partial<ProviderModelMapping>;
 };
 
 type ResolvedOptions = {
   command: string;
   commandArgsPrefix: readonly string[];
   contextWindowTokens: number;
+  models: ProviderModelMapping;
 };
 
 const resolveOptions = (options: CreateCodexProviderOptions): ResolvedOptions => ({
   command: options.command ?? "codex",
   commandArgsPrefix: options.commandArgsPrefix ?? [],
   contextWindowTokens: options.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
+  models: providerModelMappingSchema.parse({ ...DEFAULT_MODELS, ...options.models }),
 });
 
 // Spec §9, first line: `capabilities()` must not promise a provider whose CLI is not on this
@@ -216,6 +227,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
     ): Promise<ProviderOutcome> => {
       const sessionId = invocation.session.id;
       const workspace = invocation.workspace;
+      const model = resolved.models[modelTierSchema.parse(invocation.modelTier)];
       // Created for every session and removed in `finally`, including on failure (point 7). It
       // holds the generated output schema, which must not be written into a worktree: what a
       // session changed is read back from git against that directory, and a file Loomrail itself
@@ -336,6 +348,8 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
           // Loomrail proxy assignments assembled above. Authentication lives in `CODEX_HOME`, not
           // in `config.toml`, so this flag does not touch login.
           "--ignore-user-config",
+          "--model",
+          model,
           ...mcpArgs,
           ...sandboxArgs,
           "-C",

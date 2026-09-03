@@ -7,6 +7,7 @@ import type {
   CheckpointDraft,
   ContextWindowUsage,
   HumanRequestDraft,
+  ModelTier,
   ProviderOutcome,
   ProviderUsage,
 } from "@loomrail/contracts";
@@ -14,6 +15,7 @@ import type {
   ProviderAdapter,
   ProviderInvocation,
   ProviderMcpConnection,
+  ProviderModelMapping,
   ProviderSessionListener,
   ProviderWorkspace,
 } from "@loomrail/provider-core";
@@ -27,7 +29,9 @@ const fakeCodexPath = fileURLToPath(new URL("./fixtures/fake-codex.mjs", import.
 // A `.mjs` file is directly executable through its shebang on POSIX, but Windows has no such
 // contract. Run the same fixture through this test process's Node binary on every platform so the
 // process boundary is real and the adapter's argv still arrives untouched after the script path.
-const createFakeCodexProvider = (options: { contextWindowTokens?: number } = {}): ProviderAdapter =>
+const createFakeCodexProvider = (
+  options: { contextWindowTokens?: number; models?: Partial<ProviderModelMapping> } = {},
+): ProviderAdapter =>
   createCodexProvider({
     command: process.execPath,
     commandArgsPrefix: [fakeCodexPath],
@@ -224,6 +228,7 @@ const fixtureInvocation = (
   stage: ProviderInvocation["session"]["stage"] = "DISCOVERY",
   humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
   mcpConnections: readonly ProviderMcpConnection[] = [],
+  modelTier: ModelTier = "STANDARD",
 ): ProviderInvocation => ({
   dispatch: {
     schemaVersion: 1,
@@ -249,6 +254,7 @@ const fixtureInvocation = (
     text: "Discover the requirements for the payments retry policy.",
     contentHash: `sha256:${"0".repeat(64)}`,
   },
+  modelTier,
   acceptanceInput: null,
   humanRequests,
   mcpConnections,
@@ -271,10 +277,11 @@ const startWith = async (
   workspace?: ProviderWorkspace,
   humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
   mcpConnections: readonly ProviderMcpConnection[] = [],
+  modelTier: ModelTier = "STANDARD",
 ): Promise<ProviderOutcome> => {
   const outcome = await withEnv("FAKE_CODEX_RECORD_PATH", spawned.recordPath, () =>
     adapter.start(
-      fixtureInvocation("session-1", workspace, "DISCOVERY", humanRequests, mcpConnections),
+      fixtureInvocation("session-1", workspace, "DISCOVERY", humanRequests, mcpConnections, modelTier),
       noopListener(),
     ),
   );
@@ -466,6 +473,20 @@ describe("createCodexProvider", () => {
     await startWith(spawned, createFakeCodexProvider());
     expect(spawned.args).toContain("--skip-git-repo-check");
     expect(spawned.stdinClosed).toBe(true);
+  });
+
+  it("maps every immutable model tier to the configured explicit CLI model", async () => {
+    const models = {
+      FAST: "codex-fast-test",
+      STANDARD: "codex-standard-test",
+      DEEP: "codex-deep-test",
+    } as const satisfies ProviderModelMapping;
+    for (const tier of ["FAST", "STANDARD", "DEEP"] as const) {
+      const spawned = recordSpawn();
+      await startWith(spawned, createFakeCodexProvider({ models }), undefined, "ALLOWED", [], tier);
+      expect(spawned.args[spawned.args.indexOf("--model") + 1]).toBe(models[tier]);
+    }
+    expect(() => createCodexProvider({ models: { FAST: "--unsafe-flag" } })).toThrow();
   });
 
   // The value-shaped half of SD-001, alongside the spelling-shaped check below: `-s` takes a

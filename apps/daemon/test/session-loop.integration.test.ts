@@ -714,9 +714,11 @@ describe("session loop workspace provisioning", () => {
       if (reviewer.type !== "AGENT_RUN_STARTED") throw new Error("Expected the reviewer AgentRun");
       let reviewPack = "";
       let reviewWorkspaceAccess = "";
+      let reviewModelTier = "";
       const reviewAdapter = proseOnlyAdapter((invocation) => {
         reviewPack = invocation.contextPack.text;
         reviewWorkspaceAccess = invocation.workspace?.access ?? "NONE";
+        reviewModelTier = invocation.modelTier;
       });
 
       await runStageAttempt({
@@ -737,6 +739,8 @@ describe("session loop workspace provisioning", () => {
       expect(reviewPack).toContain("- ADDED review-target.ts (+1 -0)");
       expect(reviewPack).toContain(fileBody.trim());
       expect(reviewWorkspaceAccess).toBe("READ_ONLY");
+      expect(reviewer.run.policySnapshot?.modelTier).toBe("DEEP");
+      expect(reviewModelTier).toBe("DEEP");
       expect(snapshotOf(localState, seeded.workItemId).humanRequests).toHaveLength(0);
     },
     GIT_TIMEOUT_MS,

@@ -3,11 +3,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
-import type {
-  ReviewChangedFile,
-  ReviewChangeSummary,
-  ReviewDiffContent,
-  ReviewDiffLimits,
+import {
+  reviewDiffLimits,
+  type ReviewChangedFile,
+  type ReviewChangeSummary,
+  type ReviewDiffContent,
+  type ReviewDiffLimits,
 } from "@loomrail/contracts";
 
 import { runGitWithIndex } from "./git.js";
@@ -835,7 +836,10 @@ export const readReviewDiff = async (
     typeof baseline !== "string" ||
     baseline.trim().length === 0 ||
     Object.values(limits).some((value) => !Number.isSafeInteger(value) || value < 0) ||
-    maxFiles > MAX_CHANGE_SUMMARY_FILES
+    maxFiles > Math.min(MAX_CHANGE_SUMMARY_FILES, reviewDiffLimits.maxFiles) ||
+    maxContentFiles > reviewDiffLimits.maxContentFiles ||
+    maxPatchBytesPerFile > reviewDiffLimits.maxPatchBytesPerFile ||
+    maxPatchBytesTotal > reviewDiffLimits.maxPatchBytesTotal
   ) {
     throw new ReviewDiffReadError("INVALID_INPUT", "The review diff request is invalid.");
   }

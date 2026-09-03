@@ -1304,8 +1304,14 @@ Q1 tightens the deterministic baseline further:
   when a callback supplied an instance of the exported class. Startup artifact recovery exposes a separate closed
   scan error and daemon logs only its code. An `ENOENT` scan is accepted as an absent managed child only after the
   artifact root is verified as absent or a directory, because Windows can report `ENOENT` for a child below a file.
-  Recovery refuses symlinked `qa`/run directories, requires their canonical paths to remain inside the artifact root,
-  and rechecks directory identity immediately before marker removal or quarantine rename.
+  Setup, finalization, confirmation, disposal, recovery and authenticated open refuse symlinked
+  `artifacts`/`qa`/`.quarantine`/run directories, require each canonical child to remain under its already verified
+  parent, and recheck directory identity immediately before or after a path mutation. Recovery reads at most 10,000
+  directory entries per managed root; a larger root fails closed instead of becoming an unbounded startup allocation.
+  Portable Node filesystem APIs cannot make path-based rename, unlink or recursive removal atomic against a process
+  that can concurrently replace app-private directories. Sequential identity checks close normal stale/symlink
+  layouts; hostile same-user mutation during the final syscall is part of the already excluded fully compromised
+  same-user-account boundary rather than a claimed sandbox guarantee.
   The daemon still fails closed on a contract-violating adapter;
 - the baseline target is a bare literal loopback origin (`localhost`, `127/8` or `[::1]`). `localhost` resolution must
   contain only loopback addresses and Chromium pins it to one verified address for the run; exact origin is rechecked

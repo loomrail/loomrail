@@ -134,6 +134,17 @@ export const agentRunPolicySnapshotSchema = z
     provider: providerIdSchema,
     effectiveCapabilities: z.array(agentCapabilitySchema).max(6),
     modelTier: modelTierSchema,
+    // Optional only for policy snapshots written before the Constitution binding existed. New
+    // AgentRuns always write either the exact immutable content reference or explicit null.
+    projectConstitution: z
+      .object({
+        id: opaqueIdSchema,
+        version: z.number().int().positive(),
+        contentDigest: z.string().regex(/^[0-9a-f]{64}$/),
+      })
+      .strict()
+      .nullable()
+      .optional(),
     claimLimits: agentRunClaimLimitsSchema,
     budget: z
       .object({
@@ -272,6 +283,7 @@ export const agentFleetResponseSchema = z
   .strict();
 
 export type AgentRole = z.infer<typeof agentRoleSchema>;
+export type ModelTier = z.infer<typeof modelTierSchema>;
 export type AgentCapability = z.infer<typeof agentCapabilitySchema>;
 export type AgentArtifactKind = z.infer<typeof agentArtifactKindSchema>;
 export type RolePlaybook = z.infer<typeof rolePlaybookSchema>;

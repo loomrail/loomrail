@@ -38,6 +38,7 @@ const invocation = (
       attempt: options.attempt ?? 1,
     },
     contextPack: contextPack(),
+    modelTier: "STANDARD",
     acceptanceInput: {
       criteria: ["State is durable"],
       evidence: [

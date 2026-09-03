@@ -348,6 +348,7 @@ export const resolveAgentRunPolicy = (input: {
   pipelineBudget: { id: string; revision: number; maxEstimatedTokens: number };
   usedEstimatedTokens: number;
   mcpProfileRevisionIds: readonly string[];
+  projectConstitution: { id: string; version: number; contentDigest: string } | null;
 }): AgentRunPolicySnapshot => {
   const assigned = input.assignment.stages.find(({ stage }) => stage === input.stage)?.profile;
   if (
@@ -396,6 +397,7 @@ export const resolveAgentRunPolicy = (input: {
     provider: input.provider,
     effectiveCapabilities,
     modelTier: input.profile.defaultModelTier,
+    projectConstitution: input.projectConstitution,
     claimLimits: input.claimLimits,
     budget: {
       pipelinePolicyId: input.pipelineBudget.id,

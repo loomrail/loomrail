@@ -39,6 +39,11 @@ const implementationPolicy = () => {
     pipelineBudget: { id: "budget-1", revision: 2, maxEstimatedTokens: 200_000 },
     usedEstimatedTokens: 50_000,
     mcpProfileRevisionIds: ["mcp-revision-2", "mcp-revision-1"],
+    projectConstitution: {
+      id: "constitution-1",
+      version: 2,
+      contentDigest: "c".repeat(64),
+    },
   });
 };
 
@@ -130,6 +135,11 @@ describe("agent team domain", () => {
       provider: "CODEX",
       effectiveCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "REPOSITORY_WRITE", "NETWORK", "MCP_READ"],
       modelTier: "STANDARD",
+      projectConstitution: {
+        id: "constitution-1",
+        version: 2,
+        contentDigest: "c".repeat(64),
+      },
       claimLimits: { global: 3, project: 2, provider: 1 },
       budget: {
         pipelinePolicyId: "budget-1",
@@ -154,6 +164,7 @@ describe("agent team domain", () => {
       pipelineBudget: { id: "budget-1", revision: 1, maxEstimatedTokens: 100_000 },
       usedEstimatedTokens: 0,
       mcpProfileRevisionIds: [],
+      projectConstitution: null,
     });
     expect(policy.effectiveCapabilities).toEqual(["ARTIFACT_WRITE", "REPOSITORY_READ"]);
     expect(policy.workspace).toEqual({ access: "READ_ONLY", networkAccess: false });
@@ -172,6 +183,7 @@ describe("agent team domain", () => {
       pipelineBudget: { id: "budget-1", revision: 1, maxEstimatedTokens: 100_000 },
       usedEstimatedTokens: 0,
       mcpProfileRevisionIds: ["mcp-revision-not-authorized"],
+      projectConstitution: null,
     });
 
     expect(policy.effectiveCapabilities).toEqual(["ARTIFACT_WRITE", "REPOSITORY_READ", "BROWSER_READ"]);

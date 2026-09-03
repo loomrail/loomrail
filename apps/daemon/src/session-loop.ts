@@ -1468,6 +1468,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             dispatch: deps.dispatch,
             session: providerSessionRef(providerSession, attempt),
             contextPack: assembled.pack,
+            modelTier: executionPolicy?.snapshot.modelTier ?? "STANDARD",
             acceptanceInput:
               attempt.stage === "ACCEPTANCE"
                 ? {

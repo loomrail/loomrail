@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
-import { open, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -28,7 +28,12 @@ import {
 import { chromium, type BrowserContext, type Locator, type Page, type Route } from "playwright";
 import { z } from "zod";
 
-import { confirmBrowserQAArtifacts, stageBrowserQAArtifacts } from "./artifact-recovery.js";
+import {
+  confirmBrowserQAArtifacts,
+  createBrowserQAQuarantineDirectory,
+  disposeBrowserQAQuarantineDirectory,
+  stageBrowserQAArtifacts,
+} from "./artifact-recovery.js";
 
 export {
   deleteExpiredBrowserQAArtifacts,
@@ -114,8 +119,14 @@ type PendingAttachment = {
 };
 
 const normalizeBrowserDriverError = (code: BrowserDriverErrorCode, error: unknown): BrowserDriverError => {
-  const normalizedCode =
-    error instanceof BrowserDriverError && isBrowserDriverErrorCode(error.code) ? error.code : code;
+  let normalizedCode = code;
+  try {
+    if (error instanceof BrowserDriverError && isBrowserDriverErrorCode(error.code)) {
+      normalizedCode = error.code;
+    }
+  } catch {
+    // A rejected value is untrusted at this boundary; even an accessor on `code` may throw.
+  }
   return new BrowserDriverError(normalizedCode, browserDriverErrorMessages[normalizedCode], {
     cause: error,
   });
@@ -545,9 +556,10 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
               return new Set(keys);
             })();
       const runStorageSegment = `run-${createHash("sha256").update(qaRun.id).digest("hex").slice(0, 32)}`;
-      const quarantineRoot = join(parsedOptions.artifactsDirectory, ".quarantine");
-      await mkdir(quarantineRoot, { recursive: true });
-      const quarantineDirectory = await mkdtemp(join(quarantineRoot, `${runStorageSegment}-`));
+      const quarantineDirectory = await createBrowserQAQuarantineDirectory({
+        artifactsDirectory: parsedOptions.artifactsDirectory,
+        runStorageSegment,
+      });
       const pendingAttachments: PendingAttachment[] = [];
       const executions: Extract<QADriverResult, { outcome: "MEASURED" }>["executions"] = [];
       const observations: QAObservation[] = [];
@@ -579,7 +591,11 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
       const dispose = async (): Promise<void> => {
         if (finalized) return;
         try {
-          await rm(quarantineDirectory, { recursive: true, force: true });
+          await disposeBrowserQAQuarantineDirectory({
+            artifactsDirectory: parsedOptions.artifactsDirectory,
+            quarantineDirectory,
+            runStorageSegment,
+          });
         } catch (error: unknown) {
           throw new BrowserDriverError(
             "QUARANTINE_DISPOSAL_FAILED",

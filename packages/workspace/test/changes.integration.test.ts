@@ -243,6 +243,16 @@ describe("readReviewDiff", () => {
         maxPatchBytesTotal: 1,
       }),
     ).rejects.toEqual(expect.objectContaining({ name: "ReviewDiffReadError", code: "INVALID_INPUT" }));
+    await expect(
+      readReviewDiff({
+        worktreePath,
+        baseline,
+        maxFiles: 51,
+        maxContentFiles: 16,
+        maxPatchBytesPerFile: 4_096,
+        maxPatchBytesTotal: 32_768,
+      }),
+    ).rejects.toEqual(expect.objectContaining({ name: "ReviewDiffReadError", code: "INVALID_INPUT" }));
   });
 
   it("normalizes git/read failures through its closed public error vocabulary", async () => {
@@ -277,9 +287,9 @@ describe("readReviewDiff", () => {
       worktreePath,
       baseline,
       maxFiles: 50,
-      maxContentFiles: 20,
-      maxPatchBytesPerFile: 8_192,
-      maxPatchBytesTotal: 65_536,
+      maxContentFiles: 16,
+      maxPatchBytesPerFile: 4_096,
+      maxPatchBytesTotal: 32_768,
     });
 
     expect(review.baseline).toBe(baseline);
@@ -334,9 +344,9 @@ describe("readReviewDiff", () => {
       worktreePath,
       baseline,
       maxFiles: 50,
-      maxContentFiles: 50,
+      maxContentFiles: 16,
       maxPatchBytesPerFile: 512,
-      maxPatchBytesTotal: 50 * 512,
+      maxPatchBytesTotal: 16 * 512,
     });
     const huge = review.files.find(({ path }) => path === "huge-single-line.txt");
     if (huge?.content.type !== "TEXT") throw new Error("Expected a textual patch for the huge file");

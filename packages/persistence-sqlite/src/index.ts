@@ -3514,13 +3514,36 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               })()
             : null;
 
-        const activeConstitution = readActiveProjectConstitution(workItem.projectId);
+        const runningAgentRunValue = selectRunningAgentRunForStageAttempt.get(stageAttempt.id);
+        const runningPolicySnapshot =
+          runningAgentRunValue === undefined ? null : agentRunFromRow(runningAgentRunValue).policySnapshot;
+        const constitutionReference = runningPolicySnapshot?.projectConstitution;
+        // Legacy session-only tests and pre-binding AgentRuns have no field to consult and retain
+        // the old current-active read. Every newly created AgentRun writes explicit null or an
+        // exact content reference, so a later owner activation cannot change that run's context.
+        const activeConstitution =
+          constitutionReference === undefined
+            ? readActiveProjectConstitution(workItem.projectId)
+            : constitutionReference === null
+              ? null
+              : readProjectConstitutionVersion(constitutionReference.id);
+        if (
+          constitutionReference !== undefined &&
+          constitutionReference !== null &&
+          (activeConstitution?.projectId !== workItem.projectId ||
+            activeConstitution.contentDigest !== constitutionReference.contentDigest)
+        ) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The AgentRun Project Constitution reference is unavailable or no longer matches",
+          );
+        }
         const projectConstitution =
           activeConstitution === null
             ? null
             : {
                 id: activeConstitution.id,
-                version: activeConstitution.version,
+                version: constitutionReference?.version ?? activeConstitution.version,
                 ordinal: activeConstitution.ordinal,
                 contentDigest: activeConstitution.contentDigest,
                 renderedMarkdown: activeConstitution.renderedMarkdown,
@@ -6218,6 +6241,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           .all(workItem.projectId)
           .map(mcpGrantFromRow)
           .map(({ profileRevisionId }) => profileRevisionId);
+        const activeProjectConstitution = readActiveProjectConstitution(workItem.projectId);
         let policySnapshot: AgentRunPolicySnapshot;
         try {
           policySnapshot = resolveAgentRunPolicy({
@@ -6233,6 +6257,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             },
             usedEstimatedTokens,
             mcpProfileRevisionIds,
+            projectConstitution:
+              activeProjectConstitution === null
+                ? null
+                : {
+                    id: activeProjectConstitution.id,
+                    version: activeProjectConstitution.version,
+                    contentDigest: activeProjectConstitution.contentDigest,
+                  },
           });
         } catch (error: unknown) {
           if (error instanceof AgentDomainError && error.code === "AGENT_RUN_BUDGET_EXHAUSTED") {

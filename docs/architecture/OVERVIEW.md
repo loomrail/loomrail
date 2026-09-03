@@ -254,6 +254,7 @@ authority. Author checkpoints and transcripts are not sources for a new review r
 ### `packages/provider-core` and `provider-mock`
 
 - normalized capabilities/lifecycle contract;
+- validated provider-local `FAST`/`STANDARD`/`DEEP` model mapping applied to every invocation;
 - deterministic fixture sessions/events/usage and one final cumulative usage callback per session;
 - no provider JSON in domain/UI.
 
@@ -267,7 +268,8 @@ authority. Author checkpoints and transcripts are not sources for a new review r
 
 ```text
 Repository
-  .loomrail/                  # later: tracked policies/config; no runtime state
+  .loomrail/
+    constitution.md           # owner-approved Project Constitution source; no runtime state
 
 Platform application data
   state.sqlite
@@ -282,7 +284,7 @@ logs without redaction.
 ## Reliability model
 
 - state mutation and event/outbox are atomic;
-- active work has leases/heartbeats in later milestones;
+- durable AgentRun claims and workspace leases fence active work; provider processes are still reconciled on restart;
 - restart reconciles durable state before accepting commands;
 - orphan `RUNNING` agent work becomes `INTERRUPTED`;
 - no automatic replay of an agent/tool action;

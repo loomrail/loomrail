@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, sep } from "node:path";
 
 import type { ProviderOutcome, ProviderUsage, WorkflowStage } from "@loomrail/contracts";
+import { modelTierSchema } from "@loomrail/contracts";
 import {
   decodeProviderStageResult,
   describeUnproductiveSession,
   providerStageResultSchemaFor,
   providerMcpConnectionSchema,
+  providerModelMappingSchema,
   providerCapabilitiesSchema,
   runProcess,
   ProcessSpawnError,
@@ -16,6 +18,7 @@ import {
   type ProcessExitOutcome,
   type ProviderAdapter,
   type ProviderInvocation,
+  type ProviderModelMapping,
   type ProviderSessionListener,
   type ProviderStageResultPolicy,
 } from "@loomrail/provider-core";
@@ -53,6 +56,11 @@ const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 // session before it finishes", not a number measured against the real CLI or a spend policy
 // anyone signed off on -- treat it as a placeholder a real policy should replace.
 const DEFAULT_MAX_BUDGET_USD = 5;
+const DEFAULT_MODELS = {
+  FAST: "claude-haiku-4-5-20251001",
+  STANDARD: "claude-sonnet-5",
+  DEEP: "claude-opus-5",
+} as const satisfies ProviderModelMapping;
 
 export type CreateClaudeCodeProviderOptions = {
   // The `claude` executable to spawn. Overridable so tests can point it at a stand-in without
@@ -63,6 +71,7 @@ export type CreateClaudeCodeProviderOptions = {
   commandArgsPrefix?: readonly string[];
   contextWindowTokens?: number;
   maxBudgetUsd?: number;
+  models?: Partial<ProviderModelMapping>;
 };
 
 type ResolvedOptions = {
@@ -70,6 +79,7 @@ type ResolvedOptions = {
   commandArgsPrefix: readonly string[];
   contextWindowTokens: number;
   maxBudgetUsd: number;
+  models: ProviderModelMapping;
 };
 
 const resolveOptions = (options: CreateClaudeCodeProviderOptions): ResolvedOptions => ({
@@ -77,6 +87,7 @@ const resolveOptions = (options: CreateClaudeCodeProviderOptions): ResolvedOptio
   commandArgsPrefix: options.commandArgsPrefix ?? [],
   contextWindowTokens: options.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
   maxBudgetUsd: options.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
+  models: providerModelMappingSchema.parse({ ...DEFAULT_MODELS, ...options.models }),
 });
 
 // Spec §9, first line: `capabilities()` must not promise a provider whose CLI is not on this
@@ -205,6 +216,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
       listener: ProviderSessionListener,
     ): Promise<ProviderOutcome> => {
       const sessionId = invocation.session.id;
+      const model = resolved.models[modelTierSchema.parse(invocation.modelTier)];
       // Per-session and removed in `finally`, including on failure -- this adapter has no
       // repository access at all, E1 included, and an empty directory plus `--permission-mode plan`
       // is what enforces that. `invocation.workspace` is read nowhere here, deliberately: the write
@@ -265,6 +277,8 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
           "--mcp-config",
           mcpConfigPath,
           "--strict-mcp-config",
+          "--model",
+          model,
           "--permission-mode",
           "plan",
           "--no-session-persistence",

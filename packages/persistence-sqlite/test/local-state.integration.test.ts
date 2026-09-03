@@ -2903,6 +2903,111 @@ describe("SQLite local state", () => {
       );
     });
 
+    it("binds every new AgentRun to the Constitution content active when the run starts", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const seed = new DatabaseSync(databasePath);
+      const insertConstitution = (
+        suffix: string,
+        ordinal: number,
+        digestCharacter: string,
+        body: string,
+      ): void => {
+        seed
+          .prepare(
+            `INSERT INTO constitution_proposals (
+              id, schema_version, project_id, project_version, status, preset_id, preset_version,
+              recommended_preset_id, scan_json, sections_json, rendered_markdown, content_digest,
+              version, created_at, adopted_at
+            ) VALUES (?, 1, 'project-web', 1, 'ADOPTED', 'repository-baseline', 1,
+              'repository-baseline', '{}', '[]', ?, ?, 3, ?, ?)`,
+          )
+          .run(`proposal-${suffix}`, body, digestCharacter.repeat(64), timestamp, timestamp);
+        seed
+          .prepare(
+            `INSERT INTO project_constitution_versions (
+              id, schema_version, project_id, proposal_id, ordinal, preset_id, preset_version,
+              source_digest, content_digest, rendered_markdown, status, version, created_at, activated_at
+            ) VALUES (?, 1, 'project-web', ?, ?, 'repository-baseline', 1, ?, ?, ?, 'ACTIVE', 2, ?, ?)`,
+          )
+          .run(
+            `constitution-${suffix}`,
+            `proposal-${suffix}`,
+            ordinal,
+            "f".repeat(64),
+            digestCharacter.repeat(64),
+            body,
+            timestamp,
+            timestamp,
+          );
+      };
+      insertConstitution("run-start", 1, "a", "# Constitution A\n\n- Review the exact accepted rules.");
+      seed.close();
+
+      const { dispatch } = startReadyWorkflow(localState, "a3-constitution");
+      const started = localState.execute(startAgentRun("constitution", dispatch.id));
+      if (started.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun start");
+      expect(started.run.policySnapshot?.projectConstitution).toEqual({
+        id: "constitution-run-start",
+        version: 2,
+        contentDigest: "a".repeat(64),
+      });
+
+      const switched = new DatabaseSync(databasePath);
+      switched
+        .prepare("UPDATE project_constitution_versions SET status = 'SUPERSEDED', version = 3 WHERE id = ?")
+        .run("constitution-run-start");
+      const insertReplacement = (
+        suffix: string,
+        ordinal: number,
+        digestCharacter: string,
+        body: string,
+      ): void => {
+        switched
+          .prepare(
+            `INSERT INTO constitution_proposals (
+              id, schema_version, project_id, project_version, status, preset_id, preset_version,
+              recommended_preset_id, scan_json, sections_json, rendered_markdown, content_digest,
+              version, created_at, adopted_at
+            ) VALUES (?, 1, 'project-web', 1, 'ADOPTED', 'repository-baseline', 1,
+              'repository-baseline', '{}', '[]', ?, ?, 3, ?, ?)`,
+          )
+          .run(`proposal-${suffix}`, body, digestCharacter.repeat(64), timestamp, timestamp);
+        switched
+          .prepare(
+            `INSERT INTO project_constitution_versions (
+              id, schema_version, project_id, proposal_id, ordinal, preset_id, preset_version,
+              source_digest, content_digest, rendered_markdown, status, version, created_at, activated_at
+            ) VALUES (?, 1, 'project-web', ?, ?, 'repository-baseline', 1, ?, ?, ?, 'ACTIVE', 2, ?, ?)`,
+          )
+          .run(
+            `constitution-${suffix}`,
+            `proposal-${suffix}`,
+            ordinal,
+            "e".repeat(64),
+            digestCharacter.repeat(64),
+            body,
+            timestamp,
+            timestamp,
+          );
+      };
+      insertReplacement("replacement", 2, "b", "# Constitution B\n\n- Rules activated later.");
+      switched.close();
+
+      const result = localState.query({
+        type: "READ_CONTEXT_SOURCES",
+        stageAttemptId: dispatch.stageAttemptId,
+        sessionOrdinal: 1,
+      });
+      expect(result.type === "CONTEXT_SOURCES" ? result.sources.projectConstitution : null).toEqual({
+        id: "constitution-run-start",
+        version: 2,
+        ordinal: 1,
+        contentDigest: "a".repeat(64),
+        renderedMarkdown: "# Constitution A\n\n- Review the exact accepted rules.",
+      });
+    });
+
     it("enforces the default 3+1 boundary from durable active runs", async () => {
       const localState = await open();
       localState.execute(registerProject());
