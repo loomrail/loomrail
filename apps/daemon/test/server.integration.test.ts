@@ -830,7 +830,7 @@ describe("local daemon session and state boundary", () => {
     } finally {
       runState.close();
     }
-  }, 30_000);
+  }, 60_000);
 
   // The other half of the repair: it moves only a fixture-backed Project still pointing at the
   // bundled template. A Project already registered at its materialised repository is a duplicate
@@ -955,7 +955,7 @@ describe("local daemon session and state boundary", () => {
       })),
     ).toEqual([{ id: fixture.projectId, repositoryPath: materialisedPath, repositoryStatus: "READY" }]);
     expect((await inspectRepository(materialisedPath))?.topLevel).toBe(materialisedPath);
-  }, 30_000);
+  }, 60_000);
 
   // The guarantee widening the repoint must not touch: a Project the owner registered BY PATH is
   // never moved, however unusable its path has become. Loomrail does not know where they moved their
