@@ -20,6 +20,9 @@
       честным.
 - [x] Добавить additive migration, сохранив historical ProviderSession без выдуманного AgentRun backfill.
 - [x] Реализовать transactional `START_AGENT_RUN`/terminal transitions с повторной проверкой limits и lease.
+- [x] Сохранять validated effective-policy JSON + canonical hash и применять capability intersection к
+      workspace/network, Browser QA, MCP revision set и profile session cap; migration 31 не выдумывает historical
+      policy.
 - [x] Добавить restart/recovery, idempotency, storage uniqueness и 3+1 capacity coverage.
 
 ## 3. Parallel daemon execution

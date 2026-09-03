@@ -33,9 +33,10 @@ _Не означает_: групповой чат, весь доступный 
 
 **AgentRun**:
 Один непрерывный запуск immutable AgentProfile revision на StageAttempt; canonical единица concurrency и
-проверяемого результата. Хранит hash immutable policy snapshot (assignment/profile/provider/effective policy),
-а точный состав provider input принадлежит ContextPackRecipe каждой ProviderSession. Resume после owner gate
-создаёт следующий ordinal; одновременно активен максимум один.
+проверяемого результата. Новый запуск хранит validated effective policy snapshot и его canonical hash
+(assignment/profile/provider/capabilities/budget/workspace/network/MCP revisions); historical pre-migration run
+честно хранит snapshot `null`. Точный состав provider input принадлежит ContextPackRecipe каждой ProviderSession.
+Resume после owner gate создаёт следующий ordinal; одновременно активен максимум один.
 _Не означает_: ProviderSession, worker promise или повтор stage.
 
 **ProviderSession**:

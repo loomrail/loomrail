@@ -199,6 +199,82 @@ describe("MCP local state", () => {
       },
     });
     if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Pipeline was not started");
+    const pending = reopened.query({ type: "LIST_PENDING_DISPATCHES" });
+    if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected a pending dispatch");
+    const dispatch = pending.dispatches.find(({ workItemId }) => workItemId === created.workItem.id);
+    if (dispatch === undefined) throw new Error("Expected the MCP test dispatch");
+    const agent = reopened.execute({
+      schemaVersion: 1,
+      commandId: "start-agent-run",
+      correlationId: "correlation-agent-run",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: dispatch.id,
+        provider: "CODEX",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (agent.type !== "AGENT_RUN_STARTED") throw new Error("AgentRun was not started");
+    expect(agent.run.policySnapshot).toMatchObject({
+      effectiveCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "MCP_READ"],
+      mcpProfileRevisionIds: [consented.revision.id],
+    });
+
+    // A grant created after the AgentRun started must not widen its immutable MCP authority.
+    const laterCandidate = {
+      profileId: null,
+      name: "Later local docs",
+      executable: join(directory, "Инструменты", "later docs mcp"),
+      args: ["--read-only"],
+      declaredTools: ["read_later_doc"],
+    };
+    const laterDigest = createHash("sha256").update(canonicalMcpProfileSource(laterCandidate)).digest("hex");
+    const laterConsented = reopened.execute({
+      schemaVersion: 1,
+      commandId: "confirm-later-profile",
+      correlationId: "correlation-confirm-later",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CONFIRM_MCP_PROFILE",
+      payload: {
+        projectId: "project-one",
+        expectedProjectVersion: 3,
+        candidate: laterCandidate,
+        canonicalDigest: laterDigest,
+      },
+    });
+    if (laterConsented.type !== "MCP_PROFILE_CONSENTED") throw new Error("Later profile was not consented");
+    reopened.execute({
+      schemaVersion: 1,
+      commandId: "record-later-capability",
+      correlationId: "correlation-later-capability",
+      actor: { type: "SYSTEM", id: "daemon" },
+      type: "RECORD_MCP_CAPABILITY_SNAPSHOT",
+      payload: {
+        projectId: "project-one",
+        profileRevisionId: laterConsented.revision.id,
+        state: "READY",
+        protocolVersion: "2026-07-28",
+        tools: ["read_later_doc"],
+        resources: [],
+        prompts: [],
+      },
+    });
+    reopened.execute({
+      schemaVersion: 1,
+      commandId: "grant-later-profile",
+      correlationId: "correlation-grant-later",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "SET_MCP_PROFILE_GRANT",
+      payload: {
+        projectId: "project-one",
+        expectedProjectVersion: 4,
+        profileRevisionId: laterConsented.revision.id,
+        expectedGrantVersion: null,
+        tools: ["read_later_doc"],
+        ownerAttestsReadOnly: true,
+      },
+    });
     const session = reopened.execute({
       schemaVersion: 1,
       commandId: "start-provider-session",
@@ -226,6 +302,7 @@ describe("MCP local state", () => {
     expect(session.mcpSnapshots).toHaveLength(1);
     const sessionSnapshot = session.mcpSnapshots[0];
     if (!sessionSnapshot) throw new Error("MCP session snapshot was not created");
+    expect(sessionSnapshot.profileRevisionId).toBe(consented.revision.id);
     expect(session.events[0]).toMatchObject({ data: { mcpSnapshots: [sessionSnapshot] } });
 
     const startedCall = reopened.execute({
@@ -250,14 +327,14 @@ describe("MCP local state", () => {
       type: "REVOKE_MCP_PROFILE_GRANT",
       payload: {
         projectId: "project-one",
-        expectedProjectVersion: 3,
+        expectedProjectVersion: 5,
         profileRevisionId: consented.revision.id,
         expectedGrantVersion: 1,
       },
     });
     expect(revoked).toMatchObject({
       type: "MCP_GRANT_CHANGED",
-      projectVersion: 4,
+      projectVersion: 6,
       grant: { enabled: false, version: 2 },
     });
 
@@ -297,7 +374,14 @@ describe("MCP local state", () => {
             .map(({ type }) => type)
             .filter((type) => type === "PROJECT_REGISTERED" || type.startsWith("MCP_"))
         : [],
-    ).toEqual(["PROJECT_REGISTERED", "MCP_PROFILE_CONSENTED", "MCP_GRANT_CHANGED", "MCP_GRANT_CHANGED"]);
+    ).toEqual([
+      "PROJECT_REGISTERED",
+      "MCP_PROFILE_CONSENTED",
+      "MCP_GRANT_CHANGED",
+      "MCP_PROFILE_CONSENTED",
+      "MCP_GRANT_CHANGED",
+      "MCP_GRANT_CHANGED",
+    ]);
   });
 
   it("rolls back forbidden launch, digest drift and a grant without a successful probe", async () => {

@@ -790,6 +790,41 @@ describe("stage attempt session loop", () => {
     expect(pendingDispatchModes(localState)).toEqual([]);
   });
 
+  it("uses the immutable AgentProfile session cap instead of the global safety backstop", async () => {
+    const localState = await open();
+    const seeded = queuedAttempt(localState);
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-profile-session-cap",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: seeded.dispatch.id,
+        provider: "MOCK",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (started.type !== "AGENT_RUN_STARTED") throw new Error("Expected an AgentRun");
+    expect(started.run.policySnapshot?.budget.maxProviderSessions).toBe(6);
+    const neverFinishing = createMockProvider({
+      contextWindowTokens: 4_000,
+      tokensPerTurn: 3_500,
+      checkpointEvery: 1,
+    });
+    const logger = capturingLogger();
+
+    await runStageAttempt(depsFor(localState, seeded, neverFinishing, { logger }));
+
+    const { sessions } = sessionRows(localState, seeded.stageAttemptId);
+    expect(sessions).toHaveLength(6);
+    expect(sessions.every(({ endReason }) => endReason === "HANDOFF")).toBe(true);
+    expect(logger.warns).toContainEqual([
+      { stageAttemptId: seeded.stageAttemptId, maxSessions: 6 },
+      "The stage attempt reached the session backstop without finishing; the attempt is hard-paused",
+    ]);
+  });
+
   it("survives a daemon restart mid-attempt and resumes from the last checkpoint", async () => {
     // §6.4: a restart and a context handoff are the same case -- the session is gone, the state is
     // still there.

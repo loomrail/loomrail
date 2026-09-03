@@ -153,6 +153,14 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
             "Browser QA requires an active AgentRun and a successful implementation tree",
           );
         }
+        const agentRunResult = deps.state.query({ type: "GET_AGENT_RUN", agentRunId });
+        const policy = agentRunResult.type === "AGENT_RUNS" ? agentRunResult.runs[0]?.policySnapshot : null;
+        if (!policy?.effectiveCapabilities.includes("BROWSER_READ")) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "Browser QA is not permitted by the active AgentRun policy snapshot",
+          );
+        }
         await deps.browserQA.run({ dispatch, agentRunId, testedTree });
         return { dispatchId: dispatch.id, moved: true };
       }

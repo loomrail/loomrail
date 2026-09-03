@@ -119,6 +119,61 @@ export const agentRunClaimLimitsSchema = z
   })
   .strict();
 
+export const agentRunWorkspacePolicySchema = z
+  .object({
+    access: z.enum(["NONE", "READ_ONLY", "READ_WRITE"]),
+    networkAccess: z.boolean(),
+  })
+  .strict();
+
+export const agentRunPolicySnapshotSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    assignment: z.object({ id: opaqueIdSchema, revision: z.number().int().positive() }).strict(),
+    profile: agentProfileRefSchema,
+    provider: providerIdSchema,
+    effectiveCapabilities: z.array(agentCapabilitySchema).max(6),
+    modelTier: modelTierSchema,
+    claimLimits: agentRunClaimLimitsSchema,
+    budget: z
+      .object({
+        pipelinePolicyId: opaqueIdSchema,
+        pipelinePolicyRevision: z.number().int().positive(),
+        maxEstimatedTokens: z.number().int().positive(),
+        maxProviderSessions: z.number().int().positive().max(50),
+      })
+      .strict(),
+    workspace: agentRunWorkspacePolicySchema,
+    mcpProfileRevisionIds: z.array(opaqueIdSchema).max(64),
+  })
+  .strict()
+  .superRefine((snapshot, context) => {
+    const capabilities = new Set(snapshot.effectiveCapabilities);
+    if (capabilities.size !== snapshot.effectiveCapabilities.length) {
+      context.addIssue({ code: "custom", message: "Effective capabilities must be unique" });
+    }
+    if (capabilities.has("REPOSITORY_WRITE") && !capabilities.has("REPOSITORY_READ")) {
+      context.addIssue({ code: "custom", message: "Repository write requires repository read" });
+    }
+    const expectedAccess = capabilities.has("REPOSITORY_WRITE")
+      ? "READ_WRITE"
+      : capabilities.has("REPOSITORY_READ")
+        ? "READ_ONLY"
+        : "NONE";
+    if (snapshot.workspace.access !== expectedAccess) {
+      context.addIssue({ code: "custom", message: "Workspace access must match effective capabilities" });
+    }
+    if (snapshot.workspace.networkAccess !== capabilities.has("NETWORK")) {
+      context.addIssue({ code: "custom", message: "Network access must match effective capabilities" });
+    }
+    if (new Set(snapshot.mcpProfileRevisionIds).size !== snapshot.mcpProfileRevisionIds.length) {
+      context.addIssue({ code: "custom", message: "MCP profile revisions must be unique" });
+    }
+    if (capabilities.has("MCP_READ") !== snapshot.mcpProfileRevisionIds.length > 0) {
+      context.addIssue({ code: "custom", message: "MCP read requires an exact non-empty revision set" });
+    }
+  });
+
 export const agentRunSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -132,16 +187,31 @@ export const agentRunSchema = z
     profile: agentProfileRefSchema,
     provider: providerIdSchema,
     status: agentRunStatusSchema,
+    policySnapshot: agentRunPolicySnapshotSchema.nullable().default(null),
     policySnapshotHash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
     startedAt: utcTimestampSchema,
     finishedAt: utcTimestampSchema.nullable(),
     version: z.number().int().positive(),
   })
   .strict()
-  .refine(
-    (run) => (run.status === "RUNNING") === (run.finishedAt === null),
-    "A running AgentRun must not be finished and every non-running AgentRun must be finished",
-  );
+  .superRefine((run, context) => {
+    if ((run.status === "RUNNING") !== (run.finishedAt === null)) {
+      context.addIssue({
+        code: "custom",
+        message: "A running AgentRun must not be finished and every non-running AgentRun must be finished",
+      });
+    }
+    if (
+      run.policySnapshot !== null &&
+      (run.policySnapshot.assignment.id !== run.squadAssignmentId ||
+        run.policySnapshot.profile.id !== run.profile.id ||
+        run.policySnapshot.profile.revision !== run.profile.revision ||
+        run.policySnapshot.profile.role !== run.profile.role ||
+        run.policySnapshot.provider !== run.provider)
+    ) {
+      context.addIssue({ code: "custom", message: "The policy snapshot must describe this AgentRun" });
+    }
+  });
 
 export const agentFleetWaitReasonSchema = z.enum([
   "NOT_READY",
@@ -211,6 +281,8 @@ export type SquadStageAssignment = z.infer<typeof squadStageAssignmentSchema>;
 export type SquadAssignment = z.infer<typeof squadAssignmentSchema>;
 export type AgentRunStatus = z.infer<typeof agentRunStatusSchema>;
 export type AgentRunClaimLimits = z.infer<typeof agentRunClaimLimitsSchema>;
+export type AgentRunWorkspacePolicy = z.infer<typeof agentRunWorkspacePolicySchema>;
+export type AgentRunPolicySnapshot = z.infer<typeof agentRunPolicySnapshotSchema>;
 export type AgentRun = z.infer<typeof agentRunSchema>;
 export type AgentFleetWaitReason = z.infer<typeof agentFleetWaitReasonSchema>;
 export type AgentFleetEntryStatus = z.infer<typeof agentFleetEntryStatusSchema>;

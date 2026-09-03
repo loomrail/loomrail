@@ -100,6 +100,7 @@ const agentRun: AgentRun = {
   profile: { id: "builtin.browser-qa", revision: 1, role: "BROWSER_QA" },
   provider: "CODEX",
   status: "RUNNING",
+  policySnapshot: null,
   policySnapshotHash: `sha256:${"d".repeat(64)}`,
   startedAt: qaRun.startedAt,
   finishedAt: null,

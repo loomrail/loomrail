@@ -303,12 +303,11 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
                   // threat model's closed list of forbidden `-c` overrides (T16) -- which otherwise
                   // stands, `-c` being an arbitrary config override and `-c
                   // 'sandbox_permissions=["disk-full-read-access"]'` a documented sandbox escape.
-                  // `workspace-write` denies network access by default, and an IMPLEMENT or QA
-                  // session that cannot reach the network cannot install a dependency or run a suite
-                  // that fetches one. The key widens exactly that and nothing else; it is asserted as
-                  // a closed list over the argv array in this package's tests.
-                  "-c",
-                  "sandbox_workspace_write.network_access=true",
+                  // `workspace-write` denies network access by default. The immutable AgentRun
+                  // policy decides whether this session may widen exactly that one dimension; when
+                  // it says no, no `-c` assignment is emitted. Both branches are asserted over the
+                  // argv array in this package's tests.
+                  ...(workspace.networkAccess ? ["-c", "sandbox_workspace_write.network_access=true"] : []),
                   // NOT an approval flag. `codex exec` has no `--ask-for-approval`, and passing one
                   // is a hard argument error that fails the launch outright (spec §2.3) -- the
                   // sandbox mode above is the whole of what this adapter gets to say about what the

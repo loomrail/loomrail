@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { ContextSources } from "@loomrail/context-assembly";
 import {
   acceptancePackageSchema,
+  agentRunPolicySnapshotSchema,
   agentRunSchema,
   agentRunStatusSchema,
   maxAttentionProjectionSources,
@@ -71,6 +72,7 @@ import {
   type Actor,
   type AcceptancePackage,
   type AgentRun,
+  type AgentRunPolicySnapshot,
   type AgentRunStatus,
   type Checkpoint,
   type ConstitutionProposal,
@@ -120,6 +122,7 @@ import {
   type WorkItemWorkspace,
 } from "@loomrail/contracts";
 import {
+  AgentDomainError,
   ConstitutionDomainError,
   buildAttentionInbox,
   canonicalMcpProfileSource,
@@ -153,6 +156,7 @@ import {
   createStandardSquadAssignment,
   finishAgentRun,
   findBuiltinAgentProfile,
+  resolveAgentRunPolicy,
   decideMarkWorkflowDispatchStarted,
   decideMcpCapabilitySnapshot,
   decideMcpProfileConfirmation,
@@ -287,6 +291,7 @@ const agentRunRowSchema = z.object({
   profile_role: z.string(),
   provider: z.string(),
   status: z.string(),
+  policy_snapshot_json: z.string().nullable(),
   policy_snapshot_hash: z.string(),
   started_at: z.string(),
   finished_at: z.string().nullable(),
@@ -1371,6 +1376,19 @@ const squadAssignmentFromRow = (value: unknown): SquadAssignment => {
 
 const agentRunFromRow = (value: unknown): AgentRun => {
   const row = agentRunRowSchema.parse(value);
+  const policySnapshot: AgentRunPolicySnapshot | null =
+    row.policy_snapshot_json === null
+      ? null
+      : agentRunPolicySnapshotSchema.parse(parseJson(row.policy_snapshot_json));
+  if (policySnapshot !== null) {
+    const observedHash = `sha256:${createHash("sha256").update(canonicalJson(policySnapshot)).digest("hex")}`;
+    if (observedHash !== row.policy_snapshot_hash) {
+      throw new StateStoreError(
+        "PERSISTENCE_FAILURE",
+        "The AgentRun policy snapshot does not match its immutable hash",
+      );
+    }
+  }
   return agentRunSchema.parse({
     schemaVersion: row.schema_version,
     id: row.id,
@@ -1387,6 +1405,7 @@ const agentRunFromRow = (value: unknown): AgentRun => {
     },
     provider: row.provider,
     status: row.status,
+    policySnapshot,
     policySnapshotHash: row.policy_snapshot_hash,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
@@ -2681,8 +2700,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       `INSERT INTO agent_runs (
         id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id, ordinal,
         squad_assignment_id, profile_id, profile_revision, profile_role, provider, status,
-        policy_snapshot_hash, started_at, finished_at, version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        policy_snapshot_json, policy_snapshot_hash, started_at, finished_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const updateAgentRunStatus = database.prepare(
       `UPDATE agent_runs SET status = ?, finished_at = ?, version = ?
@@ -6061,34 +6080,44 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             "The assigned AgentProfile revision is unavailable",
           );
         }
-        const existingWorkspace = readWorkItemWorkspaceByWorkItemId(workItem.id);
+        const currentBudget = readCurrentBudgetPolicy(workflowRun.id);
+        if (currentBudget === null) {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The AgentRun has no current BudgetPolicy");
+        }
+        const usedEstimatedTokens = readUsageRecords(workflowRun.id).reduce(
+          (total, record) => total + record.amount,
+          0,
+        );
+        const mcpProfileRevisionIds = selectEnabledLatestMcpGrantsForProject
+          .all(workItem.projectId)
+          .map(mcpGrantFromRow)
+          .map(({ profileRevisionId }) => profileRevisionId);
+        let policySnapshot: AgentRunPolicySnapshot;
+        try {
+          policySnapshot = resolveAgentRunPolicy({
+            assignment,
+            profile,
+            stage: stageAttempt.stage,
+            provider: command.payload.provider,
+            claimLimits: command.payload.limits,
+            pipelineBudget: {
+              id: currentBudget.id,
+              revision: currentBudget.revision,
+              maxEstimatedTokens: currentBudget.maxEstimatedTokens,
+            },
+            usedEstimatedTokens,
+            mcpProfileRevisionIds,
+          });
+        } catch (error: unknown) {
+          if (error instanceof AgentDomainError && error.code === "AGENT_RUN_BUDGET_EXHAUSTED") {
+            throw new StateStoreError("AGENT_RUN_BUDGET_EXHAUSTED", error.message);
+          }
+          throw error;
+        }
         const policySnapshotHash = `sha256:${createHash("sha256")
-          .update(
-            canonicalJson({
-              schemaVersion: 1,
-              assignment: {
-                id: assignment.id,
-                revision: assignment.revision,
-                profile: stageProfile,
-              },
-              provider: command.payload.provider,
-              limits: command.payload.limits,
-              profilePolicy: {
-                allowedCapabilities: profile.allowedCapabilities,
-                defaultModelTier: profile.defaultModelTier,
-                budgetEnvelope: profile.budgetEnvelope,
-              },
-              workspace:
-                existingWorkspace === null
-                  ? null
-                  : {
-                      id: existingWorkspace.id,
-                      baseCommit: existingWorkspace.baseCommit,
-                      snapshotCommit: existingWorkspace.snapshotCommit,
-                    },
-            }),
-          )
+          .update(canonicalJson(policySnapshot))
           .digest("hex")}`;
+        const existingWorkspace = readWorkItemWorkspaceByWorkItemId(workItem.id);
         const agentRun = createAgentRun({
           id: createId("agentRun"),
           projectId: workItem.projectId,
@@ -6099,6 +6128,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           stage: stageAttempt.stage,
           assignment,
           provider: command.payload.provider,
+          policySnapshot,
           policySnapshotHash,
           now: occurredAt,
         });
@@ -6116,6 +6146,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           agentRun.profile.role,
           agentRun.provider,
           agentRun.status,
+          JSON.stringify(agentRun.policySnapshot),
           agentRun.policySnapshotHash,
           agentRun.startedAt,
           agentRun.finishedAt,
@@ -7592,9 +7623,23 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             "The StageAttempt disappeared after its ProviderSession was inserted",
           );
         }
+        if (activeAgentRun !== null && activeAgentRun.policySnapshot === null) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "A running AgentRun has no effective policy snapshot",
+          );
+        }
+        const pinnedMcpRevisions =
+          activeAgentRun === null
+            ? null
+            : new Set(activeAgentRun.policySnapshot?.mcpProfileRevisionIds ?? []);
         const enabledGrants = selectEnabledLatestMcpGrantsForProject
           .all(stageAttempt.projectId)
-          .map(mcpGrantFromRow);
+          .map(mcpGrantFromRow)
+          .filter(
+            ({ profileRevisionId }) =>
+              pinnedMcpRevisions === null || pinnedMcpRevisions.has(profileRevisionId),
+          );
         const revisions = enabledGrants.map((grant) => {
           const revision = readMcpProfileRevision(grant.profileRevisionId);
           if (!revision) {

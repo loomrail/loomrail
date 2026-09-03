@@ -1,5 +1,6 @@
 import {
   agentProfileSchema,
+  agentRunPolicySnapshotSchema,
   agentRunSchema,
   squadAssignmentSchema,
   type AgentCapability,
@@ -7,6 +8,8 @@ import {
   type AgentProfileRef,
   type AgentRole,
   type AgentRun,
+  type AgentRunClaimLimits,
+  type AgentRunPolicySnapshot,
   type AgentRunStatus,
   type ContextPackSpec,
   type ProviderId,
@@ -16,11 +19,14 @@ import {
 } from "@loomrail/contracts";
 import { validateContextPackSpec } from "@loomrail/workflow-engine";
 
+import { stageRunsInWorkspace, stageWritesInWorkspace } from "./workspace.js";
+
 export type AgentDomainErrorCode =
   | "DUPLICATE_PROFILE_FIELD"
   | "PROFILE_NOT_FOUND"
   | "PROFILE_STAGE_MISMATCH"
   | "ASSIGNMENT_SCOPE_MISMATCH"
+  | "AGENT_RUN_BUDGET_EXHAUSTED"
   | "AGENT_RUN_NOT_RUNNING";
 
 export class AgentDomainError extends Error {
@@ -80,7 +86,7 @@ export const builtinAgentProfiles: readonly AgentProfile[] = [
     stages: ["DISCOVERY", "PLAN"],
     expectedInputs: ["Approved work item", "Project Constitution"],
     expectedOutputs: ["DISCOVERY_BRIEF", "TASK_GRAPH"],
-    allowedCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ"],
+    allowedCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "MCP_READ"],
     successRubric: ["Every proposed task is bounded, owned and traceable to an approved outcome."],
     escalationConditions: ["Scope, budget or acceptance authority must change."],
     handoffContract:
@@ -102,7 +108,7 @@ export const builtinAgentProfiles: readonly AgentProfile[] = [
     stages: ["DISCOVERY"],
     expectedInputs: ["Work item brief", "Project Constitution"],
     expectedOutputs: ["DISCOVERY_BRIEF", "OPEN_QUESTION_SET"],
-    allowedCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ"],
+    allowedCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "MCP_READ"],
     successRubric: ["Requirements, non-goals, edge cases and acceptance signals are explicit."],
     escalationConditions: ["Two valid product interpretations change the implementation materially."],
     handoffContract: "Publish findings, unresolved questions and acceptance-criteria implications.",
@@ -123,7 +129,7 @@ export const builtinAgentProfiles: readonly AgentProfile[] = [
     stages: ["PLAN"],
     expectedInputs: ["Discovery brief", "Repository context", "Project Constitution"],
     expectedOutputs: ["ARCHITECTURE_PROPOSAL", "TASK_GRAPH"],
-    allowedCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ"],
+    allowedCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "MCP_READ"],
     successRubric: ["The plan names seams, invariants, risks, verification and rollback boundaries."],
     escalationConditions: ["A hard-to-reverse architecture choice has no approved authority."],
     handoffContract: "Publish the selected design, rejected alternatives, risks and executable task graph.",
@@ -192,7 +198,7 @@ export const builtinAgentProfiles: readonly AgentProfile[] = [
     stages: ["QA"],
     expectedInputs: ["Stable change checkpoint", "Acceptance criteria", "Review findings"],
     expectedOutputs: ["QA_EVIDENCE_BUNDLE", "TEST_REPORT"],
-    allowedCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "NETWORK", "BROWSER_READ"],
+    allowedCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "REPOSITORY_WRITE", "NETWORK", "BROWSER_READ"],
     successRubric: ["Evidence identifies the checkpoint, environment, steps, assertions and outcomes."],
     escalationConditions: ["The environment is unavailable or the checkpoint changes during verification."],
     handoffContract: "Publish evidence, defects, environment and exact reproduction steps.",
@@ -315,6 +321,88 @@ export const effectiveAgentCapabilities = (
   return profile.allowedCapabilities.filter((capability) => permitted.has(capability));
 };
 
+const stageCapabilityCeiling = (stage: WorkflowStage, hasMcpGrant: boolean): AgentCapability[] => {
+  const capabilities: AgentCapability[] = ["ARTIFACT_WRITE"];
+  if (stageRunsInWorkspace(stage)) capabilities.push("REPOSITORY_READ");
+  if (stageWritesInWorkspace(stage)) capabilities.push("REPOSITORY_WRITE", "NETWORK");
+  if (hasMcpGrant) capabilities.push("MCP_READ");
+  if (stage === "QA") capabilities.push("BROWSER_READ");
+  return capabilities;
+};
+
+/**
+ * Resolves every mutable input to one immutable run policy before a provider can start.
+ * Callers persist this value and apply it; they do not repeat its intersection rules.
+ */
+export const resolveAgentRunPolicy = (input: {
+  assignment: SquadAssignment;
+  profile: AgentProfile;
+  stage: WorkflowStage;
+  provider: ProviderId;
+  claimLimits: AgentRunClaimLimits;
+  pipelineBudget: { id: string; revision: number; maxEstimatedTokens: number };
+  usedEstimatedTokens: number;
+  mcpProfileRevisionIds: readonly string[];
+}): AgentRunPolicySnapshot => {
+  const assigned = input.assignment.stages.find(({ stage }) => stage === input.stage)?.profile;
+  if (
+    assigned?.id !== input.profile.id ||
+    assigned.revision !== input.profile.revision ||
+    assigned.role !== input.profile.role
+  ) {
+    throw new AgentDomainError(
+      "PROFILE_STAGE_MISMATCH",
+      "The AgentProfile does not match the exact assigned stage revision",
+      { stage: input.stage },
+    );
+  }
+  if (!Number.isSafeInteger(input.usedEstimatedTokens) || input.usedEstimatedTokens < 0) {
+    throw new AgentDomainError("AGENT_RUN_BUDGET_EXHAUSTED", "Recorded usage is invalid");
+  }
+  const remainingPipelineTokens = input.pipelineBudget.maxEstimatedTokens - input.usedEstimatedTokens;
+  if (remainingPipelineTokens <= 0) {
+    throw new AgentDomainError(
+      "AGENT_RUN_BUDGET_EXHAUSTED",
+      "No estimated-token budget remains for a new AgentRun",
+    );
+  }
+
+  assertUnique(input.mcpProfileRevisionIds, "MCP profile revisions");
+  const mcpProfileRevisionIds = [...input.mcpProfileRevisionIds].sort((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  const effectiveCapabilities = effectiveAgentCapabilities(
+    input.profile,
+    stageCapabilityCeiling(input.stage, mcpProfileRevisionIds.length > 0),
+  );
+  const access = effectiveCapabilities.includes("REPOSITORY_WRITE")
+    ? "READ_WRITE"
+    : effectiveCapabilities.includes("REPOSITORY_READ")
+      ? "READ_ONLY"
+      : "NONE";
+
+  return agentRunPolicySnapshotSchema.parse({
+    schemaVersion: 1,
+    assignment: { id: input.assignment.id, revision: input.assignment.revision },
+    profile: { id: input.profile.id, revision: input.profile.revision, role: input.profile.role },
+    provider: input.provider,
+    effectiveCapabilities,
+    modelTier: input.profile.defaultModelTier,
+    claimLimits: input.claimLimits,
+    budget: {
+      pipelinePolicyId: input.pipelineBudget.id,
+      pipelinePolicyRevision: input.pipelineBudget.revision,
+      maxEstimatedTokens: Math.min(input.profile.budgetEnvelope.maxEstimatedTokens, remainingPipelineTokens),
+      maxProviderSessions: input.profile.budgetEnvelope.maxProviderSessions,
+    },
+    workspace: {
+      access,
+      networkAccess: effectiveCapabilities.includes("NETWORK"),
+    },
+    mcpProfileRevisionIds,
+  });
+};
+
 export const createAgentRun = (input: {
   id: string;
   projectId: string;
@@ -325,6 +413,7 @@ export const createAgentRun = (input: {
   stage: WorkflowStage;
   assignment: SquadAssignment;
   provider: ProviderId;
+  policySnapshot: AgentRunPolicySnapshot;
   policySnapshotHash: string;
   now: string;
 }): AgentRun => {
@@ -357,6 +446,7 @@ export const createAgentRun = (input: {
     profile: stageAssignment.profile,
     provider: input.provider,
     status: "RUNNING",
+    policySnapshot: input.policySnapshot,
     policySnapshotHash: input.policySnapshotHash,
     startedAt: input.now,
     finishedAt: null,

@@ -206,11 +206,16 @@ const workspaceDirectory = (): string => mkdtempSync(join(tmpdir(), "loomrail-co
 // worktree is the thing several tests below are about, and a default would let a test assert
 // "workspace-write" while silently saying nothing about which stages get it -- which is how the
 // reading stages came to run with write access in the first place.
-const fixtureWorkspace = (path: string, access: ProviderWorkspace["access"]): ProviderWorkspace => ({
+const fixtureWorkspace = (
+  path: string,
+  access: ProviderWorkspace["access"],
+  networkAccess = access === "READ_WRITE",
+): ProviderWorkspace => ({
   path,
   branch: "loomrail/work-item-1-payments-retry-policy",
   baseCommit: "b".repeat(40),
   access,
+  networkAccess,
 });
 
 const fixtureInvocation = (
@@ -1127,6 +1132,17 @@ describe("createCodexProvider", () => {
     await startWith(spawned, createFakeCodexProvider(), fixtureWorkspace(workspaceDirectory(), "READ_WRITE"));
     const configValues = spawned.args.filter((arg, index) => spawned.args[index - 1] === "-c");
     expect(configValues).toEqual(["sandbox_workspace_write.network_access=true"]);
+  });
+
+  it("keeps a writable workspace offline when the run policy denies network", async () => {
+    const spawned = recordSpawn();
+    await startWith(
+      spawned,
+      createFakeCodexProvider(),
+      fixtureWorkspace(workspaceDirectory(), "READ_WRITE", false),
+    );
+    expect(spawned.args[spawned.args.indexOf("-s") + 1]).toBe("workspace-write");
+    expect(configAssignments(spawned.args)).toEqual([]);
   });
 
   // And none at all on the read-only path, which has nothing to widen.

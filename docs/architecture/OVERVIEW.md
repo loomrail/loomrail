@@ -177,6 +177,7 @@ D3 and ADR-0002.
 - stage/run states;
 - commands and domain errors;
 - human/budget/acceptance rules;
+- AgentRun effective-policy resolution from exact profile, stage, budget and MCP grant inputs;
 - deterministic, clock/ID injected, infrastructure-free tests.
 
 The deterministic interfaces include `decideWorkItemCommand`, workflow lifecycle decisions,
@@ -201,7 +202,8 @@ release projection, and bounded global Attention classification without knowing 
 
 `openLocalState()` remains the deep persistence module with `execute`, `query` and `close`. Migration checksums,
 online backup, prepared SQL, optimistic concurrency, idempotency receipts, append-only evidence, mutable versioned
-AcceptancePackages, current state and Event append stay behind that interface.
+AcceptancePackages, canonical-hash-verified AgentRun policy snapshots, current state and Event append stay behind
+that interface.
 
 `inspectStateDatabase()` is a separate read-only public contract for CLI diagnostics. It opens no missing database,
 applies no migration and runs no recovery; it returns only closed integrity/migration states after `quick_check` and

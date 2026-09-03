@@ -133,11 +133,15 @@ Required mitigations and verification:
   advisory and never starts a process;
 - `START_AGENT_RUN` repeats global/project/provider, active-attempt and active-WorkItem checks in one SQLite
   transaction, creates the durable AgentRun and captures exact AgentProfile revision/effective provider
-  before spawn. It claims an existing workspace in that transaction. When the first worktree does not exist yet,
+  before spawn. The same transaction resolves the stage/profile capability intersection, current BudgetPolicy
+  revision and remaining envelope, per-profile session cap, workspace/network rule and exact enabled MCP revision
+  set. It claims an existing workspace in that transaction. When the first worktree does not exist yet,
   the exclusive active-WorkItem claim closes the provisioning race; daemon records the new workspace already leased
   before provider spawn. No daemon-memory semaphore may be the only authority;
-- AgentRun records the hash of its immutable policy snapshot; each ProviderSession separately retains the exact
-  ContextPackRecipe content hash, so a handoff cannot make a run-level hash falsely attest to changing provider input;
+- new AgentRuns store both the closed policy snapshot JSON and its canonical hash; every read verifies the two still
+  match, and migration 31 leaves historical runs null rather than inventing an effective policy they never applied.
+  Each ProviderSession separately retains the exact ContextPackRecipe content hash, so a handoff cannot make a
+  run-level hash falsely attest to changing provider input;
 - multiple read-only claims may share a workspace only when they name the same immutable checkpoint. Any writer
   conflicts with every same-workspace claim; the existing E1 storage lease remains a backstop;
 - provider handoff stays inside one AgentRun and one capacity slot. Shutdown aborts every live ProviderSession;
@@ -149,6 +153,10 @@ Required mitigations and verification:
   `WORKFLOW_TEMPLATE` with null profile provenance and restores their append-only guards. Permission composition
   remains a separate effective-policy boundary: a lower layer cannot add a capability denied above it. Browser input
   cannot submit provider argv, workspace paths or slot claims;
+- daemon invocation consumes the stored workspace/network rule, Browser QA requires `BROWSER_READ`, and the handoff
+  loop uses the profile's stored `maxProviderSessions` rather than the global 50-session safety ceiling. New MCP
+  session snapshots are the intersection of current grants and the revisions pinned at AgentRun start, so a later
+  grant cannot widen a running agent while a revoke still fails closed;
 - required gates before enabling the pool: concurrent claim race, 3+1 capacity, per-Project/provider isolation,
   writer/read conflict, same-checkpoint readers, handoff, blocking HumanRequest isolation, shutdown and restart on
   macOS and Windows.

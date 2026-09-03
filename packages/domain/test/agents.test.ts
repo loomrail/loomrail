@@ -10,6 +10,7 @@ import {
   findBuiltinAgentProfile,
   finishAgentRun,
   refineContextPackForRole,
+  resolveAgentRunPolicy,
   validateAgentProfile,
 } from "../src/agents.js";
 
@@ -25,6 +26,21 @@ const assignment = () =>
     revision: 1,
     now,
   });
+
+const implementationPolicy = () => {
+  const profile = builtinAgentProfiles.find(({ role }) => role === "DEVELOPER");
+  if (profile === undefined) throw new Error("Expected the built-in Developer profile");
+  return resolveAgentRunPolicy({
+    assignment: assignment(),
+    profile,
+    stage: "IMPLEMENT",
+    provider: "CODEX",
+    claimLimits: { global: 3, project: 2, provider: 1 },
+    pipelineBudget: { id: "budget-1", revision: 2, maxEstimatedTokens: 200_000 },
+    usedEstimatedTokens: 50_000,
+    mcpProfileRevisionIds: ["mcp-revision-2", "mcp-revision-1"],
+  });
+};
 
 describe("agent team domain", () => {
   it("ships a unique complete roster but assigns only executable non-owner stages", () => {
@@ -106,6 +122,44 @@ describe("agent team domain", () => {
     ]);
   });
 
+  it("resolves a bounded immutable policy from stage, profile, budget and exact MCP grants", () => {
+    expect(implementationPolicy()).toEqual({
+      schemaVersion: 1,
+      assignment: { id: "squad-1", revision: 1 },
+      profile: { id: "builtin.developer", revision: 1, role: "DEVELOPER" },
+      provider: "CODEX",
+      effectiveCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "REPOSITORY_WRITE", "NETWORK", "MCP_READ"],
+      modelTier: "STANDARD",
+      claimLimits: { global: 3, project: 2, provider: 1 },
+      budget: {
+        pipelinePolicyId: "budget-1",
+        pipelinePolicyRevision: 2,
+        maxEstimatedTokens: 150_000,
+        maxProviderSessions: 12,
+      },
+      workspace: { access: "READ_WRITE", networkAccess: true },
+      mcpProfileRevisionIds: ["mcp-revision-1", "mcp-revision-2"],
+    });
+  });
+
+  it("does not grant MCP or browser authority that the stage/profile intersection lacks", () => {
+    const reviewer = builtinAgentProfiles.find(({ role }) => role === "CODE_REVIEWER");
+    if (reviewer === undefined) throw new Error("Expected the built-in reviewer profile");
+    const policy = resolveAgentRunPolicy({
+      assignment: assignment(),
+      profile: reviewer,
+      stage: "REVIEW",
+      provider: "CODEX",
+      claimLimits: { global: 3, project: 3, provider: 3 },
+      pipelineBudget: { id: "budget-1", revision: 1, maxEstimatedTokens: 100_000 },
+      usedEstimatedTokens: 0,
+      mcpProfileRevisionIds: [],
+    });
+    expect(policy.effectiveCapabilities).toEqual(["ARTIFACT_WRITE", "REPOSITORY_READ"]);
+    expect(policy.workspace).toEqual({ access: "READ_ONLY", networkAccess: false });
+    expect(policy.mcpProfileRevisionIds).toEqual([]);
+  });
+
   it("creates one run from the assigned profile revision and only finishes it once", () => {
     const run = createAgentRun({
       id: "agent-run-1",
@@ -117,6 +171,7 @@ describe("agent team domain", () => {
       stage: "IMPLEMENT",
       assignment: assignment(),
       provider: "CODEX",
+      policySnapshot: implementationPolicy(),
       policySnapshotHash: `sha256:${"a".repeat(64)}`,
       now,
     });
@@ -139,6 +194,7 @@ describe("agent team domain", () => {
         stage: "IMPLEMENT",
         assignment: assignment(),
         provider: "CODEX",
+        policySnapshot: implementationPolicy(),
         policySnapshotHash: `sha256:${"a".repeat(64)}`,
         now,
       }),
@@ -155,6 +211,7 @@ describe("agent team domain", () => {
         stage: "ACCEPTANCE",
         assignment: assignment(),
         provider: "CODEX",
+        policySnapshot: implementationPolicy(),
         policySnapshotHash: `sha256:${"a".repeat(64)}`,
         now,
       }),

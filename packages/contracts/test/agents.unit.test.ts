@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentFleetEntrySchema,
   agentProfileSchema,
+  agentRunPolicySnapshotSchema,
   agentRunSchema,
   squadAssignmentSchema,
 } from "../src/index.js";
@@ -63,6 +64,23 @@ describe("agent contracts", () => {
   });
 
   it("requires a terminal AgentRun to carry a finish timestamp", () => {
+    const policySnapshot = agentRunPolicySnapshotSchema.parse({
+      schemaVersion: 1,
+      assignment: { id: "squad-1", revision: 1 },
+      profile: { id: profile.id, revision: profile.revision, role: profile.role },
+      provider: "CODEX",
+      effectiveCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "REPOSITORY_WRITE", "NETWORK"],
+      modelTier: "STANDARD",
+      claimLimits: { global: 3, project: 3, provider: 2 },
+      budget: {
+        pipelinePolicyId: "budget-1",
+        pipelinePolicyRevision: 1,
+        maxEstimatedTokens: 100_000,
+        maxProviderSessions: 10,
+      },
+      workspace: { access: "READ_WRITE", networkAccess: true },
+      mcpProfileRevisionIds: [],
+    });
     const run = {
       schemaVersion: 1,
       id: "agent-run-1",
@@ -75,6 +93,7 @@ describe("agent contracts", () => {
       profile: { id: profile.id, revision: profile.revision, role: profile.role },
       provider: "CODEX",
       status: "RUNNING",
+      policySnapshot,
       policySnapshotHash: `sha256:${"a".repeat(64)}`,
       startedAt: "2026-09-01T10:00:00.000Z",
       finishedAt: null,
@@ -84,6 +103,18 @@ describe("agent contracts", () => {
     expect(agentRunSchema.parse(run)).toEqual(run);
     expect(() => agentRunSchema.parse({ ...run, status: "SUCCEEDED" })).toThrow();
     expect(() => agentRunSchema.parse({ ...run, finishedAt: "2026-09-01T10:01:00.000Z" })).toThrow();
+    expect(() =>
+      agentRunSchema.parse({
+        ...run,
+        policySnapshot: { ...policySnapshot, provider: "CLAUDE_CODE" },
+      }),
+    ).toThrow();
+    expect(() =>
+      agentRunPolicySnapshotSchema.parse({
+        ...policySnapshot,
+        workspace: { access: "READ_ONLY", networkAccess: true },
+      }),
+    ).toThrow();
   });
 
   it("keeps Fleet status, run identity and machine wait reason consistent", () => {

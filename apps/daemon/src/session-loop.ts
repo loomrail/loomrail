@@ -10,6 +10,7 @@ import {
   providerSessionProcessPidSchema,
   providerUsageSchema,
   type AgentProfile,
+  type AgentRunPolicySnapshot,
   type CheckpointDraft,
   type ContextPackSpec,
   type EndProviderSessionCommand,
@@ -197,7 +198,16 @@ const contextPackSpecFor = (template: WorkflowTemplate, stage: StageAttempt["sta
   return declared.contextPack;
 };
 
-const activeAgentProfile = (deps: RunStageAttemptDeps, stageAttemptId: string): AgentProfile | null => {
+type ActiveAgentExecutionPolicy = {
+  agentRunId: string;
+  profile: AgentProfile;
+  snapshot: AgentRunPolicySnapshot;
+};
+
+const activeAgentExecutionPolicy = (
+  deps: RunStageAttemptDeps,
+  stageAttemptId: string,
+): ActiveAgentExecutionPolicy | null => {
   const result = deps.state.query({ type: "LIST_AGENT_RUNS", status: "RUNNING", limit: 200 });
   if (result.type !== "AGENT_RUNS") throw new Error("The active AgentRun could not be read");
   const run = result.runs.find((candidate) => candidate.stageAttemptId === stageAttemptId);
@@ -206,7 +216,10 @@ const activeAgentProfile = (deps: RunStageAttemptDeps, stageAttemptId: string): 
   if (profile === null) {
     throw new StateStoreError("PERSISTENCE_FAILURE", "The active AgentRun profile revision is unavailable");
   }
-  return profile;
+  if (run.policySnapshot === null) {
+    throw new StateStoreError("PERSISTENCE_FAILURE", "The active AgentRun policy snapshot is unavailable");
+  }
+  return { agentRunId: run.id, profile, snapshot: run.policySnapshot };
 };
 
 const readStageAttemptState = (
@@ -248,7 +261,10 @@ const readStageAttemptState = (
  * The attempt's sessions, as one read: the next ordinal and "is one already running" are two
  * questions about the same list, and asking them separately would let the answers disagree.
  */
-const readAttemptSessions = (deps: RunStageAttemptDeps): { nextOrdinal: number; running: boolean } => {
+const readAttemptSessions = (
+  deps: RunStageAttemptDeps,
+  agentRunId: string | null,
+): { nextOrdinal: number; running: boolean; agentRunSessionCount: number } => {
   const sessions = deps.state.query({
     type: "LIST_PROVIDER_SESSIONS",
     stageAttemptId: deps.dispatch.stageAttemptId,
@@ -257,6 +273,7 @@ const readAttemptSessions = (deps: RunStageAttemptDeps): { nextOrdinal: number; 
   return {
     nextOrdinal: sessions.sessions.reduce((highest, { ordinal }) => Math.max(highest, ordinal), 0) + 1,
     running: sessions.sessions.some(({ status }) => status === "RUNNING"),
+    agentRunSessionCount: sessions.sessions.filter((session) => session.agentRunId === agentRunId).length,
   };
 };
 
@@ -843,15 +860,26 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
   const scheduleDeadline = deps.scheduleHandoffDeadline ?? defaultScheduleHandoffDeadline;
   const capabilities = deps.adapter.capabilities();
   const stageAttemptId = deps.dispatch.stageAttemptId;
-  const roleProfile = activeAgentProfile(deps, stageAttemptId);
+  const executionPolicy = activeAgentExecutionPolicy(deps, stageAttemptId);
+  const roleProfile = executionPolicy?.profile ?? null;
+  const maxSessions = executionPolicy?.snapshot.budget.maxProviderSessions ?? MAX_SESSIONS_PER_ATTEMPT;
+  const agentRunId = executionPolicy?.agentRunId ?? null;
   const templateContextSpec = contextPackSpecFor(deps.template, readStageAttemptState(deps).attempt.stage);
   const contextSpec =
     roleProfile === null
       ? templateContextSpec
       : refineContextPackForRole(templateContextSpec, roleProfile.playbook);
-  let lastSessionOrdinal = 0;
+  const initialSessions = readAttemptSessions(deps, agentRunId);
+  if (initialSessions.running) {
+    deps.logger.info(
+      { stageAttemptId },
+      "Another caller is already running a provider session on this stage attempt; the session loop stops",
+    );
+    return;
+  }
+  let lastSessionOrdinal = initialSessions.nextOrdinal - 1;
 
-  for (let session = 0; session < MAX_SESSIONS_PER_ATTEMPT; session += 1) {
+  for (let session = initialSessions.agentRunSessionCount; session < maxSessions; session += 1) {
     const { attempt, humanRequests } = readStageAttemptState(deps);
     if (attempt.status !== "RUNNING") {
       deps.logger.info(
@@ -1026,8 +1054,11 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     // `branch` and `baseCommit` travel with it because they say WHICH work this worktree holds --
     // the base a later step diffs against, and the branch the change lives on -- and a consumer
     // that had to re-derive them would shell out to git against a directory that may have moved on.
+    const policyWorkspace = executionPolicy?.snapshot.workspace;
+    const workspaceAccess =
+      policyWorkspace?.access ?? (stageWritesInWorkspace(attempt.stage) ? "READ_WRITE" : "READ_ONLY");
     const invocationWorkspace: { workspace?: ProviderWorkspace } =
-      lease.workspace === null
+      lease.workspace === null || workspaceAccess === "NONE"
         ? {}
         : {
             workspace: {
@@ -1040,7 +1071,8 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
               // which has no stage to decide from: keying the sandbox mode off the mere presence of
               // a workspace is what put DISCOVERY, PLAN and REVIEW under `-s workspace-write` with
               // the network opened.
-              access: stageWritesInWorkspace(attempt.stage) ? "READ_WRITE" : "READ_ONLY",
+              access: workspaceAccess,
+              networkAccess: policyWorkspace?.networkAccess ?? stageWritesInWorkspace(attempt.stage),
             },
           };
 
@@ -1072,7 +1104,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       return;
     }
 
-    const sessions = readAttemptSessions(deps);
+    const sessions = readAttemptSessions(deps, agentRunId);
     // Nothing serialises the daemon's drain, and the dispatch stays PENDING for the attempt's whole
     // life, so two concurrent callers can reach this point for the same dispatch. A session already
     // running on this attempt means another caller owns it -- which is the same situation as an
@@ -1584,12 +1616,12 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       reason: {
         type: "SESSION_LIMIT_REACHED",
         sessionOrdinal: lastSessionOrdinal,
-        maxSessions: MAX_SESSIONS_PER_ATTEMPT,
+        maxSessions,
       },
     },
   });
   deps.logger.warn(
-    { stageAttemptId, maxSessions: MAX_SESSIONS_PER_ATTEMPT },
+    { stageAttemptId, maxSessions },
     "The stage attempt reached the session backstop without finishing; the attempt is hard-paused",
   );
 };

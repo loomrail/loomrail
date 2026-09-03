@@ -1159,7 +1159,7 @@ describe("SQLite local state", () => {
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-      29, 30,
+      29, 30, 31,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -2790,9 +2790,21 @@ describe("SQLite local state", () => {
           status: "RUNNING",
           provider: "CODEX",
           profile: { role: "PRODUCT_ANALYST" },
+          policySnapshot: {
+            assignment: { revision: 1 },
+            profile: { role: "PRODUCT_ANALYST" },
+            provider: "CODEX",
+            effectiveCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ"],
+            modelTier: "STANDARD",
+            claimLimits: { global: 3, project: 3, provider: 3 },
+            budget: { maxEstimatedTokens: 100, maxProviderSessions: 6 },
+            workspace: { access: "READ_ONLY", networkAccess: false },
+            mcpProfileRevisionIds: [],
+          },
         },
         events: [{ type: "STAGE_ATTEMPT_CHANGED" }, { type: "AGENT_RUN_STARTED" }],
       });
+      expect(started.run.policySnapshotHash).toMatch(/^sha256:[0-9a-f]{64}$/u);
       expect(replayed).toMatchObject({ type: "AGENT_RUN_STARTED", replayed: true });
       expect(localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING", limit: 1 })).toMatchObject({
         type: "AGENT_RUNS",
@@ -2862,6 +2874,33 @@ describe("SQLite local state", () => {
       expect(
         events.type === "EVENTS" ? events.events.filter(({ type }) => type === "AGENT_RUN_FINISHED") : [],
       ).toHaveLength(1);
+    });
+
+    it("rejects a policy snapshot whose stored bytes no longer match its hash", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { dispatch } = startReadyWorkflow(localState, "a3-policy-tamper");
+      const started = localState.execute(startAgentRun("policy-tamper", dispatch.id));
+      if (started.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun start");
+      localState.close();
+      state = undefined;
+
+      const raw = new DatabaseSync(databasePath);
+      raw.exec("DROP TRIGGER agent_runs_immutable_identity");
+      raw
+        .prepare(
+          "UPDATE agent_runs SET policy_snapshot_json = json_set(policy_snapshot_json, '$.modelTier', 'DEEP') WHERE id = ?",
+        )
+        .run(started.run.id);
+      raw.close();
+
+      const reopened = await open();
+      expect(() => reopened.query({ type: "GET_AGENT_RUN", agentRunId: started.run.id })).toThrow(
+        expect.objectContaining({
+          code: "PERSISTENCE_FAILURE",
+          message: "The AgentRun policy snapshot does not match its immutable hash",
+        }),
+      );
     });
 
     it("enforces the default 3+1 boundary from durable active runs", async () => {
@@ -6280,6 +6319,74 @@ describe("SQLite local state", () => {
       after.close();
     });
 
+    it("adds nullable policy snapshots without inventing policy for historical AgentRuns", async () => {
+      const localState = await open();
+      const { workItemId } = startWorkflow(localState, "start-historical-policy", "create-historical-policy");
+      const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected pending dispatches");
+      const dispatch = pending.dispatches.find((candidate) => candidate.workItemId === workItemId);
+      if (dispatch === undefined) throw new Error("Expected the historical policy dispatch");
+      const started = localState.execute({
+        schemaVersion: 1,
+        commandId: "start-historical-policy-agent",
+        correlationId: "correlation-start-historical-policy-agent",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "START_AGENT_RUN",
+        payload: {
+          dispatchId: dispatch.id,
+          provider: "CODEX",
+          limits: { global: 3, project: 3, provider: 3 },
+        },
+      });
+      if (started.type !== "AGENT_RUN_STARTED") throw new Error("Expected the historical AgentRun");
+      localState.close();
+      state = undefined;
+
+      const raw = new DatabaseSync(databasePath);
+      raw.exec(`
+        DROP TRIGGER agent_runs_immutable_identity;
+        ALTER TABLE agent_runs DROP COLUMN policy_snapshot_json;
+        CREATE TRIGGER agent_runs_immutable_identity
+        BEFORE UPDATE ON agent_runs
+        WHEN
+          NEW.id <> OLD.id
+          OR NEW.schema_version <> OLD.schema_version
+          OR NEW.project_id <> OLD.project_id
+          OR NEW.work_item_id <> OLD.work_item_id
+          OR NEW.pipeline_run_id <> OLD.pipeline_run_id
+          OR NEW.stage_attempt_id <> OLD.stage_attempt_id
+          OR NEW.ordinal <> OLD.ordinal
+          OR NEW.squad_assignment_id <> OLD.squad_assignment_id
+          OR NEW.profile_id <> OLD.profile_id
+          OR NEW.profile_revision <> OLD.profile_revision
+          OR NEW.profile_role <> OLD.profile_role
+          OR NEW.provider <> OLD.provider
+          OR NEW.policy_snapshot_hash <> OLD.policy_snapshot_hash
+          OR NEW.started_at <> OLD.started_at
+        BEGIN
+          SELECT RAISE(ABORT, 'agent run identity is immutable');
+        END;
+        DELETE FROM schema_migrations WHERE version = 31;
+      `);
+      raw.close();
+
+      const migrated = await open();
+      expect(migrated.startup.appliedMigrations).toEqual([31]);
+      const historical = migrated.query({ type: "GET_AGENT_RUN", agentRunId: started.run.id });
+      if (historical.type !== "AGENT_RUNS") throw new Error("Expected the historical AgentRun");
+      expect(historical.runs[0]?.policySnapshot).toBeNull();
+      migrated.close();
+      state = undefined;
+
+      const after = new DatabaseSync(databasePath);
+      expect(() =>
+        after
+          .prepare("UPDATE agent_runs SET policy_snapshot_hash = ? WHERE id = ?")
+          .run(`sha256:${"f".repeat(64)}`, started.run.id),
+      ).toThrow(/immutable/u);
+      after.close();
+    });
+
     it("accepts the five new session-handoff event types under the rebuilt Events CHECK", async () => {
       const localState = await open();
       const registered = localState.execute(registerProject());
@@ -6499,14 +6606,14 @@ describe("SQLite local state", () => {
           SELECT RAISE(ABORT, 'events are append-only');
         END;
       `);
-      // 0009, 0010, 0020 and 0030 all add columns or relations to the tables 0006 creates, so a database
-      // that predates 0006 predates them too. All five migrations must be pending for the
+      // 0009, 0010, 0020, 0030 and 0031 all add columns or relations to the tables 0006 creates, so a database
+      // that predates 0006 predates them too. All six migrations must be pending for the
       // reconstruction to be honest.
-      raw.prepare("DELETE FROM schema_migrations WHERE version IN (6, 9, 10, 20, 30)").run();
+      raw.prepare("DELETE FROM schema_migrations WHERE version IN (6, 9, 10, 20, 30, 31)").run();
       raw.close();
 
       const migrated = await open();
-      expect(migrated.startup.appliedMigrations).toEqual([6, 9, 10, 20, 30]);
+      expect(migrated.startup.appliedMigrations).toEqual([6, 9, 10, 20, 30, 31]);
 
       const after = migrated.query({ type: "LIST_EVENTS" });
       if (after.type !== "EVENTS") throw new Error("Expected events");

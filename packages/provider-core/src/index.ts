@@ -186,10 +186,12 @@ export type ProviderWorkspace = {
    * fallback. The caller states it; `stageWritesInWorkspace` (`@loomrail/domain`) is what the
    * daemon reads to answer it, so no adapter carries a list of stages of its own.
    *
-   * An adapter maps this onto whatever its CLI understands. READ_ONLY still means the real
+   * An adapter maps this and `networkAccess` onto whatever its CLI understands. READ_ONLY still means the real
    * worktree at `path`: the session reads the work item's own branch, it just may not write to it.
    */
   access: "READ_ONLY" | "READ_WRITE";
+  /** Whether the immutable AgentRun policy permits provider network access. */
+  networkAccess: boolean;
 };
 
 // Neither method is speculative. Without a stream of window occupancy, Loomrail only learns how
