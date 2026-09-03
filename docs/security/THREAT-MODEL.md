@@ -743,13 +743,22 @@ Mitigation, verified in code:
   `thread_id` UUID from the recording — the closest analogue available to it — in
   `packages/provider-codex/test/adapter.unit.test.ts`.
 
-**Known gap, not yet mitigated.** Reported spend (`ProviderUsage`, `onUsage`) is validated but has nowhere
-durable to go: `usage_records` (`packages/persistence-sqlite/migrations/0003_budget_pause_recovery.sql`) is
-constrained in SQL to a single estimated-tokens kind and one `amount` column, so a live adapter's real,
-per-turn spend is logged (`apps/daemon/src/session-loop.ts`'s `onUsage` listener) rather than accumulated
-against a budget threshold. This is a budget-enforcement gap (BD-001), not a new confidentiality or integrity
-threat — spend already visible to the owner in the CLI's own output is merely not yet durable inside
-Loomrail — and is tracked as follow-up work, not part of A2 (spec §3 D4).
+**Q13 mitigation of the live-spend gap.** `ProviderUsage` remains strict untrusted input, but a valid terminal
+report now enters one transaction through `RECORD_PROVIDER_USAGE`. Migration 0032 stores one immutable,
+digest-verified `provider_usage_reports` row per ProviderSession with exact Project/WorkItem/PipelineRun/
+StageAttempt/AgentRun lineage and links its positive `input + output` total to the existing append-only
+UsageRecord ledger. A duplicate callback cannot charge the session twice: command replay is idempotent and a
+different command meets `UNIQUE(provider_session_id)`. Reaching either the pipeline limit or the immutable
+AgentRun envelope stores usage/events, blocks WorkItem, hard-pauses run/attempt, withdraws dispatch, finishes
+AgentRun and releases its workspace lease atomically; only then does the daemon abort and end the still-live
+ProviderSession. Restart therefore cannot start another session between accounting and pause.
+
+Provider-neutral `inputTokens` includes every input class. Codex already reports cached input as a subdivision
+of total input; Claude reports ordinary input, cache creation and cache read separately, so its adapter sums all
+three into normalized input while retaining cache read only as attribution. Cached/reasoning fields are not
+added again. Task Cockpit renders total/input/output, quality and optional reported cost; raw provider lines,
+transcripts and credentials remain absent. Persistence and daemon tests cover restart read, command replay,
+duplicate/actor refusal, append-only triggers, atomic pause without HumanRequest and live abort.
 
 ### E1 workspace-execution delta (T19, T20, and two registration decisions)
 

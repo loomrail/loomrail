@@ -154,6 +154,11 @@ const migrations: readonly Migration[] = [
     name: "agent_run_policy_snapshots",
     filename: "0031_agent_run_policy_snapshots.sql",
   },
+  {
+    version: 32,
+    name: "provider_usage_reports",
+    filename: "0032_provider_usage_reports.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

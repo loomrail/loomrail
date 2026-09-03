@@ -95,12 +95,10 @@ const BYTES_PER_TOKEN = 4;
  * The bound on how many ProviderSessions one StageAttempt may run.
  *
  * Spec §6.5's guard is the unproductive-session counter, and it only catches a provider that stops
- * making progress. The token budget does not back it up here: usage is recorded only when
- * `decideApplyProviderOutcome` handles a BUDGET_LIMIT_REACHED outcome, so a provider that hands off
- * productively forever never moves the budget and never trips a threshold. That makes this the only
- * thing standing between such a provider and an unbounded loop -- which is why reaching it is a
- * terminal outcome (hard pause, dispatch withdrawn, question to the owner) and not a log line: a
- * loop that merely returned would leave the dispatch PENDING for the drain to hand straight back.
+ * making progress. Live usage now backs it up when the adapter can report spend, but the capability
+ * is optional and a sequence of zero-cost/provider-unmeasured handoffs still needs a deterministic
+ * bound. Reaching it is therefore terminal (hard pause, dispatch withdrawn, question to the owner),
+ * not a log line that leaves the dispatch PENDING for the drain to hand straight back.
  */
 const MAX_SESSIONS_PER_ATTEMPT = 50;
 
@@ -1208,6 +1206,9 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       closed: false,
       handoffRequested: false,
       checkpointWriteFailed: false,
+      usageReported: false,
+      budgetPaused: false,
+      budgetAbort: null as Promise<void> | null,
       // Every integer percent already reported to state for this session. At most 101 entries.
       // See the comment on `reportedPercent` in `onContextWindow`.
       reportedPercents: new Set<number>(),
@@ -1332,23 +1333,11 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         }
         publishCheckpoint(validated.data);
       },
-      // Spend, not occupancy (see the comment on `ProviderSessionListener.onUsage` in
-      // provider-core): a separate channel from `onContextWindow` because window occupancy drives
-      // handoff while this drives budget thresholds and the HARD pause (BD-001).
-      //
-      // Provider output is untrusted input, exactly like the two listeners above: a report that
-      // does not satisfy the contract is logged and dropped rather than acted on.
-      //
-      // There is nowhere durable to put a valid report yet. `usage_records` and the budget
-      // machinery that reads it (`decideApplyProviderOutcome`'s BUDGET_LIMIT_REACHED branch) are
-      // built around one lump-sum outcome at the end of a bounded mock stage, tied to a
-      // BudgetPolicy and to the IMPLEMENT stage -- not a per-turn stream of real spend from a live
-      // adapter. Recording a report through that path would mean deciding, inside this task, how a
-      // ProviderUsage maps onto that shape; that design belongs to whichever task wires real
-      // budget enforcement to live adapters, not to opening this channel. Until it lands, a valid
-      // report is written to the structured logger so it is visible rather than silently dropped.
+      // Spend, not occupancy (BD-001). Supported adapters emit one terminal cumulative report per
+      // session. Its deterministic command id and the report table's UNIQUE(session) invariant are
+      // independent backstops against callback retries charging the budget twice.
       onUsage: (reported) => {
-        if (live.closed) return;
+        if (live.closed || live.usageReported) return;
         const usage = providerUsageSchema.safeParse(reported);
         if (!usage.success) {
           deps.logger.warn(
@@ -1357,6 +1346,19 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           );
           return;
         }
+        const recorded = deps.state.execute({
+          schemaVersion: 1,
+          commandId: `provider-usage-${providerSession.id}`,
+          correlationId: deps.correlationId,
+          actor,
+          type: "RECORD_PROVIDER_USAGE",
+          payload: { providerSessionId: providerSession.id, usage: usage.data },
+        });
+        if (recorded.type !== "PROVIDER_USAGE_RECORDED") {
+          throw new Error("The ProviderUsage report was not recorded");
+        }
+        live.usageReported = true;
+        live.budgetPaused = recorded.hardPaused;
         deps.logger.info(
           {
             providerSessionId: providerSession.id,
@@ -1364,8 +1366,18 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             outputTokens: usage.data.outputTokens,
             quality: usage.data.quality,
           },
-          "The provider reported usage",
+          recorded.hardPaused
+            ? "The provider reported usage and exhausted the active budget"
+            : "The provider usage was recorded",
         );
+        if (recorded.hardPaused) {
+          live.budgetAbort = deps.adapter.abortSession(providerSession.id).catch((error: unknown) => {
+            deps.logger.warn(
+              { providerSessionId: providerSession.id, error: errorName(error) },
+              "The budget-paused provider session could not be aborted; it may still be running",
+            );
+          });
+        }
       },
       // Spec §8 follow-up: the durable half of `ProviderSessionListener.onProcessStarted`
       // (@loomrail/provider-core) -- a live adapter calls this at most once, right after its
@@ -1460,6 +1472,16 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     live.closed = true;
     deps.onSessionLive?.(null);
     deadline?.cancel();
+
+    if (live.budgetPaused) {
+      if (live.budgetAbort !== null) await live.budgetAbort;
+      deps.state.execute(endSessionCommand(deps, providerSession.id, "INTERRUPTED"));
+      deps.logger.warn(
+        { providerSessionId: providerSession.id, stageAttemptId },
+        "The active provider token budget was exhausted; the workflow is hard-paused",
+      );
+      return;
+    }
 
     if (result.type === "FAILED") {
       // `providerStarted: false`: the adapter refused the invocation, so this session never had a

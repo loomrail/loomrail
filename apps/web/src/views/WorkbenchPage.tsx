@@ -2120,6 +2120,7 @@ const AttemptSessionsPanel = ({ attempt }: { attempt: StageAttempt }): React.JSX
   const capabilitiesQuery = useProviderCapabilities();
   const sessions = sessionsQuery.data?.sessions ?? [];
   const checkpoints = sessionsQuery.data?.checkpoints ?? [];
+  const usageReports = sessionsQuery.data?.usageReports ?? [];
   const peakContextWindowUsage = sessionsQuery.data?.peakContextWindowUsage ?? {};
 
   if (sessions.length === 0) return null;
@@ -2140,6 +2141,7 @@ const AttemptSessionsPanel = ({ attempt }: { attempt: StageAttempt }): React.JSX
     .map((session) => {
       const presentation = sessionStatusPresentation(session, t);
       const usage = peakContextWindowUsage[session.id];
+      const spend = usageReports.find((report) => report.providerSessionId === session.id);
       const occupancyPercent = usage ? Math.round((usage.usedTokens / usage.windowTokens) * 100) : undefined;
       const sessionCheckpoints: CheckpointViewModel[] = checkpoints
         .filter((checkpoint) => checkpoint.providerSessionId === session.id)
@@ -2184,6 +2186,27 @@ const AttemptSessionsPanel = ({ attempt }: { attempt: StageAttempt }): React.JSX
                 { percent: occupancyPercent },
               ),
               occupancyQualityLabel: t(usageQualityLabelKeys[usage.quality]),
+            }),
+        ...(spend === undefined
+          ? {}
+          : {
+              usageLabel: t("workflow.sessions.tokenUsage", {
+                total: spend.totalTokens.toLocaleString(locale),
+                input: spend.inputTokens.toLocaleString(locale),
+                output: spend.outputTokens.toLocaleString(locale),
+              }),
+              usageQualityLabel: t(usageQualityLabelKeys[spend.quality]),
+              ...(spend.costUsd === null
+                ? {}
+                : {
+                    usageCostLabel: t("workflow.sessions.tokenCost", {
+                      cost: spend.costUsd.toLocaleString(locale, {
+                        style: "currency",
+                        currency: "USD",
+                        maximumFractionDigits: 4,
+                      }),
+                    }),
+                  }),
             }),
         ...(sessionCheckpoints.length === 0
           ? { emptyCheckpointsLabel: t("workflow.checkpoints.empty") }

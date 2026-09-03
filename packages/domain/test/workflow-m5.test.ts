@@ -1,7 +1,9 @@
 import type {
   ApplyProviderOutcomeCommand,
+  AgentRun,
   BudgetPolicy,
   PipelineRun,
+  ProviderSession,
   StageAttempt,
   WorkItem,
   WorkflowDispatch,
@@ -12,6 +14,7 @@ import {
   decideApplyProviderOutcome,
   decideApproveBudgetOverride,
   decidePausePipeline,
+  decideRecordProviderUsage,
   decideRecoverInterruptedWorkflow,
   decideResumePipeline,
 } from "../src/index.js";
@@ -105,8 +108,143 @@ const budgetPolicy: BudgetPolicy = {
   createdBy: { type: "HUMAN", id: "local-owner" },
   createdAt: now,
 };
+const agentRun: AgentRun = {
+  schemaVersion: 1,
+  id: "agent-run-1",
+  projectId: workItem.projectId,
+  workItemId: workItem.id,
+  pipelineRunId: run.id,
+  stageAttemptId: stageAttempt.id,
+  ordinal: 1,
+  squadAssignmentId: "squad-1",
+  profile: { id: "builtin.developer", revision: 1, role: "DEVELOPER" },
+  provider: "CODEX",
+  status: "RUNNING",
+  policySnapshot: {
+    schemaVersion: 1,
+    assignment: { id: "squad-1", revision: 1 },
+    profile: { id: "builtin.developer", revision: 1, role: "DEVELOPER" },
+    provider: "CODEX",
+    effectiveCapabilities: ["REPOSITORY_READ", "REPOSITORY_WRITE"],
+    modelTier: "STANDARD",
+    claimLimits: { global: 3, project: 3, provider: 3 },
+    budget: {
+      pipelinePolicyId: budgetPolicy.id,
+      pipelinePolicyRevision: budgetPolicy.revision,
+      maxEstimatedTokens: 70,
+      maxProviderSessions: 12,
+    },
+    workspace: { access: "READ_WRITE", networkAccess: false },
+    mcpProfileRevisionIds: [],
+  },
+  policySnapshotHash: `sha256:${"a".repeat(64)}`,
+  startedAt: now,
+  finishedAt: null,
+  version: 1,
+};
+const providerSession: ProviderSession = {
+  schemaVersion: 1,
+  id: "provider-session-1",
+  agentRunId: agentRun.id,
+  stageAttemptId: stageAttempt.id,
+  ordinal: 1,
+  status: "RUNNING",
+  endReason: null,
+  handoffRequestedAt: null,
+  startedAt: now,
+  endedAt: null,
+  version: 1,
+  pid: null,
+};
 
 describe("M5 workflow decisions", () => {
+  it("records final provider usage and crosses each pipeline threshold once", () => {
+    const decision = decideRecordProviderUsage({
+      now,
+      workItem,
+      run,
+      stageAttempt,
+      dispatch,
+      providerSession,
+      agentRun,
+      budgetPolicy,
+      existingUsageRecords: [],
+      existingAgentUsageTotal: 0,
+      usage: {
+        inputTokens: 40,
+        outputTokens: 20,
+        cachedInputTokens: 10,
+        reasoningOutputTokens: 5,
+        quality: "ACTUAL",
+      },
+      reportId: "provider-usage-1",
+      usageRecordId: "usage-live-1",
+      usageDigest: `sha256:${"b".repeat(64)}`,
+    });
+
+    expect(decision).toMatchObject({
+      cumulativeAmount: 60,
+      hardPaused: false,
+      report: { totalTokens: 60, cachedInputTokens: 10, reasoningOutputTokens: 5 },
+      usageRecord: { amount: 60 },
+      stageAttempt: { status: "RUNNING" },
+    });
+    expect(
+      decision.events
+        .filter(({ type }) => type === "BUDGET_THRESHOLD_REACHED")
+        .map((event) => (event.type === "BUDGET_THRESHOLD_REACHED" ? event.data.threshold : null)),
+    ).toEqual([0.5]);
+  });
+
+  it("hard-pauses before another session when the immutable AgentRun cap is reached", () => {
+    const decision = decideRecordProviderUsage({
+      now,
+      workItem,
+      run,
+      stageAttempt,
+      dispatch,
+      providerSession,
+      agentRun,
+      budgetPolicy,
+      existingUsageRecords: [],
+      existingAgentUsageTotal: 20,
+      usage: { inputTokens: 40, outputTokens: 10, quality: "PROVIDER_ESTIMATE" },
+      reportId: "provider-usage-2",
+      usageRecordId: "usage-live-2",
+      usageDigest: `sha256:${"c".repeat(64)}`,
+    });
+
+    expect(decision).toMatchObject({
+      hardPaused: true,
+      workItem: { state: "BLOCKED" },
+      run: { status: "HARD_PAUSED" },
+      stageAttempt: { status: "HARD_PAUSED", failureCode: null },
+      dispatch: { status: "COMPLETED" },
+    });
+    expect(decision.events.map(({ type }) => type)).toContain("PIPELINE_PAUSED");
+  });
+
+  it("refuses usage whose session is not owned by the active AgentRun", () => {
+    expect(() =>
+      decideRecordProviderUsage({
+        now,
+        workItem,
+        run,
+        stageAttempt,
+        dispatch,
+        providerSession: { ...providerSession, agentRunId: "agent-run-other" },
+        agentRun,
+        budgetPolicy,
+        existingUsageRecords: [],
+        existingAgentUsageTotal: 0,
+        usage: { inputTokens: 1, outputTokens: 1, quality: "ACTUAL" },
+        reportId: "provider-usage-mismatch",
+        usageRecordId: "usage-live-mismatch",
+        usageDigest: `sha256:${"d".repeat(64)}`,
+      }),
+    ).toThrow(expect.objectContaining({ code: "PROVIDER_SESSION_MISMATCH" }));
+  });
+
   it("records deterministic usage thresholds once and enters a hard pause", () => {
     const command: ApplyProviderOutcomeCommand = {
       schemaVersion: 1,

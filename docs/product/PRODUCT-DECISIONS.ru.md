@@ -265,6 +265,11 @@ browser/runtime minutes. Alerts: 50%, 80%, 95%; при 100% stage hard-paused д
 Actual provider usage, provider estimate и Loomrail estimate визуально различаются. Если CLI не сообщает точную
 стоимость, UI не выдаёт оценку за факт.
 
+Один ProviderSession сохраняет один финальный cumulative usage report. Provider adapter нормализует `inputTokens`
+как весь input провайдера; cached/reasoning breakdown остаётся attribution и не суммируется повторно. Положительный
+`input + output` атомарно попадает в единый UsageRecord ledger. Исчерпание pipeline либо immutable AgentRun envelope
+блокирует текущий workflow до versioned owner Budget Override прежде, чем начнётся следующая сессия.
+
 ### BD-003 — Loop guard
 
 Повторяющиеся tool calls, одинаковые failures, исчерпание fix/review rounds и отсутствие прогресса переводят run в

@@ -1904,6 +1904,19 @@
   font-size: var(--lr-font-xs);
 }
 
+.lr-session-timeline__usage {
+  color: var(--lr-text-faint);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--lr-font-xs);
+  gap: var(--lr-space-1);
+  margin: 0;
+}
+
+.lr-session-timeline__usage .lr-session-timeline__usage-quality {
+  color: var(--lr-text-muted);
+}
+
 .lr-session-timeline__checkpoints {
   display: grid;
   gap: var(--lr-space-2);

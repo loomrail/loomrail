@@ -40,6 +40,9 @@ workflow state и не позволяя двум писателям пересе
 - завершение budget hierarchy: A3 соблюдает доступные limits, но не выдаёт отсутствующий live-usage accounting за
   реализованный hard cost governor.
 
+Q13 follow-up закрывает именно этот унаследованный разрыв через immutable AgentRun envelope и durable live usage;
+это не меняет историческую границу исходного A3 scope.
+
 ## 3. Принятые решения
 
 ### D1 — AgentRun является единицей concurrency

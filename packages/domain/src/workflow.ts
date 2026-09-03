@@ -24,6 +24,9 @@ import type {
   PipelinePausedEvent,
   PipelineResumedEvent,
   PipelineRun,
+  ProviderSession,
+  ProviderUsage,
+  ProviderUsageReport,
   QACorrectionRun,
   QADefect,
   QAEvidenceBundle,
@@ -145,6 +148,23 @@ export type ApplyProviderOutcomeDecision = {
     | EventIntent<ReviewLoopExhaustedEvent>
     | EventIntent<AcceptanceRequestedEvent>
     | EventIntent<PipelineCompletedEvent>
+  )[];
+};
+
+export type RecordProviderUsageDecision = {
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  dispatch: WorkflowDispatch;
+  report: ProviderUsageReport;
+  usageRecord: UsageRecord | null;
+  cumulativeAmount: number;
+  hardPaused: boolean;
+  events: (
+    | EventIntent<UsageRecordedEvent>
+    | EventIntent<BudgetThresholdReachedEvent>
+    | EventIntent<StageAttemptChangedEvent>
+    | EventIntent<PipelinePausedEvent>
   )[];
 };
 
@@ -687,6 +707,208 @@ const budgetOutcome = (
     usageRecords,
     artifacts: [],
     acceptancePackage: null,
+    events,
+  };
+};
+
+/**
+ * Applies one adapter's final cumulative usage report to the deterministic workflow budget.
+ *
+ * The caller owns IDs and the digest, while this module owns every association and transition:
+ * the report can only belong to the running ProviderSession/AgentRun/current StageAttempt tuple,
+ * and reaching either the pipeline cap or the AgentRun's immutable effective cap hard-pauses the
+ * workflow before another session can start. A zero-token report is still durable provenance but
+ * deliberately creates no UsageRecord because that append-only ledger only accepts positive
+ * amounts.
+ */
+export const decideRecordProviderUsage = (context: {
+  now: string;
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  dispatch: WorkflowDispatch;
+  providerSession: ProviderSession;
+  agentRun: AgentRun;
+  budgetPolicy: BudgetPolicy | null;
+  existingUsageRecords: readonly UsageRecord[];
+  existingAgentUsageTotal: number;
+  usage: ProviderUsage;
+  reportId: string;
+  usageRecordId: string | null;
+  usageDigest: string;
+}): RecordProviderUsageDecision => {
+  const { workItem, run, stageAttempt, dispatch, providerSession, agentRun, budgetPolicy, usage } = context;
+  requireCurrentStage(run, stageAttempt);
+  if (
+    workItem.id !== stageAttempt.workItemId ||
+    run.workItemId !== workItem.id ||
+    dispatch.pipelineRunId !== run.id ||
+    dispatch.stageAttemptId !== stageAttempt.id ||
+    providerSession.stageAttemptId !== stageAttempt.id ||
+    providerSession.agentRunId !== agentRun.id ||
+    agentRun.stageAttemptId !== stageAttempt.id ||
+    agentRun.pipelineRunId !== run.id
+  ) {
+    throw new WorkflowDomainError(
+      "PROVIDER_SESSION_MISMATCH",
+      "The provider usage report does not match the active workflow execution",
+    );
+  }
+  if (
+    stageAttempt.status !== "RUNNING" ||
+    run.status !== "RUNNING" ||
+    dispatch.status !== "PENDING" ||
+    providerSession.status !== "RUNNING" ||
+    agentRun.status !== "RUNNING"
+  ) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "Provider usage can only be recorded for the active running execution",
+    );
+  }
+  if (agentRun.policySnapshot === null) {
+    throw new WorkflowDomainError(
+      "PROVIDER_SESSION_MISMATCH",
+      "The active AgentRun has no immutable policy snapshot",
+    );
+  }
+  if (!budgetPolicy) {
+    throw new WorkflowDomainError("BUDGET_POLICY_NOT_FOUND", "The active BudgetPolicy does not exist");
+  }
+  if (
+    budgetPolicy.id !== agentRun.policySnapshot.budget.pipelinePolicyId ||
+    budgetPolicy.revision !== agentRun.policySnapshot.budget.pipelinePolicyRevision
+  ) {
+    throw new WorkflowDomainError(
+      "PROVIDER_SESSION_MISMATCH",
+      "The active BudgetPolicy does not match the AgentRun policy snapshot",
+    );
+  }
+
+  const totalTokens = usage.inputTokens + usage.outputTokens;
+  if ((totalTokens === 0) !== (context.usageRecordId === null)) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_NOT_FOUND",
+      "A positive provider usage report requires one durable UsageRecord ID",
+    );
+  }
+  const report: ProviderUsageReport = {
+    schemaVersion: 1,
+    id: context.reportId,
+    projectId: workItem.projectId,
+    workItemId: workItem.id,
+    pipelineRunId: run.id,
+    stageAttemptId: stageAttempt.id,
+    agentRunId: agentRun.id,
+    providerSessionId: providerSession.id,
+    usageRecordId: context.usageRecordId,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cachedInputTokens: usage.cachedInputTokens ?? null,
+    reasoningOutputTokens: usage.reasoningOutputTokens ?? null,
+    totalTokens,
+    costUsd: usage.costUsd ?? null,
+    quality: usage.quality,
+    usageDigest: context.usageDigest,
+    recordedAt: context.now,
+  };
+
+  const previousAmount = context.existingUsageRecords.reduce((total, record) => total + record.amount, 0);
+  const cumulativeAmount = previousAmount + totalTokens;
+  const usageRecord: UsageRecord | null =
+    totalTokens === 0 || context.usageRecordId === null
+      ? null
+      : {
+          schemaVersion: 1,
+          id: context.usageRecordId,
+          projectId: workItem.projectId,
+          workItemId: workItem.id,
+          pipelineRunId: run.id,
+          stageAttemptId: stageAttempt.id,
+          budgetPolicyId: budgetPolicy.id,
+          kind: "ESTIMATED_TOKENS",
+          amount: totalTokens,
+          quality: usage.quality,
+          recordedAt: context.now,
+        };
+  const events: RecordProviderUsageDecision["events"] = [];
+  if (usageRecord !== null) {
+    events.push({ type: "USAGE_RECORDED", data: { usageRecord, cumulativeAmount } });
+    const thresholds = [...new Set([...budgetPolicy.warningThresholds, 1])].sort(
+      (left, right) => left - right,
+    );
+    for (const threshold of thresholds) {
+      const thresholdAmount = budgetPolicy.maxEstimatedTokens * threshold;
+      if (previousAmount < thresholdAmount && cumulativeAmount >= thresholdAmount) {
+        events.push({
+          type: "BUDGET_THRESHOLD_REACHED",
+          data: { budgetPolicy, threshold, cumulativeAmount },
+        });
+      }
+    }
+  }
+
+  const agentCumulativeAmount = context.existingAgentUsageTotal + totalTokens;
+  const hardPaused =
+    cumulativeAmount >= budgetPolicy.maxEstimatedTokens ||
+    agentCumulativeAmount >= agentRun.policySnapshot.budget.maxEstimatedTokens;
+  if (!hardPaused) {
+    return {
+      workItem,
+      run,
+      stageAttempt,
+      dispatch,
+      report,
+      usageRecord,
+      cumulativeAmount,
+      hardPaused,
+      events,
+    };
+  }
+
+  const pausedAttempt: StageAttempt = {
+    ...stageAttempt,
+    status: "HARD_PAUSED",
+    failureCode: null,
+    version: stageAttempt.version + 1,
+  };
+  const pausedRun: PipelineRun = {
+    ...run,
+    status: "HARD_PAUSED",
+    version: run.version + 1,
+    updatedAt: context.now,
+  };
+  const blockedWorkItem: WorkItem = {
+    ...workItem,
+    state: "BLOCKED",
+    currentStage: pausedAttempt.stage,
+    version: workItem.version + 1,
+    updatedAt: context.now,
+  };
+  events.push(
+    {
+      type: "STAGE_ATTEMPT_CHANGED",
+      data: { run: pausedRun, stageAttempt: pausedAttempt, previousStatus: stageAttempt.status },
+    },
+    {
+      type: "PIPELINE_PAUSED",
+      data: {
+        run: pausedRun,
+        stageAttempt: pausedAttempt,
+        kind: "HARD",
+        reason: "The active provider token budget was exhausted.",
+      },
+    },
+  );
+  return {
+    workItem: blockedWorkItem,
+    run: pausedRun,
+    stageAttempt: pausedAttempt,
+    dispatch: completeDispatch(dispatch, context.now),
+    report,
+    usageRecord,
+    cumulativeAmount,
+    hardPaused,
     events,
   };
 };

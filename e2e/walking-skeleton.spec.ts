@@ -159,6 +159,7 @@ const seededRecipe = (workItemId: string) => ({
   templateId: mockDeliveryTemplate.id,
   templateVersion: mockDeliveryTemplate.version,
   specSource: "WORKFLOW_TEMPLATE" as const,
+  roleProfile: null,
   sections: [
     {
       id: "WORK_ITEM_BRIEF" as const,

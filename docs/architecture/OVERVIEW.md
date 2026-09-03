@@ -205,6 +205,12 @@ online backup, prepared SQL, optimistic concurrency, idempotency receipts, appen
 AcceptancePackages, canonical-hash-verified AgentRun policy snapshots, current state and Event append stay behind
 that interface.
 
+Live provider spend crosses the same interface once per ProviderSession. A detailed immutable
+`ProviderUsageReport` preserves input/output/cache/reasoning/cost/quality and execution lineage, while its positive
+normalized token total projects into the existing UsageRecord ledger. The domain decides threshold crossings and
+the effective pipeline/AgentRun hard pause; persistence commits report, ledger, state, dispatch, audit and AgentRun
+finish together before the daemon aborts the provider process.
+
 `inspectStateDatabase()` is a separate read-only public contract for CLI diagnostics. It opens no missing database,
 applies no migration and runs no recovery; it returns only closed integrity/migration states after `quick_check` and
 comparison with the same immutable migration sources used by `openLocalState()`.
@@ -244,7 +250,7 @@ transcripts are not sources for a new review round.
 ### `packages/provider-core` and `provider-mock`
 
 - normalized capabilities/lifecycle contract;
-- deterministic fixture sessions/events/usage;
+- deterministic fixture sessions/events/usage and one final cumulative usage callback per session;
 - no provider JSON in domain/UI.
 
 ### `packages/ui`

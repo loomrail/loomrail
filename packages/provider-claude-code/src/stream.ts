@@ -15,15 +15,18 @@ export type ClaudeEvent = {
   ok: boolean;
   text: string;
   costUsd: number;
+  // Normalized total input: ordinary + cache creation + cache read. Claude's wire splits these
+  // while Codex reports total input with cached input as a subdivision; normalizing here keeps the
+  // provider-neutral ProviderUsage budget quantity comparable and prevents cache-heavy sessions
+  // from being charged as though only their tiny uncached tail ran.
   inputTokens: number;
   outputTokens: number;
   // Only `cache_read_input_tokens` (the wire's own name for tokens served from a previous cache
   // entry) maps to this -- it is what "cached input tokens" means in the everyday sense: input
   // the CLI did not have to reprocess. `cache_creation_input_tokens` (tokens spent *writing* a new
   // cache entry) is a distinct, separately-billed quantity that is not "cached input" in that
-  // sense; there is no field in the contract it maps to cleanly, so it is read out of `usage`
-  // nowhere in this module rather than folded into either `inputTokens` or `cachedInputTokens` and
-  // invented into a figure the wire event never reported on its own.
+  // sense. Both are included in normalized `inputTokens`; this field remains the cache-read
+  // subdivision the wire reports, not another quantity the budget sums.
   cachedInputTokens: number;
 };
 
@@ -42,14 +45,14 @@ const rawResultEventSchema = z.object({
   is_error: z.boolean(),
   result: z.string(),
   total_cost_usd: z.number(),
-  // Not `.strict()`: the real `usage` object also carries `cache_creation_input_tokens`,
-  // `server_tool_use`, `service_tier`, and more that this adapter has no use for -- see the
-  // `cachedInputTokens` doc comment on `ClaudeEvent` above for why `cache_creation_input_tokens`
-  // specifically is left unread rather than picked up here and dropped later.
+  // Not `.strict()`: the real `usage` object also carries `server_tool_use`, `service_tier`, and
+  // more. Cache creation is read because it is a separately-billed input class and therefore part
+  // of the provider-neutral normalized input total.
   usage: z.object({
     input_tokens: z.number(),
     output_tokens: z.number(),
     cache_read_input_tokens: z.number(),
+    cache_creation_input_tokens: z.number().default(0),
   }),
 });
 
@@ -94,7 +97,8 @@ export const parseClaudeEvent = (line: string): ClaudeEvent | null => {
         ok: !raw.is_error,
         text: raw.result,
         costUsd: raw.total_cost_usd,
-        inputTokens: raw.usage.input_tokens,
+        inputTokens:
+          raw.usage.input_tokens + raw.usage.cache_creation_input_tokens + raw.usage.cache_read_input_tokens,
         outputTokens: raw.usage.output_tokens,
         cachedInputTokens: raw.usage.cache_read_input_tokens,
       };

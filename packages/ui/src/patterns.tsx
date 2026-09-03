@@ -171,6 +171,9 @@ export type ProviderSessionViewModel = {
   // a session was cut too early. Optional for the same reason `occupancyLabel` is -- a session that
   // never crossed the handoff threshold has no occupancy to qualify.
   occupancyQualityLabel?: string;
+  usageCostLabel?: string;
+  usageLabel?: string;
+  usageQualityLabel?: string;
   ordinal: number;
   statusLabel: string;
   tone: StatusTone;
@@ -246,6 +249,15 @@ export const ProviderSessionTimeline = ({
                 </p>
               </div>
             ) : null}
+            {session.usageLabel === undefined ? null : (
+              <p className="lr-session-timeline__usage">
+                <span>{session.usageLabel}</span>
+                {session.usageCostLabel === undefined ? null : <span>{session.usageCostLabel}</span>}
+                {session.usageQualityLabel === undefined ? null : (
+                  <span className="lr-session-timeline__usage-quality">{session.usageQualityLabel}</span>
+                )}
+              </p>
+            )}
             {session.checkpoints.length > 0 ? (
               <ul className="lr-session-timeline__checkpoints">
                 {session.checkpoints.map((checkpoint) => (

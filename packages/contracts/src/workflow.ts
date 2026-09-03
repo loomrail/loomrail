@@ -309,7 +309,9 @@ export const contextWindowUsageSchema = z
 // session handoff; spend drives budget thresholds and the HARD pause. They are different
 // quantities with different consumers, and folding one into the other would oblige the consumer
 // of one to parse the other. `costUsd` is optional because not every provider prices its own
-// usage; the token fields are the figures every provider can report. `.strict()` matters here more
+// usage; the token fields are the figures every provider can report. `inputTokens` is normalized by
+// each adapter to include every provider input class; `cachedInputTokens` is a subdivision retained
+// for attribution and must not be added to it again. `.strict()` matters here more
 // than on most schemas: this is the one channel a provider could otherwise use to smuggle
 // arbitrary content (e.g. a `transcript` field) past the contract as though it were spend.
 export const providerUsageSchema = z
@@ -323,6 +325,51 @@ export const providerUsageSchema = z
   })
   .strict();
 
+// One immutable, final spend report for one ProviderSession. Adapters report cumulative usage at
+// their terminal provider event, never deltas: making that cardinality explicit lets persistence
+// enforce UNIQUE(provider_session_id) and prevents a retrying callback from charging the budget
+// twice. `totalTokens` is the billable budget quantity Loomrail owns. Cached input and reasoning
+// output are retained as provider detail but are already included in input/output by the supported
+// adapters, so they are never added to the total again.
+export const providerUsageReportSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    workItemId: opaqueIdSchema,
+    pipelineRunId: opaqueIdSchema,
+    stageAttemptId: opaqueIdSchema,
+    agentRunId: opaqueIdSchema,
+    providerSessionId: opaqueIdSchema,
+    usageRecordId: opaqueIdSchema.nullable(),
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    cachedInputTokens: z.number().int().nonnegative().nullable(),
+    reasoningOutputTokens: z.number().int().nonnegative().nullable(),
+    totalTokens: z.number().int().nonnegative(),
+    costUsd: z.number().nonnegative().nullable(),
+    quality: usageQualitySchema,
+    usageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    recordedAt: utcTimestampSchema,
+  })
+  .strict()
+  .superRefine((report, context) => {
+    if (report.totalTokens !== report.inputTokens + report.outputTokens) {
+      context.addIssue({
+        code: "custom",
+        path: ["totalTokens"],
+        message: "Total tokens must equal input plus output tokens",
+      });
+    }
+    if ((report.totalTokens === 0) !== (report.usageRecordId === null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["usageRecordId"],
+        message: "A positive token total requires exactly one UsageRecord",
+      });
+    }
+  });
+
 export type ContextSourceKind = z.infer<typeof contextSourceKindSchema>;
 export type ContextPackRecipeSource = z.infer<typeof contextPackRecipeSourceSchema>;
 export type ContextPackRecipeSection = z.infer<typeof contextPackRecipeSectionSchema>;
@@ -335,6 +382,7 @@ export type CheckpointDraft = z.infer<typeof checkpointDraftSchema>;
 export type Checkpoint = z.infer<typeof checkpointSchema>;
 export type ContextWindowUsage = z.infer<typeof contextWindowUsageSchema>;
 export type ProviderUsage = z.infer<typeof providerUsageSchema>;
+export type ProviderUsageReport = z.infer<typeof providerUsageReportSchema>;
 
 export const workflowTemplateStageSchema = z
   .object({
@@ -1234,6 +1282,16 @@ export const recordProviderSessionProcessCommandSchema = commandBaseSchema.exten
     .strict(),
 });
 
+export const recordProviderUsageCommandSchema = commandBaseSchema.extend({
+  type: z.literal("RECORD_PROVIDER_USAGE"),
+  payload: z
+    .object({
+      providerSessionId: opaqueIdSchema,
+      usage: providerUsageSchema,
+    })
+    .strict(),
+});
+
 export const publishCheckpointCommandSchema = commandBaseSchema.extend({
   type: z.literal("PUBLISH_CHECKPOINT"),
   payload: z
@@ -1553,6 +1611,28 @@ export const providerSessionProcessRecordedResultSchema = z
   })
   .strict();
 
+export const providerUsageRecordedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("PROVIDER_USAGE_RECORDED"),
+    replayed: z.boolean(),
+    workItemId: opaqueIdSchema,
+    report: providerUsageReportSchema,
+    usageRecord: usageRecordSchema.nullable(),
+    cumulativeAmount: z.number().int().nonnegative(),
+    hardPaused: z.boolean(),
+    stageAttempt: stageAttemptSchema,
+    events: z.array(
+      z.discriminatedUnion("type", [
+        usageRecordedEventSchema,
+        budgetThresholdReachedEventSchema,
+        stageAttemptChangedEventSchema,
+        pipelinePausedEventSchema,
+      ]),
+    ),
+  })
+  .strict();
+
 export const checkpointPublishedResultSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -1724,6 +1804,7 @@ export const providerSessionsResponseSchema = z
     schemaVersion: schemaVersionSchema,
     sessions: z.array(providerSessionSchema),
     checkpoints: z.array(checkpointSchema),
+    usageReports: z.array(providerUsageReportSchema),
     peakContextWindowUsage: z.record(opaqueIdSchema, contextWindowUsageSchema),
   })
   .strict();
@@ -1814,6 +1895,8 @@ export type ContextPackRecipeInput = z.infer<typeof contextPackRecipeInputSchema
 export type StartProviderSessionCommand = z.infer<typeof startProviderSessionCommandSchema>;
 export type RecordProviderSessionProcessCommand = z.infer<typeof recordProviderSessionProcessCommandSchema>;
 export type ProviderSessionProcessRecordedResult = z.infer<typeof providerSessionProcessRecordedResultSchema>;
+export type RecordProviderUsageCommand = z.infer<typeof recordProviderUsageCommandSchema>;
+export type ProviderUsageRecordedResult = z.infer<typeof providerUsageRecordedResultSchema>;
 export type PublishCheckpointCommand = z.infer<typeof publishCheckpointCommandSchema>;
 export type EndProviderSessionCommand = z.infer<typeof endProviderSessionCommandSchema>;
 export type ProviderSessionStartedEvent = z.infer<typeof providerSessionStartedEventSchema>;

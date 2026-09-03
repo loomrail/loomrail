@@ -115,6 +115,13 @@ state, а не продолжение диалога. Использовать r
 накапливается против порогов, рассчитанных на оценку, а не факт, — отдельной работы, не входящей в A2. До неё
 валидный отчёт уходит только в структурный логгер (см. комментарий на `onUsage` там же).
 
+**ПРАВКА Q13 (2026-09-03).** Follow-up реализован по [спецификации 71](71-q13-final-security-reliability-review-spec.ru.md):
+один terminal cumulative report на ProviderSession сохраняется в append-only migration 0032, положительный
+`input + output` попадает в общий UsageRecord ledger, а effective pipeline/AgentRun cap атомарно hard-pause-ит
+workflow до следующей сессии. Claude adapter нормализует раздельные ordinary/cache-creation/cache-read input classes
+в общий `inputTokens`; breakdown не суммируется повторно. Старый абзац выше сохраняет честную границу самого A2, но
+больше не описывает текущий runtime.
+
 ### D5 — `abortSession` убивает дочерний процесс
 
 **Почему.** Это единственный пункт из четырёх, который у mock был принципиально нечестен: его `abortSession`

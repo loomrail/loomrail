@@ -205,7 +205,9 @@ export type ProviderSessionListener = {
   // Deliberately a separate channel from `onContextWindow`, not another field on
   // ContextWindowUsage (spec BD-001). Window occupancy drives session handoff; spend drives budget
   // thresholds and the HARD pause. Those are different quantities with different consumers, and
-  // combining them would oblige the consumer of one to parse the other.
+  // combining them would oblige the consumer of one to parse the other. This callback carries one
+  // final cumulative report per session, not streaming deltas: persistence enforces that cardinality
+  // so a provider retry cannot charge the same session twice.
   onUsage: (usage: ProviderUsage) => void;
   // Spec §8: the pid of the child process this session is actually driving, so a daemon that dies
   // without killing it can still find and kill that process on the next start

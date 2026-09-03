@@ -482,15 +482,15 @@ describe("createClaudeCodeProvider", () => {
   });
 
   // `hello.jsonl`'s recorded `usage` object carries real, distinct-enough-to-not-be-confused-with-
-  // each-other figures (input 4, output 214, cache_read 17038) -- this is the fact FINDING 1 named:
-  // `parseClaudeEvent` surfaces real token counts, and the adapter must forward them rather than
-  // reporting zeros tagged `ACTUAL`. `cachedInputTokens` is asserted against `cache_read_input_tokens`
-  // specifically -- see the mapping rationale in `stream.ts`'s `ClaudeEvent` doc comment.
+  // each-other figures (ordinary input 4, cache creation 812, cache read 17038, output 214).
+  // ProviderUsage normalizes the three input classes to 17854 so a cache-heavy Claude session is
+  // comparable with Codex and cannot evade the token cap; cachedInputTokens remains cache-read
+  // attribution and is not added to that total again.
   it("reports the token counts the CLI reports, not zeros", async () => {
     const usages: ProviderUsage[] = [];
     await runAgainstRecording("hello.jsonl", { onUsage: (usage) => usages.push(usage) });
     expect(usages.at(-1)).toMatchObject({
-      inputTokens: 4,
+      inputTokens: 17854,
       outputTokens: 214,
       cachedInputTokens: 17038,
       quality: "ACTUAL",
@@ -499,9 +499,8 @@ describe("createClaudeCodeProvider", () => {
 
   // Spec §7 declares `contextWindowReporting: true` for this adapter, on the grounds that usage
   // arrives in the stream -- this is the test behind that capability (mirrors provider-codex's
-  // identical "reports window occupancy..." test). `usedTokens` must be the recording's real
-  // `input_tokens` (4), not an estimate, and `windowTokens` the declared window passed at
-  // construction.
+  // identical "reports window occupancy..." test). `usedTokens` is the normalized total input
+  // (17854), not only the 4-token uncached tail, and `windowTokens` is the declared window.
   it("reports window occupancy from the input tokens the CLI reports, not an estimate", async () => {
     // Asserted alongside the behaviour, in the same test, on purpose: a capability and the
     // behaviour behind it must not be able to drift apart. `capabilities()` claiming `true` while
@@ -515,7 +514,7 @@ describe("createClaudeCodeProvider", () => {
       { onContextWindow: (usage) => seen.push(usage) },
       { contextWindowTokens: 200_000 },
     );
-    expect(seen.at(-1)).toEqual({ usedTokens: 4, windowTokens: 200_000, quality: "ACTUAL" });
+    expect(seen.at(-1)).toEqual({ usedTokens: 17_854, windowTokens: 200_000, quality: "ACTUAL" });
   });
 
   // M7, mirroring provider-codex's test of the same name: an understated declared window must not

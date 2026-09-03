@@ -17,3 +17,4 @@ record.
 | [0007](0007-marker-bound-project-scaffolding.md)    | Accepted              | Marker-bound durable Project scaffolding            |
 | [0008](0008-separate-qa-correction-runs.md)         | Accepted              | QA correction identity separate from review rounds  |
 | [0009](0009-previewed-owner-initiated-reporting.md) | Accepted              | Previewed owner-initiated public-alpha reports      |
+| [0010](0010-session-scoped-provider-usage.md)       | Accepted              | Session-scoped durable provider usage               |

@@ -25,14 +25,14 @@ describe("parseClaudeEvent", () => {
 
   it("treats a real success as a success", () => {
     const event = parseClaudeEvent(
-      '{"type":"result","subtype":"success","is_error":false,"result":"ok","total_cost_usd":0.0031,"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":3}}',
+      '{"type":"result","subtype":"success","is_error":false,"result":"ok","total_cost_usd":0.0031,"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":2,"cache_read_input_tokens":3}}',
     );
     expect(event).toEqual({
       type: "result",
       ok: true,
       text: "ok",
       costUsd: 0.0031,
-      inputTokens: 10,
+      inputTokens: 15,
       outputTokens: 5,
       cachedInputTokens: 3,
     });

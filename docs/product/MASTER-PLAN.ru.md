@@ -1362,6 +1362,13 @@ production audit, fault recovery, clean-package и 53/53 browser gates прош�
 [run 33697965100](https://github.com/loomrail/loomrail/actions/runs/33697965100). Оба Verify собрали исходники и
 остановились только на трёх protected landing lint findings; Q12 закрыт без изменения landing и без stable claim.
 
+Q13 final security/reliability review идёт по планам 71–72. Первый corrective набор уже закрыл context delimiter,
+manifest-derived runtime floor, adapter-owned diagnostics, role playbook provenance и immutable AgentRun effective
+policy. Текущий срез добавляет один digest-verified cumulative ProviderUsageReport на сессию, нормализует Claude
+cache input, атомарно проводит token spend через общий ledger и hard-pause до следующей сессии, а также показывает
+owner-у per-session attribution. До закрытия остальных Q13 findings, private dogfood, exact live-provider promotion,
+protected landing и registry provenance stable npm publish запрещён.
+
 ### Оценка первого цикла
 
 - internal dogfood alpha: примерно 12–16 недель;

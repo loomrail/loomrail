@@ -3,7 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Checkpoint, ContextPackRecipe, ProviderOutcome, ProviderSession } from "@loomrail/contracts";
+import type {
+  Checkpoint,
+  ContextPackRecipe,
+  ProviderOutcome,
+  ProviderSession,
+  ProviderUsageReport,
+} from "@loomrail/contracts";
 import { workflowSnapshotSchema } from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import {
@@ -88,6 +94,7 @@ type SessionRows = {
   sessions: ProviderSession[];
   recipes: ContextPackRecipe[];
   checkpoints: Checkpoint[];
+  usageReports: ProviderUsageReport[];
 };
 
 describe("stage attempt session loop", () => {
@@ -165,7 +172,12 @@ describe("stage attempt session loop", () => {
   const sessionRows = (localState: LocalState, stageAttemptId: string): SessionRows => {
     const result = localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId });
     if (result.type !== "PROVIDER_SESSIONS") throw new Error("Expected provider sessions");
-    return { sessions: result.sessions, recipes: result.recipes, checkpoints: result.checkpoints };
+    return {
+      sessions: result.sessions,
+      recipes: result.recipes,
+      checkpoints: result.checkpoints,
+      usageReports: result.usageReports,
+    };
   };
 
   const eventTypes = (localState: LocalState): string[] => {
@@ -567,12 +579,23 @@ describe("stage attempt session loop", () => {
 
   it("records a usage report the provider sends mid-session, rather than dropping it", async () => {
     // BD-001: spend is a separate channel from window occupancy (onContextWindow above), because
-    // it drives budget thresholds and the HARD pause, not handoff. There is nowhere in durable
-    // state yet for a live usage report to land -- see the comment on `onUsage` in
-    // session-loop.ts -- so this only proves the report reaches the daemon and is acted on
-    // (through the structured logger) rather than the channel being wired to nothing.
+    // it drives budget thresholds and the HARD pause, not handoff. The report is asserted through
+    // both its provider-detail row and its budget-ledger projection, not merely through logging.
     const localState = await open();
-    const seeded = seedRunningAttempt(localState);
+    const seeded = queuedAttempt(localState);
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-provider-usage-agent",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: seeded.dispatch.id,
+        provider: "MOCK",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (started.type !== "AGENT_RUN_STARTED") throw new Error("Expected an AgentRun");
     const logger = capturingLogger();
     const reporting: ProviderAdapter = {
       capabilities: () =>
@@ -581,7 +604,7 @@ describe("stage attempt session loop", () => {
           start: true,
           interrupt: true,
           eventStream: true,
-          usageReporting: false,
+          usageReporting: true,
           contextWindowReporting: false,
           checkpointOnRequest: false,
           contextWindowTokens: 4_000,
@@ -589,7 +612,7 @@ describe("stage attempt session loop", () => {
           costReporting: true,
         }),
       start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) => {
-        listener.onUsage({ inputTokens: 1_200, outputTokens: 340, quality: "ACTUAL" });
+        listener.onUsage({ inputTokens: 40, outputTokens: 20, quality: "ACTUAL" });
         return Promise.resolve(completingOutcome());
       },
       requestHandoff: () => Promise.resolve(),
@@ -599,9 +622,72 @@ describe("stage attempt session loop", () => {
     await runStageAttempt(depsFor(localState, seeded, reporting, { logger }));
 
     expect(logger.infos).toContainEqual([
-      expect.objectContaining({ inputTokens: 1_200, outputTokens: 340, quality: "ACTUAL" }),
-      "The provider reported usage",
+      expect.objectContaining({ inputTokens: 40, outputTokens: 20, quality: "ACTUAL" }),
+      "The provider usage was recorded",
     ]);
+    expect(sessionRows(localState, seeded.stageAttemptId).usageReports).toMatchObject([
+      { inputTokens: 40, outputTokens: 20, totalTokens: 60, agentRunId: started.run.id },
+    ]);
+    expect(snapshotOf(localState, seeded.workItemId).usageRecords).toMatchObject([{ amount: 60 }]);
+  });
+
+  it("aborts the live session when cumulative usage exhausts the immutable AgentRun budget", async () => {
+    const localState = await open();
+    const seeded = queuedAttempt(localState);
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-provider-budget-agent",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: seeded.dispatch.id,
+        provider: "MOCK",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (started.type !== "AGENT_RUN_STARTED") throw new Error("Expected an AgentRun");
+    expect(started.run.policySnapshot?.budget.maxEstimatedTokens).toBe(80_000);
+    let aborts = 0;
+    const reporting: ProviderAdapter = {
+      capabilities: () =>
+        providerCapabilitiesSchema.parse({
+          provider: "MOCK",
+          start: true,
+          interrupt: true,
+          eventStream: true,
+          usageReporting: true,
+          contextWindowReporting: false,
+          checkpointOnRequest: false,
+          contextWindowTokens: 4_000,
+          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+          costReporting: false,
+        }),
+      start: (_invocation, listener) => {
+        listener.onUsage({ inputTokens: 70_000, outputTokens: 10_000, quality: "ACTUAL" });
+        return Promise.resolve(completingOutcome());
+      },
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => {
+        aborts += 1;
+        return Promise.resolve();
+      },
+    };
+
+    await runStageAttempt(depsFor(localState, seeded, reporting));
+
+    expect(aborts).toBe(1);
+    expect(sessionRows(localState, seeded.stageAttemptId)).toMatchObject({
+      sessions: [{ status: "ENDED", endReason: "INTERRUPTED" }],
+      usageReports: [{ totalTokens: 80_000 }],
+    });
+    expect(snapshotOf(localState, seeded.workItemId)).toMatchObject({
+      run: { status: "HARD_PAUSED" },
+      stageAttempts: [{ status: "HARD_PAUSED", failureCode: null }],
+      humanRequests: [],
+      usageRecords: [{ amount: 80_000 }],
+    });
+    expect(pendingDispatchModes(localState)).toEqual([]);
   });
 
   it("logs and drops a usage report that does not satisfy the contract", async () => {
@@ -634,7 +720,7 @@ describe("stage attempt session loop", () => {
 
     await runStageAttempt(depsFor(localState, seeded, reporting, { logger }));
 
-    expect(logger.infos.some(([, message]) => message === "The provider reported usage")).toBe(false);
+    expect(logger.infos.some(([, message]) => message === "The provider usage was recorded")).toBe(false);
     expect(logger.warns).toContainEqual([
       expect.objectContaining({}),
       "The provider reported usage that does not satisfy the contract",

@@ -2,8 +2,8 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-03
 
-**Статус:** Q12 private Insights/reporting закрыт на macOS/Windows; final security review, exact live row, protected
-landing, private dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** Q13 final security/reliability review активен; exact live row, protected landing, private dogfood и
+registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -274,6 +274,12 @@ download тех же bytes; collector, external endpoint, background sender и p
 reporting, production audit, fault, clean-package и 53/53 browser gates зелёные на macOS/Windows в
 [run 33697965100](https://github.com/loomrail/loomrail/actions/runs/33697965100). Оба Verify остановились только на
 protected landing lint; Q12 закрыт без stable claim.
+Q13 выполняется по [спецификации 71](71-q13-final-security-reliability-review-spec.ru.md) и
+[плану 72](72-q13-final-security-reliability-review-implementation-plan.ru.md). После первых corrective commits
+immutable AgentRun policy теперь реально ограничивает capabilities/workspace/network/MCP/session/budget, а live
+provider usage сохраняется один раз на сессию, нормализуется между Codex/Claude, атомарно попадает в общий ledger и
+hard-pause-ит workflow до следующей сессии. Remaining actual-diff REVIEW context, typed BrowserDriver errors,
+SquadAssignment claim audit и final gates остаются открыты; landing и npm publish не меняются.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

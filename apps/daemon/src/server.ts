@@ -2541,6 +2541,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           schemaVersion: 1,
           sessions: result.type === "PROVIDER_SESSIONS" ? result.sessions : [],
           checkpoints: result.type === "PROVIDER_SESSIONS" ? result.checkpoints : [],
+          usageReports: result.type === "PROVIDER_SESSIONS" ? result.usageReports : [],
           peakContextWindowUsage: result.type === "PROVIDER_SESSIONS" ? result.peakContextWindowUsage : {},
         });
       } catch (error: unknown) {

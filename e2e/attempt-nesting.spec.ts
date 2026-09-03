@@ -89,11 +89,12 @@ const createTask = async (page: Page, title: string): Promise<void> => {
 const humanActor = { type: "HUMAN" as const, id: "local-owner" };
 const sessionLoopActor = { type: "SYSTEM" as const, id: "session-loop" };
 
-const seededRecipe = (workItemId: string) => ({
+const seededRecipe = (workItemId: string, roleProfile: { id: string; revision: number }) => ({
   schemaVersion: 1 as const,
   templateId: mockDeliveryTemplate.id,
   templateVersion: mockDeliveryTemplate.version,
-  specSource: "WORKFLOW_TEMPLATE" as const,
+  specSource: "ROLE_PLAYBOOK" as const,
+  roleProfile,
   sections: [
     {
       id: "WORK_ITEM_BRIEF" as const,
@@ -195,15 +196,23 @@ const seedMeasuredAndHandedOffSessions = async (databasePath: string, title: str
     if (started.type !== "PIPELINE_STARTED") throw new Error("The seeded pipeline did not start");
     const dispatchId = started.dispatch.id;
     const stageAttemptId = started.stageAttempt.id;
-    localState.execute({
+    const agent = localState.execute({
       schemaVersion: 1,
-      commandId: "seed-mark-dispatch-started",
-      correlationId: "correlation-seed-mark-dispatch-started",
-      actor: sessionLoopActor,
-      type: "MARK_WORKFLOW_DISPATCH_STARTED",
-      payload: { dispatchId },
+      commandId: "seed-start-agent-run",
+      correlationId: "correlation-seed-start-agent-run",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId,
+        provider: "MOCK",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
     });
-    const recipe = seededRecipe(created.workItem.id);
+    if (agent.type !== "AGENT_RUN_STARTED") throw new Error("The seeded AgentRun did not start");
+    const recipe = seededRecipe(created.workItem.id, {
+      id: agent.run.profile.id,
+      revision: agent.run.profile.revision,
+    });
 
     // Each session publishes a checkpoint before it ends: two unproductive sessions in a row are
     // spec §6.5's HARD pause, which would take the run somewhere this test is not about.
@@ -236,6 +245,24 @@ const seedMeasuredAndHandedOffSessions = async (databasePath: string, title: str
             providerSessionId: session.session.id,
             usage: { usedTokens: report.usedTokens, windowTokens: 1000, quality: "ACTUAL" },
             handoffThreshold: 0.75,
+          },
+        });
+      }
+      if (ordinal === 1) {
+        localState.execute({
+          schemaVersion: 1,
+          commandId: `provider-usage-${session.session.id}`,
+          correlationId: `correlation-seed-session-${ordinal.toString()}-provider-usage`,
+          actor: sessionLoopActor,
+          type: "RECORD_PROVIDER_USAGE",
+          payload: {
+            providerSessionId: session.session.id,
+            usage: {
+              inputTokens: 7,
+              outputTokens: 3,
+              costUsd: 0.0012,
+              quality: "ACTUAL",
+            },
           },
         });
       }
@@ -423,7 +450,9 @@ test.describe("attempt nesting", () => {
       await expect(session2.getByText("Peaked at 88% of the window", { exact: true })).toHaveCount(0);
 
       // Both figures are measured rather than estimated, and the cockpit still says which.
-      await expect(session1.getByText("(measured)", { exact: true })).toBeVisible();
+      await expect(session1.getByText("(measured)", { exact: true })).toHaveCount(2);
+      await expect(session1.getByText("10 tokens used (7 in · 3 out)", { exact: true })).toBeVisible();
+      await expect(session1.getByText("· $0.0012", { exact: true })).toBeVisible();
       await expect(session2.getByText("(measured)", { exact: true })).toBeVisible();
 
       // Never measured at all, which is not the same as measured at zero: no occupancy line.

@@ -49,6 +49,8 @@ import {
   readinessCheckSchema,
   sessionPauseFailureCodes,
   providerSessionSchema,
+  providerUsageReportSchema,
+  providerUsageSchema,
   recoveryReportSchema,
   reportingFactsSchema,
   reviewFindingSchema,
@@ -103,6 +105,7 @@ import {
   type ReadinessAttestation,
   type ReadinessCheck,
   type ProviderSession,
+  type ProviderUsageReport,
   type RecoveryReport,
   type ReviewFinding,
   type ReviewReport,
@@ -138,6 +141,7 @@ import {
   decideQAReservation,
   qaWorkflowOutcome,
   decideProjectProviderPreference,
+  decideRecordProviderUsage,
   decideApproveBudgetOverride,
   decideAnswerHumanRequest,
   decideApplyProviderOutcome,
@@ -206,6 +210,7 @@ import {
   type McpGrantChangedIntent,
   type McpProfileConsentedIntent,
   type PipelineControlDecision,
+  type RecordProviderUsageDecision,
   type RecoveryDecision,
   type QADefectDispositionDecision,
   type ReviewFindingDispositionDecision,
@@ -575,6 +580,27 @@ const usageRecordRowSchema = z.object({
   kind: z.string(),
   amount: z.number().int(),
   quality: z.string(),
+  recorded_at: z.string(),
+});
+
+const providerUsageReportRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  stage_attempt_id: z.string(),
+  agent_run_id: z.string(),
+  provider_session_id: z.string(),
+  usage_record_id: z.string().nullable(),
+  input_tokens: z.number().int(),
+  output_tokens: z.number().int(),
+  cached_input_tokens: z.number().int().nullable(),
+  reasoning_output_tokens: z.number().int().nullable(),
+  total_tokens: z.number().int(),
+  cost_usd: z.number().nullable(),
+  quality: z.string(),
+  usage_digest: z.string(),
   recorded_at: z.string(),
 });
 
@@ -1442,6 +1468,45 @@ const usageRecordFromRow = (value: unknown): UsageRecord => {
     kind: row.kind,
     amount: row.amount,
     quality: row.quality,
+    recordedAt: row.recorded_at,
+  });
+};
+
+const providerUsageReportFromRow = (value: unknown): ProviderUsageReport => {
+  const row = providerUsageReportRowSchema.parse(value);
+  const usage = providerUsageSchema.parse({
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    ...(row.cached_input_tokens === null ? {} : { cachedInputTokens: row.cached_input_tokens }),
+    ...(row.reasoning_output_tokens === null ? {} : { reasoningOutputTokens: row.reasoning_output_tokens }),
+    ...(row.cost_usd === null ? {} : { costUsd: row.cost_usd }),
+    quality: row.quality,
+  });
+  const observedDigest = `sha256:${createHash("sha256").update(canonicalJson(usage)).digest("hex")}`;
+  if (observedDigest !== row.usage_digest) {
+    throw new StateStoreError(
+      "PERSISTENCE_FAILURE",
+      "The ProviderUsage report does not match its immutable digest",
+    );
+  }
+  return providerUsageReportSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    stageAttemptId: row.stage_attempt_id,
+    agentRunId: row.agent_run_id,
+    providerSessionId: row.provider_session_id,
+    usageRecordId: row.usage_record_id,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    cachedInputTokens: row.cached_input_tokens,
+    reasoningOutputTokens: row.reasoning_output_tokens,
+    totalTokens: row.total_tokens,
+    costUsd: row.cost_usd,
+    quality: row.quality,
+    usageDigest: row.usage_digest,
     recordedAt: row.recorded_at,
   });
 };
@@ -2849,6 +2914,23 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        LIMIT 1`,
     );
     const selectProviderSessionById = database.prepare("SELECT * FROM provider_sessions WHERE id = ?");
+    const selectProviderUsageReportBySession = database.prepare(
+      "SELECT * FROM provider_usage_reports WHERE provider_session_id = ?",
+    );
+    const selectProviderUsageReportsForAttempt = database.prepare(
+      "SELECT * FROM provider_usage_reports WHERE stage_attempt_id = ? ORDER BY recorded_at, id",
+    );
+    const selectProviderUsageReportsForAgentRun = database.prepare(
+      "SELECT * FROM provider_usage_reports WHERE agent_run_id = ? ORDER BY recorded_at, id",
+    );
+    const insertProviderUsageReport = database.prepare(
+      `INSERT INTO provider_usage_reports (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
+        agent_run_id, provider_session_id, usage_record_id, input_tokens, output_tokens,
+        cached_input_tokens, reasoning_output_tokens, total_tokens, cost_usd, quality,
+        usage_digest, recorded_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
     const selectRunningProviderSession = database.prepare(
       "SELECT id FROM provider_sessions WHERE stage_attempt_id = ? AND status = 'RUNNING' LIMIT 1",
     );
@@ -3159,6 +3241,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare("SELECT * FROM usage_records WHERE pipeline_run_id = ? ORDER BY rowid")
         .all(pipelineRunId)
         .map(usageRecordFromRow);
+
+    const readProviderUsageReportsForAgentRun = (agentRunId: string): ProviderUsageReport[] =>
+      selectProviderUsageReportsForAgentRun.all(agentRunId).map(providerUsageReportFromRow);
 
     const readEvidenceArtifacts = (pipelineRunId: string): EvidenceArtifact[] =>
       database
@@ -4214,6 +4299,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       | ApplyProviderOutcomeDecision["events"][number]
       | AnswerHumanRequestDecision["events"][number]
       | PipelineControlDecision["events"][number]
+      | RecordProviderUsageDecision["events"][number]
       | BudgetOverrideDecision["events"][number]
       | RecoveryDecision["events"][number]
       | QADefectDispositionDecision["events"][number]
@@ -4712,6 +4798,29 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           record.quality,
           record.recordedAt,
         );
+    };
+
+    const persistProviderUsageReport = (report: ProviderUsageReport): void => {
+      insertProviderUsageReport.run(
+        report.id,
+        report.schemaVersion,
+        report.projectId,
+        report.workItemId,
+        report.pipelineRunId,
+        report.stageAttemptId,
+        report.agentRunId,
+        report.providerSessionId,
+        report.usageRecordId,
+        report.inputTokens,
+        report.outputTokens,
+        report.cachedInputTokens,
+        report.reasoningOutputTokens,
+        report.totalTokens,
+        report.costUsd,
+        report.quality,
+        report.usageDigest,
+        report.recordedAt,
+      );
     };
 
     const insertRecoveryReport = (report: RecoveryReport): void => {
@@ -7714,6 +7823,102 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "RECORD_PROVIDER_USAGE") {
+        if (command.actor.type !== "SYSTEM" || command.actor.id !== "session-loop") {
+          throw new StateStoreError(
+            "PROVIDER_USAGE_ACTOR_FORBIDDEN",
+            "Only the provider session loop can record provider usage",
+          );
+        }
+        if (selectProviderUsageReportBySession.get(command.payload.providerSessionId) !== undefined) {
+          throw new StateStoreError(
+            "PROVIDER_USAGE_ALREADY_RECORDED",
+            "The ProviderSession already has its final usage report",
+          );
+        }
+        const sessionValue = selectProviderSessionById.get(command.payload.providerSessionId);
+        if (sessionValue === undefined) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The ProviderSession does not exist");
+        }
+        const providerSession = providerSessionFromRow(sessionValue);
+        if (providerSession.agentRunId === null) {
+          throw new StateStoreError(
+            "AGENT_RUN_NOT_ACTIVE",
+            "Provider usage requires a ProviderSession owned by an AgentRun",
+          );
+        }
+        const agentRunValue = selectAgentRunById.get(providerSession.agentRunId);
+        const stageAttempt = readStageAttempt(providerSession.stageAttemptId);
+        if (agentRunValue === undefined || stageAttempt === null) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_NOT_FOUND",
+            "The execution backing this ProviderSession is incomplete",
+          );
+        }
+        const agentRun = agentRunFromRow(agentRunValue);
+        const run = readPipelineRun(stageAttempt.pipelineRunId);
+        const workItem = readWorkItem(stageAttempt.workItemId);
+        const dispatch = readPendingDispatchForAttempt(stageAttempt.id);
+        if (run === null || workItem === null || dispatch === null) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_NOT_FOUND",
+            "The workflow state backing this ProviderSession is incomplete",
+          );
+        }
+        const usageDigest = `sha256:${createHash("sha256")
+          .update(canonicalJson(command.payload.usage))
+          .digest("hex")}`;
+        const totalTokens = command.payload.usage.inputTokens + command.payload.usage.outputTokens;
+        const decision = decideRecordProviderUsage({
+          now: occurredAt,
+          workItem,
+          run,
+          stageAttempt,
+          dispatch,
+          providerSession,
+          agentRun,
+          budgetPolicy: readCurrentBudgetPolicy(run.id),
+          existingUsageRecords: readUsageRecords(run.id),
+          existingAgentUsageTotal: readProviderUsageReportsForAgentRun(agentRun.id).reduce(
+            (total, report) => total + report.totalTokens,
+            0,
+          ),
+          usage: command.payload.usage,
+          reportId: createId("providerUsageReport"),
+          usageRecordId: totalTokens === 0 ? null : createId("usageRecord"),
+          usageDigest,
+        });
+        if (decision.usageRecord !== null) insertUsageRecord(decision.usageRecord);
+        persistProviderUsageReport(decision.report);
+        if (decision.hardPaused) {
+          updateWorkflowDispatch(decision.dispatch);
+          updateStageAttempt(decision.stageAttempt);
+          updatePipelineRun(decision.run);
+          updateWorkflowWorkItem(decision.workItem);
+        }
+        const metadata = {
+          workItemId: workItem.id,
+          projectId: workItem.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        };
+        const events = appendWorkflowEvents(decision.events, metadata);
+        if (decision.hardPaused) finishActiveAgentRun(stageAttempt.id, "HARD_PAUSED", metadata);
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROVIDER_USAGE_RECORDED",
+          replayed: false,
+          workItemId: workItem.id,
+          report: decision.report,
+          usageRecord: decision.usageRecord,
+          cumulativeAmount: decision.cumulativeAmount,
+          hardPaused: decision.hardPaused,
+          stageAttempt: decision.stageAttempt,
+          events,
+        });
+      }
+
       if (command.type === "PUBLISH_CHECKPOINT") {
         const sessionRow = selectProviderSessionById.get(command.payload.providerSessionId);
         if (sessionRow === undefined) {
@@ -7840,7 +8045,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         let attemptAfterEnd = stageAttempt;
         let request: HumanRequest | null = null;
         let nextSessionOrdinal: number | null = null;
-        if (session.endReason !== "CANCELLED" && command.payload.providerStarted) {
+        // A live usage report may have atomically HARD-paused this attempt while the adapter was
+        // still returning from start(). The session itself still has to be ended for recovery and
+        // audit, but its unproductive-session transition must not run against an attempt that has
+        // already left RUNNING or manufacture a second pause/request.
+        if (
+          stageAttempt.status !== "HARD_PAUSED" &&
+          session.endReason !== "CANCELLED" &&
+          command.payload.providerStarted
+        ) {
           const checkpointsPublished = countRowSchema.parse(countCheckpointsForSession.get(session.id)).count;
           const decision = decideSessionEnded({
             session,
@@ -8886,6 +9099,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             sessions: sessionRows.map(providerSessionFromParsedRow),
             recipes: selectRecipesForAttempt.all(queryValue.stageAttemptId).map(contextPackRecipeFromRow),
             checkpoints: selectCheckpointsForAttempt.all(queryValue.stageAttemptId).map(checkpointFromRow),
+            usageReports: selectProviderUsageReportsForAttempt
+              .all(queryValue.stageAttemptId)
+              .map(providerUsageReportFromRow),
             peakContextWindowUsage,
           };
         }

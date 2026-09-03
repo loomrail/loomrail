@@ -30,6 +30,7 @@ import type {
   ReviewReport,
   ReportingFacts,
   ProviderSession,
+  ProviderUsageReport,
   ScaffoldOperation,
   SquadAssignment,
   StateCommand,
@@ -61,6 +62,8 @@ export type StateStoreErrorCode =
   | "PROVIDER_SESSION_ALREADY_RUNNING"
   // Guards PUBLISH_CHECKPOINT/END_PROVIDER_SESSION against acting on a session that already ended.
   | "PROVIDER_SESSION_NOT_RUNNING"
+  | "PROVIDER_USAGE_ACTOR_FORBIDDEN"
+  | "PROVIDER_USAGE_ALREADY_RECORDED"
   // START_AGENT_RUN is daemon-internal. Keeping the actor refusal distinct prevents a browser or
   // future API handler from learning to manufacture capacity/workspace claims by copying payloads.
   | "AGENT_RUN_ACTOR_FORBIDDEN"
@@ -230,6 +233,7 @@ export type StateQueryResult =
       sessions: ProviderSession[];
       recipes: ContextPackRecipe[];
       checkpoints: Checkpoint[];
+      usageReports: ProviderUsageReport[];
       // Spec §6.2: the highest window occupancy each session has been observed at, read from the
       // session's own columns (migration 0009) rather than replayed out of the audit log. The peak
       // rather than the current reading -- it is what "how full did this session get" asks, and it
@@ -276,6 +280,7 @@ export type LocalStateIdKind =
   | "evidenceArtifact"
   | "acceptancePackage"
   | "providerSession"
+  | "providerUsageReport"
   | "squadAssignment"
   | "agentRun"
   | "qaRun"

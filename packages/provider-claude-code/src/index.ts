@@ -318,10 +318,11 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
             const usage: ProviderUsage = {
               // Real figures from the wire `result` event's own `usage` object -- see
               // `stream.ts`'s doc comments on `ClaudeEvent`/`rawResultEventSchema` for exactly
-              // which wire fields these are and why `cachedInputTokens` maps to
+              // which wire fields these are and why normalized `inputTokens` includes ordinary,
+              // cache-creation and cache-read input while `cachedInputTokens` maps to
               // `cache_read_input_tokens` specifically (the tokens served from a previous cache
               // entry) and not `cache_creation_input_tokens` (a distinct, separately-billed
-              // quantity with no field of its own here). `quality: "ACTUAL"` is honest for every
+              // quantity retained inside that normalized total). `quality: "ACTUAL"` is honest for every
               // field in this record now, not just `costUsd`.
               inputTokens: event.inputTokens,
               outputTokens: event.outputTokens,
