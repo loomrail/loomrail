@@ -281,7 +281,10 @@ provider usage сохраняется один раз на сессию, нор�
 hard-pause-ит workflow до следующей сессии. REVIEW получает bounded actual diff из одного tree-checked temporary
 index; BrowserDriver нормализует async rejections в закрытый error vocabulary. Audit также снял overclaim: stable
 создаёт одну immutable SquadAssignment revision при старте PipelineRun и не предоставляет post-start composition
-editing. Final review и release gates остаются открыты; landing и npm publish не меняются.
+editing; stable role refinement принадлежит exact built-in AgentProfile, а не отсутствующему project editor.
+Следующий review round дополнительно закрыл read-only/offline policy Browser QA, фильтрацию неэффективных MCP
+revisions, untrusted framing provider evidence, fixed BrowserDriver/recovery errors и pre-buffer Git patch bounds.
+Final review и release gates остаются открыты; landing и npm publish не меняются.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

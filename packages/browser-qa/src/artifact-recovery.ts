@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants, type Stats } from "node:fs";
+import { constants } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -21,9 +21,10 @@ import {
 } from "@loomrail/contracts";
 import { z } from "zod";
 
+import { isSameFile, RUN_STORAGE_SEGMENT } from "./artifact-layout.js";
+
 export const BROWSER_QA_RECOVERY_MARKER = ".loomrail-pending.json";
 const MAX_RECOVERY_MARKER_BYTES = 128 * 1_024;
-const RUN_STORAGE_SEGMENT = /^run-[0-9a-f]{32}$/;
 
 const recoveryMarkerSchema = z
   .object({
@@ -41,6 +42,15 @@ export type BrowserQAArtifactRecovery = {
   action: "CONFIRMED" | "QUARANTINED_ORPHAN" | "QUARANTINED_INVALID" | "LEFT_PENDING";
 };
 
+export class BrowserQAArtifactRecoveryError extends Error {
+  readonly code = "RECOVERY_SCAN_FAILED";
+
+  constructor(cause: unknown) {
+    super("Browser QA artifact recovery could not inspect the managed storage safely.", { cause });
+    this.name = "BrowserQAArtifactRecoveryError";
+  }
+}
+
 export type BrowserQAArtifactOpenErrorCode =
   "ATTACHMENT_INVALID" | "STORAGE_LAYOUT_INVALID" | "ATTACHMENT_UNAVAILABLE" | "EVIDENCE_MISMATCH";
 
@@ -53,8 +63,6 @@ export class BrowserQAArtifactOpenError extends Error {
     this.code = code;
   }
 }
-
-const isSameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
 
 const readBoundedMarker = async (path: string): Promise<BrowserQARecoveryMarker> => {
   const metadata = await lstat(path);
@@ -289,7 +297,7 @@ export const recoverBrowserQAArtifacts = async (input: {
     entries = await readdir(finalRoot, { withFileTypes: true });
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
+    throw new BrowserQAArtifactRecoveryError(error);
   }
 
   const recoveries: BrowserQAArtifactRecovery[] = [];

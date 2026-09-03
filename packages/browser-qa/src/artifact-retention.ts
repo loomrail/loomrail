@@ -4,9 +4,8 @@ import { join } from "node:path";
 
 import { qaAttachmentRefSchema, type QAAttachmentRef } from "@loomrail/contracts";
 
+import { isSameFile, RUN_STORAGE_SEGMENT } from "./artifact-layout.js";
 import { BROWSER_QA_RECOVERY_MARKER } from "./artifact-recovery.js";
-
-const RUN_STORAGE_SEGMENT = /^run-[0-9a-f]{32}$/;
 
 export type BrowserQARetentionAction =
   "DELETED" | "ALREADY_ABSENT" | "SKIPPED_PENDING" | "SKIPPED_UNSAFE" | "FAILED";
@@ -19,8 +18,6 @@ export type BrowserQARetentionResult = {
 
 const hasCode = (error: unknown, code: string): boolean =>
   typeof error === "object" && error !== null && "code" in error && error.code === code;
-
-const isSameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
 
 const markerIsAbsent = async (path: string): Promise<boolean> => {
   try {

@@ -16,6 +16,10 @@
 - [x] Добавить bounded actual-diff summary в REVIEW context и проверить отсутствие path/content overflow.
 - [x] Закрыть BrowserDriver async errors exported error type и closed code contract.
 - [x] Проверить SquadAssignment revision claim и явно оставить post-start composition editing вне stable scope.
+- [x] Устранить review-round authority gaps: read-only/offline Browser QA, capability-filtered MCP revisions,
+      untrusted evidence framing и fixed code→message BrowserDriver normalization.
+- [x] Ограничить patch stdout до накопления в памяти и закрыть public async review/recovery error contracts.
+- [x] Уточнить stable role-playbook scope: built-in profile refinement реализован, project-authored editor/import — нет.
 - [ ] Выполнить финальный Standards/Spec review и закрыть все P0/P1.
 - [ ] Прогнать full non-landing source gates, fault injection, audit, clean package и browser matrix.
 - [ ] Запушить Q13, дождаться macOS/Windows CI и записать evidence.

@@ -8,6 +8,7 @@ import {
   PathNotAFileError,
   PathOutsideWorktreeError,
   PathUnresolvableError,
+  ReviewDiffReadError,
   readFileDiff,
   readReviewDiff,
   resolveWorktreeRelativePath,
@@ -229,6 +230,46 @@ describe("summariseChanges", () => {
 });
 
 describe("readReviewDiff", () => {
+  it("rejects invalid bounds through its closed public error vocabulary", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+
+    await expect(
+      readReviewDiff({
+        worktreePath,
+        baseline,
+        maxFiles: -1,
+        maxContentFiles: 1,
+        maxPatchBytesPerFile: 1,
+        maxPatchBytesTotal: 1,
+      }),
+    ).rejects.toEqual(expect.objectContaining({ name: "ReviewDiffReadError", code: "INVALID_INPUT" }));
+  });
+
+  it("normalizes git/read failures through its closed public error vocabulary", async () => {
+    const { worktreePath } = await makeWorktreeWithEveryKindOfChange();
+
+    await expect(
+      readReviewDiff({
+        worktreePath,
+        baseline: "not-a-commit",
+        maxFiles: 1,
+        maxContentFiles: 1,
+        maxPatchBytesPerFile: 1,
+        maxPatchBytesTotal: 1,
+      }),
+    ).rejects.toEqual(expect.objectContaining({ name: "ReviewDiffReadError", code: "READ_FAILED" }));
+    await expect(
+      readReviewDiff({
+        worktreePath,
+        baseline: "not-a-commit",
+        maxFiles: 1,
+        maxContentFiles: 1,
+        maxPatchBytesPerFile: 1,
+        maxPatchBytesTotal: 1,
+      }),
+    ).rejects.toBeInstanceOf(ReviewDiffReadError);
+  });
+
   it("reads file metadata, patch content and the result tree from one bounded review snapshot", async () => {
     const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
 
@@ -283,6 +324,28 @@ describe("readReviewDiff", () => {
       0,
     );
     expect(includedPatchBytes).toBeLessThanOrEqual(64);
+  });
+
+  it("bounds a single huge patch before it accumulates in memory and reports exact omission", async () => {
+    const { worktreePath, baseline } = await makeWorktreeWithEveryKindOfChange();
+    await writeFile(join(worktreePath, "huge-single-line.txt"), `${"界".repeat(100_000)}\n`, "utf8");
+
+    const review = await readReviewDiff({
+      worktreePath,
+      baseline,
+      maxFiles: 50,
+      maxContentFiles: 50,
+      maxPatchBytesPerFile: 512,
+      maxPatchBytesTotal: 50 * 512,
+    });
+    const huge = review.files.find(({ path }) => path === "huge-single-line.txt");
+    if (huge?.content.type !== "TEXT") throw new Error("Expected a textual patch for the huge file");
+
+    expect(Buffer.byteLength(huge.content.patch, "utf8")).toBeLessThanOrEqual(512);
+    expect(huge.content.patch.endsWith("\n")).toBe(true);
+    expect(huge.content.patch).not.toContain("界");
+    expect(huge.content.truncated).toBe(true);
+    expect(huge.content.omittedBytes).toBeGreaterThan(300_000);
   });
 });
 

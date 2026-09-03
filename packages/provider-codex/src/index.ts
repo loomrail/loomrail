@@ -161,9 +161,9 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
       providerCapabilitiesSchema.parse({
         provider: "CODEX",
         // All six, as of E1. IMPLEMENT and QA were withheld for one reason only -- this adapter
-        // ran its CLI in an empty temporary directory and so had nothing to change -- and that
-        // reason is gone: given a workspace it runs `codex exec` inside the work item's own
-        // worktree under `-s workspace-write` (see `start` below).
+        // ran its CLI in an empty temporary directory and so had no repository to inspect or
+        // change. That reason is gone: given a workspace it runs `codex exec` inside the work
+        // item's own worktree under the invocation's effective read-only/read-write policy.
         //
         // This declaration is static, and deliberately says nothing about whether any particular
         // session will be handed a workspace. Whether one exists is the caller's business, and this

@@ -3,6 +3,10 @@ import { spawn } from "node:child_process";
 export type GitResult = {
   stdout: string;
   stderr: string;
+  stdoutBytes: number;
+  stderrBytes: number;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
   exitCode: number;
 };
 
@@ -13,7 +17,22 @@ export type GitOptions = {
   // passes only that loses PATH, and `spawn` resolves "git" through PATH, so git will not run at
   // all. Spread `process.env` yourself: `{ ...process.env, GIT_INDEX_FILE: path }`.
   env?: Readonly<Record<string, string>>;
+  // The process is always drained to completion, but bytes beyond these capture limits are
+  // counted and discarded before they can accumulate in daemon memory.
+  maxStdoutBytes?: number;
+  maxStderrBytes?: number;
 };
+
+export type GitOutputLimits = Pick<GitOptions, "maxStdoutBytes" | "maxStderrBytes">;
+
+export class GitInputError extends Error {
+  readonly code = "INVALID_OUTPUT_LIMIT";
+
+  constructor(field: "maxStdoutBytes" | "maxStderrBytes") {
+    super(`${field} must be a non-negative safe integer`);
+    this.name = "GitInputError";
+  }
+}
 
 // Thrown only when the `git` executable itself cannot be found or started. A non-zero exit code
 // from a `git` invocation that did run is not an error -- it is data the caller inspects via
@@ -26,10 +45,17 @@ export class GitMissingError extends Error {
 }
 
 // Runs `git` as a child process with an argv array (never a shell string) and hands its exit code
-// back as data. Only a failure to launch `git` at all (e.g. it is not on PATH) rejects, and only
-// with GitMissingError.
-export const runGit = (args: readonly string[], options: GitOptions): Promise<GitResult> =>
-  new Promise((resolve, reject) => {
+// back as data. Invalid output limits reject with GitInputError; a launch failure rejects with
+// GitMissingError. A command that did start always resolves, including on a non-zero exit code.
+export const runGit = (args: readonly string[], options: GitOptions): Promise<GitResult> => {
+  for (const field of ["maxStdoutBytes", "maxStderrBytes"] as const) {
+    const value = options[field];
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+      return Promise.reject(new GitInputError(field));
+    }
+  }
+
+  return new Promise((resolve, reject) => {
     const child = spawn("git", [...args], {
       cwd: options.cwd,
       env: options.env,
@@ -37,14 +63,34 @@ export const runGit = (args: readonly string[], options: GitOptions): Promise<Gi
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
+    const capture = (limit: number | undefined) => {
+      const chunks: Buffer[] = [];
+      let capturedBytes = 0;
+      let totalBytes = 0;
+      return {
+        append: (chunk: Buffer): void => {
+          totalBytes += chunk.byteLength;
+          const remaining = limit === undefined ? chunk.byteLength : Math.max(0, limit - capturedBytes);
+          if (remaining === 0) return;
+          const kept = Math.min(remaining, chunk.byteLength);
+          chunks.push(Buffer.from(chunk.subarray(0, kept)));
+          capturedBytes += kept;
+        },
+        result: (): { text: string; bytes: number; truncated: boolean } => ({
+          text: Buffer.concat(chunks, capturedBytes).toString("utf8"),
+          bytes: totalBytes,
+          truncated: totalBytes > capturedBytes,
+        }),
+      };
+    };
+    const stdout = capture(options.maxStdoutBytes);
+    const stderr = capture(options.maxStderrBytes);
 
     child.stdout.on("data", (chunk: Buffer) => {
-      stdoutChunks.push(chunk);
+      stdout.append(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      stderrChunks.push(chunk);
+      stderr.append(chunk);
     });
 
     child.on("error", (error: unknown) => {
@@ -52,13 +98,20 @@ export const runGit = (args: readonly string[], options: GitOptions): Promise<Gi
     });
 
     child.on("close", (exitCode: number | null) => {
+      const capturedStdout = stdout.result();
+      const capturedStderr = stderr.result();
       resolve({
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-        stderr: Buffer.concat(stderrChunks).toString("utf8"),
+        stdout: capturedStdout.text,
+        stderr: capturedStderr.text,
+        stdoutBytes: capturedStdout.bytes,
+        stderrBytes: capturedStderr.bytes,
+        stdoutTruncated: capturedStdout.truncated,
+        stderrTruncated: capturedStderr.truncated,
         exitCode: exitCode ?? -1,
       });
     });
   });
+};
 
 // Runs a git plumbing command against a temporary index rather than the repository's real one, so
 // the caller never touches the owner's actual index. `env` is spread over `process.env` rather
@@ -68,4 +121,5 @@ export const runGitWithIndex = (
   args: readonly string[],
   cwd: string,
   indexFile: string,
-): Promise<GitResult> => runGit(args, { cwd, env: { ...process.env, GIT_INDEX_FILE: indexFile } });
+  limits: GitOutputLimits = {},
+): Promise<GitResult> => runGit(args, { cwd, env: { ...process.env, GIT_INDEX_FILE: indexFile }, ...limits });

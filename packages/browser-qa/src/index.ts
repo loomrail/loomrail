@@ -39,6 +39,7 @@ export {
 export {
   BROWSER_QA_RECOVERY_MARKER,
   BrowserQAArtifactOpenError,
+  BrowserQAArtifactRecoveryError,
   openVerifiedBrowserQAArtifact,
   recoverBrowserQAArtifacts,
   type BrowserQAArtifactRecovery,
@@ -63,6 +64,14 @@ export class BrowserDriverError extends Error {
     this.code = code;
   }
 }
+
+const browserDriverErrorMessages = {
+  INVALID_INPUT: "The Browser QA run input is invalid.",
+  DRIVER_SETUP_FAILED: "The Browser QA driver could not start safely.",
+  ATTACHMENT_FINALIZATION_FAILED: "Browser QA attachments could not be finalized safely.",
+  ATTACHMENT_CONFIRMATION_FAILED: "Browser QA attachments could not be confirmed safely.",
+  QUARANTINE_DISPOSAL_FAILED: "The Browser QA quarantine could not be disposed safely.",
+} as const satisfies Record<BrowserDriverErrorCode, string>;
 
 export type BrowserDriverExecution = {
   result: QADriverResult;
@@ -96,12 +105,12 @@ type PendingAttachment = {
   path: string;
 };
 
-const normalizeBrowserDriverError = (
-  code: BrowserDriverErrorCode,
-  message: string,
-  error: unknown,
-): BrowserDriverError =>
-  error instanceof BrowserDriverError ? error : new BrowserDriverError(code, message, { cause: error });
+const normalizeBrowserDriverError = (code: BrowserDriverErrorCode, error: unknown): BrowserDriverError => {
+  const normalizedCode = error instanceof BrowserDriverError ? error.code : code;
+  return new BrowserDriverError(normalizedCode, browserDriverErrorMessages[normalizedCode], {
+    cause: error,
+  });
+};
 
 const normalizeBrowserDriverRun =
   (run: BrowserDriver["run"]): BrowserDriver["run"] =>
@@ -109,11 +118,7 @@ const normalizeBrowserDriverRun =
     try {
       return await run(input, retestCells);
     } catch (error: unknown) {
-      throw normalizeBrowserDriverError(
-        "DRIVER_SETUP_FAILED",
-        "The Browser QA driver could not start safely.",
-        error,
-      );
+      throw normalizeBrowserDriverError("DRIVER_SETUP_FAILED", error);
     }
   };
 

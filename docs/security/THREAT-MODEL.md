@@ -787,11 +787,13 @@ uncommitted work, at a work item's FIRST agent stage rather than at IMPLEMENT.
 
 **Write access did not widen with it, and that was a second correction.** Which stages are GIVEN the worktree
 and which may WRITE in it are separate questions with separate answers — `stageRunsInWorkspace` and
-`stageWritesInWorkspace` (`packages/domain/src/workspace.ts`) — and only IMPLEMENT and QA answer yes to the
-second. A DISCOVERY, PLAN or REVIEW session is launched in the same worktree under `-s read-only` and with no
+`stageWritesInWorkspace` (`packages/domain/src/workspace.ts`). Q13 narrows the second set to IMPLEMENT alone: QA
+still requires the stable worktree and BrowserDriver,
+but its provider session only reads repository state and receives neither repository-write nor arbitrary-network
+authority. A DISCOVERY, PLAN, REVIEW or QA session is launched in the same worktree under `-s read-only` and with no
 `-c` key at all; the answer travels to the adapter as `ProviderWorkspace.access`
 (`packages/provider-core/src/index.ts`), so no adapter carries a list of stages of its own. For as long as the
-Codex adapter picked its sandbox mode from the mere PRESENCE of a worktree, those three read-only stages ran
+Codex adapter picked its sandbox mode from the mere PRESENCE of a worktree, those read-only stages ran
 write-enabled and network-enabled — a review able to rewrite the code it was judging. Nothing else about the
 containment changed — same worktree, same branch, same `-c` key where it is still sent, same flag guards.
 
@@ -954,7 +956,10 @@ boundary and the HTTP surface:
 - a path that names no changed file, cannot be resolved, or leaves the worktree is a named 400
   refusal, never an empty diff that would claim the file was unchanged;
 - a summary is capped at 2,000 files and one body at 512 KiB, with explicit `truncated` and
-  `omittedBytes`; refreshes of the expensive subtree are coalesced to the measured 1,600-ms window,
+  `omittedBytes`; Git stdout for one file is retained only up to that byte cap while the remaining stream is drained,
+  counted and discarded, so the cap also bounds daemon memory rather than applying after accumulation. REVIEW uses
+  tighter per-file and total limits and exposes only a closed `ReviewDiffReadError` failure contract. Refreshes of
+  the expensive subtree are coalesced to the measured 1,600-ms window,
   while closed cards have no active read;
 - the routes require the same local session as every other GET. Diff content is returned only to
   that browser response and is not added to structured log fields or durable state.
@@ -1293,7 +1298,9 @@ Q1 tightens the deterministic baseline further:
   implementation tree; provider output cannot reserve or complete it;
 - public `BrowserDriver` async operations normalize setup, finalization, confirmation and disposal rejections to one
   exported error type with a closed code set and fixed summaries. Raw filesystem/browser/callback detail stays only
-  in the in-memory cause; daemon logs the closed code and still fails closed on a contract-violating adapter;
+  in the in-memory cause; normalization always recreates the error through a fixed code-to-message map, including
+  when a callback supplied an instance of the exported class. Startup artifact recovery exposes a separate closed
+  scan error and daemon logs only its code. The daemon still fails closed on a contract-violating adapter;
 - the baseline target is a bare literal loopback origin (`localhost`, `127/8` or `[::1]`). `localhost` resolution must
   contain only loopback addresses and Chromium pins it to one verified address for the run; exact origin is rechecked
   for every request and redirect. A fresh context blocks service workers, drops response cookies, and rejects requests

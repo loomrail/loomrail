@@ -53,11 +53,11 @@ Dashed components are outside Phase 0.
 
 ## Provider compatibility boundary
 
-`apps/daemon/src/provider-compatibility.ts` owns the fixed live-provider version commands, bounded process
-observation, exact parsers, admission floors, and exact verified-version allowlist. It returns only normalized version
-and a closed compatibility state. The provider registry combines that observation with executable presence and
-provider-owned authentication; only `VERIFIED + AUTHENTICATED` can make a live adapter startable. Mock remains
-`BUILT_IN` and ready.
+Each live-provider adapter owns its fixed version command, exact parser, admission floor and verified-version
+allowlist in `packages/provider-codex/src/diagnostics.ts` or `packages/provider-claude-code/src/diagnostics.ts`.
+`packages/provider-core/src/diagnostics.ts` owns the shared bounded process observation and closed classifier. The
+daemon registry combines adapter diagnostics with executable presence and provider-owned authentication; only
+`VERIFIED + AUTHENTICATED` can make a live adapter startable. Mock remains `BUILT_IN` and ready.
 
 Compatibility is transient admission policy for a new ProviderSession, not workflow authority or durable Project
 state. A refresh cannot change Project preference or reinterpret a running session. A new upstream CLI is

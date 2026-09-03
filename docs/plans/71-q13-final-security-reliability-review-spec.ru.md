@@ -73,7 +73,9 @@ worktree-содержимое добавляется через `add -A`, а `wr
 
 Intrinsic bounds не зависят от provider window: не более 50 file records, тела не более первых 16 records, до
 4096 patch bytes на файл и 32768 patch bytes суммарно, до 512 UTF-8 bytes на rendered path. Binary body, file/content
-limit и truncation всегда обозначаются явно. Context renderer повторно применяет bounds и заключает все repository
+limit и truncation всегда обозначаются явно. Patch stdout ограничивается во время drain Git process: хвост
+подсчитывается и отбрасывается до накопления в daemon memory, а `omittedBytes` остаётся точным. Context renderer
+повторно применяет bounds и заключает все repository
 paths/patches в untrusted-data frame, поэтому внутренний shape drift не снимает ограничение и repository text не
 может закрыть delimiter. Это также даёт Claude REVIEW фактический diff без расширения его filesystem authority:
 adapter по-прежнему работает в пустом temporary directory под `permission-mode plan`.
@@ -84,6 +86,10 @@ adapter по-прежнему работает в пустом temporary directo
 `BrowserDriverError`. Его code принадлежит закрытому набору; summary фиксирован и не переносит filesystem path,
 provider/browser message или callback secret. Обычные измеренные target/browser failures остаются typed
 `QADriverResult`, а daemon всё равно fail-closed обрабатывает нарушающий контракт adapter.
+
+Каждая нормализация создаёт новый error по закрытому code→message словарю: даже переданный callback-ом экземпляр
+экспортируемого класса не сохраняет произвольный message. Публичное startup recovery также переводит scan failure
+в `BrowserQAArtifactRecoveryError` с фиксированным кодом, а daemon логирует только этот код.
 
 ### D8 — Post-start SquadAssignment revision не входит в stable scope
 
@@ -99,6 +105,9 @@ revision для будущих StageAttempt, снято. Revision остаётс
 - provider diagnostics принадлежат adapter, не daemon;
 - role playbook реально участвует в context recipe с exact profile revision;
 - AgentRun хранит и применяет immutable effective capabilities, workspace/network, budget/session и MCP revisions;
+- Browser QA policy остаётся read-only/offline, а MCP revision set очищается, если `MCP_READ` не вошёл в effective
+  capabilities;
+- provider-authored evidence заключён в ту же untrusted-data frame, что checkpoint/review output;
 - REVIEW context получает bounded actual diff summary, а не только tree label (D6);
 - public async BrowserDriver errors имеют closed typed contract (D7);
 - post-start SquadAssignment revision явно остаётся non-goal stable scope без overclaim (D8).

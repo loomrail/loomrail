@@ -44,6 +44,18 @@ export type ReviewChangeSummary = {
   truncated: boolean;
 };
 
+export type ReviewDiffReadErrorCode = "INVALID_INPUT" | "READ_FAILED";
+
+export class ReviewDiffReadError extends Error {
+  readonly code: ReviewDiffReadErrorCode;
+
+  constructor(code: ReviewDiffReadErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ReviewDiffReadError";
+    this.code = code;
+  }
+}
+
 // The flags that make git's answer independent of the owner's config (spec D4). `-M` is passed
 // explicitly rather than relying on `diff.renames`, and `core.quotepath=false` keeps non-ASCII
 // paths as themselves instead of escape sequences. `--no-ext-diff` keeps the owner's external
@@ -525,9 +537,10 @@ export const resolveWorktreeRelativePath = (worktreePath: string, requestedPath:
 const clipPatch = (
   patch: string,
   maxBytes: number,
+  totalBytes = Buffer.byteLength(patch, "utf8"),
+  sourceTruncated = false,
 ): { patch: string; truncated: boolean; omittedBytes: number } => {
-  const totalBytes = Buffer.byteLength(patch, "utf8");
-  if (totalBytes <= maxBytes) {
+  if (!sourceTruncated && totalBytes <= maxBytes) {
     return { patch, truncated: false, omittedBytes: 0 };
   }
 
@@ -536,6 +549,7 @@ const clipPatch = (
   let cursor = 0;
   while (cursor < patch.length) {
     const newline = patch.indexOf("\n", cursor);
+    if (newline === -1 && sourceTruncated) break;
     const lineEnd = newline === -1 ? patch.length : newline + 1;
     const lineBytes = Buffer.byteLength(patch.slice(cursor, lineEnd), "utf8");
     if (keptBytes + lineBytes > maxBytes) {
@@ -632,10 +646,9 @@ const readUnchangedFileOrRefuse = async (context: {
  * cannot disagree -- and not from matching git's "Binary files ... differ" wording, which is prose
  * that changes.
  *
- * Known bound, left as it is by this round: `maxBytes` is applied to the finished patch, so git's
- * whole output for the file is buffered before the cut. Limiting the read to one file is what
- * makes that bound "one file" rather than "the whole repository"; streaming it is a change to
- * `runGit` and belongs to its own task.
+ * The git process is drained to completion, but stdout beyond `maxBytes` is counted and discarded
+ * before buffering. The line-boundary cut below therefore bounds both memory and the returned
+ * patch without losing the exact omitted-byte count.
  */
 export const readFileDiff = async (context: {
   worktreePath: string;
@@ -706,10 +719,16 @@ export const readFileDiff = async (context: {
         [...readArgs.filter((arg) => arg !== "-z"), "-p", baseline, "--", ...pathspecs],
         worktreePath,
         indexFile,
+        { maxStdoutBytes: maxBytes, maxStderrBytes: 16_384 },
       );
       expectSuccess(patch, "diff-index -p");
 
-      return { path: relativePath, baseline, binary: false, ...clipPatch(patch.stdout, maxBytes) };
+      return {
+        path: relativePath,
+        baseline,
+        binary: false,
+        ...clipPatch(patch.stdout, maxBytes, patch.stdoutBytes, patch.stdoutTruncated),
+      };
     },
   );
 };
@@ -730,9 +749,13 @@ const reviewPatchFromIndex = async (context: {
     [...readArgs.filter((arg) => arg !== "-z"), "-p", baseline, "--", ...pathspecs],
     worktreePath,
     indexFile,
+    { maxStdoutBytes: maxBytes, maxStderrBytes: 16_384 },
   );
   expectSuccess(patch, "diff-index -p for review");
-  return { type: "TEXT", ...clipPatch(patch.stdout, maxBytes) };
+  return {
+    type: "TEXT",
+    ...clipPatch(patch.stdout, maxBytes, patch.stdoutBytes, patch.stdoutTruncated),
+  };
 };
 
 /**
@@ -745,9 +768,9 @@ const reviewPatchFromIndex = async (context: {
  * while four caller-supplied limits bound path count, patch-process count, each patch fragment and
  * their combined bytes. Omission is explicit per file; it is never rendered as an empty patch.
  *
- * Git still buffers one file's complete textual patch before clipping, matching {@link readFileDiff}
- * and its documented one-file memory bound. It never buffers an unrestricted whole-repository
- * patch, and files beyond `maxContentFiles` start no patch process at all.
+ * Each patch process is drained, but only its bounded stdout prefix is retained; bytes beyond the
+ * per-file/remaining-total limit are counted and discarded. Files beyond `maxContentFiles` start
+ * no patch process at all.
  */
 export const readReviewDiff = async (context: {
   worktreePath: string;
@@ -759,42 +782,59 @@ export const readReviewDiff = async (context: {
 }): Promise<ReviewChangeSummary> => {
   const { worktreePath, baseline, maxFiles, maxContentFiles, maxPatchBytesPerFile, maxPatchBytesTotal } =
     context;
+  const limits = { maxFiles, maxContentFiles, maxPatchBytesPerFile, maxPatchBytesTotal };
+  if (
+    typeof worktreePath !== "string" ||
+    worktreePath.trim().length === 0 ||
+    typeof baseline !== "string" ||
+    baseline.trim().length === 0 ||
+    Object.values(limits).some((value) => !Number.isSafeInteger(value) || value < 0)
+  ) {
+    throw new ReviewDiffReadError("INVALID_INPUT", "The review diff request is invalid.");
+  }
 
-  return withTemporaryIndex(
-    { worktreePath, baseline, prefix: "loomrail-review-diff-" },
-    async (indexFile) => {
-      const summary = await readChangeSummaryFromIndex({ worktreePath, baseline, maxFiles, indexFile });
-      let patchBytes = 0;
-      const files: ReviewChangedFile[] = [];
+  try {
+    return await withTemporaryIndex(
+      { worktreePath, baseline, prefix: "loomrail-review-diff-" },
+      async (indexFile) => {
+        const summary = await readChangeSummaryFromIndex({ worktreePath, baseline, maxFiles, indexFile });
+        let patchBytes = 0;
+        const files: ReviewChangedFile[] = [];
 
-      for (const [index, file] of summary.files.entries()) {
-        if (file.binary) {
-          files.push({ ...file, content: { type: "BINARY" } });
-          continue;
+        for (const [index, file] of summary.files.entries()) {
+          if (file.binary) {
+            files.push({ ...file, content: { type: "BINARY" } });
+            continue;
+          }
+          if (index >= maxContentFiles) {
+            files.push({ ...file, content: { type: "OMITTED", reason: "FILE_LIMIT" } });
+            continue;
+          }
+
+          const remainingBytes = Math.max(0, maxPatchBytesTotal - patchBytes);
+          if (remainingBytes === 0) {
+            files.push({ ...file, content: { type: "OMITTED", reason: "TOTAL_BYTE_LIMIT" } });
+            continue;
+          }
+
+          const content = await reviewPatchFromIndex({
+            worktreePath,
+            baseline,
+            file,
+            maxBytes: Math.min(maxPatchBytesPerFile, remainingBytes),
+            indexFile,
+          });
+          patchBytes += Buffer.byteLength(content.patch, "utf8");
+          files.push({ ...file, content });
         }
-        if (index >= maxContentFiles) {
-          files.push({ ...file, content: { type: "OMITTED", reason: "FILE_LIMIT" } });
-          continue;
-        }
 
-        const remainingBytes = Math.max(0, maxPatchBytesTotal - patchBytes);
-        if (remainingBytes === 0) {
-          files.push({ ...file, content: { type: "OMITTED", reason: "TOTAL_BYTE_LIMIT" } });
-          continue;
-        }
-
-        const content = await reviewPatchFromIndex({
-          worktreePath,
-          baseline,
-          file,
-          maxBytes: Math.min(maxPatchBytesPerFile, remainingBytes),
-          indexFile,
-        });
-        patchBytes += Buffer.byteLength(content.patch, "utf8");
-        files.push({ ...file, content });
-      }
-
-      return { baseline, tree: summary.tree, files, truncated: summary.truncated };
-    },
-  );
+        return { baseline, tree: summary.tree, files, truncated: summary.truncated };
+      },
+    );
+  } catch (error: unknown) {
+    if (error instanceof ReviewDiffReadError) throw error;
+    throw new ReviewDiffReadError("READ_FAILED", "The stable review diff could not be read safely.", {
+      cause: error,
+    });
+  }
 };

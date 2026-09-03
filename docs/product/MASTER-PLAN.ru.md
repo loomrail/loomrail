@@ -1362,12 +1362,14 @@ production audit, fault recovery, clean-package и 53/53 browser gates прош�
 [run 33697965100](https://github.com/loomrail/loomrail/actions/runs/33697965100). Оба Verify собрали исходники и
 остановились только на трёх protected landing lint findings; Q12 закрыт без изменения landing и без stable claim.
 
-Q13 final security/reliability review идёт по планам 71–72. Первый corrective набор уже закрыл context delimiter,
-manifest-derived runtime floor, adapter-owned diagnostics, role playbook provenance и immutable AgentRun effective
+Q13 final security/reliability review идёт по планам 71–72. Corrective наборы закрыли context delimiter,
+manifest-derived runtime floor, adapter-owned diagnostics, built-in profile role-playbook provenance и immutable AgentRun effective
 policy. Текущий срез добавляет один digest-verified cumulative ProviderUsageReport на сессию, нормализует Claude
 cache input, атомарно проводит token spend через общий ledger и hard-pause до следующей сессии, а также показывает
 owner-у per-session attribution. REVIEW теперь получает tree-checked bounded actual diff из одного temporary index,
-включая ограниченные unified-diff fragments для filesystem-isolated reviewer. BrowserDriver async boundary теперь
+включая unified-diff fragments, ограниченные ещё во время drain Git stdout для filesystem-isolated reviewer.
+Browser QA effective policy read-only/offline, неэффективные MCP revisions отбрасываются, а provider evidence
+заключается в untrusted-data frame. BrowserDriver async boundary теперь
 экспортирует один error type с закрытыми кодами и не пропускает raw rejection detail. Stable scope честно создаёт один
 immutable SquadAssignment при старте PipelineRun: post-start composition editing остаётся non-goal и потребует новой
 assignment revision с новым AgentRun policy snapshot. До закрытия остальных Q13 findings, private dogfood, exact

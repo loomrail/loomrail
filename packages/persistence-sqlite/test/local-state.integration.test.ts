@@ -3331,6 +3331,11 @@ describe("SQLite local state", () => {
       const qaAgent = reopened.execute(startAgentRun("q1-browser-qa", qaDispatch.id));
       if (qaAgent.type !== "AGENT_RUN_STARTED") throw new Error("Expected Browser QA AgentRun");
       expect(qaAgent.run.profile.role).toBe("BROWSER_QA");
+      expect(qaAgent.run.policySnapshot).toMatchObject({
+        effectiveCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "BROWSER_READ"],
+        workspace: { access: "READ_ONLY", networkAccess: false },
+        mcpProfileRevisionIds: [],
+      });
       expect(() =>
         reopened.execute({
           schemaVersion: 1,

@@ -8,6 +8,8 @@ import {
   stageRequiresWorkspace,
   stagesRunningInWorkspace,
   stageRunsInWorkspace,
+  stagesWritingInWorkspace,
+  stageWritesInWorkspace,
   workspaceBranchName,
 } from "../src/index.js";
 
@@ -176,6 +178,15 @@ describe("stagesRequiringWorkspace", () => {
     expect(stageRequiresWorkspace("PLAN")).toBe(false);
     expect(stageRequiresWorkspace("REVIEW")).toBe(false);
     expect(stageRequiresWorkspace("ACCEPTANCE")).toBe(false);
+  });
+});
+
+describe("stagesWritingInWorkspace", () => {
+  it("lets only implementation mutate the repository", () => {
+    expect(stagesWritingInWorkspace).toEqual(["IMPLEMENT"]);
+    expect(stageWritesInWorkspace("IMPLEMENT")).toBe(true);
+    expect(stageWritesInWorkspace("QA")).toBe(false);
+    expect(stageWritesInWorkspace("REVIEW")).toBe(false);
   });
 });
 

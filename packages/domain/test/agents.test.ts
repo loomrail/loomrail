@@ -160,6 +160,25 @@ describe("agent team domain", () => {
     expect(policy.mcpProfileRevisionIds).toEqual([]);
   });
 
+  it("keeps Browser QA read-only and offline even though its worktree is required", () => {
+    const profile = builtinAgentProfiles.find(({ role }) => role === "BROWSER_QA");
+    if (profile === undefined) throw new Error("Expected the built-in Browser QA profile");
+    const policy = resolveAgentRunPolicy({
+      assignment: assignment(),
+      profile,
+      stage: "QA",
+      provider: "CODEX",
+      claimLimits: { global: 3, project: 3, provider: 3 },
+      pipelineBudget: { id: "budget-1", revision: 1, maxEstimatedTokens: 100_000 },
+      usedEstimatedTokens: 0,
+      mcpProfileRevisionIds: ["mcp-revision-not-authorized"],
+    });
+
+    expect(policy.effectiveCapabilities).toEqual(["ARTIFACT_WRITE", "REPOSITORY_READ", "BROWSER_READ"]);
+    expect(policy.workspace).toEqual({ access: "READ_ONLY", networkAccess: false });
+    expect(policy.mcpProfileRevisionIds).toEqual([]);
+  });
+
   it("creates one run from the assigned profile revision and only finishes it once", () => {
     const run = createAgentRun({
       id: "agent-run-1",

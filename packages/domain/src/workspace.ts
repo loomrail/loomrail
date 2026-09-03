@@ -83,16 +83,15 @@ export const stageRequiresWorkspace = (stage: WorkflowStage): boolean =>
  * review that can rewrite the code it is judging is not a review, and none of the three needs to
  * write anything to do its job.
  *
- * Answered off `stagesRequiringWorkspace` rather than from a second list, here or in an adapter,
- * because writing is exactly WHY those two are refused when there is no worktree: an IMPLEMENT or
- * QA with nowhere to write can only report work it never did, while a DISCOVERY with nothing to
- * read is merely a poorer session. One list, two questions it genuinely answers. If a stage ever
- * needs write access without being refused for the lack of it (or the reverse), this function is
- * the seam where the two part company -- and the adapter, which has no notion of a stage, still
- * does not grow one.
+ * QA is deliberately absent. It still requires and reads a stable worktree so the daemon can run
+ * the project and BrowserDriver can inspect it, but the provider session that plans/interprets QA
+ * evidence has no reason to mutate repository files or reach arbitrary network origins. Keeping
+ * this as its own list prevents the workspace requirement from silently widening write authority.
  */
+export const stagesWritingInWorkspace = ["IMPLEMENT"] as const satisfies readonly WorkflowStage[];
+
 export const stageWritesInWorkspace = (stage: WorkflowStage): boolean =>
-  (stagesRequiringWorkspace as readonly WorkflowStage[]).includes(stage);
+  (stagesWritingInWorkspace as readonly WorkflowStage[]).includes(stage);
 
 /**
  * Whether an adapter uses a workspace at all, read off the stages it declares.
@@ -105,8 +104,8 @@ export const stageWritesInWorkspace = (stage: WorkflowStage): boolean =>
  *
  * Declaring a stage that *requires* a workspace is the only signal an adapter gives about this --
  * `ProviderCapabilities` has no field for "I use the worktree", and inventing one is a contract
- * change this fix does not need. An adapter that never serves IMPLEMENT or QA has no write path,
- * which is precisely why its sibling was never taught to use the worktree at all. The same
+ * change this fix does not need. An adapter that never serves IMPLEMENT or QA has no stage that
+ * requires a worktree, which is precisely why its sibling was never taught to use one at all. The same
  * expression backs the launcher's `worksInRepository` line, so the sentence an owner reads at
  * startup and the decision the dispatcher makes cannot drift apart.
  */

@@ -198,7 +198,7 @@ export const builtinAgentProfiles: readonly AgentProfile[] = [
     stages: ["QA"],
     expectedInputs: ["Stable change checkpoint", "Acceptance criteria", "Review findings"],
     expectedOutputs: ["QA_EVIDENCE_BUNDLE", "TEST_REPORT"],
-    allowedCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "REPOSITORY_WRITE", "NETWORK", "BROWSER_READ"],
+    allowedCapabilities: ["ARTIFACT_WRITE", "REPOSITORY_READ", "BROWSER_READ"],
     successRubric: ["Evidence identifies the checkpoint, environment, steps, assertions and outcomes."],
     escalationConditions: ["The environment is unavailable or the checkpoint changes during verification."],
     handoffContract: "Publish evidence, defects, environment and exact reproduction steps.",
@@ -368,13 +368,16 @@ export const resolveAgentRunPolicy = (input: {
   }
 
   assertUnique(input.mcpProfileRevisionIds, "MCP profile revisions");
-  const mcpProfileRevisionIds = [...input.mcpProfileRevisionIds].sort((left, right) =>
+  const availableMcpProfileRevisionIds = [...input.mcpProfileRevisionIds].sort((left, right) =>
     left < right ? -1 : left > right ? 1 : 0,
   );
   const effectiveCapabilities = effectiveAgentCapabilities(
     input.profile,
-    stageCapabilityCeiling(input.stage, mcpProfileRevisionIds.length > 0),
+    stageCapabilityCeiling(input.stage, availableMcpProfileRevisionIds.length > 0),
   );
+  const mcpProfileRevisionIds = effectiveCapabilities.includes("MCP_READ")
+    ? availableMcpProfileRevisionIds
+    : [];
   const access = effectiveCapabilities.includes("REPOSITORY_WRITE")
     ? "READ_WRITE"
     : effectiveCapabilities.includes("REPOSITORY_READ")

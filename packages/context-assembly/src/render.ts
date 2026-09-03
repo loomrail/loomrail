@@ -402,16 +402,18 @@ const renderLatestCheckpoint = (sources: ContextSources): RenderedBody => {
 };
 
 const renderEvidence = (sources: ContextSources): RenderedBody => {
-  const lines =
+  const body =
     sources.evidence.length === 0
-      ? ["(no evidence recorded yet)"]
-      : sources.evidence.flatMap((item) => [
-          `- [${item.id} v${String(item.version)}] ${item.kind}: ${item.title}`,
-          `  ${item.summary}`,
-          ...item.checks.map((check) => `  - Check: ${check}`),
-        ]);
+      ? null
+      : sources.evidence
+          .flatMap((item) => [
+            `- [${item.id} v${String(item.version)}] ${item.kind}: ${item.title}`,
+            `  ${item.summary}`,
+            ...item.checks.map((check) => `  - Check: ${check}`),
+          ])
+          .join("\n");
   return {
-    text: block("Evidence", lines),
+    text: block("Evidence", body === null ? ["(no evidence recorded yet)"] : [untrusted(body)]),
     sources: sources.evidence.map((item) => ({ kind: "EVIDENCE", id: item.id, version: item.version })),
   };
 };

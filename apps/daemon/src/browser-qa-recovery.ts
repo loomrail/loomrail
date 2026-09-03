@@ -1,4 +1,5 @@
 import {
+  BrowserQAArtifactRecoveryError,
   recoverBrowserQAArtifacts,
   type BrowserQAArtifactRecovery,
   type BrowserQARecoveryMarker,
@@ -45,7 +46,10 @@ export const reconcileBrowserQAArtifacts = async (input: {
     });
   } catch (error: unknown) {
     input.logger.error(
-      { error: error instanceof Error ? error.name : "unknown" },
+      {
+        errorCode:
+          error instanceof BrowserQAArtifactRecoveryError ? error.code : "UNEXPECTED_RECOVERY_REJECTION",
+      },
       "Browser QA attachment recovery could not inspect its local artifact directory",
     );
     return;

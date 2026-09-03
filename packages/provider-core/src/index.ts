@@ -181,7 +181,7 @@ export type ProviderWorkspace = {
    * Required, and required for a reason: an adapter that inferred write access from the mere
    * presence of a workspace is how DISCOVERY, PLAN and REVIEW came to launch under
    * `-s workspace-write` with network access opened. Giving every agent stage the worktree (R11)
-   * was right -- a review that cannot read the change is useless -- but only IMPLEMENT and QA
+   * was right -- a review that cannot read the change is useless -- but only IMPLEMENT may
    * change it, and a field with a default would have let the wider access go on being the silent
    * fallback. The caller states it; `stageWritesInWorkspace` (`@loomrail/domain`) is what the
    * daemon reads to answer it, so no adapter carries a list of stages of its own.

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   BROWSER_QA_RECOVERY_MARKER,
+  BrowserQAArtifactRecoveryError,
   BrowserDriverError,
   createPlaywrightDriver,
   recoverBrowserQAArtifacts,
@@ -290,6 +291,26 @@ describe("Playwright BrowserDriver", () => {
     }
   });
 
+  it("normalizes recovery scan failures without exposing filesystem details", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-recovery-errors-"));
+    resources.push({ directory });
+    const occupied = join(directory, "occupied");
+    await writeFile(occupied, "not a directory", "utf8");
+
+    await expect(
+      recoverBrowserQAArtifacts({ artifactsDirectory: occupied, isCommitted: () => false }),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "BrowserQAArtifactRecoveryError",
+        code: "RECOVERY_SCAN_FAILED",
+        message: "Browser QA artifact recovery could not inspect the managed storage safely.",
+      }),
+    );
+    await expect(
+      recoverBrowserQAArtifacts({ artifactsDirectory: occupied, isCommitted: () => false }),
+    ).rejects.toBeInstanceOf(BrowserQAArtifactRecoveryError);
+  });
+
   it("blocks off-origin redirects and exposes no finalizable evidence", async () => {
     const destination = await startServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html" });
@@ -545,5 +566,21 @@ describe("Playwright BrowserDriver", () => {
       }),
     );
     await expect(driver.run(qaRun("http://127.0.0.1:4173"), [])).rejects.toBeInstanceOf(BrowserDriverError);
+
+    const hostileRun = qaRun("http://127.0.0.1:4173");
+    Object.defineProperty(hostileRun, "id", {
+      get: () => {
+        throw new BrowserDriverError("INVALID_INPUT", "CANARY_SECRET_FROM_CALLBACK");
+      },
+    });
+    const rejection = createPlaywrightDriver({ artifactsDirectory: directory }).run(hostileRun);
+    await expect(rejection).rejects.toEqual(
+      expect.objectContaining({
+        name: "BrowserDriverError",
+        code: "INVALID_INPUT",
+        message: "The Browser QA run input is invalid.",
+      }),
+    );
+    await expect(rejection).rejects.not.toHaveProperty("message", expect.stringContaining("CANARY_SECRET"));
   });
 });

@@ -519,6 +519,9 @@ spawn и записывается уже leased, пока exclusive active WorkI
 AgentRun фиксирует hash immutable policy snapshot: assignment/profile revision, effective provider и применённые
 capability/budget/workspace rules. Exact provider input не дублируется на этом уровне: его `contentHash` остаётся в
 ContextPackRecipe конкретной ProviderSession и может закономерно измениться при handoff внутри одного AgentRun.
+MCP revision ids входят только когда пересечение реально сохранило `MCP_READ`. Browser QA требует stable worktree,
+но его provider policy остаётся read-only/offline; сетевой доступ к loopback target принадлежит отдельному
+BrowserDriver, а не provider session.
 
 Первый stable scope создаёт один immutable `SquadAssignment(revision = 1)` вместе с PipelineRun. Изменение состава
 после старта не имеет command, HTTP/UI boundary или transition и не заявляется реализованным. Поле revision фиксирует

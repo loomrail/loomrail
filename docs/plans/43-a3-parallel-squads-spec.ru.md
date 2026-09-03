@@ -18,7 +18,7 @@ workflow state и не позволяя двум писателям пересе
 
 ### Входит
 
-- versioned built-in `AgentProfile` для базовых ролей и project-local role playbook refinement;
+- versioned built-in `AgentProfile` для базовых ролей и profile-bound role playbook refinement;
 - immutable `SquadAssignment`, привязанный к approved PipelineRun и содержащий только необходимые workflow roles;
 - durable `AgentRun` между StageAttempt и ProviderSession;
 - scheduler с default global concurrency 3 и отдельными global/project/provider limits;
@@ -36,6 +36,7 @@ workflow state и не позволяя двум писателям пересе
 - cross-Project Epic и новый dependency/DAG editor;
 - shared main-directory mode, browser/server leases и merge/rebase automation;
 - user-imported roles, plugin installation либо новые permissions без owner Consent;
+- project-authored role-playbook editor/import; stable использует versioned playbook встроенного AgentProfile;
 - изменение состава SquadAssignment после старта PipelineRun;
 - автоматический retry оборванного AgentRun;
 - завершение budget hierarchy: A3 соблюдает доступные limits, но не выдаёт отсутствующий live-usage accounting за
@@ -111,7 +112,9 @@ REVIEW и QA не запускаются против меняющегося д�
 
 ### D6 — Role playbook только уточняет Context Pack
 
-WorkflowTemplate остаётся верхним из двух реализованных слоёв. Role playbook может добавить секцию либо поднять её
+WorkflowTemplate остаётся верхним из двух реализованных слоёв. В stable scope это versioned playbook точной
+встроенной ревизии AgentProfile; project-authored overrides остаются отдельным будущим Constitution/editor flow.
+Role playbook может добавить секцию либо поднять её
 раньше среди optional sections, но не удалить required section, не сделать её optional и не поменять security or
 permission policy. Recipe записывает `ROLE_PLAYBOOK` и точные profile id/revision; адаптер по-прежнему получает
 только собранный pack.
@@ -190,6 +193,7 @@ Scheduler deferral reasons: `NOT_READY`, `BUDGET_BLOCKED`, `CHECKPOINT_NOT_STABL
 4. Handoff создаёт новую ProviderSession без второго AgentRun/slot.
 5. Restart помечает orphan AgentRun interrupted и не перезапускает его автоматически.
 6. Blocking HumanRequest останавливает только связанный run; независимые runs продолжаются.
-7. Role playbook не может убрать required workflow context или расширить permissions.
+7. Built-in profile playbook участвует в recipe с exact profile revision и не может убрать required workflow
+   context или расширить permissions; project-authored refinement не заявляется реализованным.
 8. Fleet projection совпадает с durable state после reconnect/restart и не является source of truth.
 9. Focused tests, `pnpm verify`, E2E, production audit и clean release tarball проходят на macOS и Windows.
