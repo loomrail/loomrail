@@ -1304,7 +1304,7 @@ Q1 tightens the deterministic baseline further:
   when a callback supplied an instance of the exported class. Startup artifact recovery exposes a separate closed
   scan error and daemon logs only its code. An `ENOENT` scan is accepted as an absent managed child only after the
   artifact root is verified as absent or a directory, because Windows can report `ENOENT` for a child below a file.
-  Setup, finalization, confirmation, disposal, recovery and authenticated open refuse symlinked
+  Setup, finalization, confirmation, disposal, recovery, retention and authenticated open refuse symlinked
   `artifacts`/`qa`/`.quarantine`/run directories, require each canonical child to remain under its already verified
   parent, and recheck directory identity immediately before or after a path mutation. Recovery reads at most 10,000
   directory entries per managed root; a larger root fails closed instead of becoming an unbounded startup allocation.

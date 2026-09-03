@@ -243,16 +243,17 @@ describe("readReviewDiff", () => {
         maxPatchBytesTotal: 1,
       }),
     ).rejects.toEqual(expect.objectContaining({ name: "ReviewDiffReadError", code: "INVALID_INPUT" }));
-    await expect(
-      readReviewDiff({
-        worktreePath,
-        baseline,
-        maxFiles: 51,
-        maxContentFiles: 16,
-        maxPatchBytesPerFile: 4_096,
-        maxPatchBytesTotal: 32_768,
-      }),
-    ).rejects.toEqual(expect.objectContaining({ name: "ReviewDiffReadError", code: "INVALID_INPUT" }));
+    const widenedRequests = [
+      { maxFiles: 51, maxContentFiles: 16, maxPatchBytesPerFile: 4_096, maxPatchBytesTotal: 32_768 },
+      { maxFiles: 50, maxContentFiles: 17, maxPatchBytesPerFile: 4_096, maxPatchBytesTotal: 32_768 },
+      { maxFiles: 50, maxContentFiles: 16, maxPatchBytesPerFile: 4_097, maxPatchBytesTotal: 32_768 },
+      { maxFiles: 50, maxContentFiles: 16, maxPatchBytesPerFile: 4_096, maxPatchBytesTotal: 32_769 },
+    ];
+    for (const limits of widenedRequests) {
+      await expect(readReviewDiff({ worktreePath, baseline, ...limits })).rejects.toEqual(
+        expect.objectContaining({ name: "ReviewDiffReadError", code: "INVALID_INPUT" }),
+      );
+    }
   });
 
   it("normalizes git/read failures through its closed public error vocabulary", async () => {

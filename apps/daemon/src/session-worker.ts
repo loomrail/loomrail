@@ -131,16 +131,21 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
           }
           agentRunId = started.run.id;
         }
+      } else if (stageAttempt.stage !== "ACCEPTANCE") {
+        const active = deps.state.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" });
+        agentRunId =
+          active.type === "AGENT_RUNS"
+            ? active.runs.find(({ stageAttemptId }) => stageAttemptId === stageAttempt.id)?.id
+            : undefined;
+        if (agentRunId === undefined) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "A running executable StageAttempt has no active AgentRun authority",
+          );
+        }
       }
 
       if (stageAttempt.stage === "QA" && deps.browserQA !== undefined) {
-        if (agentRunId === undefined) {
-          const active = deps.state.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" });
-          agentRunId =
-            active.type === "AGENT_RUNS"
-              ? active.runs.find(({ stageAttemptId }) => stageAttemptId === stageAttempt.id)?.id
-              : undefined;
-        }
         const testedTree = [...workflowSnapshot.stageAttempts]
           .reverse()
           .find(

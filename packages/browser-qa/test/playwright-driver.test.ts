@@ -16,6 +16,9 @@ import {
   recoverBrowserQAArtifacts,
 } from "../src/index.js";
 
+const createDirectoryLink = (target: string, path: string): Promise<void> =>
+  symlink(target, path, process.platform === "win32" ? "junction" : "dir");
+
 const closeServer = (server: Server): Promise<void> =>
   new Promise((resolve, reject) => {
     server.close((error) => {
@@ -328,27 +331,49 @@ describe("Playwright BrowserDriver", () => {
     ).resolves.toEqual([]);
   });
 
-  it.skipIf(process.platform === "win32")(
-    "refuses a symlinked recovery root without mutating its external target",
-    async () => {
-      const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-symlink-root-"));
-      const external = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-external-root-"));
-      resources.push({ directory }, { directory: external });
-      const segment = `run-${"a".repeat(32)}`;
-      const externalRun = join(external, segment);
-      await mkdir(externalRun);
-      const marker = join(externalRun, BROWSER_QA_RECOVERY_MARKER);
-      await writeFile(marker, "not-json", "utf8");
-      await symlink(external, join(directory, "qa"));
+  it("fails closed when a recovery root exceeds the 10,000-entry scan bound", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-bounded-recovery-"));
+    resources.push({ directory });
+    const qaDirectory = join(directory, "qa");
+    await mkdir(qaDirectory);
+    const totalEntries = 10_001;
+    const batchSize = 250;
+    for (let offset = 0; offset < totalEntries; offset += batchSize) {
+      await Promise.all(
+        Array.from({ length: Math.min(batchSize, totalEntries - offset) }, (_value, index) =>
+          mkdir(join(qaDirectory, `entry-${(offset + index).toString().padStart(5, "0")}`)),
+        ),
+      );
+    }
 
-      await expect(
-        recoverBrowserQAArtifacts({ artifactsDirectory: directory, isCommitted: () => false }),
-      ).rejects.toBeInstanceOf(BrowserQAArtifactRecoveryError);
-      await expect(access(marker)).resolves.toBeUndefined();
-      await expect(access(externalRun)).resolves.toBeUndefined();
-      await expect(access(join(directory, ".quarantine"))).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+    await expect(
+      recoverBrowserQAArtifacts({ artifactsDirectory: directory, isCommitted: () => false }),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "BrowserQAArtifactRecoveryError",
+        code: "RECOVERY_SCAN_FAILED",
+      }),
+    );
+  }, 60_000);
+
+  it("refuses a linked recovery root without mutating its external target", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-symlink-root-"));
+    const external = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-external-root-"));
+    resources.push({ directory }, { directory: external });
+    const segment = `run-${"a".repeat(32)}`;
+    const externalRun = join(external, segment);
+    await mkdir(externalRun);
+    const marker = join(externalRun, BROWSER_QA_RECOVERY_MARKER);
+    await writeFile(marker, "not-json", "utf8");
+    await createDirectoryLink(external, join(directory, "qa"));
+
+    await expect(
+      recoverBrowserQAArtifacts({ artifactsDirectory: directory, isCommitted: () => false }),
+    ).rejects.toBeInstanceOf(BrowserQAArtifactRecoveryError);
+    await expect(access(marker)).resolves.toBeUndefined();
+    await expect(access(externalRun)).resolves.toBeUndefined();
+    await expect(access(join(directory, ".quarantine"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   it.skipIf(process.platform === "win32")("refuses a dangling symlink at the recovery root", async () => {
     const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-dangling-root-"));
@@ -360,72 +385,66 @@ describe("Playwright BrowserDriver", () => {
     ).rejects.toBeInstanceOf(BrowserQAArtifactRecoveryError);
   });
 
-  it.skipIf(process.platform === "win32")(
-    "refuses symlinked setup and finalization roots without mutating their targets",
-    async () => {
-      const setupRoot = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-setup-root-"));
-      const setupExternal = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-setup-external-"));
-      resources.push({ directory: setupRoot }, { directory: setupExternal });
-      const sentinel = join(setupExternal, "sentinel.txt");
-      await writeFile(sentinel, "preserve me", "utf8");
-      await symlink(setupExternal, join(setupRoot, ".quarantine"));
+  it("refuses linked setup and finalization roots without mutating their targets", async () => {
+    const setupRoot = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-setup-root-"));
+    const setupExternal = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-setup-external-"));
+    resources.push({ directory: setupRoot }, { directory: setupExternal });
+    const sentinel = join(setupExternal, "sentinel.txt");
+    await writeFile(sentinel, "preserve me", "utf8");
+    await createDirectoryLink(setupExternal, join(setupRoot, ".quarantine"));
 
-      await expect(
-        createPlaywrightDriver({ artifactsDirectory: setupRoot }).run(qaRun("http://127.0.0.1:4173")),
-      ).rejects.toMatchObject({ code: "DRIVER_SETUP_FAILED" });
-      await expect(readFile(sentinel, "utf8")).resolves.toBe("preserve me");
+    await expect(
+      createPlaywrightDriver({ artifactsDirectory: setupRoot }).run(qaRun("http://127.0.0.1:4173")),
+    ).rejects.toMatchObject({ code: "DRIVER_SETUP_FAILED" });
+    await expect(readFile(sentinel, "utf8")).resolves.toBe("preserve me");
 
-      const fixture = await startServer((_request, response) => {
-        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        response.end(
-          "<!doctype html><html><body><main><h1>Current work</h1><button>Continue</button></main></body></html>",
-        );
-      });
-      const finalRoot = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-final-root-"));
-      const finalExternal = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-final-external-"));
-      resources.push({ server: fixture.server, directory: finalRoot }, { directory: finalExternal });
-      const execution = await createPlaywrightDriver({ artifactsDirectory: finalRoot }).run(
-        qaRun(fixture.origin),
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        "<!doctype html><html><body><main><h1>Current work</h1><button>Continue</button></main></body></html>",
       );
-      await symlink(finalExternal, join(finalRoot, "qa"));
-      await expect(
-        execution.finalizeAttachments({ qaRunId: "qa-run-1", createAttachmentId: () => "attachment-1" }),
-      ).rejects.toMatchObject({ code: "ATTACHMENT_FINALIZATION_FAILED" });
-      await expect(readdir(finalExternal)).resolves.toEqual([]);
-      await execution.dispose();
-    },
-  );
+    });
+    const finalRoot = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-final-root-"));
+    const finalExternal = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-final-external-"));
+    resources.push({ server: fixture.server, directory: finalRoot }, { directory: finalExternal });
+    const execution = await createPlaywrightDriver({ artifactsDirectory: finalRoot }).run(
+      qaRun(fixture.origin),
+    );
+    await createDirectoryLink(finalExternal, join(finalRoot, "qa"));
+    await expect(
+      execution.finalizeAttachments({ qaRunId: "qa-run-1", createAttachmentId: () => "attachment-1" }),
+    ).rejects.toMatchObject({ code: "ATTACHMENT_FINALIZATION_FAILED" });
+    await expect(readdir(finalExternal)).resolves.toEqual([]);
+    await execution.dispose();
+  });
 
-  it.skipIf(process.platform === "win32")(
-    "refuses to open matching evidence through a symlinked QA root",
-    async () => {
-      const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-open-root-"));
-      const external = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-open-external-"));
-      resources.push({ directory }, { directory: external });
-      const segment = `run-${"a".repeat(32)}`;
-      await mkdir(join(external, segment));
-      await writeFile(join(external, segment, "evidence.txt"), "evidence", "utf8");
-      await symlink(external, join(directory, "qa"));
-      const value: QAAttachmentRef = {
-        schemaVersion: 1,
-        id: "attachment-1",
-        qaRunId: "qa-run-1",
-        kind: "SCREENSHOT",
-        contentHash: `sha256:${"a".repeat(64)}`,
-        byteSize: 8,
-        targetId: "desktop-light-en",
-        scenarioId: "current-work",
-        capturedAt: "2026-09-03T09:00:00.000Z",
-        retentionClass: "STANDARD_30_DAYS",
-        storageKey: `${segment}/evidence.txt`,
-      };
+  it("refuses to open matching evidence through a linked QA root", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-open-root-"));
+    const external = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-open-external-"));
+    resources.push({ directory }, { directory: external });
+    const segment = `run-${"a".repeat(32)}`;
+    await mkdir(join(external, segment));
+    await writeFile(join(external, segment, "evidence.txt"), "evidence", "utf8");
+    await createDirectoryLink(external, join(directory, "qa"));
+    const value: QAAttachmentRef = {
+      schemaVersion: 1,
+      id: "attachment-1",
+      qaRunId: "qa-run-1",
+      kind: "SCREENSHOT",
+      contentHash: `sha256:${"a".repeat(64)}`,
+      byteSize: 8,
+      targetId: "desktop-light-en",
+      scenarioId: "current-work",
+      capturedAt: "2026-09-03T09:00:00.000Z",
+      retentionClass: "STANDARD_30_DAYS",
+      storageKey: `${segment}/evidence.txt`,
+    };
 
-      await expect(
-        openVerifiedBrowserQAArtifact({ artifactsDirectory: directory, attachment: value }),
-      ).rejects.toMatchObject({ code: "STORAGE_LAYOUT_INVALID" });
-      await expect(readFile(join(external, segment, "evidence.txt"), "utf8")).resolves.toBe("evidence");
-    },
-  );
+    await expect(
+      openVerifiedBrowserQAArtifact({ artifactsDirectory: directory, attachment: value }),
+    ).rejects.toMatchObject({ code: "STORAGE_LAYOUT_INVALID" });
+    await expect(readFile(join(external, segment, "evidence.txt"), "utf8")).resolves.toBe("evidence");
+  });
 
   it("blocks off-origin redirects and exposes no finalizable evidence", async () => {
     const destination = await startServer((_request, response) => {

@@ -30,6 +30,7 @@
 - [x] Применить immutable model tier через schema-validated provider mapping и явный CLI `--model`.
 - [x] Запретить публичному review-diff API расширять intrinsic limits, ограничить recovery scan и проверить полную
       managed Browser QA directory chain.
+- [x] Распространить managed-root checks на retention и fail-closed прервать legacy session без AgentRun authority.
 - [ ] Выполнить финальный Standards/Spec review и закрыть все P0/P1.
 - [ ] Прогнать full non-landing source gates, fault injection, audit, clean package и browser matrix.
 - [ ] Запушить Q13, дождаться macOS/Windows CI и записать evidence.

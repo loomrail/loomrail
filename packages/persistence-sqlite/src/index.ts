@@ -7434,13 +7434,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const recoveryReports: RecoveryReport[] = [];
         const events: DomainEvent[] = [];
 
-        // Spec §6.4: a daemon restart is the ordinary end of a ProviderSession, not a failed
-        // StageAttempt. A session still marked RUNNING at startup is orphaned by definition -- the
-        // process that ran it is gone -- so it ends as ENDED/INTERRUPTED and the attempt keeps its
-        // pending dispatch, which the session loop picks up and continues from the last checkpoint.
-        // Attempts recovered this way are therefore excluded from the dispatch-level recovery
-        // below, which exists for the case where no session ever started.
-        const attemptsWithInterruptedSession = new Set<string>();
+        // A session still marked RUNNING at startup is orphaned by definition. The session ends as
+        // ENDED/INTERRUPTED, and its pending dispatch is deliberately left for the dispatch-level
+        // recovery below. A3 forbids automatic retry of an interrupted AgentRun; historical
+        // sessions with no AgentRun must fail closed the same way instead of resuming under
+        // nullable policy fallbacks that could observe current grants or configuration.
         for (const sessionRow of selectOrphanedRunningSessions.all()) {
           const current = providerSessionFromRow(sessionRow);
           const sessionAttempt = readStageAttempt(current.stageAttemptId);
@@ -7485,10 +7483,6 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             );
           }
           interruptedSessions.push(session);
-          // Historical sessions had no AgentRun and keep A1's continuation semantics. An A3
-          // session belongs to a run just interrupted above, so its StageAttempt must follow the
-          // ordinary AD-008 dispatch recovery path instead of being silently resumed.
-          if (session.agentRunId === null) attemptsWithInterruptedSession.add(session.stageAttemptId);
           events.push(
             appendSessionEvent(
               { type: "PROVIDER_SESSION_ENDED", data: { session } },
@@ -7504,17 +7498,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         }
 
         // A StageAttempt this loop recovers to INTERRUPTED is never coming back to reclaim a
-        // workspace lease itself (AD-008: nothing here restarts it): decideRecoverInterruptedWorkflow
-        // is the daemon-restart path where no session ever started at all, unlike the loop above,
-        // whose attempts stay RUNNING precisely because a resumed session is expected to use the
-        // workspace again. Collected here, not derived from a later status re-read, because it is
-        // this transaction's own decision that makes an attempt "dead" for lease purposes -- a
-        // StageAttempt already WAITING_HUMAN or *_PAUSED before this reconciliation even ran still
-        // legitimately owns its lease, and nothing below may release that.
+        // workspace lease itself (AD-008: nothing here restarts it). Collected here, not derived
+        // from a later status re-read, because it is this transaction's own decision that makes an
+        // attempt "dead" for lease purposes -- a StageAttempt already WAITING_HUMAN or *_PAUSED
+        // before this reconciliation even ran still legitimately owns its lease, and nothing below
+        // may release that.
         const attemptsRecoveredToInterrupted = new Set<string>();
 
         for (const dispatch of orphanedDispatches) {
-          if (attemptsWithInterruptedSession.has(dispatch.stageAttemptId)) continue;
           const run = readPipelineRun(dispatch.pipelineRunId);
           const stageAttempt = readStageAttempt(dispatch.stageAttemptId);
           const workItem = readWorkItem(dispatch.workItemId);

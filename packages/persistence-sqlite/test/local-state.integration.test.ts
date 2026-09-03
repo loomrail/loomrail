@@ -7372,11 +7372,10 @@ describe("SQLite local state", () => {
       });
     });
 
-    // Spec §9 asks for this at the package level, and this is the only place the SQL branch behind
-    // `selectOrphanedRunningSessions` is reachable: a session left RUNNING when the process that
-    // ran it is gone. §6.4 makes that the ordinary end of a session, not a failed StageAttempt, so
-    // the dispatch must survive for the session loop to pick the attempt back up.
-    it("ends a ProviderSession left RUNNING at reconciliation without failing its StageAttempt", async () => {
+    // A database created before A3 can contain a RUNNING ProviderSession with no AgentRun. On the
+    // first current-daemon startup it must be retained as history but may not resume with nullable
+    // authority or current MCP grants.
+    it("interrupts a historical unclaimed ProviderSession without automatically resuming it", async () => {
       const localState = await open();
       const { workItemId, stageAttemptId } = startWorkflow(
         localState,
@@ -7395,10 +7394,17 @@ describe("SQLite local state", () => {
         type: "MARK_WORKFLOW_DISPATCH_STARTED",
         payload: { dispatchId: dispatch.id },
       });
-      const started = localState.execute(
-        startProviderSessionCommand("start-orphaned-provider-session", stageAttemptId),
-      );
-      if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a started session");
+      const legacySessionId = "legacy-unclaimed-provider-session";
+      const rawSeed = new DatabaseSync(databasePath);
+      rawSeed
+        .prepare(
+          `INSERT INTO provider_sessions (
+            id, schema_version, agent_run_id, stage_attempt_id, ordinal, status, end_reason,
+            handoff_requested_at, started_at, ended_at, version, process_pid
+          ) VALUES (?, 1, NULL, ?, 1, 'RUNNING', NULL, NULL, ?, NULL, 1, NULL)`,
+        )
+        .run(legacySessionId, stageAttemptId, timestamp);
+      rawSeed.close();
 
       // No END_PROVIDER_SESSION: the row stays RUNNING, which is what a daemon that died mid-session
       // leaves behind.
@@ -7413,32 +7419,36 @@ describe("SQLite local state", () => {
       if (reconciled.type !== "WORKFLOWS_RECONCILED") throw new Error("Expected reconciliation");
       expect(reconciled.interruptedSessions).toEqual([
         expect.objectContaining({
-          id: started.session.id,
+          id: legacySessionId,
           status: "ENDED",
           endReason: "INTERRUPTED",
           endedAt: timestamp,
         }),
       ]);
       expect(reconciled.events.filter(({ type }) => type === "PROVIDER_SESSION_ENDED")).toHaveLength(1);
-      // The attempt was not routed through dispatch-level recovery: no RecoveryReport, the dispatch
-      // is still PENDING, and the attempt is still RUNNING.
-      expect(reconciled.recoveryReports).toEqual([]);
+      expect(reconciled.recoveryReports).toEqual([
+        expect.objectContaining({
+          stageAttemptId,
+          recoveredStatus: "INTERRUPTED",
+          reason: "DAEMON_RESTART",
+        }),
+      ]);
       const stillQueued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
       expect(
         stillQueued.type === "WORKFLOW_DISPATCHES" ? stillQueued.dispatches.map(({ id }) => id) : [],
-      ).toEqual([dispatch.id]);
+      ).toEqual([]);
       const snapshot = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
       expect(
         snapshot.type === "WORKFLOW_SNAPSHOT"
           ? snapshot.snapshot.stageAttempts.find(({ id }) => id === stageAttemptId)?.status
           : null,
-      ).toBe("RUNNING");
+      ).toBe("INTERRUPTED");
 
       localState.close();
       state = undefined;
       const raw = new DatabaseSync(databasePath);
       expect(
-        raw.prepare("SELECT status, end_reason FROM provider_sessions WHERE id = ?").get(started.session.id),
+        raw.prepare("SELECT status, end_reason FROM provider_sessions WHERE id = ?").get(legacySessionId),
       ).toEqual({ status: "ENDED", end_reason: "INTERRUPTED" });
       raw.close();
     });

@@ -212,22 +212,24 @@ describe("session worker", () => {
   const seedQueuedAttempt = (localState: LocalState): SeededAttempt =>
     seedQueuedAttemptFixture(localState, createCommandId, temporaryDirectory);
 
-  // The same seed as `session.integration.test.ts`'s "stops without starting a session when one is
-  // already running on the attempt": a queued attempt whose dispatch is marked started and which
-  // already has a RUNNING ProviderSession recorded directly, bypassing `runStageAttempt`. Nothing
-  // serialises the drain, so `runStageAttempt` meets this the same way a genuine second caller would
-  // -- it returns quietly, and the dispatch stays PENDING and unmoved.
+  // A claimed attempt which already has a RUNNING ProviderSession recorded directly, bypassing
+  // `runStageAttempt`. Nothing serialises the drain, so `runStageAttempt` meets this the same way a
+  // genuine second caller would -- it returns quietly, and the dispatch stays PENDING and unmoved.
   const seedUnmovableDispatch = (localState: LocalState): SeededAttempt => {
     const seeded = seedQueuedAttempt(localState);
-    const dispatched = localState.execute({
+    const claimed = localState.execute({
       schemaVersion: 1,
       commandId: createCommandId(),
       correlationId: "correlation-seed-dispatch",
-      actor: { type: "SYSTEM", id: "session-loop" },
-      type: "MARK_WORKFLOW_DISPATCH_STARTED",
-      payload: { dispatchId: seeded.dispatch.id },
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: seeded.dispatch.id,
+        provider: "MOCK",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
     });
-    if (dispatched.type !== "WORKFLOW_DISPATCH_STARTED") throw new Error("Expected a started dispatch");
+    if (claimed.type !== "AGENT_RUN_STARTED") throw new Error("Expected a claimed dispatch");
     const running = localState.execute({
       schemaVersion: 1,
       commandId: createCommandId(),
@@ -252,7 +254,7 @@ describe("session worker", () => {
       },
     });
     if (running.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected a running session");
-    return { ...seeded, dispatch: dispatched.dispatch };
+    return seeded;
   };
 
   it("applies the assigned role playbook and records its exact profile revision", async () => {
@@ -679,8 +681,7 @@ describe("session worker", () => {
     ]);
   }, 30_000);
 
-  // Without this guard the loop would spin on the same unmovable row to the cycle limit.
-  it("ends the pass once every pending dispatch is one it cannot start", async () => {
+  it("ends the pass when every pending dispatch already belongs to an active run", async () => {
     const localState = state();
     const logger = createRecordingLogger();
     const worker = createSessionWorker({
@@ -697,14 +698,13 @@ describe("session worker", () => {
     await awaitIdle(worker);
 
     const messages = logger.records.map(({ msg }) => msg);
-    // Once, not once per cycle: the dispatch is skipped and then nothing is left to pick, so the
-    // pass returns instead of retrying the same row twenty times.
+    // The scheduler excludes the active attempt before dispatch, so it neither spins nor reports a
+    // failed start for authority that is already durably claimed.
     expect(
       messages.filter(
         (msg) => msg === "This pending workflow dispatch could not be started yet; the drain moves past it",
       ),
-    ).toHaveLength(1);
-    // And it did not reach the cycle limit, which is what a spin looks like from the outside.
+    ).toHaveLength(0);
     expect(messages).not.toContain("The workflow dispatch queue exceeded its safety limit");
   }, 20_000);
 
@@ -746,8 +746,8 @@ describe("session worker", () => {
     // And the head was not lost, run twice, or completed on its behalf -- it is exactly where it
     // was, for the next wake to pick up once whoever holds it lets go.
     expect(stillPending).toContain(blockedHead.dispatch.id);
-    expect(logger.records.map(({ msg }) => msg)).toContain(
-      "This pending workflow dispatch could not be started yet; the drain moves past it",
+    expect(logger.records.map(({ msg }) => msg)).not.toContain(
+      "The workflow dispatch queue exceeded its safety limit",
     );
   }, 20_000);
 
@@ -796,14 +796,12 @@ describe("session worker", () => {
     // The pass ended because it was finished, not because it ran out of budget. This is the line
     // that appeared at error level on a perfectly healthy queue.
     expect(messages).not.toContain("The workflow dispatch queue exceeded its safety limit");
-    // Twice, not once per completed dispatch: the head is tried, set aside for the rest of the
-    // queue, and offered exactly one more turn once nothing else is left -- because by then a
-    // completion may have released whatever it was waiting on.
+    // An already active run is filtered before dispatch and consumes none of the cycle budget.
     expect(
       messages.filter(
         (msg) => msg === "This pending workflow dispatch could not be started yet; the drain moves past it",
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(0);
   }, 40_000);
 
   // The background loop has no caller to hand a 500 to. A throw must stay inside it, and must not

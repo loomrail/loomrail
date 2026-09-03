@@ -120,6 +120,10 @@ Exact live-provider promotion по-прежнему требует отдель�
 entries и fail-closed отклоняет symlink/layout swap. Финальный syscall не объявляется sandbox от уже полностью
 скомпрометированного same-user process согласно threat boundary.
 
+Историческая RUNNING ProviderSession без `agent_run_id` при первом startup reconciliation сохраняется как
+`ENDED/INTERRUPTED`, но её StageAttempt и dispatch также переходят в durable `INTERRUPTED` recovery state. Daemon не
+создаёт для неё следующую session и не применяет nullable-policy fallback, текущие grants либо новую provider config.
+
 ## 4. Другие обязательные findings Q13
 
 - untrusted repository/provider text не может закрыть собственную context section delimiter;
@@ -136,7 +140,7 @@ entries и fail-closed отклоняет symlink/layout swap. Финальны�
 - public async BrowserDriver errors имеют closed typed contract (D7);
 - post-start SquadAssignment revision явно остаётся non-goal stable scope без overclaim (D8);
 - model tier применяется к явному provider model, а публичные review limits и Browser QA managed layout нельзя
-  расширить в обход канонической policy (D9).
+  расширить в обход канонической policy; pre-AgentRun session не возобновляется автоматически (D9).
 
 ## 5. Verification и exit
 

@@ -1,10 +1,17 @@
 import { constants, type Stats } from "node:fs";
-import { lstat, open, realpath, rmdir, unlink } from "node:fs/promises";
+import { lstat, open, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import { qaAttachmentRefSchema, type QAAttachmentRef } from "@loomrail/contracts";
 
-import { isSameFile, RUN_STORAGE_SEGMENT } from "./artifact-layout.js";
+import {
+  inspectManagedArtifactRoot,
+  inspectManagedChildDirectory,
+  isSameFile,
+  managedDirectoryStillMatches,
+  RUN_STORAGE_SEGMENT,
+  type ManagedDirectory,
+} from "./artifact-layout.js";
 import { BROWSER_QA_RECOVERY_MARKER } from "./artifact-recovery.js";
 
 export type BrowserQARetentionAction =
@@ -59,40 +66,37 @@ export const deleteExpiredBrowserQAArtifacts = async (input: {
       continue;
     }
 
+    let artifactsRoot: ManagedDirectory;
+    let qaDirectory: ManagedDirectory;
+    let runDirectory: ManagedDirectory;
+    try {
+      artifactsRoot = await inspectManagedArtifactRoot(input.artifactsDirectory);
+      qaDirectory = await inspectManagedChildDirectory(artifactsRoot, "qa");
+      runDirectory = await inspectManagedChildDirectory(qaDirectory, runStorageSegment);
+    } catch (error: unknown) {
+      results.push({
+        attachmentId,
+        storageKey,
+        action: hasCode(error, "ENOENT") ? "ALREADY_ABSENT" : "SKIPPED_UNSAFE",
+      });
+      continue;
+    }
+
+    const managedRootsStillMatch = (): Promise<boolean> =>
+      Promise.all([
+        managedDirectoryStillMatches(artifactsRoot),
+        managedDirectoryStillMatches(qaDirectory),
+        managedDirectoryStillMatches(runDirectory),
+      ]).then((matches) => matches.every(Boolean));
+    const markerPath = join(runDirectory.path, BROWSER_QA_RECOVERY_MARKER);
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      const qaDirectory = join(input.artifactsDirectory, "qa");
-      const runDirectory = join(qaDirectory, runStorageSegment);
-      const [
-        canonicalArtifactsDirectory,
-        canonicalQADirectory,
-        canonicalRunDirectory,
-        qaMetadata,
-        runMetadata,
-      ] = await Promise.all([
-        realpath(input.artifactsDirectory),
-        realpath(qaDirectory),
-        realpath(runDirectory),
-        lstat(qaDirectory),
-        lstat(runDirectory),
-      ]);
-      if (
-        !qaMetadata.isDirectory() ||
-        qaMetadata.isSymbolicLink() ||
-        canonicalQADirectory !== join(canonicalArtifactsDirectory, "qa") ||
-        !runMetadata.isDirectory() ||
-        runMetadata.isSymbolicLink() ||
-        canonicalRunDirectory !== join(canonicalQADirectory, runStorageSegment)
-      ) {
-        results.push({ attachmentId, storageKey, action: "SKIPPED_UNSAFE" });
-        continue;
-      }
-      if (!(await markerIsAbsent(join(runDirectory, BROWSER_QA_RECOVERY_MARKER)))) {
+      if (!(await markerIsAbsent(markerPath))) {
         results.push({ attachmentId, storageKey, action: "SKIPPED_PENDING" });
         continue;
       }
 
-      const path = join(runDirectory, filename);
+      const path = join(runDirectory.path, filename);
       let pathMetadata: Stats;
       try {
         pathMetadata = await lstat(path);
@@ -118,7 +122,8 @@ export const deleteExpiredBrowserQAArtifacts = async (input: {
         !pathAfterOpen.isFile() ||
         pathAfterOpen.isSymbolicLink() ||
         !isSameFile(pathMetadata, pathAfterOpen) ||
-        !isSameFile(pathAfterOpen, openedMetadata)
+        !isSameFile(pathAfterOpen, openedMetadata) ||
+        !(await managedRootsStillMatch())
       ) {
         results.push({ attachmentId, storageKey, action: "SKIPPED_UNSAFE" });
         continue;
@@ -137,9 +142,19 @@ export const deleteExpiredBrowserQAArtifacts = async (input: {
           continue;
         }
       }
+      if (!(await managedRootsStillMatch())) {
+        results.push({ attachmentId, storageKey, action: "SKIPPED_UNSAFE" });
+        continue;
+      }
+      if (!(await markerIsAbsent(markerPath))) {
+        results.push({ attachmentId, storageKey, action: "SKIPPED_PENDING" });
+        continue;
+      }
       await unlink(path);
       results.push({ attachmentId, storageKey, action: "DELETED" });
-      await rmdir(runDirectory).catch(() => undefined);
+      if (await managedRootsStillMatch()) {
+        await rmdir(runDirectory.path).catch(() => undefined);
+      }
     } catch (error: unknown) {
       results.push({
         attachmentId,

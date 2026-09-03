@@ -9,6 +9,8 @@ import { BROWSER_QA_RECOVERY_MARKER, deleteExpiredBrowserQAArtifacts } from "../
 
 const runStorageSegment = `run-${"a".repeat(32)}`;
 const directories: string[] = [];
+const createDirectoryLink = (target: string, path: string): Promise<void> =>
+  symlink(target, path, process.platform === "win32" ? "junction" : "dir");
 
 const attachment = (filename = "screenshot.png"): QAAttachmentRef => ({
   schemaVersion: 1,
@@ -101,18 +103,35 @@ describe("Browser QA artifact retention", () => {
     await expect(readFile(outside, "utf8")).resolves.toBe("preserve me");
   });
 
-  it.skipIf(process.platform === "win32")("never follows a symlinked QA root", async () => {
+  it("never follows a linked QA root", async () => {
     const directory = await mkdtemp(join(tmpdir(), "loomrail-qa-retention-root-"));
     directories.push(directory);
     const outsideQADirectory = join(directory, "outside-qa");
     const outsideRunDirectory = join(outsideQADirectory, runStorageSegment);
     await mkdir(outsideRunDirectory, { recursive: true });
     await writeFile(join(outsideRunDirectory, "screenshot.png"), "preserve me");
-    await symlink(outsideQADirectory, join(directory, "qa"));
+    await createDirectoryLink(outsideQADirectory, join(directory, "qa"));
 
     await expect(
       deleteExpiredBrowserQAArtifacts({ artifactsDirectory: directory, attachments: [attachment()] }),
     ).resolves.toEqual([expect.objectContaining({ action: "SKIPPED_UNSAFE" })]);
     await expect(readFile(join(outsideRunDirectory, "screenshot.png"), "utf8")).resolves.toBe("preserve me");
+  });
+
+  it("never follows a linked artifact root", async () => {
+    const container = await mkdtemp(join(tmpdir(), "loomrail-qa-retention-artifacts-root-"));
+    directories.push(container);
+    const artifactsDirectory = join(container, "artifacts");
+    const externalRoot = join(container, "external");
+    const externalRunDirectory = join(externalRoot, "qa", runStorageSegment);
+    await mkdir(externalRunDirectory, { recursive: true });
+    const externalEvidence = join(externalRunDirectory, "screenshot.png");
+    await writeFile(externalEvidence, "preserve me");
+    await createDirectoryLink(externalRoot, artifactsDirectory);
+
+    await expect(
+      deleteExpiredBrowserQAArtifacts({ artifactsDirectory, attachments: [attachment()] }),
+    ).resolves.toEqual([expect.objectContaining({ action: "SKIPPED_UNSAFE" })]);
+    await expect(readFile(externalEvidence, "utf8")).resolves.toBe("preserve me");
   });
 });

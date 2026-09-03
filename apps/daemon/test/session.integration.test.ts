@@ -364,16 +364,10 @@ describe("stage attempt session loop", () => {
     expect(carried?.sources).toEqual([{ kind: "CHECKPOINT", id: checkpoints[0]?.id, version: 1 }]);
   });
 
-  it("continues after the adapter is swapped between sessions", async () => {
-    // The property PD-008 claims: a handoff survives a change of provider. `server.ts` runs one
-    // provider adapter for the daemon's whole process lifetime, so the real swap boundary is a
-    // restart: RECONCILE_WORKFLOWS ends the orphaned session and leaves the pending dispatch for a
-    // *fresh* `runStageAttempt` call, which is where a newly configured adapter would actually be
-    // read. Hence two genuinely separate `runStageAttempt` calls, one per adapter, the way a
-    // restart would -- not one call routed to two adapters through a test-only wrapper.
-    // `capabilities()` is read once at the top of `runStageAttempt`, before the loop knows there
-    // will be a second session, so a single call takes every session's budget from whichever
-    // adapter answers first and leaves an adapter-selection defect nowhere to be wrong.
+  it("does not swap providers by automatically resuming an interrupted legacy attempt", async () => {
+    // Provider handoff can create another ProviderSession only inside the same live AgentRun. A
+    // historical pre-A3 session has no immutable run policy to carry across restart, so it is
+    // retained as interrupted history and cannot be resumed with a newly configured adapter.
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
 
@@ -415,8 +409,7 @@ describe("stage attempt session loop", () => {
     void runStageAttempt(depsFor(localState, seeded, firstAdapter)).catch(() => undefined);
     await checkpointPublished;
 
-    // What a fresh daemon process does at startup, before it drains the dispatch queue: end the
-    // orphaned session and leave the attempt's pending dispatch for the session loop to continue.
+    // What a fresh daemon process does at startup, before it drains the dispatch queue.
     localState.execute({
       schemaVersion: 1,
       commandId: createCommandId(),
@@ -426,23 +419,16 @@ describe("stage attempt session loop", () => {
       payload: {},
     });
 
-    // A declared window that differs from the first adapter's (8,000 vs. 4,000): if the second
-    // session's budget were computed from the first provider's capabilities, this number would come
-    // out wrong.
     const secondAdapter = recording(finishingAdapter(8_000));
     await runStageAttempt(depsFor(localState, seeded, secondAdapter));
 
-    const { sessions, recipes, checkpoints } = sessionRows(localState, seeded.stageAttemptId);
-    expect(sessions).toHaveLength(2);
+    const { sessions, checkpoints } = sessionRows(localState, seeded.stageAttemptId);
+    expect(sessions).toHaveLength(1);
     expect(sessions[0]?.endReason).toBe("INTERRUPTED");
     expect(firstAdapter.startedSessionIds).toEqual([sessions[0]?.id]);
-    expect(secondAdapter.startedSessionIds).toEqual([sessions[1]?.id]);
-    expect(recipes[1]?.budgetTokens).toBe(Math.floor(8_000 * 0.35));
-    // The swap is only meaningful if the work crossed it: the second provider's pack carries the
-    // first provider's checkpoint.
-    expect(recipes[1]?.sections.find(({ id }) => id === "LATEST_CHECKPOINT")?.sources).toEqual([
-      { kind: "CHECKPOINT", id: checkpoints[0]?.id, version: 1 },
-    ]);
+    expect(secondAdapter.startedSessionIds).toEqual([]);
+    expect(checkpoints).toHaveLength(1);
+    expect(snapshotOf(localState, seeded.workItemId).stageAttempts.at(0)?.status).toBe("INTERRUPTED");
   });
 
   it("cuts a session that ignored the handoff request once the deadline passes", async () => {
@@ -911,9 +897,7 @@ describe("stage attempt session loop", () => {
     ]);
   });
 
-  it("survives a daemon restart mid-attempt and resumes from the last checkpoint", async () => {
-    // §6.4: a restart and a context handoff are the same case -- the session is gone, the state is
-    // still there.
+  it("retains a checkpoint but never replays a legacy attempt after daemon restart", async () => {
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
     let checkpointDelivered: (() => void) | undefined;
@@ -955,20 +939,12 @@ describe("stage attempt session loop", () => {
     localState.close();
     state = undefined;
 
-    // A real daemon boot against the same database: it reconciles, then drains the still-pending
-    // dispatch. Reconciliation and the resumed session are the daemon's own doing here, not the
-    // test's -- that is the behaviour §6.4 names.
+    // A real daemon boot against the same database reconciles before its first queue drain.
     const restartedDaemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
       stateDatabasePath: databasePath,
       logger: false,
     });
-    // The startup drain is asynchronous from this work item's very first stage now: DISCOVERY runs
-    // in the work item's worktree since R11, so the pass awaits the provisioning path before it
-    // opens the resumed session. `whenIdle` is the daemon's own signal that the pass is over (spec
-    // D6, and the reason that hook exists); without it `close()` shuts the state module under the
-    // pass, which the worker survives as a logged, reconcilable failure but which leaves nothing
-    // here to assert about.
     await restartedDaemon.whenIdle();
     await restartedDaemon.close();
 
@@ -976,14 +952,9 @@ describe("stage attempt session loop", () => {
     const resumed = sessionRows(restarted, seeded.stageAttemptId);
     expect(resumed.sessions[0]?.endReason).toBe("INTERRUPTED");
     expect(resumed.checkpoints).toHaveLength(1);
-    expect(resumed.sessions).toHaveLength(2);
-    expect(resumed.sessions[1]?.ordinal).toBe(2);
-    // The attempt continued rather than being restarted: the second session's pack was assembled
-    // from the checkpoint the interrupted session had already published.
-    expect(resumed.recipes[1]?.sections.find(({ id }) => id === "LATEST_CHECKPOINT")?.sources).toEqual([
-      { kind: "CHECKPOINT", id: resumed.checkpoints[0]?.id, version: 1 },
-    ]);
-    expect(snapshotOf(restarted, seeded.workItemId).stageAttempts.at(0)?.status).not.toBe("INTERRUPTED");
+    expect(resumed.sessions).toHaveLength(1);
+    expect(resumed.recipes).toHaveLength(1);
+    expect(snapshotOf(restarted, seeded.workItemId).stageAttempts.at(0)?.status).toBe("INTERRUPTED");
   });
 
   it("retries once with a smaller pack share when the provider rejects the pack, then asks the owner", () => {
