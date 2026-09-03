@@ -2,8 +2,8 @@
 
 **Дата:** 2026-08-25; трек D добавлен 2026-08-27; checkpoint обновлён 2026-09-03
 
-**Статус:** Q13 final security/reliability review активен; exact live row, protected landing, private dogfood и
-registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
+**Статус:** Q13 implementation и internal/cross-platform gates закрыты; exact live row, protected landing, private
+dogfood и registry provenance открыты; `0.1.0-alpha.4` остаётся последней опубликованной версией
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-007 (вторая persona), PD-008 (handoff первым)
@@ -286,7 +286,11 @@ editing; stable role refinement принадлежит exact built-in AgentProfi
 Следующий review round дополнительно закрыл read-only/offline policy Browser QA, фильтрацию неэффективных MCP
 revisions, untrusted framing provider evidence, fixed BrowserDriver/recovery errors, canonical recovery containment и
 pre-buffer Git patch/status/numstat bounds.
-Final review и release gates остаются открыты; landing и npm publish не меняются.
+Final Standards/Spec review не оставил P0/P1/P2 findings. Named Q13 gates, fault recovery, clean package и 53/53
+browser smoke прошли на macOS/Windows в
+[run 33760230993](https://github.com/loomrail/loomrail/actions/runs/33760230993); оба source Verify остановились только
+на трёх protected landing lint findings. Q13 закрыт без stable claim; private dogfood, exact live row, protected
+landing и registry provenance остаются release gates, npm publish не выполнялся.
 Daemon-owned MCP gateway, bundled Context7, read-only plugin SDK,
 marker-bound scaffolding и global Attention Inbox проверены локальными gates; release candidate был проверен в clean
 npm tarball на macOS и Windows, полный `verify`, production audit и браузерный smoke также прошли на обеих платформах

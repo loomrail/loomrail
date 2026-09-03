@@ -1362,7 +1362,7 @@ production audit, fault recovery, clean-package и 53/53 browser gates прош�
 [run 33697965100](https://github.com/loomrail/loomrail/actions/runs/33697965100). Оба Verify собрали исходники и
 остановились только на трёх protected landing lint findings; Q12 закрыт без изменения landing и без stable claim.
 
-Q13 final security/reliability review идёт по планам 71–72. Corrective наборы закрыли context delimiter,
+Q13 final security/reliability review закрыт по планам 71–72. Corrective наборы закрыли context delimiter,
 manifest-derived runtime floor, adapter-owned diagnostics, built-in profile role-playbook provenance и immutable AgentRun effective
 policy. Текущий срез добавляет один digest-verified cumulative ProviderUsageReport на сессию, нормализует Claude
 cache input, атомарно проводит token spend через общий ledger и hard-pause до следующей сессии, а также показывает
@@ -1377,8 +1377,11 @@ immutable SquadAssignment при старте PipelineRun: post-start compositio
 assignment revision с новым AgentRun policy snapshot. Acceptance Manager preparation теперь также получает exact
 artifact-only AgentRun с usage/model/budget lineage без workspace/network/MCP, а final решение остаётся за owner.
 Единственная additive revision в текущем runtime — fail-closed compatibility upgrade exact revision 1 старого
-Standard assignment без Acceptance Manager. До закрытия остальных Q13 findings, private dogfood, exact
-live-provider promotion, protected landing и registry provenance stable npm publish запрещён.
+Standard assignment без Acceptance Manager. Final independent Standards/Spec review не оставил P0/P1/P2 findings;
+fault recovery, clean package и 53/53 browser smoke прошли на macOS/Windows в
+[run 33760230993](https://github.com/loomrail/loomrail/actions/runs/33760230993), а оба source Verify остановились только
+на трёх protected landing lint findings. Q13 закрыт без stable claim. До private dogfood, exact live-provider
+promotion, protected landing и registry provenance stable npm publish запрещён.
 
 ### Оценка первого цикла
 

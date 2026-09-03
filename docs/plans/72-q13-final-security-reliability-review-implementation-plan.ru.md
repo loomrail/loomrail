@@ -1,6 +1,6 @@
 # Q13 — Final security and reliability review implementation plan
 
-**Статус:** local implementation verified; CI и external gates pending
+**Статус:** implementation и Q13 macOS/Windows gates complete; external stable gates pending
 
 **Спецификация:** [71-q13-final-security-reliability-review-spec.ru.md](71-q13-final-security-reliability-review-spec.ru.md)
 
@@ -40,7 +40,7 @@
       revision 1.
 - [x] Выполнить финальный Standards/Spec review и закрыть все P0/P1.
 - [x] Прогнать full non-landing source gates, fault injection, audit, clean package и browser matrix.
-- [ ] Запушить Q13, дождаться macOS/Windows CI и записать evidence.
+- [x] Запушить Q13, дождаться macOS/Windows CI и записать evidence.
 - [ ] Провести оставшиеся owner-authorized private dogfood/live-provider/landing/provenance gates.
 - [ ] Только после всех gates подготовить отдельное решение о stable tag/publish.
 
