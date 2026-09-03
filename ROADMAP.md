@@ -12,8 +12,8 @@ implementation plans.
   evidence; keep unknown versions fail-closed.
 - Complete one private dogfood epic across discovery, planning, implementation, independent review, measured Browser
   QA, restart recovery, bounded budget, criterion-linked acceptance, and owner approval.
-- Complete the final security review, resolve or explicitly gate every P0/P1 reliability or security defect, and
-  produce trusted registry provenance before any stable publication.
+- Preserve the completed final review's zero-P0/P1 boundary and produce trusted registry provenance before any stable
+  publication.
 
 ## Next — connect the proven loop to normal repository delivery
 

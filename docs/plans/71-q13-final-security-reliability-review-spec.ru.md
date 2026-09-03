@@ -1,6 +1,6 @@
 # Q13 — Final security and reliability review
 
-**Статус:** active
+**Статус:** implementation and Q13 verification complete; external stable gates pending
 
 **Дата:** 2026-09-03
 

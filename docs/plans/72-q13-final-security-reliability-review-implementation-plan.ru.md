@@ -41,7 +41,10 @@
 - [x] Выполнить финальный Standards/Spec review и закрыть все P0/P1.
 - [x] Прогнать full non-landing source gates, fault injection, audit, clean package и browser matrix.
 - [x] Запушить Q13, дождаться macOS/Windows CI и записать evidence.
-- [ ] Провести оставшиеся owner-authorized private dogfood/live-provider/landing/provenance gates.
+- [ ] Провести private dogfood на явно выбранном владельцем private full-stack repository и сохранить evidence.
+- [ ] После отдельного разрешения на quota-bearing runs добавить exact live-provider row с macOS/Windows evidence.
+- [ ] Дождаться зелёного protected landing gate от отдельной landing-сессии, не меняя и не исключая её source.
+- [ ] Настроить owner-authorized trusted publisher и доказать registry provenance в самом publish workflow.
 - [ ] Только после всех gates подготовить отдельное решение о stable tag/publish.
 
 ## Ограничения
