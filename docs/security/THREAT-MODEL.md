@@ -559,8 +559,9 @@ Mitigations, verified in code:
   rather than half-accepted, since the next pack is built on it;
 - it is rendered into the pack wrapped in explicit `BEGIN/END UNTRUSTED AGENT REPORT` delimiters and framed as
   data describing past work, never as instructions (`packages/context-assembly/src/render.ts`, the `untrusted`
-  helper), verified by `packages/context-assembly/test/render.unit.test.ts`
-  ("marks a checkpoint as untrusted provider output");
+  helper); every untrusted data line is normalized to LF and prefixed as a quote, so literal delimiter text in a
+  checkpoint, review finding or correction snapshot cannot become a framing line. This is verified by
+  `packages/context-assembly/test/render.unit.test.ts` with delimiter-collision cases for all three inputs;
 - the full checkpoint text — summary, completed, remaining, dead ends, open questions — is visible to the owner in
   the Task Cockpit, not summarized or truncated (`packages/ui/src/patterns.tsx`'s checkpoint disclosure,
   wired from real session data in `apps/web/src/views/WorkbenchPage.tsx`), verified by the `e2e/walking-skeleton.spec.ts`
@@ -573,11 +574,9 @@ Mitigations, verified in code:
   single call routed by a test-only wrapper, so a defect in which session's declared context window drives the
   next pack's budget has somewhere real to surface.
 
-**Known limitation.** The untrusted-block framing in `render.ts` is plain string concatenation with no escaping of
-the delimiter tokens themselves. A provider could emit the literal text `END UNTRUSTED AGENT REPORT` inside its
-own checkpoint fields, followed by fabricated content shaped like instructions, attempting a delimiter-collision
-escape out of the untrusted block. This is a known property of textual delimiter framing in general and is not
-eliminated here; the owner-visible full-text mitigation above is the backstop for it, not a substitute.
+Literal delimiter collision is closed by line-prefixing the normalized provider body. The remaining risk is the
+general one: a model can still follow malicious prose that is visibly marked as untrusted data. Owner-visible full
+text and deterministic workflow authority reduce that risk but do not turn provider output into trusted input.
 
 ### A1.5 event-channel delta (T03)
 
@@ -1344,10 +1343,9 @@ HumanRequest is never a secret-input channel.
   streaming proxy boundary is required to eliminate that local availability risk;
 - dependency compromise cannot be eliminated, only reduced through pinning, review and provenance;
 - LLM output remains untrusted even after independent review;
-- the untrusted-checkpoint delimiter framing (`packages/context-assembly/src/render.ts`) is plain string
-  concatenation with no escaping of the delimiter tokens: a provider could emit the literal END delimiter
-  followed by fabricated instructions and attempt a collision escape out of the untrusted block (T15). Owner
-  visibility of the full checkpoint text is the mitigation this residual risk relies on, not a fix for it.
+- textual untrusted-data framing cannot force a model to ignore malicious prose. Loomrail prevents literal
+  delimiter collision by normalizing and prefixing every provider-authored line, keeps the complete source text
+  owner-visible and retains deterministic workflow authority, but provider output remains untrusted (T15).
 
 ## 12. Review checklist
 
