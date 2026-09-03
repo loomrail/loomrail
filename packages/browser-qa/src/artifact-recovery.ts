@@ -7,6 +7,7 @@ import {
   readdir,
   realpath,
   rename,
+  stat,
   unlink,
   writeFile,
   type FileHandle,
@@ -296,7 +297,15 @@ export const recoverBrowserQAArtifacts = async (input: {
   try {
     entries = await readdir(finalRoot, { withFileTypes: true });
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        const artifactsMetadata = await stat(input.artifactsDirectory);
+        if (artifactsMetadata.isDirectory()) return [];
+      } catch (artifactsError: unknown) {
+        if ((artifactsError as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw new BrowserQAArtifactRecoveryError(artifactsError);
+      }
+    }
     throw new BrowserQAArtifactRecoveryError(error);
   }
 

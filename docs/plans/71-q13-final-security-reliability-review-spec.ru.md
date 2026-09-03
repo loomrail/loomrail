@@ -89,7 +89,9 @@ provider/browser message или callback secret. Обычные измеренн
 
 Каждая нормализация создаёт новый error по закрытому code→message словарю: даже переданный callback-ом экземпляр
 экспортируемого класса не сохраняет произвольный message. Публичное startup recovery также переводит scan failure
-в `BrowserQAArtifactRecoveryError` с фиксированным кодом, а daemon логирует только этот код.
+в `BrowserQAArtifactRecoveryError` с фиксированным кодом, а daemon логирует только этот код. Если платформа сообщает
+`ENOENT` для дочернего пути под file-valued artifact root, recovery отдельно проверяет root и не принимает invalid
+layout за допустимо отсутствующий `qa` directory.
 
 ### D8 — Post-start SquadAssignment revision не входит в stable scope
 

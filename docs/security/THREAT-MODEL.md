@@ -1300,7 +1300,9 @@ Q1 tightens the deterministic baseline further:
   exported error type with a closed code set and fixed summaries. Raw filesystem/browser/callback detail stays only
   in the in-memory cause; normalization always recreates the error through a fixed code-to-message map, including
   when a callback supplied an instance of the exported class. Startup artifact recovery exposes a separate closed
-  scan error and daemon logs only its code. The daemon still fails closed on a contract-violating adapter;
+  scan error and daemon logs only its code. An `ENOENT` scan is accepted as an absent managed child only after the
+  artifact root is verified as absent or a directory, because Windows can report `ENOENT` for a child below a file.
+  The daemon still fails closed on a contract-violating adapter;
 - the baseline target is a bare literal loopback origin (`localhost`, `127/8` or `[::1]`). `localhost` resolution must
   contain only loopback addresses and Chromium pins it to one verified address for the run; exact origin is rechecked
   for every request and redirect. A fresh context blocks service workers, drops response cookies, and rejects requests

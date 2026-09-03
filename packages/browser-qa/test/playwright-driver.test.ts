@@ -311,6 +311,21 @@ describe("Playwright BrowserDriver", () => {
     ).rejects.toBeInstanceOf(BrowserQAArtifactRecoveryError);
   });
 
+  it("treats an absent artifact root or qa child as nothing to recover", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-empty-recovery-"));
+    resources.push({ directory });
+
+    await expect(
+      recoverBrowserQAArtifacts({
+        artifactsDirectory: join(directory, "absent"),
+        isCommitted: () => false,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      recoverBrowserQAArtifacts({ artifactsDirectory: directory, isCommitted: () => false }),
+    ).resolves.toEqual([]);
+  });
+
   it("blocks off-origin redirects and exposes no finalizable evidence", async () => {
     const destination = await startServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html" });
