@@ -36,6 +36,7 @@ workflow state и не позволяя двум писателям пересе
 - cross-Project Epic и новый dependency/DAG editor;
 - shared main-directory mode, browser/server leases и merge/rebase automation;
 - user-imported roles, plugin installation либо новые permissions без owner Consent;
+- изменение состава SquadAssignment после старта PipelineRun;
 - автоматический retry оборванного AgentRun;
 - завершение budget hierarchy: A3 соблюдает доступные limits, но не выдаёт отсутствующий live-usage accounting за
   реализованный hard cost governor.
@@ -67,8 +68,11 @@ Standard workflow назначает только роли стадиям, ко�
 владельцу и AgentRun не создаёт. Маленькая задача не запускает Lead PM, Analyst и Architect одновременно только
 потому, что такие профили существуют.
 
-Изменение состава после старта создаёт новую revision назначения и действует только на ещё не начавшиеся
-StageAttempt. Уже начатый AgentRun хранит собственный policy snapshot.
+Stable scope создаёт ровно один `SquadAssignment(revision = 1)` при старте PipelineRun и не предоставляет command,
+HTTP/UI boundary или transition для изменения состава после старта. Поле revision сохраняет точную identity
+immutable snapshot и оставляет additive schema seam, но не является обещанием уже реализованного editing flow.
+Будущее изменение состава потребует отдельного решения: новая immutable assignment revision сможет действовать
+только на ещё не начавшиеся StageAttempt, а каждый новый AgentRun обязан сохранить именно её в policy snapshot.
 
 ### D3 — Scheduler планирует, transaction резервирует
 
@@ -132,7 +136,7 @@ SQLite, Fastify, adapter instances или process lifecycle.
 
 ```text
 PipelineRun
-  └── SquadAssignment (immutable revision)
+  └── SquadAssignment (one immutable revision in stable scope)
         └── AgentProfile ref per executable stage
 
 StageAttempt
@@ -149,7 +153,8 @@ Scheduler deferral reasons: `NOT_READY`, `BUDGET_BLOCKED`, `CHECKPOINT_NOT_STABL
 
 ## 6. Жизненный цикл
 
-1. Pipeline start сохраняет SquadAssignment и первый WorkflowDispatch вместе с workflow state.
+1. Pipeline start сохраняет единственный `SquadAssignment(revision = 1)` и первый WorkflowDispatch вместе с workflow
+   state.
 2. Worker читает bounded pending candidates и durable active AgentRun.
 3. Planner выдаёт упорядоченный batch и причины отсрочки.
 4. Для каждого выбранного dispatch daemon вызывает атомарный `START_AGENT_RUN`.

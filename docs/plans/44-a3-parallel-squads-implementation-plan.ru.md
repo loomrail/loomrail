@@ -13,7 +13,8 @@
 
 ## 2. Roles and durable runs
 
-- [x] Добавить versioned built-in AgentProfile и immutable SquadAssignment contracts.
+- [x] Добавить versioned built-in AgentProfile и один immutable revision-addressed SquadAssignment на PipelineRun;
+      post-start composition editing не входит в stable scope.
 - [x] Добавить AgentRun state machine и role-playbook refinement без ослабления WorkflowTemplate.
 - [x] Применять playbook точной ревизии активного AgentRun к provider Context Pack и сохранять
       `ROLE_PLAYBOOK + profile id/revision` в append-only recipe; migration 30 оставляет historical provenance

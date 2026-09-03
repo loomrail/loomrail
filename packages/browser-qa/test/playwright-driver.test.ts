@@ -1,5 +1,5 @@
 import { createServer, type RequestListener, type Server } from "node:http";
-import { access, mkdtemp, readdir, rm } from "node:fs/promises";
+import { access, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   BROWSER_QA_RECOVERY_MARKER,
+  BrowserDriverError,
   createPlaywrightDriver,
   recoverBrowserQAArtifacts,
 } from "../src/index.js";
@@ -138,6 +139,20 @@ describe("Playwright BrowserDriver", () => {
     expect(execution.result.attachments.map(({ kind }) => kind).sort()).toEqual(["SCREENSHOT", "TRACE"]);
 
     let attachmentIndex = 0;
+    await expect(
+      execution.finalizeAttachments({
+        qaRunId: "qa-run-1",
+        createAttachmentId: () => {
+          throw new Error("CANARY_UNTYPED_ATTACHMENT_ID_FAILURE");
+        },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "BrowserDriverError",
+        code: "ATTACHMENT_FINALIZATION_FAILED",
+        message: "Browser QA attachments could not be finalized safely.",
+      }),
+    );
     const finalized = await execution.finalizeAttachments({
       qaRunId: "qa-run-1",
       createAttachmentId: () => `attachment-${(attachmentIndex += 1).toString()}`,
@@ -506,5 +521,29 @@ describe("Playwright BrowserDriver", () => {
 
   it("rejects unsafe runtime limits before launching Chromium", () => {
     expect(() => createPlaywrightDriver({ artifactsDirectory: "/tmp/browser-qa", timeoutMs: 0 })).toThrow();
+  });
+
+  it("normalizes every asynchronous setup rejection to the closed BrowserDriver error vocabulary", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-errors-"));
+    resources.push({ directory });
+    const artifactFile = join(directory, "not-a-directory");
+    await writeFile(artifactFile, "occupied", "utf8");
+    const driver = createPlaywrightDriver({ artifactsDirectory: artifactFile });
+
+    await expect(driver.run({ ...qaRun("http://127.0.0.1:4173"), id: "" })).rejects.toEqual(
+      expect.objectContaining({
+        name: "BrowserDriverError",
+        code: "INVALID_INPUT",
+        message: "The Browser QA run input is invalid.",
+      }),
+    );
+    await expect(driver.run(qaRun("http://127.0.0.1:4173"))).rejects.toEqual(
+      expect.objectContaining({
+        name: "BrowserDriverError",
+        code: "DRIVER_SETUP_FAILED",
+        message: "The Browser QA driver could not start safely.",
+      }),
+    );
+    await expect(driver.run(qaRun("http://127.0.0.1:4173"), [])).rejects.toBeInstanceOf(BrowserDriverError);
   });
 });

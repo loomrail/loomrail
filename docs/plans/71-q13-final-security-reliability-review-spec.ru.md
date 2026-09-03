@@ -78,6 +78,20 @@ paths/patches в untrusted-data frame, поэтому внутренний shape
 может закрыть delimiter. Это также даёт Claude REVIEW фактический diff без расширения его filesystem authority:
 adapter по-прежнему работает в пустом temporary directory под `permission-mode plan`.
 
+### D7 — BrowserDriver имеет закрытый async error boundary
+
+Публичные `run`, `finalizeAttachments`, `confirmAttachments` и `dispose` отклоняют Promise только экспортируемым
+`BrowserDriverError`. Его code принадлежит закрытому набору; summary фиксирован и не переносит filesystem path,
+provider/browser message или callback secret. Обычные измеренные target/browser failures остаются typed
+`QADriverResult`, а daemon всё равно fail-closed обрабатывает нарушающий контракт adapter.
+
+### D8 — Post-start SquadAssignment revision не входит в stable scope
+
+Pipeline start атомарно создаёт единственный immutable `SquadAssignment(revision = 1)`. В stable runtime нет команды,
+HTTP/UI boundary или transition для замены состава, поэтому прежнее утверждение, будто такая замена уже создаёт новую
+revision для будущих StageAttempt, снято. Revision остаётся частью точной snapshot identity. Будущая реализация
+потребует отдельной команды, новой immutable assignment и нового AgentRun policy snapshot до provider spawn.
+
 ## 4. Другие обязательные findings Q13
 
 - untrusted repository/provider text не может закрыть собственную context section delimiter;
@@ -86,9 +100,8 @@ adapter по-прежнему работает в пустом temporary directo
 - role playbook реально участвует в context recipe с exact profile revision;
 - AgentRun хранит и применяет immutable effective capabilities, workspace/network, budget/session и MCP revisions;
 - REVIEW context получает bounded actual diff summary, а не только tree label (D6);
-- public async BrowserDriver errors имеют closed typed contract;
-- post-start SquadAssignment revision либо реализована с новым AgentRun snapshot, либо явно остаётся non-goal stable
-  scope без overclaim.
+- public async BrowserDriver errors имеют closed typed contract (D7);
+- post-start SquadAssignment revision явно остаётся non-goal stable scope без overclaim (D8).
 
 ## 5. Verification и exit
 

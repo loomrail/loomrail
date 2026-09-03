@@ -286,6 +286,8 @@ attention state вместо бесконечного auto-continue.
 
 Все drivers нормализуют steps, screenshots, traces, console/network failures и findings. Provider-native browser
 полезен для exploratory/authenticated flows, но не заменяет детерминированный Playwright gate.
+Публичные async-операции driver используют один экспортируемый typed error с закрытым code vocabulary; raw browser,
+filesystem и callback messages не переходят через эту границу.
 
 ### QD-002 — Evidence gate
 
@@ -517,6 +519,11 @@ spawn и записывается уже leased, пока exclusive active WorkI
 AgentRun фиксирует hash immutable policy snapshot: assignment/profile revision, effective provider и применённые
 capability/budget/workspace rules. Exact provider input не дублируется на этом уровне: его `contentHash` остаётся в
 ContextPackRecipe конкретной ProviderSession и может закономерно измениться при handoff внутри одного AgentRun.
+
+Первый stable scope создаёт один immutable `SquadAssignment(revision = 1)` вместе с PipelineRun. Изменение состава
+после старта не имеет command, HTTP/UI boundary или transition и не заявляется реализованным. Поле revision фиксирует
+identity snapshot; будущий editing flow потребует новую assignment revision только для ещё не начавшихся
+StageAttempt и новый exact AgentRun policy snapshot.
 
 Default global concurrency — 3. Параллельные readers одного workspace допустимы только на одном immutable
 checkpoint; любой writer конфликтует и с writer, и с reader. Shutdown/restart не создаёт automatic retry

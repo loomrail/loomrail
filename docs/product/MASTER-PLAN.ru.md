@@ -1367,8 +1367,11 @@ manifest-derived runtime floor, adapter-owned diagnostics, role playbook provena
 policy. Текущий срез добавляет один digest-verified cumulative ProviderUsageReport на сессию, нормализует Claude
 cache input, атомарно проводит token spend через общий ledger и hard-pause до следующей сессии, а также показывает
 owner-у per-session attribution. REVIEW теперь получает tree-checked bounded actual diff из одного temporary index,
-включая ограниченные unified-diff fragments для filesystem-isolated reviewer. До закрытия остальных Q13 findings,
-private dogfood, exact live-provider promotion, protected landing и registry provenance stable npm publish запрещён.
+включая ограниченные unified-diff fragments для filesystem-isolated reviewer. BrowserDriver async boundary теперь
+экспортирует один error type с закрытыми кодами и не пропускает raw rejection detail. Stable scope честно создаёт один
+immutable SquadAssignment при старте PipelineRun: post-start composition editing остаётся non-goal и потребует новой
+assignment revision с новым AgentRun policy snapshot. До закрытия остальных Q13 findings, private dogfood, exact
+live-provider promotion, protected landing и registry provenance stable npm publish запрещён.
 
 ### Оценка первого цикла
 

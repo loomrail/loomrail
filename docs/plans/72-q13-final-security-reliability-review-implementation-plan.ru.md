@@ -14,8 +14,8 @@
 - [x] Довести durable live-provider usage: atomic ledger/hard pause, Claude cache normalization, owner-visible
       attribution, restart/idempotency/append-only и abort tests.
 - [x] Добавить bounded actual-diff summary в REVIEW context и проверить отсутствие path/content overflow.
-- [ ] Закрыть BrowserDriver async errors typed result/error contract.
-- [ ] Проверить SquadAssignment revision claim и устранить реализацию либо документационный overclaim.
+- [x] Закрыть BrowserDriver async errors exported error type и closed code contract.
+- [x] Проверить SquadAssignment revision claim и явно оставить post-start composition editing вне stable scope.
 - [ ] Выполнить финальный Standards/Spec review и закрыть все P0/P1.
 - [ ] Прогнать full non-landing source gates, fault injection, audit, clean package и browser matrix.
 - [ ] Запушить Q13, дождаться macOS/Windows CI и записать evidence.

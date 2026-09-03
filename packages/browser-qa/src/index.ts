@@ -46,18 +46,40 @@ export {
   type BrowserQARecoveryMarker,
 } from "./artifact-recovery.js";
 
+export type BrowserDriverErrorCode =
+  | "INVALID_INPUT"
+  | "DRIVER_SETUP_FAILED"
+  | "ATTACHMENT_FINALIZATION_FAILED"
+  | "ATTACHMENT_CONFIRMATION_FAILED"
+  | "QUARANTINE_DISPOSAL_FAILED";
+
+/** The complete rejection vocabulary for public asynchronous BrowserDriver operations. */
+export class BrowserDriverError extends Error {
+  readonly code: BrowserDriverErrorCode;
+
+  constructor(code: BrowserDriverErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "BrowserDriverError";
+    this.code = code;
+  }
+}
+
 export type BrowserDriverExecution = {
   result: QADriverResult;
+  /** Rejects only with BrowserDriverError. */
   finalizeAttachments: (input: {
     qaRunId: string;
     createAttachmentId: () => string;
   }) => Promise<readonly QAFinalizedAttachment[]>;
+  /** Rejects only with BrowserDriverError. */
   confirmAttachments: () => Promise<void>;
+  /** Rejects only with BrowserDriverError. */
   dispose: () => Promise<void>;
 };
 
 export type BrowserDriver = {
   id: "PLAYWRIGHT";
+  /** Rejects only with BrowserDriverError; measured target/runtime failures are QADriverResult errors. */
   run: (qaRun: QARun, retestCells?: readonly QARetestCell[]) => Promise<BrowserDriverExecution>;
 };
 
@@ -73,6 +95,27 @@ type PendingAttachment = {
   filename: string;
   path: string;
 };
+
+const normalizeBrowserDriverError = (
+  code: BrowserDriverErrorCode,
+  message: string,
+  error: unknown,
+): BrowserDriverError =>
+  error instanceof BrowserDriverError ? error : new BrowserDriverError(code, message, { cause: error });
+
+const normalizeBrowserDriverRun =
+  (run: BrowserDriver["run"]): BrowserDriver["run"] =>
+  async (input, retestCells) => {
+    try {
+      return await run(input, retestCells);
+    } catch (error: unknown) {
+      throw normalizeBrowserDriverError(
+        "DRIVER_SETUP_FAILED",
+        "The Browser QA driver could not start safely.",
+        error,
+      );
+    }
+  };
 
 const safeSummary = (value: string): string =>
   value
@@ -450,18 +493,29 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
     options.resolveHostname ?? (async (hostname: string) => lookup(hostname, { all: true, verbatim: true }));
   return {
     id: "PLAYWRIGHT",
-    run: async (input, retestCells): Promise<BrowserDriverExecution> => {
-      const qaRun = qaRunSchema.parse(input);
+    run: normalizeBrowserDriverRun(async (input, retestCells): Promise<BrowserDriverExecution> => {
+      const parsedRun = qaRunSchema.safeParse(input);
+      if (!parsedRun.success) {
+        throw new BrowserDriverError("INVALID_INPUT", "The Browser QA run input is invalid.");
+      }
+      const qaRun = parsedRun.data;
       const selectedCells =
         qaRun.scope.type === "FULL"
           ? (() => {
               if (retestCells !== undefined) {
-                throw new TypeError("A full Browser QA run cannot receive a sparse retest scope");
+                throw new BrowserDriverError(
+                  "INVALID_INPUT",
+                  "A full Browser QA run cannot receive a sparse retest scope.",
+                );
               }
               return null;
             })()
           : (() => {
-              const parsed = z.array(qaRetestCellSchema).min(1).parse(retestCells);
+              const parsedCells = z.array(qaRetestCellSchema).min(1).safeParse(retestCells);
+              if (!parsedCells.success) {
+                throw new BrowserDriverError("INVALID_INPUT", "The Browser QA retest scope is invalid.");
+              }
+              const parsed = parsedCells.data;
               const baselineCells = new Set(
                 qaRun.plan.targets.flatMap((target) =>
                   qaRun.plan.scenarios.map((scenario) => `${target.id}\u0000${scenario.id}`),
@@ -469,7 +523,10 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
               );
               const keys = parsed.map(({ targetId, scenarioId }) => `${targetId}\u0000${scenarioId}`);
               if (new Set(keys).size !== keys.length || keys.some((key) => !baselineCells.has(key))) {
-                throw new TypeError("The Browser QA retest scope is outside the locked baseline plan");
+                throw new BrowserDriverError(
+                  "INVALID_INPUT",
+                  "The Browser QA retest scope is outside the locked baseline plan.",
+                );
               }
               return new Set(keys);
             })();
@@ -491,14 +548,31 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
 
       const confirmAttachments = async (): Promise<void> => {
         if (!finalized) return;
-        await confirmBrowserQAArtifacts({
-          artifactsDirectory: parsedOptions.artifactsDirectory,
-          runStorageSegment,
-        });
+        try {
+          await confirmBrowserQAArtifacts({
+            artifactsDirectory: parsedOptions.artifactsDirectory,
+            runStorageSegment,
+          });
+        } catch (error: unknown) {
+          throw new BrowserDriverError(
+            "ATTACHMENT_CONFIRMATION_FAILED",
+            "Browser QA attachments could not be confirmed safely.",
+            { cause: error },
+          );
+        }
       };
 
       const dispose = async (): Promise<void> => {
-        if (!finalized) await rm(quarantineDirectory, { recursive: true, force: true });
+        if (finalized) return;
+        try {
+          await rm(quarantineDirectory, { recursive: true, force: true });
+        } catch (error: unknown) {
+          throw new BrowserDriverError(
+            "QUARANTINE_DISPOSAL_FAILED",
+            "The Browser QA quarantine could not be disposed safely.",
+            { cause: error },
+          );
+        }
       };
 
       try {
@@ -814,41 +888,49 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
         createAttachmentId: () => string;
       }): Promise<readonly QAFinalizedAttachment[]> => {
         if (input.qaRunId !== qaRun.id || result.outcome !== "MEASURED") return [];
-        const refs = await Promise.all(
-          pendingAttachments.map(async ({ draft, path, filename }) => {
-            const measured = await sha256File(path);
-            if (measured.contentHash !== draft.contentHash || measured.byteSize !== draft.byteSize) {
-              throw new Error("A quarantined Browser QA attachment changed before finalization");
-            }
-            return qaFinalizedAttachmentSchema.parse({
-              handle: draft.handle,
-              ref: {
-                schemaVersion: 1,
-                id: input.createAttachmentId(),
-                qaRunId: qaRun.id,
-                kind: draft.kind,
-                contentHash: draft.contentHash,
-                byteSize: draft.byteSize,
-                targetId: draft.targetId,
-                scenarioId: draft.scenarioId,
-                capturedAt: draft.capturedAt,
-                retentionClass: "STANDARD_30_DAYS",
-                storageKey: `${runStorageSegment}/${filename}`,
-              },
-            });
-          }),
-        );
-        await stageBrowserQAArtifacts({
-          artifactsDirectory: parsedOptions.artifactsDirectory,
-          quarantineDirectory,
-          runStorageSegment,
-          qaRunId: qaRun.id,
-          attachments: refs,
-        });
-        finalized = true;
-        return refs;
+        try {
+          const refs = await Promise.all(
+            pendingAttachments.map(async ({ draft, path, filename }) => {
+              const measured = await sha256File(path);
+              if (measured.contentHash !== draft.contentHash || measured.byteSize !== draft.byteSize) {
+                throw new Error("A quarantined Browser QA attachment changed before finalization");
+              }
+              return qaFinalizedAttachmentSchema.parse({
+                handle: draft.handle,
+                ref: {
+                  schemaVersion: 1,
+                  id: input.createAttachmentId(),
+                  qaRunId: qaRun.id,
+                  kind: draft.kind,
+                  contentHash: draft.contentHash,
+                  byteSize: draft.byteSize,
+                  targetId: draft.targetId,
+                  scenarioId: draft.scenarioId,
+                  capturedAt: draft.capturedAt,
+                  retentionClass: "STANDARD_30_DAYS",
+                  storageKey: `${runStorageSegment}/${filename}`,
+                },
+              });
+            }),
+          );
+          await stageBrowserQAArtifacts({
+            artifactsDirectory: parsedOptions.artifactsDirectory,
+            quarantineDirectory,
+            runStorageSegment,
+            qaRunId: qaRun.id,
+            attachments: refs,
+          });
+          finalized = true;
+          return refs;
+        } catch (error: unknown) {
+          throw new BrowserDriverError(
+            "ATTACHMENT_FINALIZATION_FAILED",
+            "Browser QA attachments could not be finalized safely.",
+            { cause: error },
+          );
+        }
       };
       return { result, finalizeAttachments, confirmAttachments, dispose };
-    },
+    }),
   };
 };

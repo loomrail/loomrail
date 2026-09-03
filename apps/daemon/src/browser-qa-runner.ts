@@ -8,7 +8,7 @@ import type {
   QARunScope,
   WorkflowDispatch,
 } from "@loomrail/contracts";
-import type { BrowserDriver, BrowserDriverExecution } from "@loomrail/browser-qa";
+import { BrowserDriverError, type BrowserDriver, type BrowserDriverExecution } from "@loomrail/browser-qa";
 import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
 import type { FastifyBaseLogger } from "fastify";
 
@@ -138,7 +138,7 @@ export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): Brow
           {
             dispatchId: dispatch.id,
             qaRunId: reserved.qaRun.id,
-            error: error instanceof Error ? error.name : "unknown",
+            errorCode: error instanceof BrowserDriverError ? error.code : "UNEXPECTED_DRIVER_REJECTION",
           },
           "The Browser QA driver failed before it returned bounded evidence",
         );
@@ -154,7 +154,7 @@ export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): Brow
             {
               dispatchId: dispatch.id,
               qaRunId: reserved.qaRun.id,
-              error: error instanceof Error ? error.name : "unknown",
+              errorCode: error instanceof BrowserDriverError ? error.code : "UNEXPECTED_DRIVER_REJECTION",
             },
             "The Browser QA quarantine directory could not be disposed cleanly",
           );
@@ -185,7 +185,7 @@ export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): Brow
         {
           dispatchId: dispatch.id,
           qaRunId: reserved.qaRun.id,
-          error: error instanceof Error ? error.name : "unknown",
+          errorCode: error instanceof BrowserDriverError ? error.code : "UNEXPECTED_DRIVER_REJECTION",
         },
         "The committed Browser QA attachment marker remains pending for startup recovery",
       );

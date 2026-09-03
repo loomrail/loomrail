@@ -142,6 +142,9 @@ Required mitigations and verification:
   match, and migration 31 leaves historical runs null rather than inventing an effective policy they never applied.
   Each ProviderSession separately retains the exact ContextPackRecipe content hash, so a handoff cannot make a
   run-level hash falsely attest to changing provider input;
+- stable runtime creates one immutable `SquadAssignment(revision = 1)` with the PipelineRun and exposes no post-start
+  assignment mutation command or transport. A future revision flow must bind a new immutable assignment only to an
+  unstarted StageAttempt and capture it in a new AgentRun policy snapshot before spawn;
 - multiple read-only claims may share a workspace only when they name the same immutable checkpoint. Any writer
   conflicts with every same-workspace claim; the existing E1 storage lease remains a backstop;
 - provider handoff stays inside one AgentRun and one capacity slot. Shutdown aborts every live ProviderSession;
@@ -1288,6 +1291,9 @@ Q1 tightens the deterministic baseline further:
 
 - a durable `QARun` is reserved by `local-daemon` only for the active `BROWSER_QA` AgentRun and exact successful
   implementation tree; provider output cannot reserve or complete it;
+- public `BrowserDriver` async operations normalize setup, finalization, confirmation and disposal rejections to one
+  exported error type with a closed code set and fixed summaries. Raw filesystem/browser/callback detail stays only
+  in the in-memory cause; daemon logs the closed code and still fails closed on a contract-violating adapter;
 - the baseline target is a bare literal loopback origin (`localhost`, `127/8` or `[::1]`). `localhost` resolution must
   contain only loopback addresses and Chromium pins it to one verified address for the run; exact origin is rechecked
   for every request and redirect. A fresh context blocks service workers, drops response cookies, and rejects requests

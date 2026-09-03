@@ -28,8 +28,10 @@ playbook.
 _Не означает_: живой процесс, provider account или право расширить Project policy.
 
 **SquadAssignment**:
-Неизменяемое назначение точных ревизий AgentProfile на executable stages одного approved PipelineRun.
-_Не означает_: групповой чат, весь доступный roster или автоматическое расширение scope.
+Неизменяемое назначение точных ревизий AgentProfile на executable stages одного approved PipelineRun. Stable scope
+создаёт один snapshot с `revision = 1`; post-start revision command/UI отсутствуют.
+_Не означает_: групповой чат, весь доступный roster, автоматическое расширение scope или уже реализованное изменение
+состава после старта.
 
 **AgentRun**:
 Один непрерывный запуск immutable AgentProfile revision на StageAttempt; canonical единица concurrency и
