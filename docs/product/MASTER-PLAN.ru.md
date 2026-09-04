@@ -1388,7 +1388,10 @@ Code `2.1.260` получили owner-authorized success/failure/workspace/MCP e
 ключуется по version, platform и architecture, поэтому Windows не наследует macOS row. Реальный gate обнаружил и
 закрыл Claude JSON Schema dialect drift, отсутствие проекции typed MCP grant в `--allowedTools` и слишком узкий env
 auth probe. Обе CLI локально `VERIFIED`, `AUTHENTICATED` и ready; Windows live evidence остаётся blocking platform
-gap. Следующий шаг Q14 — завершить managed public dogfood, correction loop и independent review, не выдавая его за
+gap. Первый managed запуск дополнительно обнаружил, что Task Cockpit не сохранял выбранные hard budget/model tier:
+демонстрационный лимит `100` и role default `STANDARD` применялись без preview. Q14 сначала добавляет versioned
+run-cost override для будущих AgentRun и явные start/override controls, не переписывая уже сохранённый snapshot.
+Следующий шаг Q14 — завершить managed public dogfood, correction loop и independent review, не выдавая его за
 private dogfood и не принимая owner-only Acceptance решение.
 
 ### Оценка первого цикла

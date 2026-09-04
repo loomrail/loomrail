@@ -622,6 +622,15 @@ Literal delimiter collision is closed by line-prefixing the normalized provider 
 general one: a model can still follow malicious prose that is visibly marked as untrusted data. Owner-visible full
 text and deterministic workflow authority reduce that risk but do not turn provider output into trusted input.
 
+### Q14 run cost-policy delta
+
+Q14 keeps the logical model tier inside an owner-authored, revisioned run cost boundary. The Task Cockpit submits an
+explicit starting hard limit and tier; a hard-pause override persists both the increased limit and the tier selected
+for future AgentRuns. Existing AgentRun policy snapshots are append-only and are never rewritten by that override.
+Historical BudgetPolicy rows and events read an absent tier as `null` (role default), so migration does not invent
+cheaper or more capable authority for old executions. HTTP input remains runtime-validated and a new limit must still
+exceed both the prior cap and cumulative recorded usage.
+
 ### A1.5 event-channel delta (T03)
 
 A1.5 (`docs/plans/09-background-execution-and-event-stream-spec.ru.md`) adds exactly one new authenticated

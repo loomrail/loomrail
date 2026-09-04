@@ -565,6 +565,7 @@ const budgetPolicyRowSchema = z.object({
   pipeline_run_id: z.string(),
   revision: z.number().int(),
   max_estimated_tokens: z.number().int(),
+  model_tier_override: z.string().nullable(),
   warning_thresholds_json: z.string(),
   actor_type: z.string(),
   actor_id: z.string(),
@@ -1451,6 +1452,7 @@ const budgetPolicyFromRow = (value: unknown): BudgetPolicy => {
     pipelineRunId: row.pipeline_run_id,
     revision: row.revision,
     maxEstimatedTokens: row.max_estimated_tokens,
+    modelTierOverride: row.model_tier_override,
     warningThresholds: parseJson(row.warning_thresholds_json),
     createdBy: { type: row.actor_type, id: row.actor_id },
     createdAt: row.created_at,
@@ -4807,8 +4809,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO budget_policies (
             id, schema_version, project_id, work_item_id, pipeline_run_id, revision,
-            max_estimated_tokens, warning_thresholds_json, actor_type, actor_id, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            max_estimated_tokens, model_tier_override, warning_thresholds_json, actor_type, actor_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           policy.id,
@@ -4818,6 +4820,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           policy.pipelineRunId,
           policy.revision,
           policy.maxEstimatedTokens,
+          policy.modelTierOverride ?? null,
           JSON.stringify(policy.warningThresholds),
           policy.createdBy.type,
           policy.createdBy.id,
@@ -6275,6 +6278,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               revision: currentBudget.revision,
               maxEstimatedTokens: currentBudget.maxEstimatedTokens,
             },
+            modelTierOverride: currentBudget.modelTierOverride ?? null,
             usedEstimatedTokens,
             mcpProfileRevisionIds,
             projectConstitution:

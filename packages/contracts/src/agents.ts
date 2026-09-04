@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { providerPreferenceSchema } from "./provider-selection.js";
-import { opaqueIdSchema, schemaVersionSchema, utcTimestampSchema } from "./shared.js";
+import { modelTierSchema, opaqueIdSchema, schemaVersionSchema, utcTimestampSchema } from "./shared.js";
 import { contextSectionIdSchema, providerIdSchema, workflowStageSchema } from "./workflow.js";
 
 export const agentRoleSchema = z.enum([
@@ -14,7 +14,7 @@ export const agentRoleSchema = z.enum([
   "ACCEPTANCE_MANAGER",
 ]);
 
-export const modelTierSchema = z.enum(["FAST", "STANDARD", "DEEP"]);
+export { modelTierSchema } from "./shared.js";
 export const agentProfileProvenanceSchema = z.enum(["BUILTIN", "PROJECT"]);
 export const agentCapabilitySchema = z.enum([
   "ARTIFACT_WRITE",
@@ -283,7 +283,7 @@ export const agentFleetResponseSchema = z
   .strict();
 
 export type AgentRole = z.infer<typeof agentRoleSchema>;
-export type ModelTier = z.infer<typeof modelTierSchema>;
+export type { ModelTier } from "./shared.js";
 export type AgentCapability = z.infer<typeof agentCapabilitySchema>;
 export type AgentArtifactKind = z.infer<typeof agentArtifactKindSchema>;
 export type RolePlaybook = z.infer<typeof rolePlaybookSchema>;

@@ -404,6 +404,7 @@ export const resolveAgentRunPolicy = (input: {
   provider: ProviderId;
   claimLimits: AgentRunClaimLimits;
   pipelineBudget: { id: string; revision: number; maxEstimatedTokens: number };
+  modelTierOverride?: AgentRunPolicySnapshot["modelTier"] | null;
   usedEstimatedTokens: number;
   mcpProfileRevisionIds: readonly string[];
   projectConstitution: { id: string; version: number; contentDigest: string } | null;
@@ -454,7 +455,7 @@ export const resolveAgentRunPolicy = (input: {
     profile: { id: input.profile.id, revision: input.profile.revision, role: input.profile.role },
     provider: input.provider,
     effectiveCapabilities,
-    modelTier: input.profile.defaultModelTier,
+    modelTier: input.modelTierOverride ?? input.profile.defaultModelTier,
     projectConstitution: input.projectConstitution,
     claimLimits: input.claimLimits,
     budget: {

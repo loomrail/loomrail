@@ -512,6 +512,7 @@ export const decideStartMockPipeline = (
     pipelineRunId: run.id,
     revision: 1,
     maxEstimatedTokens: command.payload.budget.maxEstimatedTokens,
+    modelTierOverride: command.payload.budget.modelTierOverride ?? null,
     warningThresholds: [...command.payload.budget.warningThresholds],
     createdBy: command.actor,
     createdAt: context.now,
@@ -2254,6 +2255,10 @@ export const decideApproveBudgetOverride = (
     id: context.ids.budgetPolicyId,
     revision: context.currentBudgetPolicy.revision + 1,
     maxEstimatedTokens: command.payload.maxEstimatedTokens,
+    modelTierOverride:
+      command.payload.modelTierOverride === undefined
+        ? (context.currentBudgetPolicy.modelTierOverride ?? null)
+        : command.payload.modelTierOverride,
     createdBy: command.actor,
     createdAt: context.now,
   };

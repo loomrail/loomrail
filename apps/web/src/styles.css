@@ -2531,6 +2531,28 @@ body.is-resizing {
   justify-self: start;
 }
 
+.workflow-policy-form {
+  align-items: end;
+  display: grid;
+  gap: var(--lr-space-3);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.workflow-policy-form > .lr-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.workflow-policy-form--override {
+  flex: 1 1 100%;
+}
+
+@media (max-width: 720px) {
+  .workflow-policy-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .workflow-panel__status {
   align-items: center;
   display: flex;

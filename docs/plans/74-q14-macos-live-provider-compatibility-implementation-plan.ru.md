@@ -25,7 +25,9 @@
 ### Q14.3 — Dogfood and review
 
 - [x] Обновить public EN/RU matrix, T43 и sanitized evidence.
-- [ ] Перезапустить isolated daemon и доказать provider readiness/recovery.
+- [x] Перезапустить isolated daemon и доказать provider readiness/recovery.
+- [ ] Исправить обнаруженный dogfood blocker: durable model-tier override и управляемый hard budget в Task Cockpit.
+- [ ] Доказать migration/backward compatibility, immutable старый AgentRun snapshot и FAST для следующего AgentRun.
 - [ ] Продолжить public target workflow с Codex implementation и независимым Claude review.
 - [ ] Выполнить browser QA и correction loop; owner-only acceptance оставить владельцу.
 - [ ] Провести Standards/Spec review и полный доступный verification gate.

@@ -3,6 +3,7 @@ import type { SyntheticEvent } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   isSessionPauseFailureCode,
+  modelTierSchema,
   prioritySchema,
   riskSchema,
   type AcceptanceAction,
@@ -13,6 +14,7 @@ import {
   type DomainEvent,
   type EvidenceArtifact,
   type HumanRequest,
+  type ModelTier,
   type PipelineRun,
   type ProviderSession,
   type QADefect,
@@ -2345,6 +2347,8 @@ const WorkspacePanel = ({ item }: { item: WorkItem }): React.JSX.Element | null 
   );
 };
 
+const suggestedPipelineBudget = 700_000;
+
 const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const { t } = useI18n();
   const workflowQuery = useWorkItemWorkflow(item.id);
@@ -2352,7 +2356,18 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const controlMutation = usePipelineControl();
   const overrideMutation = useApproveBudgetOverride();
   const [lastAction, setLastAction] = useState<"pause" | "resume" | "cancel" | "override" | null>(null);
+  const [budgetLimitInput, setBudgetLimitInput] = useState(String(suggestedPipelineBudget));
+  const [modelTierOverride, setModelTierOverride] = useState<ModelTier>("FAST");
   const snapshot = workflowQuery.data;
+  const parsedBudgetLimit = Number(budgetLimitInput);
+  const budgetLimitIsValid = Number.isSafeInteger(parsedBudgetLimit) && parsedBudgetLimit > 0;
+  const startWorkflow = (): void => {
+    if (!budgetLimitIsValid) return;
+    startMutation.mutate({
+      policy: { maxEstimatedTokens: parsedBudgetLimit, modelTierOverride },
+      workItem: item,
+    });
+  };
   const openRequest =
     snapshot?.humanRequests.find(
       ({ id, status }) => status === "OPEN" && id !== snapshot.acceptancePackage?.humanRequestId,
@@ -2372,21 +2387,66 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
           <LocalConnectionRecovery
             error={startMutation.error}
             onRetry={() => {
-              startMutation.mutate(item);
+              startWorkflow();
             }}
             retrying={startMutation.isPending}
           />
         ) : null}
-        <Button
-          disabled={item.state !== "READY"}
-          loading={startMutation.isPending}
-          onClick={() => {
-            startMutation.mutate(item);
+        <form
+          className="workflow-policy-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            startWorkflow();
           }}
-          variant="primary"
         >
-          {t("workflow.start")}
-        </Button>
+          <Field
+            {...(budgetLimitIsValid ? {} : { error: t("workflow.budget.invalid") })}
+            description={t("workflow.budget.description")}
+            htmlFor="workflow-start-budget"
+            label={t("workflow.budget.input")}
+            required
+          >
+            <TextField
+              id="workflow-start-budget"
+              inputMode="numeric"
+              invalid={!budgetLimitIsValid}
+              min={1}
+              onChange={(event) => {
+                setBudgetLimitInput(event.currentTarget.value);
+              }}
+              required
+              step={1}
+              type="number"
+              value={budgetLimitInput}
+            />
+          </Field>
+          <Field
+            description={t("workflow.modelTier.description")}
+            htmlFor="workflow-start-model-tier"
+            label={t("workflow.modelTier.input")}
+          >
+            <SelectControl
+              ariaLabel={t("workflow.modelTier.input")}
+              id="workflow-start-model-tier"
+              onValueChange={(value) => {
+                setModelTierOverride(modelTierSchema.parse(value));
+              }}
+              options={(["FAST", "STANDARD", "DEEP"] as const).map((tier) => ({
+                label: t(`workflow.modelTier.${tier}`),
+                value: tier,
+              }))}
+              value={modelTierOverride}
+            />
+          </Field>
+          <Button
+            disabled={item.state !== "READY" || !budgetLimitIsValid}
+            loading={startMutation.isPending}
+            type="submit"
+            variant="primary"
+          >
+            {t("workflow.start")}
+          </Button>
+        </form>
       </div>
     );
   }
@@ -2411,7 +2471,11 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const budgetPercent = budgetPolicy
     ? Math.min(100, Math.round((used / budgetPolicy.maxEstimatedTokens) * 100))
     : 0;
-  const overrideLimit = budgetPolicy ? Math.max(budgetPolicy.maxEstimatedTokens * 2, used + 100) : used + 100;
+  const overrideLimitIsValid =
+    budgetPolicy !== null &&
+    budgetLimitIsValid &&
+    parsedBudgetLimit > budgetPolicy.maxEstimatedTokens &&
+    parsedBudgetLimit > used;
   const controlPending = controlMutation.isPending || overrideMutation.isPending;
   const runControl = (action: "pause" | "resume" | "cancel"): void => {
     controlMutation.reset();
@@ -2420,10 +2484,16 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
     controlMutation.mutate({ action, run, workItem: item });
   };
   const approveOverride = (): void => {
+    if (!overrideLimitIsValid) return;
     controlMutation.reset();
     overrideMutation.reset();
     setLastAction("override");
-    overrideMutation.mutate({ maxEstimatedTokens: overrideLimit, run, workItem: item });
+    overrideMutation.mutate({
+      maxEstimatedTokens: parsedBudgetLimit,
+      modelTierOverride,
+      run,
+      workItem: item,
+    });
   };
 
   return (
@@ -2458,6 +2528,14 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
           <div className="workflow-budget__meta">
             <span>{t("workflow.budget.revision", { revision: budgetPolicy.revision })}</span>
             <span>{budgetPercent}%</span>
+            <span>
+              {t("workflow.modelTier.current", {
+                tier:
+                  budgetPolicy.modelTierOverride === undefined || budgetPolicy.modelTierOverride === null
+                    ? t("workflow.modelTier.roleDefault")
+                    : t(`workflow.modelTier.${budgetPolicy.modelTierOverride}`),
+              })}
+            </span>
           </div>
         </div>
       ) : null}
@@ -2533,15 +2611,63 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
               {t("workflow.action.resume")}
             </Button>
           ) : null}
-          {run.status === "HARD_PAUSED" && !isSessionPauseFailureCode(currentAttempt?.failureCode ?? null) ? (
-            <Button
-              disabled={controlPending}
-              loading={overrideMutation.isPending}
-              onClick={approveOverride}
-              variant="primary"
+          {run.status === "HARD_PAUSED" &&
+          budgetPolicy !== null &&
+          !isSessionPauseFailureCode(currentAttempt?.failureCode ?? null) ? (
+            <form
+              className="workflow-policy-form workflow-policy-form--override"
+              onSubmit={(event) => {
+                event.preventDefault();
+                approveOverride();
+              }}
             >
-              {t("workflow.action.override", { limit: overrideLimit })}
-            </Button>
+              <Field
+                {...(overrideLimitIsValid ? {} : { error: t("workflow.budget.overrideInvalid") })}
+                description={t("workflow.budget.overrideDescription", {
+                  current: budgetPolicy.maxEstimatedTokens,
+                  used,
+                })}
+                htmlFor="workflow-override-budget"
+                label={t("workflow.budget.input")}
+                required
+              >
+                <TextField
+                  id="workflow-override-budget"
+                  inputMode="numeric"
+                  invalid={!overrideLimitIsValid}
+                  min={Math.max(budgetPolicy.maxEstimatedTokens, used) + 1}
+                  onChange={(event) => {
+                    setBudgetLimitInput(event.currentTarget.value);
+                  }}
+                  required
+                  step={1}
+                  type="number"
+                  value={budgetLimitInput}
+                />
+              </Field>
+              <Field htmlFor="workflow-override-model-tier" label={t("workflow.modelTier.input")}>
+                <SelectControl
+                  ariaLabel={t("workflow.modelTier.input")}
+                  id="workflow-override-model-tier"
+                  onValueChange={(value) => {
+                    setModelTierOverride(modelTierSchema.parse(value));
+                  }}
+                  options={(["FAST", "STANDARD", "DEEP"] as const).map((tier) => ({
+                    label: t(`workflow.modelTier.${tier}`),
+                    value: tier,
+                  }))}
+                  value={modelTierOverride}
+                />
+              </Field>
+              <Button
+                disabled={controlPending || !overrideLimitIsValid}
+                loading={overrideMutation.isPending}
+                type="submit"
+                variant="primary"
+              >
+                {t("workflow.action.override", { limit: parsedBudgetLimit })}
+              </Button>
+            </form>
           ) : null}
           <Button
             disabled={controlPending}

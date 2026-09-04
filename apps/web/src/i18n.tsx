@@ -440,8 +440,23 @@ const en = {
   "workflow.action.cancel": "Cancel run",
   "workflow.action.override": "Approve {limit} token budget",
   "workflow.budget.title": "Estimated token budget",
+  "workflow.budget.input": "Hard token budget",
+  "workflow.budget.description":
+    "Maximum estimated tokens for the whole run. The suggested value covers the built-in stage envelopes; unused budget is not spent.",
+  "workflow.budget.invalid": "Enter a positive whole number.",
+  "workflow.budget.overrideDescription":
+    "Enter a limit above both the current {current} and the recorded usage {used}.",
+  "workflow.budget.overrideInvalid": "The new limit must exceed the current limit and recorded usage.",
   "workflow.budget.usage": "{used} of {limit}",
   "workflow.budget.revision": "Policy revision {revision}",
+  "workflow.modelTier.input": "Model tier",
+  "workflow.modelTier.description":
+    "Applies to future agent runs and is recorded in each immutable policy snapshot.",
+  "workflow.modelTier.current": "Tier: {tier}",
+  "workflow.modelTier.roleDefault": "Role default",
+  "workflow.modelTier.FAST": "Fast",
+  "workflow.modelTier.STANDARD": "Standard",
+  "workflow.modelTier.DEEP": "Deep",
   "workflow.recovery.title": "Recovery report",
   "workflow.recovery.description":
     "A running attempt was interrupted safely after the local daemon restarted.",
@@ -1244,8 +1259,23 @@ const ru = {
   "workflow.action.cancel": "Отменить запуск",
   "workflow.action.override": "Одобрить лимит {limit} токенов",
   "workflow.budget.title": "Лимит оценочных токенов",
+  "workflow.budget.input": "Жёсткий лимит токенов",
+  "workflow.budget.description":
+    "Максимум оценочных токенов на весь запуск. Предложенное значение покрывает встроенные лимиты стадий; неиспользованный бюджет не расходуется.",
+  "workflow.budget.invalid": "Введите положительное целое число.",
+  "workflow.budget.overrideDescription":
+    "Введите лимит выше текущего {current} и уже записанного расхода {used}.",
+  "workflow.budget.overrideInvalid": "Новый лимит должен быть выше текущего лимита и записанного расхода.",
   "workflow.budget.usage": "{used} из {limit}",
   "workflow.budget.revision": "Ревизия политики {revision}",
+  "workflow.modelTier.input": "Уровень модели",
+  "workflow.modelTier.description":
+    "Применяется к будущим запускам агентов и сохраняется в каждом неизменяемом снимке политики.",
+  "workflow.modelTier.current": "Уровень: {tier}",
+  "workflow.modelTier.roleDefault": "По умолчанию роли",
+  "workflow.modelTier.FAST": "Быстрый",
+  "workflow.modelTier.STANDARD": "Стандартный",
+  "workflow.modelTier.DEEP": "Глубокий",
   "workflow.recovery.title": "Отчёт о восстановлении",
   "workflow.recovery.description":
     "Выполнявшаяся попытка безопасно прервана после перезапуска локального демона.",

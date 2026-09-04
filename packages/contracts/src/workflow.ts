@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   actorSchema,
   correlationIdSchema,
+  modelTierSchema,
   opaqueIdSchema,
   providerIdSchema,
   schemaVersionSchema,
@@ -516,6 +517,9 @@ export const budgetPolicySchema = z
     pipelineRunId: opaqueIdSchema,
     revision: z.number().int().positive(),
     maxEstimatedTokens: z.number().int().positive(),
+    // Optional preserves append-only events and receipts written before run-level model policy.
+    // Null means "use the immutable AgentProfile default"; new owner-selected policies persist a tier.
+    modelTierOverride: modelTierSchema.nullable().optional(),
     warningThresholds: z.array(budgetThresholdSchema).min(1).max(10),
     createdBy: actorSchema,
     createdAt: utcTimestampSchema,
@@ -1094,6 +1098,7 @@ export const startMockPipelineCommandSchema = commandBaseSchema.extend({
         .object({
           maxEstimatedTokens: z.number().int().positive(),
           warningThresholds: z.array(budgetThresholdSchema).min(1).max(10),
+          modelTierOverride: modelTierSchema.nullable().optional(),
         })
         .strict(),
     })
@@ -1209,6 +1214,8 @@ export const approveBudgetOverrideCommandSchema = commandBaseSchema.extend({
   type: z.literal("APPROVE_BUDGET_OVERRIDE"),
   payload: pipelineControlPayloadSchema.extend({
     maxEstimatedTokens: z.number().int().positive(),
+    // Optional for historical command receipts. Omitted means preserve the current policy value.
+    modelTierOverride: modelTierSchema.nullable().optional(),
   }),
 });
 
@@ -1722,6 +1729,10 @@ export const startMockPipelineRequestSchema = z
     schemaVersion: schemaVersionSchema,
     commandId: opaqueIdSchema,
     expectedVersion: z.number().int().positive(),
+    // Optional only for API compatibility with the Phase 0 client. The current Task Cockpit always
+    // sends both values so the owner sees the cost policy before launch.
+    maxEstimatedTokens: z.number().int().positive().optional(),
+    modelTierOverride: modelTierSchema.nullable().optional(),
   })
   .strict();
 
@@ -1756,6 +1767,7 @@ export const pipelineControlRequestSchema = z
 
 export const budgetOverrideRequestSchema = pipelineControlRequestSchema.extend({
   maxEstimatedTokens: z.number().int().positive(),
+  modelTierOverride: modelTierSchema.nullable().optional(),
 });
 
 export const resolveAcceptanceRequestSchema = z

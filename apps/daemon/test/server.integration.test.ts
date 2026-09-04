@@ -1511,6 +1511,8 @@ describe("local daemon session and state boundary", () => {
           schemaVersion: 1,
           commandId: "start-workflow-item",
           expectedVersion: 2,
+          maxEstimatedTokens: 100,
+          modelTierOverride: "STANDARD",
         }),
       },
     );
@@ -1614,6 +1616,7 @@ describe("local daemon session and state boundary", () => {
           commandId: "approve-budget-override",
           expectedVersion: hardPaused.run?.version,
           maxEstimatedTokens: 200,
+          modelTierOverride: "FAST",
         }),
       },
     );
@@ -1622,13 +1625,14 @@ describe("local daemon session and state boundary", () => {
     const awaitingAcceptance = await fetchWorkflowSnapshot(daemon, secondSession.cookie, workItemId);
     expect(awaitingAcceptance.run?.status).toBe("WAITING_HUMAN");
     expect(
-      awaitingAcceptance.budgetPolicies.map(({ revision, maxEstimatedTokens }) => ({
+      awaitingAcceptance.budgetPolicies.map(({ revision, maxEstimatedTokens, modelTierOverride }) => ({
         revision,
         maxEstimatedTokens,
+        modelTierOverride,
       })),
     ).toEqual([
-      { revision: 1, maxEstimatedTokens: 100 },
-      { revision: 2, maxEstimatedTokens: 200 },
+      { revision: 1, maxEstimatedTokens: 100, modelTierOverride: "STANDARD" },
+      { revision: 2, maxEstimatedTokens: 200, modelTierOverride: "FAST" },
     ]);
     expect(awaitingAcceptance.stageAttempts.at(-1)).toMatchObject({
       stage: "ACCEPTANCE",

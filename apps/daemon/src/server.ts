@@ -187,7 +187,7 @@ const SESSION_COOKIE = "loomrail_session";
 const CSRF_HEADER = "x-loomrail-csrf";
 const BOOTSTRAP_TTL_MS = 60_000;
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
-const DEFAULT_MOCK_BUDGET = 100;
+const LEGACY_MOCK_BUDGET = 100;
 const DEFAULT_MOCK_BUDGET_THRESHOLDS = [0.5, 0.8, 0.95] as const;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1"]);
 
@@ -2798,8 +2798,9 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             expectedVersion: body.expectedVersion,
             template: mockDeliveryTemplate,
             budget: {
-              maxEstimatedTokens: DEFAULT_MOCK_BUDGET,
+              maxEstimatedTokens: body.maxEstimatedTokens ?? LEGACY_MOCK_BUDGET,
               warningThresholds: [...DEFAULT_MOCK_BUDGET_THRESHOLDS],
+              modelTierOverride: body.modelTierOverride ?? null,
             },
           },
         });
@@ -2990,6 +2991,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             pipelineRunId: snapshot.snapshot.run.id,
             expectedVersion: body.expectedVersion,
             maxEstimatedTokens: body.maxEstimatedTokens,
+            ...(body.modelTierOverride === undefined ? {} : { modelTierOverride: body.modelTierOverride }),
           },
         });
         worker.wake();

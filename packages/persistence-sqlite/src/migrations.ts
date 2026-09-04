@@ -159,6 +159,11 @@ const migrations: readonly Migration[] = [
     name: "provider_usage_reports",
     filename: "0032_provider_usage_reports.sql",
   },
+  {
+    version: 33,
+    name: "budget_model_tier_override",
+    filename: "0033_budget_model_tier_override.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

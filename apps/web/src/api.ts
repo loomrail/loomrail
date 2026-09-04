@@ -36,6 +36,7 @@ import {
   type McpProfileCandidate,
   type McpProfileProposal,
   type McpProfileRevision,
+  type ModelTier,
   type ConstitutionPresetId,
   type ConstitutionProposal,
   type ConstitutionPublication,
@@ -669,7 +670,12 @@ export const updateWorkItem = async (workItem: WorkItem, patch: UpdateWorkItemPa
   return result.workItem;
 };
 
-export const startMockPipeline = async (workItem: WorkItem) =>
+export type PipelineStartPolicy = {
+  maxEstimatedTokens: number;
+  modelTierOverride: ModelTier | null;
+};
+
+export const startMockPipeline = async (workItem: WorkItem, policy: PipelineStartPolicy) =>
   requestLocalApi(
     `/api/v1/work-items/${encodeURIComponent(workItem.id)}/pipeline/start`,
     workflowSnapshotSchema,
@@ -679,6 +685,8 @@ export const startMockPipeline = async (workItem: WorkItem) =>
         schemaVersion: 1,
         commandId: crypto.randomUUID(),
         expectedVersion: workItem.version,
+        maxEstimatedTokens: policy.maxEstimatedTokens,
+        modelTierOverride: policy.modelTierOverride,
       }),
     },
   );
@@ -776,6 +784,7 @@ export const approveBudgetOverride = async (
   workItemId: string,
   run: PipelineRun,
   maxEstimatedTokens: number,
+  modelTierOverride: ModelTier | null,
 ) =>
   requestLocalApi(
     `/api/v1/work-items/${encodeURIComponent(workItemId)}/pipeline/budget-override`,
@@ -787,6 +796,7 @@ export const approveBudgetOverride = async (
         commandId: crypto.randomUUID(),
         expectedVersion: run.version,
         maxEstimatedTokens,
+        modelTierOverride,
       }),
     },
   );

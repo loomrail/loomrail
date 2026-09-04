@@ -56,7 +56,11 @@ describe("mock workflow decisions", () => {
         workItemId: "work-item-1",
         expectedVersion: 2,
         template,
-        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+        budget: {
+          maxEstimatedTokens: 100,
+          warningThresholds: [0.5, 0.8, 0.95],
+          modelTierOverride: "FAST",
+        },
       },
     };
     const started = decideStartMockPipeline(command, {
@@ -74,6 +78,7 @@ describe("mock workflow decisions", () => {
     expect(started).toMatchObject({
       workItem: { state: "IN_PROGRESS", currentStage: "DISCOVERY" },
       stageAttempt: { status: "QUEUED" },
+      budgetPolicy: { maxEstimatedTokens: 100, modelTierOverride: "FAST" },
       dispatch: { mode: "START", status: "PENDING" },
     });
     expect(() =>

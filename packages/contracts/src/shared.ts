@@ -13,6 +13,9 @@ export const utcTimestampSchema = z.iso.datetime({ offset: true });
 // Provider identity is shared by workflow, review, scheduling and settings contracts. It lives in
 // this dependency-free module so those contracts do not form runtime import cycles around it.
 export const providerIdSchema = z.enum(["MOCK", "CODEX", "CLAUDE_CODE"]);
+// Logical model policy is shared by workflow cost controls and immutable AgentRun snapshots. Keep
+// it dependency-free here so workflow.ts and agents.ts do not form a runtime schema cycle.
+export const modelTierSchema = z.enum(["FAST", "STANDARD", "DEEP"]);
 
 export const actorSchema = z
   .object({
@@ -23,3 +26,4 @@ export const actorSchema = z
 
 export type Actor = z.infer<typeof actorSchema>;
 export type ProviderId = z.infer<typeof providerIdSchema>;
+export type ModelTier = z.infer<typeof modelTierSchema>;

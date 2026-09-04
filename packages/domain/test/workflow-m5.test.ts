@@ -405,7 +405,12 @@ describe("M5 workflow decisions", () => {
         correlationId: "correlation-override-budget",
         actor: { type: "HUMAN", id: "local-owner" },
         type: "APPROVE_BUDGET_OVERRIDE",
-        payload: { pipelineRunId: hardRun.id, expectedVersion: hardRun.version, maxEstimatedTokens: 200 },
+        payload: {
+          pipelineRunId: hardRun.id,
+          expectedVersion: hardRun.version,
+          maxEstimatedTokens: 200,
+          modelTierOverride: "FAST",
+        },
       },
       {
         now,
@@ -420,7 +425,7 @@ describe("M5 workflow decisions", () => {
     expect(overridden).toMatchObject({
       run: { status: "RUNNING", currentStageAttemptId: "attempt-2" },
       stageAttempt: { attempt: 2, status: "QUEUED" },
-      budgetPolicy: { revision: 2, maxEstimatedTokens: 200 },
+      budgetPolicy: { revision: 2, maxEstimatedTokens: 200, modelTierOverride: "FAST" },
     });
   });
 

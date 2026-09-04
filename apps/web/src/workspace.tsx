@@ -15,6 +15,7 @@ import type {
   McpProfileCandidate,
   McpProfileProposal,
   McpProfileRevision,
+  ModelTier,
   ProjectReadinessRun,
   ProviderPreference,
   QACorrectionGateAction,
@@ -84,6 +85,7 @@ import {
   waiveQADefect,
   type CreateWorkItemInput,
   type PipelineControlAction,
+  type PipelineStartPolicy,
   type UpdateWorkItemPatch,
 } from "./api";
 import { localConnectionQuery, type ConnectionResult } from "./session";
@@ -680,8 +682,9 @@ export const useUpdateWorkItem = () => {
 export const useStartMockPipeline = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (workItem: WorkItem) => startMockPipeline(workItem),
-    onSuccess: async (_, workItem) => {
+    mutationFn: ({ policy, workItem }: { policy: PipelineStartPolicy; workItem: WorkItem }) =>
+      startMockPipeline(workItem, policy),
+    onSuccess: async (_, { workItem }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(workItem.id) }),
@@ -815,13 +818,15 @@ export const useApproveBudgetOverride = () => {
   return useMutation({
     mutationFn: ({
       maxEstimatedTokens,
+      modelTierOverride,
       run,
       workItem,
     }: {
       maxEstimatedTokens: number;
+      modelTierOverride: ModelTier | null;
       run: PipelineRun;
       workItem: WorkItem;
-    }) => approveBudgetOverride(workItem.id, run, maxEstimatedTokens),
+    }) => approveBudgetOverride(workItem.id, run, maxEstimatedTokens, modelTierOverride),
     onSuccess: async (_, { run, workItem }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),

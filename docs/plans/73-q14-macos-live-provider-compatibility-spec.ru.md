@@ -69,3 +69,21 @@ Capture использует только public synthetic prompt/repository и 
 - provider installation, update, downgrade или login;
 - stable release claim;
 - изменение provider session semantics вне обнаруженной compatibility correction.
+
+## 6. Dogfood correction: run cost policy
+
+Первый managed запуск обнаружил, что Task Cockpit не передаёт hard budget и logical model tier: daemon использует
+демонстрационный лимит `100`, а новый AgentRun всегда наследует role default. В результате narrow public dogfood
+стартовал на `STANDARD` и после реально измеренного usage предложил практически бесполезный override `used + 100`.
+
+Q14 закрывает дефект до продолжения quota-bearing workflow:
+
+- стартовый экран явно показывает и валидирует hard token budget и logical tier;
+- новый `BudgetPolicy` сохраняет nullable model-tier override, оставляя `null` совместимым значением «role default»;
+- owner budget override создаёт новую policy revision и может задать tier для только будущих AgentRun; уже сохранённые
+  immutable snapshots не переписываются;
+- effective tier нового AgentRun вычисляется детерминированно как policy override либо role default и сохраняется в
+  существующем policy snapshot;
+- budget override UI принимает осмысленный лимит больше прежнего и cumulative usage вместо вычисленного `used + 100`;
+- прежние command receipts/events и базы продолжают читаться как `modelTierOverride = null`;
+- restart/recovery доказывает сохранение policy revision до возобновления dogfood.

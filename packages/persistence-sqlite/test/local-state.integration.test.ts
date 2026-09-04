@@ -1210,7 +1210,7 @@ describe("SQLite local state", () => {
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-      29, 30, 31, 32,
+      29, 30, 31, 32, 33,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -1218,6 +1218,46 @@ describe("SQLite local state", () => {
     const backup = new DatabaseSync(localState.startup.backupPath, { readOnly: true });
     expect(backup.prepare("SELECT value FROM legacy_marker").get()).toEqual({ value: "preserve-me" });
     backup.close();
+  });
+
+  it("adds a nullable model-tier override without inventing one for an older BudgetPolicy", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-pre-0033"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-pre-0033", created.workItem.id, 1, "READY"));
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "pipeline-pre-0033",
+      correlationId: "correlation-pipeline-pre-0033",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: mockTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    localState.close();
+    state = undefined;
+
+    const pre33 = new DatabaseSync(databasePath);
+    pre33.exec(`
+      ALTER TABLE budget_policies DROP COLUMN model_tier_override;
+      DELETE FROM schema_migrations WHERE version = 33;
+    `);
+    pre33.close();
+
+    const migrated = await open();
+    expect(migrated.startup.appliedMigrations).toEqual([33]);
+    const snapshot = migrated.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    expect(snapshot).toMatchObject({
+      snapshot: { budgetPolicies: [{ revision: 1, modelTierOverride: null }] },
+    });
   });
 
   it("persists bounded QA correction lineage and local cycle numbering", async () => {
@@ -2760,7 +2800,12 @@ describe("SQLite local state", () => {
   });
 
   describe("A3 AgentRun reservation (migration 0020)", () => {
-    const startReadyWorkflow = (localState: LocalState, suffix: string, projectId = "project-web") => {
+    const startReadyWorkflow = (
+      localState: LocalState,
+      suffix: string,
+      projectId = "project-web",
+      modelTierOverride?: "FAST" | "STANDARD" | "DEEP",
+    ) => {
       const created = localState.execute(createWorkItem(`create-${suffix}`, projectId));
       if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
       localState.execute(moveWorkItem(`ready-${suffix}`, created.workItem.id, 1, "READY"));
@@ -2774,7 +2819,11 @@ describe("SQLite local state", () => {
           workItemId: created.workItem.id,
           expectedVersion: 2,
           template: mockTemplate,
-          budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+          budget: {
+            maxEstimatedTokens: 100,
+            warningThresholds: [0.5, 0.8, 0.95],
+            ...(modelTierOverride === undefined ? {} : { modelTierOverride }),
+          },
         },
       });
       const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
@@ -2925,6 +2974,29 @@ describe("SQLite local state", () => {
       expect(
         events.type === "EVENTS" ? events.events.filter(({ type }) => type === "AGENT_RUN_FINISHED") : [],
       ).toHaveLength(1);
+    });
+
+    it("persists a FAST run policy and binds it to the next immutable AgentRun", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { dispatch } = startReadyWorkflow(localState, "a3-fast-policy", "project-web", "FAST");
+
+      const started = localState.execute(startAgentRun("fast-policy", dispatch.id));
+      expect(started).toMatchObject({
+        type: "AGENT_RUN_STARTED",
+        run: {
+          policySnapshot: {
+            modelTier: "FAST",
+            budget: { pipelinePolicyRevision: 1 },
+          },
+        },
+      });
+
+      localState.close();
+      state = undefined;
+      const reopened = await open();
+      const runs = reopened.query({ type: "LIST_AGENT_RUNS", status: "RUNNING", limit: 10 });
+      expect(runs).toMatchObject({ runs: [{ policySnapshot: { modelTier: "FAST" } }] });
     });
 
     it("rejects a policy snapshot whose stored bytes no longer match its hash", async () => {
