@@ -8,25 +8,27 @@ or login alone is not a compatibility claim.
 
 ## Current matrix
 
-The `0.1.0-alpha.5` candidate begins with no verified live-provider row. This is intentional: neither provider
-promises a versioned backward-compatible schema for the whole JSONL event stream, and the existing recordings do not
-prove the same invocation on both macOS and Windows.
+The first live rows are deliberately scoped to the exact runtime target that produced their evidence. Neither
+provider promises a versioned backward-compatible schema for the whole JSONL event stream, so the same version on a
+different OS or architecture is not inferred compatible.
 
-| Provider    | Version  | Evidence                                                       | Managed live admission |
-| ----------- | -------- | -------------------------------------------------------------- | ---------------------- |
-| Mock        | built-in | Deterministic local, macOS, and Windows gates                  | `BUILT_IN` — ready     |
-| Codex       | 0.144.1  | Real successful recordings on macOS arm64; MCP path unverified | `UNVERIFIED` — blocked |
-| Claude Code | 2.1.114  | Real unauthenticated stream; successful result is derived      | `TOO_OLD` — blocked    |
-| Codex       | 0.152.1  | Current upstream candidate; no Loomrail adapter run            | `UNVERIFIED` — blocked |
-| Claude Code | 2.1.258  | Current upstream candidate; no Loomrail adapter run            | `UNVERIFIED` — blocked |
+| Provider    | Version         | Evidence                                                       | Managed live admission       |
+| ----------- | --------------- | -------------------------------------------------------------- | ---------------------------- |
+| Mock        | built-in        | Deterministic local, macOS, and Windows gates                  | `BUILT_IN` — ready           |
+| Codex       | 0.144.1         | Real successful recordings on macOS arm64; MCP path unverified | `UNVERIFIED` — blocked       |
+| Claude Code | 2.1.114         | Real unauthenticated stream; successful result is derived      | `TOO_OLD` — blocked          |
+| Codex       | 0.152.1         | Current upstream candidate; no Loomrail adapter run            | `UNVERIFIED` — blocked       |
+| Claude Code | 2.1.258         | Current upstream candidate; no Loomrail adapter run            | `UNVERIFIED` — blocked       |
+| Codex       | 0.153.0-alpha.5 | Real success/failure/workspace/MCP recordings on macOS arm64   | `VERIFIED` on `darwin/arm64` |
+| Claude Code | 2.1.260         | Real corrected success/failure/MCP recordings on macOS arm64   | `VERIFIED` on `darwin/arm64` |
 
 Upstream versions are the releases current at the 2026-09-02 research cut, not recommendations to install or
 downgrade. See the [primary research](../product/PROVIDER-COMPATIBILITY-PRIMARY-RESEARCH-2026-09.md) for first-party
 sources and the exact limits of each claim.
 
-Until a live row is promoted, use the Mock walkthrough. AUTO stays on the clearly marked Mock fallback. Explicitly
-selecting Codex or Claude Code keeps that choice visible but refuses a new provider process; it does not silently run
-another provider or report Mock work as live work.
+On any target without an exact row, use the Mock walkthrough. AUTO stays on the clearly marked Mock fallback.
+Explicitly selecting an unverified Codex or Claude Code target keeps that choice visible but refuses a new provider
+process; it does not silently run another provider or report Mock work as live work.
 
 ## Read the local status
 
@@ -40,7 +42,7 @@ Or open **Settings → AI provider** and choose **Check again**. Loomrail report
 closed status:
 
 - `VERIFIED` — exact matrix row; authentication may then be checked;
-- `UNVERIFIED` — version parsed, but no exact cross-platform row exists;
+- `UNVERIFIED` — version parsed, but no exact row exists for this OS and architecture;
 - `TOO_OLD` — below a documented admission floor;
 - `VERSION_UNREADABLE` or `UNLAUNCHABLE` — the bounded version observation could not establish identity;
 - `MISSING` — no executable was found;
@@ -62,9 +64,10 @@ behavior; it does not make `2.1.214` or anything newer verified. Codex has no in
 
 ## Promoting a version
 
-A live version becomes `VERIFIED` only in a reviewed Loomrail change that records the exact CLI version, OS and
+A live target becomes `VERIFIED` only in a reviewed Loomrail change that records the exact CLI version, OS and
 architecture, install kind, invocation-contract revision, sanitized real-CLI success/failure/workspace/MCP streams,
-negative parser corpus, and matching macOS/Windows evidence. A provider update never edits the matrix automatically.
+negative parser corpus, and independent final-result validation. Cross-platform support requires a separate matching
+row and evidence for every claimed OS/architecture. A provider update never edits the matrix automatically.
 
 Capturing those streams starts real provider work and may spend quota, so it requires separate owner authorization.
 Loomrail never runs an installer, updater, login, or downgrade command. Use the provider's official documentation to

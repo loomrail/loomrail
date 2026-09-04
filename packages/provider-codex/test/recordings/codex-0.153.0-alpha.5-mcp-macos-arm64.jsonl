@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a06b50-c26e-7c41-95f5-99a2f8077a07"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"result\":{\"summary\":\"I’m locating the loomrail_q14 evidence tool, then I’ll invoke it exactly once with the requested text.\",\"completed\":[],\"remaining\":[],\"deadEnds\":[],\"openQuestions\":[],\"type\":\"COMPLETED\"}}"}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"loomrail_q14","tool":"evidence_echo","arguments":{"text":"macos-arm64"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"loomrail_q14","tool":"evidence_echo","arguments":{"text":"macos-arm64"},"result":{"content":[{"type":"text","text":"echo:macos-arm64"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"{\"result\":{\"summary\":\"The loomrail_q14 evidence_echo tool returned the marker `echo:macos-arm64`.\",\"completed\":[\"Called evidence_echo exactly once with text `macos-arm64`.\",\"Recorded exact returned marker: `echo:macos-arm64`.\"],\"remaining\":[],\"deadEnds\":[],\"openQuestions\":[],\"type\":\"COMPLETED\"}}"}}
+{"type":"turn.completed","usage":{"input_tokens":43308,"cached_input_tokens":28160,"cache_write_input_tokens":0,"output_tokens":311,"reasoning_output_tokens":81}}

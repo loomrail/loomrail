@@ -451,18 +451,25 @@ Required controls and verification:
   version. Raw output, executable path, environment, account and exception text never cross the module boundary;
 - `ProviderAvailability` is runtime-validated: a live provider is ready only when installed, exact `VERIFIED`, and
   authenticated. AUTO ignores every other live state; explicit selection stays visible but adapter start is false;
-- the initial live verified allowlist is empty. A recognized new version is `UNVERIFIED`; Claude Code below 2.1.214
-  is `TOO_OLD`. No package update, semver range, successful probe, setup or doctor invocation promotes a row;
+- Q14 admits only the reviewed Codex `0.153.0-alpha.5` and Claude Code `2.1.260` targets on `darwin/arm64`. The same
+  versions on Windows, Linux or another architecture remain `UNVERIFIED`; Claude Code below 2.1.214 is `TOO_OLD`.
+  No package update, semver range, successful probe, setup or doctor invocation promotes a row;
 - promotion requires one reviewed change with sanitized real-CLI success/failure/workspace/MCP recordings, negative
-  stream corpus, independent final-result validation and matching macOS/Windows evidence for the exact version and
-  invocation contract;
+  stream corpus and independent final-result validation for the exact version, platform, architecture and invocation
+  contract. A cross-platform claim requires a separate matching row and evidence for each target;
 - unit/integration/browser tests cover missing, unlaunchable, unreadable, too-old, unverified, verified/auth,
   refresh and canary paths. CI runs the synthetic process probe explicitly on macOS and Windows before repository-wide
   lint, while real quota-bearing capture requires separate owner authorization.
 
+Q14's real capture found three fail-closed compatibility defects before promotion: Claude rejected Zod's root
+2020-12 dialect annotation, its granted MCP tools were not projected to `--allowedTools`, and its auth-status command
+could not find the provider-owned login when the minimal environment dropped `USER`. The adapter now strips only the
+unsupported dialect annotation, maps only typed granted MCP tools, and the auth probe admits `USER`/`LOGNAME` while
+still dropping unrelated values. Tests pin all three boundaries; permission-bypass flags remain forbidden.
+
 Residual risk remains: an executable can be replaced after observation, and exact version identity does not prove
 binary provenance or account/quota fitness. Runtime provider envelopes and final domain results remain independently
-validated; provider signing/attestation and authenticated real-provider dogfood remain release gaps.
+validated; provider signing/attestation, Windows live rows and completed private dogfood remain release gaps.
 
 ### Q10 bundled-sample delta (T44)
 

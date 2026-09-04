@@ -11,7 +11,7 @@ const nodeProbe = (script: string, options: { deadlineMs?: number; outputLimitBy
   });
 
 describe("Codex provider diagnostics", () => {
-  it("keeps recorded and current versions unverified until an exact cross-platform row exists", () => {
+  it("keeps versions without an exact runtime target unverified", () => {
     expect(codexProviderDiagnostics.classifyVersion("codex-cli 0.144.1\n")).toEqual({
       compatibility: "UNVERIFIED",
       version: "0.144.1",
@@ -19,6 +19,13 @@ describe("Codex provider diagnostics", () => {
     expect(codexProviderDiagnostics.classifyVersion("codex-cli 0.151.0-alpha.7.2\n")).toEqual({
       compatibility: "UNVERIFIED",
       version: "0.151.0-alpha.7.2",
+    });
+  });
+
+  it("verifies the recorded version only on its exact macOS arm64 target", () => {
+    expect(codexProviderDiagnostics.classifyVersion("codex-cli 0.153.0-alpha.5\n")).toEqual({
+      compatibility: process.platform === "darwin" && process.arch === "arm64" ? "VERIFIED" : "UNVERIFIED",
+      version: "0.153.0-alpha.5",
     });
   });
 

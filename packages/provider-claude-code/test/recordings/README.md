@@ -6,10 +6,19 @@ an assumption tests the assumption instead of the CLI. This file is the inventor
 where its file came from; an entry that cannot say "captured from the real CLI" has to say what it
 is instead — and one of the two below cannot.
 
-| file                  | provenance                                                                                                                                                                                                                                                            |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `not-logged-in.jsonl` | Captured from the real `claude` CLI v2.1.114, unauthenticated, in an empty temporary directory. Verbatim except for redaction of absolute paths. Carries genuine `hook_started` / `hook_response` / `hook_progress` events, which is what the redaction test runs on. |
-| `hello.jsonl`         | **Derived, not recorded.** See below.                                                                                                                                                                                                                                 |
+| file                                       | provenance                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `not-logged-in.jsonl`                      | Captured from the real `claude` CLI v2.1.114, unauthenticated, in an empty temporary directory. Verbatim except for redaction of absolute paths. Carries genuine `hook_started` / `hook_response` / `hook_progress` events, which is what the redaction test runs on.                                  |
+| `hello.jsonl`                              | **Derived, not recorded.** See below.                                                                                                                                                                                                                                                                  |
+| `claude-2.1.260-success-macos-arm64.jsonl` | Captured from authenticated Claude Code v2.1.260 on macOS arm64 with the corrected Q14 adapter argv, strict empty MCP config and FAST model `claude-haiku-4-5-20251001`. The source stream proved that removing only Zod's root `$schema` dialect annotation makes the final result schema acceptable. |
+| `claude-2.1.260-failure-macos-arm64.jsonl` | Captured from the same CLI/target with the same corrected argv except for deliberately invalid model `loomrail-invalid-model-q14`. It produced a real terminal `is_error: true` result without a useful model turn.                                                                                    |
+| `claude-2.1.260-mcp-macos-arm64.jsonl`     | Captured from the same CLI/target with strict session-scoped MCP config and the granted tool projected as `--allowedTools mcp__loomrail_q14__evidence_echo`. The synthetic read-only tool returned `echo:macos-arm64`.                                                                                 |
+
+The three v2.1.260 files are security-filtered real-stream projections, not byte-exact captures. The source streams
+contained owner hook events and path-bearing ambient metadata that SD-003 forbids in Git. A mechanical JSON pass kept
+only a projected `system/init` line, the terminal `result`, and, for the MCP file, assistant/user lines containing the
+synthetic MCP tool exchange. Values in retained fields were not invented or edited, but serialization was normalized.
+The discarded source streams remain temporary runtime data and are not committed.
 
 ## `hello.jsonl` is derived, and one of its lines is a hand-written assumption
 

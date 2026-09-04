@@ -136,6 +136,16 @@ const tryParseStructuredResult = (
   return decodeProviderStageResult(stage, candidate, policy);
 };
 
+// Claude Code 2.1.260 passes `--json-schema` through a validator that rejects the JSON Schema
+// 2020-12 dialect declaration emitted by Zod (`no schema with key or ref ...`). The remainder of
+// the schema is accepted and keeps the same closed object/required-field contract. Strip only the
+// root dialect annotation for this provider; Codex continues to receive Zod's original schema.
+const claudeStageResultJsonSchemaFor = (stage: WorkflowStage, policy: ProviderStageResultPolicy): string => {
+  const schema: Record<string, unknown> = { ...z.toJSONSchema(providerStageResultSchemaFor(stage, policy)) };
+  Reflect.deleteProperty(schema, "$schema");
+  return JSON.stringify(schema);
+};
+
 type SessionRuntime = {
   // `.exited` is awaited directly by abortSession, not merely started -- resolving `stop()`
   // without waiting for it is the defect provider-codex's own milestone closed, and this adapter
@@ -225,6 +235,9 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
       const workingDir = await mkdtemp(join(tmpdir(), "loomrail-claude-"));
       try {
         const mcpConnections = providerMcpConnectionSchema.array().max(64).parse(invocation.mcpConnections);
+        const allowedMcpTools = mcpConnections.flatMap((connection) =>
+          connection.enabledTools.map((tool) => `mcp__${connection.id}__${tool}`),
+        );
         const mcpConfigPath = join(workingDir, "mcp-config.json");
         await writeFile(
           mcpConfigPath,
@@ -245,13 +258,9 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         // Inline JSON text, not a path -- see the doc comment on `tryParseStructuredResult`
         // above for why. Nothing writes this to `workingDir`: there is no reader left for a file
         // version of it, and a file created for no reader is one more thing to leak.
-        const stageResultJsonSchema = JSON.stringify(
-          z.toJSONSchema(
-            providerStageResultSchemaFor(invocation.session.stage, {
-              humanRequests: invocation.humanRequests,
-            }),
-          ),
-        );
+        const stageResultJsonSchema = claudeStageResultJsonSchemaFor(invocation.session.stage, {
+          humanRequests: invocation.humanRequests,
+        });
 
         // Verbatim, exactly as task 1's reconnaissance established it against the real CLI --
         // with one correction: `claude --help` documents `-p, --print` as a boolean flag ("Print
@@ -277,6 +286,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
           "--mcp-config",
           mcpConfigPath,
           "--strict-mcp-config",
+          ...(allowedMcpTools.length === 0 ? [] : ["--allowedTools", ...allowedMcpTools]),
           "--model",
           model,
           "--permission-mode",

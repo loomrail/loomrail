@@ -23,7 +23,9 @@ export { decodeProviderStageResult, providerStageResultSchemaFor } from "./stage
 export type {
   CliProviderDiagnostics,
   ProviderDiagnosticProbeOptions,
+  ProviderRuntimeTarget,
   ProviderVersionObservation,
+  VerifiedProviderTarget,
 } from "./diagnostics.js";
 export { createCliProviderDiagnostics } from "./diagnostics.js";
 
@@ -120,7 +122,16 @@ export const providerMcpConnectionSchema = z
     id: z.string().regex(/^[a-z0-9_]{1,64}$/),
     proxyCommand: z.string().min(1).max(4_096).regex(absolutePathPattern),
     proxyArgs: z.array(z.string().min(1).max(2_048)).max(8),
-    enabledTools: z.array(z.string().min(1).max(128)).min(1).max(64),
+    enabledTools: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(128)
+          .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/),
+      )
+      .min(1)
+      .max(64),
   })
   .strict()
   .superRefine((connection, context) => {

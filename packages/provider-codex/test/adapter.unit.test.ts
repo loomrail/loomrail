@@ -19,6 +19,7 @@ import type {
   ProviderSessionListener,
   ProviderWorkspace,
 } from "@loomrail/provider-core";
+import { providerStageResultSchemaFor } from "@loomrail/provider-core";
 import { contextWindowUsageSchema } from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -388,6 +389,16 @@ const recordingPrefix = (file: string, lines: number): string => {
 const wholeRecording = (file: string): string =>
   readFileSync(fileURLToPath(new URL(`./recordings/${file}`, import.meta.url)), "utf8");
 
+const finalStructuredResultFromRecording = (file: string): unknown => {
+  const event = wholeRecording(file)
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { type?: string; item?: { type?: string; text?: string } })
+    .findLast((candidate) => candidate.type === "item.completed" && candidate.item?.type === "agent_message");
+  if (event?.item?.text === undefined) throw new Error("expected a final recorded agent message");
+  return JSON.parse(event.item.text) as unknown;
+};
+
 // Runs the adapter against a given stream and a given ending. The stream is written to a temporary
 // file and delivered by `fake-codex.mjs` exactly as `runAgainstRecording` delivers a whole
 // recording; only the ending differs.
@@ -728,6 +739,31 @@ describe("createCodexProvider", () => {
     });
     expect(outcome).toEqual({ type: "COMPLETED", summary: "I reviewed nothing." });
     expect(checkpoints).toHaveLength(1);
+  });
+
+  it.each([
+    ["codex-0.153.0-alpha.5-success-macos-arm64.jsonl", "Discovery result recorded as requested."],
+    [
+      "codex-0.153.0-alpha.5-workspace-macos-arm64.jsonl",
+      'Changed the exported status to "verified" and confirmed the check passes. No commit was created.',
+    ],
+    [
+      "codex-0.153.0-alpha.5-mcp-macos-arm64.jsonl",
+      "The loomrail_q14 evidence_echo tool returned the marker `echo:macos-arm64`.",
+    ],
+  ])("replays and independently validates the current macOS recording %s", async (file, summary) => {
+    expect(
+      providerStageResultSchemaFor("DISCOVERY", { humanRequests: "DISALLOWED" }).parse(
+        finalStructuredResultFromRecording(file),
+      ),
+    ).toBeDefined();
+    await expect(runAgainstRecording(file)).resolves.toMatchObject({ type: "COMPLETED", summary });
+  });
+
+  it("keeps the current real invalid-model recording on the typed failure path", async () => {
+    const outcome = await runAgainstRecording("codex-0.153.0-alpha.5-failure-macos-arm64.jsonl");
+    const request = expectNeedsHuman(outcome);
+    expect(request.context).toContain("loomrail-invalid-model-q14");
   });
 
   // The bare, un-enveloped shape the adapter originally assumed is still accepted -- kept so a CLI

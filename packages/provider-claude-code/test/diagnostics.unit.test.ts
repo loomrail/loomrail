@@ -18,6 +18,13 @@ describe("Claude Code provider diagnostics", () => {
     });
   });
 
+  it("verifies the recorded version only on its exact macOS arm64 target", () => {
+    expect(claudeCodeProviderDiagnostics.classifyVersion("2.1.260 (Claude Code)\n")).toEqual({
+      compatibility: process.platform === "darwin" && process.arch === "arm64" ? "VERIFIED" : "UNVERIFIED",
+      version: "2.1.260",
+    });
+  });
+
   it("rejects ambiguous SemVer and does not echo unknown provider output", () => {
     const canary = "/private/owner/claude-version-canary";
     expect(claudeCodeProviderDiagnostics.classifyVersion("2.1.214-rc.01 (Claude Code)\n")).toEqual({

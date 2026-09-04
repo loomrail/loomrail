@@ -17,6 +17,7 @@ import type {
   ProviderModelMapping,
   ProviderSessionListener,
 } from "@loomrail/provider-core";
+import { providerStageResultSchemaFor } from "@loomrail/provider-core";
 import { contextWindowUsageSchema } from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -256,6 +257,17 @@ const runAgainstRecording = async (
   );
 };
 
+const finalStructuredResultFromRecording = (file: string): unknown => {
+  const recordingPath = fileURLToPath(new URL(`./recordings/${file}`, import.meta.url));
+  const event = readFileSync(recordingPath, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { type?: string; result?: string })
+    .findLast((candidate) => candidate.type === "result");
+  if (event?.result === undefined) throw new Error("expected a terminal recorded result");
+  return JSON.parse(event.result) as unknown;
+};
+
 // Runs the adapter against an ad-hoc stream written out as a temporary file. Used ONLY where the
 // point of the test is a stream no CLI observed here produces (a wrong-flag stream carrying no
 // JSONL at all, a result whose text is whitespace); anything asserting what the real CLI does goes
@@ -372,6 +384,7 @@ describe("createClaudeCodeProvider", () => {
     await startWith(spawned, createFakeClaudeProvider());
     expect(spawned.args).toContain("--mcp-config");
     expect(spawned.args).toContain("--strict-mcp-config");
+    expect(spawned.args).not.toContain("--allowedTools");
     expect(spawned.mcpConfig).toEqual({ mcpServers: {} });
     if (process.platform !== "win32") expect(spawned.mcpConfigMode).toBe(0o600);
   });
@@ -395,6 +408,9 @@ describe("createClaudeCodeProvider", () => {
         },
       },
     });
+    expect(
+      spawned.args.slice(spawned.args.indexOf("--allowedTools") + 1, spawned.args.indexOf("--model")),
+    ).toEqual(["mcp__loomrail_profile_1__fetch", "mcp__loomrail_profile_1__search"]);
     expect(JSON.stringify(spawned.mcpConfig)).not.toContain("real-server.mjs");
     expectNoForbiddenArguments(spawned.args);
   });
@@ -592,6 +608,27 @@ describe("createClaudeCodeProvider", () => {
     expect(checkpoints).toHaveLength(1);
   });
 
+  it.each([
+    ["claude-2.1.260-success-macos-arm64.jsonl", "macOS adapter success capture"],
+    [
+      "claude-2.1.260-mcp-macos-arm64.jsonl",
+      "Tool execution completed successfully. The loomrail_q14 evidence_echo tool was called with 'macos-arm64' and returned the marker 'echo:macos-arm64'.",
+    ],
+  ])("replays and independently validates the current macOS recording %s", async (file, summary) => {
+    expect(
+      providerStageResultSchemaFor("DISCOVERY", { humanRequests: "DISALLOWED" }).parse(
+        finalStructuredResultFromRecording(file),
+      ),
+    ).toBeDefined();
+    await expect(runAgainstRecording(file)).resolves.toMatchObject({ type: "COMPLETED", summary });
+  });
+
+  it("keeps the current real invalid-model recording on the typed failure path", async () => {
+    const outcome = await runAgainstRecording("claude-2.1.260-failure-macos-arm64.jsonl");
+    const request = expectNeedsHuman(outcome);
+    expect(request.context).toContain("loomrail-invalid-model-q14");
+  });
+
   it("rejects a second provider-authored owner question even if the CLI ignores its output schema", async () => {
     const duplicateQuestion = JSON.stringify({
       result: {
@@ -726,6 +763,7 @@ describe("createClaudeCodeProvider", () => {
       throw new Error("expected --json-schema to contain an object schema");
     }
     const parsedSchema = parsed as Record<string, unknown>;
+    expect(parsedSchema).not.toHaveProperty("$schema");
     expect(parsedSchema["description"]).toBe("Result of the DISCOVERY stage.");
     expect(parsedSchema["type"]).toBe("object");
     expect(parsedSchema["required"]).toEqual(["result"]);

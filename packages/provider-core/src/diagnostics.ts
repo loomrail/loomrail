@@ -27,6 +27,15 @@ export type ProviderDiagnosticProbeOptions = {
   outputLimitBytes?: number;
 };
 
+export type ProviderRuntimeTarget = {
+  platform: NodeJS.Platform;
+  architecture: NodeJS.Architecture;
+};
+
+export type VerifiedProviderTarget = ProviderRuntimeTarget & {
+  version: string;
+};
+
 export type CliProviderDiagnostics = {
   executableAvailable: (environment?: Readonly<Record<string, string | undefined>>) => boolean;
   classifyVersion: (output: string) => ProviderVersionObservation;
@@ -40,8 +49,11 @@ type CliProviderDiagnosticDefinition = {
   authenticationArguments: readonly string[];
   versionFromOutput: (output: string) => string | null;
   minimumVersion?: string;
-  verifiedVersions: readonly string[];
+  verifiedTargets: readonly VerifiedProviderTarget[];
 };
+
+const targetKey = (target: VerifiedProviderTarget): string =>
+  `${target.version}\0${target.platform}\0${target.architecture}`;
 
 const pathExtensions = (environment: Readonly<Record<string, string | undefined>>): readonly string[] =>
   process.platform === "win32"
@@ -111,6 +123,8 @@ const authenticationProbeEnvironment = (
     "Path",
     "PATHEXT",
     "HOME",
+    "USER",
+    "LOGNAME",
     "USERPROFILE",
     "APPDATA",
     "LOCALAPPDATA",
@@ -158,6 +172,10 @@ const compareCore = (left: SemanticVersion["core"], right: SemanticVersion["core
 
 export const createCliProviderDiagnostics = (
   definition: CliProviderDiagnosticDefinition,
+  runtimeTarget: ProviderRuntimeTarget = {
+    platform: process.platform,
+    architecture: process.arch,
+  },
 ): CliProviderDiagnostics => {
   const minimum =
     definition.minimumVersion === undefined ? null : parseSemanticVersion(definition.minimumVersion);
@@ -165,10 +183,10 @@ export const createCliProviderDiagnostics = (
     throw new Error("The provider diagnostic minimum version is not valid SemVer");
   }
   const verified = new Set(
-    definition.verifiedVersions.map((version) => {
-      const parsed = parseSemanticVersion(version);
+    definition.verifiedTargets.map((target) => {
+      const parsed = parseSemanticVersion(target.version);
       if (parsed === null) throw new Error("A verified provider version is not valid SemVer");
-      return parsed.normalized;
+      return targetKey({ ...target, version: parsed.normalized });
     }),
   );
 
@@ -183,7 +201,9 @@ export const createCliProviderDiagnostics = (
       }
     }
     return {
-      compatibility: verified.has(parsed.normalized) ? "VERIFIED" : "UNVERIFIED",
+      compatibility: verified.has(targetKey({ ...runtimeTarget, version: parsed.normalized }))
+        ? "VERIFIED"
+        : "UNVERIFIED",
       version: parsed.normalized,
     };
   };
