@@ -168,6 +168,29 @@ export type RecordProviderUsageDecision = {
   )[];
 };
 
+export type ApplyProviderOutcomeWithUsageDecision = ApplyProviderOutcomeDecision & {
+  usageReport: ProviderUsageReport;
+  cumulativeAmount: number;
+  hardPaused: boolean;
+};
+
+export type RecordProviderUsageContext = {
+  now: string;
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  dispatch: WorkflowDispatch;
+  providerSession: ProviderSession;
+  agentRun: AgentRun;
+  budgetPolicy: BudgetPolicy | null;
+  existingUsageRecords: readonly UsageRecord[];
+  existingAgentUsageTotal: number;
+  usage: ProviderUsage;
+  reportId: string;
+  usageRecordId: string | null;
+  usageDigest: string;
+};
+
 export type AnswerHumanRequestDecision = {
   workItem: WorkItem;
   run: PipelineRun;
@@ -723,22 +746,9 @@ const budgetOutcome = (
  * deliberately creates no UsageRecord because that append-only ledger only accepts positive
  * amounts.
  */
-export const decideRecordProviderUsage = (context: {
-  now: string;
-  workItem: WorkItem;
-  run: PipelineRun;
-  stageAttempt: StageAttempt;
-  dispatch: WorkflowDispatch;
-  providerSession: ProviderSession;
-  agentRun: AgentRun;
-  budgetPolicy: BudgetPolicy | null;
-  existingUsageRecords: readonly UsageRecord[];
-  existingAgentUsageTotal: number;
-  usage: ProviderUsage;
-  reportId: string;
-  usageRecordId: string | null;
-  usageDigest: string;
-}): RecordProviderUsageDecision => {
+export const decideRecordProviderUsage = (
+  context: RecordProviderUsageContext,
+): RecordProviderUsageDecision => {
   const { workItem, run, stageAttempt, dispatch, providerSession, agentRun, budgetPolicy, usage } = context;
   requireCurrentStage(run, stageAttempt);
   if (
@@ -919,54 +929,56 @@ export const decideRecordProviderUsage = (context: {
   };
 };
 
+export type ApplyProviderOutcomeContext = {
+  now: string;
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  dispatch: WorkflowDispatch;
+  budgetPolicy: BudgetPolicy | null;
+  existingUsageRecords: readonly UsageRecord[];
+  usageRecordIds: readonly string[];
+  existingArtifacts?: readonly EvidenceArtifact[];
+  artifactIds?: readonly string[];
+  review?:
+    | {
+        authorAgentRun: AgentRun;
+        reviewerAgentRun: AgentRun;
+        currentTree: string;
+        openFindings: readonly ReviewFinding[];
+        reportId: string;
+        findingIds: readonly string[];
+        loopOptionIds: readonly [string, string];
+      }
+    | undefined;
+  reviewRequired?: boolean | undefined;
+  measuredQA?:
+    | {
+        qaRun: QARun;
+        evidence: QAEvidenceBundle;
+        currentTree: string;
+      }
+    | undefined;
+  qaCorrectionHistory?:
+    | {
+        correctionRuns: readonly QACorrectionRun[];
+        retestPlans: readonly QARetestPlan[];
+        qaRuns: readonly QARun[];
+        evidenceBundles: readonly QAEvidenceBundle[];
+        defects: readonly QADefect[];
+      }
+    | undefined;
+  qaRunRequired?: boolean | undefined;
+  qaRunCompletion?: QARun | undefined;
+  humanRequestId?: string;
+  acceptancePackageId?: string;
+  nextStageAttemptId?: string;
+  nextDispatchId?: string;
+};
+
 export const decideApplyProviderOutcome = (
   command: ApplyProviderOutcomeCommand,
-  context: {
-    now: string;
-    workItem: WorkItem;
-    run: PipelineRun;
-    stageAttempt: StageAttempt;
-    dispatch: WorkflowDispatch;
-    budgetPolicy: BudgetPolicy | null;
-    existingUsageRecords: readonly UsageRecord[];
-    usageRecordIds: readonly string[];
-    existingArtifacts?: readonly EvidenceArtifact[];
-    artifactIds?: readonly string[];
-    review?:
-      | {
-          authorAgentRun: AgentRun;
-          reviewerAgentRun: AgentRun;
-          currentTree: string;
-          openFindings: readonly ReviewFinding[];
-          reportId: string;
-          findingIds: readonly string[];
-          loopOptionIds: readonly [string, string];
-        }
-      | undefined;
-    reviewRequired?: boolean | undefined;
-    measuredQA?:
-      | {
-          qaRun: QARun;
-          evidence: QAEvidenceBundle;
-          currentTree: string;
-        }
-      | undefined;
-    qaCorrectionHistory?:
-      | {
-          correctionRuns: readonly QACorrectionRun[];
-          retestPlans: readonly QARetestPlan[];
-          qaRuns: readonly QARun[];
-          evidenceBundles: readonly QAEvidenceBundle[];
-          defects: readonly QADefect[];
-        }
-      | undefined;
-    qaRunRequired?: boolean | undefined;
-    qaRunCompletion?: QARun | undefined;
-    humanRequestId?: string;
-    acceptancePackageId?: string;
-    nextStageAttemptId?: string;
-    nextDispatchId?: string;
-  },
+  context: ApplyProviderOutcomeContext,
 ): ApplyProviderOutcomeDecision => {
   const template = validateWorkflowTemplate(command.payload.template);
   if (
@@ -1767,6 +1779,80 @@ export const decideApplyProviderOutcome = (
   };
 };
 
+/**
+ * Applies a stage-level terminal outcome and the ProviderSession's final cumulative usage as one
+ * deterministic decision. A terminal result has already stopped the current AgentRun, so a cap
+ * crossing must not erase that result or turn the completed stage into a retry. When the outcome
+ * would continue immediately, the newly queued stage is parked before its dispatch can run.
+ */
+export const decideApplyProviderOutcomeWithUsage = (
+  command: ApplyProviderOutcomeCommand,
+  context: ApplyProviderOutcomeContext & RecordProviderUsageContext,
+): ApplyProviderOutcomeWithUsageDecision => {
+  const usage = decideRecordProviderUsage(context);
+  const outcome = decideApplyProviderOutcome(command, context);
+  const usageEvents = usage.events.filter(
+    (event) => event.type === "USAGE_RECORDED" || event.type === "BUDGET_THRESHOLD_REACHED",
+  );
+  const usageRecords = [...outcome.usageRecords, ...(usage.usageRecord === null ? [] : [usage.usageRecord])];
+  const base = {
+    ...outcome,
+    usageRecords,
+    usageReport: usage.report,
+    cumulativeAmount: usage.cumulativeAmount,
+    hardPaused: outcome.run.status === "HARD_PAUSED",
+    events: [...usageEvents, ...outcome.events],
+  } satisfies ApplyProviderOutcomeWithUsageDecision;
+
+  if (!usage.hardPaused || outcome.nextStageAttempt === null || outcome.nextDispatch === null) {
+    return base;
+  }
+
+  const nextStageAttempt: StageAttempt = {
+    ...outcome.nextStageAttempt,
+    status: "HARD_PAUSED",
+  };
+  const run: PipelineRun = {
+    ...outcome.run,
+    status: "HARD_PAUSED",
+    updatedAt: context.now,
+  };
+  const workItem: WorkItem = {
+    ...outcome.workItem,
+    state: "BLOCKED",
+    currentStage: nextStageAttempt.stage,
+    updatedAt: context.now,
+  };
+  const nextDispatch = pendingDispatchFailed(outcome.nextDispatch, context.now);
+  const eventsBeforePause: ApplyProviderOutcomeDecision["events"] = base.events.map((event) =>
+    event.type === "STAGE_ATTEMPT_CHANGED" ? { ...event, data: { ...event.data, run } } : event,
+  );
+  return {
+    ...base,
+    workItem,
+    run,
+    nextStageAttempt,
+    nextDispatch,
+    hardPaused: true,
+    events: [
+      ...eventsBeforePause,
+      {
+        type: "STAGE_ATTEMPT_CHANGED",
+        data: { run, stageAttempt: nextStageAttempt, previousStatus: outcome.nextStageAttempt.status },
+      },
+      {
+        type: "PIPELINE_PAUSED",
+        data: {
+          run,
+          stageAttempt: nextStageAttempt,
+          kind: "HARD",
+          reason: "The terminal provider usage exhausted the active budget before the next stage.",
+        },
+      },
+    ],
+  };
+};
+
 const validateAnswer = (request: HumanRequest, answer: HumanRequestAnswer): void => {
   if (answer.type === "OTHER") {
     if (!request.allowOther) {
@@ -2281,26 +2367,38 @@ export const decideApproveBudgetOverride = (
     createdBy: command.actor,
     createdAt: context.now,
   };
-  const stageAttempt: StageAttempt = {
-    schemaVersion: 1,
-    id: context.ids.stageAttemptId,
-    pipelineRunId: context.run.id,
-    projectId: context.workItem.projectId,
-    workItemId: context.workItem.id,
-    correctionRunId: context.stageAttempt.correctionRunId,
-    stage: context.stageAttempt.stage,
-    attempt: context.stageAttempt.attempt + 1,
-    unproductiveSessions: 0,
-    packShareBackoffs: 0,
-    status: "QUEUED",
-    version: 1,
-    startedAt: null,
-    finishedAt: null,
-    failureCode: null,
-    // A retry starts its own measurement; it does not inherit the tree the previous attempt ended
-    // on, which belongs to that attempt.
-    resultTree: null,
-  };
+  // A cap crossed by the previous stage's terminal report parks the *next* attempt before it ever
+  // starts. Resuming that row is not a retry: no provider saw it and no work can be attributed to
+  // it yet. A pause on an attempt that did start still creates a fresh attempt, preserving the
+  // existing history and measurement boundary.
+  const parkedBeforeStart = context.stageAttempt.startedAt === null;
+  const stageAttempt: StageAttempt = parkedBeforeStart
+    ? {
+        ...context.stageAttempt,
+        status: "QUEUED",
+        failureCode: null,
+        version: context.stageAttempt.version + 1,
+      }
+    : {
+        schemaVersion: 1,
+        id: context.ids.stageAttemptId,
+        pipelineRunId: context.run.id,
+        projectId: context.workItem.projectId,
+        workItemId: context.workItem.id,
+        correctionRunId: context.stageAttempt.correctionRunId,
+        stage: context.stageAttempt.stage,
+        attempt: context.stageAttempt.attempt + 1,
+        unproductiveSessions: 0,
+        packShareBackoffs: 0,
+        status: "QUEUED",
+        version: 1,
+        startedAt: null,
+        finishedAt: null,
+        failureCode: null,
+        // A retry starts its own measurement; it does not inherit the tree the previous attempt
+        // ended on, which belongs to that attempt.
+        resultTree: null,
+      };
   const run: PipelineRun = {
     ...context.run,
     status: "RUNNING",

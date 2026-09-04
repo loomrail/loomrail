@@ -5,6 +5,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { WorkflowTemplate } from "@loomrail/contracts";
+
 import { openLocalState, StateStoreError, type LocalState } from "../src/index.js";
 
 const timestamp = "2026-09-03T10:00:00.000Z";
@@ -12,6 +14,17 @@ const contextPack = {
   schemaVersion: 1 as const,
   sections: [{ id: "WORK_ITEM_BRIEF" as const, ordinal: 0, required: true }],
 };
+
+const providerUsageTemplate = (includePlan = false): WorkflowTemplate => ({
+  schemaVersion: 1,
+  id: "provider-usage-template",
+  version: 1,
+  name: "Provider usage",
+  stages: [
+    { stage: "DISCOVERY", ordinal: 0, contextPack },
+    ...(includePlan ? [{ stage: "PLAN" as const, ordinal: 1, contextPack }] : []),
+  ],
+});
 
 describe("durable provider usage", () => {
   let temporaryDirectory = "";
@@ -43,6 +56,7 @@ describe("durable provider usage", () => {
     localState: LocalState,
     maxEstimatedTokens: number,
     agentRunMaxEstimatedTokensOverride?: number,
+    includePlan = false,
   ) => {
     localState.execute({
       schemaVersion: 1,
@@ -83,6 +97,7 @@ describe("durable provider usage", () => {
       type: "MOVE_WORK_ITEM",
       payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
     });
+    const template = providerUsageTemplate(includePlan);
     const pipeline = localState.execute({
       schemaVersion: 1,
       commandId: "start-pipeline",
@@ -92,13 +107,7 @@ describe("durable provider usage", () => {
       payload: {
         workItemId: created.workItem.id,
         expectedVersion: 2,
-        template: {
-          schemaVersion: 1,
-          id: "provider-usage-template",
-          version: 1,
-          name: "Provider usage",
-          stages: [{ stage: "DISCOVERY", ordinal: 0, contextPack }],
-        },
+        template,
         budget: {
           maxEstimatedTokens,
           warningThresholds: [0.5, 0.8, 0.95],
@@ -144,7 +153,7 @@ describe("durable provider usage", () => {
       },
     });
     if (session.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected ProviderSession start");
-    return { created, pipeline, agent, session };
+    return { created, pipeline, agent, session, template };
   };
 
   it("records one cumulative report, projects it into the ledger, and survives restart", async () => {
@@ -337,6 +346,146 @@ describe("durable provider usage", () => {
     });
   });
 
+  it("atomically keeps a terminal outcome and parks its next stage when usage reaches a cap", async () => {
+    const localState = await open();
+    const execution = startExecution(localState, 200_000, undefined, true);
+    const command = {
+      schemaVersion: 1 as const,
+      commandId: "apply-terminal-outcome-with-usage",
+      correlationId: "correlation-apply-terminal-outcome-with-usage",
+      actor: { type: "SYSTEM" as const, id: "session-loop" },
+      type: "APPLY_PROVIDER_OUTCOME" as const,
+      payload: {
+        dispatchId: execution.pipeline.dispatch.id,
+        provider: "CODEX" as const,
+        outcome: { type: "COMPLETED" as const, summary: "Discovery completed before usage arrived." },
+        template: execution.template,
+        resultTree: null,
+        sessionCompletion: {
+          providerSessionId: execution.session.session.id,
+          usage: { inputTokens: 70_000, outputTokens: 10_000, quality: "ACTUAL" as const },
+        },
+      },
+    };
+
+    expect(localState.execute(command)).toMatchObject({
+      type: "MOCK_PROVIDER_OUTCOME_APPLIED",
+      replayed: false,
+      run: { status: "HARD_PAUSED" },
+      stageAttempt: { stage: "DISCOVERY", status: "SUCCEEDED" },
+      usageRecords: [{ amount: 80_000 }],
+    });
+    expect(localState.execute(command)).toMatchObject({
+      type: "MOCK_PROVIDER_OUTCOME_APPLIED",
+      replayed: true,
+    });
+    expect(
+      localState.query({
+        type: "LIST_PROVIDER_SESSIONS",
+        stageAttemptId: execution.pipeline.stageAttempt.id,
+      }),
+    ).toMatchObject({
+      sessions: [{ status: "ENDED", endReason: "COMPLETED" }],
+      usageReports: [{ totalTokens: 80_000, agentRunId: execution.agent.run.id }],
+    });
+    expect(
+      localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: execution.created.workItem.id }),
+    ).toMatchObject({
+      snapshot: {
+        run: { status: "HARD_PAUSED" },
+        stageAttempts: [
+          { stage: "DISCOVERY", status: "SUCCEEDED" },
+          { stage: "PLAN", status: "HARD_PAUSED", startedAt: null },
+        ],
+        usageRecords: [{ amount: 80_000 }],
+      },
+    });
+    expect(localState.query({ type: "LIST_PENDING_DISPATCHES" })).toMatchObject({ dispatches: [] });
+    expect(localState.query({ type: "GET_AGENT_RUN", agentRunId: execution.agent.run.id })).toMatchObject({
+      runs: [{ status: "SUCCEEDED" }],
+    });
+
+    localState.close();
+    state = undefined;
+    const reopened = await open();
+    expect(
+      reopened.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: execution.created.workItem.id }),
+    ).toMatchObject({
+      snapshot: {
+        run: { status: "HARD_PAUSED" },
+        stageAttempts: [
+          { stage: "DISCOVERY", status: "SUCCEEDED" },
+          { stage: "PLAN", status: "HARD_PAUSED" },
+        ],
+        usageRecords: [{ amount: 80_000 }],
+      },
+    });
+  });
+
+  it("resumes a budget-parked unstarted next stage without inventing a retry", async () => {
+    const localState = await open();
+    const execution = startExecution(localState, 200_000, undefined, true);
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "park-next-stage-from-terminal-usage",
+      correlationId: "correlation-park-next-stage-from-terminal-usage",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "APPLY_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId: execution.pipeline.dispatch.id,
+        provider: "CODEX",
+        outcome: { type: "COMPLETED", summary: "Discovery completed before usage arrived." },
+        template: execution.template,
+        resultTree: null,
+        sessionCompletion: {
+          providerSessionId: execution.session.session.id,
+          usage: { inputTokens: 70_000, outputTokens: 10_000, quality: "ACTUAL" },
+        },
+      },
+    });
+    const paused = localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: execution.created.workItem.id,
+    });
+    if (paused.type !== "WORKFLOW_SNAPSHOT" || paused.snapshot.run === null) {
+      throw new Error("Expected a hard-paused workflow");
+    }
+    const parked = paused.snapshot.stageAttempts.at(-1);
+    if (parked === undefined) throw new Error("Expected the parked next stage");
+
+    const overridden = localState.execute({
+      schemaVersion: 1,
+      commandId: "resume-parked-next-stage",
+      correlationId: "correlation-resume-parked-next-stage",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "APPROVE_BUDGET_OVERRIDE",
+      payload: {
+        pipelineRunId: paused.snapshot.run.id,
+        expectedVersion: paused.snapshot.run.version,
+        maxEstimatedTokens: 200_000,
+        agentRunMaxEstimatedTokensOverride: 100_000,
+      },
+    });
+
+    expect(overridden).toMatchObject({
+      type: "BUDGET_OVERRIDE_APPROVED",
+      previousStageAttempt: { id: parked.id, stage: "PLAN", attempt: 1, status: "HARD_PAUSED" },
+      stageAttempt: { id: parked.id, stage: "PLAN", attempt: 1, status: "QUEUED" },
+      dispatch: { stageAttemptId: parked.id, mode: "START", status: "PENDING" },
+    });
+    expect(
+      localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: execution.created.workItem.id }),
+    ).toMatchObject({
+      snapshot: {
+        run: { status: "RUNNING", currentStageAttemptId: parked.id },
+        stageAttempts: [
+          { stage: "DISCOVERY", status: "SUCCEEDED" },
+          { id: parked.id, stage: "PLAN", attempt: 1, status: "QUEUED" },
+        ],
+      },
+    });
+  });
+
   it("raises only an exhausted AgentRun ceiling and binds the revision to the retry", async () => {
     const localState = await open();
     const execution = startExecution(localState, 700_000, 80_000);
@@ -426,6 +575,32 @@ describe("durable provider usage", () => {
   it("rejects an external actor and keeps the report table append-only", async () => {
     const localState = await open();
     const execution = startExecution(localState, 200);
+    expect(() =>
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "forbidden-terminal-provider-usage",
+        correlationId: "correlation-forbidden-terminal-provider-usage",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: execution.pipeline.dispatch.id,
+          provider: "CODEX",
+          outcome: { type: "COMPLETED", summary: "An external actor cannot finalize usage." },
+          template: execution.template,
+          resultTree: null,
+          sessionCompletion: {
+            providerSessionId: execution.session.session.id,
+            usage: { inputTokens: 1, outputTokens: 1, quality: "ACTUAL" },
+          },
+        },
+      }),
+    ).toThrow(StateStoreError);
+    expect(
+      localState.query({
+        type: "LIST_PROVIDER_SESSIONS",
+        stageAttemptId: execution.pipeline.stageAttempt.id,
+      }),
+    ).toMatchObject({ sessions: [{ status: "RUNNING" }], usageReports: [] });
     expect(() =>
       localState.execute({
         schemaVersion: 1,

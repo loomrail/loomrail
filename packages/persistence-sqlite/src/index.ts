@@ -145,6 +145,7 @@ import {
   decideApproveBudgetOverride,
   decideAnswerHumanRequest,
   decideApplyProviderOutcome,
+  decideApplyProviderOutcomeWithUsage,
   decideCancelPipeline,
   decideContextWindowReported,
   decideProjectConstitutionAdoption,
@@ -7019,40 +7020,131 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             : undefined;
         const qaCorrectionHistory =
           measuredQA?.qaRun.scope.type === "RETEST" ? readQACorrectionHistory(run.id) : undefined;
-        const decision = decideApplyProviderOutcome(
-          { ...command, type: "APPLY_PROVIDER_OUTCOME" },
-          {
-            now: occurredAt,
-            workItem,
-            run,
-            stageAttempt,
-            dispatch,
-            budgetPolicy: readCurrentBudgetPolicy(run.id),
-            existingUsageRecords: readUsageRecords(run.id),
-            existingArtifacts,
-            usageRecordIds:
-              command.payload.outcome.type === "BUDGET_LIMIT_REACHED"
-                ? command.payload.outcome.usageIncrements.map(() => createId("usageRecord"))
-                : [],
-            artifactIds:
-              command.payload.outcome.type === "COMPLETED"
-                ? (command.payload.outcome.artifacts ?? []).map(() => createId("evidenceArtifact"))
-                : [],
-            review: reviewContext,
-            measuredQA,
-            qaCorrectionHistory,
-            qaRunRequired,
-            // Pre-R1 fixture workflows completed Review without AgentRun reservation. Keep those
-            // historical migration paths readable, while every scheduled live reviewer is held to
-            // the structured independent-review contract.
-            reviewRequired: runningReviewerValue !== undefined,
-            humanRequestId: createId("humanRequest"),
-            acceptancePackageId: createId("acceptancePackage"),
-            nextStageAttemptId: createId("stageAttempt"),
-            nextDispatchId: createId("workflowDispatch"),
-          },
-        );
+        const normalizedCommand = { ...command, type: "APPLY_PROVIDER_OUTCOME" } as const;
+        const existingUsageRecords = readUsageRecords(run.id);
+        const budgetPolicy = readCurrentBudgetPolicy(run.id);
+        const decisionContext = {
+          now: occurredAt,
+          workItem,
+          run,
+          stageAttempt,
+          dispatch,
+          budgetPolicy,
+          existingUsageRecords,
+          existingArtifacts,
+          usageRecordIds:
+            command.payload.outcome.type === "BUDGET_LIMIT_REACHED"
+              ? command.payload.outcome.usageIncrements.map(() => createId("usageRecord"))
+              : [],
+          artifactIds:
+            command.payload.outcome.type === "COMPLETED"
+              ? (command.payload.outcome.artifacts ?? []).map(() => createId("evidenceArtifact"))
+              : [],
+          review: reviewContext,
+          measuredQA,
+          qaCorrectionHistory,
+          qaRunRequired,
+          // Pre-R1 fixture workflows completed Review without AgentRun reservation. Keep those
+          // historical migration paths readable, while every scheduled live reviewer is held to
+          // the structured independent-review contract.
+          reviewRequired: runningReviewerValue !== undefined,
+          humanRequestId: createId("humanRequest"),
+          acceptancePackageId: createId("acceptancePackage"),
+          nextStageAttemptId: createId("stageAttempt"),
+          nextDispatchId: createId("workflowDispatch"),
+        };
+        const sessionCompletion = command.payload.sessionCompletion;
+        let completedSession: ProviderSession | null = null;
+        let terminalUsageReport: ProviderUsageReport | null = null;
+        let decision: ApplyProviderOutcomeDecision;
+        if (sessionCompletion === undefined) {
+          decision = decideApplyProviderOutcome(normalizedCommand, decisionContext);
+        } else {
+          const sessionValue = selectProviderSessionById.get(sessionCompletion.providerSessionId);
+          if (sessionValue === undefined) {
+            throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The ProviderSession does not exist");
+          }
+          const providerSession = providerSessionFromRow(sessionValue);
+          if (
+            providerSession.status !== "RUNNING" ||
+            providerSession.stageAttemptId !== stageAttempt.id ||
+            providerSession.agentRunId === null ||
+            runningAgentRunValue === undefined
+          ) {
+            throw new WorkflowDomainError(
+              "PROVIDER_SESSION_MISMATCH",
+              "The terminal provider outcome does not match the active ProviderSession",
+            );
+          }
+          const agentRun = agentRunFromRow(runningAgentRunValue);
+          if (providerSession.agentRunId !== agentRun.id) {
+            throw new WorkflowDomainError(
+              "PROVIDER_SESSION_MISMATCH",
+              "The terminal provider outcome does not match the active AgentRun",
+            );
+          }
+          completedSession = providerSessionSchema.parse({
+            ...providerSession,
+            status: "ENDED",
+            endReason: "COMPLETED",
+            endedAt: occurredAt,
+            version: providerSession.version + 1,
+          });
+          if (sessionCompletion.usage === null) {
+            decision = decideApplyProviderOutcome(normalizedCommand, decisionContext);
+          } else {
+            if (command.actor.type !== "SYSTEM" || command.actor.id !== "session-loop") {
+              throw new StateStoreError(
+                "PROVIDER_USAGE_ACTOR_FORBIDDEN",
+                "Only the provider session loop can finalize provider usage",
+              );
+            }
+            if (selectProviderUsageReportBySession.get(providerSession.id) !== undefined) {
+              throw new StateStoreError(
+                "PROVIDER_USAGE_ALREADY_RECORDED",
+                "The ProviderSession already has its final usage report",
+              );
+            }
+            const usageDigest = `sha256:${createHash("sha256")
+              .update(canonicalJson(sessionCompletion.usage))
+              .digest("hex")}`;
+            const totalTokens = sessionCompletion.usage.inputTokens + sessionCompletion.usage.outputTokens;
+            const withUsage = decideApplyProviderOutcomeWithUsage(normalizedCommand, {
+              ...decisionContext,
+              providerSession,
+              agentRun,
+              existingAgentUsageTotal: readProviderUsageReportsForAgentRun(agentRun.id).reduce(
+                (total, report) => total + report.totalTokens,
+                0,
+              ),
+              usage: sessionCompletion.usage,
+              reportId: createId("providerUsageReport"),
+              usageRecordId: totalTokens === 0 ? null : createId("usageRecord"),
+              usageDigest,
+            });
+            decision = withUsage;
+            terminalUsageReport = withUsage.usageReport;
+          }
+        }
         persistWorkflowTemplate(command.payload.template, occurredAt);
+        if (completedSession !== null) {
+          const currentVersion = completedSession.version - 1;
+          const updated = updateProviderSession.run(
+            completedSession.status,
+            completedSession.endReason,
+            completedSession.handoffRequestedAt,
+            completedSession.endedAt,
+            completedSession.version,
+            completedSession.id,
+            currentVersion,
+          );
+          if (updated.changes !== 1) {
+            throw new WorkflowDomainError(
+              "WORKFLOW_VERSION_CONFLICT",
+              "The ProviderSession changed while its terminal outcome was being applied",
+            );
+          }
+        }
         updateWorkflowDispatch(decision.dispatch);
         updateStageAttempt(decision.stageAttempt);
         updatePipelineRun(decision.run);
@@ -7066,6 +7158,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (decision.nextStageAttempt) insertStageAttempt(decision.nextStageAttempt);
         if (decision.nextDispatch) insertWorkflowDispatch(decision.nextDispatch);
         decision.usageRecords.forEach(insertUsageRecord);
+        if (terminalUsageReport !== null) persistProviderUsageReport(terminalUsageReport);
         const metadata = {
           workItemId: decision.workItem.id,
           projectId: decision.workItem.projectId,
@@ -7073,9 +7166,18 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           occurredAt,
           correlationId: command.correlationId,
         };
+        const sessionEvents =
+          completedSession === null
+            ? []
+            : [
+                appendSessionEvent(
+                  { type: "PROVIDER_SESSION_ENDED", data: { session: completedSession } },
+                  metadata,
+                ),
+              ];
         const agentStatus = terminalAgentRunStatus(decision.stageAttempt.status);
         if (agentStatus) finishActiveAgentRun(decision.stageAttempt.id, agentStatus, metadata);
-        const events = appendWorkflowEvents(decision.events, metadata);
+        const events = [...sessionEvents, ...appendWorkflowEvents(decision.events, metadata)];
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "MOCK_PROVIDER_OUTCOME_APPLIED",
@@ -7405,7 +7507,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         updatePipelineRun(decision.run);
         updateWorkflowWorkItem(decision.workItem);
         insertBudgetPolicy(decision.budgetPolicy);
-        insertStageAttempt(decision.stageAttempt);
+        if (decision.stageAttempt.id === decision.previousStageAttempt.id) {
+          updateStageAttempt(decision.stageAttempt);
+        } else {
+          insertStageAttempt(decision.stageAttempt);
+        }
         insertWorkflowDispatch(decision.dispatch);
         const events = appendWorkflowEvents(decision.events, {
           workItemId: workItem.id,

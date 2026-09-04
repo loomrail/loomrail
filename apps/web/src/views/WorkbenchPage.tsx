@@ -2625,8 +2625,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
             <span>
               {t("workflow.agentRunBudget.current", {
                 limit:
-                  budgetPolicy.agentRunMaxEstimatedTokensOverride ??
-                  t("workflow.agentRunBudget.roleDefault"),
+                  budgetPolicy.agentRunMaxEstimatedTokensOverride ?? t("workflow.agentRunBudget.roleDefault"),
               })}
             </span>
           </div>

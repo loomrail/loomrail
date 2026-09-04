@@ -11,6 +11,12 @@ UsageRecord ledger had one positive token amount and no place for provider input
 or ProviderSession/AgentRun lineage. Applying a provider report after a stage result would also leave a crash window
 in which the daemon could start another session before spend caused a hard pause.
 
+Public dogfood exposed the inverse ordering bug in the first implementation: the final report was committed first,
+so a cap crossing hard-paused the current StageAttempt and aborted the ProviderSession before the adapter's already
+produced terminal outcome could be applied. Repeated owner overrides then reran the same completed stage and spent
+more on every attempt. A terminal report and its stage outcome are one completion boundary, not competing state
+transitions.
+
 Providers expose different token shapes. Codex reports total input with cached input as detail. Claude reports
 ordinary input, cache creation and cache read separately. Adding every exposed field in shared code would
 double-charge Codex; using Claude's ordinary input alone would severely undercount a cache-heavy session.
@@ -26,9 +32,18 @@ double-charge Codex; using Claude's ordinary input alone would severely undercou
   override retain one ledger. A zero report is durable but creates no artificial positive ledger row.
 - The deterministic domain compares both pipeline cumulative usage and AgentRun cumulative usage with the immutable
   limits that own them.
-- Recording a cap-crossing report atomically persists usage/audit, hard-pauses WorkItem/run/attempt, completes the
-  dispatch, finishes AgentRun and releases its workspace lease. The daemon aborts and ends the ProviderSession only
-  after that transaction commits.
+- The daemon validates and buffers the one terminal report until the adapter returns. For a stage-level terminal
+  outcome, `APPLY_PROVIDER_OUTCOME` atomically ends the ProviderSession, persists usage/audit, applies the outcome,
+  finishes AgentRun and releases its workspace lease.
+- A cap crossing never erases a valid terminal outcome. The completed StageAttempt remains `SUCCEEDED`; when that
+  outcome would continue immediately, its newly created next StageAttempt is stored as `HARD_PAUSED` and the new
+  dispatch is stored failed before any worker can claim it. A terminal outcome with no next dispatch needs no
+  synthetic pause because it cannot spend again.
+- A Budget Override resumes such an unstarted parked StageAttempt with the same id and attempt number. A budget pause
+  on an attempt that actually started still creates a new retry and preserves the old attempt as history.
+- A final report attached to a handoff, context exhaustion or failed adapter start still uses
+  `RECORD_PROVIDER_USAGE`; because no stage outcome exists to preserve, a cap crossing hard-pauses the current
+  attempt before another session can start.
 - Budget hard pause opens no Human Request and uses no session-failure code. The existing versioned owner Budget
   Override is the only continuation path. It may raise either the pipeline cap or the per-AgentRun ceiling that was
   captured in the stopped attempt; raising one does not silently inflate the other, and a new AgentRun receives the
@@ -42,6 +57,8 @@ double-charge Codex; using Claude's ordinary input alone would severely undercou
 ### Positive
 
 - callback retry and daemon restart cannot double-charge or bypass the pause;
+- an already completed stage cannot enter a quota-amplifying retry loop merely because its final report crossed a
+  cap;
 - provider detail remains inspectable without forking the budget/reporting ledger;
 - Claude cache-heavy runs count their actual input magnitude;
 - the owner sees exact reported quality and optional cost without raw provider output.
@@ -51,7 +68,9 @@ double-charge Codex; using Claude's ordinary input alone would severely undercou
 - adapters that cannot report usage still rely on the separate bounded session guard;
 - token caps remain a provider-neutral control, not a currency-equivalent cost cap;
 - a provider that changes cache field semantics requires an adapter compatibility review;
-- one final report cannot stop spend earlier than the provider's terminal reporting boundary.
+- one final report cannot stop spend earlier than the provider's terminal reporting boundary;
+- a daemon crash after the callback but before the adapter returns loses both in-memory terminal facts; recovery
+  treats the still-running durable session as interrupted and never assumes the stage completed.
 
 ## Rejected alternatives
 
@@ -59,6 +78,8 @@ double-charge Codex; using Claude's ordinary input alone would severely undercou
 - **Store detail only in UsageRecord:** widens a stable ledger into provider-specific semantics.
 - **Count cached/reasoning fields again:** double-counts providers where those fields are subdivisions.
 - **Pause after END_PROVIDER_SESSION:** leaves a restart/next-session race between accounting and control.
+- **Persist usage before applying the terminal outcome:** lets the usage transition make the valid outcome
+  inapplicable and creates an unbounded paid retry loop.
 - **Open a Human Request:** creates a second continuation mechanism beside Budget Override.
 
 ## Required tests
@@ -66,7 +87,9 @@ double-charge Codex; using Claude's ordinary input alone would severely undercou
 - schema total/link invariants and strict command input;
 - domain below-cap, threshold, effective AgentRun cap and lineage refusal;
 - SQLite transaction, replay, duplicate/actor refusal, restart read and append-only triggers;
-- daemon records a live report and aborts before another session when the cap is reached;
+- daemon records a non-stage terminal report and prevents another session when the cap is reached;
+- daemon/persistence preserve a completed terminal outcome at a cap crossing, park only its next stage, survive
+  replay/restart and resume that unstarted stage without inventing a retry;
 - Claude recording proves ordinary + cache creation + cache read normalization;
 - Task Cockpit renders token detail, quality and optional cost without relying on colour.
 - provider-selection, domain and adapter tests prove that the owner-visible model mapping and executed snapshot ID

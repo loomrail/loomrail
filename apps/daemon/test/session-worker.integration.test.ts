@@ -1048,7 +1048,7 @@ describe("session worker", () => {
     await awaitIdle(worker);
   }, 20_000);
 
-  it("keeps provider and writer authority when a budget abort is not confirmed", async () => {
+  it("does not abort a provider after its terminal outcome and usage are both available", async () => {
     const localState = state();
     await makeThrowawayRepo(join(temporaryDirectory, "project-web"));
     let aborts = 0;
@@ -1075,7 +1075,7 @@ describe("session worker", () => {
       requestHandoff: () => Promise.resolve(),
       abortSession: () => {
         aborts += 1;
-        return Promise.reject(new Error("synthetic provider stop refusal"));
+        return Promise.resolve();
       },
     };
     const worker = createSessionWorker({
@@ -1097,41 +1097,33 @@ describe("session worker", () => {
     worker.wake();
     await awaitIdle(worker);
 
-    expect(aborts).toBe(1);
+    expect(aborts).toBe(0);
     expect(snapshotOf(localState, seeded.workItemId)).toMatchObject({
-      run: { status: "HARD_PAUSED" },
-      stageAttempts: [{ status: "HARD_PAUSED" }],
+      run: { status: "SUCCEEDED" },
+      stageAttempts: [{ status: "SUCCEEDED" }],
     });
-    expect(localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" })).toMatchObject({
+    expect(localState.query({ type: "LIST_AGENT_RUNS" })).toMatchObject({
       type: "AGENT_RUNS",
-      runs: [{ stageAttemptId: seeded.stageAttemptId }],
+      runs: [{ stageAttemptId: seeded.stageAttemptId, status: "SUCCEEDED" }],
     });
     expect(
       localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId: seeded.stageAttemptId }),
     ).toMatchObject({
       type: "PROVIDER_SESSIONS",
-      sessions: [{ status: "RUNNING", endReason: null }],
+      sessions: [{ status: "ENDED", endReason: "COMPLETED" }],
       usageReports: [{ totalTokens: 120_000 }],
     });
     expect(
       localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId: seeded.workItemId }),
     ).toMatchObject({
       type: "WORKSPACE",
-      workspace: { leaseHolder: seeded.stageAttemptId },
+      workspace: { leaseHolder: null },
     });
   }, 20_000);
 
-  it("keeps a budget-stopping session registered for concurrent owner cancellation", async () => {
+  it("removes an atomically completed terminal session from cancellation authority", async () => {
     const localState = state();
     await makeThrowawayRepo(join(temporaryDirectory, "project-web"));
-    let announceBudgetAbort: () => void = () => undefined;
-    const budgetAbortRequested = new Promise<void>((resolve) => {
-      announceBudgetAbort = resolve;
-    });
-    let releaseBudgetAbort: () => void = () => undefined;
-    const budgetAbortFinished = new Promise<void>((resolve) => {
-      releaseBudgetAbort = resolve;
-    });
     const abortedSessions: string[] = [];
     const adapter: ProviderAdapter = {
       capabilities: () => ({
@@ -1153,10 +1145,6 @@ describe("session worker", () => {
       requestHandoff: () => Promise.resolve(),
       abortSession: (providerSessionId) => {
         abortedSessions.push(providerSessionId);
-        if (abortedSessions.length === 1) {
-          announceBudgetAbort();
-          return budgetAbortFinished;
-        }
         return Promise.resolve();
       },
     };
@@ -1177,43 +1165,18 @@ describe("session worker", () => {
     );
 
     worker.wake();
-    await budgetAbortRequested;
-    const paused = snapshotOf(localState, seeded.workItemId);
-    if (paused.run === null) throw new Error("Expected the hard-paused PipelineRun");
-    expect(paused.run.status).toBe("HARD_PAUSED");
-    localState.execute({
-      schemaVersion: 1,
-      commandId: createCommandId(),
-      correlationId: "correlation-cancel-during-budget-abort",
-      actor: { type: "HUMAN", id: "local-owner" },
-      type: "CANCEL_PIPELINE",
-      payload: {
-        pipelineRunId: paused.run.id,
-        expectedVersion: paused.run.version,
-      },
-    });
+    await awaitIdle(worker);
 
     const stoppedSessionIds = await worker.revokePipeline(seeded.dispatch.pipelineRunId);
-    expect(stoppedSessionIds).toHaveLength(1);
-    expect(abortedSessions).toEqual([stoppedSessionIds[0], stoppedSessionIds[0]]);
-    const providerSessionId = stoppedSessionIds[0];
-    if (providerSessionId === undefined) throw new Error("Expected the stopped ProviderSession id");
-    localState.execute({
-      schemaVersion: 1,
-      commandId: createCommandId(),
-      correlationId: "correlation-end-budget-cancelled-provider",
-      actor: { type: "SYSTEM", id: "session-loop" },
-      type: "END_PROVIDER_SESSION",
-      payload: { providerSessionId, endReason: "CANCELLED", providerStarted: true },
-    });
-    releaseBudgetAbort();
-    await awaitIdle(worker);
+    expect(stoppedSessionIds).toEqual([]);
+    expect(abortedSessions).toEqual([]);
 
     expect(
       localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId: seeded.stageAttemptId }),
     ).toMatchObject({
       type: "PROVIDER_SESSIONS",
-      sessions: [{ status: "ENDED", endReason: "CANCELLED" }],
+      sessions: [{ status: "ENDED", endReason: "COMPLETED" }],
+      usageReports: [{ totalTokens: 120_000 }],
     });
     expect(
       localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId: seeded.workItemId }),

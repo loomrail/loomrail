@@ -46,6 +46,53 @@ describe("provider usage contract", () => {
     ).toBe("RECORD_PROVIDER_USAGE");
   });
 
+  it("accepts a strict terminal session boundary on the provider outcome command", () => {
+    const command = {
+      schemaVersion: 1,
+      commandId: "terminal-outcome-command",
+      correlationId: "terminal-outcome-correlation",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "APPLY_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId: "dispatch-1",
+        provider: "CODEX",
+        outcome: { type: "COMPLETED", summary: "The stage completed." },
+        template: {
+          schemaVersion: 1,
+          id: "template-1",
+          version: 1,
+          name: "One stage",
+          stages: [
+            {
+              stage: "DISCOVERY",
+              ordinal: 0,
+              contextPack: {
+                schemaVersion: 1,
+                sections: [{ id: "WORK_ITEM_BRIEF", ordinal: 0, required: true }],
+              },
+            },
+          ],
+        },
+        resultTree: null,
+        sessionCompletion: { providerSessionId: "provider-session-1", usage: validUsage },
+      },
+    } as const;
+
+    expect(stateCommandSchema.parse(command)).toMatchObject({
+      type: "APPLY_PROVIDER_OUTCOME",
+      payload: { sessionCompletion: { usage: validUsage } },
+    });
+    expect(() =>
+      stateCommandSchema.parse({
+        ...command,
+        payload: {
+          ...command.payload,
+          sessionCompletion: { ...command.payload.sessionCompletion, rawProviderLine: "secret" },
+        },
+      }),
+    ).toThrow();
+  });
+
   it("keeps total tokens and the positive ledger link consistent", () => {
     const report = {
       schemaVersion: 1,

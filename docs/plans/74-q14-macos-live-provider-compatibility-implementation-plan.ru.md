@@ -32,6 +32,8 @@
 - [x] Доказать, что owner повышает только исчерпанный envelope без фиктивного роста достаточного pipeline cap.
 - [x] Показать в Task Cockpit конкретные model IDs из выбранного adapter mapping и зафиксировать exact model ID в
       immutable AgentRun snapshot до запуска CLI.
+- [x] Устранить обнаруженный quota loop: атомарно сохранить terminal usage/outcome, припарковать только следующий
+      этап до override и не создавать фиктивный retry для никогда не стартовавшего StageAttempt.
 - [ ] Продолжить public target workflow с Codex implementation и независимым Claude review.
 - [ ] Выполнить browser QA и correction loop; owner-only acceptance оставить владельцу.
 - [ ] Провести Standards/Spec review и полный доступный verification gate.

@@ -592,7 +592,7 @@ describe("stage attempt session loop", () => {
     });
   });
 
-  it("records a usage report the provider sends mid-session, rather than dropping it", async () => {
+  it("records a terminal usage report atomically with the completed outcome", async () => {
     // BD-001: spend is a separate channel from window occupancy (onContextWindow above), because
     // it drives budget thresholds and the HARD pause, not handoff. The report is asserted through
     // both its provider-detail row and its budget-ledger projection, not merely through logging.
@@ -637,8 +637,8 @@ describe("stage attempt session loop", () => {
     await runStageAttempt(depsFor(localState, seeded, reporting, { logger }));
 
     expect(logger.infos).toContainEqual([
-      expect.objectContaining({ inputTokens: 40, outputTokens: 20, quality: "ACTUAL" }),
-      "The provider usage was recorded",
+      expect.objectContaining({ stageAttemptId: seeded.stageAttemptId }),
+      "The provider outcome and usage were recorded atomically",
     ]);
     expect(sessionRows(localState, seeded.stageAttemptId).usageReports).toMatchObject([
       { inputTokens: 40, outputTokens: 20, totalTokens: 60, agentRunId: started.run.id },
@@ -646,7 +646,7 @@ describe("stage attempt session loop", () => {
     expect(snapshotOf(localState, seeded.workItemId).usageRecords).toMatchObject([{ amount: 60 }]);
   });
 
-  it("aborts the live session when cumulative usage exhausts the immutable AgentRun budget", async () => {
+  it("preserves a completed stage when its terminal usage exhausts the immutable AgentRun budget", async () => {
     const localState = await open();
     const seeded = queuedAttempt(localState);
     const started = localState.execute({
@@ -691,16 +691,23 @@ describe("stage attempt session loop", () => {
 
     await runStageAttempt(depsFor(localState, seeded, reporting));
 
-    expect(aborts).toBe(1);
+    expect(aborts).toBe(0);
     expect(sessionRows(localState, seeded.stageAttemptId)).toMatchObject({
-      sessions: [{ status: "ENDED", endReason: "INTERRUPTED" }],
+      sessions: [{ status: "ENDED", endReason: "COMPLETED" }],
       usageReports: [{ totalTokens: 80_000 }],
     });
     expect(snapshotOf(localState, seeded.workItemId)).toMatchObject({
       run: { status: "HARD_PAUSED" },
-      stageAttempts: [{ status: "HARD_PAUSED", failureCode: null }],
+      stageAttempts: [
+        { stage: "DISCOVERY", status: "SUCCEEDED", failureCode: null },
+        { stage: "PLAN", status: "HARD_PAUSED", startedAt: null, failureCode: null },
+      ],
       humanRequests: [],
       usageRecords: [{ amount: 80_000 }],
+    });
+    expect(localState.query({ type: "LIST_AGENT_RUNS" })).toMatchObject({
+      type: "AGENT_RUNS",
+      runs: [{ id: started.run.id, status: "SUCCEEDED" }],
     });
     expect(pendingDispatchModes(localState)).toEqual([]);
   });

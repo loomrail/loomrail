@@ -18,6 +18,7 @@ import {
   type McpSessionSnapshot,
   type ProviderOutcome,
   type ProviderSessionEndReason,
+  type ProviderUsage,
   type StageAttempt,
   type WorkflowDispatch,
   type WorkflowTemplate,
@@ -1236,8 +1237,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       handoffRequested: false,
       checkpointWriteFailed: false,
       usageReported: false,
-      budgetPaused: false,
-      budgetAbort: null as Promise<boolean> | null,
+      terminalUsage: null as ProviderUsage | null,
       // Every integer percent already reported to state for this session. At most 101 entries.
       // See the comment on `reportedPercent` in `onContextWindow`.
       reportedPercents: new Set<number>(),
@@ -1363,8 +1363,9 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         publishCheckpoint(validated.data);
       },
       // Spend, not occupancy (BD-001). Supported adapters emit one terminal cumulative report per
-      // session. Its deterministic command id and the report table's UNIQUE(session) invariant are
-      // independent backstops against callback retries charging the budget twice.
+      // session. Keep it beside the terminal outcome until `start()` settles: committing it here
+      // could HARD-pause the running attempt and make the already-produced stage result impossible
+      // to apply. The stage-result path below persists session end, usage and outcome together.
       onUsage: (reported) => {
         if (live.closed || isAuthorityRevoked(authoritySignal) || live.usageReported) return;
         const usage = providerUsageSchema.safeParse(reported);
@@ -1375,19 +1376,8 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           );
           return;
         }
-        const recorded = deps.state.execute({
-          schemaVersion: 1,
-          commandId: `provider-usage-${providerSession.id}`,
-          correlationId: deps.correlationId,
-          actor,
-          type: "RECORD_PROVIDER_USAGE",
-          payload: { providerSessionId: providerSession.id, usage: usage.data },
-        });
-        if (recorded.type !== "PROVIDER_USAGE_RECORDED") {
-          throw new Error("The ProviderUsage report was not recorded");
-        }
         live.usageReported = true;
-        live.budgetPaused = recorded.hardPaused;
+        live.terminalUsage = usage.data;
         deps.logger.info(
           {
             providerSessionId: providerSession.id,
@@ -1395,22 +1385,8 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             outputTokens: usage.data.outputTokens,
             quality: usage.data.quality,
           },
-          recorded.hardPaused
-            ? "The provider reported usage and exhausted the active budget"
-            : "The provider usage was recorded",
+          "The provider terminal usage was validated",
         );
-        if (recorded.hardPaused) {
-          live.budgetAbort = deps.adapter.abortSession(providerSession.id).then(
-            () => true,
-            (error: unknown) => {
-              deps.logger.warn(
-                { providerSessionId: providerSession.id, error: errorName(error) },
-                "The budget-paused provider session could not be aborted; it may still be running",
-              );
-              return false;
-            },
-          );
-        }
       },
       // Spec §8 follow-up: the durable half of `ProviderSessionListener.onProcessStarted`
       // (@loomrail/provider-core) -- a live adapter calls this at most once, right after its
@@ -1516,24 +1492,28 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       // Soft Pause does not revoke this signal: its current turn is allowed to finish.
       if (isAuthorityRevoked(authoritySignal)) return;
 
-      if (live.budgetPaused) {
-        const stopped = live.budgetAbort === null ? false : await live.budgetAbort;
-        if (isAuthorityRevoked(authoritySignal)) return;
-        if (!stopped) {
-          // Keep the durable session/run/lease active for startup recovery. Ending them here would
-          // make another writer eligible while the failed abort may have left this child alive.
-          lease.releaseOnExit = false;
-          return;
-        }
-        deps.state.execute(endSessionCommand(deps, providerSession.id, "INTERRUPTED"));
-        deps.logger.warn(
-          { providerSessionId: providerSession.id, stageAttemptId },
-          "The active provider token budget was exhausted; the workflow is hard-paused",
-        );
-        return;
-      }
-
       if (result.type === "FAILED") {
+        if (live.terminalUsage !== null) {
+          const recorded = deps.state.execute({
+            schemaVersion: 1,
+            commandId: `provider-usage-${providerSession.id}`,
+            correlationId: deps.correlationId,
+            actor,
+            type: "RECORD_PROVIDER_USAGE",
+            payload: { providerSessionId: providerSession.id, usage: live.terminalUsage },
+          });
+          if (recorded.type !== "PROVIDER_USAGE_RECORDED") {
+            throw new Error("The ProviderUsage report was not recorded");
+          }
+          if (recorded.hardPaused) {
+            deps.state.execute(endSessionCommand(deps, providerSession.id, "INTERRUPTED"));
+            deps.logger.warn(
+              { providerSessionId: providerSession.id, stageAttemptId },
+              "The failed provider session exhausted the active budget; the workflow is hard-paused",
+            );
+            return;
+          }
+        }
         // `providerStarted: false`: the adapter refused the invocation, so this session never had a
         // chance to publish anything and §6.5's guard does not apply to it. §7's branches below own
         // this case, and pausing twice for one failure would ask the owner two questions about it.
@@ -1639,14 +1619,6 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       // APPLY_PROVIDER_OUTCOME an attempt that is no longer RUNNING.
       if (live.checkpointWriteFailed && stageResult === null) endReason = "INTERRUPTED";
 
-      const ended = deps.state.execute(endSessionCommand(deps, providerSession.id, endReason));
-      if (ended.type !== "PROVIDER_SESSION_ENDED") throw new Error("The ProviderSession did not end");
-
-      // Soft Pause lets the in-flight turn persist checkpoints and reach a natural outcome, but it
-      // forbids that stale outcome from advancing the paused workflow. END_PROVIDER_SESSION above
-      // closes the session and its AgentRun before the attempt releases its workspace lease.
-      if (ended.stageAttempt.status !== "RUNNING") return;
-
       if (stageResult !== null) {
         // Spec §6 step 5: the tree is measured HERE, immediately before the command that ends the
         // stage, so that what the label names is the worktree as the stage left it -- and so that the
@@ -1661,7 +1633,26 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         if (isAuthorityRevoked(authoritySignal)) return;
         // The stage-level result. The outcome is untrusted provider output and is validated where it
         // is written: `execute` parses the whole command, outcome included, before touching state.
-        deps.state.execute({
+        const current = deps.state.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: attempt.workItemId });
+        if (current.type !== "WORKFLOW_SNAPSHOT") throw new Error("The workflow snapshot was not found");
+        const currentAttempt = current.snapshot.stageAttempts.find(({ id }) => id === stageAttemptId);
+        // Soft Pause lets the in-flight turn report usage and close normally, but it forbids the
+        // stale outcome from advancing the paused workflow.
+        if (currentAttempt?.status !== "RUNNING") {
+          if (live.terminalUsage !== null) {
+            deps.state.execute({
+              schemaVersion: 1,
+              commandId: `provider-usage-${providerSession.id}`,
+              correlationId: deps.correlationId,
+              actor,
+              type: "RECORD_PROVIDER_USAGE",
+              payload: { providerSessionId: providerSession.id, usage: live.terminalUsage },
+            });
+          }
+          deps.state.execute(endSessionCommand(deps, providerSession.id, endReason));
+          return;
+        }
+        const applied = deps.state.execute({
           schemaVersion: 1,
           commandId: deps.createCommandId(),
           correlationId: deps.correlationId,
@@ -1673,8 +1664,49 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             outcome: stageResult,
             template: deps.template,
             resultTree,
+            sessionCompletion: {
+              providerSessionId: providerSession.id,
+              usage: live.terminalUsage,
+            },
           },
         });
+        if (applied.type !== "MOCK_PROVIDER_OUTCOME_APPLIED") {
+          throw new Error("The terminal provider outcome was not applied");
+        }
+        if (live.terminalUsage !== null) {
+          deps.logger.info(
+            { providerSessionId: providerSession.id, stageAttemptId },
+            applied.run.status === "HARD_PAUSED"
+              ? "The provider outcome was preserved and the next stage was hard-paused by its usage"
+              : "The provider outcome and usage were recorded atomically",
+          );
+        }
+        return;
+      }
+
+      let usageHardPaused = false;
+      if (live.terminalUsage !== null) {
+        const recorded = deps.state.execute({
+          schemaVersion: 1,
+          commandId: `provider-usage-${providerSession.id}`,
+          correlationId: deps.correlationId,
+          actor,
+          type: "RECORD_PROVIDER_USAGE",
+          payload: { providerSessionId: providerSession.id, usage: live.terminalUsage },
+        });
+        if (recorded.type !== "PROVIDER_USAGE_RECORDED") {
+          throw new Error("The ProviderUsage report was not recorded");
+        }
+        usageHardPaused = recorded.hardPaused;
+      }
+
+      const ended = deps.state.execute(endSessionCommand(deps, providerSession.id, endReason));
+      if (ended.type !== "PROVIDER_SESSION_ENDED") throw new Error("The ProviderSession did not end");
+      if (usageHardPaused) {
+        deps.logger.warn(
+          { providerSessionId: providerSession.id, stageAttemptId },
+          "The provider session exhausted the active budget before completing its stage",
+        );
         return;
       }
 

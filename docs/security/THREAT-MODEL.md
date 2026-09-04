@@ -791,23 +791,27 @@ Mitigation, verified in code:
   `thread_id` UUID from the recording — the closest analogue available to it — in
   `packages/provider-codex/test/adapter.unit.test.ts`.
 
-**Q13 mitigation of the live-spend gap.** `ProviderUsage` remains strict untrusted input, but a valid terminal
-report now enters one transaction through `RECORD_PROVIDER_USAGE`. Migration 0032 stores one immutable,
+**Q13 mitigation of the live-spend gap.** `ProviderUsage` remains strict untrusted input. Migration 0032 stores one immutable,
 digest-verified `provider_usage_reports` row per ProviderSession with exact Project/WorkItem/PipelineRun/
 StageAttempt/AgentRun lineage and links its positive `input + output` total to the existing append-only
 UsageRecord ledger. A duplicate callback cannot charge the session twice: command replay is idempotent and a
-different command meets `UNIQUE(provider_session_id)`. Reaching either the pipeline limit or the immutable AgentRun
-envelope stores usage/events, blocks WorkItem, hard-pauses run/attempt and withdraws dispatch atomically while
-retaining the live ProviderSession/AgentRun and its workspace lease. The daemon aborts next; only a confirmed stop
-lets `END_PROVIDER_SESSION` finish the AgentRun and release the lease. A failed abort therefore cannot advertise a
-free writer, and restart recovery retains the same fence until it can prove the orphan is gone.
+different command meets `UNIQUE(provider_session_id)`. For a session with no stage outcome, reaching either the
+pipeline limit or immutable AgentRun envelope stores usage/events, blocks WorkItem, hard-pauses run/attempt and
+withdraws dispatch atomically. For an already-produced stage outcome, the daemon instead supplies the validated
+terminal report on `APPLY_PROVIDER_OUTCOME`: one transaction ends the ProviderSession, records usage, preserves the
+completed current stage, finishes its AgentRun/releases its lease, and parks any newly created next StageAttempt in
+`HARD_PAUSED` with no claimable dispatch. A Budget Override resumes that never-started attempt without manufacturing
+a retry number. Thus hostile or simply large terminal usage cannot discard a valid outcome and amplify spend through
+repeated execution of the same stage. A daemon crash before this transaction leaves the durable session running;
+startup recovery interrupts it and never assumes either in-memory terminal fact was committed.
 
 Provider-neutral `inputTokens` includes every input class. Codex already reports cached input as a subdivision
 of total input; Claude reports ordinary input, cache creation and cache read separately, so its adapter sums all
 three into normalized input while retaining cache read only as attribution. Cached/reasoning fields are not
 added again. Task Cockpit renders total/input/output, quality and optional reported cost; raw provider lines,
 transcripts and credentials remain absent. Persistence and daemon tests cover restart read, command replay,
-duplicate/actor refusal, append-only triggers, atomic pause without HumanRequest and live abort.
+duplicate/actor refusal, append-only triggers, atomic outcome-plus-usage completion, parking before the next
+dispatch and the no-retry override path.
 
 ### E1 workspace-execution delta (T19, T20, and two registration decisions)
 

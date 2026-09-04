@@ -99,3 +99,23 @@ Q14 закрывает дефект до продолжения quota-bearing wo
 увеличение pipeline cap не меняет этот envelope и создаёт quota loop. Рекомендуемый start preview поэтому показывает
 два независимых лимита; regression test требует, чтобы повышение per-AgentRun ceiling было валидной новой revision
 при неизменном, ещё не исчерпанном pipeline cap.
+
+## 7. Dogfood correction: terminal usage and outcome atomicity
+
+Три Implementation попытки показали более опасный quota loop: поддерживаемые adapters сообщают один cumulative usage
+у терминальной границы, но daemon сначала применял `RECORD_PROVIDER_USAGE`. Пересечение AgentRun ceiling переводило
+текущий StageAttempt в `HARD_PAUSED`, запускало abort и делало уже полученный schema-valid outcome неприменимым.
+Следующий Budget Override повторял весь Implementation; измеренный расход вырос с `489257` до `617930`, затем до
+`810317`, не продвигая workflow.
+
+До следующего quota-bearing запуска обязательна следующая семантика:
+
+- callback usage только валидируется и удерживается до возврата terminal outcome;
+- ProviderSession end, ProviderUsageReport/UsageRecord, stage outcome, AgentRun finish и lease release фиксируются
+  одной командой и одной SQLite transaction;
+- cap crossing не меняет завершённый текущий этап обратно в pause: он остаётся `SUCCEEDED` с result tree;
+- если outcome создаёт продолжение, новый StageAttempt сразу хранится `HARD_PAUSED`, а его dispatch — `FAILED`, поэтому
+  worker не может начать следующий provider;
+- Budget Override возобновляет этот никогда не стартовавший attempt с тем же id/номером; реальный начатый attempt,
+  остановленный budget, по-прежнему получает новый retry;
+- command replay, restart read, forbidden actor и no-pending-dispatch проверяются integration tests.

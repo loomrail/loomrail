@@ -1145,6 +1145,21 @@ const applyProviderOutcomePayloadSchema = z
      * the stage on a question, neither of which is a stage ending.
      */
     resultTree: treeShaSchema.nullable(),
+    /**
+     * The live ProviderSession terminal boundary owned by this outcome.
+     *
+     * Optional only for append-only compatibility with historical commands. New daemon callers
+     * supply it so ending the session, recording its final cumulative usage and applying the
+     * stage outcome are one state transaction. A null usage means the adapter honestly reported
+     * no usage; it is different from omitting the whole boundary on an old command.
+     */
+    sessionCompletion: z
+      .object({
+        providerSessionId: opaqueIdSchema,
+        usage: providerUsageSchema.nullable(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -1439,6 +1454,7 @@ export const workflowDispatchStartedResultSchema = z
   .strict();
 
 const providerOutcomeEventSchema = z.discriminatedUnion("type", [
+  providerSessionEndedEventSchema,
   stageAttemptChangedEventSchema,
   humanRequestOpenedEventSchema,
   usageRecordedEventSchema,

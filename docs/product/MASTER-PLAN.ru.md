@@ -1397,6 +1397,11 @@ revision, не раздувая ещё не исчерпанный общий ca
 Task Cockpit теперь получает конкретные model IDs из validated adapter config: при pinned provider выбирается exact
 model, а `Auto` показывает пару Codex/Claude для каждого logical tier. Выбранный ID сохраняется вместе с tier в
 immutable AgentRun policy snapshot до запуска CLI; UI-каталог и фактический argv больше не ведут две отдельные карты.
+Три последующих Implementation run выявили quota-amplification дефект на terminal boundary: usage применялся раньше
+уже готового outcome, hard pause делал outcome неприменимым, и override повторно запускал завершённый этап. Исправленная
+граница атомарно завершает ProviderSession, сохраняет usage и применяет outcome; завершённый этап остаётся
+`SUCCEEDED`, а budget блокирует только ещё не стартовавший следующий этап. Override продолжает тот же припаркованный
+attempt без искусственного увеличения номера.
 Следующий шаг Q14 — завершить managed public dogfood, correction loop и independent review, не выдавая его за
 private dogfood и не принимая owner-only Acceptance решение.
 
