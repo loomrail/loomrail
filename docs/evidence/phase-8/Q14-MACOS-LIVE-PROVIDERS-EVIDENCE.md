@@ -82,10 +82,14 @@ server-side `all`/`pending`/`completed` filtering and its accessible native filt
 review drove bounded fixes before passing the exact current tree. The final tree identity remained
 `cb92732302851e6642035886f82fbb3e8424263b` throughout measured Browser QA and Acceptance.
 
-The deterministic browser baseline passed eight target/scenario cells with 24 required assertions, ten finalized
-screenshot/trace attachments and no blocking console or network observation. It covered All, Pending, Completed,
-reload, desktop light and mobile dark targets. The baseline was green, so no QA defect correction was triggered; this
-public rehearsal therefore does not claim the separate defect-correction-loop acceptance item.
+The first complete deterministic browser baseline ran all eight target/scenario cells on tree
+`c181b7ffd6eb7289ae4e37b03a544a0a1910e047` and failed with 44 HIGH defects. Correction 1 retested the same locked
+eight cells on tree `232eb45d5e31d18c9c1eab451c592f8d9e66a2d3`; it found 16 additional HIGH defects and became `SUPERSEDED`.
+Correction 2 retested the same eight cells on the final tree `cb92732302851e6642035886f82fbb3e8424263b`, passed
+all 24 required assertions, finalized ten screenshot/trace attachments with no blocking console or network
+observation, and resolved all 60 HIGH defects through exact passing-retest provenance. The matrix covered All,
+Pending, Completed, reload, desktop light and mobile dark targets. An earlier setup `ERROR` produced no evidence and
+did not replace the complete failed baseline.
 
 The live run exercised a controlled daemon restart three times and stayed below its hard pipeline budget: 17 durable
 usage records total 4,818,908 of 5,000,000 tokens. Dogfood exposed and verified three Loomrail corrections:
@@ -97,12 +101,15 @@ usage records total 4,818,908 of 5,000,000 tokens. Dogfood exposed and verified 
 - Acceptance context now contains only the authoritative current-tree Review and measured QA artifacts, while the
   provider schema enumerates exact criteria and evidence checks rather than accepting stale or paraphrased claims.
 
-The retried live Acceptance session ended `COMPLETED` and created a `PENDING` AcceptancePackage that maps all nine
-criteria to the exact Review and measured-QA evidence and exposes the remaining medium application risk. Loomrail did
-not select Accept, Return, or Reject: that final transition remains owner-only. Its authenticated release-summary
-export rendered 64,271 bytes of Markdown with all nine criterion rows, the Review/QA evidence, decisions and 282 audit
-events; a bounded check found no personal absolute path. The public repository remains a rehearsal, not the
-private-dogfood evidence required by the stable contract.
+The retried live Acceptance session ended `COMPLETED` and created an AcceptancePackage that maps all nine criteria to
+the exact Review and measured-QA evidence and exposes the remaining medium application risk. The package began
+`PENDING`; Loomrail itself selected no disposition. On 2026-09-04 at `15:48:21.526Z`, the local human owner used the
+separate gate to accept it. The package is now `ACCEPTED` at version 2, the WorkItem is `DONE`, and the PipelineRun
+completed in the same durable transition. The pre-resolution authenticated release-summary export rendered 64,271
+bytes of Markdown with all nine criterion rows, the Review/QA evidence, decisions and the then-current 282 audit
+events; a bounded check found no personal absolute path. The three owner-resolution events bring the final WorkItem
+audit to 285 events. The public repository remains a rehearsal, not the private-dogfood evidence required by the
+stable contract.
 
 This rehearsal had one active Task plus one cancelled precursor, not a 2–3 Task dependency DAG. It therefore does not
 close that separate dogfood-contract item either; no dependency evidence is inferred from sequential workflow stages.
@@ -110,5 +117,6 @@ close that separate dogfood-contract item either; no dependency evidence is infe
 ## Remaining release gates
 
 Windows has no quota-bearing row for either exact version and remains blocking for the full compatibility target.
-Provider binary provenance is observed as install metadata, not runtime-attested. Private dogfood, trusted publisher
-provenance, the protected landing gate, and owner acceptance remain separate stable-release requirements.
+Provider binary provenance is observed as install metadata, not runtime-attested. This public rehearsal's owner gate
+is closed. Private dogfood (including its own owner acceptance and 2–3 Task DAG), trusted publisher provenance, and
+the protected landing gate remain separate stable-release requirements.

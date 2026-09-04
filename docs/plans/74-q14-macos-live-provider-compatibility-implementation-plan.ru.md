@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-04
 
-**Статус:** active
+**Статус:** complete on macOS; external stable gates pending
 
 **Спецификация:**
 [73-q14-macos-live-provider-compatibility-spec.ru.md](73-q14-macos-live-provider-compatibility-spec.ru.md)
@@ -42,9 +42,9 @@
 - [x] Продублировать границу Review/будущего Browser QA в trusted `REVIEW_INPUT`, сохранив owner-only disposition и
       запрет четвёртого review round.
 - [x] Продолжить public target workflow с Codex implementation и независимым Claude review.
-- [x] Выполнить deterministic browser QA и подготовить evidence-bound Acceptance Package; owner-only acceptance
-      оставить владельцу. Отдельный QA defect correction loop не был вызван: baseline прошёл зелёным после
-      исправления launch-конфигурации, поэтому этот rehearsal не выдаётся за доказательство defect-correction path.
+- [x] Выполнить deterministic browser QA и подготовить evidence-bound Acceptance Package. Первый полный baseline и
+      первый scoped retest выявили 60 HIGH defects; correction 1 стал `SUPERSEDED`, correction 2 прошёл все восемь
+      locked cells и закрыл defects точным passing-retest provenance. Владелец отдельно принял итоговый package.
 - [x] Провести Standards/Spec review и полный доступный verification gate. In-scope P0/P1/P2 не осталось; полный
       `pnpm verify` по-прежнему останавливается только на трёх защищённых landing lint findings.
 

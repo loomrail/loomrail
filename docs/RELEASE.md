@@ -1,6 +1,6 @@
 # Releasing the Loomrail launcher
 
-**Status:** alpha.4 published; alpha.5 release candidate under verification; public dogfood awaiting owner acceptance
+**Status:** alpha.4 published; alpha.5 release candidate under verification; managed public dogfood accepted; private dogfood and remaining stable gates pending
 **Updated:** 2026-09-04
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,

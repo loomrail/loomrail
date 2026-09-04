@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-04
 
-**Статус:** active
+**Статус:** implemented on macOS; external stable gates pending
 
 **Предшественники:** Q9, Q13
 
