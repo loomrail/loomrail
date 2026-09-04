@@ -187,6 +187,12 @@ describe("section rendering", () => {
     const rendered = renderSection("REVIEW_INPUT", sampleSources());
 
     expect(rendered.text).toContain("Review the stable implementation independently.");
+    expect(rendered.text).toContain(
+      "Do not require Browser QA evidence or owner acceptance in Review, even when the work item's end-to-end acceptance criteria mention them.",
+    );
+    expect(rendered.text).toContain(
+      "Those are later Loomrail gates and cannot exist until this review passes.",
+    );
     expect(rendered.text).toContain("Active Project Constitution: constitution_01");
     expect(rendered.text).toContain("> - Keep parser failures typed.");
     expect(rendered.text).toContain(`Stable result tree: ${"a".repeat(40)}`);

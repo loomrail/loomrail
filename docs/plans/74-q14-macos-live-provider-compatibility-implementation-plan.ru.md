@@ -38,6 +38,9 @@
       provider JSON Schema.
 - [x] Отделить durable review round от технического `StageAttempt.attempt`, чтобы budget retries до первого review
       не исчерпывали review loop и следующий IMPLEMENT сохранял уникальный operational attempt.
+- [x] Восстанавливать override form из последней durable cost policy без сброса к стартовым подсказкам при SSE.
+- [x] Продублировать границу Review/будущего Browser QA в trusted `REVIEW_INPUT`, сохранив owner-only disposition и
+      запрет четвёртого review round.
 - [ ] Продолжить public target workflow с Codex implementation и независимым Claude review.
 - [ ] Выполнить browser QA и correction loop; owner-only acceptance оставить владельцу.
 - [ ] Провести Standards/Spec review и полный доступный verification gate.

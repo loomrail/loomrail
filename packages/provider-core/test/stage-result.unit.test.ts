@@ -181,6 +181,14 @@ describe("provider stage result contract", () => {
     expect(jsonSchema).toContain('"minItems":1');
   });
 
+  it("keeps Review findings scoped to work that exists before downstream gates", () => {
+    const jsonSchema = JSON.stringify(z.toJSONSchema(providerStageResultSchemaFor("REVIEW")));
+
+    expect(jsonSchema).toContain("Do not require evidence produced by later workflow stages");
+    expect(jsonSchema).toContain("Browser QA");
+    expect(jsonSchema).toContain("owner acceptance");
+  });
+
   it("tells every provider stage not to invent approval or handoff gates", () => {
     for (const stage of ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"] as const) {
       const jsonSchema = JSON.stringify(z.toJSONSchema(providerStageResultSchemaFor(stage)));

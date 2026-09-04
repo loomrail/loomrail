@@ -514,6 +514,7 @@ const renderReviewInput = (sources: ContextSources): RenderedBody => {
   return {
     text: block("Independent Review Input", [
       "Review the stable implementation independently. Inspect the supplied diff and tests; when a read-only worktree is available, use it for surrounding context. Do not trust an author's claim of completion.",
+      "Do not require Browser QA evidence or owner acceptance in Review, even when the work item's end-to-end acceptance criteria mention them. Those are later Loomrail gates and cannot exist until this review passes. Review only the implementation, its code-level behavior, and the tests that can exist at this stage.",
       ...constitutionLines,
       untrusted(body),
     ]),

@@ -89,6 +89,8 @@ Q14 закрывает дефект до продолжения quota-bearing wo
 - daemon фиксирует resolved exact model ID в immutable AgentRun snapshot до запуска CLI, а adapter исполняет этот ID,
   не перечитывая изменившийся mapping; прежний snapshot без model ID использует совместимый fallback;
 - budget override UI принимает осмысленный лимит больше прежнего и cumulative usage вместо вычисленного `used + 100`;
+- при открытии и после SSE/restart override form восстанавливает значения из последней durable policy revision, но
+  обычный rerender не затирает ввод владельца обратно стартовыми подсказками;
 - тот же versioned cost policy может задать явный ceiling одного будущего AgentRun; owner может повысить именно его,
   не увеличивая уже достаточный pipeline cap;
 - прежние command receipts/events и базы продолжают читаться как `modelTierOverride = null`;
@@ -141,3 +143,17 @@ Q14 закрепляет две независимые границы:
   IMPLEMENT получает `current StageAttempt.attempt + 1`, чтобы не конфликтовать с историей;
 - regression tests покрывают первый review round на техническом attempt `4` и owner-authorized continuation после
   второго настоящего review round.
+
+## 9. Dogfood correction: граница Review и будущего Browser QA
+
+Третий независимый Review подтвердил реализацию и database-backed integration tests, но всё равно создал CRITICAL
+finding об отсутствии Browser QA evidence. Такое evidence не может существовать на REVIEW: deterministic workflow
+запускает отдельную QA stage только после passing review. Требование end-to-end Browser QA остаётся acceptance
+criterion, но reviewer не должен превращать ещё не наступившую стадию в code-review defect.
+
+Stage responsibility поэтому записывается не только в описание structured-result schema, но и в trusted
+`REVIEW_INPUT` до WorkItem brief и untrusted diff/findings: REVIEW оценивает существующую реализацию, code-level
+behavior и доступные на этой стадии tests; Browser QA и owner acceptance принадлежат последующим Loomrail gates.
+Это не фильтрует provider findings и не создаёт автоматический waiver. Если provider всё равно нарушает границу,
+обычные owner-only disposition и bounded review policy остаются fail-closed; исчерпанный round не превращается в
+четвёртый и не перескакивает в QA.

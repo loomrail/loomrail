@@ -91,6 +91,11 @@ import { useI18n, type Locale, type TranslationKey, type Translator } from "../i
 import type { SummaryFilter } from "../router";
 import { moveShortcutsFor, transitionTargets } from "../taskMoves";
 import {
+  suggestedAgentRunBudget,
+  suggestedPipelineBudget,
+  workflowPolicyFormValues,
+} from "../workflowPolicy";
+import {
   useInitializeFixtureWorkspace,
   useApproveBudgetOverride,
   useDisposeReviewFinding,
@@ -2349,8 +2354,6 @@ const WorkspacePanel = ({ item }: { item: WorkItem }): React.JSX.Element | null 
   );
 };
 
-const suggestedPipelineBudget = 1_000_000;
-const suggestedAgentRunBudget = 175_000;
 const modelTiers = ["FAST", "STANDARD", "DEEP"] as const;
 
 const modelPolicyOptions = (
@@ -2408,6 +2411,23 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const modelOptions = modelPolicyOptions(providerSelectionQuery.data, t);
   const selectedModelDescription = modelOptions.find(({ value }) => value === modelTierOverride)?.description;
   const snapshot = workflowQuery.data;
+  const budgetPolicy = snapshot?.budgetPolicies.at(-1) ?? null;
+  const persistedPolicyValues = budgetPolicy === null ? null : workflowPolicyFormValues(budgetPolicy);
+  const persistedBudgetLimitInput = persistedPolicyValues?.budgetLimitInput ?? null;
+  const persistedAgentRunLimitInput = persistedPolicyValues?.agentRunLimitInput ?? null;
+  const persistedModelTierOverride = persistedPolicyValues?.modelTierOverride ?? null;
+  useEffect(() => {
+    if (
+      persistedBudgetLimitInput === null ||
+      persistedAgentRunLimitInput === null ||
+      persistedModelTierOverride === null
+    ) {
+      return;
+    }
+    setBudgetLimitInput(persistedBudgetLimitInput);
+    setAgentRunLimitInput(persistedAgentRunLimitInput);
+    setModelTierOverride(persistedModelTierOverride);
+  }, [persistedAgentRunLimitInput, persistedBudgetLimitInput, persistedModelTierOverride]);
   const parsedBudgetLimit = Number(budgetLimitInput);
   const parsedAgentRunLimit = Number(agentRunLimitInput);
   const budgetLimitIsValid = Number.isSafeInteger(parsedBudgetLimit) && parsedBudgetLimit > 0;
@@ -2542,7 +2562,6 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
           run,
         }
       : null;
-  const budgetPolicy = snapshot.budgetPolicies.at(-1) ?? null;
   const used = snapshot.usageRecords.reduce((total, record) => total + record.amount, 0);
   const budgetPercent = budgetPolicy
     ? Math.min(100, Math.round((used / budgetPolicy.maxEstimatedTokens) * 100))

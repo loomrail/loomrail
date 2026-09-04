@@ -219,6 +219,9 @@ Required controls and verification:
 - bounded Review round is derived from append-only ReviewReports in the same PipelineRun/correction cycle, never from
   `StageAttempt.attempt`. Budget or recovery retries may advance that operational ordinal before the first report;
   tests prove attempt 4 can still be review round 1 and queues a collision-free next operational attempt;
+- trusted `REVIEW_INPUT` states that Browser QA and owner acceptance are later gates even when end-to-end criteria
+  mention them. This reduces stage-confusion findings without filtering provider output: an ignored instruction still
+  remains an ordinary OPEN finding, and only the authenticated owner may disposition it;
 - the authenticated review projection is bounded, React renders finding text as text, and owner mutations use the
   existing session/Origin/CSRF boundary. Task Cockpit presents severity/status as text as well as color.
 

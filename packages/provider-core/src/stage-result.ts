@@ -35,7 +35,7 @@ const reviewCompletionSchema = ordinaryCompletionSchema
   .extend({ artifact: reviewReportDraftSchema })
   .strict()
   .describe(
-    "Review the repository change without modifying it. Complete only after recording one structured REVIEW_REPORT.",
+    "Review the repository change without modifying it. Report only actionable defects in work that exists at this stage. Do not require evidence produced by later workflow stages such as Browser QA or owner acceptance; Loomrail runs those gates only after a passing review. Complete only after recording one structured REVIEW_REPORT.",
   );
 
 const qaCompletionSchema = ordinaryCompletionSchema

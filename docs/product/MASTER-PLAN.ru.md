@@ -1408,6 +1408,13 @@ attempt без искусственного увеличения номера.
 budget retries увеличили технический `StageAttempt.attempt` до `4`, и первый Review был ошибочно принят за
 запрещённый четвёртый раунд. Review policy теперь считает `ReviewReport.round` по durable отчётам отдельно от
 operational attempt; следующий fix сохраняет уникальный технический ordinal.
+Следующий dogfood pause обнаружил, что override form при каждом открытии возвращалась к setup suggestions вместо
+последней durable policy revision. Task Cockpit теперь восстанавливает сохранённые pipeline/per-AgentRun limits и
+logical model, не затирая промежуточный owner input обычным SSE rerender. Третий Review подтвердил код и integration
+tests, но ошибочно потребовал Browser QA evidence до запуска QA. Граница стадии теперь явно входит в trusted
+`REVIEW_INPUT`, а не остаётся только JSON Schema description: Review оценивает существующую реализацию и tests,
+Browser QA/owner acceptance остаются следующими gates. Это не ослабляет bounded rounds и не превращает owner waiver
+в passing review.
 Следующий шаг Q14 — завершить managed public dogfood, correction loop и independent review, не выдавая его за
 private dogfood и не принимая owner-only Acceptance решение.
 
