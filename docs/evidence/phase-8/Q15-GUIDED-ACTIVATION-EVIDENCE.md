@@ -2,7 +2,8 @@
 
 **Date:** 2026-09-04
 
-**Scope:** Q15 non-landing candidate; local macOS arm64 verification; Windows execution and protected landing pending
+**Scope:** fixed Q15 non-landing candidate with local and macOS/Windows CI evidence; protected landing and Windows
+live-provider verification pending
 
 ## Implemented boundary
 
@@ -17,9 +18,8 @@ route creates no parallel progress store: it projects Project, WorkItem, Pipelin
 Review, measured Browser QA and AcceptancePackage state through existing commands. Acceptance remains a separate
 owner action.
 
-The protected `apps/landing/**` tree was not changed or excluded. Windows-safe paths and CI execution are present,
-but this document does not claim a Windows run before CI records one. Q15 always uses Mock; it is not evidence for a
-live Codex or Claude Code compatibility row.
+The protected `apps/landing/**` tree was not changed or excluded. Q15 always uses Mock; its passing Windows fixture
+evidence is not a live Codex or Claude Code compatibility row.
 
 ## Local verification
 
@@ -32,8 +32,7 @@ live Codex or Claude Code compatibility row.
   light/dark and a 390 × 844 viewport.
 - `pnpm pack:release && pnpm test:release`: clean tarball install, receipt, audit, setup, guided `try`, daemon,
   Workbench, Doctor, data-path and log lifecycle checks passed; nothing was published.
-- `pnpm test:public-readiness`: the 680-file public-tree check, pinned toolchain check and guided-activation verifier
-  passed.
+- `pnpm test:public-readiness`: the public-tree, pinned toolchain and guided-activation checks passed.
 - Focused ESLint over every changed non-landing TypeScript/JavaScript file passed. A separate repository-wide lint
   invocation still has only the three existing protected landing findings at `apps/landing/src/main.ts` lines 630,
   631 and 634.
@@ -53,6 +52,20 @@ in CLI help, projects Human Request/Review/QA/Acceptance separately, treats ever
 Settings for repository/provider connection, exposes a bounded Guided Launch explanation and records T49 controls.
 Fresh independent Standards and Spec re-reviews found no remaining P0/P1/P2 issue.
 
-macOS/Windows CI evidence is recorded only after the candidate reaches a fixed commit. Stable publication remains
-blocked by the protected landing, private dogfood, Windows live-provider compatibility and trusted-publisher
-provenance gates.
+## Fixed-commit cross-platform evidence
+
+Commit `cebfc5190bc0e090291143898d133c3c0f9b87b7` was pushed as
+[`feat: add canonical guided activation route`](https://github.com/loomrail/loomrail/commit/cebfc5190bc0e090291143898d133c3c0f9b87b7).
+In [CI run 33910486837, attempt 2](https://github.com/loomrail/loomrail/actions/runs/33910486837/attempts/2):
+
+- the named guided activation contract passed before repository-wide lint on macOS and Windows;
+- Browser smoke passed all 54 cases on macOS and Windows, including the full `/try` journey;
+- clean tarball install and packaged `loomrail try` passed on macOS and Windows;
+- macOS fault/recovery passed; the first Windows attempt timed out one pre-existing restart test after 208 passes,
+  and the isolated Windows Verify retry passed the complete fault/recovery gate;
+- both Verify jobs then built every workspace package and stopped only at the same three protected
+  `apps/landing/src/main.ts` lint findings on lines 630, 631 and 634.
+
+This closes Q15's non-landing cross-platform source/browser/package evidence without weakening a gate. Q15's
+protected public consumer, stable publication, private dogfood, Windows live-provider compatibility and
+trusted-publisher provenance remain separate open gates.

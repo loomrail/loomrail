@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-04
 
-**Статус:** local non-landing implementation complete; protected landing и cross-platform CI pending
+**Статус:** non-landing implementation и macOS/Windows CI complete; protected landing pending
 
 **Спецификация:**
 [75-q15-canonical-activation-route-spec.ru.md](75-q15-canonical-activation-route-spec.ru.md)
@@ -32,10 +32,10 @@
 
 - [ ] В отдельной authorized landing-сессии подключить `apps/landing/**` к canonical install/version contract и закрыть
       три существующих lint finding; текущий срез эти файлы не меняет.
-- [ ] Получить clean macOS/Windows source/browser/package evidence; Windows live-provider capture не относится к Q15.
+- [x] Получить clean macOS/Windows source/browser/package evidence; Windows live-provider capture не относится к Q15.
 - [x] Обновить release/evidence/master plan локальными результатами.
 - [x] Пройти independent Standards/Spec review.
-- [ ] Зафиксировать cross-platform CI evidence.
+- [x] Зафиксировать cross-platform CI evidence.
 
 ## 2. Module seam
 

@@ -2,10 +2,10 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-04 — Q15 canonical activation реализован локально; Q16–Q17 approved
+**Последнее дополнение:** 2026-09-04 — Q15 non-landing cross-platform complete; Q16 implementation started
 
-**Статус:** approved product direction; Q15 non-landing slice local-complete; protected landing, CI evidence,
-Windows live providers и stable gates pending
+**Статус:** approved product direction; Q15 non-landing slice cross-platform complete; protected landing, Windows
+live providers и stable gates pending
 
 **Продукт:** Loomrail
 
@@ -1516,9 +1516,12 @@ Q10 Task и Mock run policy. `loomrail try` выполняет read-only preflig
 через Human Request, отдельное budget approval, Review/измеренную QA и оставляет final disposition только владельцу.
 Локально проходят contract gate, typecheck, complete unit/integration suite, clean-package invocation и 54/54
 Playwright E2E, включая RU/EN, keyboard, light/dark, narrow viewport и daemon restart. `apps/landing/**` не изменён:
-его canonical consumer и три защищённых lint finding остаются отдельной авторизованной работой. Автоматическое
-macOS/Windows evidence для этого коммита и Windows live-provider capture ещё не получены, поэтому Q15 exit и stable
-claim остаются открыты.
+его canonical consumer и три защищённых lint finding остаются отдельной авторизованной работой. На фиксированном
+коммите `cebfc51` canonical activation gate, 54/54 browser cases и clean packaged `loomrail try` прошли на macOS и
+Windows в [CI run 33910486837](https://github.com/loomrail/loomrail/actions/runs/33910486837/attempts/2). Повторный
+Windows Verify прошёл fault/recovery и, как macOS, остановился только на трёх protected landing lint diagnostics.
+Q15 non-landing cross-platform evidence закрыт; protected consumer, Windows live-provider capture и stable claim
+остаются открыты.
 
 #### Q16 — Provider allowance visibility
 
@@ -1721,10 +1724,10 @@ human waiver с documented risk.
 
 ## 26. Immediate next actions
 
-1. Завершить Q15 cross-platform source/browser/package evidence; protected landing подключить к canonical contract
-   только в отдельной authorized landing-сессии.
-2. Создать и выполнить Q16 spec/implementation plan для provider allowance с отдельным budget/allowance UX и threat
-   verification T47.
+1. Подключить protected landing к Q15 canonical contract и закрыть его три lint finding только в отдельной
+   authorized landing-сессии; non-landing macOS/Windows evidence уже зафиксирован.
+2. Выполнить Q16 spec/implementation plan для provider allowance с отдельным budget/allowance UX и threat
+   verification T47; spec и implementation plan созданы 2026-09-04.
 3. Создать и выполнить Q17 spec/implementation plan для owner-approved Project verification recipes, measured test
    evidence и threat verification T48.
 4. Провести private dogfood Epic из 2–3 зависимых Task через новые activation/verification surfaces, оба live provider,
