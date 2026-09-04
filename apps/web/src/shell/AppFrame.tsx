@@ -33,6 +33,7 @@ import { PanelResizer } from "../components/PanelResizer";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { McpSettingsPanel } from "../components/McpSettingsPanel";
 import { ProjectScaffoldPanel } from "../components/ProjectScaffoldPanel";
+import { VerificationPlanSettingsPanel } from "../components/VerificationPlanSettingsPanel";
 import { OpenAppSettingsContext } from "./appSettings";
 import { useI18n, type TranslationKey } from "../i18n";
 import { hasCustomPanelWidths, resetPanelWidths } from "../layout";
@@ -1024,6 +1025,7 @@ const SettingsDialog = ({ onOpenChange, open }: SettingsDialogProps): React.JSX.
           {selectedProject === null ? null : <ProjectProviderPanel project={selectedProject} />}
           {selectedProject === null ? null : <McpSettingsPanel project={selectedProject} />}
           {selectedProject === null ? null : <ProjectConstitutionPanel project={selectedProject} />}
+          {selectedProject === null ? null : <VerificationPlanSettingsPanel project={selectedProject} />}
           {selectedProject === null ? null : <ProjectReadinessPanel project={selectedProject} />}
         </section>
       </div>

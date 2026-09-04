@@ -39,6 +39,8 @@ import {
   projectReadinessRunSchema,
   projectReadinessSnapshotSchema,
   projectProviderSelectionSchema,
+  verificationPlanSchema,
+  verificationPlanPublicationSchema,
   qaAttachmentRefSchema,
   qaCorrectionRunSchema,
   qaDefectSchema,
@@ -97,6 +99,8 @@ import {
   type Project,
   type ProjectConstitutionVersion,
   type ProjectReadinessRun,
+  type VerificationPlan,
+  type VerificationPlanPublication,
   type QAAttachmentRef,
   type QACorrectionRun,
   type QADefect,
@@ -143,6 +147,10 @@ import {
   decideQAReservation,
   qaWorkflowOutcome,
   decideProjectProviderPreference,
+  decideVerificationPlanAdoption,
+  decideVerificationPlanPublicationCompleted,
+  decideVerificationPlanPublicationFailed,
+  decideVerificationPlanPublicationRetry,
   decideRecordProviderAllowance,
   decideRecordProviderUsage,
   decideApproveBudgetOverride,
@@ -189,6 +197,7 @@ import {
   ReadinessDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
+  VerificationDomainError,
   ProviderAllowanceDomainError,
   QACompletionError,
   QACorrectionError,
@@ -205,6 +214,8 @@ import {
   type ProjectReadinessAssessedIntent,
   type ProjectReadinessAttestedIntent,
   type ProjectProviderPreferenceChangedIntent,
+  type VerificationPlanAdoptedIntent,
+  type VerificationPlanPublicationIntent,
   type ProviderAllowanceRecordedIntent,
   type FailedQACorrectionTransition,
   type PassedQACorrectionTransition,
@@ -229,6 +240,7 @@ import {
   type WorkItemDecision,
   type WorkItemEventIntent,
 } from "@loomrail/domain";
+import { verificationPlanContentHash, verificationPlanProposalHash } from "@loomrail/project-readiness";
 import { parseWorktreeListPorcelain, type WorktreeEntry } from "@loomrail/workspace";
 import { z } from "zod";
 
@@ -385,6 +397,35 @@ const constitutionPublicationRowSchema = z.object({
   target_path: z.string(),
   expected_target_digest: z.string().nullable(),
   content_digest: z.string(),
+  status: z.string(),
+  attempts: z.number().int(),
+  last_error_code: z.string().nullable(),
+  version: z.number().int(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  applied_at: z.string().nullable(),
+});
+
+const verificationPlanRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  revision: z.number().int(),
+  status: z.string(),
+  source_proposal_hash: z.string(),
+  content_hash: z.string(),
+  plan_json: z.string(),
+  created_at: z.string(),
+});
+
+const verificationPlanPublicationRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  plan_id: z.string(),
+  target_path: z.string(),
+  expected_target_digest: z.string().nullable(),
+  content_hash: z.string(),
   status: z.string(),
   attempts: z.number().int(),
   last_error_code: z.string().nullable(),
@@ -1025,6 +1066,7 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("GET_PROJECT_CONSTITUTION_SNAPSHOT"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_PROJECT_VERIFICATION_PLAN"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_READINESS_SNAPSHOT"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_MCP_PROFILES"), projectId: opaqueIdSchema }).strict(),
   z
@@ -1035,6 +1077,7 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("LIST_MCP_TOOL_CALLS"), providerSessionId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("LIST_PENDING_CONSTITUTION_PUBLICATIONS") }).strict(),
+  z.object({ type: z.literal("LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS") }).strict(),
   z.object({ type: z.literal("GET_SCAFFOLD_OPERATION"), operationId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("LIST_PENDING_SCAFFOLD_OPERATIONS") }).strict(),
   z.object({ type: z.literal("LIST_OPEN_SCAFFOLD_OPERATIONS") }).strict(),
@@ -1221,6 +1264,47 @@ const constitutionPublicationFromRow = (value: unknown): ConstitutionPublication
     targetPath: row.target_path,
     expectedTargetDigest: row.expected_target_digest,
     contentDigest: row.content_digest,
+    status: row.status,
+    attempts: row.attempts,
+    lastErrorCode: row.last_error_code,
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    appliedAt: row.applied_at,
+  });
+};
+
+const verificationPlanFromRow = (value: unknown): VerificationPlan => {
+  const row = verificationPlanRowSchema.parse(value);
+  const plan = verificationPlanSchema.parse(parseJson(row.plan_json));
+  if (
+    plan.id !== row.id ||
+    plan.schemaVersion !== row.schema_version ||
+    plan.projectId !== row.project_id ||
+    plan.revision !== row.revision ||
+    plan.status !== row.status ||
+    plan.sourceProposalHash !== row.source_proposal_hash ||
+    plan.contentHash !== row.content_hash ||
+    plan.createdAt !== row.created_at
+  ) {
+    throw new StateStoreError(
+      "PERSISTENCE_FAILURE",
+      "The verification Plan row does not match its normalized content",
+    );
+  }
+  return plan;
+};
+
+const verificationPlanPublicationFromRow = (value: unknown): VerificationPlanPublication => {
+  const row = verificationPlanPublicationRowSchema.parse(value);
+  return verificationPlanPublicationSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    planId: row.plan_id,
+    targetPath: row.target_path,
+    expectedTargetDigest: row.expected_target_digest,
+    contentHash: row.content_hash,
     status: row.status,
     attempts: row.attempts,
     lastErrorCode: row.last_error_code,
@@ -2471,6 +2555,40 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         status = ?, attempts = ?, last_error_code = ?, version = ?, updated_at = ?, applied_at = ?
        WHERE id = ? AND version = ?`,
     );
+    const selectLatestVerificationPlan = database.prepare(
+      `SELECT * FROM verification_plans
+       WHERE project_id = ? ORDER BY revision DESC LIMIT 1`,
+    );
+    const selectVerificationPlanById = database.prepare("SELECT * FROM verification_plans WHERE id = ?");
+    const selectLatestVerificationPlanPublication = database.prepare(
+      `SELECT publication.* FROM verification_plan_publications AS publication
+       INNER JOIN verification_plans AS plan ON plan.id = publication.plan_id
+       WHERE publication.project_id = ? ORDER BY plan.revision DESC LIMIT 1`,
+    );
+    const selectVerificationPlanPublicationById = database.prepare(
+      "SELECT * FROM verification_plan_publications WHERE id = ?",
+    );
+    const selectPendingVerificationPlanPublications = database.prepare(
+      `SELECT * FROM verification_plan_publications
+       WHERE status = 'PENDING' ORDER BY created_at, id`,
+    );
+    const insertVerificationPlan = database.prepare(
+      `INSERT INTO verification_plans (
+         id, schema_version, project_id, revision, status, source_proposal_hash,
+         content_hash, plan_json, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertVerificationPlanPublication = database.prepare(
+      `INSERT INTO verification_plan_publications (
+         id, schema_version, project_id, plan_id, target_path, expected_target_digest,
+         content_hash, status, attempts, last_error_code, version, created_at, updated_at, applied_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateVerificationPlanPublication = database.prepare(
+      `UPDATE verification_plan_publications SET
+         status = ?, attempts = ?, last_error_code = ?, version = ?, updated_at = ?, applied_at = ?
+       WHERE id = ? AND version = ?`,
+    );
     const selectScaffoldOperationById = database.prepare("SELECT * FROM scaffold_operations WHERE id = ?");
     const selectPendingScaffoldOperations = database.prepare(
       "SELECT * FROM scaffold_operations WHERE status = 'PENDING' ORDER BY created_at, id",
@@ -3130,6 +3248,21 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const readConstitutionPublication = (id: string): ConstitutionPublication | null => {
       const row = selectConstitutionPublicationById.get(id);
       return row === undefined ? null : constitutionPublicationFromRow(row);
+    };
+
+    const readLatestVerificationPlan = (projectId: string): VerificationPlan | null => {
+      const row = selectLatestVerificationPlan.get(projectId);
+      return row === undefined ? null : verificationPlanFromRow(row);
+    };
+
+    const readVerificationPlan = (id: string): VerificationPlan | null => {
+      const row = selectVerificationPlanById.get(id);
+      return row === undefined ? null : verificationPlanFromRow(row);
+    };
+
+    const readVerificationPlanPublication = (id: string): VerificationPlanPublication | null => {
+      const row = selectVerificationPlanPublicationById.get(id);
+      return row === undefined ? null : verificationPlanPublicationFromRow(row);
     };
 
     const readScaffoldOperation = (id: string): ScaffoldOperation | null => {
@@ -3917,6 +4050,61 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       }
     };
 
+    const insertProjectVerificationPlan = (plan: VerificationPlan): void => {
+      insertVerificationPlan.run(
+        plan.id,
+        plan.schemaVersion,
+        plan.projectId,
+        plan.revision,
+        plan.status,
+        plan.sourceProposalHash,
+        plan.contentHash,
+        JSON.stringify(plan),
+        plan.createdAt,
+      );
+    };
+
+    const insertProjectVerificationPublication = (publication: VerificationPlanPublication): void => {
+      insertVerificationPlanPublication.run(
+        publication.id,
+        publication.schemaVersion,
+        publication.projectId,
+        publication.planId,
+        publication.targetPath,
+        publication.expectedTargetDigest,
+        publication.contentHash,
+        publication.status,
+        publication.attempts,
+        publication.lastErrorCode,
+        publication.version,
+        publication.createdAt,
+        publication.updatedAt,
+        publication.appliedAt,
+      );
+    };
+
+    const updateProjectVerificationPublication = (
+      publication: VerificationPlanPublication,
+      expectedVersion: number,
+    ): void => {
+      const update = updateVerificationPlanPublication.run(
+        publication.status,
+        publication.attempts,
+        publication.lastErrorCode,
+        publication.version,
+        publication.updatedAt,
+        publication.appliedAt,
+        publication.id,
+        expectedVersion,
+      );
+      if (update.changes !== 1) {
+        throw new VerificationDomainError(
+          "PUBLICATION_VERSION_CONFLICT",
+          "The verification publication changed while the command was applied",
+        );
+      }
+    };
+
     const insertScaffold = (operation: ScaffoldOperation): void => {
       insertScaffoldOperation.run(
         operation.id,
@@ -4370,6 +4558,44 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
     const appendProviderSelectionEvent = (
       intent: ProjectProviderPreferenceChangedIntent,
+      metadata: {
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "PROJECT",
+        metadata.projectId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "PROJECT",
+        aggregateId: metadata.projectId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
+    const appendVerificationPlanEvent = (
+      intent: VerificationPlanAdoptedIntent | VerificationPlanPublicationIntent,
       metadata: {
         projectId: string;
         actor: Actor;
@@ -5754,6 +5980,127 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           type: "PROJECT_PROVIDER_PREFERENCE_CHANGED",
           replayed: false,
           selection,
+          event,
+        });
+      }
+
+      if (command.type === "ADOPT_VERIFICATION_PLAN") {
+        const project = readProject(command.payload.projectId);
+        const currentPlan = readLatestVerificationPlan(command.payload.projectId);
+        const newPlanId = createId("verificationPlan");
+        const newPublicationId = createId("verificationPlanPublication");
+        const planContent = {
+          schemaVersion: 1 as const,
+          id: newPlanId,
+          projectId: command.payload.projectId,
+          revision: (currentPlan?.revision ?? 0) + 1,
+          status: "ACTIVE" as const,
+          recipes: command.payload.proposal.recipes,
+          sourceProposalHash: command.payload.proposal.proposalHash,
+          createdAt: occurredAt,
+        };
+        const decision = decideVerificationPlanAdoption(command, {
+          now: occurredAt,
+          newPlanId,
+          newPublicationId,
+          contentHash: verificationPlanContentHash(planContent),
+          observedProposalHash: verificationPlanProposalHash(command.payload.proposal),
+          project: project ?? undefined,
+          ...(currentPlan === null ? {} : { currentPlan }),
+        });
+        const update = database
+          .prepare(
+            `UPDATE projects SET version = ?, updated_at = ?
+             WHERE id = ? AND version = ?`,
+          )
+          .run(
+            decision.project.version,
+            decision.project.updatedAt,
+            decision.project.id,
+            decision.project.version - 1,
+          );
+        if (update.changes !== 1) {
+          throw new VerificationDomainError(
+            "PROJECT_VERSION_CONFLICT",
+            "The Project changed while the verification plan was adopted",
+          );
+        }
+        insertProjectVerificationPlan(decision.plan);
+        insertProjectVerificationPublication(decision.publication);
+        const event = appendVerificationPlanEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "VERIFICATION_PLAN_ADOPTED",
+          replayed: false,
+          plan: decision.plan,
+          publication: decision.publication,
+          event,
+        });
+      }
+
+      if (
+        command.type === "COMPLETE_VERIFICATION_PLAN_PUBLICATION" ||
+        command.type === "FAIL_VERIFICATION_PLAN_PUBLICATION"
+      ) {
+        const currentPublication = readVerificationPlanPublication(command.payload.publicationId);
+        const plan = currentPublication === null ? null : readVerificationPlan(currentPublication.planId);
+        const decision =
+          command.type === "COMPLETE_VERIFICATION_PLAN_PUBLICATION"
+            ? decideVerificationPlanPublicationCompleted(command, {
+                now: occurredAt,
+                plan: plan ?? undefined,
+                publication: currentPublication ?? undefined,
+              })
+            : decideVerificationPlanPublicationFailed(command, {
+                now: occurredAt,
+                plan: plan ?? undefined,
+                publication: currentPublication ?? undefined,
+              });
+        updateProjectVerificationPublication(decision.publication, command.payload.expectedVersion);
+        const event = appendVerificationPlanEvent(decision.event, {
+          projectId: decision.plan.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: decision.event.type,
+          replayed: false,
+          plan: decision.plan,
+          publication: decision.publication,
+          event,
+        });
+      }
+
+      if (command.type === "RETRY_VERIFICATION_PLAN_PUBLICATION") {
+        const currentPublication = readVerificationPlanPublication(command.payload.publicationId);
+        const plan = currentPublication === null ? null : readVerificationPlan(currentPublication.planId);
+        const latestPlan = readLatestVerificationPlan(command.payload.projectId);
+        const decision = decideVerificationPlanPublicationRetry(command, {
+          now: occurredAt,
+          latestPlanRevision: latestPlan?.revision ?? 0,
+          plan: plan ?? undefined,
+          publication: currentPublication ?? undefined,
+        });
+        updateProjectVerificationPublication(decision.publication, command.payload.expectedVersion);
+        const event = appendVerificationPlanEvent(decision.event, {
+          projectId: decision.plan.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "VERIFICATION_PLAN_PUBLICATION_RETRIED",
+          replayed: false,
+          plan: decision.plan,
+          publication: decision.publication,
           event,
         });
       }
@@ -9179,6 +9526,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           error instanceof ReadinessDomainError ||
           error instanceof ProviderAllowanceDomainError ||
           error instanceof ProviderSelectionDomainError ||
+          error instanceof VerificationDomainError ||
           error instanceof QACompletionError ||
           error instanceof QACorrectionError ||
           error instanceof QADefectDispositionError ||
@@ -9290,6 +9638,21 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             }),
           };
         }
+        case "GET_PROJECT_VERIFICATION_PLAN": {
+          const project = readProject(queryValue.projectId);
+          if (project === null) {
+            throw new VerificationDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+          }
+          const plan = readLatestVerificationPlan(queryValue.projectId);
+          const publicationRow = selectLatestVerificationPlanPublication.get(queryValue.projectId);
+          return {
+            type: "PROJECT_VERIFICATION_PLAN",
+            project,
+            plan,
+            publication:
+              publicationRow === undefined ? null : verificationPlanPublicationFromRow(publicationRow),
+          };
+        }
         case "GET_PROJECT_READINESS_SNAPSHOT": {
           if (!readProject(queryValue.projectId)) {
             throw new ReadinessDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
@@ -9339,6 +9702,21 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 );
               }
               return { proposal, constitution, publication };
+            }),
+          };
+        case "LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS":
+          return {
+            type: "VERIFICATION_PLAN_PUBLICATIONS",
+            publications: selectPendingVerificationPlanPublications.all().map((row) => {
+              const publication = verificationPlanPublicationFromRow(row);
+              const plan = readVerificationPlan(publication.planId);
+              if (plan === null) {
+                throw new StateStoreError(
+                  "PERSISTENCE_FAILURE",
+                  "A pending verification plan publication has incomplete durable state",
+                );
+              }
+              return { plan, publication };
             }),
           };
         case "GET_SCAFFOLD_OPERATION":
@@ -9650,6 +10028,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       } catch (error: unknown) {
         if (
           error instanceof ReadinessDomainError ||
+          error instanceof VerificationDomainError ||
           error instanceof WorkItemDomainError ||
           error instanceof WorkflowDomainError ||
           error instanceof StateStoreError

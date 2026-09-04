@@ -41,6 +41,8 @@ import type {
   WorkflowDispatch,
   WorkflowSnapshot,
   WorkItemWorkspace,
+  VerificationPlan,
+  VerificationPlanPublication,
 } from "@loomrail/contracts";
 import type { WorktreeEntry } from "@loomrail/workspace";
 
@@ -118,11 +120,13 @@ export type StateQuery =
   // claim a path has to see exactly what the UNIQUE index and REGISTER_PROJECT see.
   | { type: "GET_PROJECT_BY_REPOSITORY_PATH"; repositoryPath: string }
   | { type: "GET_PROJECT_CONSTITUTION_SNAPSHOT"; projectId: string }
+  | { type: "GET_PROJECT_VERIFICATION_PLAN"; projectId: string }
   | { type: "GET_PROJECT_READINESS_SNAPSHOT"; projectId: string }
   | { type: "GET_PROJECT_MCP_PROFILES"; projectId: string }
   | { type: "LIST_PROVIDER_SESSION_MCP_SNAPSHOTS"; providerSessionId: string }
   | { type: "LIST_MCP_TOOL_CALLS"; providerSessionId: string }
   | { type: "LIST_PENDING_CONSTITUTION_PUBLICATIONS" }
+  | { type: "LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS" }
   | { type: "GET_SCAFFOLD_OPERATION"; operationId: string }
   | { type: "LIST_PENDING_SCAFFOLD_OPERATIONS" }
   | { type: "LIST_OPEN_SCAFFOLD_OPERATIONS" }
@@ -194,6 +198,12 @@ export type StateQueryResult =
   | { type: "PROJECT"; project: Project | null }
   | { type: "PROVIDER_ALLOWANCES"; snapshots: ProviderAllowanceSnapshot[] }
   | { type: "PROJECT_CONSTITUTION_SNAPSHOT"; snapshot: ProjectConstitutionSnapshot }
+  | {
+      type: "PROJECT_VERIFICATION_PLAN";
+      project: Project;
+      plan: VerificationPlan | null;
+      publication: VerificationPlanPublication | null;
+    }
   | { type: "PROJECT_READINESS_SNAPSHOT"; snapshot: ProjectReadinessSnapshot }
   | { type: "PROJECT_MCP_PROFILES"; project: Project; profiles: McpProfileView[] }
   | { type: "MCP_SESSION_SNAPSHOTS"; snapshots: McpSessionSnapshot[] }
@@ -207,6 +217,10 @@ export type StateQueryResult =
         constitution: ProjectConstitutionVersion;
         publication: ConstitutionPublication;
       }[];
+    }
+  | {
+      type: "VERIFICATION_PLAN_PUBLICATIONS";
+      publications: { plan: VerificationPlan; publication: VerificationPlanPublication }[];
     }
   | { type: "WORK_ITEM"; workItem: WorkItem | null }
   | { type: "WORKFLOW_SNAPSHOT"; snapshot: WorkflowSnapshot }
@@ -300,6 +314,8 @@ export type LocalStateIdKind =
   | "constitutionProposal"
   | "projectConstitutionVersion"
   | "constitutionPublication"
+  | "verificationPlan"
+  | "verificationPlanPublication"
   | "projectReadinessRun"
   | "readinessCheck"
   | "securityFinding"

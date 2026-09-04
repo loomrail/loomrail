@@ -19,6 +19,7 @@
     "@loomrail/contracts": "workspace:*",
     "@loomrail/context-assembly": "workspace:*",
     "@loomrail/domain": "workspace:*",
+    "@loomrail/project-readiness": "workspace:*",
     "@loomrail/workspace": "workspace:*",
     "zod": "^4.0.0"
   }

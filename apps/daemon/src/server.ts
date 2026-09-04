@@ -18,6 +18,7 @@ import {
   agentFleetResponseSchema,
   answerHumanRequestRequestSchema,
   attestProjectReadinessRequestSchema,
+  adoptVerificationPlanRequestSchema,
   adoptProjectConstitutionRequestSchema,
   apiErrorResponseSchema,
   budgetOverrideRequestSchema,
@@ -67,6 +68,7 @@ import {
   reviewStateResponseSchema,
   revokeMcpProfileGrantRequestSchema,
   retryProjectConstitutionPublicationRequestSchema,
+  retryVerificationPlanPublicationRequestSchema,
   retryProjectScaffoldRequestSchema,
   scaffoldProposalSchema,
   runProjectReadinessRequestSchema,
@@ -87,6 +89,7 @@ import {
   workItemStateSchema,
   workItemWorkspaceResponseSchema,
   workflowSnapshotSchema,
+  verificationPlanSettingsResponseSchema,
   type ApiErrorResponse,
   type DomainEvent,
   type PublishedWorkItemWorkspace,
@@ -109,6 +112,7 @@ import {
   QADefectDispositionError,
   QACorrectionError,
   ReadinessDomainError,
+  VerificationDomainError,
   renderReleaseSummary,
   ReviewFindingDispositionError,
   ScaffoldDomainError,
@@ -131,7 +135,14 @@ import {
   RepositoryScanError,
   scanProjectRepository,
 } from "@loomrail/project-constitution";
-import { assessProjectReadiness, ProjectReadinessScanError } from "@loomrail/project-readiness";
+import {
+  assessProjectReadiness,
+  ProjectReadinessScanError,
+  ProjectVerificationPublicationError,
+  ProjectVerificationScanError,
+  publishVerificationPlan,
+  scanVerificationPlanProposal,
+} from "@loomrail/project-readiness";
 import {
   ProjectScaffoldingError,
   proposeProjectScaffold,
@@ -270,6 +281,8 @@ export type StartDaemonOptions = {
   // covered only in its middle link. Production always gets HEARTBEAT_INTERVAL_MS.
   heartbeatIntervalMs?: number;
   constitutionPublisher?: typeof publishProjectConstitution;
+  /** Test seam; production writes the marker-bound owner-approved verification Plan. */
+  verificationPlanPublisher?: typeof publishVerificationPlan;
   /** Injected only for crash/failure integration tests; production uses the marker-bound publisher. */
   scaffoldPublisher?: typeof publishProjectScaffold;
 };
@@ -500,6 +513,12 @@ const sendOperationError = (
     const status = error.code === "GIT_UNAVAILABLE" ? 500 : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId));
   }
+  if (error instanceof ProjectVerificationScanError) {
+    return reply.code(409).send(createError(error.code, error.message, correlationId));
+  }
+  if (error instanceof ProjectVerificationPublicationError) {
+    return reply.code(409).send(createError(error.code, error.message, correlationId));
+  }
   if (error instanceof ProjectScaffoldingError) {
     const status =
       error.code === "INVALID_OPERATION_ID" ||
@@ -532,6 +551,10 @@ const sendOperationError = (
       error.code === "READINESS_CHECK_NOT_FOUND"
         ? 404
         : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof VerificationDomainError) {
+    const status = error.code === "PROJECT_NOT_FOUND" || error.code === "PUBLICATION_NOT_FOUND" ? 404 : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
   if (error instanceof ScaffoldDomainError) {
@@ -1006,6 +1029,114 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         }
       }
     }
+  };
+
+  const verificationPlanPublisher = options.verificationPlanPublisher ?? publishVerificationPlan;
+  const verificationPublicationCommandId = (
+    action: "complete" | "fail",
+    publicationId: string,
+    version: number,
+  ): string =>
+    `verification-plan-${action}-${createHash("sha256")
+      .update(`${publicationId}\0${version.toString()}`)
+      .digest("hex")}`;
+
+  const drainVerificationPlanPublications = async (): Promise<void> => {
+    const result = localState.query({ type: "LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS" });
+    if (result.type !== "VERIFICATION_PLAN_PUBLICATIONS") return;
+    for (const bundle of result.publications) {
+      const projectResult = localState.query({ type: "GET_PROJECT", projectId: bundle.plan.projectId });
+      const project = projectResult.type === "PROJECT" ? projectResult.project : null;
+      try {
+        if (project === null) {
+          throw new ProjectVerificationPublicationError(
+            "REPOSITORY_UNAVAILABLE",
+            "The Project repository is no longer available",
+          );
+        }
+        await verificationPlanPublisher({
+          repositoryPath: project.repositoryPath,
+          expectedTargetDigest: bundle.publication.expectedTargetDigest,
+          plan: bundle.plan,
+        });
+        localState.execute({
+          schemaVersion: 1,
+          commandId: verificationPublicationCommandId(
+            "complete",
+            bundle.publication.id,
+            bundle.publication.version,
+          ),
+          correlationId: `verification-plan-publication-${bundle.publication.id}`,
+          actor: { type: "SYSTEM", id: "verification-publisher" },
+          type: "COMPLETE_VERIFICATION_PLAN_PUBLICATION",
+          payload: {
+            publicationId: bundle.publication.id,
+            expectedVersion: bundle.publication.version,
+          },
+        });
+      } catch (error: unknown) {
+        const errorCode = error instanceof ProjectVerificationPublicationError ? error.code : "WRITE_FAILED";
+        app.log.error(
+          {
+            publicationId: bundle.publication.id,
+            projectId: bundle.publication.projectId,
+            errorCode,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+          },
+          "Verification Plan publication failed",
+        );
+        try {
+          localState.execute({
+            schemaVersion: 1,
+            commandId: verificationPublicationCommandId(
+              "fail",
+              bundle.publication.id,
+              bundle.publication.version,
+            ),
+            correlationId: `verification-plan-publication-${bundle.publication.id}`,
+            actor: { type: "SYSTEM", id: "verification-publisher" },
+            type: "FAIL_VERIFICATION_PLAN_PUBLICATION",
+            payload: {
+              publicationId: bundle.publication.id,
+              expectedVersion: bundle.publication.version,
+              errorCode,
+            },
+          });
+        } catch (recordError: unknown) {
+          app.log.error(
+            {
+              publicationId: bundle.publication.id,
+              errorName: recordError instanceof Error ? recordError.name : "UnknownError",
+            },
+            "Verification Plan publication failure could not be recorded",
+          );
+        }
+      }
+    }
+  };
+
+  const readVerificationPlanSettings = async (projectId: string) => {
+    const projectResult = localState.query({ type: "GET_PROJECT", projectId });
+    const project = projectResult.type === "PROJECT" ? projectResult.project : null;
+    if (project === null) {
+      throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+    }
+    const proposal = await scanVerificationPlanProposal({
+      projectId,
+      repositoryPath: project.repositoryPath,
+    });
+    const stored = localState.query({ type: "GET_PROJECT_VERIFICATION_PLAN", projectId });
+    if (stored.type !== "PROJECT_VERIFICATION_PLAN") {
+      throw new StateStoreError("PERSISTENCE_FAILURE", "Verification Plan settings are unavailable");
+    }
+    return verificationPlanSettingsResponseSchema.parse({
+      schemaVersion: 1,
+      projectId,
+      projectVersion: stored.project.version,
+      proposal,
+      plan: stored.plan,
+      publication: stored.publication,
+    });
   };
 
   const scaffoldPublisher = options.scaffoldPublisher ?? publishProjectScaffold;
@@ -2068,6 +2199,74 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           throw new StateStoreError("PERSISTENCE_FAILURE", "The Constitution snapshot is unavailable");
         }
         return projectConstitutionSnapshotSchema.parse(result.snapshot);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/projects/:projectId/verification-plan", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        return await readVerificationPlanSettings(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/verification-plan/adopt", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = adoptVerificationPlanRequestSchema.parse(request.body);
+        const settings = await readVerificationPlanSettings(params.projectId);
+        if (settings.proposal.proposalHash !== body.proposalHash) {
+          throw new VerificationDomainError(
+            "PROPOSAL_HASH_MISMATCH",
+            "The verification preview changed before adoption",
+          );
+        }
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "ADOPT_VERIFICATION_PLAN",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            proposal: settings.proposal,
+          },
+        });
+        await drainVerificationPlanPublications();
+        return await readVerificationPlanSettings(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/verification-plan/publication/retry", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = retryVerificationPlanPublicationRequestSchema.parse(request.body);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "RETRY_VERIFICATION_PLAN_PUBLICATION",
+          payload: {
+            projectId: params.projectId,
+            publicationId: body.publicationId,
+            expectedVersion: body.expectedVersion,
+          },
+        });
+        await drainVerificationPlanPublications();
+        return await readVerificationPlanSettings(params.projectId);
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }
@@ -3552,6 +3751,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
 
     await drainScaffoldOperations();
     await drainConstitutionPublications();
+    await drainVerificationPlanPublications();
 
     // Said out loud at startup, both of them. An unrecognised value falls back to the mock rather
     // than stopping the daemon (a typo must not), but the mock then completes stages successfully:

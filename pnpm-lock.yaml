@@ -265,6 +265,9 @@ importers:
       '@loomrail/domain':
         specifier: workspace:*
         version: link:../domain
+      '@loomrail/project-readiness':
+        specifier: workspace:*
+        version: link:../project-readiness
       '@loomrail/workspace':
         specifier: workspace:*
         version: link:../workspace

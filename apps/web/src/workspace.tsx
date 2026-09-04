@@ -30,6 +30,8 @@ import type {
   PipelineRun,
   WorkItem,
   WorkItemState,
+  VerificationPlanPublication,
+  VerificationPlanSettingsResponse,
 } from "@loomrail/contracts";
 
 import {
@@ -47,6 +49,7 @@ import {
   getProjectMcpProfiles,
   getProjectConstitution,
   getProjectReadiness,
+  getVerificationPlanSettings,
   getAttentionInbox,
   getAgentFleet,
   getInsights,
@@ -77,12 +80,14 @@ import {
   proposeNewProjectScaffold,
   retryNewProjectScaffold,
   retryProjectConstitutionPublication,
+  retryVerificationPlanPublication,
   runProjectReadiness,
   resolveAcceptance,
   resolveQACorrectionGate,
   startMockPipeline,
   scanProjectConstitution,
   setProjectProviderPreference,
+  adoptVerificationPlan,
   revokeMcpProfile,
   updateWorkItem,
   waiveQADefect,
@@ -101,6 +106,8 @@ const insightsKey = ["insights"] as const;
 const constitutionPresetsKey = ["constitution-presets"] as const;
 const projectConstitutionKey = (projectId: string) => ["projects", projectId, "constitution"] as const;
 const projectReadinessKey = (projectId: string) => ["projects", projectId, "readiness"] as const;
+const projectVerificationPlanKey = (projectId: string) =>
+  ["projects", projectId, "verification-plan"] as const;
 const projectWorkItemsKey = (projectId: string) => ["projects", projectId, "work-items"] as const;
 const workItemEventsKey = (projectId: string, workItemId: string) =>
   ["projects", projectId, "work-items", workItemId, "events"] as const;
@@ -615,6 +622,45 @@ export const useRetryProjectConstitutionPublication = () => {
       retryProjectConstitutionPublication(projectId, publication),
     onSuccess: async (_, { projectId }) => {
       await queryClient.invalidateQueries({ queryKey: projectConstitutionKey(projectId) });
+    },
+  });
+};
+
+export const useVerificationPlanSettings = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: projectId ? projectVerificationPlanKey(projectId) : ["projects", "none", "verification-plan"],
+    queryFn: () => {
+      if (!projectId) throw new Error("A project is required to load its verification Plan");
+      return getVerificationPlanSettings(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+
+export const useAdoptVerificationPlan = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (settings: VerificationPlanSettingsResponse) => adoptVerificationPlan(settings),
+    onSuccess: async (settings) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectVerificationPlanKey(settings.projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectsKey }),
+      ]);
+    },
+  });
+};
+
+export const useRetryVerificationPlanPublication = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      projectId,
+      publication,
+    }: {
+      projectId: string;
+      publication: VerificationPlanPublication;
+    }) => retryVerificationPlanPublication(projectId, publication),
+    onSuccess: async (settings) => {
+      await queryClient.invalidateQueries({ queryKey: projectVerificationPlanKey(settings.projectId) });
     },
   });
 };

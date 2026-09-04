@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { VerificationPlanPublication, VerificationPlanSettingsResponse } from "@loomrail/contracts";
 
 import {
   LocalApiError,
   guidedActivationCreateCommandId,
   getProjectProviderAllowance,
+  getVerificationPlanSettings,
   refreshProjectProviderAllowance,
   requestLocalApi,
+  retryVerificationPlanPublication,
   storeCsrfToken,
+  adoptVerificationPlan,
   waiveQADefect,
   workItemQAAttachmentUrl,
   workItemAcceptanceExportUrl,
@@ -131,6 +135,97 @@ describe("local API client", () => {
     expect(url).toBe("/api/v1/projects/project%20%2F%20one/provider-allowance/refresh");
     expect(init?.method).toBe("POST");
     expect(new Headers(init?.headers).get("x-loomrail-csrf")).toBe("csrf-fixture-token");
+  });
+
+  it("reads, adopts and retries the exact project verification Plan through authenticated routes", async () => {
+    const response: VerificationPlanSettingsResponse = {
+      schemaVersion: 1,
+      projectId: "project:one",
+      projectVersion: 3,
+      proposal: {
+        schemaVersion: 1,
+        projectId: "project:one",
+        target: { state: "ABSENT", digest: null },
+        recipes: [
+          {
+            schemaVersion: 1,
+            id: "package-test",
+            kind: "UNIT",
+            label: "Tests",
+            required: true,
+            executable: "pnpm",
+            argv: ["run", "test"],
+            cwd: ".",
+            timeoutSeconds: 300,
+            outputLimitBytes: 65_536,
+            environmentProfile: "VERIFICATION_BASELINE",
+            networkPolicy: "INHERIT_HOST",
+            provenance: {
+              source: "PACKAGE_JSON_SCRIPT",
+              manifestPath: "package.json",
+              manifestContentHash: "a".repeat(64),
+              scriptName: "test",
+              scriptBodyPreview: "vitest run",
+            },
+          },
+        ],
+        warnings: [],
+        proposalHash: "b".repeat(64),
+      },
+      plan: null,
+      publication: null,
+    };
+    fetchMock.mockImplementation(async () =>
+      Promise.resolve(
+        new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(getVerificationPlanSettings(response.projectId)).resolves.toEqual(response);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/projects/project%3Aone/verification-plan");
+
+    storeCsrfToken("csrf-fixture-token");
+    await expect(adoptVerificationPlan(response)).resolves.toEqual(response);
+    const [adoptUrl, adoptInit] = fetchMock.mock.calls[1] ?? [];
+    expect(adoptUrl).toBe("/api/v1/projects/project%3Aone/verification-plan/adopt");
+    expect(adoptInit?.method).toBe("POST");
+    if (typeof adoptInit?.body !== "string") throw new Error("Expected an adoption JSON body");
+    expect(JSON.parse(adoptInit.body)).toMatchObject({
+      schemaVersion: 1,
+      expectedProjectVersion: 3,
+      proposalHash: "b".repeat(64),
+    });
+
+    const publication: VerificationPlanPublication = {
+      schemaVersion: 1,
+      id: "verification-publication-1",
+      projectId: response.projectId,
+      planId: "verification-plan-1",
+      targetPath: ".loomrail/verification-plan.json",
+      expectedTargetDigest: null,
+      contentHash: "c".repeat(64),
+      status: "FAILED",
+      attempts: 1,
+      lastErrorCode: "WRITE_FAILED",
+      version: 2,
+      createdAt: "2026-09-05T10:00:00.000Z",
+      updatedAt: "2026-09-05T10:00:01.000Z",
+      appliedAt: null,
+    };
+    await expect(retryVerificationPlanPublication(response.projectId, publication)).resolves.toEqual(
+      response,
+    );
+    const [retryUrl, retryInit] = fetchMock.mock.calls[2] ?? [];
+    expect(retryUrl).toBe("/api/v1/projects/project%3Aone/verification-plan/publication/retry");
+    expect(retryInit?.method).toBe("POST");
+    if (typeof retryInit?.body !== "string") throw new Error("Expected a retry JSON body");
+    expect(JSON.parse(retryInit.body)).toMatchObject({
+      publicationId: publication.id,
+      expectedVersion: 2,
+    });
   });
 
   it("keeps QA attachment identifiers inside the authenticated same-origin route", () => {

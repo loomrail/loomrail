@@ -6,6 +6,7 @@ export * from "./mcp.js";
 export * from "./readiness.js";
 export * from "./review.js";
 export * from "./scaffolding.js";
+export * from "./verification.js";
 export * from "./provider-selection.js";
 export * from "./provider-allowance.js";
 export * from "./qa.js";

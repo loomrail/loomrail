@@ -728,6 +728,41 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.constitutionPublicationFailed"),
         tone: "warning",
       };
+    case "VERIFICATION_PLAN_ADOPTED":
+      return {
+        detail: t("event.verificationPlanAdoptedDetail", {
+          count: event.data.plan.recipes.length,
+          revision: event.data.plan.revision,
+        }),
+        icon: "settings",
+        label: t("event.verificationPlanAdopted"),
+        tone: "accent",
+      };
+    case "VERIFICATION_PLAN_PUBLICATION_APPLIED":
+      return {
+        detail: t("event.verificationPlanPublicationAppliedDetail", {
+          revision: event.data.plan.revision,
+        }),
+        icon: "check",
+        label: t("event.verificationPlanPublicationApplied"),
+        tone: "success",
+      };
+    case "VERIFICATION_PLAN_PUBLICATION_FAILED":
+      return {
+        detail: event.data.publication.lastErrorCode ?? t("error.unknown"),
+        icon: "warning",
+        label: t("event.verificationPlanPublicationFailed"),
+        tone: "warning",
+      };
+    case "VERIFICATION_PLAN_PUBLICATION_RETRIED":
+      return {
+        detail: t("event.verificationPlanPublicationRetriedDetail", {
+          revision: event.data.plan.revision,
+        }),
+        icon: "clock",
+        label: t("event.verificationPlanPublicationRetried"),
+        tone: "accent",
+      };
     case "PROJECT_READINESS_ASSESSED":
       return {
         detail: t("event.readinessAssessedDetail", {

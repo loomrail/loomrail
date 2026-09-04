@@ -29,6 +29,7 @@ import {
   workItemsResponseSchema,
   workItemWorkspaceResponseSchema,
   workflowSnapshotSchema,
+  verificationPlanSettingsResponseSchema,
   guidedActivationContract,
   type FixtureProjectId,
   type AcceptanceAction,
@@ -57,6 +58,8 @@ import {
   type PipelineRun,
   type WorkItem,
   type WorkItemState,
+  type VerificationPlanPublication,
+  type VerificationPlanSettingsResponse,
 } from "@loomrail/contracts";
 
 type RuntimeSchema<T> = {
@@ -235,6 +238,45 @@ export const retryProjectConstitutionPublication = async (
   requestLocalApi(
     `/api/v1/projects/${encodeURIComponent(projectId)}/constitution/publication/retry`,
     projectConstitutionSnapshotSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        publicationId: publication.id,
+        expectedVersion: publication.version,
+      }),
+    },
+  );
+
+export const getVerificationPlanSettings = async (projectId: string) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/verification-plan`,
+    verificationPlanSettingsResponseSchema,
+  );
+
+export const adoptVerificationPlan = async (settings: VerificationPlanSettingsResponse) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(settings.projectId)}/verification-plan/adopt`,
+    verificationPlanSettingsResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: settings.projectVersion,
+        proposalHash: settings.proposal.proposalHash,
+      }),
+    },
+  );
+
+export const retryVerificationPlanPublication = async (
+  projectId: string,
+  publication: VerificationPlanPublication,
+) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/verification-plan/publication/retry`,
+    verificationPlanSettingsResponseSchema,
     {
       method: "POST",
       body: JSON.stringify({

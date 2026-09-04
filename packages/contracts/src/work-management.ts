@@ -166,6 +166,20 @@ import {
   requestProjectScaffoldCommandSchema,
   retryProjectScaffoldCommandSchema,
 } from "./scaffolding.js";
+import {
+  adoptVerificationPlanCommandSchema,
+  completeVerificationPlanPublicationCommandSchema,
+  failVerificationPlanPublicationCommandSchema,
+  retryVerificationPlanPublicationCommandSchema,
+  verificationPlanAdoptedEventSchema,
+  verificationPlanAdoptedResultSchema,
+  verificationPlanPublicationAppliedEventSchema,
+  verificationPlanPublicationAppliedResultSchema,
+  verificationPlanPublicationFailedEventSchema,
+  verificationPlanPublicationFailedResultSchema,
+  verificationPlanPublicationRetriedEventSchema,
+  verificationPlanPublicationRetriedResultSchema,
+} from "./verification.js";
 
 export const fixtureProjectIdSchema = z.enum(["web-app-a", "api-service-b"]);
 export const projectStatusSchema = z.enum(["PROVISIONING", "ACTIVE", "ARCHIVED"]);
@@ -354,6 +368,10 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   projectReadinessAssessedEventSchema,
   projectReadinessAttestedEventSchema,
   projectProviderPreferenceChangedEventSchema,
+  verificationPlanAdoptedEventSchema,
+  verificationPlanPublicationAppliedEventSchema,
+  verificationPlanPublicationFailedEventSchema,
+  verificationPlanPublicationRetriedEventSchema,
   providerAllowanceRecordedEventSchema,
   mcpProfileConsentedEventSchema,
   mcpGrantChangedEventSchema,
@@ -554,6 +572,10 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   recordProjectReadinessAssessmentCommandSchema,
   attestProjectReadinessCheckCommandSchema,
   setProjectProviderPreferenceCommandSchema,
+  adoptVerificationPlanCommandSchema,
+  completeVerificationPlanPublicationCommandSchema,
+  failVerificationPlanPublicationCommandSchema,
+  retryVerificationPlanPublicationCommandSchema,
   recordProviderAllowanceCommandSchema,
   confirmMcpProfileCommandSchema,
   setMcpProfileGrantCommandSchema,
@@ -662,6 +684,10 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   projectReadinessAssessedResultSchema,
   projectReadinessAttestedResultSchema,
   projectProviderPreferenceChangedResultSchema,
+  verificationPlanAdoptedResultSchema,
+  verificationPlanPublicationAppliedResultSchema,
+  verificationPlanPublicationFailedResultSchema,
+  verificationPlanPublicationRetriedResultSchema,
   providerAllowanceRecordedResultSchema,
   mcpProfileConsentedResultSchema,
   mcpGrantChangedResultSchema,
