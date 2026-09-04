@@ -23,25 +23,29 @@ node --version
 
 Create a separate evaluation directory. Do not begin inside a repository you care about.
 
+<!-- loomrail-guided-activation-v1:start -->
+
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail setup
-npx loomrail start
+npx loomrail try
 ```
 
-`next` selects the public pre-alpha channel explicitly. The launcher binds to `127.0.0.1` and opens a one-time
-authenticated URL. New projects use **Auto**, which admits only an exact verified and signed-in provider CLI. The
-current candidate has no verified live row, so Auto remains on Mock; the next section also makes that choice explicit
-before any workflow starts. Keep the terminal open.
+<!-- loomrail-guided-activation-v1:end -->
 
-The Chromium download is a one-time Browser QA prerequisite. It is isolated from your signed-in browser profile. In
-the setup prompt, press Enter for the recommended **Mock walkthrough**. Setup composes the read-only diagnostics with
-the Chromium and route checks; it changes and persists nothing. A new database or missing live-provider login is safe
-for the Mock route. See the [operations guide](OPERATIONS.md) for machine-readable setup, diagnostic codes, upgrade,
-rollback, backup, and uninstall.
+`next` selects the public pre-alpha channel explicitly. The launcher binds to `127.0.0.1` and opens a one-time
+authenticated `/try` URL. New projects use **Auto**, which admits only an exact verified and signed-in provider CLI,
+but this guided route always requires an explicit **Mock** choice before any workflow starts. Exact live Codex and
+Claude Code rows are currently scoped to macOS arm64; Windows live-provider verification remains pending. Keep the
+terminal open.
+
+The Chromium download is a one-time Browser QA prerequisite. It is isolated from your signed-in browser profile.
+`loomrail try` first composes the read-only diagnostics with Chromium and Mock-route checks. A failed preflight starts
+nothing and writes nothing. A ready preflight states that it will create Loomrail-owned state and logs, then starts the
+loopback daemon. See the [operations guide](OPERATIONS.md) for the separate machine-readable `setup` command,
+diagnostic codes, upgrade, rollback, backup, and uninstall.
 
 Provider versions are fail-closed independently of setup. Read the
 [compatibility matrix](PROVIDER-COMPATIBILITY.md) before any live-provider route.
@@ -49,13 +53,13 @@ Provider versions are fail-closed independently of setup. Read the
 If the browser must not open automatically:
 
 ```bash
-npx loomrail --no-open --port 4176
+npx loomrail try --no-open --port 4176
 ```
 
 Open the printed URL in a browser on the same machine within 60 seconds. `--no-open` does not enable remote access.
 
 To put the launcher on your `PATH` instead, run `npm install -g --ignore-scripts loomrail@next`, then
-`npx playwright install chromium`, `loomrail setup`, and `loomrail start`. The project-local installation above is
+`npx playwright install chromium` and `loomrail try`. The project-local installation above is
 recommended for evaluation because the selected pre-alpha channel remains visible.
 
 The package already includes the pinned Context7 MCP server. You do not need to install it globally or run `npx` for
@@ -63,10 +67,10 @@ it; configuration remains an explicit owner action in **Settings → MCP connect
 
 ## 2. Complete the mock delivery
 
-1. Choose **Initialize demo workspace**.
-2. Open **Settings → AI provider**, choose **Mock**, and close Settings.
-3. Create a task with a concrete outcome and observable acceptance criteria.
-4. Move it to **Ready**, then choose **Start workflow**.
+1. Choose **Prepare demo workspace**.
+2. Choose **Use Mock for this project**.
+3. Create the exact guided task, then move it to **Ready**.
+4. Start the guided workflow with the displayed Loomrail task budget and Fast model tier.
 5. Open **Attention**, answer the blocking Human Request, and approve the explicit mock budget increase when the run
    pauses.
 6. When acceptance appears in **Attention**, open its task, inspect Review and QA evidence, then accept or return the

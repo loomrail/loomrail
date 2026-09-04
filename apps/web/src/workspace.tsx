@@ -39,6 +39,7 @@ import {
   answerHumanRequest,
   controlPipeline,
   createWorkItem,
+  createGuidedActivationWorkItem,
   disposeReviewFinding,
   getProviderCapabilities,
   getProjectProviderSelection,
@@ -640,6 +641,19 @@ export const useCreateWorkItem = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: CreateWorkItemInput) => createWorkItem(input),
+    onSuccess: async (workItem) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
+      ]);
+    },
+  });
+};
+
+export const useCreateGuidedActivationWorkItem = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId: string) => createGuidedActivationWorkItem(projectId),
     onSuccess: async (workItem) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),

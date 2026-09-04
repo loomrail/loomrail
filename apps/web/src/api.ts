@@ -28,6 +28,7 @@ import {
   workItemsResponseSchema,
   workItemWorkspaceResponseSchema,
   workflowSnapshotSchema,
+  guidedActivationContract,
   type FixtureProjectId,
   type AcceptanceAction,
   type AcceptancePackage,
@@ -601,12 +602,15 @@ export type CreateWorkItemInput = {
   type: WorkItem["type"];
 };
 
-export const createWorkItem = async (input: CreateWorkItemInput): Promise<WorkItem> => {
+export const createWorkItem = async (
+  input: CreateWorkItemInput,
+  commandId: string = crypto.randomUUID(),
+): Promise<WorkItem> => {
   const result = await requestLocalApi("/api/v1/work-items", stateCommandResultSchema, {
     method: "POST",
     body: JSON.stringify({
       schemaVersion: 1,
-      commandId: crypto.randomUUID(),
+      commandId,
       projectId: input.projectId,
       parentId: null,
       type: input.type,
@@ -623,6 +627,26 @@ export const createWorkItem = async (input: CreateWorkItemInput): Promise<WorkIt
   }
   return result.workItem;
 };
+
+export const guidedActivationCreateCommandId = async (projectId: string): Promise<string> => {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${guidedActivationContract.createCommandId}:${projectId}`),
+  );
+  const projectDigest = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+  return `${guidedActivationContract.createCommandId}:${projectDigest}`;
+};
+
+export const createGuidedActivationWorkItem = async (projectId: string): Promise<WorkItem> =>
+  createWorkItem(
+    {
+      ...guidedActivationContract.task,
+      projectId,
+    },
+    await guidedActivationCreateCommandId(projectId),
+  );
 
 export const moveWorkItem = async (workItem: WorkItem, targetState: WorkItemState): Promise<WorkItem> => {
   const result = await requestLocalApi(

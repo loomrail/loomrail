@@ -299,7 +299,7 @@ const run = async () => {
     ) {
       throw new Error("the packaged diagnostic did not fail closed for an unusable data path");
     }
-    launcher = spawn(process.execPath, [binaryPath, "--no-open", "--port", String(port)], {
+    launcher = spawn(process.execPath, [binaryPath, "try", "--no-open", "--port", String(port)], {
       cwd: installDirectory,
       env: diagnosticEnvironment,
     });
@@ -319,8 +319,8 @@ const run = async () => {
     }
 
     // Headless installs authenticate through the printed one-time URL.
-    if (!output.includes("#bootstrap=")) {
-      throw new Error(`the launcher did not print a sign-in URL:\n${output}`);
+    if (!output.includes("/try#bootstrap=") || !output.includes("guided demo: READY")) {
+      throw new Error(`the guided launcher did not print its exact ready sign-in URL:\n${output}`);
     }
 
     const activeExport = spawnSync(process.execPath, [binaryPath, "logs", "export"], {
@@ -370,7 +370,7 @@ const run = async () => {
     }
 
     process.stdout.write(
-      `Release check passed: samples, setup, receipt, installed files and log lifecycle match; ${tarball} runs from a clean install.\n`,
+      `Release check passed: samples, setup, guided try, receipt, installed files and log lifecycle match; ${tarball} runs from a clean install.\n`,
     );
   } finally {
     launcher?.kill("SIGTERM");

@@ -10,6 +10,12 @@ implementation plans.
 - Close every macOS and Windows release gate without bypassing protected source checks.
 - Admit exact live Codex and Claude Code CLI versions only after separately authorized, quota-bearing compatibility
   evidence; keep unknown versions fail-closed.
+- Replace divergent install copy with one canonical safe entry route and a zero-quota guided mission built from the
+  existing setup checks, bundled Task recipes, measured QA, and owner Acceptance Package.
+- Show structured Codex/Claude allowance windows with an explicit remaining percentage, reset time, and freshness,
+  kept separate from Loomrail's authoritative task/project budgets.
+- Promote owner-approved build/test/lint/integration/E2E recipes to snapshot-bound evidence; required failed, errored,
+  or stale checks block Acceptance and never grant merge/deploy authority.
 - Complete one private dogfood epic across discovery, planning, implementation, independent review, measured Browser
   QA, restart recovery, bounded budget, criterion-linked acceptance, and owner approval.
 - Preserve the completed final review's zero-P0/P1 boundary and produce trusted registry provenance before any stable
@@ -17,6 +23,8 @@ implementation plans.
 
 ## Next — connect the proven loop to normal repository delivery
 
+- Validate an optional, bounded Guided Launch service around repository readiness, verification setup, the first live
+  route, and Acceptance Package review; keep the Apache-2.0 local workflow fully useful.
 - Prepare GitHub pull requests with linked issues and required checks while preserving explicit owner merge authority.
 - Strengthen isolated execution and platform packaging without describing a worktree or container as a complete
   security sandbox.

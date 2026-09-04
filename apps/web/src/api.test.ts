@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   LocalApiError,
+  guidedActivationCreateCommandId,
   requestLocalApi,
   storeCsrfToken,
   waiveQADefect,
@@ -103,6 +104,14 @@ describe("local API client", () => {
     expect(workItemAcceptanceExportUrl("work item/1", "package:1")).toBe(
       "/api/v1/work-items/work%20item%2F1/acceptance/package%3A1/export",
     );
+  });
+
+  it("derives one bounded idempotency key for each guided project", async () => {
+    const first = await guidedActivationCreateCommandId("project-one");
+    expect(await guidedActivationCreateCommandId("project-one")).toBe(first);
+    expect(await guidedActivationCreateCommandId("project-two")).not.toBe(first);
+    expect(first).toMatch(/^guided-activation-v1-create-task:[a-f0-9]{64}$/);
+    expect(first.length).toBeLessThanOrEqual(128);
   });
 
   it("sends an optimistic owner waiver for the exact QA defect", async () => {

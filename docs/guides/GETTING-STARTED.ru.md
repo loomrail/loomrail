@@ -23,25 +23,28 @@ node --version
 
 Создайте отдельный каталог для проверки. Не начинайте внутри важного репозитория.
 
+<!-- loomrail-guided-activation-v1:start -->
+
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail setup
-npx loomrail start
+npx loomrail try
 ```
 
+<!-- loomrail-guided-activation-v1:end -->
+
 Тег `next` явно выбирает публичный pre-alpha канал. Launcher слушает только `127.0.0.1` и открывает одноразовую
-авторизованную ссылку. Новый проект использует **Авто**, но Loomrail допускает только exact verified CLI с активным
-входом. В текущем candidate нет verified live row, поэтому Авто остаётся на Mock; в следующем разделе вы также явно
-зафиксируете этот выбор до запуска workflow. Не закрывайте терминал.
+авторизованную ссылку `/try`. Новый проект использует **Авто**, но guided route до запуска workflow требует явно
+выбрать **Mock**. Exact live rows Codex и Claude Code пока относятся только к macOS arm64; live-provider проверка на
+Windows остаётся отложенным гейтом. Не закрывайте терминал.
 
 Chromium скачивается один раз как обязательная среда Browser QA и не использует ваш авторизованный browser profile.
-В setup prompt нажмите Enter для рекомендуемого **Mock walkthrough**. Setup объединяет read-only диагностику с
-проверками Chromium и выбранного маршрута; он ничего не меняет и не сохраняет. Новая база или отсутствующий
-live-provider login безопасны для Mock route. Machine-readable setup, коды диагностики, upgrade, rollback, backup и
-uninstall описаны в [operations guide](OPERATIONS.ru.md).
+`loomrail try` сначала объединяет read-only диагностику с проверками Chromium и Mock route. Если preflight не прошёл,
+ничего не запускается и не записывается. При готовности команда сообщает о создании Loomrail-owned state и logs,
+после чего запускает loopback daemon. Отдельная machine-readable команда `setup`, коды диагностики, upgrade, rollback,
+backup и uninstall описаны в [operations guide](OPERATIONS.ru.md).
 
 Provider version проверяется fail closed независимо от setup. Перед любым live route прочитайте
 [compatibility matrix](PROVIDER-COMPATIBILITY.ru.md).
@@ -49,14 +52,14 @@ Provider version проверяется fail closed независимо от se
 Чтобы браузер не открывался автоматически:
 
 ```bash
-npx loomrail --no-open --port 4176
+npx loomrail try --no-open --port 4176
 ```
 
 Откройте напечатанную ссылку в браузере на той же машине в течение 60 секунд. Флаг `--no-open` не включает удалённый
 доступ.
 
 Если нужен глобальный бинарник, выполните `npm install -g --ignore-scripts loomrail@next`, затем
-`npx playwright install chromium`, `loomrail setup` и `loomrail start`. Для проверки продукта рекомендуется локальная
+`npx playwright install chromium` и `loomrail try`. Для проверки продукта рекомендуется локальная
 установка выше: выбранный pre-alpha канал остаётся явным.
 
 Pinned Context7 MCP server уже входит в пакет. Его не нужно устанавливать глобально или запускать через `npx`;
@@ -64,10 +67,10 @@ Pinned Context7 MCP server уже входит в пакет. Его не нуж
 
 ## 2. Пройдите mock-маршрут
 
-1. Выберите **Инициализировать demo-пространство**.
-2. Откройте **Настройки → ИИ-провайдер**, выберите **Mock** и закройте настройки.
-3. Создайте задачу с конкретным результатом и наблюдаемыми критериями приёмки.
-4. Переместите её в **Готово к работе**, затем нажмите **Запустить процесс**.
+1. Нажмите **Подготовить демо-проект**.
+2. Нажмите **Выбрать Mock для проекта**.
+3. Создайте точную demo-задачу и переведите её в **Ready**.
+4. Запустите demo-процесс с показанными бюджетом задачи Loomrail и уровнем модели Fast.
 5. Откройте **Внимание**, ответьте на блокирующий Human Request и одобрите явное увеличение mock-бюджета, когда
    маршрут остановится.
 6. Когда приёмка появится во **Внимании**, откройте её задачу, проверьте доказательства Review и QA, затем примите

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { ProviderAvailabilitySnapshot } from "@loomrail/daemon";
+import { guidedActivationContract } from "@loomrail/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -136,10 +137,15 @@ describe("Loomrail doctor", () => {
   });
 
   it("keeps help bounded and points exact-path disclosure to its explicit command", () => {
-    expect(formatCliHelp().join("\n")).toContain("setup [--mode mock|live] [--json]");
-    expect(formatCliHelp().join("\n")).toContain("doctor [--json]");
-    expect(formatCliHelp().join("\n")).toContain("logs export");
-    expect(formatCliHelp().join("\n")).toContain("logs delete");
-    expect(formatCliHelp().join("\n")).toContain("data-path");
+    const help = formatCliHelp().join("\n");
+    expect(help).toContain("setup [--mode mock|live] [--json]");
+    expect(help).toContain("try [--no-open] [--port N]");
+    expect(help).toContain("doctor [--json]");
+    expect(help).toContain("logs export");
+    expect(help).toContain("logs delete");
+    expect(help).toContain("data-path");
+    for (const command of guidedActivationContract.install.commands) {
+      expect(help).toContain(`  ${command}`);
+    }
   });
 });

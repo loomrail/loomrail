@@ -1,6 +1,7 @@
 # Loomrail — зафиксированные продуктовые и архитектурные решения
 
 **Дата фиксации:** 2026-08-22
+**Последнее дополнение:** 2026-09-04 — activation, provider allowance и project verification
 **Статус:** approved baseline
 **Основание:** последовательный product/architecture grilling с владельцем проекта
 
@@ -93,8 +94,8 @@ Rust, Tauri и Electron не входят в Phase 0.
 
 ### AD-005 — Provider capabilities, а не фальшивая одинаковость
 
-Каждый adapter сообщает поддерживаемые start/resume/steer/interrupt/approval/usage/browser capabilities. UI не
-показывает неподдерживаемое действие как рабочее.
+Каждый adapter сообщает поддерживаемые start/resume/steer/interrupt/approval/usage/rate-limit-window/browser
+capabilities. UI не показывает неподдерживаемое действие как рабочее.
 
 ### AD-006 — Разделение профиля, запуска и provider session
 
@@ -275,6 +276,18 @@ Actual provider usage, provider estimate и Loomrail estimate визуально
 Повторяющиеся tool calls, одинаковые failures, исчерпание fix/review rounds и отсутствие прогресса переводят run в
 attention state вместо бесконечного auto-continue.
 
+### BD-004 — Provider allowance не является бюджетом Loomrail
+
+Если официальный provider surface отдаёт rate-limit windows, adapter может нормализовать bucket, `usedPercent`,
+`windowDurationMins`, `resetsAt`, `observedAt` и freshness. UI явно подписывает «использовано» либо «осталось» и
+показывает `LIVE | STALE | UNAVAILABLE`; остаток вычисляется только из provider-reported usage, а не из локальной
+оценки.
+
+Provider allowance — внешний advisory capacity signal. Он не заменяет и не изменяет authoritative hard budgets из
+BD-001, не доказывает стоимость и сам по себе не отменяет уже разрешённую работу. Фактически достигнутый provider
+limit создаёт typed attention state с известным reset time, если provider его сообщил. Account identifiers,
+credentials и raw provider status output не сохраняются.
+
 ## 9. Browser QA
 
 ### QD-001 — Общий BrowserDriver
@@ -293,6 +306,17 @@ filesystem и callback messages не переходят через эту гра
 
 Сообщение агента «всё работает» не проходит QA. Evidence связано с точным code snapshot и становится stale после
 существенного изменения.
+
+### QD-003 — Versioned Project Verification Plan
+
+Кроме Browser QA, Project может иметь owner-approved build/test/lint/integration/E2E recipes. Onboarding scanner
+только предлагает найденные команды: он не исполняет их до preview exact executable/argv, working directory,
+environment/network policy и явного подтверждения владельца. Принятая revision хранится в `.loomrail/` и входит в
+policy snapshot запуска.
+
+Verification result создаёт daemon-owned evidence с recipe revision, exact tested tree, platform, exit status,
+duration и bounded/redacted output. Изменение tree делает результат `STALE`; обязательная failing, error либо stale
+проверка блокирует Acceptance. Запуск tests не даёт authority на commit, push, merge или deploy.
 
 ## 10. Permissions, privacy и secrets
 
@@ -370,6 +394,19 @@ In-app Inbox обязателен. macOS/Windows notifications использу�
 
 Перед migrations создаются local snapshots. Workspace экспортируется в versioned archive без secrets, `.env`, Git
 repository и provider credentials. Import сначала валидируется и показывает состав данных.
+
+### UXD-007 — Бесплатная guided activation mission
+
+Публичный entrypoint ведёт не в общую документацию, а в один canonical пошаговый маршрут с локальным progress,
+маленькими действиями, inline-пояснениями и copy controls. Одна команда или один copy-block могут открыть onboarding,
+но не скрывают install scripts, provider login, Chromium download, запись repository или иной authority-bearing шаг.
+Landing, README, RU/EN guides и CLI help получают install sequence из одного versioned contract.
+
+Первый zero-quota маршрут использует Mock и готовую Q10 Task recipe, проходит Human Request, budget, Review,
+измеряемый QA и owner Acceptance, затем показывает Acceptance Package. Progress на marketing page хранится только
+локально; внутри приложения он всегда выводится из durable domain state и после restart продолжается с той же точки.
+Дальше владелец явно выбирает: продолжить бесплатно, подключить свой repository/provider или запросить paid guided
+onboarding.
 
 ## 12. Утверждённая граница Phase 0
 
@@ -544,6 +581,18 @@ checkpoint; любой writer конфликтует и с writer, и с reader.
 показывает Task, Project, точную роль, stage, provider, running/waiting status и machine-readable причину ожидания,
 но не хранит собственную очередь и не меняет permissions, budget или acceptance. Reconnect и restart перестраивают
 тот же view из SQLite и текущей validated scheduling policy.
+
+### PD-016 — Платный слой продаёт внедрение и совместную работу, а не безопасность core
+
+Apache-2.0 local Community остаётся полезным полным accountable workflow: durable state, budgets, Review, QA,
+Acceptance, Mock и samples не становятся искусственными paid gates. Ближайшая проверяемая коммерческая ступень —
+bounded `Guided Launch`: readiness/security review проекта, предложение Constitution и verification policy, настройка
+первого реального маршрута, разбор Acceptance Package и ограниченный срок поддержки/обучения.
+
+Recurring Team/Cloud tier появляется только после отдельных cloud/team решений и продаёт новую операционную ценность:
+collaboration, RBAC, shared policies/audit, hosted or remote workers, enterprise identity/retention и SLA. Loomrail не
+обещает lifetime updates за один платёж, экономию «в X раз», число клиентов или provider compatibility без
+проверяемой методики и evidence.
 
 ## 14. Отложенные решения
 

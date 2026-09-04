@@ -2,7 +2,10 @@
 
 **Дата:** 2026-08-22
 
-**Статус:** approved product direction, brand and Phase 0 boundary; M2 local kernel complete on macOS
+**Последнее дополнение:** 2026-09-04 — Q15 canonical activation реализован локально; Q16–Q17 approved
+
+**Статус:** approved product direction; Q15 non-landing slice local-complete; protected landing, CI evidence,
+Windows live providers и stable gates pending
 
 **Продукт:** Loomrail
 
@@ -263,6 +266,8 @@ Raw event помогает расследовать adapter drift. UI и workflo
 - answer provider-native user-input/permission request;
 - select model/reasoning profile where supported;
 - report usage as `actual`, `provider_estimate` или `unavailable`;
+- report structured provider rate-limit windows where officially supported, including usage, duration, reset and
+  observation time;
 - reconcile sessions after daemon restart;
 - expose observed external sessions without promising unsupported control.
 
@@ -277,7 +282,7 @@ UI получает `ProviderCapabilities` для конкретной верс�
 
 ```text
 canResume, canFork, canSteer, canInterrupt, canReview, canRequestInput,
-canApproveTools, canReportUsage, canDiscoverExternal, canAttachExternal
+canApproveTools, canReportUsage, canReportRateLimits, canDiscoverExternal, canAttachExternal
 ```
 
 Provider compatibility matrix тестируется на поддерживаемых версиях, а не хранится как маркетинговое обещание.
@@ -583,6 +588,24 @@ Mapping tier -> конкретная model хранится в provider config. 
 - actual и estimated usage визуально различаются;
 - эффективность multi-agent workflow сравнивается с single-agent baseline в eval suite.
 
+### 12.4. Provider allowance
+
+Provider allowance и Loomrail budget показаны рядом, но никогда не объединяются в одну шкалу:
+
+- allowance — внешний advisory signal из официального provider interface;
+- budget — внутренний hard limit, которым владеет Loomrail;
+- adapter нормализует bucket, used/remaining percentage, window duration, reset time, `observedAt` и
+  `LIVE | STALE | UNAVAILABLE`;
+- UI всегда пишет «использовано» или «осталось», а не показывает неоднозначный процент;
+- scheduler сначала использует allowance только для объяснимой рекомендации и планирования новой работы;
+- фактический provider rate-limit создаёт typed attention state, но stale/missing allowance не подменяет budget и не
+  становится скрытым запретом;
+- account identity, credentials и raw status-line/terminal output не входят в durable record.
+
+Codex получает такие данные через отдельную capability официального App Server, Claude Code — через безопасный
+structured status-data bridge там, где текущая версия и auth mode его поддерживают. ANSI/terminal scraping и
+перезапись пользовательского status-line configuration запрещены.
+
 ## 13. Independent review, QA и acceptance
 
 ### 13.1. Code review
@@ -598,7 +621,16 @@ Mapping tier -> конкретная model хранится в provider config. 
 
 Reviewer read-only и не меняет код или evaluator.
 
-### 13.2. Browser QA
+### 13.2. Project verification и Browser QA
+
+Каждый Project может иметь versioned `VerificationPlan` с owner-approved build/test/lint/integration/E2E recipes.
+Scanner только предлагает найденные команды и до принятия revision ничего не исполняет. Recipe фиксирует exact
+executable/argv, working directory, timeout, environment/network policy и обязательность; shell interpolation,
+неявный package install и lifecycle setup не добавляются.
+
+Каждый `VerificationRun` связывает recipe revision, exact tested tree, platform, exit status, duration и
+bounded/redacted output. Результат становится `STALE` после изменения tree. Required `FAILED | ERROR | STALE` не
+может открыть Acceptance. Запуск проверки не получает commit/push/merge/deploy authority.
 
 QA работает через общий `BrowserDriver`:
 
@@ -713,6 +745,7 @@ Settings
 - active runs и queue;
 - blocked/at-risk tasks;
 - current budget burn;
+- provider allowance windows и freshness для подключённых adapters, отдельно от budget burn;
 - recently completed/failed;
 - quick start: Epic / Quick Task.
 
@@ -725,7 +758,7 @@ Settings
 - Epic/Feature tree и collapsible child WorkItem;
 - filters: Project, Epic, stage, agent, provider, risk, priority, attention;
 - saved views позднее совместимы с GitHub/YouTrack sync;
-- card показывает current stage, assignee squad, provider, budget state, blocker, review/QA status;
+- card показывает current stage, assignee squad, provider, budget state, blocker, review/verification/QA status;
 - drag-and-drop вызывает domain command и объясняет invalid transition.
 
 ### 15.4. Epic Workspace
@@ -750,6 +783,10 @@ Tabs/secondary views: Overview, Workflow, Runs, Changes, Review, QA, Activity. R
 раскрывается по запросу и не перекрывает продуктовый timeline. `Send guidance` — вспомогательное действие, а не
 source of truth.
 
+Компактная status strip показывает provider/model, доступные 5-hour/7-day/other windows с явно подписанным остатком и
+reset time, freshness данных, Loomrail task/project budget и состояние обязательных tests. Недоступный provider bucket
+показывается как `Unavailable`, а не как `0%`.
+
 ### 15.6. Attention Inbox
 
 - group by `Blocking now`, `Approvals`, `Questions`, `Manual actions`, `Soon`;
@@ -764,8 +801,9 @@ source of truth.
 
 Review surface: file tree, unified/split diff, inline findings, severity filters, accept/waive/return controls.
 
-QA surface: scenario list, browser preview, viewport, screenshots, trace, console/network panels, defects и retest
-history. Evidence связано с точным commit/diff snapshot; после изменения кода оно может стать stale.
+QA surface: группы build/test/lint/integration/E2E и Browser QA, exact approved recipe, passed/failed counts, duration,
+platform, bounded logs, scenario list, browser preview, viewport, screenshots, trace, console/network panels, defects
+и retest history. Evidence связано с точным commit/diff snapshot; после изменения кода оно становится явно `STALE`.
 
 ### 15.8. Mobile companion
 
@@ -1002,6 +1040,16 @@ docs/
 9. выбрать trust/budget/workspace policy;
 10. выполнить mocked/sandboxed test Task;
 11. увидеть первый managed run и Attention request.
+
+До live-provider пути публичная `/try`-поверхность предлагает zero-quota guided mission: один canonical safe copy
+block открывает setup, Q8 проверяет среду, Q10 даёт готовую Task recipe, а приложение проводит пользователя через
+Human Request, budget, Review, measured QA и owner Acceptance до экспортируемого Acceptance Package. Каждый шаг имеет
+один outcome, primary action, progress и короткое объяснение «зачем».
+
+Marketing progress хранится только локально и не является workflow truth. После открытия приложения progress
+выводится из durable state и переживает restart. Landing, README, RU/EN guides и CLI help не содержат вручную
+расходящихся install sequences: они используют один versioned install contract. Одна команда не означает скрытую
+установку Chromium, provider login, запись repository, запуск tests или иной authority-bearing side effect.
 
 ### 18.2. Distribution
 
@@ -1264,6 +1312,9 @@ full build/typecheck/unit, 52/52 E2E, production audit и clean-install tarball.
 - package provenance и update/rollback strategy;
 - provider compatibility matrix;
 - sample repositories/workflows/roles;
+- canonical safe install contract и бесплатная guided activation mission;
+- provider allowance visibility, явно отделённая от hard budgets Loomrail;
+- owner-approved Project verification recipes и snapshot-bound test evidence;
 - English docs и i18n-ready UI;
 - opt-in telemetry/crash reporting;
 - public issue templates/roadmap.
@@ -1432,6 +1483,85 @@ slice, correction path, Standards/Spec review и доступный release veri
 одной Task с cancelled precursor, а не требуемым private Epic с 2–3 зависимыми Task; Windows live-provider rows,
 private dogfood, protected landing и trusted publisher provenance остаются отдельными stable gates.
 
+### Phase 8 approved extension — Q15–Q17
+
+[Исследование onboarding и соседних local agent orchestrators](../research/competitor-landscape-2026-09-04.ru.md) от
+2026-09-04 добавляет три bounded результата в текущую очередь Public Alpha hardening. Они не переоткрывают
+завершённую историю Q14 и не разрешают publish до прежних Windows/private-dogfood/provenance gates. Перед реализацией
+каждого результата создаются отдельные spec и implementation plan.
+
+#### Q15 — Canonical activation route
+
+**Outcome:** новый пользователь без регистрации и расхода provider quota проходит первую доказуемую поставку, а все
+публичные поверхности показывают один безопасный install contract.
+
+**Deliverables:**
+
+- устранить drift версии и install sequence между landing, README, RU/EN guides и CLI help;
+- дать одну copy action для canonical safe route, не скрывая Chromium install или другой owner action;
+- собрать `/try` из Q8 read-only setup, Q10 sample/Task recipe и существующего durable workflow;
+- провести пользователя по маленьким шагам через Human Request, budget, Review, measured QA и owner Acceptance;
+- закончить маршрутом Acceptance Package и тремя явными продолжениями: free local, connect repo/provider, paid guided
+  onboarding;
+- хранить progress лендинга только локально, а in-product progress выводить только из durable domain state;
+- проверить RU/EN, light/dark, keyboard, narrow viewport и restart/resume.
+
+**Exit gate:** clean macOS и Windows environment стартуют из одного canonical блока; zero-quota пользователь создаёт
+seeded Task без пустого brief, видит фактические Review/QA results, переживает restart и сам принимает или возвращает
+результат. Setup не устанавливает зависимости, не логинит provider и не пишет repository скрыто.
+
+**Implementation checkpoint 2026-09-04:** один runtime-validated contract теперь владеет install commands, точной
+Q10 Task и Mock run policy. `loomrail try` выполняет read-only preflight, явно сообщает будущие local side effects и
+открывает authenticated `/try`; route выводит progress из durable Project/WorkItem/Pipeline/Acceptance state, ведёт
+через Human Request, отдельное budget approval, Review/измеренную QA и оставляет final disposition только владельцу.
+Локально проходят contract gate, typecheck, complete unit/integration suite, clean-package invocation и 54/54
+Playwright E2E, включая RU/EN, keyboard, light/dark, narrow viewport и daemon restart. `apps/landing/**` не изменён:
+его canonical consumer и три защищённых lint finding остаются отдельной авторизованной работой. Автоматическое
+macOS/Windows evidence для этого коммита и Windows live-provider capture ещё не получены, поэтому Q15 exit и stable
+claim остаются открыты.
+
+#### Q16 — Provider allowance visibility
+
+**Outcome:** владелец видит, сколько provider quota осталось и когда обновится окно, не путая это с бюджетом Loomrail.
+
+**Deliverables:**
+
+- optional `canReportRateLimits` capability и runtime-validated normalized multi-bucket contract;
+- Codex App Server reader/updates и Claude Code structured status-data bridge только для verified provider rows;
+- поля `provider`, bucket/name, used/remaining percentage, window duration, `resetsAt`, `observedAt`, freshness и
+  unavailable reason;
+- status strip в Command Center и Task Cockpit рядом с отдельным task/project budget;
+- typed attention state при фактически достигнутом provider limit;
+- advisory scheduler hint для новых dispatches без скрытого hard stop по stale/missing observation;
+- parser-drift, null/missing bucket, reset, stale, restart, multi-bucket, redaction и macOS/Windows tests.
+
+**Exit gate:** для поддерживаемых Codex/Claude auth modes UI показывает явно подписанный remaining percentage, окно,
+reset и freshness; unsupported/missing data выглядит как `Unavailable`, а не `0%`; поддельный/stale provider payload
+не меняет budget, permissions, workflow или acceptance.
+
+#### Q17 — Project verification gate
+
+**Outcome:** unit/integration/E2E/build/lint checks становятся таким же измеряемым и snapshot-bound evidence, как
+Browser QA, а не строкой «тесты прошли» в provider response.
+
+**Deliverables:**
+
+- versioned `.loomrail/` Verification Plan и owner adoption после preview exact executable/argv, cwd, timeout и
+  effective environment/network permissions;
+- daemon-owned Verification Run над exact implementation tree через существующий trusted execution boundary;
+- normalized suites/checks, passed/failed counts, duration, platform и bounded/redacted output;
+- `STALE` propagation после изменения tree и Acceptance block для required `FAILED | ERROR | STALE`;
+- typed failure evidence, bounded correction, fresh independent review и exact rerun без смешения с Browser QADefect
+  identity до отдельного domain decision;
+- Task Cockpit groups, summaries, logs-on-demand и retest history;
+- malicious manifest/script name, argv injection, path/env escape, timeout/output cap, crash/restart/idempotency и
+  macOS/Windows verification tests.
+
+**Exit gate:** intentional unit/integration failure в fixture Project создаёт durable failure, не открывает Acceptance,
+проходит correction/re-review и закрывается только fresh passing rerun того же approved recipe на текущем tree.
+Scanner никогда не запускает предложенную команду до owner adoption; verification не получает commit, push, merge,
+deploy или package-install authority.
+
 ### Оценка первого цикла
 
 - internal dogfood alpha: примерно 12–16 недель;
@@ -1458,6 +1588,22 @@ private dogfood, protected landing и trusted publisher provenance остают�
 11. Additional QA targets: API, CLI, mobile/native, desktop.
 12. Other departments/workflows only after software delivery loop proves retention.
 
+### 21.1. Коммерческая лестница
+
+Платная модель проверяется последовательно и не ослабляет Apache-2.0 local core:
+
+| Ступень         | Ценность                                                                                  | Граница                                                                                  |
+| --------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Community       | Local workflow, Mock, samples, budgets, Review, QA и Acceptance                           | Полезный полный core без искусственного лимита задач/агентов                             |
+| Guided Launch   | Readiness/security review, Constitution/verification setup, первый live route и поддержка | Bounded fixed-scope service; явный запрос владельца, без скрытой telemetry               |
+| Supported Local | Priority support, training, compatibility assistance                                      | Оплата за время и снижение риска, не за снятие локальных safety gates                    |
+| Team / Cloud    | Collaboration, RBAC, shared policy/audit, hosted/remote workers                           | Только после отдельных architecture/security решений и повторяемой операционной ценности |
+| Enterprise      | SSO/SCIM, DPA, retention/export policy, SLA и deployment support                          | Только после доказанной support economics и procurement readiness                        |
+
+Не обещаются lifetime updates за один платёж, автоматический merge/deploy как premium value или количественные claims
+без определённой методики. Первый коммерческий smoke test после Q15 — необязательный `Guided Launch` CTA после
+успешного бесплатного Acceptance Package.
+
 ## 22. Dogfood Alpha acceptance contract
 
 Milestone не закрывается, пока один private dogfood Epic не докажет всё одновременно:
@@ -1471,11 +1617,13 @@ Milestone не закрывается, пока один private dogfood Epic н
 - [ ] shared working tree соблюдает single-writer lease;
 - [ ] implementation не перетёр existing user changes;
 - [ ] independent cross-provider review завершён;
+- [ ] owner-approved build/test/lint verification recipes прошли на exact current tree;
 - [ ] browser QA сохранил screenshots, trace, console/network evidence;
 - [ ] high/blocker findings закрыты или явно waived;
 - [ ] Acceptance Package связывает каждый criterion с evidence;
 - [ ] daemon был перезапущен в середине workflow и корректно recovered;
 - [ ] hard budget не превышен;
+- [ ] provider allowance, если доступен, показывает окно/reset/freshness отдельно от hard budget;
 - [ ] человек принял результат;
 - [ ] export содержит читаемые artifacts и audit trail.
 
@@ -1573,17 +1721,28 @@ human waiver с documented risk.
 
 ## 26. Immediate next actions
 
-1. Review и утвердить `docs/plans/00-phase-0-implementation-plan.ru.md`.
-2. Зарезервировать domain/package namespaces одним согласованным действием.
-3. Выполнить Phase 0 milestones и mocked vertical slice.
-4. Выбрать одну private dogfood feature, которая затрагивает UI, backend и browser QA, но не billing/deploy.
-5. Не начинать marketplace, team mode, Jira sync или desktop wrapper до закрытия Dogfood Alpha contract.
+1. Завершить Q15 cross-platform source/browser/package evidence; protected landing подключить к canonical contract
+   только в отдельной authorized landing-сессии.
+2. Создать и выполнить Q16 spec/implementation plan для provider allowance с отдельным budget/allowance UX и threat
+   verification T47.
+3. Создать и выполнить Q17 spec/implementation plan для owner-approved Project verification recipes, measured test
+   evidence и threat verification T48.
+4. Провести private dogfood Epic из 2–3 зависимых Task через новые activation/verification surfaces, оба live provider,
+   restart, review, Browser QA и owner Acceptance.
+5. После отдельной owner-authorized сессии закрыть Windows live-provider compatibility rows; до неё неизвестные
+   версии оставить fail-closed и использовать Mock.
+6. Закрыть protected-source, clean macOS/Windows, registry/trusted-publisher provenance gates; только затем принимать
+   отдельное решение о stable publish.
+7. Не начинать marketplace, team mode, Jira sync, desktop wrapper, billing или deploy automation до закрытия Dogfood
+   Alpha contract.
 
 ## 27. Primary-source anchors
 
 - [OpenAI Codex overview and local/browser capabilities](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
+- [OpenAI Codex App Server rate-limit contract](https://learn.chatgpt.com/docs/app-server#rate-limits-chatgpt)
 - [Claude Code CLI reference](https://docs.anthropic.com/en/docs/claude-code/cli-usage)
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks)
+- [Claude Code structured status-line data](https://code.claude.com/docs/en/statusline#available-data)
 - [Agency Agents](https://github.com/msitarzewski/agency-agents)
 - [GitHub Projects documentation](https://docs.github.com/en/issues/planning-and-tracking-with-projects)
 - [YouTrack agile boards](https://www.jetbrains.com/help/youtrack/cloud/agile-board.html)

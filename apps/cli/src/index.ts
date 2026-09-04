@@ -26,7 +26,9 @@ import {
   type SetupRoute,
 } from "./setup.js";
 import { formatStartupReport } from "./startup-report.js";
+import { formatGuidedLaunchReadiness, guidedBootstrapUrl } from "./guided-launch.js";
 import { LOOMRAIL_VERSION } from "./version.js";
+import type { TryCliCommand } from "./options.js";
 
 const writeLine = (message: string): void => {
   process.stdout.write(`${message}\n`);
@@ -37,7 +39,7 @@ const writeFailure = (error: unknown): void => {
   process.stderr.write(`Loomrail failed: ${redactOperationalText(message)}\n`);
 };
 
-const start = async (options: StartCliCommand): Promise<void> => {
+const start = async (options: StartCliCommand | TryCliCommand): Promise<void> => {
   const bootstrapToken = randomBytes(32).toString("base64url");
   const webRoot = fileURLToPath(new URL("../../web/dist", import.meta.url));
   const dataDirectory = resolveLoomrailDataDirectory();
@@ -97,15 +99,17 @@ const start = async (options: StartCliCommand): Promise<void> => {
   });
 
   try {
+    const launchUrl =
+      options.command === "TRY" ? guidedBootstrapUrl(daemon.bootstrapUrl) : daemon.bootstrapUrl;
     let browserOpened = false;
     if (!options.noOpen) {
-      await open(daemon.bootstrapUrl, { wait: false });
+      await open(launchUrl, { wait: false });
       browserOpened = true;
     }
 
     for (const line of formatStartupReport({
       baseUrl: daemon.baseUrl,
-      bootstrapUrl: daemon.bootstrapUrl,
+      bootstrapUrl: launchUrl,
       browserOpened,
       provider: daemon.provider,
     })) {
@@ -136,6 +140,17 @@ const run = async (): Promise<void> => {
     case "START":
       await start(command);
       return;
+    case "TRY": {
+      const report = await collectSetupReadiness("MOCK");
+      for (const reportLine of formatGuidedLaunchReadiness(report)) writeLine(reportLine);
+      if (report.status === "BLOCKED") {
+        for (const reportLine of formatSetupReadiness(report)) writeLine(reportLine);
+        process.exitCode = 1;
+        return;
+      }
+      await start(command);
+      return;
+    }
     case "SETUP": {
       const route = command.route ?? (await chooseSetupRoute());
       const report = await collectSetupReadiness(route);

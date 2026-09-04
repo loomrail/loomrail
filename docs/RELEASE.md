@@ -32,8 +32,13 @@ Before packaging, run the named crash and fault-injection gate:
 
 ```bash
 pnpm exec playwright install chromium
+pnpm test:activation
 pnpm test:fault-injection
 ```
+
+`test:activation` validates the one versioned guided-activation contract against CLI help, the exact marked install
+blocks, the bundled Q10 recipe and the named macOS/Windows CI step. It also rejects unknown fields and unsafe command
+mutations. This keeps `loomrail try`, the Workbench route and public documentation on one fail-closed contract.
 
 It builds the repository, runs the persistence/provider/MCP/scaffolding/Browser QA/daemon fault suites sequentially,
 then kills a test-owned daemon child during a durably active ProviderSession. Fresh daemon processes on the same
@@ -62,6 +67,7 @@ launches the installed binary on a free loopback port with an isolated `LOOMRAIL
 
 - non-TTY setup requires an explicit route, while `setup --mode mock --json` reports the clean installation READY
   after the CI lane's explicit Chromium installation and creates no state;
+- `loomrail try --no-open` reports the guided Mock route READY and prints an authenticated `/try` URL;
 - the daemon reports `/health/ready`;
 - the installed launcher serves the built Workbench shell, not just the API;
 - the launcher prints the one-time sign-in URL, so a headless install can authenticate;

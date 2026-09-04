@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import {
   constitutionPresetIdSchema,
@@ -33,6 +33,7 @@ import { PanelResizer } from "../components/PanelResizer";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { McpSettingsPanel } from "../components/McpSettingsPanel";
 import { ProjectScaffoldPanel } from "../components/ProjectScaffoldPanel";
+import { OpenAppSettingsContext } from "./appSettings";
 import { useI18n, type TranslationKey } from "../i18n";
 import { hasCustomPanelWidths, resetPanelWidths } from "../layout";
 import { applyDensityPreference, readDensityPreference, type DensityPreference } from "../density";
@@ -1043,7 +1044,7 @@ const SidebarLink = ({
   countOverflow?: boolean;
   icon: IconName;
   label: string;
-  to: "/" | "/attention" | "/fleet" | "/insights";
+  to: "/" | "/attention" | "/fleet" | "/insights" | "/try";
 }): React.JSX.Element => {
   const content = (
     <>
@@ -1072,6 +1073,13 @@ const SidebarLink = ({
   if (to === "/fleet") {
     return (
       <Link className={className} to="/fleet">
+        {content}
+      </Link>
+    );
+  }
+  if (to === "/try") {
+    return (
+      <Link className={className} search={{}} to="/try">
         {content}
       </Link>
     );
@@ -1131,6 +1139,7 @@ const WorkspaceNavigation = ({
   const onAttention = pathname === "/attention";
   const onFleet = pathname === "/fleet";
   const onInsights = pathname === "/insights";
+  const onActivation = pathname === "/try";
 
   return (
     <>
@@ -1170,6 +1179,7 @@ const WorkspaceNavigation = ({
         )}
         <nav aria-label={t("nav.workspace")} className="app-nav app-nav--nested" onClick={onNavigate}>
           <SidebarLink active={pathname === "/"} icon="board" label={t("nav.currentWork")} to="/" />
+          <SidebarLink active={onActivation} icon="play" label={t("nav.guidedDemo")} to="/try" />
           <SidebarLink
             active={onFleet}
             icon="agents"
@@ -1214,6 +1224,9 @@ export const AppFrame = (): React.JSX.Element => {
   const pathname = useLocation({ select: (location) => location.pathname });
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const openAppSettings = useCallback(() => {
+    setSettingsOpen(true);
+  }, []);
   const projectInitial = selectedProject?.name.slice(0, 1).toUpperCase() ?? "–";
 
   if (connectionPending || projectsPending) {
@@ -1232,11 +1245,7 @@ export const AppFrame = (): React.JSX.Element => {
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
-        <WorkspaceNavigation
-          onOpenSettings={() => {
-            setSettingsOpen(true);
-          }}
-        />
+        <WorkspaceNavigation onOpenSettings={openAppSettings} />
         <PanelResizer edge="start" panel="sidebar" />
       </aside>
 
@@ -1274,16 +1283,20 @@ export const AppFrame = (): React.JSX.Element => {
                   ? "attention.inboxTitle"
                   : pathname === "/fleet"
                     ? "fleet.title"
-                    : "work.current",
+                    : pathname === "/insights"
+                      ? "insights.title"
+                      : pathname === "/try"
+                        ? "activation.title"
+                        : "work.current",
               )}
             </strong>
           </div>
-          <div className="app-topbar__actions">
-            <NewTaskDialog />
-          </div>
+          <div className="app-topbar__actions">{pathname === "/try" ? null : <NewTaskDialog />}</div>
         </header>
         <main className="app-content" id="main-content">
-          <Outlet />
+          <OpenAppSettingsContext.Provider value={openAppSettings}>
+            <Outlet />
+          </OpenAppSettingsContext.Provider>
         </main>
       </section>
 

@@ -6,6 +6,12 @@ export type StartCliCommand = {
   port?: number;
 };
 
+export type TryCliCommand = {
+  command: "TRY";
+  noOpen: boolean;
+  port?: number;
+};
+
 export type SetupCliCommand = {
   command: "SETUP";
   format: "HUMAN" | "JSON";
@@ -14,6 +20,7 @@ export type SetupCliCommand = {
 
 export type CliCommand =
   | StartCliCommand
+  | TryCliCommand
   | SetupCliCommand
   | { command: "DOCTOR"; format: "HUMAN" | "JSON" }
   | { command: "DATA_PATH" }
@@ -21,7 +28,10 @@ export type CliCommand =
   | { command: "LOGS_DELETE" }
   | { command: "HELP" };
 
-const parseStart = (args: string[]): StartCliCommand => {
+const parseLaunch = (
+  command: StartCliCommand["command"] | TryCliCommand["command"],
+  args: string[],
+): StartCliCommand | TryCliCommand => {
   const parsed = parseArgs({
     args,
     strict: true,
@@ -33,7 +43,7 @@ const parseStart = (args: string[]): StartCliCommand => {
   });
 
   if (parsed.values.port === undefined) {
-    return { command: "START", noOpen: parsed.values["no-open"] };
+    return { command, noOpen: parsed.values["no-open"] };
   }
 
   const port = Number(parsed.values.port);
@@ -41,7 +51,7 @@ const parseStart = (args: string[]): StartCliCommand => {
     throw new Error("--port must be an integer between 0 and 65535");
   }
 
-  return { command: "START", noOpen: parsed.values["no-open"], port };
+  return { command, noOpen: parsed.values["no-open"], port };
 };
 
 const parseDoctor = (args: string[]): CliCommand => {
@@ -101,8 +111,9 @@ export const parseCliCommand = (args: string[]): CliCommand => {
     noArguments(first, rest);
     return { command: "HELP" };
   }
-  if (first === undefined || first.startsWith("-")) return parseStart(args);
-  if (first === "start") return parseStart(rest);
+  if (first === undefined || first.startsWith("-")) return parseLaunch("START", args);
+  if (first === "start") return parseLaunch("START", rest);
+  if (first === "try") return parseLaunch("TRY", rest);
   if (first === "setup") return parseSetup(rest);
   if (first === "doctor") return parseDoctor(rest);
   if (first === "logs") return parseLogs(rest);

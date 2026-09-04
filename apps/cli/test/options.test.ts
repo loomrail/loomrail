@@ -13,6 +13,16 @@ describe("CLI options", () => {
     expect(parseCliCommand(["start", "--no-open", "--port", "3210"])).toEqual(expected);
   });
 
+  it("parses the guided route with the portable launcher flags", () => {
+    expect(parseCliCommand(["try"])).toEqual({ command: "TRY", noOpen: false });
+    expect(parseCliCommand(["try", "--no-open", "--port", "0"])).toEqual({
+      command: "TRY",
+      noOpen: true,
+      port: 0,
+    });
+    expect(() => parseCliCommand(["try", "--port", "not-a-port"])).toThrow(/--port/);
+  });
+
   it("rejects an invalid port", () => {
     expect(() => parseCliCommand(["--port", "70000"])).toThrow(/--port/);
   });

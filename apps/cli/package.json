@@ -15,6 +15,7 @@
     "bundle": "vite build"
   },
   "dependencies": {
+    "@loomrail/contracts": "workspace:*",
     "@loomrail/daemon": "workspace:*",
     "@loomrail/persistence-sqlite": "workspace:*",
     "open": "^10.0.0",

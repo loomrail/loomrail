@@ -28,9 +28,9 @@ the source of truth.
 
 > [!IMPORTANT]
 > Loomrail is public pre-alpha software. New projects use **Auto**, but a live CLI is admitted only when its exact
-> version is verified and its provider-owned authentication succeeds. The current alpha.5 candidate has no verified
-> live row, so Auto remains on Mock and explicit live choices fail before spawn. Choose **Mock** in
-> **Settings → AI provider** before starting the workflow. Loomrail never installs or signs into a provider,
+> version, OS, and architecture have a reviewed compatibility row and provider-owned authentication succeeds. Exact
+> Codex and Claude Code rows are currently verified only on macOS arm64; Windows live-provider verification is still
+> pending. The guided route below always uses **Mock**. Loomrail never installs or signs into a provider,
 > enables permission-bypass flags, commits, pushes, merges, or deploys for you. A task worktree is not an
 > operating-system sandbox.
 
@@ -41,18 +41,22 @@ managed by the installed Playwright package. Linux is best effort.
 
 Start in a new empty directory, not inside a repository you care about:
 
+<!-- loomrail-guided-activation-v1:start -->
+
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail setup
-npx loomrail start
+npx loomrail try
 ```
 
+<!-- loomrail-guided-activation-v1:end -->
+
 The Chromium download is an explicit one-time installation for deterministic Browser QA. Loomrail never reuses your
-signed-in browser profile. Guided setup defaults to the zero-quota Mock route, checks the full local path, and prints
-the remaining owner actions without changing or persisting state.
+signed-in browser profile. `loomrail try` first runs the read-only Mock preflight. If a required check fails it writes
+nothing; when ready, it states the local state/log side effects, starts the loopback daemon, and opens the guided
+route. Each later mutation remains a visible owner action.
 
 The launcher binds to `127.0.0.1`, opens a one-time authenticated URL, and stores state in local SQLite. Keep the
 terminal open and stop Loomrail with `Ctrl+C`.
@@ -60,21 +64,21 @@ terminal open and stop Loomrail with `Ctrl+C`.
 If the browser must not open automatically:
 
 ```bash
-npx loomrail --no-open --port 4176
+npx loomrail try --no-open --port 4176
 ```
 
 Open the printed URL on the same machine within 60 seconds. `--no-open` does not enable remote access.
 
 For a global launcher, use `npm install -g --ignore-scripts loomrail@next`, run
-`npx playwright install chromium`, `loomrail setup`, and then `loomrail start`.
+`npx playwright install chromium`, and then `loomrail try`.
 The project-local route above is recommended for evaluation because it keeps the selected pre-alpha channel visible.
 
 ## First run
 
-1. Choose **Initialize demo workspace**.
-2. Open **Settings → AI provider** and choose **Mock** for the zero-quota walkthrough.
-3. Create a task with a concrete outcome and observable acceptance criteria.
-4. Move it to **Ready** and start the workflow.
+1. Choose **Prepare demo workspace**.
+2. Choose **Use Mock for this project** for the zero-quota walkthrough.
+3. Create the exact guided task and move it to **Ready**.
+4. Start the guided workflow with the displayed Loomrail budget and model tier.
 5. Open **Attention**, answer the blocking Human Request, and approve the explicit mock budget increase.
 6. When acceptance appears in **Attention**, open its exact task, inspect Review and QA evidence, then accept the
    delivery or return it to work as the owner.
@@ -101,8 +105,8 @@ change inspection, backup, recovery, diagnostics, upgrade, and uninstall:
 
 Install and authenticate the provider CLI yourself, then start Loomrail normally. In **Settings → AI provider**, use
 **Check again** to read its bounded version/auth status. Auto uses only an exact `VERIFIED` and signed-in CLI; an
-unverified or too-old explicit choice remains visible but fails before spawn. The current alpha.5 matrix has no
-verified live row, so use Mock until a version is promoted through cross-platform real-CLI evidence.
+unverified or too-old explicit choice remains visible but fails before spawn. The current exact Codex and Claude Code
+rows are scoped to macOS arm64; use Mock on Windows until separate real-CLI evidence promotes a Windows row.
 `LOOMRAIL_PROVIDER` remains an optional process-wide override for automation and troubleshooting, but it does not
 bypass compatibility. Read the compatibility guide, owner guide, and threat model before exposing a repository to a
 live CLI.

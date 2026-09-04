@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "guided-mock-v1",
+  "fixtureId": "web-app-a",
+  "createCommandId": "guided-activation-v1-create-task",
+  "task": {
+    "title": "Render an accessible empty task state",
+    "description": "When the task list is empty, render a concise status message instead of an empty list. Keep non-empty markup and HTML escaping unchanged. Use semantic server-rendered HTML, add focused tests, and do not add dependencies or client-side JavaScript.",
+    "priority": "MEDIUM",
+    "risk": "LOW",
+    "type": "TASK",
+    "acceptanceCriteria": [
+      "An empty input renders exactly one visible status message and no empty ul element.",
+      "A non-empty input preserves the current list markup and escaped titles.",
+      "All tests pass with node --test and no install or network step."
+    ]
+  },
+  "policy": {
+    "maxEstimatedTokens": 100,
+    "agentRunMaxEstimatedTokensOverride": 100,
+    "modelTierOverride": "FAST"
+  },
+  "install": {
+    "commands": [
+      "mkdir loomrail-evaluation",
+      "cd loomrail-evaluation",
+      "npm install --ignore-scripts loomrail@next",
+      "npx playwright install chromium",
+      "npx loomrail try"
+    ]
+  }
+}

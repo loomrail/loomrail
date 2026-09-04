@@ -48,6 +48,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@loomrail/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@loomrail/daemon':
         specifier: workspace:*
         version: link:../daemon

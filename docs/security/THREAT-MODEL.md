@@ -1,7 +1,7 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-09-02
+**Updated:** 2026-09-04
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
@@ -111,6 +111,9 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T44 | Bundled sample executes hidden code or carries unreviewed repository input   | High     | exact file catalog; regular bounded files; no dependencies/lifecycle scripts/links; no implicit execution                                                                                    | see Q10 bundled-sample delta below                                                |
 | T45 | Public issue intake exposes private data or routes a vulnerability publicly  | High     | closed forms; explicit public-data acknowledgement; enabled private reporting; no uploads/log requests; no runtime ingestion                                                                 | see Q11 public-intake delta below                                                 |
 | T46 | Insights/report export leaks sensitive local workflow or machine metadata    | High     | numeric/enum facts; strict nested schemas; exact preview/download object; authenticated loopback; no network sender                                                                          | see Q12 private-reporting delta below                                             |
+| T47 | Forged, stale or ambiguous provider allowance misleads scheduling or spend   | High     | official structured surface only; closed adapter schema; explicit used/remaining label; observed/reset time and freshness; advisory-only scheduling; no account/credential persistence       | planned Q16 provider-allowance delta below                                        |
+| T48 | Repository-proposed verification recipe executes attacker-controlled code    | Critical | proposal is inert; exact owner-approved revision; argv/no-shell trusted runner; scoped cwd/env/network; time/output bounds; no install/Git/deploy authority; durable idempotent execution    | planned Q17 Project-verification delta below                                      |
+| T49 | Guided activation hides authority or publishes an unsafe install sequence    | High     | exact closed install contract; Mock-only preflight; explicit side effects and owner actions; fragment-only bootstrap; durable idempotent Task; no parallel progress truth                    | see Q15 canonical-activation delta below                                          |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -641,6 +644,83 @@ authority for old executions. Model IDs do not come from HTTP or provider output
 runtime-validated tier mapping, the registry projects that same mapping to the Task Cockpit, and the daemon stores the
 resolved ID in the immutable AgentRun policy before launch. Adapters execute the stored ID even if their current
 mapping later changes; only legacy snapshots use the compatibility fallback. All HTTP input remains runtime-validated.
+
+### Q15 canonical-activation delta (T49)
+
+Q15 adds a convenience command that starts the ordinary local daemon and opens a guided, tokenized browser route. A
+malicious or drifted install contract could persuade an owner to copy a destructive/network command; misleading
+preflight copy could hide state/log creation or a live provider; a retried request could duplicate the demo Task; and
+browser-only progress could falsely skip owner gates. Rated **High** because the route is a new user's first contact
+with local process authority and executable installation instructions.
+
+Required controls and verification:
+
+- the versioned JSON contract is strict and accepts exactly five reviewed literal commands in their reviewed order;
+  arbitrary standalone commands, shell composition, traversal, unknown fields and policy expansion fail closed in
+  both the runtime schema and an independent standard-library verifier;
+- `loomrail try` always calls the read-only Q8 Mock preflight before opening logs, SQLite or the daemon. `BLOCKED`
+  reports that nothing was started or written; `READY` names the local state/log side effects before startup;
+- the route starts no live provider and spends no provider quota. Project `MOCK`, Task creation, Ready, workflow start,
+  budget changes and final disposition remain separate authenticated owner actions through existing Origin/CSRF,
+  optimistic-version and audit controls;
+- the bootstrap value remains fragment-only and is consumed by the existing one-time session exchange. It is neither
+  persisted in guided state nor admitted to operational logs;
+- one Project-derived mission command ID makes lost-response Task creation idempotent. Progress is reconstructed only
+  from durable Project, exact-recipe WorkItem, PipelineRun, HumanRequest, evidence and AcceptancePackage reads; stale
+  URL input and browser storage cannot advance it;
+- unit tests cover blocked/ready output, exact URL construction, command mutation, recipe matching and all terminal
+  Acceptance statuses. Clean-package verification starts `try --no-open`; Browser QA covers reload, daemon restart,
+  Human Request, budget pause, separate Review/QA evidence, owner-only disposition, RU/EN, keyboard, light/dark and
+  narrow viewport. The same named contract, browser and package gates run on macOS/Windows CI before unrelated lint.
+
+Residual risk remains until that CI run exists for the fixed Q15 commit and the protected landing consumes the same
+contract. Windows live-provider compatibility is unrelated: Q15 remains Mock-only on every platform.
+
+### Q16 provider-allowance delta (T47, planned)
+
+Q16 adds a read-only observation path from official provider status surfaces into Command Center, Task Cockpit and an
+advisory scheduler hint. A compromised executable, schema drift, old observation or UI label could invert «used» and
+«remaining», present expired capacity as current, leak account metadata or make an external estimate look like a
+Loomrail hard budget. T47 stays open until the Q16 spec names and the implementation passes all of these controls:
+
+- capability is optional and version/platform/auth-mode scoped; an unsupported provider reports `UNAVAILABLE` rather
+  than a zero value;
+- adapters accept only a closed runtime schema from documented structured provider data. ANSI, terminal prose,
+  screenshots and user status-line output are never parsed;
+- normalized rows retain provider/bucket, used percentage, derived remaining percentage, window duration, reset time,
+  `observedAt` and `LIVE | STALE | UNAVAILABLE`; bounds, clock skew and expired windows fail closed to stale/unavailable;
+- UI text explicitly says «used» or «remaining», includes reset/freshness, does not encode state by color alone and
+  renders provider allowance separately from authoritative Loomrail budget;
+- allowance cannot mutate BudgetPolicy, permissions, workflow, acceptance or an existing AgentRun snapshot. Until a
+  later owner-approved scheduling policy exists, it can only rank/defer proposed new work with a visible reason;
+- no account identifier, credential, raw response or status-line configuration enters SQLite, Events, logs, export or
+  telemetry; adapter errors use closed redacted codes;
+- required verification covers malicious/overlong/NaN/out-of-range data, missing and multiple buckets, reset/expiry,
+  stale after restart, provider drift, label inversion, redaction canaries, advisory-only scheduling and macOS/Windows
+  UI states.
+
+### Q17 Project-verification delta (T48, planned)
+
+Q17 promotes repository build/test/lint/integration/E2E commands from provider prose to executable acceptance evidence.
+Repository manifests and agent instructions are untrusted data, so a discovered script name is a proposal, not launch
+authority. Running even a familiar test executes repository code with the local owner's OS privileges; T48 is
+Critical and stays open until the Q17 spec and implementation provide:
+
+- scanner remains read-only and returns a bounded proposed recipe plus provenance. It never resolves a proposal by
+  executing package-manager metadata, lifecycle scripts or repository helpers;
+- owner adopts one exact versioned recipe only after preview of executable/argv, cwd, timeout and effective
+  filesystem/environment/network permissions. Adoption and execution are separate optimistic-versioned commands;
+- trusted runner uses argv arrays with `shell: false`, a canonical task worktree, scrubbed environment, no provider or
+  production secrets, explicit network policy, process-tree cancellation, deadline and stdout/stderr caps;
+- verification has no package-install, commit, push, merge, cleanup or deploy authority. A recipe needing setup is a
+  separate owner action and cannot smuggle it into a test command;
+- reservation, exact tree/recipe snapshot, terminal result, evidence, workflow transition and receipt follow durable
+  transaction/idempotency rules; restart never silently replays an unknown external execution;
+- daemon derives `PASSED | FAILED | ERROR | STALE`; provider text cannot create a pass. Required failed/error/stale
+  evidence blocks Acceptance and any correction requires fresh review plus exact rerun on the current tree;
+- required verification covers shell metacharacters, hostile package scripts/manifests, cwd/path and symlink escape,
+  env/secret canaries, denied network, timeout/output exhaustion, child orphaning, duplicate completion, crash/restart,
+  stale tree/recipe, and the same macOS/Windows fixture behavior.
 
 ### A1.5 event-channel delta (T03)
 

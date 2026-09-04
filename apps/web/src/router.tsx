@@ -15,6 +15,7 @@ import { WorkbenchPage } from "./views/WorkbenchPage";
 import { AttentionPage } from "./views/AttentionPage";
 import { AgentFleetPage } from "./views/AgentFleetPage";
 import { InsightsPage } from "./views/InsightsPage";
+import { ActivationPage } from "./views/ActivationPage";
 
 const rootRoute = createRootRoute({ component: AppFrame });
 
@@ -113,7 +114,25 @@ const insightsRoute = createRoute({
   component: InsightsPage,
 });
 
-const routeTree = rootRoute.addChildren([workbenchRoute, attentionRoute, agentFleetRoute, insightsRoute]);
+export type ActivationSearch = { task?: string };
+
+const activationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/try",
+  component: ActivationPage,
+  validateSearch: (search: Record<string, unknown>): ActivationSearch => {
+    const task = opaqueIdSchema.safeParse(search["task"]);
+    return task.success ? { task: task.data } : {};
+  },
+});
+
+const routeTree = rootRoute.addChildren([
+  workbenchRoute,
+  attentionRoute,
+  agentFleetRoute,
+  insightsRoute,
+  activationRoute,
+]);
 
 export const router = createRouter({
   routeTree,

@@ -62,6 +62,11 @@ jobs:
       - name: Verify public issue intake and roadmap
         run: pnpm test:community
 
+      # The same strict JSON drives the CLI, /try mission, Q10 recipe and public install block.
+      # Run it on both blocking source platforms before protected landing lint can hide drift.
+      - name: Verify guided activation contract
+        run: pnpm test:activation
+
       # Exercise the fixed-argv child-process boundary on both supported platforms before a
       # protected source lint failure can hide the compatibility evidence.
       - name: Verify provider compatibility probes
