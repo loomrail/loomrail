@@ -99,7 +99,9 @@ describe("Codex allowance App Server reader", () => {
     await expect(
       readFixture("timeout-stubborn", { deadlineMs: 150, terminationGraceMs: 80 }),
     ).resolves.toMatchObject({ unavailableReason: "PROVIDER_TIMEOUT" });
-    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(210);
+    // Windows does not deliver a catchable SIGTERM to a child: Node terminates it immediately.
+    // POSIX exercises the grace-period escalation; both branches still resolve only after close.
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(process.platform === "win32" ? 140 : 210);
   });
 
   it("maps an unlaunchable command to unavailable instead of rejecting", async () => {
