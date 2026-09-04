@@ -57,6 +57,67 @@ const acceptanceReadySchema = z
     "Summarize the completed delivery for its owner. This does not accept the work; only the owner can do that.",
   );
 
+export type ProviderAcceptanceInput = {
+  criteria: readonly string[];
+  evidence: readonly {
+    kind: "REVIEW_REPORT" | "QA_REPORT";
+    checks: readonly string[];
+  }[];
+};
+
+const exactStringSchema = (values: readonly string[]): z.ZodType<string> => {
+  const [first, ...rest] = [...new Set(values)];
+  return first === undefined ? z.never() : z.enum([first, ...rest]);
+};
+
+const acceptanceReadySchemaFor = (input: ProviderAcceptanceInput | null | undefined): z.ZodType => {
+  if (input === null || input === undefined) return acceptanceReadySchema;
+  const reviewChecks = input.evidence
+    .filter(({ kind }) => kind === "REVIEW_REPORT")
+    .flatMap(({ checks }) => checks);
+  const qaChecks = input.evidence.filter(({ kind }) => kind === "QA_REPORT").flatMap(({ checks }) => checks);
+  if (input.criteria.length === 0 || reviewChecks.length === 0 || qaChecks.length === 0) {
+    return acceptanceReadySchema;
+  }
+  const criterionClaim = acceptanceCriterionClaimSchema
+    .extend({
+      criterion: exactStringSchema(input.criteria).describe(
+        "Copy one recorded acceptance criterion exactly. Do not summarize or paraphrase it.",
+      ),
+      reviewCheck: exactStringSchema(reviewChecks).describe(
+        "Select one check exactly from the current Review evidence. Do not summarize or paraphrase it.",
+      ),
+      qaCheck: exactStringSchema(qaChecks).describe(
+        "Select one check exactly from the current measured QA evidence. Do not summarize or paraphrase it.",
+      ),
+    })
+    .strict();
+  return z
+    .object({
+      type: z.literal("READY_FOR_ACCEPTANCE"),
+      releaseNote: z.string().trim().min(1).max(4_000),
+      verifyInstructions: z.array(z.string().trim().min(1).max(4_000)).min(1).max(20),
+      criteria: z
+        .array(criterionClaim)
+        .length(input.criteria.length)
+        .superRefine((claims, context) => {
+          for (const [index, criterion] of input.criteria.entries()) {
+            if (claims[index]?.criterion !== criterion) {
+              context.addIssue({
+                code: "custom",
+                path: [index, "criterion"],
+                message: "Acceptance criteria must preserve the recorded order and exact text",
+              });
+            }
+          }
+        }),
+    })
+    .strict()
+    .describe(
+      "Summarize the completed delivery without accepting it. Return every recorded criterion exactly once, in its recorded order. Criterion, reviewCheck, and qaCheck are closed evidence values: copy them exactly from the allowed values instead of paraphrasing them.",
+    );
+};
+
 // OpenAI Structured Outputs accepts `anyOf` below the root but requires the root itself to be an
 // object. Zod's discriminatedUnion emits `oneOf`, including when it is nested, while a plain union
 // emits the supported `anyOf`. Keep the provider choice under one required `result` property so
@@ -118,6 +179,7 @@ const stageSchemasWithoutHumanRequest = {
 
 export type ProviderStageResultPolicy = {
   humanRequests: "ALLOWED" | "DISALLOWED";
+  acceptanceInput?: ProviderAcceptanceInput | null;
 };
 
 const defaultStageResultPolicy: ProviderStageResultPolicy = { humanRequests: "ALLOWED" };
@@ -125,8 +187,16 @@ const defaultStageResultPolicy: ProviderStageResultPolicy = { humanRequests: "AL
 export const providerStageResultSchemaFor = (
   stage: WorkflowStage,
   policy: ProviderStageResultPolicy = defaultStageResultPolicy,
-): z.ZodType =>
-  policy.humanRequests === "ALLOWED" ? stageSchemas[stage] : stageSchemasWithoutHumanRequest[stage];
+): z.ZodType => {
+  if (stage === "ACCEPTANCE" && policy.acceptanceInput !== undefined) {
+    const ready = acceptanceReadySchemaFor(policy.acceptanceInput);
+    return resultEnvelope(
+      policy.humanRequests === "ALLOWED" ? z.union([ready, needsHumanSchema]) : ready,
+      stageDescriptions.ACCEPTANCE,
+    );
+  }
+  return policy.humanRequests === "ALLOWED" ? stageSchemas[stage] : stageSchemasWithoutHumanRequest[stage];
+};
 
 export type DecodedProviderStageResult = {
   outcome: ProviderOutcome;
@@ -230,14 +300,16 @@ export const decodeProviderStageResult = (
       };
     }
     case "ACCEPTANCE": {
-      const schema =
-        policy.humanRequests === "ALLOWED"
-          ? stageSchemas.ACCEPTANCE
-          : stageSchemasWithoutHumanRequest.ACCEPTANCE;
+      const schema = providerStageResultSchemaFor(stage, policy);
       const parsed = schema.safeParse(candidate);
       if (!parsed.success) return null;
+      const typed = (
+        policy.humanRequests === "ALLOWED"
+          ? stageSchemas.ACCEPTANCE
+          : stageSchemasWithoutHumanRequest.ACCEPTANCE
+      ).parse(candidate);
       return {
-        outcome: providerOutcomeSchema.parse(parsed.data.result),
+        outcome: providerOutcomeSchema.parse(typed.result),
         checkpoint: null,
       };
     }

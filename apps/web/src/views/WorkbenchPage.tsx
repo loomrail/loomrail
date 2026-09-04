@@ -508,6 +508,7 @@ const hardPauseLabelKeys: Record<SessionPauseFailureCode, TranslationKey> = {
   CONTEXT_FLOOR_EXCEEDED: "workflow.hardPause.contextFloor",
   PROVIDER_REJECTED_PACK: "workflow.hardPause.providerRejected",
   PROVIDER_START_FAILED: "workflow.hardPause.providerStartFailed",
+  PROVIDER_OUTCOME_REJECTED: "workflow.hardPause.providerOutcomeRejected",
   SESSION_LIMIT_REACHED: "workflow.hardPause.sessionLimit",
 };
 

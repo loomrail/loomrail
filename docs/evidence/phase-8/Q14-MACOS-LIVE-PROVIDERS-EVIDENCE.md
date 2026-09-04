@@ -56,20 +56,56 @@ boundary.
 
 ## Replay and local verification
 
-- Provider core: 6 files, 55 tests passed, including exact platform/architecture mismatch and auth-env canary cases.
-- Codex adapter: 3 files, 65 tests passed, including current success/failure/workspace/MCP replay and independent
+- Provider core: 6 files, 58 tests passed, including exact platform/architecture mismatch and auth-env canary cases.
+- Codex adapter: 3 files, 67 tests passed, including current success/failure/workspace/MCP replay and independent
   final-result schema validation.
-- Claude Code adapter: 3 files, 41 tests passed, including current success/failure/MCP replay, dialect omission,
+- Claude Code adapter: 3 files, 45 tests passed, including current success/failure/MCP replay, dialect omission,
   exact granted-tool argv, and independent final-result schema validation.
 - Focused compatibility gate: 2 files, 11 tests passed.
 - CLI dependency build completed across 18 packages; local Doctor status is `PASS` with both live providers ready.
 - Repository-wide typecheck and the complete sequential test suite across 22 workspace packages pass.
-- Repository-wide `pnpm verify` passes formatting, the 657-file public-tree check, pinned toolchain checks and the
+- Fault injection passes, including the real child-process crash drill: one interrupted run, no replay and one durable
+  report. All 53 Playwright E2E cases pass. Release packaging and isolated clean-install verification pass with zero
+  audit vulnerabilities; no artifact was published.
+- Repository-wide `pnpm verify` passes formatting, the 662-file public-tree check, pinned toolchain checks and the
   complete build, then stops at exactly the three pre-existing protected `apps/landing/src/main.ts` lint findings on
-  lines 630, 631 and 634. Focused ESLint over every changed TypeScript file passes.
+  lines 630, 631 and 634. Focused ESLint over every changed TypeScript file passes. The final two-axis review against
+  the preceding Q14 slice found no in-scope Standards or Spec P0/P1/P2 findings.
 
 Managed public dogfood is recorded after this compatibility slice. The protected `apps/landing/**` blocker remains
 outside this slice and is neither edited nor excluded.
+
+## Managed public dogfood rehearsal
+
+The pinned public Todo repository was copied to an isolated local worktree and never pushed. Codex implemented
+server-side `all`/`pending`/`completed` filtering and its accessible native filter control; an independent Claude
+review drove bounded fixes before passing the exact current tree. The final tree identity remained
+`cb92732302851e6642035886f82fbb3e8424263b` throughout measured Browser QA and Acceptance.
+
+The deterministic browser baseline passed eight target/scenario cells with 24 required assertions, ten finalized
+screenshot/trace attachments and no blocking console or network observation. It covered All, Pending, Completed,
+reload, desktop light and mobile dark targets. The baseline was green, so no QA defect correction was triggered; this
+public rehearsal therefore does not claim the separate defect-correction-loop acceptance item.
+
+The live run exercised a controlled daemon restart three times and stayed below its hard pipeline budget: 17 durable
+usage records total 4,818,908 of 5,000,000 tokens. Dogfood exposed and verified three Loomrail corrections:
+
+- a schema-valid but stage-invalid terminal provider outcome now closes the session and actual usage atomically,
+  hard-pauses without advancing, and opens an answerable owner recovery request with the stable domain error code;
+- a second orphaning episode after explicit resume now records a second append-only RecoveryReport instead of
+  preventing daemon startup on a uniqueness conflict;
+- Acceptance context now contains only the authoritative current-tree Review and measured QA artifacts, while the
+  provider schema enumerates exact criteria and evidence checks rather than accepting stale or paraphrased claims.
+
+The retried live Acceptance session ended `COMPLETED` and created a `PENDING` AcceptancePackage that maps all nine
+criteria to the exact Review and measured-QA evidence and exposes the remaining medium application risk. Loomrail did
+not select Accept, Return, or Reject: that final transition remains owner-only. Its authenticated release-summary
+export rendered 64,271 bytes of Markdown with all nine criterion rows, the Review/QA evidence, decisions and 282 audit
+events; a bounded check found no personal absolute path. The public repository remains a rehearsal, not the
+private-dogfood evidence required by the stable contract.
+
+This rehearsal had one active Task plus one cancelled precursor, not a 2–3 Task dependency DAG. It therefore does not
+close that separate dogfood-contract item either; no dependency evidence is inferred from sequential workflow stages.
 
 ## Remaining release gates
 

@@ -1415,8 +1415,17 @@ tests, но ошибочно потребовал Browser QA evidence до за�
 `REVIEW_INPUT`, а не остаётся только JSON Schema description: Review оценивает существующую реализацию и tests,
 Browser QA/owner acceptance остаются следующими gates. Это не ослабляет bounded rounds и не превращает owner waiver
 в passing review.
-Следующий шаг Q14 — завершить managed public dogfood, correction loop и independent review, не выдавая его за
-private dogfood и не принимая owner-only Acceptance решение.
+Managed public dogfood затем дошёл до текущего owner gate на неизменном implementation tree. Deterministic Browser QA
+прошёл восемь target/scenario cells и 24 обязательных assertion с console/network evidence. Live Acceptance выявил
+три отдельные lifecycle-ошибки Loomrail: domain-invalid terminal provider outcome оставлял session/run/dispatch в
+`RUNNING`; повторное startup recovery того же явно возобновлённого StageAttempt конфликтовало со старой уникальностью
+RecoveryReport; Acceptance получал исторические Review/QA artifacts и принимал свободно перефразированные evidence
+claims. Теперь semantic rejection атомарно закрывает session с фактическим usage и создаёт разрешимый hard-pause,
+recovery reports допускают новые orphaning episodes после явного resume, а Acceptance schema и context принимают
+только текущую authoritative Review/измеренную QA пару и точные criterion/check values. Повторный Acceptance создал
+`PENDING` package при 4 818 908 из 5 000 000 фактически учтённых токенов; owner-only решение не нажато.
+Следующий шаг Q14 — получить owner acceptance либо return/reject, отдельно доказать QA defect correction path и
+завершить Standards/Spec и release verification, не выдавая public rehearsal за private dogfood.
 
 ### Оценка первого цикла
 

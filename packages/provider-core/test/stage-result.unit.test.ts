@@ -294,4 +294,57 @@ describe("provider stage result contract", () => {
       ),
     ).toMatchObject({ outcome: { type: "READY_FOR_ACCEPTANCE" } });
   });
+
+  it("constrains Acceptance claims to the exact current criteria and evidence checks", () => {
+    const policy = {
+      humanRequests: "DISALLOWED" as const,
+      acceptanceInput: {
+        criteria: ["The API filters pending todos."],
+        evidence: [
+          { kind: "REVIEW_REPORT" as const, checks: ["Current review passed"] },
+          { kind: "QA_REPORT" as const, checks: ["Current browser QA passed"] },
+        ],
+      },
+    };
+    const exact = {
+      result: {
+        type: "READY_FOR_ACCEPTANCE",
+        releaseNote: "The delivery is ready for owner review.",
+        verifyInstructions: ["Inspect the recorded evidence."],
+        criteria: [
+          {
+            criterion: "The API filters pending todos.",
+            implementation: "The route applies the validated status predicate.",
+            reviewCheck: "Current review passed",
+            qaCheck: "Current browser QA passed",
+            ownerVerification: "Choose Pending and inspect the result.",
+            knownRisk: null,
+          },
+        ],
+      },
+    };
+
+    const schema = providerStageResultSchemaFor("ACCEPTANCE", policy);
+    expect(schema.safeParse(exact).success).toBe(true);
+    expect(decodeProviderStageResult("ACCEPTANCE", exact, policy)).not.toBeNull();
+    const jsonSchema = JSON.stringify(z.toJSONSchema(schema));
+    expect(jsonSchema).toContain('"enum":["Current review passed"]');
+    expect(jsonSchema).toContain('"enum":["Current browser QA passed"]');
+    expect(
+      providerStageResultSchemaFor("ACCEPTANCE", policy).safeParse({
+        result: {
+          ...exact.result,
+          criteria: [{ ...exact.result.criteria[0], reviewCheck: "An older review passed" }],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      providerStageResultSchemaFor("ACCEPTANCE", policy).safeParse({
+        result: {
+          ...exact.result,
+          criteria: [{ ...exact.result.criteria[0], criterion: "The API filters todos." }],
+        },
+      }).success,
+    ).toBe(false);
+  });
 });

@@ -180,6 +180,7 @@ import {
   decideStageAttemptHardPause,
   decideStartMockPipeline,
   decideWorkItemCommand,
+  isProviderOutcomeRejectionError,
   stageAttemptIsTerminal,
   WorkflowDomainError,
   ReadinessDomainError,
@@ -2682,7 +2683,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
            WHEN human_requests.blocking = 1 THEN 0
            WHEN acceptance_packages.id IS NOT NULL THEN 1
            WHEN stage_attempts.status = 'HARD_PAUSED'
-             AND stage_attempts.failure_code IN (?, ?, ?, ?, ?) THEN 3
+             AND stage_attempts.failure_code IN (${sessionPauseFailureCodes.map(() => "?").join(", ")}) THEN 3
            ELSE 2
          END,
          CASE work_items.priority
@@ -3274,6 +3275,38 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .all(pipelineRunId)
         .map(evidenceArtifactFromRow);
 
+    // Acceptance may follow several Review/QA correction rounds, but only the Review and measured
+    // QA artifacts bound to the current correction lineage and implementation tree are authority
+    // for the package. Supplying every historical check to the provider lets it select a real but
+    // stale check which decideApplyProviderOutcome must then reject. This selector mirrors that
+    // decision's evidence predicates and is shared by context assembly and terminal validation.
+    const acceptanceEvidenceArtifacts = (
+      run: PipelineRun,
+      stageAttempt: StageAttempt,
+      artifacts: readonly EvidenceArtifact[],
+    ): EvidenceArtifact[] => {
+      if (stageAttempt.stage !== "ACCEPTANCE") return [];
+      const treeValue = selectLatestSucceededImplementTreeForCycle.get(run.id, stageAttempt.correctionRunId);
+      if (treeValue === undefined) return [];
+      const currentTree = resultTreeRowSchema.parse(treeValue).result_tree;
+      const qaArtifact = artifacts.find(
+        (artifact) =>
+          artifact.kind === "QA_REPORT" &&
+          artifact.correctionRunId === stageAttempt.correctionRunId &&
+          artifact.testedTree === currentTree,
+      );
+      if (qaArtifact === undefined) return [];
+      const reviewArtifact = artifacts.find(
+        (artifact) =>
+          artifact.kind === "REVIEW_REPORT" &&
+          artifact.correctionRunId === qaArtifact.correctionRunId &&
+          (qaArtifact.correctionRunId === null
+            ? artifact.testedTree === undefined || artifact.testedTree === qaArtifact.testedTree
+            : artifact.reviewReportId !== undefined && artifact.testedTree === qaArtifact.testedTree),
+      );
+      return reviewArtifact === undefined ? [qaArtifact] : [reviewArtifact, qaArtifact];
+    };
+
     const readMeasuredQAForArtifact = (
       artifact: EvidenceArtifact | undefined,
       currentTree: string,
@@ -3642,7 +3675,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 };
               })();
 
-        const evidence = readRecentEvidenceArtifacts(run.id, MAX_CONTEXT_SOURCE_RECORDS).map((artifact) => ({
+        const evidenceArtifacts =
+          stageAttempt.stage === "ACCEPTANCE"
+            ? acceptanceEvidenceArtifacts(run, stageAttempt, readEvidenceArtifacts(run.id))
+            : readRecentEvidenceArtifacts(run.id, MAX_CONTEXT_SOURCE_RECORDS);
+        const evidence = evidenceArtifacts.map((artifact) => ({
           id: artifact.id,
           version: 1,
           kind: artifact.kind,
@@ -7013,18 +7050,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const measuredQA =
           command.payload.outcome.type === "READY_FOR_ACCEPTANCE"
             ? (() => {
-                const treeValue = selectLatestSucceededImplementTreeForCycle.get(
-                  run.id,
-                  stageAttempt.correctionRunId,
+                const qaArtifact = acceptanceEvidenceArtifacts(run, stageAttempt, existingArtifacts).find(
+                  ({ kind }) => kind === "QA_REPORT",
                 );
-                if (treeValue === undefined) return undefined;
-                const currentTree = resultTreeRowSchema.parse(treeValue).result_tree;
-                const qaArtifact = existingArtifacts.find(
-                  (artifact) =>
-                    artifact.kind === "QA_REPORT" &&
-                    artifact.correctionRunId === stageAttempt.correctionRunId &&
-                    artifact.testedTree === currentTree,
-                );
+                if (qaArtifact?.testedTree === undefined) return undefined;
+                const currentTree = qaArtifact.testedTree;
                 return readMeasuredQAForArtifact(qaArtifact, currentTree);
               })()
             : undefined;
@@ -7066,6 +7096,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const sessionCompletion = command.payload.sessionCompletion;
         let completedSession: ProviderSession | null = null;
         let terminalUsageReport: ProviderUsageReport | null = null;
+        let outcomeRejectionCode: string | null = null;
         let decision: ApplyProviderOutcomeDecision;
         if (sessionCompletion === undefined) {
           decision = decideApplyProviderOutcome(normalizedCommand, decisionContext);
@@ -7100,40 +7131,116 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             endedAt: occurredAt,
             version: providerSession.version + 1,
           });
-          if (sessionCompletion.usage === null) {
-            decision = decideApplyProviderOutcome(normalizedCommand, decisionContext);
-          } else {
-            if (command.actor.type !== "SYSTEM" || command.actor.id !== "session-loop") {
-              throw new StateStoreError(
-                "PROVIDER_USAGE_ACTOR_FORBIDDEN",
-                "Only the provider session loop can finalize provider usage",
-              );
+          const terminalUsage = sessionCompletion.usage;
+          const usageContext =
+            terminalUsage === null
+              ? null
+              : (() => {
+                  if (command.actor.type !== "SYSTEM" || command.actor.id !== "session-loop") {
+                    throw new StateStoreError(
+                      "PROVIDER_USAGE_ACTOR_FORBIDDEN",
+                      "Only the provider session loop can finalize provider usage",
+                    );
+                  }
+                  if (selectProviderUsageReportBySession.get(providerSession.id) !== undefined) {
+                    throw new StateStoreError(
+                      "PROVIDER_USAGE_ALREADY_RECORDED",
+                      "The ProviderSession already has its final usage report",
+                    );
+                  }
+                  const usageDigest = `sha256:${createHash("sha256")
+                    .update(canonicalJson(terminalUsage))
+                    .digest("hex")}`;
+                  const totalTokens = terminalUsage.inputTokens + terminalUsage.outputTokens;
+                  return {
+                    ...decisionContext,
+                    providerSession,
+                    agentRun,
+                    existingAgentUsageTotal: readProviderUsageReportsForAgentRun(agentRun.id).reduce(
+                      (total, report) => total + report.totalTokens,
+                      0,
+                    ),
+                    usage: terminalUsage,
+                    reportId: createId("providerUsageReport"),
+                    usageRecordId: totalTokens === 0 ? null : createId("usageRecord"),
+                    usageDigest,
+                  };
+                })();
+          let usageDecision: RecordProviderUsageDecision | null = null;
+          try {
+            if (usageContext === null) {
+              decision = decideApplyProviderOutcome(normalizedCommand, decisionContext);
+            } else {
+              const withUsage = decideApplyProviderOutcomeWithUsage(normalizedCommand, usageContext);
+              decision = withUsage;
+              terminalUsageReport = withUsage.usageReport;
             }
-            if (selectProviderUsageReportBySession.get(providerSession.id) !== undefined) {
-              throw new StateStoreError(
-                "PROVIDER_USAGE_ALREADY_RECORDED",
-                "The ProviderSession already has its final usage report",
-              );
-            }
-            const usageDigest = `sha256:${createHash("sha256")
-              .update(canonicalJson(sessionCompletion.usage))
-              .digest("hex")}`;
-            const totalTokens = sessionCompletion.usage.inputTokens + sessionCompletion.usage.outputTokens;
-            const withUsage = decideApplyProviderOutcomeWithUsage(normalizedCommand, {
-              ...decisionContext,
-              providerSession,
-              agentRun,
-              existingAgentUsageTotal: readProviderUsageReportsForAgentRun(agentRun.id).reduce(
-                (total, report) => total + report.totalTokens,
-                0,
-              ),
-              usage: sessionCompletion.usage,
-              reportId: createId("providerUsageReport"),
-              usageRecordId: totalTokens === 0 ? null : createId("usageRecord"),
-              usageDigest,
+          } catch (error: unknown) {
+            if (!isProviderOutcomeRejectionError(error)) throw error;
+            outcomeRejectionCode = error.code;
+            completedSession = providerSessionSchema.parse({
+              ...completedSession,
+              endReason: "INTERRUPTED",
             });
-            decision = withUsage;
-            terminalUsageReport = withUsage.usageReport;
+
+            // The adapter already produced its final cumulative usage. Rejection of the stage
+            // result must not erase that spend, so derive and persist it in the same transaction as
+            // closing the session and pausing the attempt. Reusing the domain usage decision also
+            // preserves the stricter budget pause when this very report crosses a hard ceiling.
+            if (usageContext !== null) {
+              usageDecision = decideRecordProviderUsage(usageContext);
+              terminalUsageReport = usageDecision.report;
+            }
+
+            if (usageDecision?.hardPaused === true) {
+              decision = {
+                workItem: usageDecision.workItem,
+                run: usageDecision.run,
+                stageAttempt: usageDecision.stageAttempt,
+                dispatch: usageDecision.dispatch,
+                request: null,
+                nextStageAttempt: null,
+                nextDispatch: null,
+                usageRecords: usageDecision.usageRecord === null ? [] : [usageDecision.usageRecord],
+                artifacts: [],
+                acceptancePackage: null,
+                events: usageDecision.events,
+              };
+            } else {
+              const paused = decideStageAttemptHardPause({
+                now: occurredAt,
+                workItem: usageDecision?.workItem ?? workItem,
+                run: usageDecision?.run ?? run,
+                stageAttempt: usageDecision?.stageAttempt ?? stageAttempt,
+                previousStatus: stageAttempt.status,
+                pendingDispatch: usageDecision?.dispatch ?? dispatch,
+                humanRequestId: createId("humanRequest"),
+                reason: {
+                  type: "PROVIDER_OUTCOME_REJECTED",
+                  sessionOrdinal: providerSession.ordinal,
+                  errorCode: error.code,
+                },
+              });
+              decision = {
+                workItem: paused.workItem,
+                run: paused.run,
+                stageAttempt: paused.stageAttempt,
+                dispatch: paused.dispatch ?? dispatch,
+                request: paused.request,
+                nextStageAttempt: null,
+                nextDispatch: null,
+                usageRecords:
+                  usageDecision?.usageRecord === null || usageDecision === null
+                    ? []
+                    : [usageDecision.usageRecord],
+                artifacts: [],
+                acceptancePackage: null,
+                events: [
+                  ...(usageDecision?.events ?? []),
+                  ...paused.events.filter((event) => event.type !== "CONTEXT_FLOOR_EXCEEDED"),
+                ],
+              };
+            }
           }
         }
         persistWorkflowTemplate(command.payload.template, occurredAt);
@@ -7198,6 +7305,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           usageRecords: decision.usageRecords,
           artifacts: decision.artifacts,
           acceptancePackage: decision.acceptancePackage,
+          outcomeRejectionCode,
           events,
         });
       }

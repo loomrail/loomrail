@@ -156,6 +156,7 @@ export type StageAttemptPauseReason =
     }
   | { type: "PROVIDER_REJECTED_PACK"; sessionOrdinal: number }
   | { type: "PROVIDER_START_FAILED"; sessionOrdinal: number }
+  | { type: "PROVIDER_OUTCOME_REJECTED"; sessionOrdinal: number; errorCode: string }
   | { type: "SESSION_LIMIT_REACHED"; sessionOrdinal: number; maxSessions: number };
 
 export type StageAttemptPauseDecision = {
@@ -205,6 +206,14 @@ const pauseWording = (reason: StageAttemptPauseReason): PauseWording => {
         recommendation:
           "Check that the provider is reachable and configured, then resume this stage or cancel the run.",
         pauseReason: "The provider session failed to start.",
+      };
+    case "PROVIDER_OUTCOME_REJECTED":
+      return {
+        title: "The provider returned an invalid stage result",
+        context: `The provider finished its turn, but Loomrail rejected the result because it conflicts with the deterministic workflow state (${reason.errorCode}). The session and its usage were closed safely; the stage did not advance.`,
+        recommendation:
+          "Review the recorded workflow evidence, then answer this request to retry the stage or cancel the run.",
+        pauseReason: `The provider outcome was rejected by workflow validation (${reason.errorCode}).`,
       };
     case "SESSION_LIMIT_REACHED":
       return {

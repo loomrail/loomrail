@@ -1673,6 +1673,17 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         if (applied.type !== "MOCK_PROVIDER_OUTCOME_APPLIED") {
           throw new Error("The terminal provider outcome was not applied");
         }
+        if (applied.outcomeRejectionCode !== null && applied.outcomeRejectionCode !== undefined) {
+          deps.logger.warn(
+            {
+              providerSessionId: providerSession.id,
+              stageAttemptId,
+              errorCode: applied.outcomeRejectionCode,
+            },
+            "The provider outcome was rejected and the attempt was hard-paused",
+          );
+          return;
+        }
         if (live.terminalUsage !== null) {
           deps.logger.info(
             { providerSessionId: providerSession.id, stageAttemptId },

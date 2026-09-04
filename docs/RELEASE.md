@@ -1,7 +1,7 @@
 # Releasing the Loomrail launcher
 
-**Status:** alpha.4 published; alpha.5 release candidate under verification
-**Updated:** 2026-09-03
+**Status:** alpha.4 published; alpha.5 release candidate under verification; public dogfood awaiting owner acceptance
+**Updated:** 2026-09-04
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
 the SQLite migrations and the bundled fixture projects. Consumers install one package and run one binary; they never
@@ -135,8 +135,9 @@ For every authorized candidate:
 Any release that claims a live provider version also requires one exact row in the
 [provider compatibility matrix](guides/PROVIDER-COMPATIBILITY.md). Add no semver range or `latest` promise: promotion
 must include sanitized real-CLI recordings, negative parser coverage and matching macOS/Windows evidence for that
-exact version and invocation contract. The current alpha.5 candidate has no verified live row and therefore admits
-only Mock.
+exact version and invocation contract. The current alpha.5 candidate has exact macOS arm64 rows for Codex and Claude
+Code, but no matching Windows evidence. It therefore cannot claim the cross-platform live-provider release gate;
+Mock remains the only provider mode with complete macOS/Windows evidence.
 
 ### Pre-alpha channel
 

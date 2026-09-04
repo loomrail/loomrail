@@ -41,9 +41,12 @@
 - [x] Восстанавливать override form из последней durable cost policy без сброса к стартовым подсказкам при SSE.
 - [x] Продублировать границу Review/будущего Browser QA в trusted `REVIEW_INPUT`, сохранив owner-only disposition и
       запрет четвёртого review round.
-- [ ] Продолжить public target workflow с Codex implementation и независимым Claude review.
-- [ ] Выполнить browser QA и correction loop; owner-only acceptance оставить владельцу.
-- [ ] Провести Standards/Spec review и полный доступный verification gate.
+- [x] Продолжить public target workflow с Codex implementation и независимым Claude review.
+- [x] Выполнить deterministic browser QA и подготовить evidence-bound Acceptance Package; owner-only acceptance
+      оставить владельцу. Отдельный QA defect correction loop не был вызван: baseline прошёл зелёным после
+      исправления launch-конфигурации, поэтому этот rehearsal не выдаётся за доказательство defect-correction path.
+- [x] Провести Standards/Spec review и полный доступный verification gate. In-scope P0/P1/P2 не осталось; полный
+      `pnpm verify` по-прежнему останавливается только на трёх защищённых landing lint findings.
 
 ## 2. Stop conditions
 

@@ -276,6 +276,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         // version of it, and a file created for no reader is one more thing to leak.
         const stageResultJsonSchema = claudeStageResultJsonSchemaFor(invocation.session.stage, {
           humanRequests: invocation.humanRequests,
+          acceptanceInput: invocation.acceptanceInput,
         });
 
         // Verbatim, exactly as task 1's reconnaissance established it against the real CLI --
@@ -402,6 +403,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
 
             const stageResult = tryDecodeStructuredResult(event, invocation.session.stage, {
               humanRequests: invocation.humanRequests,
+              acceptanceInput: invocation.acceptanceInput,
             });
             if (stageResult !== null) {
               if (stageResult.checkpoint !== null) listener.onCheckpoint(stageResult.checkpoint);

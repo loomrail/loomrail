@@ -500,6 +500,7 @@ export const sessionPauseFailureCodes = [
   "CONTEXT_FLOOR_EXCEEDED",
   "PROVIDER_REJECTED_PACK",
   "PROVIDER_START_FAILED",
+  "PROVIDER_OUTCOME_REJECTED",
   "SESSION_LIMIT_REACHED",
 ] as const;
 
@@ -1393,6 +1394,17 @@ export const stageAttemptHardPauseReasonSchema = z.discriminatedUnion("type", [
       sessionOrdinal: z.number().int().positive(),
     })
     .strict(),
+  // The provider returned a contract-valid terminal object which the deterministic workflow
+  // rejected (for example, Acceptance evidence did not bind to the recorded Review/QA checks).
+  // Keep only the stable domain code: provider prose can contain repository text or secrets and
+  // must not cross into owner-facing durable state through an error message.
+  z
+    .object({
+      type: z.literal("PROVIDER_OUTCOME_REJECTED"),
+      sessionOrdinal: z.number().int().positive(),
+      errorCode: z.string().trim().min(1).max(100),
+    })
+    .strict(),
   // The session loop's own backstop (spec §6.5). Not a way a session fails to happen, but the one
   // way the attempt stops without any session having failed: the provider kept handing off
   // productively and the attempt never finished. It resolves the same way as the others -- pause,
@@ -1480,6 +1492,9 @@ export const mockProviderOutcomeAppliedResultSchema = z
     usageRecords: z.array(usageRecordSchema),
     artifacts: z.array(evidenceArtifactSchema),
     acceptancePackage: acceptancePackageSchema.nullable(),
+    // Present for a live terminal result that passed the adapter contract but was rejected by the
+    // deterministic workflow. Optional keeps command receipts written before this field readable.
+    outcomeRejectionCode: z.string().trim().min(1).max(100).nullable().optional(),
     events: z.array(providerOutcomeEventSchema),
   })
   .strict();

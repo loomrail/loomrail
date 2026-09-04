@@ -18,13 +18,17 @@ import {
 } from "@loomrail/contracts";
 import { z } from "zod";
 
-import type { ProviderStageResultPolicy } from "./stage-result.js";
+import type { ProviderAcceptanceInput, ProviderStageResultPolicy } from "./stage-result.js";
 
 export type { ProcessExitOutcome, ProcessRun, RunProcessOptions } from "./process-runner.js";
 export { ProcessSpawnError, runProcess } from "./process-runner.js";
 export type { UnproductiveSessionReason, UnproductiveSessionReport } from "./session-diagnosis.js";
 export { describeUnproductiveSession } from "./session-diagnosis.js";
-export type { DecodedProviderStageResult, ProviderStageResultPolicy } from "./stage-result.js";
+export type {
+  DecodedProviderStageResult,
+  ProviderAcceptanceInput,
+  ProviderStageResultPolicy,
+} from "./stage-result.js";
 export { decodeProviderStageResult, providerStageResultSchemaFor } from "./stage-result.js";
 export type {
   CliProviderDiagnostics,
@@ -154,13 +158,7 @@ export type ProviderInvocation = {
    * Acceptance. It carries no authority IDs: adapters may propose a mapping without parsing prose,
    * while the domain still resolves and verifies every durable reference itself.
    */
-  acceptanceInput: {
-    criteria: readonly string[];
-    evidence: readonly {
-      kind: "REVIEW_REPORT" | "QA_REPORT";
-      checks: readonly string[];
-    }[];
-  } | null;
+  acceptanceInput: ProviderAcceptanceInput | null;
   /**
    * Whether this StageAttempt may open a provider-authored owner gate.
    *

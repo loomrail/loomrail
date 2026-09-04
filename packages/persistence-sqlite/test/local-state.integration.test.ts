@@ -1210,7 +1210,7 @@ describe("SQLite local state", () => {
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-      29, 30, 31, 32, 33, 34,
+      29, 30, 31, 32, 33, 34, 35,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -4490,6 +4490,35 @@ describe("SQLite local state", () => {
             correctionRunId === activeCorrection.id && stage === "ACCEPTANCE" && status === "QUEUED",
         ),
       ).toBe(true);
+      const acceptanceAttempt = passingSnapshot.snapshot.stageAttempts.find(
+        ({ correctionRunId, stage }) => correctionRunId === activeCorrection.id && stage === "ACCEPTANCE",
+      );
+      const authoritativeReview = passingSnapshot.snapshot.artifacts.find(
+        ({ correctionRunId, kind, testedTree: artifactTree }) =>
+          correctionRunId === activeCorrection.id &&
+          kind === "REVIEW_REPORT" &&
+          artifactTree === correctedTree,
+      );
+      const authoritativeQA = passingSnapshot.snapshot.artifacts.find(
+        ({ kind, qaRunId }) => kind === "QA_REPORT" && qaRunId === passingRetestReservation.qaRun.id,
+      );
+      if (
+        acceptanceAttempt === undefined ||
+        authoritativeReview === undefined ||
+        authoritativeQA === undefined
+      ) {
+        throw new Error("Expected authoritative corrected Acceptance evidence");
+      }
+      const acceptanceSources = localState.query({
+        type: "READ_CONTEXT_SOURCES",
+        stageAttemptId: acceptanceAttempt.id,
+        sessionOrdinal: 1,
+      });
+      expect(
+        acceptanceSources.type === "CONTEXT_SOURCES"
+          ? acceptanceSources.sources.evidence.map(({ id }) => id)
+          : null,
+      ).toEqual([authoritativeReview.id, authoritativeQA.id]);
       expect(localState.query({ type: "GET_WORK_ITEM", workItemId: created.workItem.id })).toMatchObject({
         type: "WORK_ITEM",
         workItem: { currentStage: "ACCEPTANCE", state: "IN_PROGRESS" },
@@ -6333,7 +6362,7 @@ describe("SQLite local state", () => {
     );
   });
 
-  it("reconciles an orphaned running attempt once and persists its RecoveryReport", async () => {
+  it("records each orphaning after the same interrupted attempt is explicitly resumed", async () => {
     const localState = await open();
     localState.execute(registerProject());
     const created = localState.execute(createWorkItem("create-recovery-item"));
@@ -6384,6 +6413,53 @@ describe("SQLite local state", () => {
     });
     expect(repeated).toMatchObject({ type: "WORKFLOWS_RECONCILED", recoveryReports: [] });
 
+    const firstRecovery = localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    if (firstRecovery.type !== "WORKFLOW_SNAPSHOT" || firstRecovery.snapshot.run === null) {
+      throw new Error("Expected the interrupted workflow");
+    }
+    const resumed = localState.execute({
+      schemaVersion: 1,
+      commandId: "resume-after-first-recovery",
+      correlationId: "correlation-resume-after-first-recovery",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "RESUME_PIPELINE",
+      payload: {
+        pipelineRunId: firstRecovery.snapshot.run.id,
+        expectedVersion: firstRecovery.snapshot.run.version,
+      },
+    });
+    if (
+      resumed.type !== "PIPELINE_CONTROL_APPLIED" ||
+      resumed.action !== "RESUME" ||
+      resumed.dispatch === null
+    ) {
+      throw new Error("Expected the interrupted attempt to resume");
+    }
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "mark-second-recovery-running",
+      correlationId: "correlation-mark-second-recovery",
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "MARK_WORKFLOW_DISPATCH_STARTED",
+      payload: { dispatchId: resumed.dispatch.id },
+    });
+
+    const reconciledAgain = localState.execute({
+      schemaVersion: 1,
+      commandId: "reconcile-startup-3",
+      correlationId: "correlation-reconcile-3",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "RECONCILE_WORKFLOWS",
+      payload: {},
+    });
+    expect(reconciledAgain).toMatchObject({
+      type: "WORKFLOWS_RECONCILED",
+      recoveryReports: [{ reason: "DAEMON_RESTART", recoveredStatus: "INTERRUPTED" }],
+    });
+
     localState.close();
     state = undefined;
     const reopened = await open();
@@ -6394,7 +6470,7 @@ describe("SQLite local state", () => {
     expect(snapshot.type === "WORKFLOW_SNAPSHOT" ? snapshot.snapshot : null).toMatchObject({
       run: { status: "INTERRUPTED" },
       stageAttempts: [{ status: "INTERRUPTED", failureCode: "DAEMON_RESTART" }],
-      recoveryReports: [{ reason: "DAEMON_RESTART" }],
+      recoveryReports: [{ reason: "DAEMON_RESTART" }, { reason: "DAEMON_RESTART" }],
     });
   });
 

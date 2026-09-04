@@ -245,6 +245,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
             z.toJSONSchema(
               providerStageResultSchemaFor(invocation.session.stage, {
                 humanRequests: invocation.humanRequests,
+                acceptanceInput: invocation.acceptanceInput,
               }),
             ),
           ),
@@ -425,6 +426,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
                 // schema constrained.
                 const stageResult = tryParseStructuredResult(event.item.text, invocation.session.stage, {
                   humanRequests: invocation.humanRequests,
+                  acceptanceInput: invocation.acceptanceInput,
                 });
                 if (stageResult !== null) {
                   finalResult = stageResult;
@@ -465,6 +467,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
             }
             const stageResult = tryParseStructuredResult(line, invocation.session.stage, {
               humanRequests: invocation.humanRequests,
+              acceptanceInput: invocation.acceptanceInput,
             });
             if (stageResult !== null) {
               finalResult = stageResult;

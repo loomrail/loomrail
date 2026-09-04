@@ -811,6 +811,16 @@ a retry number. Thus hostile or simply large terminal usage cannot discard a val
 repeated execution of the same stage. A daemon crash before this transaction leaves the durable session running;
 startup recovery interrupts it and never assumes either in-memory terminal fact was committed.
 
+The same terminal transaction now also fails closed when an adapter returns a schema-valid outcome that violates
+deterministic stage semantics. Only classified workflow-output errors are converted: Loomrail ends the
+ProviderSession as interrupted, records terminal usage, fails the pending dispatch, hard-pauses the AgentRun/run/
+attempt, releases the lease and opens one owner-visible recovery request atomically. Unexpected persistence or
+programming errors still escape instead of being misclassified. The request remains answerable during Acceptance
+because it precedes any AcceptancePackage; the package's separate human-only resolution path is unchanged.
+Repeated daemon orphaning after an explicit owner resume is recorded as a new RecoveryReport episode. Migration 0035
+removes the old `(stage_attempt_id, reason)` uniqueness assumption while preserving append-only triggers, so startup
+cannot be denied by a legitimate second recovery and repeated reconciliation without a resume remains idempotent.
+
 Provider-neutral `inputTokens` includes every input class. Codex already reports cached input as a subdivision
 of total input; Claude reports ordinary input, cache creation and cache read separately, so its adapter sums all
 three into normalized input while retaining cache read only as attribution. Cached/reasoning fields are not
@@ -1050,6 +1060,9 @@ The controls are structural and verified below the model layer:
   `APPLY_PROVIDER_OUTCOME`; provider output cannot choose its own audit attribution;
 - the domain independently rejects `COMPLETED` on Acceptance, even if an adapter or internal caller
   bypasses the stage-result decoder;
+- Acceptance receives only the current-tree authoritative Review and measured QA artifacts. Its live-provider schema
+  enumerates the exact recorded criteria and evidence checks and preserves criterion order, so stale artifact IDs or
+  plausible paraphrases cannot be promoted into an AcceptancePackage;
 - EvidenceArtifact and SQLite accept only `MOCK`, `CODEX` or `CLAUDE_CODE`. Migration 0014 preserves
   historical MOCK rows, and append-only triggers remain after the table rebuild.
 - the normal first-attempt path may expose at most one provider-authored owner gate. The daemon derives

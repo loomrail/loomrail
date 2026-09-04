@@ -1275,4 +1275,92 @@ describe("session worker", () => {
     // second seeded dispatch must never reach it.
     expect(adapter.startCallCount).toBe(startedBeforeStop);
   }, 20_000);
+
+  it("fails closed when a terminal provider outcome violates workflow semantics", async () => {
+    const localState = state();
+    const logger = createRecordingLogger();
+    const adapter: ProviderAdapter = {
+      capabilities: () => ({
+        provider: "MOCK",
+        start: true,
+        interrupt: true,
+        eventStream: true,
+        usageReporting: true,
+        contextWindowReporting: false,
+        checkpointOnRequest: false,
+        contextWindowTokens: 200_000,
+        stages: ["DISCOVERY"],
+        costReporting: false,
+      }),
+      start: (_invocation, listener) => {
+        listener.onUsage({ inputTokens: 29_167, outputTokens: 551, quality: "ACTUAL" });
+        // Contract-valid, but impossible for DISCOVERY: only ACCEPTANCE may produce this outcome.
+        // This is the live failure shape that used to strand every execution record in RUNNING.
+        return Promise.resolve({
+          type: "READY_FOR_ACCEPTANCE",
+          releaseNote: "Synthetic invalid terminal result.",
+          verifyInstructions: ["Do not accept this result."],
+          criteria: [
+            {
+              criterion: "The attempt survives a context handoff",
+              implementation: "No implementation exists at Discovery.",
+              reviewCheck: "No review evidence exists.",
+              qaCheck: "No QA evidence exists.",
+              ownerVerification: "Inspect the durable failure state.",
+              knownRisk: null,
+            },
+          ],
+        });
+      },
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
+    };
+    const worker = createSessionWorker({
+      state: localState,
+      adapter,
+      template: mockDeliveryTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
+      createCommandId,
+      logger,
+    });
+    const seeded = seedQueuedAttempt(localState);
+
+    worker.wake();
+    await awaitIdle(worker);
+
+    expect(snapshotOf(localState, seeded.workItemId)).toMatchObject({
+      run: { status: "HARD_PAUSED" },
+      stageAttempts: [
+        {
+          id: seeded.stageAttemptId,
+          status: "HARD_PAUSED",
+          failureCode: "PROVIDER_OUTCOME_REJECTED",
+        },
+      ],
+      humanRequests: [
+        {
+          status: "OPEN",
+          blocking: true,
+          title: "The provider returned an invalid stage result",
+        },
+      ],
+    });
+    expect(pendingDispatchModes(localState)).toEqual([]);
+    expect(localState.query({ type: "LIST_AGENT_RUNS" })).toMatchObject({
+      type: "AGENT_RUNS",
+      runs: [{ stageAttemptId: seeded.stageAttemptId, status: "HARD_PAUSED" }],
+    });
+    expect(
+      localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId: seeded.stageAttemptId }),
+    ).toMatchObject({
+      type: "PROVIDER_SESSIONS",
+      sessions: [{ status: "ENDED", endReason: "INTERRUPTED" }],
+      usageReports: [{ totalTokens: 29_718 }],
+    });
+    const rejectionLog = logger.records.find(
+      ({ msg }) => msg === "The provider outcome was rejected and the attempt was hard-paused",
+    );
+    expect(rejectionLog?.level).toBe("warn");
+    expect(rejectionLog?.details?.["errorCode"]).toBe("WORKFLOW_STAGE_MISMATCH");
+  }, 20_000);
 });

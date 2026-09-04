@@ -102,6 +102,28 @@ export class WorkflowDomainError extends Error {
   }
 }
 
+// These failures say the provider's terminal object cannot be reconciled with the deterministic
+// workflow evidence. They differ from command/version/not-found failures: the caller itself is
+// valid, so retrying the same state-store command cannot succeed and must not leave the live
+// ProviderSession authoritative. Kept in the domain so persistence does not invent which workflow
+// errors are provider-output failures.
+export const providerOutcomeRejectionCodes = [
+  "WORKFLOW_STAGE_MISMATCH",
+  "ACCEPTANCE_NOT_READY",
+  "REVIEW_REPORT_REQUIRED",
+  "REVIEW_RUN_MISMATCH",
+  "REVIEW_TREE_STALE",
+  "QA_MEASUREMENT_REQUIRED",
+] as const satisfies readonly WorkflowDomainErrorCode[];
+
+export type ProviderOutcomeRejectionCode = (typeof providerOutcomeRejectionCodes)[number];
+
+export const isProviderOutcomeRejectionError = (
+  error: unknown,
+): error is WorkflowDomainError & { readonly code: ProviderOutcomeRejectionCode } =>
+  error instanceof WorkflowDomainError &&
+  (providerOutcomeRejectionCodes as readonly WorkflowDomainErrorCode[]).includes(error.code);
+
 type EventIntent<T extends { data: unknown; type: string }> = Pick<T, "data" | "type">;
 
 export type StartWorkflowDecision = {
@@ -1934,7 +1956,11 @@ export const decideAnswerHumanRequest = (
       "The HumanRequest is not attached to the current waiting workflow stage",
     );
   }
-  if (context.stageAttempt.stage === "ACCEPTANCE") {
+  // Once an AcceptancePackage exists, its dedicated owner transition remains the only way to
+  // finish Acceptance. A session-loop hard pause happens before any package exists, though, and
+  // deliberately opens this request as the safe retry path. Keeping the blanket stage check here
+  // made that recovery question impossible to answer.
+  if (context.stageAttempt.stage === "ACCEPTANCE" && !pausedBySessionLoop) {
     throw new WorkflowDomainError(
       "WORKFLOW_CONTROL_NOT_ALLOWED",
       "Final acceptance must be accepted, returned, or rejected through its AcceptancePackage",

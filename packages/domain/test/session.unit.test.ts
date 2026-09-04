@@ -435,6 +435,46 @@ describe("provider session decisions", () => {
       expect(decision.decision.answer).toMatchObject({ type: "OTHER" });
     });
 
+    it("lets the owner retry a rejected provider outcome during Acceptance", () => {
+      const decision = decideAnswerHumanRequest(
+        {
+          schemaVersion: 1,
+          commandId: "command-answer-acceptance",
+          correlationId: "correlation-answer-acceptance",
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "ANSWER_HUMAN_REQUEST",
+          payload: {
+            humanRequestId: "human-request-1",
+            expectedVersion: 1,
+            answer: { type: "OTHER", text: "Retry against the authoritative evidence." },
+          },
+        },
+        {
+          now,
+          workItem: { ...workItemFixture, currentStage: "ACCEPTANCE" },
+          run: pausedRun,
+          stageAttempt: attemptWith({
+            stage: "ACCEPTANCE",
+            status: "HARD_PAUSED",
+            failureCode: "PROVIDER_OUTCOME_REJECTED",
+            version: 2,
+          }),
+          request: openRequest,
+          decisionId: "decision-acceptance",
+          dispatchId: "dispatch-acceptance",
+        },
+      );
+
+      expect(decision.request.status).toBe("RESOLVED");
+      expect(decision.run.status).toBe("RUNNING");
+      expect(decision.stageAttempt).toMatchObject({
+        stage: "ACCEPTANCE",
+        status: "QUEUED",
+        failureCode: null,
+      });
+      expect(decision.dispatch).toMatchObject({ mode: "RESUME" });
+    });
+
     it("still refuses an answer to a budget hard pause", () => {
       // A budget pause carries no session failure code, and a prose answer does not buy tokens.
       expect(() =>
