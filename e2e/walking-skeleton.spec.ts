@@ -1754,7 +1754,19 @@ test.describe("authenticated walking skeleton", () => {
       timeout: BUDGET_WALL_MS,
     });
     await expect(workflowSection.getByText("100 of 100", { exact: true })).toBeVisible();
-    await workflowSection.getByLabel("Hard token budget").fill("200");
+    const overrideBudget = workflowSection.getByLabel("Hard token budget");
+    const overrideModel = workflowSection.getByLabel("Model", { exact: true });
+    const overrideBudgetControl = workflowSection.locator(".lr-text-field:has(#workflow-override-budget)");
+    const [overrideBudgetControlBox, overrideModelControlBox] = await Promise.all([
+      overrideBudgetControl.boundingBox(),
+      overrideModel.boundingBox(),
+    ]);
+    expect(overrideBudgetControlBox).not.toBeNull();
+    expect(overrideModelControlBox).not.toBeNull();
+    if (overrideBudgetControlBox && overrideModelControlBox) {
+      expect(Math.abs(overrideBudgetControlBox.y - overrideModelControlBox.y)).toBeLessThanOrEqual(0.5);
+    }
+    await overrideBudget.fill("200");
     await expect(workflowSection.getByRole("button", { name: "Approve cost policy" })).toBeEnabled();
     await workflowSection.getByRole("button", { name: "Approve cost policy" }).click();
     await expect(workflowSection.getByText("100 of 200", { exact: true })).toBeVisible();

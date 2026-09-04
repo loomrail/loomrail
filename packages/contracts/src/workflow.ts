@@ -797,6 +797,10 @@ export const providerOutcomeSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("NEEDS_HUMAN"),
       request: humanRequestDraftSchema,
+      // Set only by the trusted provider adapter after it observes a structured terminal
+      // failure. The stage-result schemas exposed to models deliberately omit this field and are
+      // strict, so provider prose cannot manufacture a system attention reason.
+      reason: z.literal("PROVIDER_RATE_LIMITED").optional(),
     })
     .strict(),
   z
@@ -1878,6 +1882,7 @@ export const providerCapabilitiesResponseSchema = z
     checkpointOnRequest: z.boolean(),
     contextWindowReporting: z.boolean(),
     costReporting: z.boolean(),
+    canReportRateLimits: z.boolean().default(false),
   })
   .strict();
 

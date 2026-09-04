@@ -27,7 +27,7 @@ export type CodexEvent =
   // The CLI's own report that the turn it was running failed -- a rate limit, an auth refusal, a
   // model error. Captured from the real CLI (see recordings/turn-failed.jsonl): the diagnostic
   // arrives as `error.message`, and is untrusted process output like every other field here.
-  | { type: "turn.failed"; errorMessage: string }
+  | { type: "turn.failed"; errorMessage: string; rateLimited: boolean }
   | {
       type: "turn.completed";
       usage: {
@@ -112,6 +112,19 @@ const parseJsonLine = (line: unknown): unknown => {
 
 const codexLineSchema = z.preprocess(parseJsonLine, rawCodexEventSchema);
 
+const structuredErrorStatusSchema = z.object({ status: z.literal(429) });
+
+// `turn.failed.error.message` is sometimes a JSON-encoded API error. Only an exact structured 429
+// is authoritative; human-readable text containing "rate limit" is untrusted prose and must not
+// create a typed system reason.
+const isStructuredRateLimit = (message: string): boolean => {
+  try {
+    return structuredErrorStatusSchema.safeParse(JSON.parse(message) as unknown).success;
+  } catch {
+    return false;
+  }
+};
+
 const toCodexEvent = (raw: z.infer<typeof rawCodexEventSchema>): CodexEvent => {
   switch (raw.type) {
     case "thread.started":
@@ -128,7 +141,11 @@ const toCodexEvent = (raw: z.infer<typeof rawCodexEventSchema>): CodexEvent => {
           }
         : { type: "item.ignored" };
     case "turn.failed":
-      return { type: "turn.failed", errorMessage: raw.error.message };
+      return {
+        type: "turn.failed",
+        errorMessage: raw.error.message,
+        rateLimited: isStructuredRateLimit(raw.error.message),
+      };
     case "turn.completed":
       return {
         type: "turn.completed",

@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LocalApiError,
   guidedActivationCreateCommandId,
+  getProjectProviderAllowance,
+  refreshProjectProviderAllowance,
   requestLocalApi,
   storeCsrfToken,
   waiveQADefect,
@@ -92,6 +94,43 @@ describe("local API client", () => {
     const headers = new Headers(requestInit?.headers);
     expect(headers.get("x-loomrail-csrf")).toBe("csrf-fixture-token");
     expect(headers.get("content-type")).toBe("application/json");
+  });
+
+  it("reads and refreshes provider allowance through the project-scoped authenticated routes", async () => {
+    const unavailable = (provider: "CODEX" | "CLAUDE_CODE" | "MOCK") => ({
+      schemaVersion: 1,
+      provider,
+      observedAt: "2026-09-04T18:00:00.000Z",
+      freshness: "UNAVAILABLE",
+      buckets: [],
+      unavailableReason: "PROVIDER_UNSUPPORTED",
+    });
+    const response = {
+      schemaVersion: 1,
+      projectId: "project / one",
+      effectiveProvider: "MOCK",
+      current: unavailable("MOCK"),
+      advisory: { status: "UNKNOWN", deferUntil: null },
+      providers: [unavailable("CODEX"), unavailable("CLAUDE_CODE")],
+    };
+    fetchMock.mockImplementation(async () =>
+      Promise.resolve(
+        new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(getProjectProviderAllowance(response.projectId)).resolves.toEqual(response);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/provider/allowance?projectId=project%20%2F%20one");
+
+    storeCsrfToken("csrf-fixture-token");
+    await expect(refreshProjectProviderAllowance(response.projectId)).resolves.toEqual(response);
+    const [url, init] = fetchMock.mock.calls[1] ?? [];
+    expect(url).toBe("/api/v1/projects/project%20%2F%20one/provider-allowance/refresh");
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("x-loomrail-csrf")).toBe("csrf-fixture-token");
   });
 
   it("keeps QA attachment identifiers inside the authenticated same-origin route", () => {

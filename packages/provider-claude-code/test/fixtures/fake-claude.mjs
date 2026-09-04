@@ -32,17 +32,31 @@ if (hangMarkerPath !== undefined) {
 } else {
   const recordPath = process.env.FAKE_CLAUDE_RECORD_PATH;
   const outputFile = process.env.FAKE_CLAUDE_OUTPUT_FILE;
+  const args = process.argv.slice(2);
+  const settingsIndex = args.indexOf("--settings");
+  const settingsPath = settingsIndex === -1 ? undefined : args[settingsIndex + 1];
+  const settings = settingsPath === undefined ? null : JSON.parse(readFileSync(settingsPath, "utf8"));
+  const settingsMode = settingsPath === undefined ? null : statSync(settingsPath).mode & 0o777;
 
   // Unlike fake-codex.mjs, this stand-in never needs to wait on stdin: nothing in the adapter
   // under test depends on when (or whether) this process's stdin closes, so there is no event to
   // defer to -- writing the record/output and exiting can happen synchronously, right here.
   if (recordPath !== undefined) {
-    const args = process.argv.slice(2);
     const mcpConfigIndex = args.indexOf("--mcp-config");
     const mcpConfigPath = mcpConfigIndex === -1 ? undefined : args[mcpConfigIndex + 1];
     const mcpConfig = mcpConfigPath === undefined ? null : JSON.parse(readFileSync(mcpConfigPath, "utf8"));
     const mcpConfigMode = mcpConfigPath === undefined ? null : statSync(mcpConfigPath).mode & 0o777;
-    writeFileSync(recordPath, JSON.stringify({ args, cwd: process.cwd(), mcpConfig, mcpConfigMode }));
+    writeFileSync(
+      recordPath,
+      JSON.stringify({
+        args,
+        cwd: process.cwd(),
+        mcpConfig,
+        mcpConfigMode,
+        settings,
+        settingsMode,
+      }),
+    );
   }
   if (outputFile !== undefined) {
     process.stdout.write(readFileSync(outputFile, "utf8"));

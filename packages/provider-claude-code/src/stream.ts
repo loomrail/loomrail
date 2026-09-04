@@ -13,6 +13,7 @@ import { z } from "zod";
 export type ClaudeEvent = {
   type: "result";
   ok: boolean;
+  rateLimited: boolean;
   text: string;
   // Claude Code may keep the schema-constrained value here even when `result` is only display
   // prose. This stays `unknown` until the stage-specific provider contract validates it.
@@ -46,6 +47,7 @@ const rawResultEventSchema = z.object({
   type: z.literal("result"),
   subtype: z.string(),
   is_error: z.boolean(),
+  api_error_status: z.number().int().nullable().optional(),
   result: z.string(),
   structured_output: z.unknown().optional(),
   total_cost_usd: z.number(),
@@ -99,6 +101,7 @@ export const parseClaudeEvent = (line: string): ClaudeEvent | null => {
       return {
         type: "result",
         ok: !raw.is_error,
+        rateLimited: raw.is_error && raw.api_error_status === 429,
         text: raw.result,
         ...(raw.structured_output === undefined ? {} : { structuredOutput: raw.structured_output }),
         costUsd: raw.total_cost_usd,

@@ -2165,6 +2165,161 @@ body.is-resizing {
   overflow-y: auto;
 }
 
+/* Provider allowance is account telemetry, not another dashboard card and not the Loomrail
+   budget. The same quiet strip appears in the board and inspector; only its outer spacing changes. */
+.provider-allowance {
+  border-block: 1px solid var(--lr-border-subtle);
+  color: var(--lr-text-secondary);
+  display: grid;
+  font-size: var(--lr-font-xs);
+  gap: var(--lr-space-2);
+  min-width: 0;
+  padding: var(--lr-space-2-5) var(--lr-space-3);
+}
+
+.provider-allowance--command-center {
+  background: var(--lr-surface-grouped);
+  border-bottom-color: var(--lr-border);
+}
+
+.provider-allowance--task-cockpit {
+  background: var(--lr-surface-inset);
+  border-inline: 1px solid var(--lr-border-subtle);
+}
+
+/* The inspector is a narrow column even on a wide desktop. Give its title a full row instead of
+   squeezing it between freshness and refresh, then keep the two controls aligned below it. */
+.provider-allowance--task-cockpit .provider-allowance__header {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.provider-allowance--task-cockpit .provider-allowance__header > strong {
+  grid-column: 1 / -1;
+}
+
+.provider-allowance__header {
+  align-items: center;
+  display: grid;
+  gap: var(--lr-space-2);
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.provider-allowance__header > strong {
+  color: var(--lr-text);
+  font-size: var(--lr-font-sm);
+  overflow-wrap: anywhere;
+}
+
+.provider-allowance__freshness {
+  align-items: center;
+  color: var(--lr-text-muted);
+  display: inline-flex;
+  font-weight: var(--lr-weight-medium);
+  gap: var(--lr-space-1);
+  white-space: nowrap;
+}
+
+.provider-allowance.is-live .provider-allowance__freshness {
+  color: var(--lr-success);
+}
+
+.provider-allowance.is-stale .provider-allowance__freshness {
+  color: var(--lr-warning);
+}
+
+.provider-allowance__buckets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lr-space-2) var(--lr-space-4);
+  list-style: none;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.provider-allowance__bucket {
+  display: grid;
+  flex: 1 1 220px;
+  gap: var(--lr-space-1) var(--lr-space-3);
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+}
+
+.provider-allowance__bucket-name {
+  color: var(--lr-text-muted);
+}
+
+.provider-allowance__bucket > strong {
+  color: var(--lr-text);
+  font-weight: var(--lr-weight-semibold);
+  text-align: right;
+}
+
+.provider-allowance__bucket > span:nth-of-type(2),
+.provider-allowance__bucket > span:nth-of-type(3) {
+  color: var(--lr-text-muted);
+}
+
+.provider-allowance__bucket > span:nth-of-type(3) {
+  text-align: right;
+}
+
+.provider-allowance__bucket details {
+  grid-column: 1 / -1;
+}
+
+.provider-allowance__bucket summary {
+  border-radius: var(--lr-radius-xs);
+  color: var(--lr-text-muted);
+  cursor: pointer;
+  display: inline-block;
+  outline: 0;
+}
+
+.provider-allowance__bucket summary:hover {
+  color: var(--lr-text);
+}
+
+.provider-allowance__bucket summary:focus-visible {
+  box-shadow: 0 0 0 2px var(--lr-focus);
+  color: var(--lr-text);
+}
+
+.provider-allowance__bucket summary:active {
+  color: var(--lr-accent);
+}
+
+.provider-allowance__bucket details > span {
+  color: var(--lr-text-muted);
+  display: block;
+  padding-top: var(--lr-space-1);
+}
+
+.provider-allowance__advisory,
+.provider-allowance__unavailable,
+.provider-allowance__error {
+  align-items: start;
+  display: flex;
+  gap: var(--lr-space-1-5);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.provider-allowance__advisory .lr-icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.provider-allowance__error {
+  color: var(--lr-danger);
+}
+
+.provider-allowance__loading {
+  align-items: center;
+  display: flex;
+  gap: var(--lr-space-3);
+}
+
 .board-toolbar {
   align-items: center;
   background: var(--lr-canvas);
@@ -2675,6 +2830,12 @@ body.is-resizing {
   display: grid;
   gap: var(--lr-space-2);
   padding: var(--lr-space-2-5);
+}
+
+.workflow-budget__kind {
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-xs);
+  font-weight: var(--lr-weight-semibold);
 }
 
 .workflow-budget__heading,
@@ -4596,6 +4757,19 @@ body.is-resizing {
   .board-view-tabs,
   .board-toolbar__actions {
     flex: 0 0 auto;
+  }
+
+  .provider-allowance__header {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .provider-allowance__header > .lr-button {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .provider-allowance__bucket {
+    flex-basis: 100%;
   }
 
   .attention-banner {

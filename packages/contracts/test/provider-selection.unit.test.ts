@@ -13,6 +13,7 @@ const liveAvailability = {
   checkpointOnRequest: false,
   contextWindowReporting: true,
   costReporting: false,
+  canReportRateLimits: false,
   models: {
     FAST: "gpt-5.6-luna",
     STANDARD: "gpt-5.6-terra",
@@ -47,15 +48,29 @@ describe("provider availability compatibility", () => {
     ).toThrow("Live provider readiness must match install, compatibility and auth state");
   });
 
-  it("rejects authentication claims made before exact version verification", () => {
-    expect(() =>
+  it("allows authentication on a separately verified read-only capability target", () => {
+    expect(
       providerAvailabilitySchema.parse({
         ...liveAvailability,
         compatibility: "UNVERIFIED",
         authentication: "REQUIRED",
         ready: false,
+        canReportRateLimits: true,
       }),
-    ).toThrow("Authentication is observed only for an exact verified live provider");
+    ).toMatchObject({ authentication: "REQUIRED", ready: false, canReportRateLimits: true });
+  });
+
+  it("rejects authentication claims for a missing or unversioned executable", () => {
+    expect(() =>
+      providerAvailabilitySchema.parse({
+        ...liveAvailability,
+        installed: false,
+        version: null,
+        compatibility: "MISSING",
+        authentication: "REQUIRED",
+        ready: false,
+      }),
+    ).toThrow("Authentication is observed only for an installed, versioned live provider target");
   });
 
   it("binds version presence and missing state to compatibility", () => {

@@ -40,6 +40,8 @@ export type UnproductiveSessionReason =
    * something that was never broken. The directory is the fact, and it is a different fact.
    */
   | "WORKING_DIRECTORY_MISSING"
+  /** A structured terminal provider status identified HTTP 429; prose alone never selects it. */
+  | "PROVIDER_RATE_LIMITED"
   /** The CLI ran and reported its own failure -- an auth refusal, a rate limit, a model error. */
   | "PROVIDER_REPORTED_FAILURE"
   /** The CLI ran, said nothing about failing, and still produced no structured result. */
@@ -197,6 +199,8 @@ const openingLine = (report: UnproductiveSessionReport): string => {
       return `Loomrail could not start "${report.command}", the executable the ${report.provider} adapter runs.`;
     case "WORKING_DIRECTORY_MISSING":
       return `Loomrail did not start the ${report.provider} CLI: the directory this session was to run in is not there (${workingDirectoryOf(report)}). The workspace this stage was given has been removed or moved since it was recorded.`;
+    case "PROVIDER_RATE_LIMITED":
+      return `The ${report.provider} CLI reported a provider rate limit in its structured terminal status, so this session produced no result.`;
     case "PROVIDER_REPORTED_FAILURE":
       return `The ${report.provider} CLI reported that its own turn failed, so this session produced no result.`;
     case "NO_STRUCTURED_RESULT":
@@ -214,6 +218,8 @@ const recommendationFor = (report: UnproductiveSessionReport): string => {
       return `Check that "${report.command}" is installed and executable on this machine, then resume the attempt.`;
     case "WORKING_DIRECTORY_MISSING":
       return `Restore ${workingDirectoryOf(report)} -- the work item's own worktree, cut from the project's repository -- then resume the attempt. Nothing is wrong with "${report.command}" or with this machine's install of it.`;
+    case "PROVIDER_RATE_LIMITED":
+      return "Check the provider allowance shown in Loomrail for the latest known reset. Resume the attempt when capacity is available; the allowance is advisory and does not resume work by itself.";
     case "PROVIDER_REPORTED_FAILURE":
       return "Read the provider's own message above -- an authentication prompt, a rate limit and a model error each need a different fix -- then resume the attempt.";
     case "NO_STRUCTURED_RESULT":
@@ -235,6 +241,8 @@ const titleFor = (report: UnproductiveSessionReport): string => {
       return `${report.provider} could not start its CLI`;
     case "WORKING_DIRECTORY_MISSING":
       return `${report.provider} had no directory to run in`;
+    case "PROVIDER_RATE_LIMITED":
+      return `${report.provider} reached a provider rate limit`;
     case "PROVIDER_REPORTED_FAILURE":
       return `${report.provider} reported a failed turn`;
     case "NO_STRUCTURED_RESULT":
@@ -282,6 +290,7 @@ export const describeUnproductiveSession = (report: UnproductiveSessionReport): 
 
   return {
     type: "NEEDS_HUMAN",
+    ...(report.reason === "PROVIDER_RATE_LIMITED" ? { reason: "PROVIDER_RATE_LIMITED" as const } : {}),
     request: humanRequestDraftSchema.parse({
       kind: "FREE_TEXT",
       blocking: true,

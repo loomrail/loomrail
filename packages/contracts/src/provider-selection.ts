@@ -62,6 +62,7 @@ export const providerAvailabilitySchema = z
     checkpointOnRequest: z.boolean(),
     contextWindowReporting: z.boolean(),
     costReporting: z.boolean(),
+    canReportRateLimits: z.boolean().default(false),
     models: providerModelMappingSchema.nullable(),
   })
   .strict()
@@ -73,6 +74,7 @@ export const providerAvailabilitySchema = z
         availability.version !== null ||
         availability.compatibility !== "BUILT_IN" ||
         !availability.ready ||
+        availability.canReportRateLimits ||
         availability.models !== null
       ) {
         context.addIssue({
@@ -95,10 +97,13 @@ export const providerAvailabilitySchema = z
         message: "Live provider version presence must match its compatibility state",
       });
     }
-    if (availability.compatibility !== "VERIFIED" && availability.authentication !== "UNKNOWN") {
+    if (
+      availability.authentication !== "UNKNOWN" &&
+      (!availability.installed || availability.version === null)
+    ) {
       context.addIssue({
         code: "custom",
-        message: "Authentication is observed only for an exact verified live provider",
+        message: "Authentication is observed only for an installed, versioned live provider target",
       });
     }
     if (

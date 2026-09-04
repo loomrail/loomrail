@@ -71,6 +71,7 @@ const requireConsistentSource = (source: AttentionProjectionSource): void => {
 
 const categoryFor = (source: AttentionProjectionSource): AttentionCategory => {
   if (source.acceptancePackageId !== null) return "APPROVAL";
+  if (source.stageAttempt.failureCode === "PROVIDER_RATE_LIMITED") return "MANUAL_ACTION";
   if (
     source.stageAttempt.status === "HARD_PAUSED" &&
     isSessionPauseFailureCode(source.stageAttempt.failureCode)
@@ -130,6 +131,10 @@ export const buildAttentionInbox = (
         },
         section: sectionFor(source.request, category),
         category,
+        reason:
+          source.stageAttempt.failureCode === "PROVIDER_RATE_LIMITED"
+            ? ("PROVIDER_RATE_LIMITED" as const)
+            : null,
         action:
           source.acceptancePackageId === null ? ("ANSWER_REQUEST" as const) : ("REVIEW_ACCEPTANCE" as const),
         acceptancePackageId: source.acceptancePackageId,

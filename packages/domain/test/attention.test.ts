@@ -144,6 +144,18 @@ describe("Attention Inbox projection", () => {
     expect(inbox.items.map(({ section }) => section)).toEqual(["QUESTIONS", "MANUAL_ACTIONS"]);
   });
 
+  it("projects a structured provider rate limit as a typed manual action", () => {
+    const inbox = buildAttentionInbox([
+      source({ id: "provider-limit", failureCode: "PROVIDER_RATE_LIMITED" }),
+    ]);
+
+    expect(inbox.items[0]).toMatchObject({
+      category: "MANUAL_ACTION",
+      reason: "PROVIDER_RATE_LIMITED",
+      action: "ANSWER_REQUEST",
+    });
+  });
+
   it("sorts by section, priority, age and stable id", () => {
     const inbox = buildAttentionInbox([
       source({ id: "low", priority: "LOW", createdAt: "2026-09-01T08:00:00.000Z" }),

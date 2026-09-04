@@ -32,6 +32,7 @@ const providers = (
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: true,
+      canReportRateLimits: false,
       models: null,
     },
     {
@@ -45,6 +46,7 @@ const providers = (
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: false,
+      canReportRateLimits: liveReady,
       models: { FAST: "gpt-fast", STANDARD: "gpt-standard", DEEP: "gpt-deep" },
     },
   ],

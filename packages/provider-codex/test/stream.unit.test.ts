@@ -72,7 +72,18 @@ describe("parseCodexEvent", () => {
     expect(event).toEqual({
       type: "turn.failed",
       errorMessage: "The model is not supported when using Codex with a ChatGPT account.",
+      rateLimited: false,
     });
+  });
+
+  it("recognises only a structured 429 as a provider rate limit", () => {
+    const structured = parseCodexEvent(
+      JSON.stringify({ type: "turn.failed", error: { message: JSON.stringify({ status: 429 }) } }),
+    );
+    const prose = parseCodexEvent('{"type":"turn.failed","error":{"message":"rate limit reached"}}');
+
+    expect(structured).toMatchObject({ type: "turn.failed", rateLimited: true });
+    expect(prose).toMatchObject({ type: "turn.failed", rateLimited: false });
   });
 
   it("reads the recorded stream of a real failed run", () => {

@@ -149,6 +149,11 @@ import {
   setProjectProviderPreferenceCommandSchema,
 } from "./provider-selection.js";
 import {
+  providerAllowanceRecordedEventSchema,
+  providerAllowanceRecordedResultSchema,
+  recordProviderAllowanceCommandSchema,
+} from "./provider-allowance.js";
+import {
   completeProjectScaffoldCommandSchema,
   failProjectScaffoldCommandSchema,
   projectScaffoldCompletedEventSchema,
@@ -349,6 +354,7 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   projectReadinessAssessedEventSchema,
   projectReadinessAttestedEventSchema,
   projectProviderPreferenceChangedEventSchema,
+  providerAllowanceRecordedEventSchema,
   mcpProfileConsentedEventSchema,
   mcpGrantChangedEventSchema,
   workItemCreatedEventSchema,
@@ -548,6 +554,7 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   recordProjectReadinessAssessmentCommandSchema,
   attestProjectReadinessCheckCommandSchema,
   setProjectProviderPreferenceCommandSchema,
+  recordProviderAllowanceCommandSchema,
   confirmMcpProfileCommandSchema,
   setMcpProfileGrantCommandSchema,
   revokeMcpProfileGrantCommandSchema,
@@ -655,6 +662,7 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   projectReadinessAssessedResultSchema,
   projectReadinessAttestedResultSchema,
   projectProviderPreferenceChangedResultSchema,
+  providerAllowanceRecordedResultSchema,
   mcpProfileConsentedResultSchema,
   mcpGrantChangedResultSchema,
   mcpCapabilityRecordedResultSchema,

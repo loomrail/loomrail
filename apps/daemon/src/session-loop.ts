@@ -8,6 +8,7 @@ import {
   contextWindowUsageSchema,
   maxCarriedPaths,
   providerSessionProcessPidSchema,
+  providerAllowanceSnapshotSchema,
   providerUsageSchema,
   type AgentProfile,
   type AgentRunPolicySnapshot,
@@ -1237,6 +1238,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       handoffRequested: false,
       checkpointWriteFailed: false,
       usageReported: false,
+      allowanceReported: false,
       terminalUsage: null as ProviderUsage | null,
       // Every integer percent already reported to state for this session. At most 101 entries.
       // See the comment on `reportedPercent` in `onContextWindow`.
@@ -1387,6 +1389,37 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           },
           "The provider terminal usage was validated",
         );
+      },
+      // Provider allowance is account-capacity telemetry, not session usage and never a workflow
+      // command. Claude can only supply it while an already-authorized session is running; this
+      // callback validates and records that observation without allowing a failed advisory write
+      // to discard the provider's actual stage result.
+      onAllowance: (reported) => {
+        if (live.closed || isAuthorityRevoked(authoritySignal) || live.allowanceReported) return;
+        const snapshot = providerAllowanceSnapshotSchema.safeParse(reported);
+        if (!snapshot.success || snapshot.data.provider !== capabilities.provider) {
+          deps.logger.warn(
+            { providerSessionId: providerSession.id },
+            "The provider reported allowance data that does not satisfy the contract",
+          );
+          return;
+        }
+        live.allowanceReported = true;
+        try {
+          deps.state.execute({
+            schemaVersion: 1,
+            commandId: `allowance-${providerSession.id}`,
+            correlationId: deps.correlationId,
+            actor,
+            type: "RECORD_PROVIDER_ALLOWANCE",
+            payload: { projectId: deps.dispatch.projectId, snapshot: snapshot.data },
+          });
+        } catch (error: unknown) {
+          deps.logger.warn(
+            { providerSessionId: providerSession.id, error: errorName(error) },
+            "The provider allowance observation could not be persisted; the session continues",
+          );
+        }
       },
       // Spec §8 follow-up: the durable half of `ProviderSessionListener.onProcessStarted`
       // (@loomrail/provider-core) -- a live adapter calls this at most once, right after its

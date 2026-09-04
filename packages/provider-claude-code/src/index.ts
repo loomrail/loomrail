@@ -26,7 +26,6 @@ import {
 import { z } from "zod";
 
 export { claudeCodeProviderDiagnostics } from "./diagnostics.js";
-
 import { parseClaudeEvent } from "./stream.js";
 
 export type { ClaudeEvent } from "./stream.js";
@@ -217,6 +216,13 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         // on. This one does -- see the `onContextWindow` call below, mirroring provider-codex's
         // `turn.completed` handler.
         contextWindowReporting: true,
+        // Claude's documented rate-limit fields are delivered to the interactive terminal's
+        // status-line command. This adapter is deliberately headless (`claude -p`), and live
+        // v2.1.260 probes confirmed that the process exits without invoking that command after
+        // its first response. Claude Desktop exposes no separate machine-readable allowance
+        // interface. Claim no capability until the provider offers a documented headless seam;
+        // scraping the TUI or mutating the owner's global status-line settings is not acceptable.
+        canReportRateLimits: false,
         // The one thing this adapter can report that provider-codex cannot: `total_cost_usd` on
         // the terminal `result` event is a real figure from the CLI, not something Loomrail has
         // to estimate.
@@ -326,6 +332,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         // "Not logged in · Please run /login" text spec §9 line 291 promised the owner and never
         // delivered.
         let providerFailureText: string | undefined;
+        const providerFailure = { rateLimited: false, text: undefined as string | undefined };
         // Spec §9's "invalid JSON -> the line is dropped with a record". `parseClaudeEvent` stays
         // pure (no logger), so the record is a count kept here and stated in the session's own
         // diagnosis. Note this counts every line the parser surfaced nothing for, which includes
@@ -397,6 +404,8 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
               // one string that tells the owner what to do, and the one this adapter used to
               // discard in favour of a CONTEXT_EXHAUSTED it had measured nothing to support.
               providerFailureText = event.text;
+              providerFailure.rateLimited = event.rateLimited;
+              providerFailure.text = event.text;
               outcome = undefined;
               return;
             }
@@ -454,7 +463,12 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         return describeUnproductiveSession({
           provider: "CLAUDE_CODE",
           command: resolved.command,
-          reason: providerFailureText === undefined ? "NO_STRUCTURED_RESULT" : "PROVIDER_REPORTED_FAILURE",
+          reason:
+            providerFailure.text === undefined
+              ? "NO_STRUCTURED_RESULT"
+              : providerFailure.rateLimited
+                ? "PROVIDER_RATE_LIMITED"
+                : "PROVIDER_REPORTED_FAILURE",
           exitCode: exit.code,
           signal: exit.signal,
           linesReceived,

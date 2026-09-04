@@ -15,6 +15,7 @@ describe("parseClaudeEvent", () => {
     expect(event).toEqual({
       type: "result",
       ok: false,
+      rateLimited: false,
       text: "Not logged in · Please run /login",
       costUsd: 0,
       inputTokens: 0,
@@ -30,12 +31,21 @@ describe("parseClaudeEvent", () => {
     expect(event).toEqual({
       type: "result",
       ok: true,
+      rateLimited: false,
       text: "ok",
       costUsd: 0.0031,
       inputTokens: 15,
       outputTokens: 5,
       cachedInputTokens: 3,
     });
+  });
+
+  it("recognises an error result with API status 429 as a provider rate limit", () => {
+    const event = parseClaudeEvent(
+      '{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"capacity unavailable","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0}}',
+    );
+
+    expect(event).toMatchObject({ type: "result", ok: false, rateLimited: true });
   });
 
   it("keeps the CLI's structured output separate from its display result", () => {

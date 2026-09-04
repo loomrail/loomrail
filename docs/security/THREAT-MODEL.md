@@ -111,7 +111,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T44 | Bundled sample executes hidden code or carries unreviewed repository input   | High     | exact file catalog; regular bounded files; no dependencies/lifecycle scripts/links; no implicit execution                                                                                    | see Q10 bundled-sample delta below                                                |
 | T45 | Public issue intake exposes private data or routes a vulnerability publicly  | High     | closed forms; explicit public-data acknowledgement; enabled private reporting; no uploads/log requests; no runtime ingestion                                                                 | see Q11 public-intake delta below                                                 |
 | T46 | Insights/report export leaks sensitive local workflow or machine metadata    | High     | numeric/enum facts; strict nested schemas; exact preview/download object; authenticated loopback; no network sender                                                                          | see Q12 private-reporting delta below                                             |
-| T47 | Forged, stale or ambiguous provider allowance misleads scheduling or spend   | High     | official structured surface only; closed adapter schema; explicit used/remaining label; observed/reset time and freshness; advisory-only scheduling; no account/credential persistence       | planned Q16 provider-allowance delta below                                        |
+| T47 | Forged, stale or ambiguous provider allowance misleads scheduling or spend   | High     | official structured surface only; closed adapter schema; explicit used/remaining label; observed/reset time and freshness; advisory-only scheduling; no account/credential persistence       | Q16 provider-allowance delta below                                                |
 | T48 | Repository-proposed verification recipe executes attacker-controlled code    | Critical | proposal is inert; exact owner-approved revision; argv/no-shell trusted runner; scoped cwd/env/network; time/output bounds; no install/Git/deploy authority; durable idempotent execution    | planned Q17 Project-verification delta below                                      |
 | T49 | Guided activation hides authority or publishes an unsafe install sequence    | High     | exact closed install contract; Mock-only preflight; explicit side effects and owner actions; fragment-only bootstrap; durable idempotent Task; no parallel progress truth                    | see Q15 canonical-activation delta below                                          |
 
@@ -676,28 +676,47 @@ Required controls and verification:
 Residual risk remains until that CI run exists for the fixed Q15 commit and the protected landing consumes the same
 contract. Windows live-provider compatibility is unrelated: Q15 remains Mock-only on every platform.
 
-### Q16 provider-allowance delta (T47, planned)
+### Q16 provider-allowance delta (T47)
 
 Q16 adds a read-only observation path from official provider status surfaces into Command Center, Task Cockpit and an
 advisory scheduler hint. A compromised executable, schema drift, old observation or UI label could invert «used» and
 «remaining», present expired capacity as current, leak account metadata or make an external estimate look like a
-Loomrail hard budget. T47 stays open until the Q16 spec names and the implementation passes all of these controls:
+Loomrail hard budget. Q16 closes the in-product T47 path with these controls:
 
-- capability is optional and version/platform/auth-mode scoped; an unsupported provider reports `UNAVAILABLE` rather
-  than a zero value;
-- adapters accept only a closed runtime schema from documented structured provider data. ANSI, terminal prose,
-  screenshots and user status-line output are never parsed;
+- capability is optional and exact target/auth/version scoped by the provider registry; the current Codex row is
+  `0.153.1 / darwin / arm64 / ChatGPT`, while another login mode fails closed. An unsupported or unverified provider
+  reports `UNAVAILABLE` rather than a zero value. No allowance probe broadens provider readiness;
+- Codex uses a bounded, fixed-vocabulary App Server JSON-RPC child (`initialize`, `initialized`,
+  `account/rateLimits/read`) with argv/no-shell, minimal environment, response-size/deadline bounds and confirmed
+  termination. Claude's current headless adapter and Claude Desktop expose no verified machine-readable delivery
+  seam for interactive status-line data, so they claim no capability, inject no `--settings` and remain unavailable;
+- adapters accept only closed runtime schemas from documented structured provider data. ANSI, arbitrary terminal
+  prose, screenshots, account/profile fields and unrelated status-line input are never normalized or persisted;
 - normalized rows retain provider/bucket, used percentage, derived remaining percentage, window duration, reset time,
   `observedAt` and `LIVE | STALE | UNAVAILABLE`; bounds, clock skew and expired windows fail closed to stale/unavailable;
 - UI text explicitly says «used» or «remaining», includes reset/freshness, does not encode state by color alone and
   renders provider allowance separately from authoritative Loomrail budget;
-- allowance cannot mutate BudgetPolicy, permissions, workflow, acceptance or an existing AgentRun snapshot. Until a
-  later owner-approved scheduling policy exists, it can only rank/defer proposed new work with a visible reason;
+- allowance cannot mutate BudgetPolicy, permissions, workflow, acceptance or an existing AgentRun snapshot. Its
+  deterministic `CAPACITY_AVAILABLE | LOW_CAPACITY | LIMIT_REACHED | UNKNOWN` advisory and optional `deferUntil` are
+  visible hints only; no dispatch veto or automatic resume exists;
+- only a structured terminal HTTP 429 creates the typed `PROVIDER_RATE_LIMITED` Attention reason. Provider prose cannot
+  manufacture it, a reset time is explanatory only, and resuming remains a separate owner action;
+- snapshot and append-only Event are written in one idempotent SQLite transaction; strictly older observations are
+  rejected, restart recalculates freshness from the stored `observedAt`, and concurrent refreshes coalesce per
+  Project/provider. The daemon's three-second outer deadline frees a timed-out coalescing slot so a later retry can
+  start a new bounded read. GET and refresh use the ordinary authenticated loopback session; refresh additionally
+  requires exact Origin and CSRF;
 - no account identifier, credential, raw response or status-line configuration enters SQLite, Events, logs, export or
   telemetry; adapter errors use closed redacted codes;
-- required verification covers malicious/overlong/NaN/out-of-range data, missing and multiple buckets, reset/expiry,
-  stale after restart, provider drift, label inversion, redaction canaries, advisory-only scheduling and macOS/Windows
-  UI states.
+- verification covers malicious/overlong/NaN/out-of-range data, missing and multiple buckets, reset/expiry, stale
+  after restart, JSON-RPC wrong-id/error/timeout/premature-exit/kill, nullable/expanded provider schemas, full
+  sensitive canaries, Claude negative capability/no-settings behavior, label inversion, keyboard refresh, narrow
+  layout and advisory-only behavior.
+
+Residual risk remains until an exact installed Codex version has a fresh authenticated supported-row capture and the
+packaged build is exercised on a real Windows host. Claude allowance needs a future official headless delivery seam
+and a new exact compatibility decision; Desktop/TUI presence is not evidence. These are release-evidence gates, not
+permission to reinterpret unavailable data as zero or to make allowance authoritative meanwhile.
 
 ### Q17 Project-verification delta (T48, planned)
 

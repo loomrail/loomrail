@@ -62,7 +62,8 @@ const createFakeClaudeProvider = (
 //   `-c` / `--config` (Codex) is an arbitrary config override -- `codex exec --help` documents
 //   `-c 'sandbox_permissions=["disk-full-read-access"]'`, a sandbox escape with no dangerous word in
 //   it anywhere;
-//   `--settings` and `--tools` (Claude) are the equivalent widening levers on that side.
+//   `--tools` (Claude) is an equivalent widening lever. Arbitrary `--settings` remains forbidden;
+//   the headless adapter does not receive interactive status-line data.
 //
 // What a name list can never cover is a VALUE-shaped relaxation: `-s danger-full-access` and
 // `--permission-mode dontAsk` are legitimate flags carrying dangerous values, and a name check would
@@ -82,7 +83,6 @@ const FORBIDDEN_PERMISSION_BYPASS_FLAGS: readonly string[] = [
   "--add-dir",
   "-c",
   "--config",
-  "--settings",
   "--tools",
 ];
 
@@ -142,6 +142,8 @@ type Spawned = {
   cwd: string;
   mcpConfig: unknown;
   mcpConfigMode: number | null;
+  settings: unknown;
+  settingsMode: number | null;
   readonly recordPath: string;
 };
 
@@ -152,6 +154,8 @@ const recordSpawn = (): Spawned => {
     cwd: "",
     mcpConfig: null,
     mcpConfigMode: null,
+    settings: null,
+    settingsMode: null,
     recordPath: join(dir, "spawn-record.json"),
   };
 };
@@ -234,11 +238,15 @@ const startWith = async (
     cwd: string;
     mcpConfig: unknown;
     mcpConfigMode: number | null;
+    settings: unknown;
+    settingsMode: number | null;
   };
   spawned.args = recorded.args;
   spawned.cwd = recorded.cwd;
   spawned.mcpConfig = recorded.mcpConfig;
   spawned.mcpConfigMode = recorded.mcpConfigMode;
+  spawned.settings = recorded.settings;
+  spawned.settingsMode = recorded.settingsMode;
   return outcome;
 };
 
@@ -350,6 +358,7 @@ describe("createClaudeCodeProvider", () => {
     const capabilities = createClaudeCodeProvider().capabilities();
     expect(capabilities.provider).toBe("CLAUDE_CODE");
     expect(capabilities.costReporting).toBe(true);
+    expect(capabilities.canReportRateLimits).toBe(false);
   });
 
   // Task 1's reconnaissance could not confirm an injection channel into a running session (the
@@ -396,6 +405,14 @@ describe("createClaudeCodeProvider", () => {
     expect(spawned.args).not.toContain("--allowedTools");
     expect(spawned.mcpConfig).toEqual({ mcpServers: {} });
     if (process.platform !== "win32") expect(spawned.mcpConfigMode).toBe(0o600);
+  });
+
+  it("does not inject interactive status-line settings into a headless session", async () => {
+    const spawned = recordSpawn();
+    await startWith(spawned, createFakeClaudeProvider());
+    expect(spawned.args).not.toContain("--settings");
+    expect(spawned.settings).toBeNull();
+    expect(spawned.settingsMode).toBeNull();
   });
 
   it("writes only the Loomrail proxy connector into the strict MCP config", async () => {
@@ -450,7 +467,6 @@ describe("createClaudeCodeProvider", () => {
 
     for (const smuggled of [
       "--add-dir=/tmp/somewhere-else",
-      "--settings=/tmp/settings.json",
       '--config=sandbox_permissions=["disk-full-read-access"]',
       "-csandbox_permissions=x",
       "--permission-mode=bypassPermissions",
@@ -515,6 +531,14 @@ describe("createClaudeCodeProvider", () => {
     expect(request.blocking).toBe(true);
     expect(request.context).toContain("Not logged in");
     expect(request.context).toContain("Please run /login");
+  });
+
+  it("returns a typed owner action for a terminal API status 429", async () => {
+    const outcome = await runAgainstLines([
+      '{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"capacity unavailable","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0}}',
+    ]);
+
+    expect(outcome).toMatchObject({ type: "NEEDS_HUMAN", reason: "PROVIDER_RATE_LIMITED" });
   });
 
   // A successful CLI exit is not evidence that the workflow stage completed. Whitespace cannot

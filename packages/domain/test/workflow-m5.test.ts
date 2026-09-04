@@ -324,6 +324,52 @@ describe("M5 workflow decisions", () => {
     ).toEqual([0.5, 0.8, 0.95, 1]);
   });
 
+  it("keeps a trusted provider-rate-limit reason on the waiting attempt", () => {
+    const decision = decideApplyProviderOutcome(
+      {
+        schemaVersion: 1,
+        commandId: "apply-provider-limit",
+        correlationId: "correlation-provider-limit",
+        actor: { type: "SYSTEM", id: "provider-adapter" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          resultTree: null,
+          dispatchId: dispatch.id,
+          template,
+          outcome: {
+            type: "NEEDS_HUMAN",
+            reason: "PROVIDER_RATE_LIMITED",
+            request: {
+              kind: "FREE_TEXT",
+              blocking: true,
+              title: "Provider capacity reached",
+              context: "The terminal provider status reported HTTP 429.",
+              recommendation: "Resume when capacity is available.",
+              options: [],
+              allowOther: true,
+            },
+          },
+        },
+      },
+      {
+        now,
+        workItem,
+        run,
+        stageAttempt,
+        dispatch,
+        budgetPolicy,
+        existingUsageRecords: [],
+        usageRecordIds: [],
+        humanRequestId: "provider-limit-request",
+      },
+    );
+
+    expect(decision.stageAttempt).toMatchObject({
+      status: "WAITING_HUMAN",
+      failureCode: "PROVIDER_RATE_LIMITED",
+    });
+  });
+
   it("rejects a session-level outcome as a stage result", () => {
     // HANDED_OFF and CONTEXT_EXHAUSTED (spec \u00a75.2) are session-level: the session loop
     // (spec \u00a76.3) handles them, not this stage-level decision. Built by breaking exactly

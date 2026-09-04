@@ -43,6 +43,7 @@ describe("attention contracts", () => {
     stage: { id: request.stageAttemptId, name: "PLAN", status: "WAITING_HUMAN" },
     section: "BLOCKING_NOW",
     category: "QUESTION",
+    reason: null,
     action: "ANSWER_REQUEST",
     acceptancePackageId: null,
     affectedStages: ["PLAN"],

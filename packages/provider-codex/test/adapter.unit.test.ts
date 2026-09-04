@@ -496,6 +496,7 @@ describe("createCodexProvider", () => {
   it("declares itself as Codex and now serves every stage, including the two that need a repository", () => {
     const capabilities = createCodexProvider().capabilities();
     expect(capabilities.provider).toBe("CODEX");
+    expect(capabilities.canReportRateLimits).toBe(true);
     expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
     expect(capabilities.checkpointOnRequest).toBe(false);
   });
@@ -1156,6 +1157,14 @@ describe("createCodexProvider", () => {
     const request = expectNeedsHuman(outcome);
     expect(request.title).toContain("failed turn");
     expect(request.context).toContain("is not supported when using Codex with a ChatGPT account");
+  });
+
+  it("returns a typed owner action only for a structured provider 429", async () => {
+    const outcome = await runAgainstLines([
+      JSON.stringify({ type: "turn.failed", error: { message: JSON.stringify({ status: 429 }) } }),
+    ]);
+
+    expect(outcome).toMatchObject({ type: "NEEDS_HUMAN", reason: "PROVIDER_RATE_LIMITED" });
   });
 
   // M4: the sibling adapter has always caught `ProcessSpawnError`; this one let it reject out of

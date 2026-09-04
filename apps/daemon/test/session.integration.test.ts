@@ -646,6 +646,79 @@ describe("stage attempt session loop", () => {
     expect(snapshotOf(localState, seeded.workItemId).usageRecords).toMatchObject([{ amount: 60 }]);
   });
 
+  it("records a sanitized Claude allowance observation without changing session outcome or budget", async () => {
+    const localState = await open();
+    const seeded = queuedAttempt(localState);
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-provider-allowance-agent",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: seeded.dispatch.id,
+        provider: "CLAUDE_CODE",
+        modelMapping: { FAST: "fast", STANDARD: "standard", DEEP: "deep" },
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (started.type !== "AGENT_RUN_STARTED") throw new Error("Expected an AgentRun");
+    const reporting: ProviderAdapter = {
+      capabilities: () =>
+        providerCapabilitiesSchema.parse({
+          provider: "CLAUDE_CODE",
+          start: true,
+          interrupt: true,
+          eventStream: true,
+          usageReporting: false,
+          contextWindowReporting: false,
+          checkpointOnRequest: false,
+          contextWindowTokens: 4_000,
+          stages: ["DISCOVERY", "PLAN", "REVIEW"],
+          costReporting: true,
+          canReportRateLimits: true,
+        }),
+      modelMapping: () => ({ FAST: "fast", STANDARD: "standard", DEEP: "deep" }),
+      start: (_invocation, listener) => {
+        listener.onAllowance?.({
+          schemaVersion: 1,
+          provider: "CLAUDE_CODE",
+          observedAt: "2026-08-25T17:59:59.000Z",
+          freshness: "LIVE",
+          buckets: [
+            {
+              id: "claude:five-hour",
+              name: "5 hour",
+              kind: "FIVE_HOUR",
+              usedPercent: 40,
+              remainingPercent: 60,
+              windowDurationMins: 300,
+              resetsAt: "2026-08-25T20:00:00.000Z",
+              limitReached: false,
+            },
+          ],
+          unavailableReason: null,
+        });
+        return Promise.resolve(completingOutcome());
+      },
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
+    };
+
+    await runStageAttempt(depsFor(localState, seeded, reporting));
+
+    expect(
+      localState.query({ type: "GET_PROVIDER_ALLOWANCES", projectId: seeded.dispatch.projectId }),
+    ).toMatchObject({
+      type: "PROVIDER_ALLOWANCES",
+      snapshots: [{ provider: "CLAUDE_CODE", buckets: [{ remainingPercent: 60 }] }],
+    });
+    const workflow = snapshotOf(localState, seeded.workItemId);
+    expect(workflow.stageAttempts[0]).toMatchObject({ status: "SUCCEEDED" });
+    expect(workflow.usageRecords).toEqual([]);
+    expect(eventTypes(localState)).toContain("PROVIDER_ALLOWANCE_RECORDED");
+  });
+
   it("preserves a completed stage when its terminal usage exhausts the immutable AgentRun budget", async () => {
     const localState = await open();
     const seeded = queuedAttempt(localState);

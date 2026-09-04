@@ -7,6 +7,7 @@ export * from "./reporting.js";
 export * from "./scaffolding.js";
 export * from "./event-stream.js";
 export * from "./mcp.js";
+export * from "./provider-allowance.js";
 export * from "./provider-selection.js";
 export * from "./qa.js";
 export * from "./review.js";

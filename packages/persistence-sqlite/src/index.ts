@@ -49,6 +49,7 @@ import {
   readinessCheckSchema,
   sessionPauseFailureCodes,
   providerSessionSchema,
+  providerAllowanceSnapshotSchema,
   providerUsageReportSchema,
   providerUsageSchema,
   recoveryReportSchema,
@@ -105,6 +106,7 @@ import {
   type ReadinessAttestation,
   type ReadinessCheck,
   type ProviderSession,
+  type ProviderAllowanceSnapshot,
   type ProviderUsageReport,
   type RecoveryReport,
   type ReviewFinding,
@@ -141,6 +143,7 @@ import {
   decideQAReservation,
   qaWorkflowOutcome,
   decideProjectProviderPreference,
+  decideRecordProviderAllowance,
   decideRecordProviderUsage,
   decideApproveBudgetOverride,
   decideAnswerHumanRequest,
@@ -186,6 +189,7 @@ import {
   ReadinessDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
+  ProviderAllowanceDomainError,
   QACompletionError,
   QACorrectionError,
   QADefectDispositionError,
@@ -201,6 +205,7 @@ import {
   type ProjectReadinessAssessedIntent,
   type ProjectReadinessAttestedIntent,
   type ProjectProviderPreferenceChangedIntent,
+  type ProviderAllowanceRecordedIntent,
   type FailedQACorrectionTransition,
   type PassedQACorrectionTransition,
   type QACorrectionGateResolution,
@@ -257,6 +262,16 @@ const projectRowSchema = z.object({
   version: z.number().int(),
   created_at: z.string(),
   updated_at: z.string(),
+});
+
+const providerAllowanceRowSchema = z.object({
+  project_id: z.string(),
+  provider: z.string(),
+  schema_version: z.number().int(),
+  observed_at: z.string(),
+  freshness: z.string(),
+  snapshot_json: z.string(),
+  recorded_at: z.string(),
 });
 
 const workItemRowSchema = z.object({
@@ -1002,6 +1017,7 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LIST_PROJECTS") }).strict(),
   z.object({ type: z.literal("GET_REPORTING_FACTS") }).strict(),
   z.object({ type: z.literal("GET_PROJECT"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_PROVIDER_ALLOWANCES"), projectId: opaqueIdSchema }).strict(),
   z
     .object({
       type: z.literal("GET_PROJECT_BY_REPOSITORY_PATH"),
@@ -1135,6 +1151,23 @@ const projectFromRow = (value: unknown): Project => {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
+};
+
+const providerAllowanceFromRow = (value: unknown): ProviderAllowanceSnapshot => {
+  const row = providerAllowanceRowSchema.parse(value);
+  const snapshot = providerAllowanceSnapshotSchema.parse(parseJson(row.snapshot_json));
+  if (
+    snapshot.schemaVersion !== row.schema_version ||
+    snapshot.provider !== row.provider ||
+    snapshot.observedAt !== row.observed_at ||
+    snapshot.freshness !== row.freshness
+  ) {
+    throw new StateStoreError(
+      "PERSISTENCE_FAILURE",
+      "The provider allowance row does not match its normalized snapshot",
+    );
+  }
+  return snapshot;
 };
 
 const constitutionProposalFromRow = (value: unknown): ConstitutionProposal => {
@@ -2317,6 +2350,24 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       .run(DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACE_NAME, openedAt, openedAt);
 
     const selectProjectById = database.prepare("SELECT * FROM projects WHERE id = ?");
+    const selectProviderAllowancesByProject = database.prepare(
+      "SELECT * FROM provider_allowance_snapshots WHERE project_id = ? ORDER BY provider",
+    );
+    const selectProviderAllowance = database.prepare(
+      "SELECT * FROM provider_allowance_snapshots WHERE project_id = ? AND provider = ?",
+    );
+    const upsertProviderAllowance = database.prepare(
+      `INSERT INTO provider_allowance_snapshots (
+         project_id, provider, schema_version, observed_at, freshness, snapshot_json, recorded_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(project_id, provider) DO UPDATE SET
+         schema_version = excluded.schema_version,
+         observed_at = excluded.observed_at,
+         freshness = excluded.freshness,
+         snapshot_json = excluded.snapshot_json,
+         recorded_at = excluded.recorded_at
+       WHERE julianday(provider_allowance_snapshots.observed_at) < julianday(excluded.observed_at)`,
+    );
     // One statement is the snapshot seam for Insights. Only counts cross it: no row, identifier,
     // free text, timestamp or path can be accidentally handed to the reporting module.
     const selectReportingFacts = database.prepare(`
@@ -4355,6 +4406,44 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       });
     };
 
+    const appendProviderAllowanceEvent = (
+      intent: ProviderAllowanceRecordedIntent,
+      metadata: {
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "PROJECT",
+        metadata.projectId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "PROJECT",
+        aggregateId: metadata.projectId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
     const appendMcpEvent = (
       intent: McpProfileConsentedIntent | McpGrantChangedIntent,
       metadata: {
@@ -5665,6 +5754,47 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           type: "PROJECT_PROVIDER_PREFERENCE_CHANGED",
           replayed: false,
           selection,
+          event,
+        });
+      }
+
+      if (command.type === "RECORD_PROVIDER_ALLOWANCE") {
+        const project = readProject(command.payload.projectId);
+        const currentRow = selectProviderAllowance.get(
+          command.payload.projectId,
+          command.payload.snapshot.provider,
+        );
+        const decision = decideRecordProviderAllowance(command, {
+          ...(project === null ? {} : { project }),
+          ...(currentRow === undefined ? {} : { current: providerAllowanceFromRow(currentRow) }),
+        });
+        const persisted = upsertProviderAllowance.run(
+          command.payload.projectId,
+          decision.snapshot.provider,
+          decision.snapshot.schemaVersion,
+          decision.snapshot.observedAt,
+          decision.snapshot.freshness,
+          JSON.stringify(decision.snapshot),
+          occurredAt,
+        );
+        if (persisted.changes !== 1) {
+          throw new ProviderAllowanceDomainError(
+            "PROVIDER_ALLOWANCE_STALE",
+            "The provider allowance changed while this observation was being applied",
+          );
+        }
+        options.onProviderAllowanceSnapshotPersisted?.();
+        const event = appendProviderAllowanceEvent(decision.event, {
+          projectId: command.payload.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROVIDER_ALLOWANCE_RECORDED",
+          replayed: false,
+          snapshot: decision.snapshot,
           event,
         });
       }
@@ -9047,6 +9177,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           error instanceof ConstitutionDomainError ||
           error instanceof McpDomainError ||
           error instanceof ReadinessDomainError ||
+          error instanceof ProviderAllowanceDomainError ||
           error instanceof ProviderSelectionDomainError ||
           error instanceof QACompletionError ||
           error instanceof QACorrectionError ||
@@ -9127,6 +9258,17 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         }
         case "GET_PROJECT":
           return { type: "PROJECT", project: readProject(queryValue.projectId) };
+        case "GET_PROVIDER_ALLOWANCES": {
+          if (readProject(queryValue.projectId) === null) {
+            throw new ProviderAllowanceDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+          }
+          return {
+            type: "PROVIDER_ALLOWANCES",
+            snapshots: selectProviderAllowancesByProject
+              .all(queryValue.projectId)
+              .map(providerAllowanceFromRow),
+          };
+        }
         case "GET_PROJECT_BY_REPOSITORY_PATH": {
           const row = selectProjectByRepositoryPath.get(queryValue.repositoryPath);
           return { type: "PROJECT", project: row === undefined ? null : projectFromRow(row) };

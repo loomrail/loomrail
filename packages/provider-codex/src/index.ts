@@ -25,9 +25,23 @@ import {
 } from "@loomrail/provider-core";
 import { z } from "zod";
 
-export { codexProviderDiagnostics } from "./diagnostics.js";
+export {
+  classifyCodexAuthenticationMode,
+  codexProviderDiagnostics,
+  codexRateLimitReportingTargetVerified,
+  probeCodexAuthenticationMode,
+  type CodexAuthenticationMode,
+} from "./diagnostics.js";
+export {
+  codexRateLimitsProjectionSchema,
+  normalizeCodexRateLimits,
+  readCodexAllowance,
+  type CodexRateLimitsProjection,
+  type ReadCodexAllowanceOptions,
+} from "./allowance.js";
 
 import { parseCodexEvent, TERMINAL_TURN_EVENT } from "./stream.js";
+import { readCodexAllowance } from "./allowance.js";
 
 export type { CodexEvent } from "./stream.js";
 export { parseCodexEvent, TERMINAL_TURN_EVENT } from "./stream.js";
@@ -215,12 +229,19 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         eventStream: true,
         usageReporting: true,
         contextWindowReporting: true,
+        canReportRateLimits: true,
         // No cost figure appears anywhere in the JSONL stream.
         costReporting: false,
         // SD-001 note lives on `requestHandoff` below, not here: this field just states the fact
         // that follows from it -- a one-shot process cannot be asked to wind down early.
         checkpointOnRequest: false,
         contextWindowTokens: resolved.contextWindowTokens,
+      }),
+
+    readAllowance: () =>
+      readCodexAllowance({
+        command: resolved.command,
+        commandArgsPrefix: resolved.commandArgsPrefix,
       }),
 
     start: async (
@@ -391,6 +412,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // to `false` and only ever assigned inside the stream callback reads as the constant `false`
         // to the type checker, which would make the test below dead code by its own reckoning.
         let completedTurn: ProviderUsage | undefined;
+        const providerFailure = { rateLimited: false, text: undefined as string | undefined };
 
         // All asynchronous scratch/worktree preparation happens before this last authority gate.
         // There is no await between the check and child_process.spawn inside runProcess, so the
@@ -417,6 +439,8 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
               let consumed = false;
               if (event.type === "turn.failed") {
                 providerFailureText = event.errorMessage;
+                providerFailure.rateLimited = event.rateLimited;
+                providerFailure.text = event.errorMessage;
                 consumed = true;
               }
               if (event.type === "item.completed") {
@@ -562,8 +586,9 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         // finished this stage" directly above "The process exited with code 0" -- a self-
         // contradiction naming nothing, whose advice to resume reproduced it identically on every
         // stage of every work item.
-        const reason =
-          providerFailureText !== undefined
+        const reason = providerFailure.rateLimited
+          ? "PROVIDER_RATE_LIMITED"
+          : providerFailure.text !== undefined
             ? "PROVIDER_REPORTED_FAILURE"
             : finalResult === undefined
               ? "NO_STRUCTURED_RESULT"

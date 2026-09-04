@@ -17,6 +17,7 @@ export const attentionSectionSchema = z.enum([
 
 export const attentionCategorySchema = z.enum(["APPROVAL", "QUESTION", "MANUAL_ACTION"]);
 export const attentionActionSchema = z.enum(["ANSWER_REQUEST", "REVIEW_ACCEPTANCE"]);
+export const attentionReasonSchema = z.enum(["PROVIDER_RATE_LIMITED"]);
 
 export const attentionItemSchema = z
   .object({
@@ -46,6 +47,7 @@ export const attentionItemSchema = z
       .strict(),
     section: attentionSectionSchema,
     category: attentionCategorySchema,
+    reason: attentionReasonSchema.nullable(),
     action: attentionActionSchema,
     acceptancePackageId: opaqueIdSchema.nullable(),
     affectedStages: z.array(workflowStageSchema).min(1).max(20),
@@ -63,5 +65,6 @@ export const attentionInboxResponseSchema = z
 export type AttentionSection = z.infer<typeof attentionSectionSchema>;
 export type AttentionCategory = z.infer<typeof attentionCategorySchema>;
 export type AttentionAction = z.infer<typeof attentionActionSchema>;
+export type AttentionReason = z.infer<typeof attentionReasonSchema>;
 export type AttentionItem = z.infer<typeof attentionItemSchema>;
 export type AttentionInboxResponse = z.infer<typeof attentionInboxResponseSchema>;

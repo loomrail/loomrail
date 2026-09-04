@@ -30,6 +30,7 @@ import type {
   ReviewReport,
   ReportingFacts,
   ProviderSession,
+  ProviderAllowanceSnapshot,
   ProviderUsageReport,
   ScaffoldOperation,
   SquadAssignment,
@@ -111,6 +112,7 @@ export type StateQuery =
   | { type: "LIST_PROJECTS" }
   | { type: "GET_REPORTING_FACTS" }
   | { type: "GET_PROJECT"; projectId: string }
+  | { type: "GET_PROVIDER_ALLOWANCES"; projectId: string }
   // Reads the raw `projects` row for a path, PROVISIONING included -- unlike LIST_PROJECTS, which
   // hides a Project whose repository the scaffold publisher has not verified yet. A caller about to
   // claim a path has to see exactly what the UNIQUE index and REGISTER_PROJECT see.
@@ -190,6 +192,7 @@ export type StateQueryResult =
   | { type: "PROJECTS"; projects: Project[] }
   | { type: "REPORTING_FACTS"; facts: ReportingFacts }
   | { type: "PROJECT"; project: Project | null }
+  | { type: "PROVIDER_ALLOWANCES"; snapshots: ProviderAllowanceSnapshot[] }
   | { type: "PROJECT_CONSTITUTION_SNAPSHOT"; snapshot: ProjectConstitutionSnapshot }
   | { type: "PROJECT_READINESS_SNAPSHOT"; snapshot: ProjectReadinessSnapshot }
   | { type: "PROJECT_MCP_PROFILES"; project: Project; profiles: McpProfileView[] }
@@ -390,6 +393,12 @@ export type OpenLocalStateOptions = {
   // observable difference between "wrapped in one transaction" and "read as independent
   // statements". Never set outside tests; a no-op when absent.
   onContextSourcesSnapshotStarted?: () => void;
+  /**
+   * Test-only transaction probe called after a provider allowance snapshot row is written and
+   * before its audit Event and command receipt are appended. Throwing here must roll back all
+   * three durable effects; production never supplies it.
+   */
+  onProviderAllowanceSnapshotPersisted?: () => void;
   /**
    * Called synchronously, once per orphaned ProviderSession that carries a pid, at the moment
    * reconciliation decides what to do about that process -- BEFORE the session row is marked ENDED.

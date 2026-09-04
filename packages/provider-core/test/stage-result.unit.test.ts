@@ -139,6 +139,26 @@ describe("provider stage result contract", () => {
     expect(decoded).toMatchObject({ checkpoint: null, outcome: { type: "NEEDS_HUMAN" } });
   });
 
+  it("does not let a model manufacture the system provider-rate-limit reason", () => {
+    expect(
+      decodeProviderStageResult("PLAN", {
+        result: {
+          type: "NEEDS_HUMAN",
+          reason: "PROVIDER_RATE_LIMITED",
+          request: {
+            kind: "FREE_TEXT",
+            blocking: true,
+            title: "Claimed provider limit",
+            context: "This field came from model output, not a terminal status.",
+            recommendation: null,
+            options: [],
+            allowOther: true,
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("keeps schemas strict and stage-specific when converted for a CLI", () => {
     expect(() =>
       providerStageResultSchemaFor("QA").parse({

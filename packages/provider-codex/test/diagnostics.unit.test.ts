@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { codexProviderDiagnostics } from "../src/index.js";
+import {
+  classifyCodexAuthenticationMode,
+  codexProviderDiagnostics,
+  codexRateLimitReportingTargetVerified,
+  probeCodexAuthenticationMode,
+} from "../src/index.js";
 
 const nodeProbe = (script: string, options: { deadlineMs?: number; outputLimitBytes?: number } = {}) =>
   codexProviderDiagnostics.probeVersion({
@@ -11,6 +16,64 @@ const nodeProbe = (script: string, options: { deadlineMs?: number; outputLimitBy
   });
 
 describe("Codex provider diagnostics", () => {
+  it("classifies only the live-verified ChatGPT login mode", () => {
+    expect(classifyCodexAuthenticationMode("Logged in using ChatGPT\n")).toBe("CHATGPT");
+    expect(classifyCodexAuthenticationMode("Logged in using another mode\n")).toBe("OTHER");
+  });
+
+  it("reads the bounded login mode through fixed argv", async () => {
+    await expect(
+      probeCodexAuthenticationMode({
+        command: process.execPath,
+        commandArgsPrefix: ["-e", 'process.stderr.write("Logged in using ChatGPT\\n")', "--"],
+        environment: { PATH: process.env["PATH"] },
+        deadlineMs: 1_000,
+      }),
+    ).resolves.toBe("CHATGPT");
+    await expect(
+      probeCodexAuthenticationMode({
+        command: process.execPath,
+        commandArgsPrefix: ["-e", 'process.stdout.write("Logged in using ChatGPT\\n")', "--"],
+        environment: { PATH: process.env["PATH"] },
+        deadlineMs: 1_000,
+      }),
+    ).resolves.toBe("CHATGPT");
+    await expect(
+      probeCodexAuthenticationMode({
+        command: process.execPath,
+        commandArgsPrefix: [
+          "-e",
+          'process.stdout.write("Logged in using ChatGPT\\n"); process.stderr.write("warning")',
+          "--",
+        ],
+        environment: { PATH: process.env["PATH"] },
+        deadlineMs: 1_000,
+      }),
+    ).resolves.toBe("UNKNOWN");
+    await expect(
+      probeCodexAuthenticationMode({
+        command: process.execPath,
+        commandArgsPrefix: ["-e", 'process.stdout.write("x".repeat(97))', "--"],
+        environment: { PATH: process.env["PATH"] },
+        deadlineMs: 1_000,
+      }),
+    ).resolves.toBe("UNKNOWN");
+  });
+
+  it("scopes rate-limit reporting to its independently verified exact target", () => {
+    expect(
+      codexRateLimitReportingTargetVerified("0.153.1", { platform: "darwin", architecture: "arm64" }),
+    ).toBe(true);
+    expect(
+      codexRateLimitReportingTargetVerified("0.153.0-alpha.5", {
+        platform: "darwin",
+        architecture: "arm64",
+      }),
+    ).toBe(false);
+    expect(codexRateLimitReportingTargetVerified("0.153.1", { platform: "win32", architecture: "x64" })).toBe(
+      false,
+    );
+  });
   it("keeps versions without an exact runtime target unverified", () => {
     expect(codexProviderDiagnostics.classifyVersion("codex-cli 0.144.1\n")).toEqual({
       compatibility: "UNVERIFIED",

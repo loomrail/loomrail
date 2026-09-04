@@ -1052,6 +1052,7 @@ export const decideApplyProviderOutcome = (
     const stageAttempt: StageAttempt = {
       ...context.stageAttempt,
       status: "WAITING_HUMAN",
+      failureCode: command.payload.outcome.reason ?? null,
       version: context.stageAttempt.version + 1,
     };
     const run: PipelineRun = {

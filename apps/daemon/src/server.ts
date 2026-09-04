@@ -40,10 +40,12 @@ import {
   pipelineControlRequestSchema,
   projectConstitutionSnapshotSchema,
   projectProviderSelectionResponseSchema,
+  projectProviderAllowanceResponseSchema,
   projectReadinessSnapshotSchema,
   proposeProjectScaffoldRequestSchema,
   proposeProjectScaffoldResponseSchema,
   projectsResponseSchema,
+  providerAllowanceSnapshotSchema,
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
   qaDefectWaivedResultSchema,
@@ -58,6 +60,8 @@ import {
   registerFixtureProjectRequestSchema,
   registerRepositoryProjectRequestSchema,
   refreshProviderAvailabilityRequestSchema,
+  refreshProviderAllowanceRequestSchema,
+  providerAllowanceQuerySchema,
   resolveAcceptanceRequestSchema,
   reviewFindingDisposedResultSchema,
   reviewStateResponseSchema,
@@ -87,6 +91,7 @@ import {
   type DomainEvent,
   type PublishedWorkItemWorkspace,
   type Project,
+  type ProviderAllowanceSnapshot,
   type QAAttachmentRef,
   type QAAttachmentSummary,
   type ScaffoldOperationErrorCode,
@@ -100,6 +105,7 @@ import {
   ConstitutionDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
+  ProviderAllowanceDomainError,
   QADefectDispositionError,
   QACorrectionError,
   ReadinessDomainError,
@@ -180,6 +186,7 @@ import { describeReportingRuntime } from "./reporting.js";
 import { createMcpProposalChallengeStore, McpProposalError } from "./mcp-proposals.js";
 import { createMcpConnectionOpener } from "./mcp-sessions.js";
 import { changeBaselineOf, MAX_PATCH_BYTES, MAX_SUMMARY_FILES } from "./workspace-changes.js";
+import { projectProviderAllowanceResponse } from "./provider-allowance.js";
 
 const API_VERSION = "v1" as const;
 const DAEMON_VERSION = "0.0.0";
@@ -190,6 +197,7 @@ export const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
 const LEGACY_MOCK_BUDGET = 100;
 const DEFAULT_MOCK_BUDGET_THRESHOLDS = [0.5, 0.8, 0.95] as const;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1"]);
+const PROVIDER_ALLOWANCE_READ_DEADLINE_MS = 3_000;
 
 type Clock = () => Date;
 
@@ -243,6 +251,8 @@ export type StartDaemonOptions = {
   providerAdapter?: ProviderAdapter;
   /** Injected availability/routing seam for deterministic provider-selection integration tests. */
   providerRegistry?: ProviderRegistry;
+  /** Test seam; production always uses the Q16 three-second outer allowance deadline. */
+  providerAllowanceReadDeadlineMs?: number;
   /** Optional bounded A3 concurrency policy; defaults to three globally, per Project and provider. */
   schedulingLimits?: SchedulerLimits;
   /** Test seam; production reads `.loomrail/browser-qa.json` and uses isolated Playwright. */
@@ -682,6 +692,91 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   await providerRegistry.refresh();
   const fixedProviderAdapter = options.providerAdapter;
   const schedulingLimits = validateSchedulerLimits(options.schedulingLimits);
+  const allowanceReads = new Map<ProviderId, Promise<ProviderAllowanceSnapshot>>();
+  const allowanceReadDeadlineMs = z
+    .number()
+    .int()
+    .positive()
+    .max(PROVIDER_ALLOWANCE_READ_DEADLINE_MS)
+    .parse(options.providerAllowanceReadDeadlineMs ?? PROVIDER_ALLOWANCE_READ_DEADLINE_MS);
+
+  const withAllowanceDeadline = (
+    provider: ProviderId,
+    pending: Promise<ProviderAllowanceSnapshot>,
+    onTimeout: () => void,
+  ): Promise<ProviderAllowanceSnapshot> =>
+    new Promise((resolvePromise, rejectPromise) => {
+      let settled = false;
+      const finish = (result: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        result();
+      };
+      const timer = setTimeout(() => {
+        onTimeout();
+        finish(() => {
+          resolvePromise(
+            providerAllowanceSnapshotSchema.parse({
+              schemaVersion: 1,
+              provider,
+              observedAt: now().toISOString(),
+              freshness: "UNAVAILABLE",
+              buckets: [],
+              unavailableReason: "PROVIDER_TIMEOUT",
+            }),
+          );
+        });
+      }, allowanceReadDeadlineMs);
+      timer.unref();
+      pending.then(
+        (snapshot) => {
+          finish(() => {
+            resolvePromise(snapshot);
+          });
+        },
+        (error: unknown) => {
+          finish(() => {
+            rejectPromise(
+              error instanceof Error
+                ? error
+                : new Error("The provider allowance reader rejected without an Error", { cause: error }),
+            );
+          });
+        },
+      );
+    });
+
+  const readAllowanceOnce = (
+    provider: ProviderId,
+    adapter: ProviderAdapter,
+  ): Promise<ProviderAllowanceSnapshot> => {
+    const current = allowanceReads.get(provider);
+    if (current !== undefined) {
+      return withAllowanceDeadline(provider, current, () => {
+        if (allowanceReads.get(provider) === current) allowanceReads.delete(provider);
+      });
+    }
+    if (adapter.readAllowance === undefined) {
+      throw new StateStoreError(
+        "PERSISTENCE_FAILURE",
+        "The selected provider has no bounded allowance reader",
+      );
+    }
+    const pending = adapter.readAllowance();
+    allowanceReads.set(provider, pending);
+    pending.then(
+      () => {
+        if (allowanceReads.get(provider) === pending) allowanceReads.delete(provider);
+      },
+      () => {
+        if (allowanceReads.get(provider) === pending) allowanceReads.delete(provider);
+      },
+    );
+    return withAllowanceDeadline(provider, pending, () => {
+      if (allowanceReads.get(provider) === pending) allowanceReads.delete(provider);
+    });
+  };
 
   let allowedOrigin = "";
   let closing = false;
@@ -1112,6 +1207,22 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       return null;
     }
     return session;
+  };
+
+  const providerAllowanceForProject = (project: Project) => {
+    const stored = localState.query({ type: "GET_PROVIDER_ALLOWANCES", projectId: project.id });
+    if (stored.type !== "PROVIDER_ALLOWANCES") {
+      throw new StateStoreError("PERSISTENCE_FAILURE", "Provider allowance state could not be loaded");
+    }
+    const registryResolution = providerRegistry.resolve(project);
+    const effectiveProvider = (fixedProviderAdapter ?? registryResolution.adapter).capabilities().provider;
+    return projectProviderAllowanceResponse({
+      projectId: project.id,
+      effectiveProvider,
+      snapshots: stored.snapshots,
+      availability: providerRegistry.availability(),
+      now: now(),
+    });
   };
 
   try {
@@ -2566,6 +2677,21 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
+    app.get("/api/v1/provider/allowance", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const query = providerAllowanceQuerySchema.parse(request.query);
+        const result = localState.query({ type: "GET_PROJECT", projectId: query.projectId });
+        if (result.type !== "PROJECT" || result.project === null) {
+          throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+        return projectProviderAllowanceResponseSchema.parse(providerAllowanceForProject(result.project));
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
     app.put("/api/v1/projects/:projectId/provider-selection", (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!authorizeMutation(request, reply, correlationId)) return;
@@ -2628,6 +2754,55 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
+    app.post("/api/v1/projects/:projectId/provider-allowance/refresh", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        refreshProviderAllowanceRequestSchema.parse(request.body);
+        const result = localState.query({ type: "GET_PROJECT", projectId: params.projectId });
+        if (result.type !== "PROJECT" || result.project === null) {
+          throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+        const registryResolution = providerRegistry.resolve(result.project);
+        const adapter = fixedProviderAdapter ?? registryResolution.adapter;
+        const capabilities = adapter.capabilities();
+        if (
+          capabilities.provider !== "MOCK" &&
+          capabilities.canReportRateLimits === true &&
+          adapter.readAllowance !== undefined
+        ) {
+          const snapshot = await readAllowanceOnce(capabilities.provider, adapter);
+          if (snapshot.provider !== capabilities.provider) {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "The provider allowance reader returned another provider's snapshot",
+            );
+          }
+          try {
+            localState.execute({
+              schemaVersion: 1,
+              commandId: `provider-allowance-${randomUUID()}`,
+              correlationId,
+              actor: { type: "SYSTEM", id: "provider-allowance" },
+              type: "RECORD_PROVIDER_ALLOWANCE",
+              payload: { projectId: result.project.id, snapshot },
+            });
+          } catch (error: unknown) {
+            if (
+              !(error instanceof ProviderAllowanceDomainError) ||
+              error.code !== "PROVIDER_ALLOWANCE_STALE"
+            ) {
+              throw error;
+            }
+          }
+        }
+        return projectProviderAllowanceResponseSchema.parse(providerAllowanceForProject(result.project));
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
     // Compatibility projection for clients that predate per-Project selection. New clients use
     // the route above so the answer follows the Project they are actually showing.
     app.get("/api/v1/provider/capabilities", (request, reply) => {
@@ -2650,6 +2825,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           checkpointOnRequest: capabilities.checkpointOnRequest,
           contextWindowReporting: capabilities.contextWindowReporting,
           costReporting: capabilities.costReporting,
+          canReportRateLimits: capabilities.canReportRateLimits ?? false,
         });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);

@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-04
 
-**Статус:** approved implementation spec
+**Статус:** implemented locally; cross-platform CI и independent review pending
 
 **Основание:** BD-004, T47 и Phase 8 Q16 в
 [MASTER-PLAN.ru.md](../product/MASTER-PLAN.ru.md)
@@ -18,12 +18,15 @@
 - Codex: только официальный JSON-RPC `account/rateLimits/read` и
   `account/rateLimits/updated` из `codex app-server`; `rateLimitsByLimitId` предпочтительнее legacy single-bucket
   `rateLimits`.
-- Claude Code: только JSON, который Claude Code передаёт нашему ephemeral session-scoped status-line bridge. Bridge
-  получает фиксированный путь назначения, записывает только разрешённый `rate_limits` projection и не меняет
-  пользовательские settings. ANSI, отрисованный footer, transcript и произвольный status-line stdout не парсятся.
+- Claude Code: документированный `rate_limits` JSON поступает только в interactive status-line command. Текущий
+  Loomrail adapter использует headless `claude -p`; live-проверка v2.1.260 подтвердила, что после первого API response
+  status-line command не вызывается до завершения процесса. Поэтому adapter сообщает `canReportRateLimits=false`, не
+  добавляет `--settings` и показывает `UNAVAILABLE / PROVIDER_UNSUPPORTED`. Claude Desktop также не считается
+  machine-readable source. Будущий bridge допустим только после отдельной live-проверки официального headless seam.
 - Mock: capability отсутствует и всегда возвращается как `UNAVAILABLE / PROVIDER_UNSUPPORTED`.
 - Provider surface читается только для exact compatibility row, где allowance capability отдельно разрешена. Semver,
-  более новая версия, другая ОС или архитектура не наследуют это разрешение.
+  более новая версия, другая ОС, архитектура или auth mode не наследуют это разрешение. Текущая Codex allowance-row
+  фиксирует `0.153.1 / darwin / arm64 / ChatGPT`; она не расширяет execution compatibility этой версии.
 - Чтение allowance не запускает model turn, не выполняет login/update/install и не выдаёт repository authority.
 
 Официальный Codex contract содержит `usedPercent`, `windowDurationMins`, Unix `resetsAt`, primary/secondary windows и
@@ -95,10 +98,8 @@ authenticated API projection. Web не импортирует provider package �
 - Codex reader запускает fixed argv `codex app-server --listen stdio://`, выполняет `initialize`/`initialized`, один
   `account/rateLimits/read`, принимает matching response или documented update notification и гарантированно
   завершает child process. Никакие thread/turn/login/reset methods не отправляются.
-- Claude bridge подключается только к уже разрешённой Loomrail provider session через ephemeral `--settings`; он не
-  создаёт отдельного inference. Файл имеет owner-only permissions, удаляется вместе с session temp directory и
-  содержит только sanitized allowance projection.
-- Missing field до первого Claude response означает `DATA_NOT_PRESENT`, не `0%` и не authentication failure.
+- Текущий Claude headless adapter не устанавливает bridge и не меняет user/project settings. Отсутствие официального
+  delivery seam является `PROVIDER_UNSUPPORTED`, а не `0%`, authentication failure или поводом парсить Desktop/TUI.
 
 ## 7. UI
 
@@ -128,8 +129,8 @@ authenticated API projection. Web не импортирует provider package �
   duplicate/overlong ids, missing/multiple buckets, invalid Unix/ISO timestamps;
 - Codex: multi-bucket priority, legacy fallback, primary/secondary, notification, wrong JSON-RPC id, error, overlong
   line, timeout, premature exit and guaranteed process termination;
-- Claude: absent independent windows, spend limit, full sensitive canary payload, atomic sanitized write, malformed
-  file, cleanup, no mutation of user settings and Windows/POSIX path quoting fixtures;
+- Claude: negative capability для headless/Desktop route, отсутствие `--settings`, user-setting mutation и
+  терминального scraping; возврат поддержки требует отдельного provider-version fixture;
 - persistence: migration, atomic event, idempotency, stale ordering, restart, rollback and raw-data canaries;
 - daemon: exact compatibility/auth gate, CSRF/Origin, refresh coalescing, typed unavailable codes and no budget/workflow
   mutation;
@@ -141,8 +142,9 @@ authenticated API projection. Web не импортирует provider package �
 ## 10. Exit и non-goals
 
 Q16 закрыт, когда exact supported fixtures проходят полный local/macOS/Windows contract, persistence, API и UI gate;
-Codex read и Claude session bridge подтверждены sanitized recordings на уже verified macOS rows без дополнительного
-model turn. Windows live provider capture остаётся отложенным owner gate и не выводится из fixture CI.
+Codex read подтверждён sanitized live observation на macOS, а каждый неподдерживаемый provider route честно остаётся
+`UNAVAILABLE`. Claude headless/Desktop не блокирует Q16 как отсутствующая capability, но не может считаться live
+allowance evidence. Windows live provider capture остаётся отложенным owner gate и не выводится из fixture CI.
 
 Не входят: billing/cost prediction, покупка или расход reset credits, управление account plan, login, provider update,
 автоматический budget override, безусловное ожидание до reset, cloud sync и парсинг терминального текста.

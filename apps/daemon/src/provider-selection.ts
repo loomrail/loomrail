@@ -15,7 +15,13 @@ import type {
   ProviderVersionObservation,
 } from "@loomrail/provider-core";
 import { claudeCodeProviderDiagnostics, createClaudeCodeProvider } from "@loomrail/provider-claude-code";
-import { codexProviderDiagnostics, createCodexProvider } from "@loomrail/provider-codex";
+import {
+  codexProviderDiagnostics,
+  codexRateLimitReportingTargetVerified,
+  createCodexProvider,
+  probeCodexAuthenticationMode,
+  type CodexAuthenticationMode,
+} from "@loomrail/provider-codex";
 import { createMockProvider } from "@loomrail/provider-mock";
 
 export const LOOMRAIL_PROVIDER_ENV_VAR = "LOOMRAIL_PROVIDER";
@@ -34,6 +40,13 @@ const providerDiagnostics: Readonly<Record<LiveProviderId, CliProviderDiagnostic
 
 export type ProviderAuthProbe = (provider: LiveProviderId) => Promise<ProviderAuthentication>;
 export type ProviderCompatibilityProbe = (provider: LiveProviderId) => Promise<ProviderVersionObservation>;
+export type ProviderRateLimitVersionTargetProbe = (
+  provider: LiveProviderId,
+  observation: { compatibility: ProviderCompatibility; version: string | null },
+) => boolean;
+export type ProviderRateLimitAuthenticationModeProbe = (
+  provider: LiveProviderId,
+) => Promise<CodexAuthenticationMode>;
 
 export type ProviderResolution = {
   provider: ProviderId;
@@ -78,6 +91,11 @@ const requestedEnvironmentProvider = (
 export const probeProviderAuthentication: ProviderAuthProbe = (provider) =>
   providerDiagnostics[provider].probeAuthentication({ deadlineMs: AUTH_PROBE_DEADLINE_MS });
 
+const probeProviderRateLimitAuthenticationMode: ProviderRateLimitAuthenticationModeProbe = (provider) =>
+  provider === "CODEX"
+    ? probeCodexAuthenticationMode({ deadlineMs: AUTH_PROBE_DEADLINE_MS })
+    : Promise.resolve("UNKNOWN");
+
 // One process may open many in-memory daemons in integration tests. Re-running two real CLI probes
 // for every instance would make unrelated suites depend on local login latency. Production opens
 // one daemon; an explicit Settings refresh bypasses this startup cache below.
@@ -89,14 +107,38 @@ const cachedStartupProbe: ProviderAuthProbe = (provider) => {
   startupProbeCache.set(provider, pending);
   return pending;
 };
+const startupRateLimitAuthModeProbeCache = new Map<LiveProviderId, Promise<CodexAuthenticationMode>>();
+const cachedStartupRateLimitAuthenticationModeProbe: ProviderRateLimitAuthenticationModeProbe = (
+  provider,
+) => {
+  const existing = startupRateLimitAuthModeProbeCache.get(provider);
+  if (existing !== undefined) return existing;
+  const pending = probeProviderRateLimitAuthenticationMode(provider);
+  startupRateLimitAuthModeProbeCache.set(provider, pending);
+  return pending;
+};
 
-const adapterWithStart = (adapter: ProviderAdapter, start: boolean): ProviderAdapter => ({
-  capabilities: () => ({ ...adapter.capabilities(), start }),
-  ...(adapter.modelMapping === undefined ? {} : { modelMapping: adapter.modelMapping }),
-  start: (invocation, listener) => adapter.start(invocation, listener),
-  requestHandoff: (sessionId) => adapter.requestHandoff(sessionId),
-  abortSession: (sessionId) => adapter.abortSession(sessionId),
-});
+const adapterWithAvailability = (
+  adapter: ProviderAdapter,
+  availability: ProviderAvailability,
+): ProviderAdapter => {
+  const allowanceAdmitted =
+    availability.canReportRateLimits && availability.authentication === "AUTHENTICATED";
+  return {
+    capabilities: () => ({
+      ...adapter.capabilities(),
+      start: availability.ready,
+      canReportRateLimits: allowanceAdmitted,
+    }),
+    ...(adapter.modelMapping === undefined ? {} : { modelMapping: adapter.modelMapping }),
+    ...(adapter.readAllowance === undefined || !allowanceAdmitted
+      ? {}
+      : { readAllowance: adapter.readAllowance }),
+    start: (invocation, listener) => adapter.start(invocation, listener),
+    requestHandoff: (sessionId) => adapter.requestHandoff(sessionId),
+    abortSession: (sessionId) => adapter.abortSession(sessionId),
+  };
+};
 
 const availabilityFor = (
   provider: ProviderId,
@@ -104,6 +146,7 @@ const availabilityFor = (
   installed: boolean,
   authentication: ProviderAuthentication,
   observation: { compatibility: ProviderCompatibility; version: string | null },
+  rateLimitTargetVerified: boolean,
 ): ProviderAvailability => {
   const capabilities = adapter.capabilities();
   const ready =
@@ -120,6 +163,10 @@ const availabilityFor = (
     checkpointOnRequest: capabilities.checkpointOnRequest,
     contextWindowReporting: capabilities.contextWindowReporting,
     costReporting: capabilities.costReporting,
+    canReportRateLimits:
+      rateLimitTargetVerified &&
+      (capabilities.canReportRateLimits ?? false) &&
+      adapter.readAllowance !== undefined,
     models: adapter.modelMapping?.() ?? null,
   };
 };
@@ -141,6 +188,8 @@ export const createProviderRegistry = (
     adapters?: Partial<ProviderAdapters>;
     probeAuthentication?: ProviderAuthProbe;
     probeCompatibility?: ProviderCompatibilityProbe;
+    rateLimitVersionTargetVerified?: ProviderRateLimitVersionTargetProbe;
+    probeRateLimitAuthenticationMode?: ProviderRateLimitAuthenticationModeProbe;
     executableAvailable?: (provider: LiveProviderId) => boolean;
   } = {},
 ): ProviderRegistry => {
@@ -158,24 +207,57 @@ export const createProviderRegistry = (
   const executableAvailable =
     options.executableAvailable ??
     ((provider: LiveProviderId): boolean => providerDiagnostics[provider].executableAvailable(env));
+  const rateLimitVersionTargetVerified =
+    options.rateLimitVersionTargetVerified ??
+    ((
+      provider: LiveProviderId,
+      observation: { compatibility: ProviderCompatibility; version: string | null },
+    ): boolean => provider === "CODEX" && codexRateLimitReportingTargetVerified(observation.version));
+  const customRateLimitAuthenticationModeProbe = options.probeRateLimitAuthenticationMode;
   let firstRefresh = true;
   let availability: Readonly<Record<ProviderId, ProviderAvailability>> = {
-    MOCK: availabilityFor("MOCK", adapters.MOCK, true, "AUTHENTICATED", {
-      compatibility: "BUILT_IN",
-      version: null,
-    }),
-    CODEX: availabilityFor("CODEX", adapters.CODEX, false, "UNKNOWN", {
-      compatibility: "MISSING",
-      version: null,
-    }),
-    CLAUDE_CODE: availabilityFor("CLAUDE_CODE", adapters.CLAUDE_CODE, false, "UNKNOWN", {
-      compatibility: "MISSING",
-      version: null,
-    }),
+    MOCK: availabilityFor(
+      "MOCK",
+      adapters.MOCK,
+      true,
+      "AUTHENTICATED",
+      {
+        compatibility: "BUILT_IN",
+        version: null,
+      },
+      false,
+    ),
+    CODEX: availabilityFor(
+      "CODEX",
+      adapters.CODEX,
+      false,
+      "UNKNOWN",
+      {
+        compatibility: "MISSING",
+        version: null,
+      },
+      false,
+    ),
+    CLAUDE_CODE: availabilityFor(
+      "CLAUDE_CODE",
+      adapters.CLAUDE_CODE,
+      false,
+      "UNKNOWN",
+      {
+        compatibility: "MISSING",
+        version: null,
+      },
+      false,
+    ),
   };
 
   const refresh = async (): Promise<void> => {
     const authProbe = customAuthProbe ?? (firstRefresh ? cachedStartupProbe : probeProviderAuthentication);
+    const rateLimitAuthenticationModeProbe =
+      customRateLimitAuthenticationModeProbe ??
+      (firstRefresh
+        ? cachedStartupRateLimitAuthenticationModeProbe
+        : probeProviderRateLimitAuthenticationMode);
     const installed = {
       CODEX: executableAvailable("CODEX"),
       CLAUDE_CODE: executableAvailable("CLAUDE_CODE"),
@@ -188,25 +270,44 @@ export const createProviderRegistry = (
         ? compatibilityProbe("CLAUDE_CODE")
         : Promise.resolve({ compatibility: "MISSING" as const, version: null }),
     ]);
-    const [codexAuthentication, claudeAuthentication] = await Promise.all([
-      codexCompatibility.compatibility === "VERIFIED"
-        ? authProbe("CODEX")
-        : Promise.resolve<ProviderAuthentication>("UNKNOWN"),
-      claudeCompatibility.compatibility === "VERIFIED"
-        ? authProbe("CLAUDE_CODE")
-        : Promise.resolve<ProviderAuthentication>("UNKNOWN"),
-    ]);
+    const rateLimitVersionTargets = {
+      CODEX: rateLimitVersionTargetVerified("CODEX", codexCompatibility),
+      CLAUDE_CODE: rateLimitVersionTargetVerified("CLAUDE_CODE", claudeCompatibility),
+    } as const;
+    const [codexAuthentication, claudeAuthentication, codexRateLimitAuthMode, claudeRateLimitAuthMode] =
+      await Promise.all([
+        codexCompatibility.compatibility === "VERIFIED" || rateLimitVersionTargets.CODEX
+          ? authProbe("CODEX")
+          : Promise.resolve<ProviderAuthentication>("UNKNOWN"),
+        claudeCompatibility.compatibility === "VERIFIED" || rateLimitVersionTargets.CLAUDE_CODE
+          ? authProbe("CLAUDE_CODE")
+          : Promise.resolve<ProviderAuthentication>("UNKNOWN"),
+        rateLimitVersionTargets.CODEX
+          ? rateLimitAuthenticationModeProbe("CODEX")
+          : Promise.resolve<CodexAuthenticationMode>("UNKNOWN"),
+        rateLimitVersionTargets.CLAUDE_CODE
+          ? rateLimitAuthenticationModeProbe("CLAUDE_CODE")
+          : Promise.resolve<CodexAuthenticationMode>("UNKNOWN"),
+      ]);
     availability = {
-      MOCK: availabilityFor("MOCK", adapters.MOCK, true, "AUTHENTICATED", {
-        compatibility: "BUILT_IN",
-        version: null,
-      }),
+      MOCK: availabilityFor(
+        "MOCK",
+        adapters.MOCK,
+        true,
+        "AUTHENTICATED",
+        {
+          compatibility: "BUILT_IN",
+          version: null,
+        },
+        false,
+      ),
       CODEX: availabilityFor(
         "CODEX",
         adapters.CODEX,
         installed.CODEX,
         codexAuthentication,
         codexCompatibility,
+        rateLimitVersionTargets.CODEX && codexRateLimitAuthMode === "CHATGPT",
       ),
       CLAUDE_CODE: availabilityFor(
         "CLAUDE_CODE",
@@ -214,6 +315,7 @@ export const createProviderRegistry = (
         installed.CLAUDE_CODE,
         claudeAuthentication,
         claudeCompatibility,
+        rateLimitVersionTargets.CLAUDE_CODE && claudeRateLimitAuthMode === "CHATGPT",
       ),
     };
     firstRefresh = false;
@@ -266,7 +368,7 @@ export const createProviderRegistry = (
     });
     return {
       response,
-      adapter: adapterWithStart(adapters[effectiveProvider], effectiveAvailability.ready),
+      adapter: adapterWithAvailability(adapters[effectiveProvider], effectiveAvailability),
     };
   };
 

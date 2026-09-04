@@ -85,6 +85,7 @@ import {
   type BoardView,
 } from "../boardView";
 import { PanelResizer } from "../components/PanelResizer";
+import { ProjectProviderAllowanceStrip } from "../components/ProviderAllowanceStrip";
 import { HumanRequestAnswerForm } from "../components/HumanRequestAnswerForm";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
@@ -661,6 +662,21 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         }),
         icon: "settings",
         label: t("event.providerPreferenceChanged"),
+      };
+    case "PROVIDER_ALLOWANCE_RECORDED":
+      return {
+        detail: t("event.providerAllowanceRecordedDetail", {
+          provider: event.data.snapshot.provider.replace("_", " "),
+          freshness: t(
+            event.data.snapshot.freshness === "LIVE"
+              ? "providerAllowance.freshness.live"
+              : event.data.snapshot.freshness === "STALE"
+                ? "providerAllowance.freshness.stale"
+                : "providerAllowance.freshness.unavailable",
+          ),
+        }),
+        icon: "budget",
+        label: t("event.providerAllowanceRecorded"),
       };
     case "MCP_PROFILE_CONSENTED":
       return {
@@ -2617,6 +2633,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
       </div>
       {budgetPolicy ? (
         <div className="workflow-budget">
+          <span className="workflow-budget__kind">{t("workflow.budget.kind")}</span>
           <div className="workflow-budget__heading">
             <span>{t("workflow.budget.title")}</span>
             <strong>
@@ -3054,6 +3071,7 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
         }
         title={t("workflow.title")}
       >
+        <ProjectProviderAllowanceStrip projectId={item.projectId} surface="task-cockpit" />
         <WorkflowPanel item={item} />
       </InspectorSection>
 
@@ -3264,6 +3282,9 @@ export const WorkbenchPage = (): React.JSX.Element => {
           summaryFilter={summaryFilter}
           view={view}
         />
+        {selectedProject ? (
+          <ProjectProviderAllowanceStrip projectId={selectedProject.id} surface="command-center" />
+        ) : null}
         {blockingRequests[0] ? (
           <button
             className="attention-banner"

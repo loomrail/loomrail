@@ -174,6 +174,11 @@ const migrations: readonly Migration[] = [
     name: "repeatable_recovery_reports",
     filename: "0035_repeatable_recovery_reports.sql",
   },
+  {
+    version: 36,
+    name: "provider_allowance_snapshots",
+    filename: "0036_provider_allowance_snapshots.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

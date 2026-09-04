@@ -24,7 +24,11 @@ const testModels = {
   DEEP: "test-deep",
 } as const;
 
-const inertAdapter = (provider: ProviderId, supportedStages: readonly WorkflowStage[]): ProviderAdapter => ({
+const inertAdapter = (
+  provider: ProviderId,
+  supportedStages: readonly WorkflowStage[],
+  options: { canReportRateLimits?: boolean; readAllowance?: ProviderAdapter["readAllowance"] } = {},
+): ProviderAdapter => ({
   modelMapping: () => testModels,
   capabilities: () =>
     providerCapabilitiesSchema.parse({
@@ -38,7 +42,9 @@ const inertAdapter = (provider: ProviderId, supportedStages: readonly WorkflowSt
       contextWindowTokens: 128_000,
       stages: supportedStages,
       costReporting: provider === "CLAUDE_CODE",
+      canReportRateLimits: options.canReportRateLimits ?? false,
     }),
+  ...(options.readAllowance === undefined ? {} : { readAllowance: options.readAllowance }),
   start: () => Promise.reject(new Error("This provider-settings test never starts a session")),
   requestHandoff: () => Promise.resolve(undefined),
   abortSession: () => Promise.resolve(undefined),
@@ -193,6 +199,71 @@ describe("Project provider settings API", () => {
       authentication: "AUTHENTICATED",
       ready: true,
     });
+  });
+
+  it("admits allowance only for its exact target and auth, independently from execution", async () => {
+    let version = "0.153.0-alpha.5";
+    let authentication: "REQUIRED" | "AUTHENTICATED" = "REQUIRED";
+    let authenticationMode: "OTHER" | "CHATGPT" = "OTHER";
+    let reads = 0;
+    const codex = inertAdapter("CODEX", stages, {
+      canReportRateLimits: true,
+      readAllowance: () => {
+        reads += 1;
+        return Promise.resolve({
+          schemaVersion: 1,
+          provider: "CODEX",
+          observedAt: "2026-09-04T20:00:00.000Z",
+          freshness: "UNAVAILABLE",
+          buckets: [],
+          unavailableReason: "DATA_NOT_PRESENT",
+        });
+      },
+    });
+    const registry = createProviderRegistry({
+      env: {},
+      adapters: { CODEX: codex },
+      executableAvailable: () => true,
+      probeCompatibility: (provider) =>
+        Promise.resolve({
+          compatibility: "UNVERIFIED",
+          version: provider === "CODEX" ? version : "2.1.260",
+        }),
+      probeAuthentication: () => Promise.resolve(authentication),
+      rateLimitVersionTargetVerified: (provider, observation) =>
+        provider === "CODEX" && observation.version === "0.153.1",
+      probeRateLimitAuthenticationMode: () => Promise.resolve(authenticationMode),
+    });
+    const project: Project = {
+      schemaVersion: 1,
+      id: "project-allowance-admission",
+      workspaceId: "workspace-local",
+      fixtureId: null,
+      name: "Allowance admission",
+      repositoryPath: directory,
+      providerPreference: "CODEX",
+      status: "ACTIVE",
+      version: 1,
+      createdAt: "2026-09-02T00:00:00.000Z",
+      updatedAt: "2026-09-02T00:00:00.000Z",
+    };
+
+    await registry.refresh();
+    expect(registry.resolve(project).adapter.capabilities().canReportRateLimits).toBe(false);
+    expect(registry.resolve(project).adapter.readAllowance).toBeUndefined();
+    version = "0.153.1";
+    await registry.refresh();
+    expect(registry.resolve(project).adapter.capabilities().canReportRateLimits).toBe(false);
+    authentication = "AUTHENTICATED";
+    await registry.refresh();
+    expect(registry.resolve(project).adapter.capabilities().canReportRateLimits).toBe(false);
+    authenticationMode = "CHATGPT";
+    await registry.refresh();
+    const admitted = registry.resolve(project).adapter;
+    expect(admitted.capabilities().start).toBe(false);
+    expect(admitted.capabilities().canReportRateLimits).toBe(true);
+    await admitted.readAllowance?.();
+    expect(reads).toBe(1);
   });
 
   it("auto-selects the one authenticated live CLI and persists an explicit choice", async () => {

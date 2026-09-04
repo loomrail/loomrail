@@ -24,6 +24,16 @@ const requestOf = (outcome: ReturnType<typeof describeUnproductiveSession>) => {
 };
 
 describe("describeUnproductiveSession", () => {
+  it("marks a structured provider 429 with a typed owner-action reason", () => {
+    const outcome = describeUnproductiveSession(report({ reason: "PROVIDER_RATE_LIMITED" }));
+
+    expect(outcome).toMatchObject({ type: "NEEDS_HUMAN", reason: "PROVIDER_RATE_LIMITED" });
+    if (outcome.type !== "NEEDS_HUMAN") throw new Error("expected a provider owner action");
+    expect(outcome.request.blocking).toBe(true);
+    expect(outcome.request.title).toContain("provider rate limit");
+    expect(outcome.request.recommendation).toContain("does not resume work by itself");
+  });
+
   it("asks a blocking, out-of-band question with no options to choose from", () => {
     const request = requestOf(describeUnproductiveSession(report()));
     expect(request.blocking).toBe(true);

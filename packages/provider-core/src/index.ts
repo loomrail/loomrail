@@ -3,6 +3,7 @@ import type {
   ContextPack,
   ContextWindowUsage,
   ModelTier,
+  ProviderAllowanceSnapshot,
   ProviderOutcome,
   ProviderId,
   ProviderModelMapping,
@@ -38,6 +39,12 @@ export type {
   VerifiedProviderTarget,
 } from "./diagnostics.js";
 export { createCliProviderDiagnostics } from "./diagnostics.js";
+export {
+  PROVIDER_ALLOWANCE_FUTURE_SKEW_MS,
+  PROVIDER_ALLOWANCE_LIVE_TTL_MS,
+  projectProviderAllowanceAdvisory,
+  projectProviderAllowanceFreshness,
+} from "./allowance.js";
 
 // The set of adapters Loomrail can dispatch to. A live adapter is not a MOCK wearing a different
 // label -- it is a distinct identity the daemon and the audit trail key on, so the enum is closed
@@ -71,6 +78,7 @@ export const providerCapabilitiesSchema = z
     // is about context-window consumption, not spend -- an adapter can know how full its window
     // got without knowing what that turn billed, and vice versa.
     costReporting: z.boolean(),
+    canReportRateLimits: z.boolean().optional(),
   })
   .strict()
   .refine(
@@ -240,6 +248,8 @@ export type ProviderSessionListener = {
   // final cumulative report per session, not streaming deltas: persistence enforces that cardinality
   // so a provider retry cannot charge the same session twice.
   onUsage: (usage: ProviderUsage) => void;
+  /** Optional external account-capacity observation; never a budget or workflow command. */
+  onAllowance?: (snapshot: ProviderAllowanceSnapshot) => void;
   // Spec §8: the pid of the child process this session is actually driving, so a daemon that dies
   // without killing it can still find and kill that process on the next start
   // (@loomrail/persistence-sqlite's `provider_sessions.process_pid`). Optional, unlike the three
@@ -273,6 +283,8 @@ export type ProviderAdapter = {
   // it on the adapter prevents the web app from maintaining a second, drifting model catalogue.
   // MOCK and third-party test adapters may omit it when no real provider model is selected.
   modelMapping?: () => ProviderModelMapping;
+  /** Bounded read-only provider surface. Present only when the adapter capability is implemented. */
+  readAllowance?: () => Promise<ProviderAllowanceSnapshot>;
   start: (invocation: ProviderInvocation, listener: ProviderSessionListener) => Promise<ProviderOutcome>;
   requestHandoff: (sessionId: string) => Promise<void>;
   // Spec §7 promises a *hard* cut when a wind-down request is ignored, and `requestHandoff` cannot

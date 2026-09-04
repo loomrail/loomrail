@@ -9,6 +9,7 @@ import {
   mcpProfileProposalSchema,
   mcpProfilesResponseSchema,
   projectsResponseSchema,
+  projectProviderAllowanceResponseSchema,
   projectProviderSelectionResponseSchema,
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
@@ -382,6 +383,19 @@ export const refreshProjectProviderAvailability = async (projectId: string) =>
   requestLocalApi(
     `/api/v1/projects/${encodeURIComponent(projectId)}/provider-selection/refresh`,
     projectProviderSelectionResponseSchema,
+    { method: "POST", body: JSON.stringify({ schemaVersion: 1 }) },
+  );
+
+export const getProjectProviderAllowance = async (projectId: string) =>
+  requestLocalApi(
+    `/api/v1/provider/allowance?projectId=${encodeURIComponent(projectId)}`,
+    projectProviderAllowanceResponseSchema,
+  );
+
+export const refreshProjectProviderAllowance = async (projectId: string) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/provider-allowance/refresh`,
+    projectProviderAllowanceResponseSchema,
     { method: "POST", body: JSON.stringify({ schemaVersion: 1 }) },
   );
 

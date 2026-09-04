@@ -42,6 +42,7 @@ import {
   createGuidedActivationWorkItem,
   disposeReviewFinding,
   getProviderCapabilities,
+  getProjectProviderAllowance,
   getProjectProviderSelection,
   getProjectMcpProfiles,
   getProjectConstitution,
@@ -69,6 +70,7 @@ import {
   registerFixtureProject,
   registerRepositoryProject,
   refreshProjectProviderAvailability,
+  refreshProjectProviderAllowance,
   probeMcpProfile,
   proposeContext7Preset,
   proposeMcpProfile,
@@ -124,6 +126,8 @@ const stageAttemptSessionsKey = (stageAttemptId: string) =>
 const providerCapabilitiesKey = ["provider", "capabilities"] as const;
 const projectProviderSelectionKey = (projectId: string) =>
   ["projects", projectId, "provider-selection"] as const;
+const projectProviderAllowanceKey = (projectId: string) =>
+  ["projects", projectId, "provider-allowance"] as const;
 const projectMcpProfilesKey = (projectId: string) => ["projects", projectId, "mcp-profiles"] as const;
 const openProjectScaffoldsKey = ["project-scaffolds", "open"] as const;
 
@@ -354,6 +358,26 @@ export const useProjectProviderSelection = (projectId: string | undefined) =>
     },
     enabled: projectId !== undefined,
   });
+
+export const useProjectProviderAllowance = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: projectId ? projectProviderAllowanceKey(projectId) : ["projects", "none", "provider-allowance"],
+    queryFn: () => {
+      if (!projectId) throw new Error("A Project is required to load provider allowance");
+      return getProjectProviderAllowance(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+
+export const useRefreshProjectProviderAllowance = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId: string) => refreshProjectProviderAllowance(projectId),
+    onSuccess: (allowance) => {
+      queryClient.setQueryData(projectProviderAllowanceKey(allowance.projectId), allowance);
+    },
+  });
+};
 
 export const useSetProjectProviderPreference = () => {
   const queryClient = useQueryClient();
