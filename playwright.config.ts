@@ -13,7 +13,10 @@ export default defineConfig({
   // repository. Under `fullyParallel` several workers do all of that at once. Raised rather than
   // narrowed to the affected specs: a per-test budget that is wrong for the machine it runs on is
   // how a suite starts failing for reasons that have nothing to do with the product.
-  timeout: 60_000,
+  // The cascading desktop/mobile filter scenario measured 59.7 s in two-worker stress repeats on
+  // this machine while completing every assertion. Keep enough scheduling headroom for the
+  // Git/SQLite-heavy setup without weakening the scenario or turning retries on locally.
+  timeout: 90_000,
   // Capped, and not because the suite is slow. Playwright's default is half this machine's cores,
   // and under `fullyParallel` every one of those workers boots a daemon, materialises two fixture
   // repositories and cuts real Git worktrees. On a busy machine -- load average 105 on 10 cores,
