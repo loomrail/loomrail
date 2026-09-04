@@ -119,3 +119,25 @@ Q14 закрывает дефект до продолжения quota-bearing wo
 - Budget Override возобновляет этот никогда не стартовавший attempt с тем же id/номером; реальный начатый attempt,
   остановленный budget, по-прежнему получает новый retry;
 - command replay, restart read, forbidden actor и no-pending-dispatch проверяются integration tests.
+
+## 8. Dogfood correction: Claude result и review-round identity
+
+Первый независимый Review на Claude Code `2.1.260` завершил CLI с exit `0`, но актуальный wire result сохранил
+schema-constrained объект в `structured_output`, а человекочитаемый `result` оставил prose. Adapter пытался
+декодировать только prose и ошибочно объявлял schema-valid завершение непродуктивной сессией. После исправления
+Claude вернул Changes Requested, но три предыдущих budget retries уже сделали технический номер REVIEW attempt равным
+`4`; workflow использовал этот номер как bounded review round и отверг самый первый durable report.
+
+Q14 закрепляет две независимые границы:
+
+- Claude terminal parser сохраняет bounded `structured_output`; adapter сначала валидирует его stage schema и лишь
+  затем использует совместимый JSON-in-text fallback;
+- Review verdict/cardinality выражается непосредственно JSON Schema union: `PASSED` не имеет findings,
+  `CHANGES_REQUESTED` требует хотя бы один finding;
+- `StageAttempt.attempt` остаётся уникальным operational retry ordinal внутри stage/correction cycle и может расти из-за
+  budget/recovery retry до первого review;
+- `ReviewReport.round` вычисляется только из ранее сохранённых ReviewReport того же PipelineRun/correction cycle;
+- bounded review policy, owner gate и текст HumanRequest используют `ReviewReport.round`, а следующий технический
+  IMPLEMENT получает `current StageAttempt.attempt + 1`, чтобы не конфликтовать с историей;
+- regression tests покрывают первый review round на техническом attempt `4` и owner-authorized continuation после
+  второго настоящего review round.

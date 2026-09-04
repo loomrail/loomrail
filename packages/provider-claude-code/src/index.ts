@@ -137,6 +137,18 @@ const tryParseStructuredResult = (
   return decodeProviderStageResult(stage, candidate, policy);
 };
 
+const tryDecodeStructuredResult = (
+  event: { text: string; structuredOutput?: unknown },
+  stage: WorkflowStage,
+  policy: ProviderStageResultPolicy,
+): DecodedProviderStageResult | null => {
+  if (event.structuredOutput !== undefined) {
+    const decoded = decodeProviderStageResult(stage, event.structuredOutput, policy);
+    if (decoded !== null) return decoded;
+  }
+  return tryParseStructuredResult(event.text, stage, policy);
+};
+
 // Claude Code 2.1.260 passes `--json-schema` through a validator that rejects the JSON Schema
 // 2020-12 dialect declaration emitted by Zod (`no schema with key or ref ...`). The remainder of
 // the schema is accepted and keeps the same closed object/required-field contract. Strip only the
@@ -388,7 +400,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
               return;
             }
 
-            const stageResult = tryParseStructuredResult(event.text, invocation.session.stage, {
+            const stageResult = tryDecodeStructuredResult(event, invocation.session.stage, {
               humanRequests: invocation.humanRequests,
             });
             if (stageResult !== null) {

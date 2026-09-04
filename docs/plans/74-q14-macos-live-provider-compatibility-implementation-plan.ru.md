@@ -34,6 +34,10 @@
       immutable AgentRun snapshot до запуска CLI.
 - [x] Устранить обнаруженный quota loop: атомарно сохранить terminal usage/outcome, припарковать только следующий
       этап до override и не создавать фиктивный retry для никогда не стартовавшего StageAttempt.
+- [x] Читать Claude `structured_output` отдельно от display prose и выражать зависимость verdict/findings прямо в
+      provider JSON Schema.
+- [x] Отделить durable review round от технического `StageAttempt.attempt`, чтобы budget retries до первого review
+      не исчерпывали review loop и следующий IMPLEMENT сохранял уникальный operational attempt.
 - [ ] Продолжить public target workflow с Codex implementation и независимым Claude review.
 - [ ] Выполнить browser QA и correction loop; owner-only acceptance оставить владельцу.
 - [ ] Провести Standards/Spec review и полный доступный verification gate.

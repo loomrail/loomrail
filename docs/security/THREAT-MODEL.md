@@ -216,6 +216,9 @@ Required controls and verification:
   in one SQLite transaction. Restart tests verify no duplicate dispatch;
 - one failed first review queues round 2. A failed round 2 creates a HumanRequest; only the owner may authorize the
   single final round 3. A failed round 3 offers cancellation and cannot create round 4;
+- bounded Review round is derived from append-only ReviewReports in the same PipelineRun/correction cycle, never from
+  `StageAttempt.attempt`. Budget or recovery retries may advance that operational ordinal before the first report;
+  tests prove attempt 4 can still be review round 1 and queues a collision-free next operational attempt;
 - the authenticated review projection is bounded, React renders finding text as text, and owner mutations use the
   existing session/Origin/CSRF boundary. Task Cockpit presents severity/status as text as well as color.
 

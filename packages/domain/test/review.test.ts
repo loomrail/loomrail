@@ -80,7 +80,6 @@ describe("review loop", () => {
     ).toEqual({
       action: "ADVANCE_TO_QA",
       nextStage: "QA",
-      nextAttempt: 1,
       newFindings: [],
       resolveFindingIds: ["finding-1", "finding-2"],
     });
@@ -95,7 +94,7 @@ describe("review loop", () => {
         report: report("CHANGES_REQUESTED"),
         openFindingIds: [],
       }),
-    ).toMatchObject({ action: "QUEUE_FIX", nextStage: "IMPLEMENT", nextAttempt: 2 });
+    ).toMatchObject({ action: "QUEUE_FIX", nextStage: "IMPLEMENT" });
   });
 
   it("stops after the second failed review instead of creating a third automatic round", () => {

@@ -10,11 +10,11 @@ Q1 gives Browser QA measured authority, but a failed QARun deliberately stops on
 next step: return the WorkItem to fix, independently review the changed tree and execute a scoped retest plus a
 regression subset.
 
-The existing `StageAttempt.attempt` cannot be the bound for this loop. R1 already uses it as the local
-IMPLEMENT/REVIEW round and caps it at two automatic rounds plus one owner-authorized round. Reusing that number for
-QA corrections either exhausts QA because review already reached round 2/3, or silently extends the number of R1
-review rounds. Re-running the same waiting QA StageAttempt is also insufficient: it has no durable identity for the
-fix tree, defect set, locked retest scope or independent review between failure and retest.
+The existing `StageAttempt.attempt` cannot be the bound for this loop. It is an operational attempt ordinal and can
+advance on a budget or recovery retry before a ReviewReport exists. Review separately caps two automatic rounds plus
+one owner-authorized round. Reusing either number for QA corrections can exhaust one loop because another retried,
+or silently extend its bound. Re-running the same waiting QA StageAttempt is also insufficient: it has no durable
+identity for the fix tree, defect set, locked retest scope or independent review between failure and retest.
 
 Q2 additionally makes the old one-`REVIEW_REPORT`/one-`QA_REPORT` per PipelineRun storage assumption invalid. A
 correction changes the implementation tree, so Acceptance must use later evidence without deleting the earlier
@@ -26,9 +26,11 @@ append-only history.
   is independent from every StageAttempt attempt and from R1 review rounds.
 - Each CorrectionRun owns one immutable source QA failure, a snapshot of the OPEN QADefects it must address and one
   immutable `QARetestPlan`.
-- StageAttempts created for that correction carry its identity. Their `attempt` remains the local R1 round: the
-  correction begins at IMPLEMENT(1), review changes can create IMPLEMENT/REVIEW(2), and the existing optional final
-  owner-authorized R1 round remains 3.
+- StageAttempts created for that correction carry its identity. Their `attempt` is a unique operational ordinal
+  inside the stage/correction cycle; budget or recovery retries may advance it independently.
+- ReviewReport `round` is derived from earlier append-only reports in the same PipelineRun/correction cycle. A
+  correction's first report is round 1 even when its REVIEW StageAttempt has a higher operational ordinal; the
+  existing optional final owner-authorized Review round remains 3.
 - Two CorrectionRuns may start automatically. A failed retest in the second opens a domain-owned HumanRequest; the
   owner may authorize exactly one final CorrectionRun or cancel the PipelineRun.
 - A QARun `ERROR` is an environment/driver retry on the same QA StageAttempt and never creates or consumes a
@@ -61,6 +63,7 @@ append-only history.
 - scoped current-tree evidence is meaningful only together with its locked baseline and correction lineage, so every
   reader must validate the chain rather than looking for an arbitrary latest `PASSED` row;
 - nested bounds are visible: one CorrectionRun may itself stop at the existing R1 owner gate before it reaches retest.
+- operational retries cannot prematurely exhaust Review or collide with an earlier IMPLEMENT attempt number.
 
 ## Rejected alternatives
 
@@ -75,6 +78,7 @@ append-only history.
 ## Required tests
 
 - initial review round 3 can still create CorrectionRun 1 whose review begins at round 1;
+- technical StageAttempt attempt 4 can still persist ReviewReport round 1 and queue a unique next IMPLEMENT attempt;
 - two automatic corrections and one owner-authorized correction are the absolute total bound;
 - QARun ERROR/retry does not change the correction ordinal;
 - duplicate failure completion cannot create a second CorrectionRun or dispatch;

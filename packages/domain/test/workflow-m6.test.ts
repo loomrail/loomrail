@@ -1,4 +1,5 @@
 import type {
+  AgentRun,
   AnswerHumanRequestCommand,
   ApplyProviderOutcomeCommand,
   EvidenceArtifact,
@@ -96,6 +97,29 @@ const dispatch = (attempt: StageAttempt): WorkflowDispatch => ({
   status: "PENDING",
   createdAt: now,
   completedAt: null,
+});
+const agentRun = (
+  id: string,
+  stageAttemptId: string,
+  role: AgentRun["profile"]["role"],
+  status: AgentRun["status"],
+): AgentRun => ({
+  schemaVersion: 1,
+  id,
+  projectId: workItem.projectId,
+  workItemId: workItem.id,
+  pipelineRunId: run.id,
+  stageAttemptId,
+  ordinal: 1,
+  squadAssignmentId: "assignment-1",
+  profile: { id: `profile-${role.toLowerCase()}`, revision: 1, role },
+  provider: role === "CODE_REVIEWER" ? "CLAUDE_CODE" : "CODEX",
+  status,
+  policySnapshot: null,
+  policySnapshotHash: `sha256:${"0".repeat(64)}`,
+  startedAt: now,
+  finishedAt: status === "RUNNING" ? null : now,
+  version: status === "RUNNING" ? 1 : 2,
 });
 const artifact = (
   kind: EvidenceArtifact["kind"],
@@ -240,6 +264,77 @@ describe("M6 acceptance decisions", () => {
         artifactIds: ["artifact-review"],
       }),
     ).toThrow(expect.objectContaining({ code: "REVIEW_REPORT_REQUIRED" }));
+  });
+
+  it("counts review rounds independently from operational StageAttempt retries", () => {
+    const attempt = { ...stageAttempt("REVIEW", "attempt-review-4"), attempt: 4 };
+    const decision = decideApplyProviderOutcome(
+      {
+        schemaVersion: 1,
+        commandId: "complete-first-review-after-retries",
+        correlationId: "correlation-first-review-after-retries",
+        actor: { type: "SYSTEM", id: "claude-code-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          resultTree: testedTree,
+          dispatchId: "dispatch-review",
+          provider: "CLAUDE_CODE",
+          template,
+          outcome: {
+            type: "COMPLETED",
+            summary: "The first independent review found one required change.",
+            reviewReport: {
+              kind: "REVIEW_REPORT",
+              title: "Independent review",
+              summary: "One acceptance gap remains.",
+              checks: ["Checked the implementation against the acceptance criteria."],
+              verdict: "CHANGES_REQUESTED",
+              findings: [
+                {
+                  severity: "CRITICAL",
+                  title: "Acceptance behavior is not covered",
+                  description: "The integration suite does not prove the required filtered result sets.",
+                  path: "server/src/index.test.ts",
+                  startLine: 1,
+                  endLine: 1,
+                  reproduction: "Run the server integration suite.",
+                  criterion: "Pending and completed filters return the correct todo sets.",
+                  suggestedFix: "Add integration assertions for both filters.",
+                },
+              ],
+            },
+          },
+        },
+      },
+      {
+        now,
+        workItem,
+        run: { ...run, currentStageAttemptId: attempt.id },
+        stageAttempt: attempt,
+        dispatch: { ...dispatch(attempt), id: "dispatch-review" },
+        budgetPolicy: null,
+        existingUsageRecords: [],
+        usageRecordIds: [],
+        reviewRequired: true,
+        review: {
+          authorAgentRun: agentRun("author-1", "attempt-implement-3", "DEVELOPER", "SUCCEEDED"),
+          reviewerAgentRun: agentRun("reviewer-1", attempt.id, "CODE_REVIEWER", "RUNNING"),
+          currentTree: testedTree,
+          round: 1,
+          openFindings: [],
+          reportId: "review-report-1",
+          findingIds: ["review-finding-1"],
+          loopOptionIds: ["retry-option", "cancel-option"],
+        },
+        nextStageAttemptId: "attempt-implement-5",
+        nextDispatchId: "dispatch-implement-5",
+      },
+    );
+
+    expect(decision).toMatchObject({
+      reviewReport: { round: 1, verdict: "CHANGES_REQUESTED" },
+      nextStageAttempt: { stage: "IMPLEMENT", attempt: 5, status: "QUEUED" },
+    });
   });
 
   it("forbids ordinary provider completion from bypassing owner acceptance", () => {

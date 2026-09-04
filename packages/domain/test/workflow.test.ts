@@ -218,7 +218,7 @@ describe("mock workflow decisions", () => {
       workItemId: "work-item-1",
       correctionRunId: null,
       stage: "REVIEW",
-      attempt: 2,
+      attempt: 4,
       status: "WAITING_HUMAN",
       version: 3,
       startedAt: timestamp,
@@ -281,14 +281,15 @@ describe("mock workflow decisions", () => {
       request,
       decisionId: "decision-retry",
       dispatchId: "dispatch-final-fix",
-      nextStageAttemptId: "implement-3",
+      nextStageAttemptId: "implement-5",
+      reviewRound: 2,
     });
     expect(retry).toMatchObject({
       workItem: { state: "IN_PROGRESS", currentStage: "IMPLEMENT" },
-      run: { status: "RUNNING", currentStageAttemptId: "implement-3" },
+      run: { status: "RUNNING", currentStageAttemptId: "implement-5" },
       stageAttempt: { id: "review-2", status: "SUCCEEDED" },
-      nextStageAttempt: { id: "implement-3", stage: "IMPLEMENT", attempt: 3, status: "QUEUED" },
-      dispatch: { stageAttemptId: "implement-3", mode: "START", status: "PENDING" },
+      nextStageAttempt: { id: "implement-5", stage: "IMPLEMENT", attempt: 5, status: "QUEUED" },
+      dispatch: { stageAttemptId: "implement-5", mode: "START", status: "PENDING" },
     });
 
     const cancelled = decideAnswerHumanRequest(answer("cancel-review-work"), {
@@ -299,6 +300,7 @@ describe("mock workflow decisions", () => {
       request,
       decisionId: "decision-cancel",
       dispatchId: "unused-dispatch",
+      reviewRound: 2,
     });
     expect(cancelled).toMatchObject({
       workItem: { state: "CANCELLED" },

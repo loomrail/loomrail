@@ -2754,6 +2754,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        WHERE pipeline_run_id = ? AND correction_run_id IS ? AND status = 'OPEN'
        ORDER BY created_at, id LIMIT 200`,
     );
+    const countReviewReportsForCycle = database.prepare(
+      `SELECT COUNT(*) AS count FROM review_reports
+       WHERE pipeline_run_id = ? AND correction_run_id IS ?`,
+    );
+    const selectReviewReportByStageAttempt = database.prepare(
+      "SELECT * FROM review_reports WHERE stage_attempt_id = ? ORDER BY rowid DESC LIMIT 1",
+    );
     const selectReviewFindingById = database.prepare("SELECT * FROM review_findings WHERE id = ?");
     const selectQADefectById = database.prepare("SELECT * FROM qa_defects WHERE id = ?");
     const selectRunningAgentRuns = database.prepare(
@@ -6988,6 +6995,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                   authorAgentRun: agentRunFromRow(authorValue),
                   reviewerAgentRun: agentRunFromRow(runningReviewerValue),
                   currentTree: resultTreeRowSchema.parse(treeValue).result_tree,
+                  round:
+                    countRowSchema.parse(countReviewReportsForCycle.get(run.id, stageAttempt.correctionRunId))
+                      .count + 1,
                   openFindings: selectOpenReviewFindingsForCycle
                     .all(run.id, stageAttempt.correctionRunId)
                     .map(reviewFindingFromRow),
@@ -7337,6 +7347,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (!stageAttempt || !run || !workItem) {
           throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow state is incomplete");
         }
+        const reviewReportValue =
+          stageAttempt.stage === "REVIEW" ? selectReviewReportByStageAttempt.get(stageAttempt.id) : undefined;
         const decision = decideAnswerHumanRequest(command, {
           now: occurredAt,
           workItem,
@@ -7346,6 +7358,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           decisionId: createId("decision"),
           dispatchId: createId("workflowDispatch"),
           nextStageAttemptId: createId("stageAttempt"),
+          ...(reviewReportValue === undefined
+            ? {}
+            : { reviewRound: reviewReportFromRow(reviewReportValue).round }),
         });
         updateHumanRequest(decision.request);
         insertDecision(decision.decision);

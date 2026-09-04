@@ -945,6 +945,7 @@ export type ApplyProviderOutcomeContext = {
         authorAgentRun: AgentRun;
         reviewerAgentRun: AgentRun;
         currentTree: string;
+        round: number;
         openFindings: readonly ReviewFinding[];
         reportId: string;
         findingIds: readonly string[];
@@ -1323,7 +1324,7 @@ export const decideApplyProviderOutcome = (
     let loop;
     try {
       loop = decideReviewLoop({
-        round: context.stageAttempt.attempt,
+        round: review.round,
         reviewedTree: command.payload.resultTree,
         currentTree: review.currentTree,
         report: reviewReportDraft,
@@ -1381,7 +1382,7 @@ export const decideApplyProviderOutcome = (
           ? "SAME_PROVIDER"
           : "CROSS_PROVIDER",
       reviewedTree: review.currentTree,
-      round: context.stageAttempt.attempt,
+      round: review.round,
       title: reviewReportDraft.title,
       summary: reviewReportDraft.summary,
       checks: reviewReportDraft.checks,
@@ -1441,7 +1442,7 @@ export const decideApplyProviderOutcome = (
           workItemId: context.workItem.id,
           correctionRunId: context.stageAttempt.correctionRunId,
           stage: "IMPLEMENT",
-          attempt: loop.nextAttempt,
+          attempt: context.stageAttempt.attempt + 1,
           status: "QUEUED",
           version: 1,
           startedAt: null,
@@ -1521,7 +1522,7 @@ export const decideApplyProviderOutcome = (
         updatedAt: context.now,
       };
       const [retryId, cancelId] = review.loopOptionIds;
-      const retryAvailable = context.stageAttempt.attempt < MAX_TOTAL_REVIEW_ROUNDS;
+      const retryAvailable = review.round < MAX_TOTAL_REVIEW_ROUNDS;
       const request: HumanRequest = {
         schemaVersion: 1,
         id: context.humanRequestId,
@@ -1532,7 +1533,7 @@ export const decideApplyProviderOutcome = (
         blocking: true,
         title: "Review loop needs a decision",
         context:
-          context.stageAttempt.attempt === 2
+          review.round === 2
             ? "Two automatic fix and review rounds still left open findings."
             : "The owner-authorized review round still left open findings.",
         recommendation: retryAvailable
@@ -1891,6 +1892,7 @@ export const decideAnswerHumanRequest = (
     decisionId: string;
     dispatchId: string;
     nextStageAttemptId?: string;
+    reviewRound?: number;
   },
 ): AnswerHumanRequestDecision => {
   if (context.request.id !== command.payload.humanRequestId) {
@@ -1973,8 +1975,19 @@ export const decideAnswerHumanRequest = (
         "Only the owner can resolve an exhausted review loop",
       );
     }
+    if (
+      context.reviewRound === undefined ||
+      !Number.isInteger(context.reviewRound) ||
+      context.reviewRound < 1 ||
+      context.reviewRound > MAX_TOTAL_REVIEW_ROUNDS
+    ) {
+      throw new WorkflowDomainError(
+        "REVIEW_RUN_MISMATCH",
+        "The exhausted review loop has no valid durable review round",
+      );
+    }
     const selectedOptionId = command.payload.answer.optionIds[0];
-    const retryAvailable = context.stageAttempt.attempt < MAX_TOTAL_REVIEW_ROUNDS;
+    const retryAvailable = context.reviewRound < MAX_TOTAL_REVIEW_ROUNDS;
     const retryOptionId = retryAvailable ? context.request.options[0]?.id : undefined;
     const cancelOptionId = context.request.options.at(-1)?.id;
     if (retryAvailable && selectedOptionId === retryOptionId) {

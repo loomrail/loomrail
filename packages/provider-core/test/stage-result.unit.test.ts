@@ -172,6 +172,15 @@ describe("provider stage result contract", () => {
     }
   });
 
+  it("expresses Review verdict and finding cardinality in the provider JSON Schema", () => {
+    const jsonSchema = JSON.stringify(z.toJSONSchema(providerStageResultSchemaFor("REVIEW")));
+
+    expect(jsonSchema).toContain('"const":"PASSED"');
+    expect(jsonSchema).toContain('"maxItems":0');
+    expect(jsonSchema).toContain('"const":"CHANGES_REQUESTED"');
+    expect(jsonSchema).toContain('"minItems":1');
+  });
+
   it("tells every provider stage not to invent approval or handoff gates", () => {
     for (const stage of ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"] as const) {
       const jsonSchema = JSON.stringify(z.toJSONSchema(providerStageResultSchemaFor(stage)));

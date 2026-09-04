@@ -14,6 +14,9 @@ export type ClaudeEvent = {
   type: "result";
   ok: boolean;
   text: string;
+  // Claude Code may keep the schema-constrained value here even when `result` is only display
+  // prose. This stays `unknown` until the stage-specific provider contract validates it.
+  structuredOutput?: unknown;
   costUsd: number;
   // Normalized total input: ordinary + cache creation + cache read. Claude's wire splits these
   // while Codex reports total input with cached input as a subdivision; normalizing here keeps the
@@ -44,6 +47,7 @@ const rawResultEventSchema = z.object({
   subtype: z.string(),
   is_error: z.boolean(),
   result: z.string(),
+  structured_output: z.unknown().optional(),
   total_cost_usd: z.number(),
   // Not `.strict()`: the real `usage` object also carries `server_tool_use`, `service_tier`, and
   // more. Cache creation is read because it is a separately-billed input class and therefore part
@@ -96,6 +100,7 @@ export const parseClaudeEvent = (line: string): ClaudeEvent | null => {
         type: "result",
         ok: !raw.is_error,
         text: raw.result,
+        ...(raw.structured_output === undefined ? {} : { structuredOutput: raw.structured_output }),
         costUsd: raw.total_cost_usd,
         inputTokens:
           raw.usage.input_tokens + raw.usage.cache_creation_input_tokens + raw.usage.cache_read_input_tokens,

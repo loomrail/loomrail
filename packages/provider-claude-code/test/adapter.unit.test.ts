@@ -714,6 +714,47 @@ describe("createClaudeCodeProvider", () => {
     });
   });
 
+  it("uses structured_output when the CLI display result is not the schema payload", async () => {
+    const structuredOutput = {
+      result: {
+        type: "COMPLETED",
+        summary: "The independent review passed.",
+        completed: ["Acceptance criteria traced"],
+        remaining: [],
+        deadEnds: [],
+        openQuestions: [],
+        artifact: {
+          kind: "REVIEW_REPORT",
+          title: "Independent review",
+          summary: "No blocking findings remain.",
+          checks: ["Requirements traced to the diff"],
+          verdict: "PASSED",
+          findings: [],
+        },
+      },
+    };
+    const outcome = await runAgainstLines(
+      [
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "The independent review passed.",
+          structured_output: structuredOutput,
+          total_cost_usd: 0.01,
+          usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0 },
+        }),
+      ],
+      {},
+      "REVIEW",
+    );
+
+    expect(outcome).toMatchObject({
+      type: "COMPLETED",
+      reviewReport: { verdict: "PASSED", findings: [] },
+    });
+  });
+
   // requestHandoff is declared unsupported; it must be a no-op that *resolves* rather than an
   // error, because the session loop calls it whenever the occupancy threshold is crossed and
   // cannot know which adapter it is talking to -- rejecting would break a loop behaving

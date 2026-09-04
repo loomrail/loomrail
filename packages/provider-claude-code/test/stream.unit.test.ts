@@ -38,6 +38,33 @@ describe("parseClaudeEvent", () => {
     });
   });
 
+  it("keeps the CLI's structured output separate from its display result", () => {
+    const structuredOutput = {
+      result: {
+        type: "COMPLETED",
+        summary: "The review passed.",
+      },
+    };
+    const event = parseClaudeEvent(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "The review passed.",
+        structured_output: structuredOutput,
+        total_cost_usd: 0.0031,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_creation_input_tokens: 2,
+          cache_read_input_tokens: 3,
+        },
+      }),
+    );
+
+    expect(event).toMatchObject({ structuredOutput });
+  });
+
   // The user's own hooks stream through here carrying their stdout and stderr. They are not provider
   // events, and SD-003 forbids Loomrail recording that text.
   it("drops the user's hook events", () => {

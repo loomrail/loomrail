@@ -73,24 +73,35 @@ export const reviewFindingDraftSchema = z
   .strict()
   .superRefine(refineFindingLocation);
 
-export const reviewReportDraftSchema = z
-  .object({
-    kind: z.literal("REVIEW_REPORT"),
-    title: titleSchema,
-    summary: descriptionSchema,
-    checks: z.array(z.string().trim().min(1).max(500)).min(1).max(20),
-    verdict: reviewVerdictSchema,
-    findings: z.array(reviewFindingDraftSchema).max(MAX_REVIEW_FINDINGS_PER_REPORT),
-  })
-  .strict()
-  .superRefine((report, context) => {
-    if (report.verdict === "PASSED" && report.findings.length !== 0) {
-      context.addIssue({ code: "custom", message: "A passed review cannot contain findings" });
-    }
-    if (report.verdict === "CHANGES_REQUESTED" && report.findings.length === 0) {
-      context.addIssue({ code: "custom", message: "A changes-requested review requires a finding" });
-    }
-  });
+const reviewReportDraftFields = {
+  kind: z.literal("REVIEW_REPORT"),
+  title: titleSchema,
+  summary: descriptionSchema,
+  checks: z.array(z.string().trim().min(1).max(500)).min(1).max(20),
+} as const;
+
+// Keep the verdict invariant structural rather than hiding it in `superRefine`. Both live
+// providers receive the JSON Schema generated from this contract before they answer; a refinement
+// is enforced only after the response returns and therefore lets a CLI accept a contradictory
+// `PASSED` report with findings (or an empty `CHANGES_REQUESTED` report) that Loomrail must then
+// discard. A plain union emits JSON Schema `anyOf`, supported by both provider adapters, while
+// preserving the same inferred discriminated data shape for domain consumers.
+export const reviewReportDraftSchema = z.union([
+  z
+    .object({
+      ...reviewReportDraftFields,
+      verdict: z.literal("PASSED"),
+      findings: z.array(reviewFindingDraftSchema).max(0),
+    })
+    .strict(),
+  z
+    .object({
+      ...reviewReportDraftFields,
+      verdict: z.literal("CHANGES_REQUESTED"),
+      findings: z.array(reviewFindingDraftSchema).min(1).max(MAX_REVIEW_FINDINGS_PER_REPORT),
+    })
+    .strict(),
+]);
 
 export const reviewFindingSchema = z
   .object({

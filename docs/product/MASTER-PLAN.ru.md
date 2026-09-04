@@ -1402,6 +1402,12 @@ immutable AgentRun policy snapshot до запуска CLI; UI-каталог и
 граница атомарно завершает ProviderSession, сохраняет usage и применяет outcome; завершённый этап остаётся
 `SUCCEEDED`, а budget блокирует только ещё не стартовавший следующий этап. Override продолжает тот же припаркованный
 attempt без искусственного увеличения номера.
+Первый Claude review дополнительно подтвердил wire drift: schema-constrained ответ находится в
+`structured_output`, тогда как `result` может быть обычным prose. Adapter теперь валидирует structured field первым,
+а Review JSON Schema напрямую кодирует связь verdict/findings. Тот же запуск выявил независимую domain-ошибку:
+budget retries увеличили технический `StageAttempt.attempt` до `4`, и первый Review был ошибочно принят за
+запрещённый четвёртый раунд. Review policy теперь считает `ReviewReport.round` по durable отчётам отдельно от
+operational attempt; следующий fix сохраняет уникальный технический ordinal.
 Следующий шаг Q14 — завершить managed public dogfood, correction loop и independent review, не выдавая его за
 private dogfood и не принимая owner-only Acceptance решение.
 

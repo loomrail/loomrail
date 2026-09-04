@@ -14,14 +14,12 @@ export type ReviewLoopDecision =
   | {
       action: "ADVANCE_TO_QA";
       nextStage: "QA";
-      nextAttempt: 1;
       newFindings: readonly [];
       resolveFindingIds: readonly string[];
     }
   | {
       action: "QUEUE_FIX";
       nextStage: "IMPLEMENT";
-      nextAttempt: number;
       newFindings: readonly ReviewFindingDraft[];
       resolveFindingIds: readonly [];
     }
@@ -172,7 +170,6 @@ export const decideReviewLoop = (input: {
     return {
       action: "ADVANCE_TO_QA",
       nextStage: "QA",
-      nextAttempt: 1,
       newFindings: [],
       resolveFindingIds: openFindingIds,
     };
@@ -181,7 +178,6 @@ export const decideReviewLoop = (input: {
     return {
       action: "QUEUE_FIX",
       nextStage: "IMPLEMENT",
-      nextAttempt: input.round + 1,
       newFindings: report.findings,
       resolveFindingIds: [],
     };

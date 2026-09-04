@@ -41,6 +41,8 @@ double-charge Codex; using Claude's ordinary input alone would severely undercou
   synthetic pause because it cannot spend again.
 - A Budget Override resumes such an unstarted parked StageAttempt with the same id and attempt number. A budget pause
   on an attempt that actually started still creates a new retry and preserves the old attempt as history.
+- `StageAttempt.attempt` is consequently an operational retry ordinal, not the bounded Review round. Review policy
+  derives its own round from append-only ReviewReports in the same PipelineRun/correction cycle.
 - A final report attached to a handoff, context exhaustion or failed adapter start still uses
   `RECORD_PROVIDER_USAGE`; because no stage outcome exists to preserve, a cap crossing hard-pauses the current
   attempt before another session can start.
@@ -90,6 +92,7 @@ double-charge Codex; using Claude's ordinary input alone would severely undercou
 - daemon records a non-stage terminal report and prevents another session when the cap is reached;
 - daemon/persistence preserve a completed terminal outcome at a cap crossing, park only its next stage, survive
   replay/restart and resume that unstarted stage without inventing a retry;
+- a first Review after multiple budget retries remains round 1 and its fix queues the next unique operational attempt;
 - Claude recording proves ordinary + cache creation + cache read normalization;
 - Task Cockpit renders token detail, quality and optional cost without relying on colour.
 - provider-selection, domain and adapter tests prove that the owner-visible model mapping and executed snapshot ID
