@@ -131,6 +131,7 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
           payload: {
             dispatchId: dispatch.id,
             provider,
+            modelMapping: adapter.modelMapping?.() ?? null,
             limits: agentRunClaimLimits(schedulingLimits, dispatch.projectId, provider),
           },
         });

@@ -10,6 +10,7 @@ import {
   describeUnproductiveSession,
   providerStageResultSchemaFor,
   providerMcpConnectionSchema,
+  providerModelIdSchema,
   providerModelMappingSchema,
   providerCapabilitiesSchema,
   runProcess,
@@ -170,6 +171,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
   const runningSessions = new Map<string, SessionRuntime>();
 
   return {
+    modelMapping: () => ({ ...resolved.models }),
     capabilities: () =>
       providerCapabilitiesSchema.parse({
         provider: "CLAUDE_CODE",
@@ -226,7 +228,9 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
       listener: ProviderSessionListener,
     ): Promise<ProviderOutcome> => {
       const sessionId = invocation.session.id;
-      const model = resolved.models[modelTierSchema.parse(invocation.modelTier)];
+      const model = providerModelIdSchema.parse(
+        invocation.modelId ?? resolved.models[modelTierSchema.parse(invocation.modelTier)],
+      );
       // Per-session and removed in `finally`, including on failure -- this adapter has no
       // repository access at all, E1 included, and an empty directory plus `--permission-mode plan`
       // is what enforces that. `invocation.workspace` is read nowhere here, deliberately: the write

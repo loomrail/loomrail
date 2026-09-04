@@ -11,6 +11,7 @@ import {
   providerStageResultSchemaFor,
   providerCapabilitiesSchema,
   providerMcpConnectionSchema,
+  providerModelIdSchema,
   providerModelMappingSchema,
   runProcess,
   ProcessSpawnError,
@@ -168,6 +169,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
   const runningSessions = new Map<string, SessionRuntime>();
 
   return {
+    modelMapping: () => ({ ...resolved.models }),
     capabilities: () =>
       providerCapabilitiesSchema.parse({
         provider: "CODEX",
@@ -227,7 +229,9 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
     ): Promise<ProviderOutcome> => {
       const sessionId = invocation.session.id;
       const workspace = invocation.workspace;
-      const model = resolved.models[modelTierSchema.parse(invocation.modelTier)];
+      const model = providerModelIdSchema.parse(
+        invocation.modelId ?? resolved.models[modelTierSchema.parse(invocation.modelTier)],
+      );
       // Created for every session and removed in `finally`, including on failure (point 7). It
       // holds the generated output schema, which must not be written into a worktree: what a
       // session changed is read back from git against that directory, and a file Loomrail itself

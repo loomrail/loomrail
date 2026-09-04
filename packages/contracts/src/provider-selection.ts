@@ -36,6 +36,20 @@ export const providerFallbackReasonSchema = z
   .enum(["NO_READY_LIVE_PROVIDER", "LIVE_PROVIDER_UNAVAILABLE"])
   .nullable();
 
+export const providerModelIdSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+
+export const providerModelMappingSchema = z
+  .object({
+    FAST: providerModelIdSchema,
+    STANDARD: providerModelIdSchema,
+    DEEP: providerModelIdSchema,
+  })
+  .strict();
+
 export const providerAvailabilitySchema = z
   .object({
     provider: providerIdSchema,
@@ -48,6 +62,7 @@ export const providerAvailabilitySchema = z
     checkpointOnRequest: z.boolean(),
     contextWindowReporting: z.boolean(),
     costReporting: z.boolean(),
+    models: providerModelMappingSchema.nullable(),
   })
   .strict()
   .superRefine((availability, context) => {
@@ -57,11 +72,18 @@ export const providerAvailabilitySchema = z
         availability.authentication !== "AUTHENTICATED" ||
         availability.version !== null ||
         availability.compatibility !== "BUILT_IN" ||
-        !availability.ready
+        !availability.ready ||
+        availability.models !== null
       ) {
-        context.addIssue({ code: "custom", message: "The Mock provider is always ready" });
+        context.addIssue({
+          code: "custom",
+          message: "The Mock provider is always ready and has no live model mapping",
+        });
       }
       return;
+    }
+    if (availability.models === null) {
+      context.addIssue({ code: "custom", message: "A live provider must expose its model mapping" });
     }
     if (!availability.installed && availability.compatibility !== "MISSING") {
       context.addIssue({ code: "custom", message: "A missing live provider must report MISSING" });
@@ -178,6 +200,7 @@ export type ProjectProviderSelection = z.infer<typeof projectProviderSelectionSc
 export type ProviderAuthentication = z.infer<typeof providerAuthenticationSchema>;
 export type ProviderCompatibility = z.infer<typeof providerCompatibilitySchema>;
 export type ProviderSelectionSource = z.infer<typeof providerSelectionSourceSchema>;
+export type ProviderModelMapping = z.infer<typeof providerModelMappingSchema>;
 export type ProviderAvailability = z.infer<typeof providerAvailabilitySchema>;
 export type ProjectProviderSelectionResponse = z.infer<typeof projectProviderSelectionResponseSchema>;
 export type ProjectProviderPreferenceChangedEvent = z.infer<

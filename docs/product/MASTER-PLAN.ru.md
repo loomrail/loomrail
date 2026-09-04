@@ -1391,6 +1391,12 @@ auth probe. Обе CLI локально `VERIFIED`, `AUTHENTICATED` и ready; Wi
 gap. Первый managed запуск дополнительно обнаружил, что Task Cockpit не сохранял выбранные hard budget/model tier:
 демонстрационный лимит `100` и role default `STANDARD` применялись без preview. Q14 сначала добавляет versioned
 run-cost override для будущих AgentRun и явные start/override controls, не переписывая уже сохранённый snapshot.
+Второй запуск отделил ещё один скрытый предел: достаточный pipeline cap не повышал immutable role envelope одного
+AgentRun. Cost policy поэтому хранит оба независимых ограничения; owner может поднять per-AgentRun ceiling новой
+revision, не раздувая ещё не исчерпанный общий cap.
+Task Cockpit теперь получает конкретные model IDs из validated adapter config: при pinned provider выбирается exact
+model, а `Auto` показывает пару Codex/Claude для каждого logical tier. Выбранный ID сохраняется вместе с tier в
+immutable AgentRun policy snapshot до запуска CLI; UI-каталог и фактический argv больше не ведут две отдельные карты.
 Следующий шаг Q14 — завершить managed public dogfood, correction loop и independent review, не выдавая его за
 private dogfood и не принимая owner-only Acceptance решение.
 

@@ -39,7 +39,11 @@ describe("durable provider usage", () => {
     return state;
   };
 
-  const startExecution = (localState: LocalState, maxEstimatedTokens: number) => {
+  const startExecution = (
+    localState: LocalState,
+    maxEstimatedTokens: number,
+    agentRunMaxEstimatedTokensOverride?: number,
+  ) => {
     localState.execute({
       schemaVersion: 1,
       commandId: "register-project",
@@ -95,7 +99,11 @@ describe("durable provider usage", () => {
           name: "Provider usage",
           stages: [{ stage: "DISCOVERY", ordinal: 0, contextPack }],
         },
-        budget: { maxEstimatedTokens, warningThresholds: [0.5, 0.8, 0.95] },
+        budget: {
+          maxEstimatedTokens,
+          warningThresholds: [0.5, 0.8, 0.95],
+          ...(agentRunMaxEstimatedTokensOverride === undefined ? {} : { agentRunMaxEstimatedTokensOverride }),
+        },
       },
     });
     if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
@@ -326,6 +334,92 @@ describe("durable provider usage", () => {
     });
     expect(localState.query({ type: "GET_AGENT_RUN", agentRunId: execution.agent.run.id })).toMatchObject({
       runs: [{ status: "HARD_PAUSED" }],
+    });
+  });
+
+  it("raises only an exhausted AgentRun ceiling and binds the revision to the retry", async () => {
+    const localState = await open();
+    const execution = startExecution(localState, 700_000, 80_000);
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "record-agent-run-exhaustion",
+      correlationId: "correlation-record-agent-run-exhaustion",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "RECORD_PROVIDER_USAGE",
+      payload: {
+        providerSessionId: execution.session.session.id,
+        usage: { inputTokens: 132_916, outputTokens: 1_315, quality: "ACTUAL" },
+      },
+    });
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "end-agent-run-exhaustion",
+      correlationId: "correlation-end-agent-run-exhaustion",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "END_PROVIDER_SESSION",
+      payload: {
+        providerSessionId: execution.session.session.id,
+        endReason: "INTERRUPTED",
+        providerStarted: true,
+      },
+    });
+    const paused = localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: execution.created.workItem.id,
+    });
+    if (paused.type !== "WORKFLOW_SNAPSHOT" || paused.snapshot.run === null) {
+      throw new Error("Expected a hard-paused workflow");
+    }
+
+    const overridden = localState.execute({
+      schemaVersion: 1,
+      commandId: "raise-agent-run-ceiling",
+      correlationId: "correlation-raise-agent-run-ceiling",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "APPROVE_BUDGET_OVERRIDE",
+      payload: {
+        pipelineRunId: paused.snapshot.run.id,
+        expectedVersion: paused.snapshot.run.version,
+        maxEstimatedTokens: 700_000,
+        modelTierOverride: "FAST",
+        agentRunMaxEstimatedTokensOverride: 175_000,
+      },
+    });
+    if (overridden.type !== "BUDGET_OVERRIDE_APPROVED") {
+      throw new Error("Expected BudgetPolicy override");
+    }
+    expect(overridden.budgetPolicy).toMatchObject({
+      revision: 2,
+      maxEstimatedTokens: 700_000,
+      agentRunMaxEstimatedTokensOverride: 175_000,
+    });
+
+    const retried = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-agent-run-retry",
+      correlationId: "correlation-start-agent-run-retry",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: overridden.dispatch.id,
+        provider: "CLAUDE_CODE",
+        modelMapping: {
+          FAST: "claude-fast-pinned",
+          STANDARD: "claude-standard-pinned",
+          DEEP: "claude-deep-pinned",
+        },
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    expect(retried).toMatchObject({
+      type: "AGENT_RUN_STARTED",
+      run: {
+        policySnapshot: {
+          provider: "CLAUDE_CODE",
+          modelId: "claude-fast-pinned",
+          budget: { pipelinePolicyRevision: 2, maxEstimatedTokens: 175_000 },
+        },
+      },
     });
   });
 

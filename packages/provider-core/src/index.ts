@@ -5,11 +5,17 @@ import type {
   ModelTier,
   ProviderOutcome,
   ProviderId,
+  ProviderModelMapping,
   ProviderUsage,
   WorkflowDispatch,
   WorkflowStage,
 } from "@loomrail/contracts";
-import { providerIdSchema, workflowStageSchema } from "@loomrail/contracts";
+import {
+  providerIdSchema,
+  providerModelIdSchema,
+  providerModelMappingSchema,
+  workflowStageSchema,
+} from "@loomrail/contracts";
 import { z } from "zod";
 
 import type { ProviderStageResultPolicy } from "./stage-result.js";
@@ -34,6 +40,8 @@ export { createCliProviderDiagnostics } from "./diagnostics.js";
 // rather than left as a bare string an adapter could misspell.
 export { providerIdSchema };
 export type { ProviderId };
+export { providerModelIdSchema, providerModelMappingSchema };
+export type { ProviderModelMapping };
 
 // `contextWindowTokens` is required, not optional: the pack budget (spec §4.3) is computed as a
 // share of the window before the session starts, so an adapter that cannot declare its window
@@ -78,22 +86,6 @@ export const providerCapabilitiesSchema = z
   );
 
 export type ProviderCapabilities = z.infer<typeof providerCapabilitiesSchema>;
-
-export const providerModelIdSchema = z
-  .string()
-  .min(1)
-  .max(200)
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
-
-export const providerModelMappingSchema = z
-  .object({
-    FAST: providerModelIdSchema,
-    STANDARD: providerModelIdSchema,
-    DEEP: providerModelIdSchema,
-  })
-  .strict();
-
-export type ProviderModelMapping = Readonly<Record<ModelTier, string>>;
 
 // `stage` is kept on the session reference on purpose: choosing a model tier and a tool set is
 // legitimate adapter work and needs something to key on. `attempt` is kept for the same reason,
@@ -150,8 +142,13 @@ export type ProviderInvocation = {
   dispatch: WorkflowDispatch;
   session: ProviderSessionRef;
   contextPack: ContextPack;
-  /** Immutable logical tier from the active AgentRun policy; the adapter resolves its exact model. */
+  /** Immutable logical tier from the active AgentRun policy. */
   modelTier: ModelTier;
+  /**
+   * Exact validated model from the same immutable policy snapshot. Optional only for AgentRuns
+   * written before model binding; adapters fall back to their current tier mapping for those.
+   */
+  modelId?: string | null;
   /**
    * A structured copy of the criterion/check text rendered into this same pack, present only for
    * Acceptance. It carries no authority IDs: adapters may propose a mapping without parsing prose,
@@ -274,6 +271,10 @@ export class ProviderPackTooLargeError extends Error {
 
 export type ProviderAdapter = {
   capabilities: () => ProviderCapabilities;
+  // The owner-facing policy editor needs the same validated mapping the adapter will use. Keeping
+  // it on the adapter prevents the web app from maintaining a second, drifting model catalogue.
+  // MOCK and third-party test adapters may omit it when no real provider model is selected.
+  modelMapping?: () => ProviderModelMapping;
   start: (invocation: ProviderInvocation, listener: ProviderSessionListener) => Promise<ProviderOutcome>;
   requestHandoff: (sessionId: string) => Promise<void>;
   // Spec §7 promises a *hard* cut when a wind-down request is ignored, and `requestHandoff` cannot

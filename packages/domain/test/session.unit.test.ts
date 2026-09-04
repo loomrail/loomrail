@@ -496,6 +496,7 @@ describe("provider session decisions", () => {
               createdAt: now,
             },
             cumulativeUsage: 0,
+            currentAgentRunMaxEstimatedTokens: 80,
             ids: {
               budgetPolicyId: "budget-2",
               stageAttemptId: "attempt-2",

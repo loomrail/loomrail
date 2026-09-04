@@ -819,14 +819,23 @@ export const useApproveBudgetOverride = () => {
     mutationFn: ({
       maxEstimatedTokens,
       modelTierOverride,
+      agentRunMaxEstimatedTokensOverride,
       run,
       workItem,
     }: {
       maxEstimatedTokens: number;
       modelTierOverride: ModelTier | null;
+      agentRunMaxEstimatedTokensOverride: number | null;
       run: PipelineRun;
       workItem: WorkItem;
-    }) => approveBudgetOverride(workItem.id, run, maxEstimatedTokens, modelTierOverride),
+    }) =>
+      approveBudgetOverride(
+        workItem.id,
+        run,
+        maxEstimatedTokens,
+        modelTierOverride,
+        agentRunMaxEstimatedTokensOverride,
+      ),
     onSuccess: async (_, { run, workItem }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { providerPreferenceSchema } from "./provider-selection.js";
+import { providerModelIdSchema, providerPreferenceSchema } from "./provider-selection.js";
 import { modelTierSchema, opaqueIdSchema, schemaVersionSchema, utcTimestampSchema } from "./shared.js";
 import { contextSectionIdSchema, providerIdSchema, workflowStageSchema } from "./workflow.js";
 
@@ -134,6 +134,9 @@ export const agentRunPolicySnapshotSchema = z
     provider: providerIdSchema,
     effectiveCapabilities: z.array(agentCapabilitySchema).max(6),
     modelTier: modelTierSchema,
+    // Optional only for snapshots written before exact provider-model binding. New live AgentRuns
+    // persist the validated adapter model ID; Mock persists explicit null.
+    modelId: providerModelIdSchema.nullable().optional(),
     // Optional only for policy snapshots written before the Constitution binding existed. New
     // AgentRuns always write either the exact immutable content reference or explicit null.
     projectConstitution: z

@@ -173,6 +173,7 @@ const fixtureInvocation = (
   humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
   mcpConnections: readonly ProviderMcpConnection[] = [],
   modelTier: ModelTier = "STANDARD",
+  modelId?: string,
 ): ProviderInvocation => ({
   dispatch: {
     schemaVersion: 1,
@@ -199,6 +200,7 @@ const fixtureInvocation = (
     contentHash: `sha256:${"0".repeat(64)}`,
   },
   modelTier,
+  ...(modelId === undefined ? {} : { modelId }),
   acceptanceInput: null,
   humanRequests,
   mcpConnections,
@@ -219,10 +221,11 @@ const startWith = async (
   humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
   mcpConnections: readonly ProviderMcpConnection[] = [],
   modelTier: ModelTier = "STANDARD",
+  modelId?: string,
 ): Promise<ProviderOutcome> => {
   const outcome = await withEnv("FAKE_CLAUDE_RECORD_PATH", spawned.recordPath, () =>
     adapter.start(
-      fixtureInvocation("session-1", "DISCOVERY", humanRequests, mcpConnections, modelTier),
+      fixtureInvocation("session-1", "DISCOVERY", humanRequests, mcpConnections, modelTier, modelId),
       noopListener(),
     ),
   );
@@ -368,6 +371,12 @@ describe("createClaudeCodeProvider", () => {
       expect(spawned.args[spawned.args.indexOf("--model") + 1]).toBe(models[tier]);
     }
     expect(() => createClaudeCodeProvider({ models: { DEEP: "--unsafe-flag" } })).toThrow();
+  });
+
+  it("uses the exact model pinned in the AgentRun snapshot even if the adapter mapping changed", async () => {
+    const spawned = recordSpawn();
+    await startWith(spawned, createFakeClaudeProvider(), "ALLOWED", [], "FAST", "claude-snapshot-pinned");
+    expect(spawned.args[spawned.args.indexOf("--model") + 1]).toBe("claude-snapshot-pinned");
   });
 
   // SD-001 again. Every named spelling is checked, not just the ones this adapter happens to

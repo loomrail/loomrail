@@ -520,6 +520,9 @@ export const budgetPolicySchema = z
     // Optional preserves append-only events and receipts written before run-level model policy.
     // Null means "use the immutable AgentProfile default"; new owner-selected policies persist a tier.
     modelTierOverride: modelTierSchema.nullable().optional(),
+    // Same compatibility rule as modelTierOverride. Null keeps the exact role envelope; a value is
+    // an owner-authored ceiling for each future AgentRun under this policy revision.
+    agentRunMaxEstimatedTokensOverride: z.number().int().positive().nullable().optional(),
     warningThresholds: z.array(budgetThresholdSchema).min(1).max(10),
     createdBy: actorSchema,
     createdAt: utcTimestampSchema,
@@ -1099,6 +1102,7 @@ export const startMockPipelineCommandSchema = commandBaseSchema.extend({
           maxEstimatedTokens: z.number().int().positive(),
           warningThresholds: z.array(budgetThresholdSchema).min(1).max(10),
           modelTierOverride: modelTierSchema.nullable().optional(),
+          agentRunMaxEstimatedTokensOverride: z.number().int().positive().nullable().optional(),
         })
         .strict(),
     })
@@ -1216,6 +1220,7 @@ export const approveBudgetOverrideCommandSchema = commandBaseSchema.extend({
     maxEstimatedTokens: z.number().int().positive(),
     // Optional for historical command receipts. Omitted means preserve the current policy value.
     modelTierOverride: modelTierSchema.nullable().optional(),
+    agentRunMaxEstimatedTokensOverride: z.number().int().positive().nullable().optional(),
   }),
 });
 
@@ -1733,6 +1738,7 @@ export const startMockPipelineRequestSchema = z
     // sends both values so the owner sees the cost policy before launch.
     maxEstimatedTokens: z.number().int().positive().optional(),
     modelTierOverride: modelTierSchema.nullable().optional(),
+    agentRunMaxEstimatedTokensOverride: z.number().int().positive().nullable().optional(),
   })
   .strict();
 
@@ -1768,6 +1774,7 @@ export const pipelineControlRequestSchema = z
 export const budgetOverrideRequestSchema = pipelineControlRequestSchema.extend({
   maxEstimatedTokens: z.number().int().positive(),
   modelTierOverride: modelTierSchema.nullable().optional(),
+  agentRunMaxEstimatedTokensOverride: z.number().int().positive().nullable().optional(),
 });
 
 export const resolveAcceptanceRequestSchema = z

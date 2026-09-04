@@ -405,6 +405,8 @@ export const resolveAgentRunPolicy = (input: {
   claimLimits: AgentRunClaimLimits;
   pipelineBudget: { id: string; revision: number; maxEstimatedTokens: number };
   modelTierOverride?: AgentRunPolicySnapshot["modelTier"] | null;
+  modelMapping?: Readonly<Record<AgentRunPolicySnapshot["modelTier"], string>> | null;
+  agentRunMaxEstimatedTokensOverride?: number | null;
   usedEstimatedTokens: number;
   mcpProfileRevisionIds: readonly string[];
   projectConstitution: { id: string; version: number; contentDigest: string } | null;
@@ -431,6 +433,8 @@ export const resolveAgentRunPolicy = (input: {
       "No estimated-token budget remains for a new AgentRun",
     );
   }
+  const agentRunMaxEstimatedTokens =
+    input.agentRunMaxEstimatedTokensOverride ?? input.profile.budgetEnvelope.maxEstimatedTokens;
 
   assertUnique(input.mcpProfileRevisionIds, "MCP profile revisions");
   const availableMcpProfileRevisionIds = [...input.mcpProfileRevisionIds].sort((left, right) =>
@@ -449,19 +453,22 @@ export const resolveAgentRunPolicy = (input: {
       ? "READ_ONLY"
       : "NONE";
 
+  const modelTier = input.modelTierOverride ?? input.profile.defaultModelTier;
+
   return agentRunPolicySnapshotSchema.parse({
     schemaVersion: 1,
     assignment: { id: input.assignment.id, revision: input.assignment.revision },
     profile: { id: input.profile.id, revision: input.profile.revision, role: input.profile.role },
     provider: input.provider,
     effectiveCapabilities,
-    modelTier: input.modelTierOverride ?? input.profile.defaultModelTier,
+    modelTier,
+    ...("modelMapping" in input ? { modelId: input.modelMapping?.[modelTier] ?? null } : {}),
     projectConstitution: input.projectConstitution,
     claimLimits: input.claimLimits,
     budget: {
       pipelinePolicyId: input.pipelineBudget.id,
       pipelinePolicyRevision: input.pipelineBudget.revision,
-      maxEstimatedTokens: Math.min(input.profile.budgetEnvelope.maxEstimatedTokens, remainingPipelineTokens),
+      maxEstimatedTokens: Math.min(agentRunMaxEstimatedTokens, remainingPipelineTokens),
       maxProviderSessions: input.profile.budgetEnvelope.maxProviderSessions,
     },
     workspace: {

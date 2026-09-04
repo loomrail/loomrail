@@ -137,6 +137,8 @@ const BUDGET_WALL_MS = 20_000;
 const readyForBudgetApproval = async (page: Page, inspector: Locator): Promise<Locator> => {
   await inspector.getByRole("button", { name: "Move to Ready" }).click();
   await expect(inspector.getByRole("button", { name: "Start workflow" })).toBeEnabled();
+  await inspector.getByLabel("Hard token budget").fill("100");
+  await inspector.getByLabel("Per-agent run ceiling").fill("100");
   await inspector.getByRole("button", { name: "Start workflow" }).click();
   await expect(inspector.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible({
     timeout: DISCOVERY_DECISION_MS,
@@ -172,7 +174,8 @@ test.describe("event channel", () => {
     // The one click that unblocks the rest of the pipeline. Everything after IMPLEMENT's retry --
     // REVIEW, QA, the request for acceptance -- runs unattended in the session worker (Task 8).
     const actorWorkflow = workflowSectionOf(page, actorInspector);
-    await actorWorkflow.getByRole("button", { name: "Approve 200 token budget" }).click();
+    await actorWorkflow.getByLabel("Hard token budget").fill("200");
+    await actorWorkflow.getByRole("button", { name: "Approve cost policy" }).click();
 
     // Nothing is clicked on the observer page from here on: only its own channel connection can
     // move this text.
@@ -209,7 +212,8 @@ test.describe("event channel", () => {
     await expect(observerWorkflow.getByText("100 of 100", { exact: true })).toBeVisible();
 
     const actorWorkflow = workflowSectionOf(page, actorInspector);
-    await actorWorkflow.getByRole("button", { name: "Approve 200 token budget" }).click();
+    await actorWorkflow.getByLabel("Hard token budget").fill("200");
+    await actorWorkflow.getByRole("button", { name: "Approve cost policy" }).click();
     // The actor's own view is unaffected -- it never depended on the channel -- and settles on the
     // finished delivery through its own mutation's invalidation.
     await expect(actorWorkflow.getByRole("heading", { name: "Acceptance package" })).toBeVisible({

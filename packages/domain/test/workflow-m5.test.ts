@@ -419,6 +419,7 @@ describe("M5 workflow decisions", () => {
         stageAttempt: hardAttempt,
         currentBudgetPolicy: budgetPolicy,
         cumulativeUsage: 100,
+        currentAgentRunMaxEstimatedTokens: 80,
         ids: { budgetPolicyId: "budget-2", stageAttemptId: "attempt-2", dispatchId: "dispatch-2" },
       },
     );
@@ -426,6 +427,42 @@ describe("M5 workflow decisions", () => {
       run: { status: "RUNNING", currentStageAttemptId: "attempt-2" },
       stageAttempt: { attempt: 2, status: "QUEUED" },
       budgetPolicy: { revision: 2, maxEstimatedTokens: 200, modelTierOverride: "FAST" },
+    });
+  });
+
+  it("can raise an exhausted AgentRun envelope without inflating an unused pipeline cap", () => {
+    const pipelineLimit = 700_000;
+    const hardRun = { ...run, status: "HARD_PAUSED" as const };
+    const hardAttempt = { ...stageAttempt, status: "HARD_PAUSED" as const };
+    const command = {
+      schemaVersion: 1,
+      commandId: "override-agent-run-budget",
+      correlationId: "correlation-override-agent-run-budget",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "APPROVE_BUDGET_OVERRIDE",
+      payload: {
+        pipelineRunId: hardRun.id,
+        expectedVersion: hardRun.version,
+        maxEstimatedTokens: pipelineLimit,
+        agentRunMaxEstimatedTokensOverride: 160_000,
+      },
+    } as unknown as Parameters<typeof decideApproveBudgetOverride>[0];
+
+    const overridden = decideApproveBudgetOverride(command, {
+      now,
+      workItem: { ...workItem, state: "BLOCKED" },
+      run: hardRun,
+      stageAttempt: hardAttempt,
+      currentBudgetPolicy: { ...budgetPolicy, maxEstimatedTokens: pipelineLimit },
+      cumulativeUsage: 284_250,
+      currentAgentRunMaxEstimatedTokens: 80_000,
+      ids: { budgetPolicyId: "budget-3", stageAttemptId: "attempt-3", dispatchId: "dispatch-3" },
+    });
+
+    expect(overridden.budgetPolicy).toMatchObject({
+      revision: 2,
+      maxEstimatedTokens: pipelineLimit,
+      agentRunMaxEstimatedTokensOverride: 160_000,
     });
   });
 

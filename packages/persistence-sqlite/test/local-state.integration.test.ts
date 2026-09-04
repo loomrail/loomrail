@@ -1210,7 +1210,7 @@ describe("SQLite local state", () => {
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-      29, 30, 31, 32, 33,
+      29, 30, 31, 32, 33, 34,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -1257,6 +1257,46 @@ describe("SQLite local state", () => {
     });
     expect(snapshot).toMatchObject({
       snapshot: { budgetPolicies: [{ revision: 1, modelTierOverride: null }] },
+    });
+  });
+
+  it("adds a nullable per-AgentRun override without inventing one for an older BudgetPolicy", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const created = localState.execute(createWorkItem("create-pre-0034"));
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute(moveWorkItem("ready-pre-0034", created.workItem.id, 1, "READY"));
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "pipeline-pre-0034",
+      correlationId: "correlation-pipeline-pre-0034",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: mockTemplate,
+        budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    localState.close();
+    state = undefined;
+
+    const pre34 = new DatabaseSync(databasePath);
+    pre34.exec(`
+      ALTER TABLE budget_policies DROP COLUMN agent_run_max_estimated_tokens_override;
+      DELETE FROM schema_migrations WHERE version = 34;
+    `);
+    pre34.close();
+
+    const migrated = await open();
+    expect(migrated.startup.appliedMigrations).toEqual([34]);
+    const snapshot = migrated.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: created.workItem.id,
+    });
+    expect(snapshot).toMatchObject({
+      snapshot: { budgetPolicies: [{ revision: 1, agentRunMaxEstimatedTokensOverride: null }] },
     });
   });
 
@@ -2805,6 +2845,8 @@ describe("SQLite local state", () => {
       suffix: string,
       projectId = "project-web",
       modelTierOverride?: "FAST" | "STANDARD" | "DEEP",
+      agentRunMaxEstimatedTokensOverride?: number,
+      maxEstimatedTokens = 100,
     ) => {
       const created = localState.execute(createWorkItem(`create-${suffix}`, projectId));
       if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
@@ -2820,9 +2862,12 @@ describe("SQLite local state", () => {
           expectedVersion: 2,
           template: mockTemplate,
           budget: {
-            maxEstimatedTokens: 100,
+            maxEstimatedTokens,
             warningThresholds: [0.5, 0.8, 0.95],
             ...(modelTierOverride === undefined ? {} : { modelTierOverride }),
+            ...(agentRunMaxEstimatedTokensOverride === undefined
+              ? {}
+              : { agentRunMaxEstimatedTokensOverride }),
           },
         },
       });
@@ -2979,7 +3024,14 @@ describe("SQLite local state", () => {
     it("persists a FAST run policy and binds it to the next immutable AgentRun", async () => {
       const localState = await open();
       localState.execute(registerProject());
-      const { dispatch } = startReadyWorkflow(localState, "a3-fast-policy", "project-web", "FAST");
+      const { dispatch } = startReadyWorkflow(
+        localState,
+        "a3-fast-policy",
+        "project-web",
+        "FAST",
+        175_000,
+        700_000,
+      );
 
       const started = localState.execute(startAgentRun("fast-policy", dispatch.id));
       expect(started).toMatchObject({
@@ -2987,7 +3039,7 @@ describe("SQLite local state", () => {
         run: {
           policySnapshot: {
             modelTier: "FAST",
-            budget: { pipelinePolicyRevision: 1 },
+            budget: { pipelinePolicyRevision: 1, maxEstimatedTokens: 175_000 },
           },
         },
       });
@@ -2996,7 +3048,16 @@ describe("SQLite local state", () => {
       state = undefined;
       const reopened = await open();
       const runs = reopened.query({ type: "LIST_AGENT_RUNS", status: "RUNNING", limit: 10 });
-      expect(runs).toMatchObject({ runs: [{ policySnapshot: { modelTier: "FAST" } }] });
+      expect(runs).toMatchObject({
+        runs: [
+          {
+            policySnapshot: {
+              modelTier: "FAST",
+              budget: { pipelinePolicyRevision: 1, maxEstimatedTokens: 175_000 },
+            },
+          },
+        ],
+      });
     });
 
     it("rejects a policy snapshot whose stored bytes no longer match its hash", async () => {

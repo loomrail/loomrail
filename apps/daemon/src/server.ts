@@ -2801,6 +2801,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
               maxEstimatedTokens: body.maxEstimatedTokens ?? LEGACY_MOCK_BUDGET,
               warningThresholds: [...DEFAULT_MOCK_BUDGET_THRESHOLDS],
               modelTierOverride: body.modelTierOverride ?? null,
+              agentRunMaxEstimatedTokensOverride: body.agentRunMaxEstimatedTokensOverride ?? null,
             },
           },
         });
@@ -2992,6 +2993,11 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             expectedVersion: body.expectedVersion,
             maxEstimatedTokens: body.maxEstimatedTokens,
             ...(body.modelTierOverride === undefined ? {} : { modelTierOverride: body.modelTierOverride }),
+            ...(body.agentRunMaxEstimatedTokensOverride === undefined
+              ? {}
+              : {
+                  agentRunMaxEstimatedTokensOverride: body.agentRunMaxEstimatedTokensOverride,
+                }),
           },
         });
         worker.wake();

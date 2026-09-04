@@ -26,8 +26,12 @@
 
 - [x] Обновить public EN/RU matrix, T43 и sanitized evidence.
 - [x] Перезапустить isolated daemon и доказать provider readiness/recovery.
-- [ ] Исправить обнаруженный dogfood blocker: durable model-tier override и управляемый hard budget в Task Cockpit.
-- [ ] Доказать migration/backward compatibility, immutable старый AgentRun snapshot и FAST для следующего AgentRun.
+- [x] Исправить первую часть dogfood blocker: durable model-tier override и управляемый pipeline hard budget.
+- [x] Доказать migration/backward compatibility, immutable старый AgentRun snapshot и FAST для следующего AgentRun.
+- [x] Разделить pipeline cap и per-AgentRun ceiling после измеренного FAST stop `134231 > 80000`.
+- [x] Доказать, что owner повышает только исчерпанный envelope без фиктивного роста достаточного pipeline cap.
+- [x] Показать в Task Cockpit конкретные model IDs из выбранного adapter mapping и зафиксировать exact model ID в
+      immutable AgentRun snapshot до запуска CLI.
 - [ ] Продолжить public target workflow с Codex implementation и независимым Claude review.
 - [ ] Выполнить browser QA и correction loop; owner-only acceptance оставить владельцу.
 - [ ] Провести Standards/Spec review и полный доступный verification gate.

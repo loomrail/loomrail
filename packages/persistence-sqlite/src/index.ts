@@ -566,6 +566,7 @@ const budgetPolicyRowSchema = z.object({
   revision: z.number().int(),
   max_estimated_tokens: z.number().int(),
   model_tier_override: z.string().nullable(),
+  agent_run_max_estimated_tokens_override: z.number().int().nullable(),
   warning_thresholds_json: z.string(),
   actor_type: z.string(),
   actor_id: z.string(),
@@ -1453,6 +1454,7 @@ const budgetPolicyFromRow = (value: unknown): BudgetPolicy => {
     revision: row.revision,
     maxEstimatedTokens: row.max_estimated_tokens,
     modelTierOverride: row.model_tier_override,
+    agentRunMaxEstimatedTokensOverride: row.agent_run_max_estimated_tokens_override,
     warningThresholds: parseJson(row.warning_thresholds_json),
     createdBy: { type: row.actor_type, id: row.actor_id },
     createdAt: row.created_at,
@@ -2709,6 +2711,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     );
     const selectRunningAgentRunForStageAttempt = database.prepare(
       "SELECT * FROM agent_runs WHERE stage_attempt_id = ? AND status = 'RUNNING' LIMIT 1",
+    );
+    const selectLatestAgentRunForStageAttempt = database.prepare(
+      "SELECT * FROM agent_runs WHERE stage_attempt_id = ? ORDER BY ordinal DESC, rowid DESC LIMIT 1",
     );
     const selectAgentRunById = database.prepare("SELECT * FROM agent_runs WHERE id = ?");
     const selectLatestSucceededDeveloperAgentRun = database.prepare(
@@ -4809,8 +4814,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO budget_policies (
             id, schema_version, project_id, work_item_id, pipeline_run_id, revision,
-            max_estimated_tokens, model_tier_override, warning_thresholds_json, actor_type, actor_id, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            max_estimated_tokens, model_tier_override, agent_run_max_estimated_tokens_override,
+            warning_thresholds_json, actor_type, actor_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           policy.id,
@@ -4821,6 +4827,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           policy.revision,
           policy.maxEstimatedTokens,
           policy.modelTierOverride ?? null,
+          policy.agentRunMaxEstimatedTokensOverride ?? null,
           JSON.stringify(policy.warningThresholds),
           policy.createdBy.type,
           policy.createdBy.id,
@@ -6279,6 +6286,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               maxEstimatedTokens: currentBudget.maxEstimatedTokens,
             },
             modelTierOverride: currentBudget.modelTierOverride ?? null,
+            ...(command.payload.modelMapping === undefined
+              ? {}
+              : { modelMapping: command.payload.modelMapping }),
+            agentRunMaxEstimatedTokensOverride: currentBudget.agentRunMaxEstimatedTokensOverride ?? null,
             usedEstimatedTokens,
             mcpProfileRevisionIds,
             projectConstitution:
@@ -7374,6 +7385,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (!run || !stageAttempt || !workItem || !currentBudgetPolicy) {
           throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The workflow state is incomplete");
         }
+        const latestAgentRunValue = selectLatestAgentRunForStageAttempt.get(stageAttempt.id);
+        const latestAgentRun = latestAgentRunValue ? agentRunFromRow(latestAgentRunValue) : null;
         const decision = decideApproveBudgetOverride(command, {
           now: occurredAt,
           workItem,
@@ -7381,6 +7394,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           stageAttempt,
           currentBudgetPolicy,
           cumulativeUsage: readUsageRecords(run.id).reduce((total, record) => total + record.amount, 0),
+          currentAgentRunMaxEstimatedTokens:
+            latestAgentRun?.policySnapshot?.budget.maxEstimatedTokens ?? null,
           ids: {
             budgetPolicyId: createId("budgetPolicy"),
             stageAttemptId: createId("stageAttempt"),

@@ -513,6 +513,7 @@ export const decideStartMockPipeline = (
     revision: 1,
     maxEstimatedTokens: command.payload.budget.maxEstimatedTokens,
     modelTierOverride: command.payload.budget.modelTierOverride ?? null,
+    agentRunMaxEstimatedTokensOverride: command.payload.budget.agentRunMaxEstimatedTokensOverride ?? null,
     warningThresholds: [...command.payload.budget.warningThresholds],
     createdBy: command.actor,
     createdAt: context.now,
@@ -2214,6 +2215,7 @@ export const decideApproveBudgetOverride = (
     stageAttempt: StageAttempt;
     currentBudgetPolicy: BudgetPolicy;
     cumulativeUsage: number;
+    currentAgentRunMaxEstimatedTokens: number | null;
     ids: { budgetPolicyId: string; stageAttemptId: string; dispatchId: string };
   },
 ): BudgetOverrideDecision => {
@@ -2237,16 +2239,29 @@ export const decideApproveBudgetOverride = (
       { failureCode: context.stageAttempt.failureCode },
     );
   }
+  const pipelineLimitRaised =
+    command.payload.maxEstimatedTokens > context.currentBudgetPolicy.maxEstimatedTokens;
+  const requestedAgentRunLimit = command.payload.agentRunMaxEstimatedTokensOverride;
+  const currentAgentRunLimit = Math.max(
+    context.currentAgentRunMaxEstimatedTokens ?? 0,
+    context.currentBudgetPolicy.agentRunMaxEstimatedTokensOverride ?? 0,
+  );
+  const agentRunLimitRaised =
+    requestedAgentRunLimit !== undefined &&
+    requestedAgentRunLimit !== null &&
+    requestedAgentRunLimit > currentAgentRunLimit;
   if (
-    command.payload.maxEstimatedTokens <= context.currentBudgetPolicy.maxEstimatedTokens ||
-    command.payload.maxEstimatedTokens <= context.cumulativeUsage
+    command.payload.maxEstimatedTokens < context.currentBudgetPolicy.maxEstimatedTokens ||
+    command.payload.maxEstimatedTokens <= context.cumulativeUsage ||
+    (!pipelineLimitRaised && !agentRunLimitRaised)
   ) {
     throw new WorkflowDomainError(
       "BUDGET_OVERRIDE_INVALID",
-      "The new budget must exceed both the previous limit and recorded usage",
+      "The new cost policy must preserve the pipeline cap, exceed recorded usage, and raise an exhausted limit",
       {
         previousLimit: context.currentBudgetPolicy.maxEstimatedTokens,
         cumulativeUsage: context.cumulativeUsage,
+        currentAgentRunLimit,
       },
     );
   }
@@ -2259,6 +2274,10 @@ export const decideApproveBudgetOverride = (
       command.payload.modelTierOverride === undefined
         ? (context.currentBudgetPolicy.modelTierOverride ?? null)
         : command.payload.modelTierOverride,
+    agentRunMaxEstimatedTokensOverride:
+      command.payload.agentRunMaxEstimatedTokensOverride === undefined
+        ? (context.currentBudgetPolicy.agentRunMaxEstimatedTokensOverride ?? null)
+        : command.payload.agentRunMaxEstimatedTokensOverride,
     createdBy: command.actor,
     createdAt: context.now,
   };

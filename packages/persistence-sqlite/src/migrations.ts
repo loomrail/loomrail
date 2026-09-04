@@ -164,6 +164,11 @@ const migrations: readonly Migration[] = [
     name: "budget_model_tier_override",
     filename: "0033_budget_model_tier_override.sql",
   },
+  {
+    version: 34,
+    name: "budget_agent_run_override",
+    filename: "0034_budget_agent_run_override.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

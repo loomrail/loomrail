@@ -30,6 +30,7 @@ const providerSnapshot = (
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: true,
+      models: null,
     },
     {
       provider: "CODEX",
@@ -42,6 +43,7 @@ const providerSnapshot = (
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: false,
+      models: { FAST: "gpt-fast", STANDARD: "gpt-standard", DEEP: "gpt-deep" },
     },
     {
       provider: "CLAUDE_CODE",
@@ -54,6 +56,7 @@ const providerSnapshot = (
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: true,
+      models: { FAST: "claude-fast", STANDARD: "claude-standard", DEEP: "claude-deep" },
     },
   ],
 });

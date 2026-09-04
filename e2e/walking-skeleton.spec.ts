@@ -1714,6 +1714,14 @@ test.describe("authenticated walking skeleton", () => {
     const inspector = page.getByRole("complementary", { name: "Human decision workflow" });
     await inspector.getByRole("button", { name: "Move to Ready" }).click();
     await expect(inspector.getByRole("button", { name: "Start workflow" })).toBeEnabled();
+    await expect(inspector.getByLabel("Model", { exact: true })).toContainText("Fast");
+    expect(
+      await inspector
+        .locator(".workflow-policy-form")
+        .evaluate((form) => window.getComputedStyle(form).alignItems),
+    ).toBe("start");
+    await inspector.getByLabel("Hard token budget").fill("100");
+    await inspector.getByLabel("Per-agent run ceiling").fill("100");
     await inspector.getByRole("button", { name: "Start workflow" }).click();
 
     await expect(inspector.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible();
@@ -1745,8 +1753,9 @@ test.describe("authenticated walking skeleton", () => {
       timeout: BUDGET_WALL_MS,
     });
     await expect(workflowSection.getByText("100 of 100", { exact: true })).toBeVisible();
-    await expect(workflowSection.getByRole("button", { name: "Approve 200 token budget" })).toBeEnabled();
-    await workflowSection.getByRole("button", { name: "Approve 200 token budget" }).click();
+    await workflowSection.getByLabel("Hard token budget").fill("200");
+    await expect(workflowSection.getByRole("button", { name: "Approve cost policy" })).toBeEnabled();
+    await workflowSection.getByRole("button", { name: "Approve cost policy" }).click();
     await expect(workflowSection.getByText("100 of 200", { exact: true })).toBeVisible();
     await expect(workflowSection.getByRole("heading", { name: "Acceptance package" })).toBeVisible();
     await expect(workflowSection.getByText("Review report", { exact: true })).toBeVisible();
@@ -2410,7 +2419,7 @@ test.describe("authenticated walking skeleton", () => {
       // and would keep passing even if the banner reverted to "Budget paused".
       await expect(workflowSection.getByText("Paused: no progress", { exact: true }).first()).toBeVisible();
       await expect(workflowSection.getByText("Budget paused", { exact: true })).toHaveCount(0);
-      await expect(workflowSection.getByRole("button", { name: /Approve .* token budget/ })).toHaveCount(0);
+      await expect(workflowSection.getByRole("button", { name: "Approve cost policy" })).toHaveCount(0);
 
       // The owner is not stuck: the Human Request panel still renders the real question, and
       // answering it is the action that actually lifts a session-loop pause.

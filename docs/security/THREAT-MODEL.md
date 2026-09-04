@@ -624,12 +624,17 @@ text and deterministic workflow authority reduce that risk but do not turn provi
 
 ### Q14 run cost-policy delta
 
-Q14 keeps the logical model tier inside an owner-authored, revisioned run cost boundary. The Task Cockpit submits an
-explicit starting hard limit and tier; a hard-pause override persists both the increased limit and the tier selected
-for future AgentRuns. Existing AgentRun policy snapshots are append-only and are never rewritten by that override.
-Historical BudgetPolicy rows and events read an absent tier as `null` (role default), so migration does not invent
-cheaper or more capable authority for old executions. HTTP input remains runtime-validated and a new limit must still
-exceed both the prior cap and cumulative recorded usage.
+Q14 keeps the logical model tier and two distinct token limits inside an owner-authored, revisioned run cost boundary.
+The Task Cockpit submits an explicit pipeline hard cap, per-AgentRun ceiling and tier. A hard-pause override may raise
+the exhausted per-AgentRun ceiling while preserving an unspent pipeline cap, or raise the pipeline cap when that is
+the exhausted boundary; it cannot lower the pipeline cap or place it at/below cumulative recorded usage. The daemon
+reads the stopped attempt's latest immutable AgentRun snapshot before validating which boundary was actually raised.
+Existing AgentRun policy snapshots are append-only and are never rewritten by that override. Historical BudgetPolicy
+rows and events read absent overrides as `null` (role defaults), so migration does not invent cheaper or more capable
+authority for old executions. Model IDs do not come from HTTP or provider output: each live adapter exposes one
+runtime-validated tier mapping, the registry projects that same mapping to the Task Cockpit, and the daemon stores the
+resolved ID in the immutable AgentRun policy before launch. Adapters execute the stored ID even if their current
+mapping later changes; only legacy snapshots use the compatibility fallback. All HTTP input remains runtime-validated.
 
 ### A1.5 event-channel delta (T03)
 

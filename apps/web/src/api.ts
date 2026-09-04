@@ -673,6 +673,7 @@ export const updateWorkItem = async (workItem: WorkItem, patch: UpdateWorkItemPa
 export type PipelineStartPolicy = {
   maxEstimatedTokens: number;
   modelTierOverride: ModelTier | null;
+  agentRunMaxEstimatedTokensOverride: number | null;
 };
 
 export const startMockPipeline = async (workItem: WorkItem, policy: PipelineStartPolicy) =>
@@ -687,6 +688,7 @@ export const startMockPipeline = async (workItem: WorkItem, policy: PipelineStar
         expectedVersion: workItem.version,
         maxEstimatedTokens: policy.maxEstimatedTokens,
         modelTierOverride: policy.modelTierOverride,
+        agentRunMaxEstimatedTokensOverride: policy.agentRunMaxEstimatedTokensOverride,
       }),
     },
   );
@@ -785,6 +787,7 @@ export const approveBudgetOverride = async (
   run: PipelineRun,
   maxEstimatedTokens: number,
   modelTierOverride: ModelTier | null,
+  agentRunMaxEstimatedTokensOverride: number | null,
 ) =>
   requestLocalApi(
     `/api/v1/work-items/${encodeURIComponent(workItemId)}/pipeline/budget-override`,
@@ -797,6 +800,7 @@ export const approveBudgetOverride = async (
         expectedVersion: run.version,
         maxEstimatedTokens,
         modelTierOverride,
+        agentRunMaxEstimatedTokensOverride,
       }),
     },
   );

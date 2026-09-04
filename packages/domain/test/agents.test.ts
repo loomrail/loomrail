@@ -153,6 +153,30 @@ describe("agent team domain", () => {
     });
   });
 
+  it("binds the exact provider model selected by the resolved tier into the run snapshot", () => {
+    const profile = builtinAgentProfiles.find(({ role }) => role === "DEVELOPER");
+    if (profile === undefined) throw new Error("Expected the built-in Developer profile");
+    const policy = resolveAgentRunPolicy({
+      assignment: assignment(),
+      profile,
+      stage: "IMPLEMENT",
+      provider: "CODEX",
+      claimLimits: { global: 3, project: 2, provider: 1 },
+      pipelineBudget: { id: "budget-1", revision: 2, maxEstimatedTokens: 200_000 },
+      modelTierOverride: "FAST",
+      modelMapping: {
+        FAST: "gpt-fast-pinned",
+        STANDARD: "gpt-standard-pinned",
+        DEEP: "gpt-deep-pinned",
+      },
+      usedEstimatedTokens: 0,
+      mcpProfileRevisionIds: [],
+      projectConstitution: null,
+    });
+
+    expect(policy).toMatchObject({ modelTier: "FAST", modelId: "gpt-fast-pinned" });
+  });
+
   it("uses a run cost-policy tier override without mutating the role profile", () => {
     const profile = builtinAgentProfiles.find(({ role }) => role === "DEVELOPER");
     if (profile === undefined) throw new Error("Expected the built-in Developer profile");
@@ -172,6 +196,30 @@ describe("agent team domain", () => {
     expect(profile.defaultModelTier).toBe("STANDARD");
     expect(policy.modelTier).toBe("FAST");
     expect(policy.budget).toMatchObject({ pipelinePolicyRevision: 3, maxEstimatedTokens: 160_000 });
+  });
+
+  it("uses an explicit per-AgentRun ceiling without mutating the role profile", () => {
+    const profile = builtinAgentProfiles.find(({ role }) => role === "PRODUCT_ANALYST");
+    if (profile === undefined) throw new Error("Expected the built-in Product Analyst profile");
+    const policy = resolveAgentRunPolicy({
+      assignment: assignment(),
+      profile,
+      stage: "DISCOVERY",
+      provider: "CLAUDE_CODE",
+      claimLimits: { global: 3, project: 3, provider: 3 },
+      pipelineBudget: { id: "budget-raised", revision: 4, maxEstimatedTokens: 700_000 },
+      modelTierOverride: "FAST",
+      agentRunMaxEstimatedTokensOverride: 175_000,
+      usedEstimatedTokens: 284_250,
+      mcpProfileRevisionIds: [],
+      projectConstitution: null,
+    });
+
+    expect(profile.budgetEnvelope.maxEstimatedTokens).toBe(80_000);
+    expect(policy.budget).toMatchObject({
+      pipelinePolicyRevision: 4,
+      maxEstimatedTokens: 175_000,
+    });
   });
 
   it("does not grant MCP or browser authority that the stage/profile intersection lacks", () => {

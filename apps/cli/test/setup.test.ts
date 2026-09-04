@@ -32,6 +32,7 @@ const providers = (
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: true,
+      models: null,
     },
     {
       provider: "CODEX",
@@ -44,6 +45,7 @@ const providers = (
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: false,
+      models: { FAST: "gpt-fast", STANDARD: "gpt-standard", DEEP: "gpt-deep" },
     },
   ],
 });

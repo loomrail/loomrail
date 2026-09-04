@@ -13,6 +13,11 @@ const liveAvailability = {
   checkpointOnRequest: false,
   contextWindowReporting: true,
   costReporting: false,
+  models: {
+    FAST: "gpt-5.6-luna",
+    STANDARD: "gpt-5.6-terra",
+    DEEP: "gpt-5.6-sol",
+  },
 } as const;
 
 describe("provider availability compatibility", () => {
@@ -23,6 +28,7 @@ describe("provider availability compatibility", () => {
         provider: "MOCK",
         version: null,
         compatibility: "BUILT_IN",
+        models: null,
       }),
     ).toMatchObject({ provider: "MOCK", ready: true });
   });

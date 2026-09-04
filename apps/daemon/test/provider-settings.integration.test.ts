@@ -18,7 +18,14 @@ import { authenticate, bootstrapToken, mutationHeaders } from "./daemon-fixtures
 
 const stages: readonly WorkflowStage[] = ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"];
 
+const testModels = {
+  FAST: "test-fast",
+  STANDARD: "test-standard",
+  DEEP: "test-deep",
+} as const;
+
 const inertAdapter = (provider: ProviderId, supportedStages: readonly WorkflowStage[]): ProviderAdapter => ({
+  modelMapping: () => testModels,
   capabilities: () =>
     providerCapabilitiesSchema.parse({
       provider,
@@ -226,6 +233,7 @@ describe("Project provider settings API", () => {
       source: "AUTO",
       fallbackReason: null,
     });
+    expect(initial.providers.find(({ provider }) => provider === "CODEX")?.models).toEqual(testModels);
     expect(initial.providers.find(({ provider }) => provider === "CLAUDE_CODE")).toMatchObject({
       installed: true,
       authentication: "REQUIRED",

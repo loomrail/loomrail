@@ -84,6 +84,18 @@ Q14 закрывает дефект до продолжения quota-bearing wo
   immutable snapshots не переписываются;
 - effective tier нового AgentRun вычисляется детерминированно как policy override либо role default и сохраняется в
   существующем policy snapshot;
+- Task Cockpit называет control «Model» и показывает exact model IDs из того же validated adapter mapping, который
+  использует daemon; в `Auto` один tier честно показывает обе возможные provider-модели;
+- daemon фиксирует resolved exact model ID в immutable AgentRun snapshot до запуска CLI, а adapter исполняет этот ID,
+  не перечитывая изменившийся mapping; прежний snapshot без model ID использует совместимый fallback;
 - budget override UI принимает осмысленный лимит больше прежнего и cumulative usage вместо вычисленного `used + 100`;
+- тот же versioned cost policy может задать явный ceiling одного будущего AgentRun; owner может повысить именно его,
+  не увеличивая уже достаточный pipeline cap;
 - прежние command receipts/events и базы продолжают читаться как `modelTierOverride = null`;
 - restart/recovery доказывает сохранение policy revision до возобновления dogfood.
+
+Второй live Discovery run подтвердил необходимость этого разделения: при cumulative usage `284250` из pipeline cap
+`700000` новый FAST AgentRun остановился на role envelope `80000` после фактического расхода `134231`. Повторное
+увеличение pipeline cap не меняет этот envelope и создаёт quota loop. Рекомендуемый start preview поэтому показывает
+два независимых лимита; regression test требует, чтобы повышение per-AgentRun ceiling было валидной новой revision
+при неизменном, ещё не исчерпанном pipeline cap.

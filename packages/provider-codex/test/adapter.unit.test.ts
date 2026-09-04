@@ -230,6 +230,7 @@ const fixtureInvocation = (
   humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
   mcpConnections: readonly ProviderMcpConnection[] = [],
   modelTier: ModelTier = "STANDARD",
+  modelId?: string,
 ): ProviderInvocation => ({
   dispatch: {
     schemaVersion: 1,
@@ -256,6 +257,7 @@ const fixtureInvocation = (
     contentHash: `sha256:${"0".repeat(64)}`,
   },
   modelTier,
+  ...(modelId === undefined ? {} : { modelId }),
   acceptanceInput: null,
   humanRequests,
   mcpConnections,
@@ -280,10 +282,19 @@ const startWith = async (
   humanRequests: ProviderInvocation["humanRequests"] = "ALLOWED",
   mcpConnections: readonly ProviderMcpConnection[] = [],
   modelTier: ModelTier = "STANDARD",
+  modelId?: string,
 ): Promise<ProviderOutcome> => {
   const outcome = await withEnv("FAKE_CODEX_RECORD_PATH", spawned.recordPath, () =>
     adapter.start(
-      fixtureInvocation("session-1", workspace, "DISCOVERY", humanRequests, mcpConnections, modelTier),
+      fixtureInvocation(
+        "session-1",
+        workspace,
+        "DISCOVERY",
+        humanRequests,
+        mcpConnections,
+        modelTier,
+        modelId,
+      ),
       noopListener(),
     ),
   );
@@ -510,6 +521,20 @@ describe("createCodexProvider", () => {
       expect(spawned.args[spawned.args.indexOf("--model") + 1]).toBe(models[tier]);
     }
     expect(() => createCodexProvider({ models: { FAST: "--unsafe-flag" } })).toThrow();
+  });
+
+  it("uses the exact model pinned in the AgentRun snapshot even if the adapter mapping changed", async () => {
+    const spawned = recordSpawn();
+    await startWith(
+      spawned,
+      createFakeCodexProvider(),
+      undefined,
+      "ALLOWED",
+      [],
+      "FAST",
+      "gpt-snapshot-pinned",
+    );
+    expect(spawned.args[spawned.args.indexOf("--model") + 1]).toBe("gpt-snapshot-pinned");
   });
 
   // The value-shaped half of SD-001, alongside the spelling-shaped check below: `-s` takes a

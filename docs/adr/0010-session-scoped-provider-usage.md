@@ -30,7 +30,12 @@ double-charge Codex; using Claude's ordinary input alone would severely undercou
   dispatch, finishes AgentRun and releases its workspace lease. The daemon aborts and ends the ProviderSession only
   after that transaction commits.
 - Budget hard pause opens no Human Request and uses no session-failure code. The existing versioned owner Budget
-  Override is the only continuation path.
+  Override is the only continuation path. It may raise either the pipeline cap or the per-AgentRun ceiling that was
+  captured in the stopped attempt; raising one does not silently inflate the other, and a new AgentRun receives the
+  new immutable policy revision.
+- A live adapter exposes its validated tier-to-model mapping through the provider registry. The daemon resolves and
+  persists the exact model ID in the immutable AgentRun policy before starting the CLI; the adapter executes that
+  snapshot value. Historical snapshots without it retain the adapter-mapping fallback.
 
 ## Consequences
 
@@ -64,3 +69,5 @@ double-charge Codex; using Claude's ordinary input alone would severely undercou
 - daemon records a live report and aborts before another session when the cap is reached;
 - Claude recording proves ordinary + cache creation + cache read normalization;
 - Task Cockpit renders token detail, quality and optional cost without relying on colour.
+- provider-selection, domain and adapter tests prove that the owner-visible model mapping and executed snapshot ID
+  cannot drift.

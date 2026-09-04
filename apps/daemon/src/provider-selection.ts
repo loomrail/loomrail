@@ -92,6 +92,7 @@ const cachedStartupProbe: ProviderAuthProbe = (provider) => {
 
 const adapterWithStart = (adapter: ProviderAdapter, start: boolean): ProviderAdapter => ({
   capabilities: () => ({ ...adapter.capabilities(), start }),
+  ...(adapter.modelMapping === undefined ? {} : { modelMapping: adapter.modelMapping }),
   start: (invocation, listener) => adapter.start(invocation, listener),
   requestHandoff: (sessionId) => adapter.requestHandoff(sessionId),
   abortSession: (sessionId) => adapter.abortSession(sessionId),
@@ -119,6 +120,7 @@ const availabilityFor = (
     checkpointOnRequest: capabilities.checkpointOnRequest,
     contextWindowReporting: capabilities.contextWindowReporting,
     costReporting: capabilities.costReporting,
+    models: adapter.modelMapping?.() ?? null,
   };
 };
 

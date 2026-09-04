@@ -1513,6 +1513,7 @@ describe("local daemon session and state boundary", () => {
           expectedVersion: 2,
           maxEstimatedTokens: 100,
           modelTierOverride: "STANDARD",
+          agentRunMaxEstimatedTokensOverride: 80,
         }),
       },
     );
@@ -1617,6 +1618,7 @@ describe("local daemon session and state boundary", () => {
           expectedVersion: hardPaused.run?.version,
           maxEstimatedTokens: 200,
           modelTierOverride: "FAST",
+          agentRunMaxEstimatedTokensOverride: 150,
         }),
       },
     );
@@ -1625,14 +1627,27 @@ describe("local daemon session and state boundary", () => {
     const awaitingAcceptance = await fetchWorkflowSnapshot(daemon, secondSession.cookie, workItemId);
     expect(awaitingAcceptance.run?.status).toBe("WAITING_HUMAN");
     expect(
-      awaitingAcceptance.budgetPolicies.map(({ revision, maxEstimatedTokens, modelTierOverride }) => ({
-        revision,
-        maxEstimatedTokens,
-        modelTierOverride,
-      })),
+      awaitingAcceptance.budgetPolicies.map(
+        ({ revision, maxEstimatedTokens, modelTierOverride, agentRunMaxEstimatedTokensOverride }) => ({
+          revision,
+          maxEstimatedTokens,
+          modelTierOverride,
+          agentRunMaxEstimatedTokensOverride,
+        }),
+      ),
     ).toEqual([
-      { revision: 1, maxEstimatedTokens: 100, modelTierOverride: "STANDARD" },
-      { revision: 2, maxEstimatedTokens: 200, modelTierOverride: "FAST" },
+      {
+        revision: 1,
+        maxEstimatedTokens: 100,
+        modelTierOverride: "STANDARD",
+        agentRunMaxEstimatedTokensOverride: 80,
+      },
+      {
+        revision: 2,
+        maxEstimatedTokens: 200,
+        modelTierOverride: "FAST",
+        agentRunMaxEstimatedTokensOverride: 150,
+      },
     ]);
     expect(awaitingAcceptance.stageAttempts.at(-1)).toMatchObject({
       stage: "ACCEPTANCE",

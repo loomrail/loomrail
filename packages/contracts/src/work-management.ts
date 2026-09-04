@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { agentRunClaimLimitsSchema, agentRunSchema, squadAssignmentSchema } from "./agents.js";
+import { providerModelMappingSchema } from "./provider-selection.js";
 import {
   actorSchema,
   correlationIdSchema,
@@ -512,6 +513,9 @@ export const startAgentRunCommandSchema = commandBaseSchema.extend({
     .object({
       dispatchId: opaqueIdSchema,
       provider: providerIdSchema,
+      // Optional only for replaying command receipts created before exact model snapshots. The
+      // daemon now supplies the mapping from the selected adapter, never from HTTP or provider text.
+      modelMapping: providerModelMappingSchema.nullable().optional(),
       limits: agentRunClaimLimitsSchema,
     })
     .strict(),

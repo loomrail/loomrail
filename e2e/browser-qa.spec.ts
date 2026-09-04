@@ -150,6 +150,8 @@ const chooseInSettings = async (page: Page, control: string, option: string): Pr
 const advanceTaskToBrowserQA = async (page: Page, title: string): Promise<Locator> => {
   const inspector = await createTask(page, title);
   await inspector.getByRole("button", { name: "Move to Ready" }).click();
+  await inspector.getByLabel("Hard token budget").fill("100");
+  await inspector.getByLabel("Per-agent run ceiling").fill("100");
   await inspector.getByRole("button", { name: "Start workflow" }).click();
   await expect(inspector.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible({
     timeout: 20_000,
@@ -162,7 +164,8 @@ const advanceTaskToBrowserQA = async (page: Page, title: string): Promise<Locato
   await expect(workflow.getByText("Budget paused", { exact: true }).first()).toBeVisible({
     timeout: 20_000,
   });
-  await workflow.getByRole("button", { name: "Approve 200 token budget" }).click();
+  await workflow.getByLabel("Hard token budget").fill("200");
+  await workflow.getByRole("button", { name: "Approve cost policy" }).click();
   return workflow;
 };
 
