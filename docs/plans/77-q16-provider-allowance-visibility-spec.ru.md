@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-04
 
-**Статус:** implemented locally; cross-platform CI и independent review pending
+**Статус:** implemented and verified; Windows live-provider capture deferred by owner
 
 **Основание:** BD-004, T47 и Phase 8 Q16 в
 [MASTER-PLAN.ru.md](../product/MASTER-PLAN.ru.md)

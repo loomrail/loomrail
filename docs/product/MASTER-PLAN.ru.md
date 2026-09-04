@@ -2,11 +2,11 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-05 — Q16 local implementation, verification и review complete; cross-platform CI
-pending
+**Последнее дополнение:** 2026-09-05 — Q16 complete with macOS/Windows fixture evidence; Windows live-provider capture
+deferred
 
-**Статус:** approved product direction; Q15 non-landing и Q16 local slice/review complete; protected landing, Windows
-live providers, Q16 cross-platform CI и stable gates pending
+**Статус:** approved product direction; Q15 non-landing и Q16 complete; protected landing, Windows live providers и
+stable gates pending
 
 **Продукт:** Loomrail
 
@@ -1551,8 +1551,11 @@ reset и freshness; unsupported/missing data выглядит как `Unavailabl
 поля и повторный bounded read вернул три валидных окна. Эта версия ещё не повышена до execution-compatible row. Два
 минимальных Claude Code 2.1.260 FAST probe подтвердили отсутствие status-line delivery в headless режиме, поэтому
 capability исправлена на false. Независимые Standards/Spec review завершены без оставшихся P0–P2; найденный ими
-auth-mode stderr mismatch исправлен и live exact probe вернул `CHATGPT`. Fixed-commit cross-platform CI остаётся gate
-текущего среза; Windows live-provider проверка по решению владельца отложена.
+auth-mode stderr mismatch исправлен и live exact probe вернул `CHATGPT`. На `66e8fad` clean install и 57/57 browser
+cases прошли на macOS/Windows; provider/reporting/fault gates также зелёные на обеих платформах в
+[CI run 33925446778](https://github.com/loomrail/loomrail/actions/runs/33925446778). Оба Verify остановились только на
+трёх заранее известных protected landing lint findings. Q16 cross-platform evidence закрыт; Windows live-provider
+проверка по решению владельца отложена.
 
 #### Q17 — Project verification gate
 
@@ -1738,8 +1741,8 @@ human waiver с documented risk.
 
 1. Подключить protected landing к Q15 canonical contract и закрыть его три lint finding только в отдельной
    authorized landing-сессии; non-landing macOS/Windows evidence уже зафиксирован.
-2. Закрыть Q16 macOS/Windows fixed-commit fixture CI; независимые Standards/Spec review уже завершены, Claude
-   headless/Desktop остаётся explicit unsupported, Windows live-provider capture отложен владельцем.
+2. Сохранить Q16 provider allowance fail-closed: Claude headless/Desktop остаётся explicit unsupported, Windows
+   live-provider capture отложен владельцем; macOS/Windows fixture CI и review уже закрыты.
 3. Создать и выполнить Q17 spec/implementation plan для owner-approved Project verification recipes, measured test
    evidence и threat verification T48.
 4. Провести private dogfood Epic из 2–3 зависимых Task через новые activation/verification surfaces, оба live provider,

@@ -2,8 +2,7 @@
 
 **Дата:** 2026-09-04
 
-**Статус:** local implementation и verification complete; independent review complete; fixed-commit cross-platform
-CI pending
+**Статус:** complete; Windows live-provider capture deferred by owner
 
 **Спецификация:**
 [77-q16-provider-allowance-visibility-spec.ru.md](77-q16-provider-allowance-visibility-spec.ru.md)
@@ -40,7 +39,7 @@ CI pending
 
 - [x] Выполнить final focused lint/typecheck/unit/integration/E2E и packaged release checks на исправленном slice.
 - [x] Выполнить independent Standards/Spec review и исправить P0–P2.
-- [ ] Зафиксировать macOS/Windows fixture CI evidence; Windows live-provider evidence оставить отдельным pending gate.
+- [x] Зафиксировать macOS/Windows fixture CI evidence; Windows live-provider evidence оставить отдельным pending gate.
 - [x] Обновить T47, master plan и evidence; не менять `apps/landing/**` и не публиковать пакет.
 
 ## Module boundary

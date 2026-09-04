@@ -2,8 +2,8 @@
 
 **Date:** 2026-09-05
 
-**Scope:** locally verified implementation with macOS live diagnostics and completed independent review;
-macOS/Windows fixed-commit fixture CI and Windows live-provider verification remain pending
+**Scope:** locally and cross-platform verified implementation with macOS live diagnostics and completed independent
+review; Windows live-provider verification remains deferred by the owner
 
 ## Implemented module
 
@@ -76,9 +76,25 @@ as a machine-readable source. No raw provider transcript was saved and `--no-ses
   has the same three protected `apps/landing/src/main.ts` findings at lines 630, 631 and 634; neither surface is part of
   Q16, and `apps/landing/**` was not changed.
 
+## Fixed-commit macOS/Windows CI
+
+Q16 shipped in `765e458`; Windows CI then exposed one platform-invalid timing assertion in the stubborn-child test.
+On Windows, Node terminates a child immediately for `SIGTERM` instead of delivering the catchable POSIX signal, so
+the reader had correctly waited for real `close` but the test incorrectly required the additional POSIX grace period.
+Commit `66e8fad` retained the POSIX escalation assertion and verified the Windows immediate-termination branch.
+
+[CI run 33925446778](https://github.com/loomrail/loomrail/actions/runs/33925446778) on `66e8fad` recorded:
+
+- Clean install passed on macOS and Windows, including tarball build, local-log lifecycle, Chromium prerequisite and
+  clean-install release verification;
+- Browser smoke passed 57/57 on macOS and 57/57 on Windows;
+- provider compatibility, private reporting and the complete crash/fault-recovery gate passed on both platforms;
+- the Windows process-tree lifecycle gate passed;
+- each repository-wide Verify job stopped only at the same protected landing ESLint findings on lines 630, 631 and 634. The CI run therefore has an honest `failure` conclusion, while every Q16 and pre-landing cross-platform gate is
+  green. The landing failure is not reclassified as Q16 success and remains a separate authorized work item.
+
 ## Remaining gates
 
-- fixed-commit macOS/Windows fixture, browser and package CI;
 - exact Codex 0.153.1 execution compatibility requalification before it can dispatch sessions (the independently
   admitted read-only allowance surface does not grant execution readiness);
 - Windows live provider rows, protected landing, private dogfood and trusted publisher provenance remain separate
