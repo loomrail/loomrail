@@ -1313,8 +1313,10 @@ git commit -m "docs(readiness): record catalog v2 implementation result"
   `lockfileFindings` фильтрует «не-корневые» пути условием `path.includes("/")`
   (`packages/project-readiness/src/scanner.ts`) — `git ls-files` эмитит `/`-разделители даже на Windows, так что
   это должно быть безопасно, но здесь это не доказано. Fixture-репозитории задачи 6 уже используют пути с
-  пробелами и кириллицей (подтверждено при этом прогоне — `apps/daemon` тесты создавали worktree-пути вида
-  `loomrail state тест <suffix>`), но только на macOS.
+  пробелами и кириллицей (подтверждено при этом прогоне: новые проверки readiness тестируются на
+  репозитории-фикстуре `clean path-кириллица` в `packages/project-readiness/test/scanner.integration.test.ts:44`;
+  неASCII-пути также упражняются в `packages/persistence-sqlite/test/local-state.integration.test.ts:228`),
+  но только на macOS.
 
 ### Известные ограничения
 
