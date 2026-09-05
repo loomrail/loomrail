@@ -646,6 +646,28 @@ describe("local daemon session and state boundary", () => {
     expect(apiErrorResponseSchema.parse(await missingDefect.json())).toMatchObject({
       error: { code: "QA_DEFECT_NOT_FOUND" },
     });
+
+    const workItemId = await createReadyWorkItem(daemon, session, "mixed-qa-gate-route");
+    const missingMixedGate = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${workItemId}/qa/correction-gate/missing-request`,
+      {
+        method: "POST",
+        headers: mutationHeaders(daemon, session),
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "resolve-missing-mixed-qa-gate",
+          expectedRequestVersion: 1,
+          correctionRunId: null,
+          expectedCorrectionVersion: null,
+          expectedPipelineRunVersion: 1,
+          action: "CANCEL",
+        }),
+      },
+    );
+    expect(missingMixedGate.status).toBe(404);
+    expect(apiErrorResponseSchema.parse(await missingMixedGate.json())).toMatchObject({
+      error: { code: "QA_CORRECTION_REQUEST_INVALID" },
+    });
   });
 
   it("rejects a non-catalog fixture identifier at the HTTP boundary", async () => {

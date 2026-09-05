@@ -894,7 +894,7 @@ export const waiveQADefect = async (defect: QADefect, reason: string): Promise<Q
 
 export const resolveQACorrectionGate = async (
   request: HumanRequest,
-  correctionRun: QACorrectionRun,
+  correctionRun: QACorrectionRun | null,
   run: PipelineRun,
   action: QACorrectionGateAction,
 ) =>
@@ -907,8 +907,8 @@ export const resolveQACorrectionGate = async (
         schemaVersion: 1,
         commandId: crypto.randomUUID(),
         expectedRequestVersion: request.version,
-        correctionRunId: correctionRun.id,
-        expectedCorrectionVersion: correctionRun.version,
+        correctionRunId: correctionRun?.id ?? null,
+        expectedCorrectionVersion: correctionRun?.version ?? null,
         expectedPipelineRunVersion: run.version,
         action,
       }),

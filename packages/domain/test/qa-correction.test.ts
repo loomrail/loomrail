@@ -467,30 +467,61 @@ describe("QA correction scope", () => {
 
 describe("QA correction loop", () => {
   it("starts two automatic corrections without borrowing an R1 attempt", () => {
-    expect(decideQACorrectionLoop({ qaRun: failedRun, now })).toEqual({
+    expect(
+      decideQACorrectionLoop({ qaRun: failedRun, budgetUsage: { automaticUsed: 0, totalUsed: 0 }, now }),
+    ).toEqual({
       action: "START_CORRECTION",
       automatic: true,
       nextOrdinal: 1,
+      budgetPosition: 1,
       previousCorrection: null,
     });
 
-    const second = decideQACorrectionLoop({ qaRun: failedRun, currentCorrection: correction(1), now });
+    const second = decideQACorrectionLoop({
+      qaRun: failedRun,
+      currentCorrection: correction(1),
+      budgetUsage: { automaticUsed: 1, totalUsed: 1 },
+      now,
+    });
     expect(second).toMatchObject({
       action: "START_CORRECTION",
       automatic: true,
       nextOrdinal: 2,
+      budgetPosition: 2,
       previousCorrection: { status: "SUPERSEDED", version: 2, completedAt: now },
     });
   });
 
+  it("keeps the QA ordinal local while consuming the next delivery-wide position", () => {
+    expect(
+      decideQACorrectionLoop({
+        qaRun: failedRun,
+        budgetUsage: { automaticUsed: 1, totalUsed: 1 },
+        now,
+      }),
+    ).toEqual({
+      action: "START_CORRECTION",
+      automatic: true,
+      nextOrdinal: 1,
+      budgetPosition: 2,
+      previousCorrection: null,
+    });
+  });
+
   it("requires the owner after correction two and never authorizes correction four", () => {
-    const exhausted = decideQACorrectionLoop({ qaRun: failedRun, currentCorrection: correction(2), now });
+    const exhausted = decideQACorrectionLoop({
+      qaRun: failedRun,
+      currentCorrection: correction(2),
+      budgetUsage: { automaticUsed: 2, totalUsed: 2 },
+      now,
+    });
     expect(exhausted).toMatchObject({
       action: "WAIT_FOR_OWNER",
       canAuthorizeFinal: true,
       correctionRun: { status: "EXHAUSTED", version: 2, completedAt: null },
     });
     if (exhausted.action !== "WAIT_FOR_OWNER") throw new Error("Expected exhausted correction");
+    if (exhausted.correctionRun === null) throw new Error("Expected current correction");
     expect(
       decideQACorrectionOwnerAction({
         correctionRun: exhausted.correctionRun,
@@ -503,12 +534,19 @@ describe("QA correction loop", () => {
       previousCorrection: { status: "SUPERSEDED", completedAt: now },
     });
 
-    const finalFailure = decideQACorrectionLoop({ qaRun: failedRun, currentCorrection: correction(3), now });
+    const finalFailure = decideQACorrectionLoop({
+      qaRun: failedRun,
+      currentCorrection: correction(3),
+      budgetUsage: { automaticUsed: 2, totalUsed: 3 },
+      now,
+    });
     expect(finalFailure).toMatchObject({ action: "WAIT_FOR_OWNER", canAuthorizeFinal: false });
     if (finalFailure.action !== "WAIT_FOR_OWNER") throw new Error("Expected final exhausted correction");
+    if (finalFailure.correctionRun === null) throw new Error("Expected final current correction");
+    const exhaustedFinalCorrection = finalFailure.correctionRun;
     expect(() =>
       decideQACorrectionOwnerAction({
-        correctionRun: finalFailure.correctionRun,
+        correctionRun: exhaustedFinalCorrection,
         action: "AUTHORIZE_FINAL",
         now,
       }),
@@ -517,31 +555,43 @@ describe("QA correction loop", () => {
 
   it("passes a correction, advances a green baseline, and retries ERROR without spending a correction", () => {
     const passedRun: QARun = { ...failedRun, status: "PASSED" };
-    expect(decideQACorrectionLoop({ qaRun: passedRun, now })).toEqual({
+    expect(
+      decideQACorrectionLoop({ qaRun: passedRun, budgetUsage: { automaticUsed: 0, totalUsed: 0 }, now }),
+    ).toEqual({
       action: "ADVANCE_BASELINE_TO_ACCEPTANCE",
     });
-    expect(decideQACorrectionLoop({ qaRun: passedRun, currentCorrection: correction(1), now })).toMatchObject(
-      {
-        action: "PASS_CORRECTION",
-        correctionRun: { status: "PASSED", version: 2, completedAt: now },
-      },
-    );
+    expect(
+      decideQACorrectionLoop({
+        qaRun: passedRun,
+        currentCorrection: correction(1),
+        budgetUsage: { automaticUsed: 1, totalUsed: 1 },
+        now,
+      }),
+    ).toMatchObject({
+      action: "PASS_CORRECTION",
+      correctionRun: { status: "PASSED", version: 2, completedAt: now },
+    });
 
     const errorRun: QARun = {
       ...failedRun,
       status: "ERROR",
       error: { code: "TIMEOUT", summary: "The target stopped responding." },
     };
-    expect(decideQACorrectionLoop({ qaRun: errorRun, currentCorrection: correction(1), now })).toEqual({
-      action: "RETRY_ENVIRONMENT",
-      correctionRun: correction(1),
-    });
+    expect(
+      decideQACorrectionLoop({
+        qaRun: errorRun,
+        currentCorrection: correction(1),
+        budgetUsage: { automaticUsed: 1, totalUsed: 1 },
+        now,
+      }),
+    ).toEqual({ action: "RETRY_ENVIRONMENT", correctionRun: correction(1) });
   });
 
   it("rejects running QA and outcomes applied to a closed correction", () => {
     expect(() =>
       decideQACorrectionLoop({
         qaRun: { ...failedRun, status: "RUNNING", completedAt: null, version: 1 },
+        budgetUsage: { automaticUsed: 0, totalUsed: 0 },
         now,
       }),
     ).toThrow(expect.objectContaining<Partial<QACorrectionError>>({ code: "QA_CORRECTION_SOURCE_INVALID" }));
@@ -549,6 +599,7 @@ describe("QA correction loop", () => {
       decideQACorrectionLoop({
         qaRun: failedRun,
         currentCorrection: { ...correction(1), status: "PASSED", completedAt: now, version: 2 },
+        budgetUsage: { automaticUsed: 1, totalUsed: 1 },
         now,
       }),
     ).toThrow(expect.objectContaining<Partial<QACorrectionError>>({ code: "QA_CORRECTION_STATE_MISMATCH" }));
@@ -614,6 +665,7 @@ describe("failed QA correction workflow transition", () => {
       sourceEvidence: failedEvidence,
       baselineQARun: failedRun,
       openDefects: defects,
+      budgetUsage: { automaticUsed: 0, totalUsed: 0 },
       workItem: qaWorkItem,
       run: qaPipelineRun,
       stageAttempt: qaStageAttempt(),
@@ -692,6 +744,7 @@ describe("failed QA correction workflow transition", () => {
       baselineQARun: failedRun,
       openDefects: defects,
       currentCorrection,
+      budgetUsage: { automaticUsed: 1, totalUsed: 1 },
       workItem: qaWorkItem,
       run: { ...qaPipelineRun, currentStageAttemptId: retestRun.stageAttemptId },
       stageAttempt: {
@@ -721,6 +774,42 @@ describe("failed QA correction workflow transition", () => {
     });
   });
 
+  it("opens the shared owner gate when other evaluators consumed both automatic positions", () => {
+    const decision = decideFailedQACorrectionTransition({
+      qaRun: failedRun,
+      sourceEvidence: failedEvidence,
+      baselineQARun: failedRun,
+      openDefects: defects,
+      budgetUsage: { automaticUsed: 2, totalUsed: 2 },
+      workItem: qaWorkItem,
+      run: qaPipelineRun,
+      stageAttempt: qaStageAttempt(),
+      dispatch: qaDispatch(),
+      ids: transitionIds,
+      now,
+    });
+
+    expect(decision).toMatchObject({
+      action: "WAIT_FOR_OWNER",
+      previousCorrection: null,
+      correctionRun: null,
+      request: {
+        context: "Two automatic delivery corrections were already consumed before this measured QA failure.",
+        options: [
+          {
+            id: transitionIds.authorizeFinalOptionId,
+            consequence: "Creates the final shared correction position with a locked retest plan.",
+          },
+          { id: transitionIds.cancelOptionId },
+        ],
+      },
+    });
+    expect(decision.events.map(({ type }) => type)).toEqual([
+      "STAGE_ATTEMPT_CHANGED",
+      "HUMAN_REQUEST_OPENED",
+    ]);
+  });
+
   it("opens the bounded owner gate after correction two and offers no fourth correction", () => {
     const exhaustedCorrection = correction(2);
     const finalCorrection = correction(3);
@@ -746,6 +835,10 @@ describe("failed QA correction workflow transition", () => {
         baselineQARun: failedRun,
         openDefects: defects,
         currentCorrection,
+        budgetUsage:
+          currentCorrection.ordinal <= 2
+            ? { automaticUsed: currentCorrection.ordinal, totalUsed: currentCorrection.ordinal }
+            : { automaticUsed: 2, totalUsed: 3 },
         workItem: qaWorkItem,
         run: { ...qaPipelineRun, currentStageAttemptId: retestRun.stageAttemptId },
         stageAttempt: {
@@ -794,6 +887,7 @@ describe("failed QA correction workflow transition", () => {
         sourceEvidence: failedEvidence,
         baselineQARun: failedRun,
         openDefects: defects,
+        budgetUsage: { automaticUsed: 0, totalUsed: 0 },
         workItem: qaWorkItem,
         run: { ...qaPipelineRun, version: 10 },
         stageAttempt: { ...qaStageAttempt(), status: "WAITING_HUMAN" },
@@ -815,6 +909,7 @@ describe("failed QA correction workflow transition", () => {
         baselineQARun: failedRun,
         openDefects: defects,
         currentCorrection: correction(2),
+        budgetUsage: { automaticUsed: 2, totalUsed: 2 },
         workItem: qaWorkItem,
         run: qaPipelineRun,
         stageAttempt: qaStageAttempt("correction-1"),
@@ -1169,6 +1264,7 @@ describe("exhausted QA correction owner gate", () => {
     sourceEvidence,
     baselineQARun: failedRun,
     openDefects: defects,
+    budgetUsage: { automaticUsed: 2, totalUsed: 2 },
     ids: {
       decisionId: "decision-final-correction",
       correctionRunId: "correction-3",
@@ -1241,6 +1337,53 @@ describe("exhausted QA correction owner gate", () => {
     ]);
   });
 
+  it("authorizes the final shared position when QA has no earlier local correction", () => {
+    const sourceQARun: QARun = {
+      ...failedRun,
+      id: "qa-run-after-verification-corrections",
+      stageAttemptId: waitingStage.id,
+      verificationCorrectionRunId: "verification-correction-2",
+    };
+    const sourceEvidence: QAEvidenceBundle = {
+      ...failedEvidence,
+      id: "qa-evidence-after-verification-corrections",
+      qaRunId: sourceQARun.id,
+      stageAttemptId: waitingStage.id,
+      verificationCorrectionRunId: "verification-correction-2",
+    };
+    const decision = decideQACorrectionGateResolution({
+      ...gateContext,
+      command: {
+        ...command("AUTHORIZE_FINAL"),
+        payload: {
+          ...command("AUTHORIZE_FINAL").payload,
+          correctionRunId: null,
+          expectedCorrectionVersion: null,
+        },
+      },
+      stageAttempt: {
+        ...waitingStage,
+        correctionRunId: null,
+        verificationCorrectionRunId: "verification-correction-2",
+      },
+      correctionRun: null,
+      sourceQARun,
+      sourceEvidence,
+      baselineQARun: sourceQARun,
+    });
+
+    expect(decision).toMatchObject({
+      action: "AUTHORIZE_FINAL",
+      previousCorrection: null,
+      correctionRun: { ordinal: 1, sourceQARunId: sourceQARun.id },
+      budgetAllocation: { position: 3, automatic: false },
+      nextStageAttempt: {
+        correctionRunId: "correction-3",
+        verificationCorrectionRunId: null,
+      },
+    });
+  });
+
   it("rejects non-owner, stale, and fourth-correction actions", () => {
     expect(() =>
       decideQACorrectionGateResolution({
@@ -1298,6 +1441,7 @@ describe("exhausted QA correction owner gate", () => {
           qaRunId: finalSource.id,
         },
         request: finalRequest,
+        budgetUsage: { automaticUsed: 2, totalUsed: 3 },
       }),
     ).toThrow(expect.objectContaining<Partial<QACorrectionError>>({ code: "QA_CORRECTION_LIMIT_REACHED" }));
   });

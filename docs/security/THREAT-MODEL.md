@@ -744,11 +744,13 @@ Critical and stays open until the Q17 spec and implementation provide:
   transaction as measured Run/Check state and its Event. It contains only typed Run/Check/Plan/tree lineage, not raw
   output or a local path; command replay and restart cannot duplicate the identity;
 - Project verification shares the delivery-wide bound of two automatic corrections plus at most one final
-  owner-authorized correction without merging its failure identity with Browser QA. Exhaustion parks the exact QA
-  stage in `WAITING_HUMAN`; a dedicated HUMAN-only command requires the open request, correction and PipelineRun
-  versions plus complete Run/Failure/Plan/tree lineage. Its authenticated Origin+CSRF route can only authorize
-  position 3 or cancel, and request resolution, Decision, correction/stage/run/work-item state, Events and receipt are
-  one transaction;
+  owner-authorized correction without merging its failure identity with Browser QA. An append-only shared SQLite
+  ledger allocates positions monotonically in the same transaction as the evaluator-specific correction and storage
+  rejects gaps or a new position above 3. Exhaustion parks the exact QA stage in `WAITING_HUMAN`; a dedicated
+  HUMAN-only command requires the open request and PipelineRun versions, the exact current correction version when
+  that evaluator already owns one (or an explicit null pair for the first local QA failure), and complete measured
+  source lineage. Its authenticated Origin+CSRF route can only authorize position 3 or cancel, and request resolution,
+  Decision, correction/stage/run/work-item state, Events, ledger allocation and receipt are one transaction;
 - bounded redacted output lives only in the Loomrail artifact directory. Missing files fail closed, and 30-day startup
   retention accepts only a basename-matched regular `.txt` file, refuses symlink/path escape, and records a durable
   idempotent outcome without rewriting the measured Check;

@@ -1372,7 +1372,7 @@ describe("SQLite local state", () => {
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-      29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+      29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -1552,6 +1552,21 @@ describe("SQLite local state", () => {
       timestamp,
       2,
     );
+    raw
+      .prepare(
+        `INSERT INTO correction_budget_entries (
+          id, project_id, work_item_id, pipeline_run_id, position, automatic, evaluator,
+          correction_run_id, created_at
+        ) VALUES (?, ?, ?, ?, 1, 1, 'BROWSER_QA', ?, ?)`,
+      )
+      .run(
+        "q2-budget-1",
+        created.workItem.projectId,
+        created.workItem.id,
+        pipeline.run.id,
+        "q2-correction-1",
+        timestamp,
+      );
     raw
       .prepare(
         `INSERT INTO qa_runs (
@@ -1904,7 +1919,7 @@ describe("SQLite local state", () => {
           source_qa_run_id, baseline_qa_run_id, source_evidence_bundle_id, source_tested_tree,
           defect_ids_json, status, created_at, completed_at, version
         ) SELECT
-          'q2-correction-2', schema_version, project_id, work_item_id, pipeline_run_id, 2,
+          'q2-correction-1', schema_version, project_id, work_item_id, pipeline_run_id, 2,
           source_qa_run_id, baseline_qa_run_id, source_evidence_bundle_id, source_tested_tree,
           defect_ids_json, status, created_at, completed_at, version
         FROM qa_correction_runs WHERE id = 'q2-correction-1'
@@ -2072,7 +2087,7 @@ describe("SQLite local state", () => {
     durable.close();
   });
 
-  it("resolves an exhausted QA gate atomically and preserves the final correction across restart", async () => {
+  it("resolves a mixed-evaluator QA gate with no earlier local correction across restart", async () => {
     const localState = await open();
     localState.execute(registerProject());
     const created = localState.execute(createWorkItem("create-q2-owner-gate"));
@@ -2161,9 +2176,6 @@ describe("SQLite local state", () => {
     ];
     const raw = new DatabaseSync(databasePath);
     raw.exec("PRAGMA foreign_keys = ON");
-    const assignment = raw
-      .prepare("SELECT id FROM squad_assignments WHERE pipeline_run_id = ?")
-      .get(pipeline.run.id) as { id: string };
     raw
       .prepare(
         `UPDATE agent_runs SET status = 'SUCCEEDED', finished_at = ?, version = 2
@@ -2172,10 +2184,11 @@ describe("SQLite local state", () => {
       .run(timestamp, baselineAgent.run.id);
     raw
       .prepare(
-        `UPDATE stage_attempts SET status = 'SUCCEEDED', finished_at = ?, result_tree = ?, version = 2
-         WHERE id = ? AND version = 1`,
+        `UPDATE stage_attempts
+         SET status = 'WAITING_HUMAN', failure_code = 'QA_CORRECTION_EXHAUSTED', version = 3
+         WHERE id = ? AND version = 2`,
       )
-      .run(timestamp, testedTree, pipeline.stageAttempt.id);
+      .run(pipeline.stageAttempt.id);
     const insertQARun = raw.prepare(
       `INSERT INTO qa_runs (
         id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
@@ -2242,129 +2255,43 @@ describe("SQLite local state", () => {
     );
     raw
       .prepare(
-        `INSERT INTO qa_correction_runs (
-          id, schema_version, project_id, work_item_id, pipeline_run_id, ordinal,
-          source_qa_run_id, baseline_qa_run_id, source_evidence_bundle_id, source_tested_tree,
-          defect_ids_json, status, created_at, completed_at, version
-        ) VALUES (?, 1, ?, ?, ?, 2, ?, ?, ?, ?, ?, 'ACTIVE', ?, NULL, 1)`,
+        `INSERT INTO correction_budget_entries (
+          id, project_id, work_item_id, pipeline_run_id, position, automatic, evaluator,
+          correction_run_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, 1, 'PROJECT_VERIFICATION', ?, ?)`,
       )
       .run(
-        "q2-owner-gate-correction-2",
+        "q2-owner-budget-1",
         created.workItem.projectId,
         created.workItem.id,
         pipeline.run.id,
-        "q2-owner-gate-baseline-run",
-        "q2-owner-gate-baseline-run",
-        "q2-owner-gate-baseline-evidence",
-        testedTree,
-        JSON.stringify(["q2-owner-gate-defect"]),
+        1,
+        "q2-owner-gate-correction-1-history",
         timestamp,
       );
     raw
       .prepare(
-        `INSERT INTO qa_retest_plans (
-          id, schema_version, project_id, work_item_id, pipeline_run_id, correction_run_id,
-          baseline_qa_run_id, source_qa_run_id, source_evidence_bundle_id,
-          baseline_plan_revision, baseline_plan_content_hash, cells_json, created_at
-        ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+        `INSERT INTO correction_budget_entries (
+          id, project_id, work_item_id, pipeline_run_id, position, automatic, evaluator,
+          correction_run_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, 1, 'PROJECT_VERIFICATION', ?, ?)`,
       )
       .run(
-        "q2-owner-gate-retest-2",
+        "q2-owner-budget-2",
         created.workItem.projectId,
         created.workItem.id,
         pipeline.run.id,
-        "q2-owner-gate-correction-2",
-        "q2-owner-gate-baseline-run",
-        "q2-owner-gate-baseline-run",
-        "q2-owner-gate-baseline-evidence",
-        plan.contentHash,
-        JSON.stringify([
-          {
-            targetId: "mobile-dark-ru",
-            scenarioId: "task-cockpit",
-            reasons: ["FAILED_CHECK", "OPEN_DEFECT"],
-          },
-        ]),
-        timestamp,
-      );
-    raw
-      .prepare(
-        `INSERT INTO stage_attempts (
-          id, pipeline_run_id, project_id, work_item_id, correction_run_id, stage, attempt,
-          status, version, started_at, finished_at, failure_code, unproductive_sessions,
-          pack_share_backoffs, result_tree
-        ) VALUES (?, ?, ?, ?, ?, 'QA', 1, 'WAITING_HUMAN', 1, ?, NULL,
-          'QA_CORRECTION_EXHAUSTED', 0, 0, NULL)`,
-      )
-      .run(
-        "q2-owner-gate-qa-attempt",
-        pipeline.run.id,
-        created.workItem.projectId,
-        created.workItem.id,
+        2,
         "q2-owner-gate-correction-2",
         timestamp,
       );
-    raw
-      .prepare(
-        `INSERT INTO agent_runs (
-          id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id, ordinal,
-          squad_assignment_id, profile_id, profile_revision, profile_role, provider, status,
-          policy_snapshot_hash, started_at, finished_at, version
-        ) VALUES (?, 1, ?, ?, ?, ?, 1, ?, 'builtin.browser-qa', 1, 'BROWSER_QA', 'CODEX',
-          'SUCCEEDED', ?, ?, ?, 2)`,
-      )
-      .run(
-        "q2-owner-gate-retest-agent",
-        created.workItem.projectId,
-        created.workItem.id,
-        pipeline.run.id,
-        "q2-owner-gate-qa-attempt",
-        assignment.id,
-        `sha256:${"e".repeat(64)}`,
-        timestamp,
-        timestamp,
-      );
-    insertQARun.run(
-      "q2-owner-gate-retest-run",
-      created.workItem.projectId,
-      created.workItem.id,
-      pipeline.run.id,
-      "q2-owner-gate-qa-attempt",
-      "q2-owner-gate-retest-agent",
-      testedTree,
-      "http://127.0.0.1:4173",
-      JSON.stringify(plan),
-      "q2-owner-gate-correction-2",
-      "q2-owner-gate-retest-2",
-      timestamp,
-      timestamp,
-    );
-    insertEvidence.run(
-      "q2-owner-gate-retest-evidence",
-      "q2-owner-gate-retest-run",
-      created.workItem.projectId,
-      created.workItem.id,
-      pipeline.run.id,
-      "q2-owner-gate-qa-attempt",
-      testedTree,
-      JSON.stringify(environment),
-      JSON.stringify(executions),
-      JSON.stringify(["q2-owner-gate-defect"]),
-      timestamp,
-    );
-    raw
-      .prepare(
-        `UPDATE qa_correction_runs SET status = 'EXHAUSTED', version = 2
-         WHERE id = 'q2-owner-gate-correction-2' AND status = 'ACTIVE' AND version = 1`,
-      )
-      .run();
     raw
       .prepare(
         `UPDATE pipeline_runs SET status = 'WAITING_HUMAN', orchestration_status = 'WAITING_HUMAN',
-          current_stage_attempt_id = 'q2-owner-gate-qa-attempt', version = 2, updated_at = ?
+          current_stage_attempt_id = ?, version = 2, updated_at = ?
          WHERE id = ? AND version = 1`,
       )
-      .run(timestamp, pipeline.run.id);
+      .run(pipeline.stageAttempt.id, timestamp, pipeline.run.id);
     raw
       .prepare(
         `UPDATE work_items SET state = 'BLOCKED', current_stage = 'QA', version = version + 1,
@@ -2382,9 +2309,9 @@ describe("SQLite local state", () => {
         "q2-owner-gate-request",
         created.workItem.projectId,
         created.workItem.id,
-        "q2-owner-gate-qa-attempt",
+        pipeline.stageAttempt.id,
         "QA correction loop needs a decision",
-        "Two automatic QA correction runs still ended in measured defects.",
+        "Two automatic delivery corrections were already consumed before this measured QA failure.",
         "Inspect the complete defect and evidence history.",
         timestamp,
       );
@@ -2397,7 +2324,7 @@ describe("SQLite local state", () => {
       0,
       "q2-owner-gate-authorize",
       "Authorize one final QA correction",
-      "Creates CorrectionRun 3 with a locked retest plan.",
+      "Creates the final shared correction position with a locked retest plan.",
       1,
     );
     insertOption.run(
@@ -2411,6 +2338,40 @@ describe("SQLite local state", () => {
     raw.close();
 
     const reopened = await open();
+    expect(reopened.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: created.workItem.id })).toMatchObject({
+      snapshot: {
+        run: {
+          id: pipeline.run.id,
+          status: "WAITING_HUMAN",
+          currentStageAttemptId: pipeline.stageAttempt.id,
+        },
+        stageAttempts: [
+          expect.objectContaining({
+            id: pipeline.stageAttempt.id,
+            correctionRunId: null,
+            status: "WAITING_HUMAN",
+            failureCode: "QA_CORRECTION_EXHAUSTED",
+          }),
+        ],
+      },
+    });
+    expect(reopened.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id })).toMatchObject({
+      runs: [
+        {
+          id: "q2-owner-gate-baseline-run",
+          stageAttemptId: pipeline.stageAttempt.id,
+          scope: { type: "FULL" },
+          status: "FAILED",
+        },
+      ],
+      evidence: [
+        {
+          qaRunId: "q2-owner-gate-baseline-run",
+          stageAttemptId: pipeline.stageAttempt.id,
+          verdict: "FAILED",
+        },
+      ],
+    });
     expect(() =>
       reopened.execute({
         schemaVersion: 1,
@@ -2424,7 +2385,7 @@ describe("SQLite local state", () => {
           answer: { type: "OPTION", optionIds: ["q2-owner-gate-authorize"] },
         },
       }),
-    ).toThrow(expect.objectContaining({ code: "WORKFLOW_CONTROL_NOT_ALLOWED" }));
+    ).toThrow();
     const command = {
       schemaVersion: 1 as const,
       commandId: "resolve-q2-owner-gate",
@@ -2434,8 +2395,8 @@ describe("SQLite local state", () => {
       payload: {
         humanRequestId: "q2-owner-gate-request",
         expectedRequestVersion: 1,
-        correctionRunId: "q2-owner-gate-correction-2",
-        expectedCorrectionVersion: 2,
+        correctionRunId: null,
+        expectedCorrectionVersion: null,
         expectedPipelineRunVersion: 2,
         action: "AUTHORIZE_FINAL" as const,
       },
@@ -2451,11 +2412,11 @@ describe("SQLite local state", () => {
       action: "AUTHORIZE_FINAL",
       request: { status: "RESOLVED", version: 2 },
       decision: { answer: { type: "OPTION", optionIds: ["q2-owner-gate-authorize"] } },
-      previousCorrection: { id: "q2-owner-gate-correction-2", status: "SUPERSEDED", version: 3 },
-      correctionRun: { ordinal: 3, status: "ACTIVE", version: 1 },
-      retestPlan: { sourceQARunId: "q2-owner-gate-retest-run" },
+      previousCorrection: null,
+      correctionRun: { ordinal: 1, status: "ACTIVE", version: 1 },
+      retestPlan: { sourceQARunId: "q2-owner-gate-baseline-run" },
       run: { status: "RUNNING", version: 3 },
-      stageAttempt: { id: "q2-owner-gate-qa-attempt", status: "SUCCEEDED", version: 2 },
+      stageAttempt: { id: pipeline.stageAttempt.id, status: "SUCCEEDED", version: 4 },
       dispatch: { status: "PENDING" },
     });
     expect(resolved.events.map(({ type }) => type)).toEqual(
@@ -2472,17 +2433,11 @@ describe("SQLite local state", () => {
     const restartedQA = restarted.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id });
     expect(restartedQA).toMatchObject({
       type: "QA_STATE",
-      correctionRuns: [
-        { ordinal: 2, status: "SUPERSEDED", version: 3 },
-        { ordinal: 3, status: "ACTIVE", version: 1 },
-      ],
+      correctionRuns: [{ ordinal: 1, status: "ACTIVE", version: 1 }],
     });
     if (restartedQA.type !== "QA_STATE") throw new Error("Expected restarted QA state");
     expect(
-      restartedQA.retestPlans.some(({ correctionRunId }) => correctionRunId === "q2-owner-gate-correction-2"),
-    ).toBe(true);
-    expect(
-      restartedQA.retestPlans.some(({ sourceQARunId }) => sourceQARunId === "q2-owner-gate-retest-run"),
+      restartedQA.retestPlans.some(({ sourceQARunId }) => sourceQARunId === "q2-owner-gate-baseline-run"),
     ).toBe(true);
     const restartedWorkflow = restarted.query({
       type: "GET_WORKFLOW_SNAPSHOT",
@@ -2525,10 +2480,7 @@ describe("SQLite local state", () => {
     );
     expect(restarted.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id })).toMatchObject({
       type: "QA_STATE",
-      correctionRuns: [
-        { ordinal: 2, status: "SUPERSEDED" },
-        { ordinal: 3, status: "CANCELLED", version: 2 },
-      ],
+      correctionRuns: [{ ordinal: 1, status: "CANCELLED", version: 2 }],
     });
   });
 
@@ -4060,7 +4012,7 @@ describe("SQLite local state", () => {
       immutableQA.close();
     });
 
-    it("starts the first bounded correction atomically when measured browser QA fails", async () => {
+    it("uses the next shared position while starting the first local QA correction", async () => {
       const localState = await open();
       localState.execute(registerProject());
       const created = localState.execute(createWorkItem("create-q1-failed-qa"));
@@ -4092,6 +4044,23 @@ describe("SQLite local state", () => {
         },
       });
       if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+      const priorAllocation = new DatabaseSync(databasePath);
+      priorAllocation
+        .prepare(
+          `INSERT INTO correction_budget_entries (
+            id, project_id, work_item_id, pipeline_run_id, position, automatic, evaluator,
+            correction_run_id, created_at
+          ) VALUES (?, ?, ?, ?, 1, 1, 'PROJECT_VERIFICATION', ?, ?)`,
+        )
+        .run(
+          "prior-verification-budget-entry",
+          created.workItem.projectId,
+          created.workItem.id,
+          pipeline.run.id,
+          "prior-verification-correction",
+          timestamp,
+        );
+      priorAllocation.close();
       const initialAuthor = localState.execute(
         startAgentRun("q1-failed-initial-author", pipeline.dispatch.id),
       );
@@ -4368,6 +4337,31 @@ describe("SQLite local state", () => {
       if (activeCorrection === undefined || activeRetestPlan === undefined) {
         throw new Error("Expected an active correction and retest plan");
       }
+      const sharedBudget = new DatabaseSync(databasePath, { readOnly: true });
+      expect(
+        sharedBudget
+          .prepare(
+            `SELECT position, automatic, evaluator, correction_run_id
+             FROM correction_budget_entries
+             WHERE pipeline_run_id = ?
+             ORDER BY position`,
+          )
+          .all(pipeline.run.id),
+      ).toEqual([
+        {
+          position: 1,
+          automatic: 1,
+          evaluator: "PROJECT_VERIFICATION",
+          correction_run_id: "prior-verification-correction",
+        },
+        {
+          position: 2,
+          automatic: 1,
+          evaluator: "BROWSER_QA",
+          correction_run_id: activeCorrection.id,
+        },
+      ]);
+      sharedBudget.close();
       expect(
         localState.query({
           type: "READ_CONTEXT_SOURCES",

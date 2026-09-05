@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import type { StartMockPipelineCommand, VerificationPlanProposal } from "@loomrail/contracts";
 import { VerificationDomainError } from "@loomrail/domain";
@@ -577,7 +578,18 @@ describe("verification Run local state", () => {
 
     fixture.localState.close();
     state = undefined;
+    const beforeLedger = new DatabaseSync(databasePath);
+    beforeLedger.exec(`
+      DROP TRIGGER qa_correction_runs_budget_entry_insert;
+      DROP TRIGGER verification_correction_runs_budget_entry_insert;
+      DROP TRIGGER correction_budget_entries_append_only_update;
+      DROP TRIGGER correction_budget_entries_append_only_delete;
+      DROP TABLE correction_budget_entries;
+      DELETE FROM schema_migrations WHERE version = 46;
+    `);
+    beforeLedger.close();
     const reopened = await open();
+    expect(reopened.startup.appliedMigrations).toEqual([46]);
     expect(
       reopened.query({
         type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
@@ -603,6 +615,24 @@ describe("verification Run local state", () => {
       stage: "IMPLEMENT",
       status: "QUEUED",
     });
+    const durableLedger = new DatabaseSync(databasePath, { readOnly: true });
+    expect(
+      durableLedger
+        .prepare(
+          `SELECT position, automatic, evaluator, correction_run_id
+           FROM correction_budget_entries
+           WHERE pipeline_run_id = ?`,
+        )
+        .all(fixture.pipelineRunId),
+    ).toEqual([
+      {
+        position: 1,
+        automatic: 1,
+        evaluator: "PROJECT_VERIFICATION",
+        correction_run_id: correction.id,
+      },
+    ]);
+    durableLedger.close();
   });
 
   it("closes the active correction only after a fresh reviewed passing rerun", async () => {

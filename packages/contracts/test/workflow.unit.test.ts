@@ -5,8 +5,33 @@ import {
   humanRequestDraftSchema,
   providerUsageReportSchema,
   providerUsageSchema,
+  resolveQACorrectionGateRequestSchema,
   stateCommandSchema,
 } from "../src/index.js";
+
+describe("QA correction owner gate contract", () => {
+  const request = {
+    schemaVersion: 1,
+    commandId: "resolve-qa-correction",
+    expectedRequestVersion: 1,
+    correctionRunId: "qa-correction-2",
+    expectedCorrectionVersion: 2,
+    expectedPipelineRunVersion: 7,
+    action: "AUTHORIZE_FINAL",
+  } as const;
+
+  it("accepts either an exact exhausted correction or a mixed-evaluator gate without one", () => {
+    expect(resolveQACorrectionGateRequestSchema.parse(request)).toEqual(request);
+    expect(
+      resolveQACorrectionGateRequestSchema.parse({
+        ...request,
+        correctionRunId: null,
+        expectedCorrectionVersion: null,
+      }),
+    ).toMatchObject({ correctionRunId: null, expectedCorrectionVersion: null });
+    expect(() => resolveQACorrectionGateRequestSchema.parse({ ...request, correctionRunId: null })).toThrow();
+  });
+});
 
 describe("provider usage contract", () => {
   const validUsage = { inputTokens: 1200, outputTokens: 340, quality: "ACTUAL" } as const;

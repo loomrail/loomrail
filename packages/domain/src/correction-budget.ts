@@ -5,6 +5,11 @@ export type CorrectionBudgetDecision =
   | { action: "WAIT_FOR_OWNER"; position: number }
   | { action: "EXHAUSTED" };
 
+export type CorrectionBudgetUsage = {
+  automaticUsed: number;
+  totalUsed: number;
+};
+
 export class CorrectionBudgetError extends Error {
   readonly code = "INVALID_USAGE" as const;
 
@@ -15,10 +20,7 @@ export class CorrectionBudgetError extends Error {
 }
 
 /** Selects a fix-cycle branch from delivery-wide usage, independent of evaluator identity. */
-export const decideCorrectionBudget = (input: {
-  automaticUsed: number;
-  totalUsed: number;
-}): CorrectionBudgetDecision => {
+export const decideCorrectionBudget = (input: CorrectionBudgetUsage): CorrectionBudgetDecision => {
   const ownerAuthorizedUsed = input.totalUsed - input.automaticUsed;
   if (
     !Number.isInteger(input.automaticUsed) ||

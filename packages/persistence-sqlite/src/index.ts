@@ -3126,14 +3126,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     );
     const selectCorrectionBudgetUsage = database.prepare(
       `SELECT
-         (SELECT COUNT(*) FROM qa_correction_runs
-          WHERE pipeline_run_id = ? AND ordinal <= 2)
-         +
-         (SELECT COUNT(*) FROM verification_correction_runs
-          WHERE pipeline_run_id = ? AND automatic = 1) AS automatic_used,
-         (SELECT COUNT(*) FROM qa_correction_runs WHERE pipeline_run_id = ?)
-         +
-         (SELECT COUNT(*) FROM verification_correction_runs WHERE pipeline_run_id = ?) AS total_used`,
+         COUNT(*) FILTER (WHERE automatic = 1) AS automatic_used,
+         COUNT(*) AS total_used
+       FROM correction_budget_entries
+       WHERE pipeline_run_id = ?`,
+    );
+    const insertCorrectionBudgetEntry = database.prepare(
+      `INSERT INTO correction_budget_entries (
+        id, project_id, work_item_id, pipeline_run_id, position, automatic, evaluator,
+        correction_run_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const insertVerificationCorrectionRun = database.prepare(
       `INSERT INTO verification_correction_runs (
@@ -3377,6 +3379,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        WHERE id = ? AND version = ? AND status = 'RUNNING'`,
     );
     const selectQARunById = database.prepare("SELECT * FROM qa_runs WHERE id = ?");
+    const selectFailedQARunByStageAttempt = database.prepare(
+      `SELECT * FROM qa_runs
+       WHERE stage_attempt_id = ? AND status = 'FAILED'
+       ORDER BY completed_at DESC, rowid DESC LIMIT 1`,
+    );
     const selectQARunByAgentRun = database.prepare("SELECT * FROM qa_runs WHERE agent_run_id = ?");
     const selectQARunsForPipeline = database.prepare(
       "SELECT * FROM qa_runs WHERE pipeline_run_id = ? ORDER BY started_at, id",
@@ -6054,7 +6061,21 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       }
     };
 
-    const persistQACorrectionRun = (correctionRun: QACorrectionRun): void => {
+    const persistQACorrectionRun = (
+      correctionRun: QACorrectionRun,
+      allocation: { position: number; automatic: boolean },
+    ): void => {
+      insertCorrectionBudgetEntry.run(
+        createId("correctionBudgetEntry"),
+        correctionRun.projectId,
+        correctionRun.workItemId,
+        correctionRun.pipelineRunId,
+        allocation.position,
+        allocation.automatic ? 1 : 0,
+        "BROWSER_QA",
+        correctionRun.id,
+        correctionRun.createdAt,
+      );
       insertQACorrectionRun.run(
         correctionRun.id,
         correctionRun.schemaVersion,
@@ -6077,6 +6098,17 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const persistVerificationCorrectionRun = (
       correctionRun: StartedVerificationCorrectionTransition["correctionRun"],
     ): void => {
+      insertCorrectionBudgetEntry.run(
+        createId("correctionBudgetEntry"),
+        correctionRun.projectId,
+        correctionRun.workItemId,
+        correctionRun.pipelineRunId,
+        correctionRun.budgetPosition,
+        correctionRun.automatic ? 1 : 0,
+        "PROJECT_VERIFICATION",
+        correctionRun.id,
+        correctionRun.createdAt,
+      );
       insertVerificationCorrectionRun.run(
         correctionRun.id,
         correctionRun.schemaVersion,
@@ -6962,12 +6994,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             pipelineRun === null ? null : readStageAttempt(pipelineRun.currentStageAttemptId);
           const dispatch = stageAttempt === null ? null : readPendingDispatch(stageAttempt.id);
           const usage = correctionBudgetUsageRowSchema.parse(
-            selectCorrectionBudgetUsage.get(
-              decision.run.pipelineRunId,
-              decision.run.pipelineRunId,
-              decision.run.pipelineRunId,
-              decision.run.pipelineRunId,
-            ),
+            selectCorrectionBudgetUsage.get(decision.run.pipelineRunId),
           );
           const canStartAutomatically =
             usage.automatic_used < MAX_AUTOMATIC_CORRECTION_RUNS &&
@@ -8363,6 +8390,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             );
           }
           const currentCorrection = readCurrentQACorrectionRun(decision.qaRun.pipelineRunId);
+          const usage = correctionBudgetUsageRowSchema.parse(
+            selectCorrectionBudgetUsage.get(decision.qaRun.pipelineRunId),
+          );
           let baselineQARun = decision.qaRun;
           if (currentCorrection !== null) {
             const baselineValue = selectQARunById.get(currentCorrection.baselineQARunId);
@@ -8377,6 +8407,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             baselineQARun,
             openDefects: readOpenQADefects(decision.qaRun.pipelineRunId),
             ...(currentCorrection === null ? {} : { currentCorrection }),
+            budgetUsage: {
+              automaticUsed: usage.automatic_used,
+              totalUsed: usage.total_used,
+            },
             workItem,
             run: pipelineRun,
             stageAttempt,
@@ -8396,7 +8430,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             persistUpdatedQACorrectionRun(correctionDecision.previousCorrection);
           }
           if (correctionDecision.correctionRun !== null) {
-            persistQACorrectionRun(correctionDecision.correctionRun);
+            persistQACorrectionRun(correctionDecision.correctionRun, correctionDecision.budgetAllocation);
             persistQARetestPlan(correctionDecision.retestPlan);
           }
           updateWorkflowDispatch(correctionDecision.completedDispatch);
@@ -9026,18 +9060,31 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
       if (command.type === "RESOLVE_QA_CORRECTION_GATE") {
         const request = readHumanRequest(command.payload.humanRequestId);
-        const correctionRun = readQACorrectionRun(command.payload.correctionRunId);
+        const correctionRun =
+          command.payload.correctionRunId === null
+            ? null
+            : readQACorrectionRun(command.payload.correctionRunId);
         const stageAttempt = request ? readStageAttempt(request.stageAttemptId) : null;
         const run = stageAttempt ? readPipelineRun(stageAttempt.pipelineRunId) : null;
         const workItem = request ? readWorkItem(request.workItemId) : null;
-        if (!request || !correctionRun || !stageAttempt || !run || !workItem) {
+        if (
+          !request ||
+          !stageAttempt ||
+          !run ||
+          !workItem ||
+          (command.payload.correctionRunId !== null && correctionRun === null)
+        ) {
           throw new QACorrectionError(
             "QA_CORRECTION_REQUEST_INVALID",
             "The exhausted QA correction gate does not exist",
           );
         }
-        const sourceValue = selectLatestFailedRetestForCorrection.get(correctionRun.id);
-        const baselineValue = selectQARunById.get(correctionRun.baselineQARunId);
+        const sourceValue =
+          correctionRun === null
+            ? selectFailedQARunByStageAttempt.get(stageAttempt.id)
+            : selectLatestFailedRetestForCorrection.get(correctionRun.id);
+        const baselineValue =
+          correctionRun === null ? sourceValue : selectQARunById.get(correctionRun.baselineQARunId);
         if (sourceValue === undefined || baselineValue === undefined) {
           throw new QACorrectionError(
             "QA_CORRECTION_LINEAGE_MISMATCH",
@@ -9052,6 +9099,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             "The exhausted QA correction source evidence is missing",
           );
         }
+        const usage = correctionBudgetUsageRowSchema.parse(selectCorrectionBudgetUsage.get(run.id));
         const gateDecision = decideQACorrectionGateResolution({
           command,
           workItem,
@@ -9063,6 +9111,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           sourceEvidence: qaEvidenceBundleFromRow(evidenceValue),
           baselineQARun: qaRunFromRow(baselineValue),
           openDefects: readOpenQADefects(run.id),
+          budgetUsage: {
+            automaticUsed: usage.automatic_used,
+            totalUsed: usage.total_used,
+          },
           ids: {
             decisionId: createId("decision"),
             correctionRunId: createId("qaCorrectionRun"),
@@ -9074,9 +9126,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
         updateHumanRequest(gateDecision.request);
         insertDecision(gateDecision.decision);
-        persistUpdatedQACorrectionRun(gateDecision.previousCorrection);
+        if (gateDecision.previousCorrection !== null) {
+          persistUpdatedQACorrectionRun(gateDecision.previousCorrection);
+        }
         if (gateDecision.correctionRun !== null) {
-          persistQACorrectionRun(gateDecision.correctionRun);
+          persistQACorrectionRun(gateDecision.correctionRun, gateDecision.budgetAllocation);
           persistQARetestPlan(gateDecision.retestPlan);
         }
         updateStageAttempt(gateDecision.stageAttempt);

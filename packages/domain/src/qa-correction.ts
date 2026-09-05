@@ -36,7 +36,7 @@ import {
   type WorkItem,
 } from "@loomrail/contracts";
 
-import { decideCorrectionBudget } from "./correction-budget.js";
+import { decideCorrectionBudget, type CorrectionBudgetUsage } from "./correction-budget.js";
 
 export type QADefectDispositionErrorCode =
   | "QA_DEFECT_NOT_FOUND"
@@ -340,12 +340,13 @@ export type QACorrectionLoopDecision =
       action: "START_CORRECTION";
       automatic: true;
       nextOrdinal: number;
+      budgetPosition: number;
       previousCorrection: QACorrectionRun | null;
     }
   | { action: "PASS_CORRECTION"; correctionRun: QACorrectionRun }
   | {
       action: "WAIT_FOR_OWNER";
-      correctionRun: QACorrectionRun;
+      correctionRun: QACorrectionRun | null;
       canAuthorizeFinal: boolean;
     };
 
@@ -353,6 +354,7 @@ export type QACorrectionLoopDecision =
 export const decideQACorrectionLoop = (input: {
   qaRun: QARun;
   currentCorrection?: QACorrectionRun | undefined;
+  budgetUsage: CorrectionBudgetUsage;
   now: string;
 }): QACorrectionLoopDecision => {
   const qaRun = qaRunSchema.parse(input.qaRun);
@@ -398,16 +400,13 @@ export const decideQACorrectionLoop = (input: {
       }),
     };
   }
-  const totalUsed = correction?.ordinal ?? 0;
-  const budget = decideCorrectionBudget({
-    automaticUsed: Math.min(totalUsed, MAX_AUTOMATIC_CORRECTION_RUNS),
-    totalUsed,
-  });
+  const budget = decideCorrectionBudget(input.budgetUsage);
   if (budget.action === "START_AUTOMATIC") {
     return {
       action: "START_CORRECTION",
       automatic: true,
-      nextOrdinal: budget.position,
+      nextOrdinal: (correction?.ordinal ?? 0) + 1,
+      budgetPosition: budget.position,
       previousCorrection:
         correction === undefined
           ? null
@@ -419,20 +418,17 @@ export const decideQACorrectionLoop = (input: {
             }),
     };
   }
-  if (correction === undefined) {
-    throw new QACorrectionError(
-      "QA_CORRECTION_STATE_MISMATCH",
-      "Correction usage cannot be exhausted before its first durable QA correction",
-    );
-  }
   return {
     action: "WAIT_FOR_OWNER",
-    correctionRun: qaCorrectionRunSchema.parse({
-      ...correction,
-      status: "EXHAUSTED",
-      completedAt: null,
-      version: correction.version + 1,
-    }),
+    correctionRun:
+      correction === undefined
+        ? null
+        : qaCorrectionRunSchema.parse({
+            ...correction,
+            status: "EXHAUSTED",
+            completedAt: null,
+            version: correction.version + 1,
+          }),
     canAuthorizeFinal: budget.action === "WAIT_FOR_OWNER",
   };
 };
@@ -452,6 +448,7 @@ export type FailedQACorrectionTransition =
       completedDispatch: WorkflowDispatch;
       previousCorrection: QACorrectionRun | null;
       correctionRun: QACorrectionRun;
+      budgetAllocation: { position: number; automatic: true };
       retestPlan: QARetestPlan;
       nextStageAttempt: StageAttempt;
       nextDispatch: WorkflowDispatch;
@@ -464,7 +461,7 @@ export type FailedQACorrectionTransition =
       run: PipelineRun;
       completedStageAttempt: StageAttempt;
       completedDispatch: WorkflowDispatch;
-      previousCorrection: QACorrectionRun;
+      previousCorrection: QACorrectionRun | null;
       correctionRun: null;
       retestPlan: null;
       nextStageAttempt: null;
@@ -538,6 +535,7 @@ export const decideFailedQACorrectionTransition = (input: {
   baselineQARun: QARun;
   openDefects: readonly QADefect[];
   currentCorrection?: QACorrectionRun | undefined;
+  budgetUsage: CorrectionBudgetUsage;
   workItem: WorkItem;
   run: PipelineRun;
   stageAttempt: StageAttempt;
@@ -572,6 +570,7 @@ export const decideFailedQACorrectionTransition = (input: {
   const loop = decideQACorrectionLoop({
     qaRun,
     ...(currentCorrection === undefined ? {} : { currentCorrection }),
+    budgetUsage: input.budgetUsage,
     now: input.now,
   });
   if (loop.action !== "START_CORRECTION" && loop.action !== "WAIT_FOR_OWNER") {
@@ -616,8 +615,12 @@ export const decideFailedQACorrectionTransition = (input: {
       blocking: true,
       title: "QA correction loop needs a decision",
       context: loop.canAuthorizeFinal
-        ? "Two automatic QA correction runs still ended in measured defects."
-        : "The owner-authorized final QA correction still ended in measured defects.",
+        ? loop.correctionRun === null
+          ? "Two automatic delivery corrections were already consumed before this measured QA failure."
+          : "Two automatic QA correction runs still ended in measured defects."
+        : loop.correctionRun === null
+          ? "The owner-authorized final delivery correction was already consumed before this measured QA failure."
+          : "The owner-authorized final QA correction still ended in measured defects.",
       recommendation: loop.canAuthorizeFinal
         ? "Inspect the complete defect and evidence history before authorizing the one final correction."
         : "Inspect the remaining defects and cancel this delivery when no further bounded correction is available.",
@@ -627,7 +630,10 @@ export const decideFailedQACorrectionTransition = (input: {
               {
                 id: input.ids.authorizeFinalOptionId,
                 label: "Authorize one final QA correction",
-                consequence: "Creates CorrectionRun 3 with a locked retest plan.",
+                consequence:
+                  loop.correctionRun === null
+                    ? "Creates the final shared correction position with a locked retest plan."
+                    : "Creates CorrectionRun 3 with a locked retest plan.",
                 recommended: true,
               },
             ]
@@ -663,10 +669,14 @@ export const decideFailedQACorrectionTransition = (input: {
           data: { run, stageAttempt: completedStageAttempt, previousStatus: input.stageAttempt.status },
         },
         { type: "HUMAN_REQUEST_OPENED", data: { request } },
-        {
-          type: "QA_CORRECTION_EXHAUSTED",
-          data: { correctionRun: loop.correctionRun, canAuthorizeFinal: loop.canAuthorizeFinal },
-        },
+        ...(loop.correctionRun === null
+          ? []
+          : [
+              {
+                type: "QA_CORRECTION_EXHAUSTED" as const,
+                data: { correctionRun: loop.correctionRun, canAuthorizeFinal: loop.canAuthorizeFinal },
+              },
+            ]),
       ],
     };
   }
@@ -756,6 +766,7 @@ export const decideFailedQACorrectionTransition = (input: {
     completedDispatch,
     previousCorrection: loop.previousCorrection,
     correctionRun,
+    budgetAllocation: { position: loop.budgetPosition, automatic: true },
     retestPlan,
     nextStageAttempt,
     nextDispatch,
@@ -980,7 +991,14 @@ export const decidePassedQACorrectionTransition = (input: {
       "The passing QA evidence is not the active correction's immutable retest outcome",
     );
   }
-  const loop = decideQACorrectionLoop({ qaRun, currentCorrection, now: input.now });
+  const loop = decideQACorrectionLoop({
+    qaRun,
+    currentCorrection,
+    // PASSED returns before consulting the budget; the actual allocation remains owned by
+    // persistence and its durable ledger.
+    budgetUsage: { automaticUsed: 0, totalUsed: 0 },
+    now: input.now,
+  });
   if (loop.action !== "PASS_CORRECTION") {
     throw new QACorrectionError(
       "QA_CORRECTION_STATE_MISMATCH",
@@ -1119,8 +1137,9 @@ export type QACorrectionGateResolution =
       stageAttempt: StageAttempt;
       request: HumanRequest;
       decision: Decision;
-      previousCorrection: QACorrectionRun;
+      previousCorrection: QACorrectionRun | null;
       correctionRun: QACorrectionRun;
+      budgetAllocation: { position: number; automatic: false };
       retestPlan: QARetestPlan;
       nextStageAttempt: StageAttempt;
       dispatch: WorkflowDispatch;
@@ -1133,7 +1152,7 @@ export type QACorrectionGateResolution =
       stageAttempt: StageAttempt;
       request: HumanRequest;
       decision: Decision;
-      previousCorrection: QACorrectionRun;
+      previousCorrection: QACorrectionRun | null;
       correctionRun: null;
       retestPlan: null;
       nextStageAttempt: null;
@@ -1147,10 +1166,11 @@ const assertQACorrectionGateLineage = (input: {
   run: PipelineRun;
   stageAttempt: StageAttempt;
   request: HumanRequest;
-  correctionRun: QACorrectionRun;
+  correctionRun: QACorrectionRun | null;
   sourceQARun: QARun;
   sourceEvidence: QAEvidenceBundle;
   baselineQARun: QARun;
+  budgetUsage: CorrectionBudgetUsage;
 }): void => {
   const { command, workItem, run, stageAttempt, request, correctionRun, sourceQARun, sourceEvidence } = input;
   if (command.actor.type !== "HUMAN") {
@@ -1159,7 +1179,10 @@ const assertQACorrectionGateLineage = (input: {
       "Only the owner can resolve an exhausted QA correction gate",
     );
   }
-  if (request.id !== command.payload.humanRequestId || correctionRun.id !== command.payload.correctionRunId) {
+  if (
+    request.id !== command.payload.humanRequestId ||
+    (correctionRun?.id ?? null) !== command.payload.correctionRunId
+  ) {
     throw new QACorrectionError(
       "QA_CORRECTION_REQUEST_INVALID",
       "The owner action does not identify this QA correction gate",
@@ -1167,7 +1190,7 @@ const assertQACorrectionGateLineage = (input: {
   }
   if (
     request.version !== command.payload.expectedRequestVersion ||
-    correctionRun.version !== command.payload.expectedCorrectionVersion ||
+    (correctionRun?.version ?? null) !== command.payload.expectedCorrectionVersion ||
     run.version !== command.payload.expectedPipelineRunVersion
   ) {
     throw new QACorrectionError(
@@ -1176,24 +1199,31 @@ const assertQACorrectionGateLineage = (input: {
       {
         expectedRequestVersion: command.payload.expectedRequestVersion,
         actualRequestVersion: request.version,
-        expectedCorrectionVersion: command.payload.expectedCorrectionVersion,
-        actualCorrectionVersion: correctionRun.version,
+        expectedCorrectionVersion: command.payload.expectedCorrectionVersion ?? "none",
+        actualCorrectionVersion: correctionRun?.version ?? "none",
         expectedPipelineRunVersion: command.payload.expectedPipelineRunVersion,
         actualPipelineRunVersion: run.version,
       },
     );
   }
+  const correctionScopeMatches =
+    correctionRun === null
+      ? sourceQARun.scope.type === "FULL" && stageAttempt.correctionRunId === null
+      : correctionRun.status === "EXHAUSTED" &&
+        sourceQARun.scope.type === "RETEST" &&
+        sourceQARun.scope.correctionRunId === correctionRun.id &&
+        stageAttempt.correctionRunId === correctionRun.id;
   const sameDelivery =
-    correctionRun.status === "EXHAUSTED" &&
+    correctionScopeMatches &&
     request.status === "OPEN" &&
     request.kind === "SINGLE_CHOICE" &&
     request.blocking &&
     !request.allowOther &&
-    workItem.id === correctionRun.workItemId &&
-    workItem.projectId === correctionRun.projectId &&
+    (correctionRun === null || workItem.id === correctionRun.workItemId) &&
+    (correctionRun === null || workItem.projectId === correctionRun.projectId) &&
     workItem.state === "BLOCKED" &&
     workItem.currentStage === "QA" &&
-    run.id === correctionRun.pipelineRunId &&
+    (correctionRun === null || run.id === correctionRun.pipelineRunId) &&
     run.projectId === workItem.projectId &&
     run.workItemId === workItem.id &&
     run.status === "WAITING_HUMAN" &&
@@ -1201,7 +1231,6 @@ const assertQACorrectionGateLineage = (input: {
     stageAttempt.projectId === workItem.projectId &&
     stageAttempt.workItemId === workItem.id &&
     stageAttempt.pipelineRunId === run.id &&
-    stageAttempt.correctionRunId === correctionRun.id &&
     stageAttempt.stage === "QA" &&
     stageAttempt.status === "WAITING_HUMAN" &&
     stageAttempt.failureCode === "QA_CORRECTION_EXHAUSTED" &&
@@ -1209,12 +1238,12 @@ const assertQACorrectionGateLineage = (input: {
     request.workItemId === workItem.id &&
     request.stageAttemptId === stageAttempt.id &&
     sourceQARun.status === "FAILED" &&
-    sourceQARun.scope.type === "RETEST" &&
-    sourceQARun.scope.correctionRunId === correctionRun.id &&
     sourceQARun.projectId === workItem.projectId &&
     sourceQARun.workItemId === workItem.id &&
     sourceQARun.pipelineRunId === run.id &&
     sourceQARun.stageAttemptId === stageAttempt.id &&
+    (sourceQARun.verificationCorrectionRunId ?? null) ===
+      (stageAttempt.verificationCorrectionRunId ?? null) &&
     sourceEvidence.verdict === "FAILED" &&
     sourceEvidence.qaRunId === sourceQARun.id &&
     sourceEvidence.stageAttemptId === stageAttempt.id &&
@@ -1226,13 +1255,14 @@ const assertQACorrectionGateLineage = (input: {
     );
   }
   requireSameDelivery(input.baselineQARun, sourceQARun, sourceEvidence);
-  if (input.baselineQARun.id !== correctionRun.baselineQARunId) {
+  if (input.baselineQARun.id !== (correctionRun === null ? sourceQARun.id : correctionRun.baselineQARunId)) {
     throw new QACorrectionError(
       "QA_CORRECTION_LINEAGE_MISMATCH",
       "The exhausted correction no longer points to this QA baseline",
     );
   }
-  const expectedOptionCount = correctionRun.ordinal === MAX_AUTOMATIC_CORRECTION_RUNS ? 2 : 1;
+  const budget = decideCorrectionBudget(input.budgetUsage);
+  const expectedOptionCount = budget.action === "WAIT_FOR_OWNER" ? 2 : 1;
   if (request.options.length !== expectedOptionCount) {
     throw new QACorrectionError(
       "QA_CORRECTION_REQUEST_INVALID",
@@ -1253,11 +1283,12 @@ export const decideQACorrectionGateResolution = (input: {
   run: PipelineRun;
   stageAttempt: StageAttempt;
   request: HumanRequest;
-  correctionRun: QACorrectionRun;
+  correctionRun: QACorrectionRun | null;
   sourceQARun: QARun;
   sourceEvidence: QAEvidenceBundle;
   baselineQARun: QARun;
   openDefects: readonly QADefect[];
+  budgetUsage: CorrectionBudgetUsage;
   ids: {
     decisionId: string;
     correctionRunId: string;
@@ -1267,7 +1298,8 @@ export const decideQACorrectionGateResolution = (input: {
   };
   now: string;
 }): QACorrectionGateResolution => {
-  const correctionRun = qaCorrectionRunSchema.parse(input.correctionRun);
+  const correctionRun =
+    input.correctionRun === null ? null : qaCorrectionRunSchema.parse(input.correctionRun);
   const sourceQARun = qaRunSchema.parse(input.sourceQARun);
   const sourceEvidence = qaEvidenceBundleSchema.parse(input.sourceEvidence);
   const baselineQARun = qaRunSchema.parse(input.baselineQARun);
@@ -1282,12 +1314,16 @@ export const decideQACorrectionGateResolution = (input: {
     sourceQARun,
     sourceEvidence,
     baselineQARun,
+    budgetUsage: input.budgetUsage,
   });
-  const ownerDecision = decideQACorrectionOwnerAction({
-    correctionRun,
-    action: input.command.payload.action,
-    now: input.now,
-  });
+  const budget = decideCorrectionBudget(input.budgetUsage);
+  const ownerBudgetPosition = budget.action === "WAIT_FOR_OWNER" ? budget.position : null;
+  if (input.command.payload.action === "AUTHORIZE_FINAL" && ownerBudgetPosition === null) {
+    throw new QACorrectionError(
+      "QA_CORRECTION_LIMIT_REACHED",
+      "No owner-authorized QA correction remains in the delivery-wide budget",
+    );
+  }
   const optionId =
     input.command.payload.action === "AUTHORIZE_FINAL"
       ? input.request.options[0]?.id
@@ -1319,7 +1355,16 @@ export const decideQACorrectionGateResolution = (input: {
     createdAt: input.now,
   };
 
-  if (ownerDecision.action === "CANCEL_CORRECTION") {
+  if (input.command.payload.action === "CANCEL") {
+    const previousCorrection =
+      correctionRun === null
+        ? null
+        : qaCorrectionRunSchema.parse({
+            ...correctionRun,
+            status: "CANCELLED",
+            completedAt: input.now,
+            version: correctionRun.version + 1,
+          });
     const stageAttempt: StageAttempt = {
       ...input.stageAttempt,
       status: "CANCELLED",
@@ -1347,7 +1392,7 @@ export const decideQACorrectionGateResolution = (input: {
       stageAttempt,
       request,
       decision,
-      previousCorrection: ownerDecision.correctionRun,
+      previousCorrection,
       correctionRun: null,
       retestPlan: null,
       nextStageAttempt: null,
@@ -1358,11 +1403,35 @@ export const decideQACorrectionGateResolution = (input: {
           type: "STAGE_ATTEMPT_CHANGED",
           data: { run, stageAttempt, previousStatus: input.stageAttempt.status },
         },
-        { type: "QA_CORRECTION_CANCELLED", data: { correctionRun: ownerDecision.correctionRun } },
+        ...(previousCorrection === null
+          ? []
+          : [
+              {
+                type: "QA_CORRECTION_CANCELLED" as const,
+                data: { correctionRun: previousCorrection },
+              },
+            ]),
         { type: "PIPELINE_CANCELLED", data: { run, stageAttempt } },
       ],
     };
   }
+
+  if (ownerBudgetPosition === null) {
+    throw new QACorrectionError(
+      "QA_CORRECTION_LIMIT_REACHED",
+      "No owner-authorized QA correction remains in the delivery-wide budget",
+    );
+  }
+
+  const previousCorrection =
+    correctionRun === null
+      ? null
+      : qaCorrectionRunSchema.parse({
+          ...correctionRun,
+          status: "SUPERSEDED",
+          completedAt: input.now,
+          version: correctionRun.version + 1,
+        });
 
   const nextCorrection = qaCorrectionRunSchema.parse({
     schemaVersion: 1,
@@ -1370,7 +1439,7 @@ export const decideQACorrectionGateResolution = (input: {
     projectId: sourceQARun.projectId,
     workItemId: sourceQARun.workItemId,
     pipelineRunId: sourceQARun.pipelineRunId,
-    ordinal: ownerDecision.nextOrdinal,
+    ordinal: (correctionRun?.ordinal ?? 0) + 1,
     sourceQARunId: sourceQARun.id,
     baselineQARunId: baselineQARun.id,
     sourceEvidenceBundleId: sourceEvidence.id,
@@ -1405,6 +1474,7 @@ export const decideQACorrectionGateResolution = (input: {
     projectId: input.workItem.projectId,
     workItemId: input.workItem.id,
     correctionRunId: nextCorrection.id,
+    verificationCorrectionRunId: null,
     stage: "IMPLEMENT",
     attempt: 1,
     status: "QUEUED",
@@ -1449,8 +1519,9 @@ export const decideQACorrectionGateResolution = (input: {
     stageAttempt,
     request,
     decision,
-    previousCorrection: ownerDecision.previousCorrection,
+    previousCorrection,
     correctionRun: nextCorrection,
+    budgetAllocation: { position: ownerBudgetPosition, automatic: false },
     retestPlan,
     nextStageAttempt,
     dispatch,

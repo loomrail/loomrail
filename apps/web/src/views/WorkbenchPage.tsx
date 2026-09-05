@@ -1673,7 +1673,7 @@ const BrowserQAPanel = ({
   correctionGate,
   item,
 }: {
-  correctionGate: { correctionRunId: string; request: HumanRequest; run: PipelineRun } | null;
+  correctionGate: { correctionRunId: string | null; request: HumanRequest; run: PipelineRun } | null;
   item: WorkItem;
 }): React.JSX.Element | null => {
   const { t } = useI18n();
@@ -1701,10 +1701,11 @@ const BrowserQAPanel = ({
   const attachments = qa.attachments.filter(({ qaRunId }) => qaRunId === latest.id);
   const defects = qa.defects;
   const environment = evidence?.environment;
+  const exhaustedCorrectionId = correctionGate?.correctionRunId ?? null;
   const exhaustedCorrection =
-    correctionGate === null
+    exhaustedCorrectionId === null
       ? undefined
-      : qa.correctionRuns.find(({ id }) => id === correctionGate.correctionRunId);
+      : qa.correctionRuns.find(({ id }) => id === exhaustedCorrectionId);
 
   const submitWaiver = (event: SyntheticEvent<HTMLFormElement>): void => {
     event.preventDefault();
@@ -1730,10 +1731,15 @@ const BrowserQAPanel = ({
         <Badge tone={qaRunStatusTones[latest.status]}>{t(`qa.status.${latest.status}`)}</Badge>
       </header>
 
-      {correctionGate !== null && exhaustedCorrection?.status === "EXHAUSTED" ? (
+      {correctionGate !== null &&
+      (correctionGate.correctionRunId === null || exhaustedCorrection?.status === "EXHAUSTED") ? (
         <div className="human-request-card">
           <h3>{t("qa.correctionGate.title")}</h3>
-          <p>{t("qa.correctionGate.description", { ordinal: exhaustedCorrection.ordinal })}</p>
+          <p>
+            {exhaustedCorrection === undefined
+              ? correctionGate.request.context
+              : t("qa.correctionGate.description", { ordinal: exhaustedCorrection.ordinal })}
+          </p>
           {correctionGate.request.recommendation ? (
             <div className="human-request-card__recommendation">
               <strong>{t("humanRequest.recommendation")}</strong>
@@ -1742,14 +1748,14 @@ const BrowserQAPanel = ({
           ) : null}
           {gateMutation.error ? <LocalConnectionRecovery error={gateMutation.error} /> : null}
           <div className="workflow-panel__actions">
-            {exhaustedCorrection.ordinal === 2 ? (
+            {correctionGate.request.options.length === 2 ? (
               <Button
                 disabled={gateMutation.isPending}
                 loading={gateMutation.isPending && gateMutation.variables.action === "AUTHORIZE_FINAL"}
                 onClick={() => {
                   gateMutation.mutate({
                     action: "AUTHORIZE_FINAL",
-                    correctionRun: exhaustedCorrection,
+                    correctionRun: exhaustedCorrection ?? null,
                     request: correctionGate.request,
                     run: correctionGate.run,
                   });
@@ -1765,7 +1771,7 @@ const BrowserQAPanel = ({
               onClick={() => {
                 gateMutation.mutate({
                   action: "CANCEL",
-                  correctionRun: exhaustedCorrection,
+                  correctionRun: exhaustedCorrection ?? null,
                   request: correctionGate.request,
                   run: correctionGate.run,
                 });
@@ -2713,8 +2719,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
     openRequest !== null &&
     currentAttempt?.stage === "QA" &&
     currentAttempt.status === "WAITING_HUMAN" &&
-    currentAttempt.failureCode === "QA_CORRECTION_EXHAUSTED" &&
-    currentAttempt.correctionRunId !== null
+    currentAttempt.failureCode === "QA_CORRECTION_EXHAUSTED"
       ? {
           correctionRunId: currentAttempt.correctionRunId,
           request: openRequest,

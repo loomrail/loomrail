@@ -1260,12 +1260,17 @@ export const resolveQACorrectionGateCommandSchema = commandBaseSchema.extend({
     .object({
       humanRequestId: opaqueIdSchema,
       expectedRequestVersion: z.number().int().positive(),
-      correctionRunId: opaqueIdSchema,
-      expectedCorrectionVersion: z.number().int().positive(),
+      correctionRunId: opaqueIdSchema.nullable(),
+      expectedCorrectionVersion: z.number().int().positive().nullable(),
       expectedPipelineRunVersion: z.number().int().positive(),
       action: qaCorrectionGateActionSchema,
     })
-    .strict(),
+    .strict()
+    .refine(
+      ({ correctionRunId, expectedCorrectionVersion }) =>
+        (correctionRunId === null) === (expectedCorrectionVersion === null),
+      "A QA correction ID and expected version must be supplied together",
+    ),
 });
 
 const pipelineControlPayloadSchema = z
@@ -1587,7 +1592,7 @@ export const qaCorrectionGateResolvedResultSchema = z
     workItemId: opaqueIdSchema,
     request: humanRequestSchema,
     decision: decisionSchema,
-    previousCorrection: qaCorrectionRunSchema,
+    previousCorrection: qaCorrectionRunSchema.nullable(),
     correctionRun: qaCorrectionRunSchema.nullable(),
     retestPlan: qaRetestPlanSchema.nullable(),
     run: pipelineRunSchema,
@@ -1878,12 +1883,17 @@ export const resolveQACorrectionGateRequestSchema = z
     schemaVersion: schemaVersionSchema,
     commandId: opaqueIdSchema,
     expectedRequestVersion: z.number().int().positive(),
-    correctionRunId: opaqueIdSchema,
-    expectedCorrectionVersion: z.number().int().positive(),
+    correctionRunId: opaqueIdSchema.nullable(),
+    expectedCorrectionVersion: z.number().int().positive().nullable(),
     expectedPipelineRunVersion: z.number().int().positive(),
     action: qaCorrectionGateActionSchema,
   })
-  .strict();
+  .strict()
+  .refine(
+    ({ correctionRunId, expectedCorrectionVersion }) =>
+      (correctionRunId === null) === (expectedCorrectionVersion === null),
+    "A QA correction ID and expected version must be supplied together",
+  );
 
 export const pipelineControlRequestSchema = z
   .object({

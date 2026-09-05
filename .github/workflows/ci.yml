@@ -85,7 +85,9 @@ jobs:
           pnpm --filter "@loomrail/daemon..." build
           pnpm --dir packages/contracts exec vitest run test/verification.unit.test.ts
           pnpm --dir packages/domain exec vitest run test/verification-run.unit.test.ts
+          pnpm --dir packages/domain exec vitest run test/qa-correction.test.ts -t "delivery-wide|shared owner gate"
           pnpm --dir packages/persistence-sqlite exec vitest run test/verification-run-state.integration.test.ts
+          pnpm --dir packages/persistence-sqlite exec vitest run test/local-state.integration.test.ts -t "next shared position|mixed-evaluator QA gate"
           pnpm --dir apps/daemon exec vitest run --project unit test/project-verification-gate.unit.test.ts
           pnpm --dir apps/daemon exec vitest run --project unit test/verification-output-retention.unit.test.ts
           pnpm --dir apps/daemon exec vitest run --project integration test/session-worker.integration.test.ts -t "drives a CODEX-shaped"

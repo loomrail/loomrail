@@ -900,7 +900,7 @@ export const useResolveQACorrectionGate = () => {
       run,
     }: {
       action: QACorrectionGateAction;
-      correctionRun: QACorrectionRun;
+      correctionRun: QACorrectionRun | null;
       request: HumanRequest;
       run: PipelineRun;
     }) => resolveQACorrectionGate(request, correctionRun, run, action),
