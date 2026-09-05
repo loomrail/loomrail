@@ -1892,9 +1892,10 @@ describe("local daemon session and state boundary", () => {
     });
     expect(overflowExport.status).toBe(409);
     expect(apiErrorResponseSchema.parse(await overflowExport.json()).error.code).toBe("ACCEPTANCE_NOT_READY");
-    // This run reaches IMPLEMENT, which cuts a real worktree: a couple of dozen `git` subprocesses
-    // on top of two daemons, which outlives vitest's 5s default under a loaded `pnpm test`.
-  }, 30_000);
+    // This run reaches IMPLEMENT, cuts a real worktree, restarts the daemon, and writes more than
+    // 1,000 audit events. Keep enough headroom for the slower Windows SQLite/filesystem path while
+    // preserving a finite timeout for a genuinely stuck recovery flow.
+  }, 60_000);
 
   it("starts the current workflow after a legacy template version was persisted", async () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail legacy template "));
