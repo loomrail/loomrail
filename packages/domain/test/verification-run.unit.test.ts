@@ -17,6 +17,7 @@ import {
   decideVerificationCheckStart,
   decideVerificationRunReservation,
   decideVerificationRunInterruption,
+  projectVerificationAcceptanceGate,
   projectVerificationRunFreshness,
 } from "../src/verification.js";
 
@@ -520,5 +521,213 @@ describe("verification Run freshness", () => {
       freshness: "STALE",
       staleReasons: ["PLAN_REPLACED", "PLAN_UNPUBLISHED", "TREE_CHANGED"],
     });
+  });
+});
+
+describe("verification Acceptance gate", () => {
+  const plan: VerificationPlan = {
+    schemaVersion: 1,
+    id: run.planId,
+    projectId: run.projectId,
+    revision: run.planRevision,
+    status: "ACTIVE",
+    recipes: [
+      {
+        schemaVersion: 1,
+        id: requiredCheck.recipeId,
+        kind: "UNIT",
+        label: "Unit tests",
+        required: true,
+        executable: "pnpm",
+        argv: ["run", "test"],
+        cwd: ".",
+        timeoutSeconds: 300,
+        outputLimitBytes: 65_536,
+        environmentProfile: "VERIFICATION_BASELINE",
+        networkPolicy: "INHERIT_HOST",
+        provenance: {
+          source: "PACKAGE_JSON_SCRIPT",
+          manifestPath: "package.json",
+          manifestContentHash: "f".repeat(64),
+          scriptName: "test",
+          scriptBodyPreview: "vitest run",
+        },
+      },
+      {
+        schemaVersion: 1,
+        id: optionalCheck.recipeId,
+        kind: "LINT",
+        label: "Lint",
+        required: false,
+        executable: "pnpm",
+        argv: ["run", "lint"],
+        cwd: ".",
+        timeoutSeconds: 300,
+        outputLimitBytes: 65_536,
+        environmentProfile: "VERIFICATION_BASELINE",
+        networkPolicy: "INHERIT_HOST",
+        provenance: {
+          source: "PACKAGE_JSON_SCRIPT",
+          manifestPath: "package.json",
+          manifestContentHash: "f".repeat(64),
+          scriptName: "lint",
+          scriptBodyPreview: "eslint .",
+        },
+      },
+    ],
+    sourceProposalHash: "d".repeat(64),
+    contentHash: run.planContentHash,
+    createdAt: now,
+  };
+  const publication: VerificationPlanPublication = {
+    schemaVersion: 1,
+    id: "verification-publication-1",
+    projectId: run.projectId,
+    planId: plan.id,
+    targetPath: ".loomrail/verification-plan.json",
+    expectedTargetDigest: null,
+    contentHash: plan.contentHash,
+    status: "APPLIED",
+    attempts: 1,
+    lastErrorCode: null,
+    version: 2,
+    createdAt: now,
+    updatedAt: now,
+    appliedAt: now,
+  };
+  const passedRun: VerificationRun = {
+    ...run,
+    status: "PASSED",
+    terminalReason: "ALL_REQUIRED_PASSED",
+    startedAt: now,
+    completedAt: "2026-09-05T10:00:02.000Z",
+    version: 4,
+  };
+  const passedRequired: VerificationCheck = {
+    ...requiredCheck,
+    status: "PASSED",
+    startedAt: now,
+    completedAt: "2026-09-05T10:00:01.000Z",
+    durationMs: 1_000,
+    exitCode: 0,
+    output,
+    version: 3,
+  };
+  const failedOptional: VerificationCheck = {
+    ...optionalCheck,
+    status: "FAILED",
+    startedAt: now,
+    completedAt: "2026-09-05T10:00:02.000Z",
+    durationMs: 1_000,
+    exitCode: 1,
+    output,
+    version: 3,
+  };
+
+  it("allows legacy Projects without an active Plan", () => {
+    expect(
+      projectVerificationAcceptanceGate({
+        projectId: run.projectId,
+        workItemId: run.workItemId,
+        pipelineRunId: run.pipelineRunId,
+        currentPlan: undefined,
+        publication: undefined,
+        latestRun: undefined,
+        checks: [],
+        currentTree: run.implementationTree,
+      }),
+    ).toEqual({ status: "NOT_CONFIGURED", evidence: null, blocker: null });
+  });
+
+  it("binds safe current-tree evidence while keeping an optional failure advisory", () => {
+    expect(
+      projectVerificationAcceptanceGate({
+        projectId: run.projectId,
+        workItemId: run.workItemId,
+        pipelineRunId: run.pipelineRunId,
+        currentPlan: plan,
+        publication,
+        latestRun: passedRun,
+        checks: [passedRequired, failedOptional],
+        currentTree: run.implementationTree,
+      }),
+    ).toEqual({
+      status: "READY",
+      blocker: null,
+      evidence: {
+        schemaVersion: 1,
+        projectId: run.projectId,
+        workItemId: run.workItemId,
+        pipelineRunId: run.pipelineRunId,
+        verificationRunId: run.id,
+        planId: plan.id,
+        planRevision: plan.revision,
+        planContentHash: plan.contentHash,
+        implementationTree: run.implementationTree,
+        platform: run.platform,
+        requiredCheckIds: [requiredCheck.id],
+        optionalFailedCheckIds: [optionalCheck.id],
+        completedAt: passedRun.completedAt,
+      },
+    });
+  });
+
+  it.each([
+    ["missing Run", undefined, [] as VerificationCheck[], "RUN_MISSING"],
+    [
+      "failed required Check",
+      { ...passedRun, status: "FAILED", terminalReason: "REQUIRED_CHECK_FAILED" },
+      [{ ...passedRequired, status: "FAILED", exitCode: 1 }, failedOptional],
+      "RUN_FAILED",
+    ],
+    [
+      "errored required Check",
+      { ...passedRun, status: "ERROR", terminalReason: "REQUIRED_CHECK_ERROR" },
+      [
+        {
+          ...passedRequired,
+          status: "ERROR",
+          exitCode: null,
+          errorCode: "TIMED_OUT",
+        },
+        failedOptional,
+      ],
+      "RUN_ERROR",
+    ],
+    [
+      "interrupted Run",
+      {
+        ...passedRun,
+        status: "INTERRUPTED",
+        terminalReason: "OWNER_CANCELLED",
+      },
+      [passedRequired, failedOptional],
+      "RUN_INTERRUPTED",
+    ],
+    [
+      "foreign PipelineRun",
+      { ...passedRun, pipelineRunId: "pipeline-run-foreign" },
+      [passedRequired, failedOptional],
+      "LINEAGE_MISMATCH",
+    ],
+    [
+      "stale tree",
+      { ...passedRun, implementationTree: "e".repeat(40) },
+      [passedRequired, failedOptional],
+      "STALE",
+    ],
+  ] as const)("blocks Acceptance for %s", (_label, latestRun, gateChecks, blocker) => {
+    expect(
+      projectVerificationAcceptanceGate({
+        projectId: run.projectId,
+        workItemId: run.workItemId,
+        pipelineRunId: run.pipelineRunId,
+        currentPlan: plan,
+        publication,
+        latestRun,
+        checks: gateChecks,
+        currentTree: run.implementationTree,
+      }),
+    ).toEqual({ status: "BLOCKED", evidence: null, blocker });
   });
 });

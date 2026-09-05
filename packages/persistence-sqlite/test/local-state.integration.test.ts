@@ -24,6 +24,7 @@ import type {
   StartAgentRunCommand,
   StartProviderSessionCommand,
   UpdateWorkItemCommand,
+  VerificationPlanProposal,
 } from "@loomrail/contracts";
 import {
   contextPackRecipeSectionSchema,
@@ -32,6 +33,7 @@ import {
 } from "@loomrail/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
+import { verificationPlanProposalHash } from "@loomrail/project-readiness";
 
 import { applyMigrations } from "../src/migrations.js";
 import {
@@ -640,6 +642,59 @@ describe("SQLite local state", () => {
   it("persists Review and QA evidence and gates Done on owner acceptance", async () => {
     const localState = await open();
     localState.execute(registerProject());
+    const proposalContent: Omit<VerificationPlanProposal, "proposalHash"> = {
+      schemaVersion: 1,
+      projectId: "project-web",
+      target: { state: "ABSENT", digest: null },
+      recipes: [
+        {
+          schemaVersion: 1,
+          id: "acceptance-unit-recipe",
+          kind: "UNIT",
+          label: "Acceptance unit tests",
+          required: true,
+          executable: "pnpm",
+          argv: ["run", "test"],
+          cwd: ".",
+          timeoutSeconds: 300,
+          outputLimitBytes: 65_536,
+          environmentProfile: "VERIFICATION_BASELINE",
+          networkPolicy: "INHERIT_HOST",
+          provenance: {
+            source: "PACKAGE_JSON_SCRIPT",
+            manifestPath: "package.json",
+            manifestContentHash: "c".repeat(64),
+            scriptName: "test",
+            scriptBodyPreview: "vitest run",
+          },
+        },
+      ],
+      warnings: [],
+    };
+    const adopted = localState.execute({
+      schemaVersion: 1,
+      commandId: "adopt-acceptance-verification-plan",
+      correlationId: "correlation-adopt-acceptance-verification-plan",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "ADOPT_VERIFICATION_PLAN",
+      payload: {
+        projectId: "project-web",
+        expectedProjectVersion: 1,
+        proposal: {
+          ...proposalContent,
+          proposalHash: verificationPlanProposalHash(proposalContent),
+        },
+      },
+    });
+    if (adopted.type !== "VERIFICATION_PLAN_ADOPTED") throw new Error("Expected adopted Plan");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "publish-acceptance-verification-plan",
+      correlationId: "correlation-publish-acceptance-verification-plan",
+      actor: { type: "SYSTEM", id: "verification-publisher" },
+      type: "COMPLETE_VERIFICATION_PLAN_PUBLICATION",
+      payload: { publicationId: adopted.publication.id, expectedVersion: adopted.publication.version },
+    });
     const created = localState.execute(createWorkItem("create-acceptance-item"));
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
     localState.execute(moveWorkItem("ready-acceptance-item", created.workItem.id, 1, "READY"));
@@ -668,6 +723,25 @@ describe("SQLite local state", () => {
         budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
       },
     });
+    const acceptanceWorkspace = localState.execute({
+      schemaVersion: 1,
+      commandId: "create-acceptance-workspace",
+      correlationId: "correlation-create-acceptance-workspace",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "CREATE_WORK_ITEM_WORKSPACE",
+      payload: {
+        projectId: "project-web",
+        workItemId: created.workItem.id,
+        branch: "loomrail/acceptance-evidence",
+        worktreePath: join(temporaryDirectory, "acceptance worktree-ёж"),
+        baseCommit: null,
+        snapshotCommit: null,
+        carriedPaths: [],
+      },
+    });
+    if (acceptanceWorkspace.type !== "WORK_ITEM_WORKSPACE_CREATED") {
+      throw new Error("Expected acceptance workspace");
+    }
 
     const applyNext = (
       outcome: ApplyProviderOutcomeCommand["payload"]["outcome"],
@@ -722,6 +796,80 @@ describe("SQLite local state", () => {
       ],
     });
     completeMeasuredQA(localState, "acceptance", acceptedTree);
+    const currentWorkItem = localState.query({
+      type: "GET_WORK_ITEM",
+      workItemId: created.workItem.id,
+    });
+    if (currentWorkItem.type !== "WORK_ITEM" || currentWorkItem.workItem === null) {
+      throw new Error("Expected the current acceptance WorkItem");
+    }
+    const verification = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-acceptance-verification",
+      correlationId: "correlation-start-acceptance-verification",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_VERIFICATION_RUN",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedWorkItemVersion: currentWorkItem.workItem.version,
+        expectedPlanRevision: adopted.plan.revision,
+        expectedPlanContentHash: adopted.plan.contentHash,
+        implementationTree: acceptedTree,
+        platform: "darwin",
+      },
+    });
+    if (verification.type !== "VERIFICATION_RUN_RESERVED") {
+      throw new Error("Expected reserved acceptance verification");
+    }
+    const verificationCheck = verification.checks[0];
+    if (verificationCheck === undefined) throw new Error("Expected an acceptance verification Check");
+    const startedVerification = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-acceptance-verification-check",
+      correlationId: "correlation-start-acceptance-verification-check",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "START_VERIFICATION_CHECK",
+      payload: {
+        runId: verification.run.id,
+        checkId: verificationCheck.id,
+        expectedRunVersion: verification.run.version,
+        expectedCheckVersion: verificationCheck.version,
+      },
+    });
+    if (startedVerification.type !== "VERIFICATION_CHECK_STARTED") {
+      throw new Error("Expected started acceptance verification Check");
+    }
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "complete-acceptance-verification-check",
+      correlationId: "correlation-complete-acceptance-verification-check",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "COMPLETE_VERIFICATION_CHECK",
+      payload: {
+        runId: verification.run.id,
+        checkId: verificationCheck.id,
+        expectedRunVersion: startedVerification.run.version,
+        expectedCheckVersion: startedVerification.check.version,
+        observation: {
+          status: "PASSED",
+          completedAt: timestamp,
+          durationMs: 25,
+          exitCode: 0,
+          signal: null,
+          output: {
+            schemaVersion: 1,
+            artifactId: "acceptance-verification-output",
+            sha256: "d".repeat(64),
+            capturedBytes: 4,
+            stdoutBytes: 4,
+            stderrBytes: 0,
+            truncated: false,
+            available: true,
+          },
+        },
+        outputStorageKey: "acceptance-verification-output.txt",
+      },
+    });
     const pendingAcceptance = localState.query({ type: "LIST_PENDING_DISPATCHES" });
     if (pendingAcceptance.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
     const acceptanceDispatch = pendingAcceptance.dispatches[0];
@@ -873,7 +1021,15 @@ describe("SQLite local state", () => {
           testedTree: acceptedTree,
         },
       ],
-      acceptancePackage: { status: "PENDING" },
+      acceptancePackage: {
+        status: "PENDING",
+        verificationEvidence: {
+          verificationRunId: verification.run.id,
+          implementationTree: acceptedTree,
+          requiredCheckIds: [verificationCheck.id],
+        },
+        criteria: [{ verificationCheckIds: [verificationCheck.id] }],
+      },
     });
     const measuredQAArtifact = pendingSnapshot.snapshot.artifacts.find(({ kind }) => kind === "QA_REPORT");
     expect(typeof measuredQAArtifact?.qaRunId).toBe("string");
@@ -913,8 +1069,14 @@ describe("SQLite local state", () => {
         criterion: "State is durable",
         reviewCheck: "Contract review passed.",
         qaCheck: "1 required assertions passed.",
+        verificationCheckIds: [verificationCheck.id],
       }),
     ]);
+    expect(restored.snapshot.acceptancePackage.verificationEvidence).toMatchObject({
+      verificationRunId: verification.run.id,
+      planId: adopted.plan.id,
+      implementationTree: acceptedTree,
+    });
     expect(acceptanceState.query({ type: "GET_ATTENTION_INBOX" })).toMatchObject({
       type: "ATTENTION_INBOX",
       inbox: {
@@ -1210,7 +1372,7 @@ describe("SQLite local state", () => {
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-      29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+      29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");

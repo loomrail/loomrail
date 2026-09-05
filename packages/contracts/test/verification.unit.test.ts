@@ -5,6 +5,7 @@ import {
   retryVerificationRunRequestSchema,
   startVerificationRunRequestSchema,
   verificationCheckSchema,
+  verificationEvidenceSchema,
   verificationPlanProposalSchema,
   verificationRecipeSchema,
   verificationRunSchema,
@@ -310,5 +311,36 @@ describe("verification run evidence contract", () => {
     } as const;
 
     expect(verificationRunSchema.parse(queuedRun)).toEqual(queuedRun);
+  });
+
+  it("keeps Acceptance evidence bounded, path-free and internally unique", () => {
+    const evidence = {
+      schemaVersion: 1,
+      projectId: runningRun.projectId,
+      workItemId: runningRun.workItemId,
+      pipelineRunId: runningRun.pipelineRunId,
+      verificationRunId: runningRun.id,
+      planId: runningRun.planId,
+      planRevision: runningRun.planRevision,
+      planContentHash: runningRun.planContentHash,
+      implementationTree: runningRun.implementationTree,
+      platform: runningRun.platform,
+      requiredCheckIds: [runningCheck.id],
+      optionalFailedCheckIds: [],
+      completedAt: "2026-09-05T10:00:01.250Z",
+    } as const;
+    expect(verificationEvidenceSchema.parse(evidence)).toEqual(evidence);
+    expect(
+      verificationEvidenceSchema.safeParse({
+        ...evidence,
+        optionalFailedCheckIds: [runningCheck.id],
+      }).success,
+    ).toBe(false);
+    expect(
+      verificationEvidenceSchema.safeParse({
+        ...evidence,
+        outputPath: "/private/loomrail-fixture/output.txt",
+      }).success,
+    ).toBe(false);
   });
 });

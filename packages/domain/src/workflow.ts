@@ -48,6 +48,10 @@ import type {
   StartMockPipelineCommand,
   UsageRecord,
   UsageRecordedEvent,
+  VerificationCheck,
+  VerificationPlan,
+  VerificationPlanPublication,
+  VerificationRun,
   WorkflowStage,
   WorkItem,
   WorkflowDispatch,
@@ -59,6 +63,7 @@ import { isSessionPauseFailureCode } from "./session-pause.js";
 import { bindAcceptanceCriteria } from "./acceptance.js";
 import { decideReviewLoop, ReviewLoopError } from "./review.js";
 import { assertQACorrectionAcceptanceLineage } from "./qa-correction.js";
+import { projectVerificationAcceptanceGate } from "./verification.js";
 
 export type WorkflowDomainErrorCode =
   | "WORKFLOW_NOT_READY"
@@ -84,6 +89,7 @@ export type WorkflowDomainErrorCode =
   | "REVIEW_RUN_MISMATCH"
   | "REVIEW_TREE_STALE"
   | "QA_MEASUREMENT_REQUIRED"
+  | "PROJECT_VERIFICATION_REQUIRED"
   | "SESSION_END_REASON_NOT_HANDLED";
 
 export class WorkflowDomainError extends Error {
@@ -114,6 +120,7 @@ export const providerOutcomeRejectionCodes = [
   "REVIEW_RUN_MISMATCH",
   "REVIEW_TREE_STALE",
   "QA_MEASUREMENT_REQUIRED",
+  "PROJECT_VERIFICATION_REQUIRED",
 ] as const satisfies readonly WorkflowDomainErrorCode[];
 
 export type ProviderOutcomeRejectionCode = (typeof providerOutcomeRejectionCodes)[number];
@@ -982,6 +989,18 @@ export type ApplyProviderOutcomeContext = {
         currentTree: string;
       }
     | undefined;
+  projectVerification?:
+    | {
+        projectId: string;
+        workItemId: string;
+        pipelineRunId: string;
+        currentPlan: VerificationPlan | undefined;
+        publication: VerificationPlanPublication | undefined;
+        latestRun: VerificationRun | undefined;
+        checks: readonly VerificationCheck[];
+        currentTree: string;
+      }
+    | undefined;
   qaCorrectionHistory?:
     | {
         correctionRuns: readonly QACorrectionRun[];
@@ -1186,6 +1205,17 @@ export const decideApplyProviderOutcome = (
         ...context.qaCorrectionHistory,
       });
     }
+    const projectVerification =
+      context.projectVerification === undefined
+        ? ({ status: "NOT_CONFIGURED", evidence: null, blocker: null } as const)
+        : projectVerificationAcceptanceGate(context.projectVerification);
+    if (projectVerification.status === "BLOCKED") {
+      throw new WorkflowDomainError(
+        "PROJECT_VERIFICATION_REQUIRED",
+        "Owner acceptance requires a current passing Project verification Run",
+        { blocker: projectVerification.blocker },
+      );
+    }
     const stageAttempt: StageAttempt = {
       ...context.stageAttempt,
       status: "WAITING_HUMAN",
@@ -1247,6 +1277,9 @@ export const decideApplyProviderOutcome = (
       claims: acceptanceOutcome.criteria,
       reviewArtifact,
       qaArtifact,
+      ...(projectVerification.evidence === null
+        ? {}
+        : { verificationEvidence: projectVerification.evidence }),
     });
     if (boundCriteria.type === "INVALID") {
       throw new WorkflowDomainError("ACCEPTANCE_NOT_READY", boundCriteria.reason);
@@ -1261,6 +1294,7 @@ export const decideApplyProviderOutcome = (
       humanRequestId: request.id,
       status: "PENDING",
       criteria: [...boundCriteria.criteria],
+      verificationEvidence: projectVerification.evidence,
       artifactIds,
       releaseNote: acceptanceOutcome.releaseNote,
       verifyInstructions: [...acceptanceOutcome.verifyInstructions],

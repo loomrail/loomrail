@@ -7,6 +7,7 @@ import type {
   EvidenceArtifact,
   QAAttachmentSummary,
   QAEvidenceBundle,
+  VerificationEvidence,
   WorkItem,
 } from "@loomrail/contracts";
 
@@ -15,6 +16,7 @@ export type BindAcceptanceCriteriaInput = {
   claims: readonly AcceptanceCriterionClaim[];
   reviewArtifact: EvidenceArtifact;
   qaArtifact: EvidenceArtifact;
+  verificationEvidence?: VerificationEvidence | undefined;
 };
 
 export type BindAcceptanceCriteriaResult =
@@ -74,6 +76,9 @@ export const bindAcceptanceCriteria = (input: BindAcceptanceCriteriaInput): Bind
       qaArtifactId: input.qaArtifact.id,
       reviewCheck: claim.reviewCheck,
       qaCheck: claim.qaCheck,
+      ...(input.verificationEvidence === undefined
+        ? {}
+        : { verificationCheckIds: [...input.verificationEvidence.requiredCheckIds] }),
       verification: claim.ownerVerification,
       knownRisk: claim.knownRisk,
     });
@@ -175,6 +180,35 @@ export const renderReleaseSummary = (input: RenderReleaseSummaryInput): RenderRe
     }
   }
 
+  const verificationEvidence = packageValue.verificationEvidence;
+  if (
+    verificationEvidence !== undefined &&
+    verificationEvidence !== null &&
+    (verificationEvidence.projectId !== workItem.projectId ||
+      verificationEvidence.workItemId !== workItem.id ||
+      verificationEvidence.pipelineRunId !== packageValue.pipelineRunId)
+  ) {
+    return invalid("Project verification evidence crosses an AcceptancePackage boundary");
+  }
+  const requiredVerificationCheckIds = new Set(verificationEvidence?.requiredCheckIds ?? []);
+  if (verificationEvidence === undefined || verificationEvidence === null) {
+    if (packageValue.criteria.some(({ verificationCheckIds }) => verificationCheckIds !== undefined)) {
+      return invalid("Criterion Project checks have no package Verification evidence");
+    }
+  } else if (
+    packageValue.criteria.some(({ verificationCheckIds }) => {
+      if (verificationCheckIds?.length !== requiredVerificationCheckIds.size) {
+        return true;
+      }
+      return (
+        new Set(verificationCheckIds).size !== verificationCheckIds.length ||
+        verificationCheckIds.some((checkId) => !requiredVerificationCheckIds.has(checkId))
+      );
+    })
+  ) {
+    return invalid("Every criterion must bind the complete required Project verification set");
+  }
+
   const artifactsById = new Map(input.artifacts.map((artifact) => [artifact.id, artifact]));
   const packageArtifactIds = new Set(packageValue.artifactIds);
   if (
@@ -212,6 +246,14 @@ export const renderReleaseSummary = (input: RenderReleaseSummaryInput): RenderRe
       (!review.checks.includes(criterion.reviewCheck) || !qa.checks.includes(criterion.qaCheck ?? ""))
     ) {
       return invalid("Criterion evidence selects a check absent from its referenced artifact");
+    }
+    if (
+      verificationEvidence !== undefined &&
+      verificationEvidence !== null &&
+      (review.testedTree !== verificationEvidence.implementationTree ||
+        qa.testedTree !== verificationEvidence.implementationTree)
+    ) {
+      return invalid("Project verification, Review, and QA evidence must name one implementation tree");
     }
   }
 
@@ -295,6 +337,20 @@ export const renderReleaseSummary = (input: RenderReleaseSummaryInput): RenderRe
     "## Release note",
     "",
     ...quoted(packageValue.releaseNote),
+    ...(verificationEvidence === undefined || verificationEvidence === null
+      ? []
+      : [
+          "",
+          "## Project verification",
+          "",
+          `- Project verification Run: \`${verificationEvidence.verificationRunId}\``,
+          `- Plan: \`${verificationEvidence.planId}\` revision ${verificationEvidence.planRevision.toString()}`,
+          `- Tested tree: \`${verificationEvidence.implementationTree}\``,
+          `- Platform: \`${verificationEvidence.platform}\``,
+          `- Required checks passed: ${verificationEvidence.requiredCheckIds.length.toString()}`,
+          `- Optional checks not passed: ${verificationEvidence.optionalFailedCheckIds.length.toString()}`,
+          `- Completed: \`${verificationEvidence.completedAt}\``,
+        ]),
     "",
     "## Criterion matrix",
   ];
@@ -314,6 +370,11 @@ export const renderReleaseSummary = (input: RenderReleaseSummaryInput): RenderRe
             `- Selected QA check: ${inline(criterion.qaCheck ?? "")}`,
           ]
         : []),
+      ...(criterion.verificationCheckIds === undefined
+        ? []
+        : [
+            `- Selected Project checks: ${criterion.verificationCheckIds.map((id) => `\`${id}\``).join(", ")}`,
+          ]),
       `- Known risk: ${criterion.knownRisk === null ? "None recorded" : inline(criterion.knownRisk)}`,
       "",
       "Implementation:",

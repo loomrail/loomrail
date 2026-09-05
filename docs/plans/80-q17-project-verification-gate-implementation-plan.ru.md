@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-05
 
-**Статус:** in progress — Q17.1 complete, Q17.2 manual runner/API/UI complete
+**Статус:** in progress — Q17.1/Q17.2 complete, Q17.3 Acceptance gate in progress
 
 **Спецификация:**
 [79-q17-project-verification-gate-spec.ru.md](79-q17-project-verification-gate-spec.ru.md)
@@ -42,9 +42,9 @@ output; restart сохраняет failure, а crash во время process д�
 - [ ] Запускать active required Plan после fresh independent Review и до Browser QA.
 - [ ] Добавить отдельный `VerificationFailure` и связать его с correction IMPLEMENT/re-review/rerun lineage.
 - [ ] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
-- [ ] Сделать required failed/error/interrupted/stale детерминированным Acceptance blocker; optional failure оставить
+- [x] Сделать required failed/error/interrupted/stale детерминированным Acceptance blocker; optional failure оставить
       advisory.
-- [ ] Показать criterion-to-verification evidence в Acceptance Package/export без raw output/path leakage.
+- [x] Показать criterion-to-verification evidence в Acceptance Package/export без raw output/path leakage.
 
 **Tracer:** intentional failure блокирует Acceptance, fix меняет tree и делает старый Run stale, independent re-review
 запускает exact rerun, только current-tree pass открывает Browser QA и затем owner Acceptance.

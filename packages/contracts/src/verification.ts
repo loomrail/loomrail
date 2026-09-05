@@ -470,6 +470,34 @@ export const verificationRunStaleReasonSchema = z.enum([
   "TREE_CHANGED",
 ]);
 
+export const verificationEvidenceSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    projectId: opaqueIdSchema,
+    workItemId: opaqueIdSchema,
+    pipelineRunId: opaqueIdSchema,
+    verificationRunId: opaqueIdSchema,
+    planId: opaqueIdSchema,
+    planRevision: z.number().int().positive(),
+    planContentHash: sha256Schema,
+    implementationTree: treeShaSchema,
+    platform: verificationPlatformSchema,
+    requiredCheckIds: z.array(opaqueIdSchema).min(1).max(12),
+    optionalFailedCheckIds: z.array(opaqueIdSchema).max(12),
+    completedAt: utcTimestampSchema,
+  })
+  .strict()
+  .superRefine((evidence, context) => {
+    const allCheckIds = [...evidence.requiredCheckIds, ...evidence.optionalFailedCheckIds];
+    if (new Set(allCheckIds).size !== allCheckIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["requiredCheckIds"],
+        message: "Verification evidence Check identities must be unique",
+      });
+    }
+  });
+
 export const verificationOutputSummarySchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -966,6 +994,7 @@ export type VerificationCheckErrorCode = z.infer<typeof verificationCheckErrorCo
 export type VerificationRunTerminalReason = z.infer<typeof verificationRunTerminalReasonSchema>;
 export type VerificationRunFreshness = z.infer<typeof verificationRunFreshnessSchema>;
 export type VerificationRunStaleReason = z.infer<typeof verificationRunStaleReasonSchema>;
+export type VerificationEvidence = z.infer<typeof verificationEvidenceSchema>;
 export type VerificationOutputSummary = z.infer<typeof verificationOutputSummarySchema>;
 export type VerificationCheck = z.infer<typeof verificationCheckSchema>;
 export type VerificationRun = z.infer<typeof verificationRunSchema>;

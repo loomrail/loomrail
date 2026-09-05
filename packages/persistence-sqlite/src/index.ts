@@ -972,6 +972,7 @@ const acceptancePackageRowSchema = z.object({
   human_request_id: z.string(),
   status: z.string(),
   criteria_json: z.string(),
+  verification_evidence_json: z.string().nullable(),
   artifact_ids_json: z.string(),
   release_note: z.string(),
   verify_instructions_json: z.string(),
@@ -2003,6 +2004,8 @@ const acceptancePackageFromRow = (value: unknown): AcceptancePackage => {
     humanRequestId: row.human_request_id,
     status: row.status,
     criteria: parseJson(row.criteria_json),
+    verificationEvidence:
+      row.verification_evidence_json === null ? null : parseJson(row.verification_evidence_json),
     artifactIds: parseJson(row.artifact_ids_json),
     releaseNote: row.release_note,
     verifyInstructions: parseJson(row.verify_instructions_json),
@@ -3554,6 +3557,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
     const readVerificationChecks = (runId: string): VerificationCheck[] =>
       selectVerificationChecksByRun.all(runId).map(verificationCheckFromRow);
+
+    const readLatestVerificationRun = (workItemId: string): VerificationRun | null => {
+      const row = selectVerificationRunsByWorkItem.get(workItemId, 1);
+      return row === undefined ? null : verificationRunFromRow(row);
+    };
 
     const readWorkItem = (workItemId: string): WorkItem | null => {
       const value = selectWorkItemById.get(workItemId);
@@ -5802,10 +5810,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO acceptance_packages (
             id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
-            human_request_id, status, criteria_json, artifact_ids_json, release_note,
+            human_request_id, status, criteria_json, verification_evidence_json, artifact_ids_json, release_note,
             verify_instructions_json, version, created_at, resolved_at, resolved_by_type,
             resolved_by_id, resolution_reason
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           acceptancePackage.id,
@@ -5817,6 +5825,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           acceptancePackage.humanRequestId,
           acceptancePackage.status,
           JSON.stringify(acceptancePackage.criteria),
+          acceptancePackage.verificationEvidence === undefined ||
+            acceptancePackage.verificationEvidence === null
+            ? null
+            : JSON.stringify(acceptancePackage.verificationEvidence),
           JSON.stringify(acceptancePackage.artifactIds),
           acceptancePackage.releaseNote,
           JSON.stringify(acceptancePackage.verifyInstructions),
@@ -5833,7 +5845,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       const update = database
         .prepare(
           `UPDATE acceptance_packages SET status = ?, criteria_json = ?, artifact_ids_json = ?,
-             release_note = ?, verify_instructions_json = ?, version = ?, resolved_at = ?,
+             verification_evidence_json = ?, release_note = ?, verify_instructions_json = ?, version = ?, resolved_at = ?,
              resolved_by_type = ?, resolved_by_id = ?, resolution_reason = ?
            WHERE id = ? AND version = ?`,
         )
@@ -5841,6 +5853,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           acceptancePackage.status,
           JSON.stringify(acceptancePackage.criteria),
           JSON.stringify(acceptancePackage.artifactIds),
+          acceptancePackage.verificationEvidence === undefined ||
+            acceptancePackage.verificationEvidence === null
+            ? null
+            : JSON.stringify(acceptancePackage.verificationEvidence),
           acceptancePackage.releaseNote,
           JSON.stringify(acceptancePackage.verifyInstructions),
           acceptancePackage.version,
@@ -8088,6 +8104,27 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             : undefined;
         const qaCorrectionHistory =
           measuredQA?.qaRun.scope.type === "RETEST" ? readQACorrectionHistory(run.id) : undefined;
+        const projectVerification =
+          command.payload.outcome.type === "READY_FOR_ACCEPTANCE"
+            ? (() => {
+                const currentPlan = readLatestVerificationPlan(workItem.projectId);
+                const publicationRow = selectLatestVerificationPlanPublication.get(workItem.projectId);
+                const latestRun = readLatestVerificationRun(workItem.id);
+                return {
+                  projectId: workItem.projectId,
+                  workItemId: workItem.id,
+                  pipelineRunId: run.id,
+                  currentPlan: currentPlan ?? undefined,
+                  publication:
+                    publicationRow === undefined
+                      ? undefined
+                      : verificationPlanPublicationFromRow(publicationRow),
+                  latestRun: latestRun ?? undefined,
+                  checks: latestRun === null ? [] : readVerificationChecks(latestRun.id),
+                  currentTree: measuredQA?.currentTree ?? "",
+                };
+              })()
+            : undefined;
         const normalizedCommand = { ...command, type: "APPLY_PROVIDER_OUTCOME" } as const;
         const existingUsageRecords = readUsageRecords(run.id);
         const budgetPolicy = readCurrentBudgetPolicy(run.id);
@@ -8110,6 +8147,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               : [],
           review: reviewContext,
           measuredQA,
+          projectVerification,
           qaCorrectionHistory,
           qaRunRequired,
           // Pre-R1 fixture workflows completed Review without AgentRun reservation. Keep those

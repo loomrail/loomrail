@@ -8,6 +8,7 @@ import {
   type EvidenceArtifact,
   type QAAttachmentSummary,
   type QAEvidenceBundle,
+  type VerificationEvidence,
   type WorkItem,
 } from "@loomrail/contracts";
 import { describe, expect, it } from "vitest";
@@ -21,6 +22,21 @@ import {
 
 const now = "2026-09-02T16:00:00.000Z";
 const testedTree = "a".repeat(40);
+const verificationEvidence: VerificationEvidence = {
+  schemaVersion: 1,
+  projectId: "project-1",
+  workItemId: "work-item-1",
+  pipelineRunId: "run-1",
+  verificationRunId: "verification-run-1",
+  planId: "verification-plan-1",
+  planRevision: 2,
+  planContentHash: "c".repeat(64),
+  implementationTree: testedTree,
+  platform: "darwin",
+  requiredCheckIds: ["verification-check-unit"],
+  optionalFailedCheckIds: ["verification-check-lint"],
+  completedAt: now,
+};
 
 const artifact = (
   kind: EvidenceArtifact["kind"],
@@ -112,6 +128,7 @@ const releaseInput = (): RenderReleaseSummaryInput => {
         qaArtifactId: qaArtifact.id,
         reviewCheck: claimA.reviewCheck,
         qaCheck: claimA.qaCheck,
+        verificationCheckIds: verificationEvidence.requiredCheckIds,
         verification: "Inspect <script>alert(1)</script> A.",
         knownRisk: null,
       },
@@ -122,10 +139,12 @@ const releaseInput = (): RenderReleaseSummaryInput => {
         qaArtifactId: qaArtifact.id,
         reviewCheck: claimB.reviewCheck,
         qaCheck: claimB.qaCheck,
+        verificationCheckIds: verificationEvidence.requiredCheckIds,
         verification: claimB.ownerVerification,
         knownRisk: claimB.knownRisk,
       },
     ],
+    verificationEvidence,
     artifactIds: [reviewArtifact.id, qaArtifact.id],
     releaseNote: "Ready on C:\\private\\repo. <b>Owner review</b>.",
     verifyInstructions: ["Open the matrix.", "Inspect browser evidence."],
@@ -259,6 +278,24 @@ describe("criterion-bound acceptance", () => {
     });
   });
 
+  it("binds current Project verification evidence without provider-selected durable IDs", () => {
+    const result = bindAcceptanceCriteria({
+      acceptanceCriteria: ["Criterion A", "Criterion B"],
+      claims,
+      reviewArtifact,
+      qaArtifact,
+      verificationEvidence,
+    });
+    expect(result.type).toBe("BOUND");
+    if (result.type !== "BOUND") throw new Error("Expected bound Project verification evidence");
+    expect(
+      result.criteria.map(({ criterion, verificationCheckIds }) => ({ criterion, verificationCheckIds })),
+    ).toEqual([
+      { criterion: "Criterion A", verificationCheckIds: ["verification-check-unit"] },
+      { criterion: "Criterion B", verificationCheckIds: ["verification-check-unit"] },
+    ]);
+  });
+
   it.each([
     {
       label: "has no recorded criteria",
@@ -381,6 +418,10 @@ describe("release summary", () => {
     if (first.type !== "RENDERED") throw new Error("Expected a rendered release summary");
     expect(first.byteSize).toBe(Buffer.byteLength(first.markdown, "utf8"));
     expect(first.markdown).toContain("Evidence binding: `BOUND`");
+    expect(first.markdown).toContain("Project verification Run: `verification-run-1`");
+    expect(first.markdown).toContain("Selected Project checks: `verification-check-unit`");
+    expect(first.markdown).toContain("Optional checks not passed: 1");
+    expect(first.markdown).not.toContain("verification-check-lint");
     expect(first.markdown).toContain("Assertion `visible`: `PASSED`");
     expect(first.markdown).toContain("&lt;script&gt;alert\\(1\\)&lt;/script&gt;");
     expect(first.markdown).not.toContain("<script>");
@@ -452,6 +493,20 @@ describe("release summary", () => {
           criteria: input.acceptancePackage.criteria.map((row, index) =>
             index === 0 ? (({ reviewCheck: _review, qaCheck: _qa, ...legacy }) => legacy)(row) : row,
           ),
+        },
+      }),
+      type: "INVALID",
+    },
+    {
+      label: "selects a foreign Project verification Check",
+      mutate: (input: RenderReleaseSummaryInput): RenderReleaseSummaryInput => ({
+        ...input,
+        acceptancePackage: {
+          ...input.acceptancePackage,
+          criteria: input.acceptancePackage.criteria.map((row) => ({
+            ...row,
+            verificationCheckIds: ["verification-check-foreign"],
+          })),
         },
       }),
       type: "INVALID",

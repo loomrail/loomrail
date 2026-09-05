@@ -12,11 +12,13 @@ import type {
   VerificationPlanPublication,
   VerificationCheck,
   VerificationCheckObservation,
+  VerificationEvidence,
   VerificationRun,
   VerificationRunStaleReason,
   WorkItem,
   WorkItemWorkspace,
 } from "@loomrail/contracts";
+import { verificationEvidenceSchema } from "@loomrail/contracts";
 
 export type VerificationDomainErrorCode =
   | "OWNER_REQUIRED"
@@ -806,5 +808,124 @@ export const projectVerificationRunFreshness = (
   return {
     freshness: staleReasons.length === 0 ? "CURRENT" : "STALE",
     staleReasons,
+  };
+};
+
+export type ProjectVerificationAcceptanceBlocker =
+  | "PLAN_UNPUBLISHED"
+  | "RUN_MISSING"
+  | "RUN_QUEUED"
+  | "RUN_RUNNING"
+  | "RUN_FAILED"
+  | "RUN_ERROR"
+  | "RUN_INTERRUPTED"
+  | "STALE"
+  | "LINEAGE_MISMATCH"
+  | "EVIDENCE_INVALID";
+
+export type ProjectVerificationAcceptanceGate =
+  | { status: "NOT_CONFIGURED"; evidence: null; blocker: null }
+  | { status: "READY"; evidence: VerificationEvidence; blocker: null }
+  | { status: "BLOCKED"; evidence: null; blocker: ProjectVerificationAcceptanceBlocker };
+
+/**
+ * Selects the only Project verification evidence that may cross into Acceptance.
+ *
+ * A missing/disabled Plan preserves legacy Project behavior. Once the owner activates a Plan,
+ * the gate fails closed: the latest Run must belong to this exact delivery, match the published
+ * Plan and current tree, and independently prove every required recipe passed. Optional failures
+ * remain visible in the evidence but cannot turn a required pass into a block.
+ */
+export const projectVerificationAcceptanceGate = (input: {
+  projectId: string;
+  workItemId: string;
+  pipelineRunId: string;
+  currentPlan: VerificationPlan | undefined;
+  publication: VerificationPlanPublication | undefined;
+  latestRun: VerificationRun | undefined;
+  checks: readonly VerificationCheck[];
+  currentTree: string;
+}): ProjectVerificationAcceptanceGate => {
+  const plan = input.currentPlan;
+  if (plan?.status !== "ACTIVE") {
+    return { status: "NOT_CONFIGURED", evidence: null, blocker: null };
+  }
+  if (
+    input.publication?.status !== "APPLIED" ||
+    input.publication.projectId !== input.projectId ||
+    input.publication.planId !== plan.id ||
+    input.publication.contentHash !== plan.contentHash
+  ) {
+    return { status: "BLOCKED", evidence: null, blocker: "PLAN_UNPUBLISHED" };
+  }
+
+  const run = input.latestRun;
+  if (run === undefined) {
+    return { status: "BLOCKED", evidence: null, blocker: "RUN_MISSING" };
+  }
+  if (
+    plan.projectId !== input.projectId ||
+    run.projectId !== input.projectId ||
+    run.workItemId !== input.workItemId ||
+    run.pipelineRunId !== input.pipelineRunId
+  ) {
+    return { status: "BLOCKED", evidence: null, blocker: "LINEAGE_MISMATCH" };
+  }
+  const freshness = projectVerificationRunFreshness(run, {
+    currentPlan: plan,
+    publication: input.publication,
+    currentTree: input.currentTree,
+  });
+  if (freshness.freshness === "STALE") {
+    return { status: "BLOCKED", evidence: null, blocker: "STALE" };
+  }
+  if (run.status !== "PASSED") {
+    return { status: "BLOCKED", evidence: null, blocker: `RUN_${run.status}` };
+  }
+
+  const orderedChecks = [...input.checks].sort((left, right) => left.ordinal - right.ordinal);
+  const exactChecks =
+    orderedChecks.length === plan.recipes.length &&
+    orderedChecks.every((check, index) => {
+      const recipe = plan.recipes[index];
+      return (
+        recipe !== undefined &&
+        check.projectId === input.projectId &&
+        check.workItemId === input.workItemId &&
+        check.runId === run.id &&
+        check.recipeId === recipe.id &&
+        check.required === recipe.required &&
+        check.ordinal === index + 1 &&
+        check.status !== "QUEUED" &&
+        check.status !== "RUNNING"
+      );
+    });
+  if (!exactChecks || orderedChecks.some((check) => check.required && check.status !== "PASSED")) {
+    return { status: "BLOCKED", evidence: null, blocker: "EVIDENCE_INVALID" };
+  }
+  if (run.completedAt === null) {
+    return { status: "BLOCKED", evidence: null, blocker: "EVIDENCE_INVALID" };
+  }
+
+  return {
+    status: "READY",
+    blocker: null,
+    evidence: verificationEvidenceSchema.parse({
+      schemaVersion: 1,
+      projectId: input.projectId,
+      workItemId: input.workItemId,
+      pipelineRunId: input.pipelineRunId,
+      verificationRunId: run.id,
+      planId: plan.id,
+      planRevision: plan.revision,
+      planContentHash: plan.contentHash,
+      implementationTree: run.implementationTree,
+      platform: run.platform,
+      requiredCheckIds: orderedChecks.filter(({ required }) => required).map(({ id }) => id),
+      optionalFailedCheckIds: orderedChecks
+        .filter(({ required, status }) => !required && status !== "PASSED")
+        .map(({ id }) => id),
+      completedAt: run.completedAt,
+    }),
   };
 };

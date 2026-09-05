@@ -12,7 +12,11 @@ import {
 import { mcpSessionSnapshotSchema } from "./mcp.js";
 import { workItemWorkspaceOrphanedEventSchema, workItemWorkspaceSchema } from "./workspace.js";
 import { reviewFindingSchema, reviewReportDraftSchema, reviewReportSchema } from "./review.js";
-import { verificationRunInterruptedEventSchema, verificationRunSchema } from "./verification.js";
+import {
+  verificationEvidenceSchema,
+  verificationRunInterruptedEventSchema,
+  verificationRunSchema,
+} from "./verification.js";
 import {
   qaCorrectionCancelledEventSchema,
   qaCorrectionRunSchema,
@@ -649,6 +653,7 @@ export const acceptanceCriterionEvidenceSchema = z
     // legacy rows; every new package is required to bind them by the domain decision.
     reviewCheck: z.string().trim().min(1).max(500).optional(),
     qaCheck: z.string().trim().min(1).max(500).optional(),
+    verificationCheckIds: z.array(opaqueIdSchema).min(1).max(12).optional(),
     verification: descriptionSchema,
     knownRisk: descriptionSchema.nullable(),
   })
@@ -673,6 +678,9 @@ export const acceptancePackageSchema = z
     humanRequestId: opaqueIdSchema,
     status: acceptanceStatusSchema,
     criteria: z.array(acceptanceCriterionEvidenceSchema).max(50),
+    // Optional keeps packages persisted before Q17 readable. Every new package for a Project with
+    // an active VerificationPlan is required to carry this daemon-derived value by the domain.
+    verificationEvidence: verificationEvidenceSchema.nullable().optional(),
     artifactIds: z.array(opaqueIdSchema).min(2).max(20),
     releaseNote: descriptionSchema,
     verifyInstructions: z.array(descriptionSchema).min(1).max(20),
@@ -682,7 +690,46 @@ export const acceptancePackageSchema = z
     resolvedBy: actorSchema.nullable(),
     resolutionReason: descriptionSchema.nullable(),
   })
-  .strict();
+  .strict()
+  .superRefine((acceptancePackage, context) => {
+    const evidence = acceptancePackage.verificationEvidence;
+    const criterionBindings = acceptancePackage.criteria.map(
+      ({ verificationCheckIds }) => verificationCheckIds,
+    );
+    if (evidence === undefined || evidence === null) {
+      if (criterionBindings.some((binding) => binding !== undefined)) {
+        context.addIssue({
+          code: "custom",
+          path: ["criteria"],
+          message: "Criterion Project checks require package Verification evidence",
+        });
+      }
+      return;
+    }
+    if (
+      evidence.projectId !== acceptancePackage.projectId ||
+      evidence.workItemId !== acceptancePackage.workItemId ||
+      evidence.pipelineRunId !== acceptancePackage.pipelineRunId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["verificationEvidence"],
+        message: "Verification evidence cannot cross an AcceptancePackage boundary",
+      });
+    }
+    const required = new Set(evidence.requiredCheckIds);
+    if (
+      criterionBindings.some(
+        (binding) => binding?.length !== required.size || binding.some((checkId) => !required.has(checkId)),
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["criteria"],
+        message: "Every criterion must bind the complete required Project verification set",
+      });
+    }
+  });
 
 export const humanRequestOptionSchema = z
   .object({

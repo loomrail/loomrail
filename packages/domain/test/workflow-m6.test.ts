@@ -8,6 +8,10 @@ import type {
   QARun,
   ResolveAcceptanceCommand,
   StageAttempt,
+  VerificationCheck,
+  VerificationPlan,
+  VerificationPlanPublication,
+  VerificationRun,
   WorkItem,
   WorkflowDispatch,
 } from "@loomrail/contracts";
@@ -210,6 +214,116 @@ const measuredQAEvidence: QAEvidenceBundle = {
   attachmentIds: [],
   defectIds: [],
   createdAt: now,
+};
+
+const verificationPlan: VerificationPlan = {
+  schemaVersion: 1,
+  id: "verification-plan-1",
+  projectId: workItem.projectId,
+  revision: 2,
+  status: "ACTIVE",
+  recipes: [
+    {
+      schemaVersion: 1,
+      id: "verification-recipe-unit",
+      kind: "UNIT",
+      label: "Unit tests",
+      required: true,
+      executable: "pnpm",
+      argv: ["run", "test"],
+      cwd: ".",
+      timeoutSeconds: 300,
+      outputLimitBytes: 65_536,
+      environmentProfile: "VERIFICATION_BASELINE",
+      networkPolicy: "INHERIT_HOST",
+      provenance: {
+        source: "PACKAGE_JSON_SCRIPT",
+        manifestPath: "package.json",
+        manifestContentHash: "d".repeat(64),
+        scriptName: "test",
+        scriptBodyPreview: "vitest run",
+      },
+    },
+  ],
+  sourceProposalHash: "e".repeat(64),
+  contentHash: "f".repeat(64),
+  createdAt: now,
+};
+const verificationPublication: VerificationPlanPublication = {
+  schemaVersion: 1,
+  id: "verification-publication-1",
+  projectId: workItem.projectId,
+  planId: verificationPlan.id,
+  targetPath: ".loomrail/verification-plan.json",
+  expectedTargetDigest: null,
+  contentHash: verificationPlan.contentHash,
+  status: "APPLIED",
+  attempts: 1,
+  lastErrorCode: null,
+  version: 2,
+  createdAt: now,
+  updatedAt: now,
+  appliedAt: now,
+};
+const verificationRun: VerificationRun = {
+  schemaVersion: 1,
+  id: "verification-run-1",
+  projectId: workItem.projectId,
+  workItemId: workItem.id,
+  pipelineRunId: run.id,
+  workspaceId: "workspace-1",
+  planId: verificationPlan.id,
+  planRevision: verificationPlan.revision,
+  planContentHash: verificationPlan.contentHash,
+  implementationTree: testedTree,
+  ordinal: 1,
+  retryOfRunId: null,
+  platform: "darwin",
+  status: "PASSED",
+  currentCheckId: null,
+  terminalReason: "ALL_REQUIRED_PASSED",
+  startedAt: now,
+  completedAt: now,
+  createdAt: now,
+  version: 4,
+};
+const verificationCheck: VerificationCheck = {
+  schemaVersion: 1,
+  id: "verification-check-unit",
+  projectId: workItem.projectId,
+  workItemId: workItem.id,
+  runId: verificationRun.id,
+  recipeId: verificationPlan.recipes[0]?.id ?? "missing-recipe",
+  ordinal: 1,
+  required: true,
+  status: "PASSED",
+  startedAt: now,
+  completedAt: now,
+  durationMs: 100,
+  exitCode: 0,
+  signal: null,
+  errorCode: null,
+  output: {
+    schemaVersion: 1,
+    artifactId: "verification-output-unit",
+    sha256: "a".repeat(64),
+    capturedBytes: 2,
+    stdoutBytes: 2,
+    stderrBytes: 0,
+    truncated: false,
+    available: true,
+  },
+  version: 3,
+};
+const currentProjectVerification = {
+  projectId: workItem.projectId,
+  workItemId: workItem.id,
+  pipelineRunId: run.id,
+  currentPlan: verificationPlan,
+  publication: verificationPublication,
+  latestRun: verificationRun,
+  checks: [verificationCheck],
+  currentTree: testedTree,
 };
 
 describe("M6 acceptance decisions", () => {
@@ -466,6 +580,7 @@ describe("M6 acceptance decisions", () => {
           artifact("QA_REPORT", "QA", "artifact-qa"),
         ],
         measuredQA: { qaRun: measuredQARun, evidence: measuredQAEvidence, currentTree: testedTree },
+        projectVerification: currentProjectVerification,
         humanRequestId: "request-acceptance",
         acceptancePackageId: "package-1",
       },
@@ -475,6 +590,13 @@ describe("M6 acceptance decisions", () => {
       workItem: { state: "BLOCKED" },
       request: { blocking: true, status: "OPEN" },
       acceptancePackage: { status: "PENDING", artifactIds: ["artifact-review", "artifact-qa"] },
+    });
+    expect(ready.acceptancePackage).toMatchObject({
+      verificationEvidence: {
+        verificationRunId: verificationRun.id,
+        requiredCheckIds: [verificationCheck.id],
+      },
+      criteria: [{ verificationCheckIds: [verificationCheck.id] }],
     });
     const acceptancePackage = ready.acceptancePackage;
     const request = ready.request;
@@ -580,5 +702,66 @@ describe("M6 acceptance decisions", () => {
       "ACCEPTANCE_RESOLVED",
       "PIPELINE_COMPLETED",
     ]);
+  });
+
+  it("blocks a configured Project when the current verification Run failed", () => {
+    const attempt = stageAttempt("ACCEPTANCE", "attempt-acceptance-failed-verification");
+    expect(() =>
+      decideApplyProviderOutcome(
+        {
+          schemaVersion: 1,
+          commandId: "request-acceptance-failed-verification",
+          correlationId: "correlation-request-acceptance-failed-verification",
+          actor: { type: "SYSTEM", id: "mock-provider" },
+          type: "APPLY_PROVIDER_OUTCOME",
+          payload: {
+            resultTree: null,
+            dispatchId: "dispatch-acceptance",
+            template,
+            outcome: {
+              type: "READY_FOR_ACCEPTANCE",
+              releaseNote: "Should remain blocked.",
+              verifyInstructions: ["Fix the required Project check."],
+              criteria: [
+                {
+                  criterion: workItem.acceptanceCriteria[0] ?? "missing criterion",
+                  implementation: "The implementation is not yet verified.",
+                  reviewCheck: "Synthetic check passed.",
+                  qaCheck: "Synthetic check passed.",
+                  ownerVerification: "Wait for a fresh passing Project check.",
+                  knownRisk: null,
+                },
+              ],
+            },
+          },
+        },
+        {
+          now,
+          workItem: { ...workItem, currentStage: "ACCEPTANCE" },
+          run: { ...run, currentStageAttemptId: attempt.id },
+          stageAttempt: attempt,
+          dispatch: dispatch(attempt),
+          budgetPolicy: null,
+          existingUsageRecords: [],
+          usageRecordIds: [],
+          existingArtifacts: [
+            artifact("REVIEW_REPORT", "REVIEW", "artifact-review"),
+            artifact("QA_REPORT", "QA", "artifact-qa"),
+          ],
+          measuredQA: { qaRun: measuredQARun, evidence: measuredQAEvidence, currentTree: testedTree },
+          projectVerification: {
+            ...currentProjectVerification,
+            latestRun: {
+              ...verificationRun,
+              status: "FAILED",
+              terminalReason: "REQUIRED_CHECK_FAILED",
+            },
+            checks: [{ ...verificationCheck, status: "FAILED", exitCode: 1 }],
+          },
+          humanRequestId: "request-acceptance-failed-verification",
+          acceptancePackageId: "package-failed-verification",
+        },
+      ),
+    ).toThrow(expect.objectContaining({ code: "PROJECT_VERIFICATION_REQUIRED" }));
   });
 });
