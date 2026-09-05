@@ -263,7 +263,6 @@ import {
   type StageAttemptPauseDecision,
   type StartWorkflowDecision,
   type StartedVerificationCorrectionTransition,
-  type InitialVerificationCorrectionGateTransition,
   type MixedVerificationCorrectionGateResolution,
   type PassedVerificationCorrectionQAHandoff,
   type PassedVerificationCorrectionTransition,
@@ -6404,6 +6403,181 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       writeCriteria(item);
     };
 
+    type PersistedVerificationFailureWorkflow = {
+      workItemId: string;
+      projectId: string;
+      events: readonly WorkflowEventIntent[];
+    };
+
+    /** Persists the bounded workflow continuation sourced by one immutable verification failure. */
+    const persistVerificationFailureWorkflow = (
+      verificationRun: VerificationRun,
+      failure: VerificationFailure,
+      occurredAt: string,
+    ): PersistedVerificationFailureWorkflow | null => {
+      if (
+        failure.reason !== "REQUIRED_CHECK_FAILED" &&
+        failure.reason !== "REQUIRED_CHECK_ERROR" &&
+        failure.reason !== "RUN_INTERRUPTED"
+      ) {
+        return null;
+      }
+      const pipelineRun = readPipelineRun(verificationRun.pipelineRunId);
+      const workItem = readWorkItem(verificationRun.workItemId);
+      const stageAttempt = pipelineRun === null ? null : readStageAttempt(pipelineRun.currentStageAttemptId);
+      const dispatch = stageAttempt === null ? null : readPendingDispatch(stageAttempt.id);
+      if (pipelineRun === null || workItem === null || stageAttempt === null || dispatch === null) {
+        return null;
+      }
+      const usage = correctionBudgetUsageRowSchema.parse(
+        selectCorrectionBudgetUsage.get(verificationRun.pipelineRunId),
+      );
+      const budgetUsage = {
+        automaticUsed: usage.automatic_used,
+        totalUsed: usage.total_used,
+      };
+      const canStartAutomatically =
+        usage.automatic_used < MAX_AUTOMATIC_CORRECTION_RUNS && usage.total_used < MAX_TOTAL_CORRECTION_RUNS;
+      const currentCorrectionId = verificationRun.verificationCorrectionRunId ?? null;
+
+      if (
+        currentCorrectionId === null &&
+        canStartAutomatically &&
+        workItem.currentStage === "QA" &&
+        pipelineRun.status === "RUNNING" &&
+        pipelineRun.currentStageAttemptId === stageAttempt.id &&
+        stageAttempt.stage === "QA" &&
+        stageAttempt.status === "QUEUED" &&
+        (stageAttempt.verificationCorrectionRunId ?? null) === null
+      ) {
+        const qaCorrectionRun =
+          stageAttempt.correctionRunId === null ? null : readQACorrectionRun(stageAttempt.correctionRunId);
+        if (stageAttempt.correctionRunId !== null && qaCorrectionRun === null) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The active Browser QA correction lineage is incomplete",
+          );
+        }
+        const decision = decideInitialFailedVerificationCorrectionTransition({
+          verificationRun,
+          failure,
+          workItem,
+          pipelineRun,
+          stageAttempt,
+          dispatch,
+          ...(qaCorrectionRun === null ? {} : { qaCorrectionRun }),
+          budgetUsage,
+          ids: {
+            correctionRunId: createId("verificationCorrectionRun"),
+            nextStageAttemptId: createId("stageAttempt"),
+            nextDispatchId: createId("workflowDispatch"),
+          },
+          now: occurredAt,
+        });
+        persistVerificationCorrectionRun(decision.correctionRun);
+        updateWorkflowDispatch(decision.completedDispatch);
+        updateStageAttempt(decision.completedStageAttempt);
+        updatePipelineRun(decision.pipelineRun);
+        updateWorkflowWorkItem(decision.workItem);
+        insertStageAttempt(decision.nextStageAttempt);
+        insertWorkflowDispatch(decision.nextDispatch);
+        return {
+          workItemId: decision.workItem.id,
+          projectId: decision.workItem.projectId,
+          events: decision.events,
+        };
+      }
+
+      if (
+        currentCorrectionId === null &&
+        !canStartAutomatically &&
+        stageAttempt.correctionRunId !== null &&
+        (stageAttempt.verificationCorrectionRunId ?? null) === null
+      ) {
+        const qaCorrectionRun = readQACorrectionRun(stageAttempt.correctionRunId);
+        if (qaCorrectionRun === null) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The mixed Project verification owner gate has no active Browser QA correction",
+          );
+        }
+        const decision = decideInitialFailedVerificationCorrectionGateTransition({
+          verificationRun,
+          failure,
+          qaCorrectionRun,
+          workItem,
+          pipelineRun,
+          stageAttempt,
+          dispatch,
+          budgetUsage,
+          ids: {
+            humanRequestId: createId("humanRequest"),
+            authorizeFinalOptionId: createId("humanRequestOption"),
+            cancelOptionId: createId("humanRequestOption"),
+          },
+          now: occurredAt,
+        });
+        updateWorkflowDispatch(decision.completedDispatch);
+        updateStageAttempt(decision.completedStageAttempt);
+        updatePipelineRun(decision.pipelineRun);
+        updateWorkflowWorkItem(decision.workItem);
+        insertHumanRequest(decision.request);
+        return {
+          workItemId: decision.workItem.id,
+          projectId: decision.workItem.projectId,
+          events: decision.events,
+        };
+      }
+
+      if (currentCorrectionId !== null) {
+        const currentCorrection = readVerificationCorrectionRun(currentCorrectionId);
+        const correctionSourceVerificationRun =
+          currentCorrection === null ? null : readVerificationRun(currentCorrection.sourceVerificationRunId);
+        if (currentCorrection === null || correctionSourceVerificationRun === null) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The active Project verification correction lineage is incomplete",
+          );
+        }
+        const decision = decideSubsequentFailedVerificationCorrectionTransition({
+          verificationRun,
+          failure,
+          correctionRun: currentCorrection,
+          correctionSourceVerificationRun,
+          workItem,
+          pipelineRun,
+          stageAttempt,
+          dispatch,
+          budgetUsage,
+          ids: {
+            correctionRunId: createId("verificationCorrectionRun"),
+            nextStageAttemptId: createId("stageAttempt"),
+            nextDispatchId: createId("workflowDispatch"),
+            humanRequestId: createId("humanRequest"),
+            authorizeFinalOptionId: createId("humanRequestOption"),
+            cancelOptionId: createId("humanRequestOption"),
+          },
+          now: occurredAt,
+        });
+        persistUpdatedVerificationCorrectionRun(decision.previousCorrection);
+        updateWorkflowDispatch(decision.completedDispatch);
+        updateStageAttempt(decision.completedStageAttempt);
+        updatePipelineRun(decision.pipelineRun);
+        updateWorkflowWorkItem(decision.workItem);
+        if (decision.correctionRun !== null) persistVerificationCorrectionRun(decision.correctionRun);
+        if (decision.nextStageAttempt !== null) insertStageAttempt(decision.nextStageAttempt);
+        if (decision.nextDispatch !== null) insertWorkflowDispatch(decision.nextDispatch);
+        if (decision.request !== null) insertHumanRequest(decision.request);
+        return {
+          workItemId: decision.workItem.id,
+          projectId: decision.workItem.projectId,
+          events: decision.events,
+        };
+      }
+
+      return null;
+    };
+
     const executeFresh = (command: StateCommand, occurredAt: string): StateCommandResult => {
       if (command.type === "REQUEST_PROJECT_SCAFFOLD") {
         const existingRow = selectProjectByRepositoryPath.get(command.payload.proposal.targetPath);
@@ -7105,177 +7279,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           decision.next === "TERMINAL" && decision.run.status !== "PASSED"
             ? persistVerificationFailure(decision.run, readVerificationChecks(run.id), occurredAt)
             : null;
-        let correctionDecision: StartedVerificationCorrectionTransition | null = null;
-        let initialGateDecision: InitialVerificationCorrectionGateTransition | null = null;
-        let subsequentCorrectionDecision: SubsequentFailedVerificationCorrectionTransition | null = null;
-        if (
-          failureDecision !== null &&
-          (failureDecision.failure.reason === "REQUIRED_CHECK_FAILED" ||
-            failureDecision.failure.reason === "REQUIRED_CHECK_ERROR")
-        ) {
-          const pipelineRun = readPipelineRun(decision.run.pipelineRunId);
-          const workItem = readWorkItem(decision.run.workItemId);
-          const stageAttempt =
-            pipelineRun === null ? null : readStageAttempt(pipelineRun.currentStageAttemptId);
-          const dispatch = stageAttempt === null ? null : readPendingDispatch(stageAttempt.id);
-          const usage = correctionBudgetUsageRowSchema.parse(
-            selectCorrectionBudgetUsage.get(decision.run.pipelineRunId),
-          );
-          const canStartAutomatically =
-            usage.automatic_used < MAX_AUTOMATIC_CORRECTION_RUNS &&
-            usage.total_used < MAX_TOTAL_CORRECTION_RUNS;
-          const currentCorrectionId = decision.run.verificationCorrectionRunId ?? null;
-          if (
-            currentCorrectionId === null &&
-            canStartAutomatically &&
-            pipelineRun !== null &&
-            workItem !== null &&
-            stageAttempt !== null &&
-            dispatch !== null &&
-            workItem.currentStage === "QA" &&
-            pipelineRun.status === "RUNNING" &&
-            pipelineRun.currentStageAttemptId === stageAttempt.id &&
-            stageAttempt.stage === "QA" &&
-            stageAttempt.status === "QUEUED" &&
-            (stageAttempt.verificationCorrectionRunId ?? null) === null
-          ) {
-            const qaCorrectionRun =
-              stageAttempt.correctionRunId === null
-                ? null
-                : readQACorrectionRun(stageAttempt.correctionRunId);
-            if (stageAttempt.correctionRunId !== null && qaCorrectionRun === null) {
-              throw new StateStoreError(
-                "PERSISTENCE_FAILURE",
-                "The active Browser QA correction lineage is incomplete",
-              );
-            }
-            correctionDecision = decideInitialFailedVerificationCorrectionTransition({
-              verificationRun: decision.run,
-              failure: failureDecision.failure,
-              workItem,
-              pipelineRun,
-              stageAttempt,
-              dispatch,
-              ...(qaCorrectionRun === null ? {} : { qaCorrectionRun }),
-              budgetUsage: {
-                automaticUsed: usage.automatic_used,
-                totalUsed: usage.total_used,
-              },
-              ids: {
-                correctionRunId: createId("verificationCorrectionRun"),
-                nextStageAttemptId: createId("stageAttempt"),
-                nextDispatchId: createId("workflowDispatch"),
-              },
-              now: occurredAt,
-            });
-            persistVerificationCorrectionRun(correctionDecision.correctionRun);
-            updateWorkflowDispatch(correctionDecision.completedDispatch);
-            updateStageAttempt(correctionDecision.completedStageAttempt);
-            updatePipelineRun(correctionDecision.pipelineRun);
-            updateWorkflowWorkItem(correctionDecision.workItem);
-            insertStageAttempt(correctionDecision.nextStageAttempt);
-            insertWorkflowDispatch(correctionDecision.nextDispatch);
-          } else if (
-            currentCorrectionId === null &&
-            !canStartAutomatically &&
-            pipelineRun !== null &&
-            workItem !== null &&
-            stageAttempt !== null &&
-            dispatch !== null &&
-            stageAttempt.correctionRunId !== null &&
-            (stageAttempt.verificationCorrectionRunId ?? null) === null
-          ) {
-            const qaCorrectionRun = readQACorrectionRun(stageAttempt.correctionRunId);
-            if (qaCorrectionRun === null) {
-              throw new StateStoreError(
-                "PERSISTENCE_FAILURE",
-                "The mixed Project verification owner gate has no active Browser QA correction",
-              );
-            }
-            initialGateDecision = decideInitialFailedVerificationCorrectionGateTransition({
-              verificationRun: decision.run,
-              failure: failureDecision.failure,
-              qaCorrectionRun,
-              workItem,
-              pipelineRun,
-              stageAttempt,
-              dispatch,
-              budgetUsage: {
-                automaticUsed: usage.automatic_used,
-                totalUsed: usage.total_used,
-              },
-              ids: {
-                humanRequestId: createId("humanRequest"),
-                authorizeFinalOptionId: createId("humanRequestOption"),
-                cancelOptionId: createId("humanRequestOption"),
-              },
-              now: occurredAt,
-            });
-            updateWorkflowDispatch(initialGateDecision.completedDispatch);
-            updateStageAttempt(initialGateDecision.completedStageAttempt);
-            updatePipelineRun(initialGateDecision.pipelineRun);
-            updateWorkflowWorkItem(initialGateDecision.workItem);
-            insertHumanRequest(initialGateDecision.request);
-          } else if (
-            currentCorrectionId !== null &&
-            pipelineRun !== null &&
-            workItem !== null &&
-            stageAttempt !== null &&
-            dispatch !== null
-          ) {
-            const currentCorrection = readVerificationCorrectionRun(currentCorrectionId);
-            const correctionSourceVerificationRun =
-              currentCorrection === null
-                ? null
-                : readVerificationRun(currentCorrection.sourceVerificationRunId);
-            if (currentCorrection === null || correctionSourceVerificationRun === null) {
-              throw new StateStoreError(
-                "PERSISTENCE_FAILURE",
-                "The active Project verification correction lineage is incomplete",
-              );
-            }
-            subsequentCorrectionDecision = decideSubsequentFailedVerificationCorrectionTransition({
-              verificationRun: decision.run,
-              failure: failureDecision.failure,
-              correctionRun: currentCorrection,
-              correctionSourceVerificationRun,
-              workItem,
-              pipelineRun,
-              stageAttempt,
-              dispatch,
-              budgetUsage: {
-                automaticUsed: usage.automatic_used,
-                totalUsed: usage.total_used,
-              },
-              ids: {
-                correctionRunId: createId("verificationCorrectionRun"),
-                nextStageAttemptId: createId("stageAttempt"),
-                nextDispatchId: createId("workflowDispatch"),
-                humanRequestId: createId("humanRequest"),
-                authorizeFinalOptionId: createId("humanRequestOption"),
-                cancelOptionId: createId("humanRequestOption"),
-              },
-              now: occurredAt,
-            });
-            persistUpdatedVerificationCorrectionRun(subsequentCorrectionDecision.previousCorrection);
-            updateWorkflowDispatch(subsequentCorrectionDecision.completedDispatch);
-            updateStageAttempt(subsequentCorrectionDecision.completedStageAttempt);
-            updatePipelineRun(subsequentCorrectionDecision.pipelineRun);
-            updateWorkflowWorkItem(subsequentCorrectionDecision.workItem);
-            if (subsequentCorrectionDecision.correctionRun !== null) {
-              persistVerificationCorrectionRun(subsequentCorrectionDecision.correctionRun);
-            }
-            if (subsequentCorrectionDecision.nextStageAttempt !== null) {
-              insertStageAttempt(subsequentCorrectionDecision.nextStageAttempt);
-            }
-            if (subsequentCorrectionDecision.nextDispatch !== null) {
-              insertWorkflowDispatch(subsequentCorrectionDecision.nextDispatch);
-            }
-            if (subsequentCorrectionDecision.request !== null) {
-              insertHumanRequest(subsequentCorrectionDecision.request);
-            }
-          }
-        }
+        const correctionWorkflow =
+          failureDecision === null
+            ? null
+            : persistVerificationFailureWorkflow(decision.run, failureDecision.failure, occurredAt);
         let passedCorrection: PassedVerificationCorrectionTransition | null = null;
         let qaHandoff: PassedVerificationCorrectionQAHandoff | null = null;
         const verificationCorrectionRunId = decision.run.verificationCorrectionRunId ?? null;
@@ -7368,28 +7375,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             correlationId: command.correlationId,
           });
         }
-        if (correctionDecision !== null) {
-          appendWorkflowEvents(correctionDecision.events, {
-            workItemId: correctionDecision.workItem.id,
-            projectId: correctionDecision.workItem.projectId,
-            actor: command.actor,
-            occurredAt,
-            correlationId: command.correlationId,
-          });
-        }
-        if (initialGateDecision !== null) {
-          appendWorkflowEvents(initialGateDecision.events, {
-            workItemId: initialGateDecision.workItem.id,
-            projectId: initialGateDecision.workItem.projectId,
-            actor: command.actor,
-            occurredAt,
-            correlationId: command.correlationId,
-          });
-        }
-        if (subsequentCorrectionDecision !== null) {
-          appendWorkflowEvents(subsequentCorrectionDecision.events, {
-            workItemId: subsequentCorrectionDecision.workItem.id,
-            projectId: subsequentCorrectionDecision.workItem.projectId,
+        if (correctionWorkflow !== null) {
+          appendWorkflowEvents(correctionWorkflow.events, {
+            workItemId: correctionWorkflow.workItemId,
+            projectId: correctionWorkflow.projectId,
             actor: command.actor,
             occurredAt,
             correlationId: command.correlationId,
@@ -7475,6 +7464,19 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           occurredAt,
           correlationId: command.correlationId,
         });
+        const correctionWorkflow =
+          command.type === "INTERRUPT_VERIFICATION_RUN"
+            ? persistVerificationFailureWorkflow(decision.run, failureDecision.failure, occurredAt)
+            : null;
+        if (correctionWorkflow !== null) {
+          appendWorkflowEvents(correctionWorkflow.events, {
+            workItemId: correctionWorkflow.workItemId,
+            projectId: correctionWorkflow.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          });
+        }
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "VERIFICATION_RUN_INTERRUPTED",
@@ -9898,6 +9900,22 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               correlationId: command.correlationId,
             }),
           );
+          const correctionWorkflow = persistVerificationFailureWorkflow(
+            decision.run,
+            failureDecision.failure,
+            occurredAt,
+          );
+          if (correctionWorkflow !== null) {
+            verificationEvents.push(
+              ...appendWorkflowEvents(correctionWorkflow.events, {
+                workItemId: correctionWorkflow.workItemId,
+                projectId: correctionWorkflow.projectId,
+                actor: command.actor,
+                occurredAt,
+                correlationId: command.correlationId,
+              }),
+            );
+          }
         }
         // AgentRun is the A3 concurrency authority. Every RUNNING row at startup is orphaned even
         // when no ProviderSession was created yet; ending all of them first frees capacity and

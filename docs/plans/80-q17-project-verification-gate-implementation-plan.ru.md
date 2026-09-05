@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-05
 
-**Статус:** in progress — Q17.1/Q17.2 complete, Q17.3 Acceptance gate in progress
+**Статус:** in progress — Q17.1/Q17.2/Q17.3 complete, Q17.4 verification in progress
 
 **Спецификация:**
 [79-q17-project-verification-gate-spec.ru.md](79-q17-project-verification-gate-spec.ru.md)
@@ -44,7 +44,7 @@ output; restart сохраняет failure, а crash во время process д�
 - [x] Запускать active required Plan после fresh independent Review и до Browser QA: внутренний
       `verification-workflow` может зарезервировать только первый Run на стадии QA; Browser QA не получает AgentRun
       или browser authority до свежего current-tree pass, а terminal non-pass не ретраится скрыто.
-- [ ] Добавить отдельный `VerificationFailure` и связать его с correction IMPLEMENT/re-review/rerun lineage.
+- [x] Добавить отдельный `VerificationFailure` и связать его с correction IMPLEMENT/re-review/rerun lineage.
       Immutable failure identity и атомарная запись `FAILED | ERROR | INTERRUPTED` уже готовы; correction transition,
       отдельный bounded `VerificationCorrectionRun`, pure initial `QA gate → correction IMPLEMENT` decision и
       migration 0042 с раздельной lineage Stage/Review/QA/Verification готовы. Terminal `FAILED | ERROR` теперь в
@@ -68,8 +68,10 @@ output; restart сохраняет failure, а crash во время process д�
       materialization теперь сохраняет исходный terminal `PASSED` неизменным, добавляет один append-only
       `VerificationFailure(STALE)` и в той же SQLite-транзакции переводит pending QA gate в bounded correction;
       exact-version conflict, command replay, повторный daemon gate и SQLite reopen не создают дубль. Fresh passing
-      rerun новой current Plan/tree authority закрывает эту correction. Автоматический correction transition для
-      `RUN_INTERRUPTED` остаётся в работе.
+      rerun новой current Plan/tree authority закрывает эту correction. `RUN_INTERRUPTED` при `DAEMON_RESTART`
+      теперь в той же транзакции переводит initial или subsequent QA gate в bounded correction, включая startup
+      reconciliation, replay и второй SQLite reopen; `OWNER_CANCELLED` остаётся окончательной owner action и никогда
+      не создаёт скрытый correction run.
 - [x] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
       Общие constants и pure decision `2 automatic + 1 owner` уже заменили QA-only policy; durable usage/lineage,
       объединяющие оба evaluator без объединения их failure entities, закреплены транзакционным подсчётом обеих
@@ -94,7 +96,9 @@ output; restart сохраняет failure, а crash во время process д�
       Initial verification correction уже покрыта allowed/forbidden domain cases, replay idempotency и SQLite reopen;
       fresh reviewed passing rerun, второй automatic cycle и owner-authorized final cycle покрыты сквозным public
       workflow, command replay и SQLite reopen; cancel покрыт pure allowed transition, а stale versions, foreign
-      lineage и non-owner actor запрещены domain-переходом. Живая light/dark/keyboard проверка UI ещё не закрыта.
+      lineage и non-owner actor запрещены domain-переходом. Daemon interruption отдельно покрыта для initial и
+      subsequent correction, direct stop и startup reconciliation; owner cancellation остаётся forbidden source.
+      Живая light/dark/keyboard проверка UI ещё не закрыта.
 - [ ] Выполнить RU/EN, keyboard/focus, light/dark, 320 px и daemon-restart Browser QA.
 - [ ] Выполнить focused lint/typecheck/unit/integration, full non-landing gates, fault injection и clean release.
 - [ ] Выполнить independent Standards/Spec review и исправить все P0–P2.

@@ -200,6 +200,9 @@ export const decideInitialFailedVerificationCorrectionTransition = (input: {
   const sourceStatusMatches =
     (verificationRun.status === "FAILED" && failure.reason === "REQUIRED_CHECK_FAILED") ||
     (verificationRun.status === "ERROR" && failure.reason === "REQUIRED_CHECK_ERROR") ||
+    (verificationRun.status === "INTERRUPTED" &&
+      verificationRun.terminalReason === "DAEMON_RESTART" &&
+      failure.reason === "RUN_INTERRUPTED") ||
     (verificationRun.status === "PASSED" && failure.reason === "STALE");
   if (!sourceStatusMatches) {
     throw new VerificationCorrectionError(
@@ -383,6 +386,9 @@ export const decideInitialFailedVerificationCorrectionGateTransition = (input: {
   const sourceStatusMatches =
     (verificationRun.status === "FAILED" && failure.reason === "REQUIRED_CHECK_FAILED") ||
     (verificationRun.status === "ERROR" && failure.reason === "REQUIRED_CHECK_ERROR") ||
+    (verificationRun.status === "INTERRUPTED" &&
+      verificationRun.terminalReason === "DAEMON_RESTART" &&
+      failure.reason === "RUN_INTERRUPTED") ||
     (verificationRun.status === "PASSED" && failure.reason === "STALE");
   const lineageMatches =
     sourceStatusMatches &&
@@ -896,8 +902,14 @@ export const decideSubsequentFailedVerificationCorrectionTransition = (input: {
   const failure = verificationFailureSchema.parse(input.failure);
   const correctionRun = verificationCorrectionRunSchema.parse(input.correctionRun);
   const correctionSourceVerificationRun = verificationRunSchema.parse(input.correctionSourceVerificationRun);
+  const sourceStatusMatches =
+    (verificationRun.status === "FAILED" && failure.reason === "REQUIRED_CHECK_FAILED") ||
+    (verificationRun.status === "ERROR" && failure.reason === "REQUIRED_CHECK_ERROR") ||
+    (verificationRun.status === "INTERRUPTED" &&
+      verificationRun.terminalReason === "DAEMON_RESTART" &&
+      failure.reason === "RUN_INTERRUPTED");
   const lineageMatches =
-    (verificationRun.status === "FAILED" || verificationRun.status === "ERROR") &&
+    sourceStatusMatches &&
     (verificationRun.verificationCorrectionRunId ?? null) === correctionRun.id &&
     verificationRun.projectId === correctionRun.projectId &&
     verificationRun.workItemId === correctionRun.workItemId &&
@@ -915,7 +927,6 @@ export const decideSubsequentFailedVerificationCorrectionTransition = (input: {
     failure.planRevision === verificationRun.planRevision &&
     failure.planContentHash === verificationRun.planContentHash &&
     failure.implementationTree === verificationRun.implementationTree &&
-    (failure.reason === "REQUIRED_CHECK_FAILED" || failure.reason === "REQUIRED_CHECK_ERROR") &&
     correctionRun.status === "ACTIVE" &&
     correctionRun.sourceVerificationRunId === correctionSourceVerificationRun.id &&
     correctionRun.sourceImplementationTree === correctionSourceVerificationRun.implementationTree &&

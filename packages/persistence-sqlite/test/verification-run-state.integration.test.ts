@@ -1486,6 +1486,102 @@ describe("verification Run local state", () => {
     ).toMatchObject({ artifact: null });
   });
 
+  it("atomically moves a daemon-interrupted verification gate into correction", async () => {
+    const fixture = await prepare();
+    const reserved = reserve(fixture, "reserve-direct-interruption");
+    if (reserved.type !== "VERIFICATION_RUN_RESERVED") throw new Error("Expected reserved Run");
+    const check = reserved.checks[0];
+    if (check === undefined) throw new Error("Expected Check");
+    const started = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "start-direct-interruption-check",
+      correlationId: "correlation-start-direct-interruption-check",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "START_VERIFICATION_CHECK",
+      payload: {
+        runId: reserved.run.id,
+        checkId: check.id,
+        expectedRunVersion: reserved.run.version,
+        expectedCheckVersion: check.version,
+      },
+    });
+    if (started.type !== "VERIFICATION_CHECK_STARTED") throw new Error("Expected started Check");
+    const interruptCommand = {
+      schemaVersion: 1,
+      commandId: "interrupt-direct-verification",
+      correlationId: "correlation-interrupt-direct-verification",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "INTERRUPT_VERIFICATION_RUN",
+      payload: {
+        runId: started.run.id,
+        expectedRunVersion: started.run.version,
+        reason: "DAEMON_RESTART",
+      },
+    } as const;
+    expect(fixture.localState.execute(interruptCommand)).toMatchObject({
+      type: "VERIFICATION_RUN_INTERRUPTED",
+      replayed: false,
+      run: { status: "INTERRUPTED", terminalReason: "DAEMON_RESTART" },
+      interruptedCheck: { status: "INTERRUPTED" },
+    });
+    expect(fixture.localState.execute(interruptCommand)).toMatchObject({
+      type: "VERIFICATION_RUN_INTERRUPTED",
+      replayed: true,
+    });
+    const failures = fixture.localState.query({
+      type: "LIST_WORK_ITEM_VERIFICATION_FAILURES",
+      workItemId: fixture.workItemId,
+    });
+    if (failures.type !== "VERIFICATION_FAILURES" || failures.failures[0] === undefined) {
+      throw new Error("Expected interruption failure");
+    }
+    expect(failures.failures).toMatchObject([
+      { verificationRunId: started.run.id, reason: "RUN_INTERRUPTED" },
+    ]);
+    const corrections = fixture.localState.query({
+      type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+      workItemId: fixture.workItemId,
+    });
+    if (corrections.type !== "VERIFICATION_CORRECTIONS" || corrections.correctionRuns[0] === undefined) {
+      throw new Error("Expected interruption correction");
+    }
+    expect(corrections.correctionRuns).toMatchObject([
+      {
+        budgetPosition: 1,
+        sourceFailureId: failures.failures[0].id,
+        sourceVerificationRunId: started.run.id,
+        status: "ACTIVE",
+      },
+    ]);
+    const correction = corrections.correctionRuns[0];
+    const workflow = fixture.localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: fixture.workItemId,
+    });
+    if (workflow.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected interrupted workflow");
+    expect(workflow.snapshot.run).toMatchObject({ status: "RUNNING" });
+    expect(
+      workflow.snapshot.stageAttempts.find(
+        ({ verificationCorrectionRunId, stage }) =>
+          verificationCorrectionRunId === correction.id && stage === "IMPLEMENT",
+      ),
+    ).toMatchObject({ status: "QUEUED" });
+    const events = fixture.localState.query({
+      type: "LIST_EVENTS",
+      aggregateId: fixture.workItemId,
+      direction: "ASC",
+      limit: 100,
+    });
+    if (events.type !== "EVENTS") throw new Error("Expected interruption events");
+    expect(events.events.map(({ type }) => type)).toEqual(
+      expect.arrayContaining([
+        "VERIFICATION_RUN_INTERRUPTED",
+        "VERIFICATION_FAILURE_RECORDED",
+        "VERIFICATION_CORRECTION_STARTED",
+      ]),
+    );
+  });
+
   it("interrupts active verification on restart without replaying unknown work", async () => {
     const fixture = await prepare();
     const reserved = reserve(fixture);
@@ -1510,14 +1606,15 @@ describe("verification Run local state", () => {
     state = undefined;
 
     const reopened = await open();
-    const reconciled = reopened.execute({
+    const reconcileCommand = {
       schemaVersion: 1,
       commandId: "reconcile-after-restart",
       correlationId: "correlation-reconcile-after-restart",
       actor: { type: "SYSTEM", id: "local-daemon" },
       type: "RECONCILE_WORKFLOWS",
       payload: {},
-    });
+    } as const;
+    const reconciled = reopened.execute(reconcileCommand);
     expect(reconciled).toMatchObject({
       type: "WORKFLOWS_RECONCILED",
       interruptedVerificationRuns: [
@@ -1527,6 +1624,7 @@ describe("verification Run local state", () => {
     if (reconciled.type !== "WORKFLOWS_RECONCILED") throw new Error("Expected reconciliation");
     expect(reconciled.events.map((event) => event.type)).toContain("VERIFICATION_RUN_INTERRUPTED");
     expect(reconciled.events.map((event) => event.type)).toContain("VERIFICATION_FAILURE_RECORDED");
+    expect(reconciled.events.map((event) => event.type)).toContain("VERIFICATION_CORRECTION_STARTED");
     expect(reopened.query({ type: "GET_VERIFICATION_RUN", runId: started.run.id })).toMatchObject({
       run: { status: "INTERRUPTED", terminalReason: "DAEMON_RESTART" },
       checks: [{ status: "INTERRUPTED" }],
@@ -1535,12 +1633,11 @@ describe("verification Run local state", () => {
       type: "VERIFICATION_RUNS",
       runs: [],
     });
-    expect(
-      reopened.query({
-        type: "LIST_WORK_ITEM_VERIFICATION_FAILURES",
-        workItemId: fixture.workItemId,
-      }),
-    ).toMatchObject({
+    const failures = reopened.query({
+      type: "LIST_WORK_ITEM_VERIFICATION_FAILURES",
+      workItemId: fixture.workItemId,
+    });
+    expect(failures).toMatchObject({
       type: "VERIFICATION_FAILURES",
       failures: [
         {
@@ -1550,6 +1647,52 @@ describe("verification Run local state", () => {
         },
       ],
     });
+    if (failures.type !== "VERIFICATION_FAILURES" || failures.failures[0] === undefined) {
+      throw new Error("Expected interrupted failure");
+    }
+    const corrections = reopened.query({
+      type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+      workItemId: fixture.workItemId,
+    });
+    expect(corrections).toMatchObject({
+      type: "VERIFICATION_CORRECTIONS",
+      correctionRuns: [
+        {
+          budgetPosition: 1,
+          sourceFailureId: failures.failures[0].id,
+          sourceVerificationRunId: started.run.id,
+          status: "ACTIVE",
+        },
+      ],
+    });
+    if (corrections.type !== "VERIFICATION_CORRECTIONS" || corrections.correctionRuns[0] === undefined) {
+      throw new Error("Expected interrupted correction");
+    }
+    const correction = corrections.correctionRuns[0];
+    const workflow = reopened.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: fixture.workItemId });
+    if (workflow.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected interrupted workflow");
+    expect(workflow.snapshot.run).toMatchObject({ status: "RUNNING" });
+    expect(
+      workflow.snapshot.stageAttempts.find(
+        ({ verificationCorrectionRunId, stage }) =>
+          verificationCorrectionRunId === correction.id && stage === "IMPLEMENT",
+      ),
+    ).toMatchObject({ status: "QUEUED" });
+    expect(reopened.execute(reconcileCommand)).toMatchObject({
+      type: "WORKFLOWS_RECONCILED",
+      replayed: true,
+      interruptedVerificationRuns: [{ id: started.run.id }],
+    });
+
+    reopened.close();
+    state = undefined;
+    const recoveredAgain = await open();
+    expect(
+      recoveredAgain.query({
+        type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+        workItemId: fixture.workItemId,
+      }),
+    ).toMatchObject({ correctionRuns: [{ id: correction.id, status: "ACTIVE" }] });
   });
 
   it("rejects a second active Run without writing a second reservation", async () => {

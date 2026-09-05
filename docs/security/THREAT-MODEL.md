@@ -742,7 +742,8 @@ Critical and stays open until the Q17 spec and implementation provide:
   evidence blocks Acceptance and any correction requires fresh review plus exact rerun on the current tree;
 - a terminal required non-pass or interrupted Run creates one append-only `VerificationFailure` in the same SQLite
   transaction as measured Run/Check state and its Event. It contains only typed Run/Check/Plan/tree lineage, not raw
-  output or a local path; command replay and restart cannot duplicate the identity;
+  output or a local path; command replay and restart cannot duplicate the identity. A daemon-restart interruption
+  atomically enters the same bounded correction loop, while an explicit owner cancellation cannot restart work;
 - a previously passing Run is never rewritten when its Plan/tree authority becomes stale. The daemon materializes
   one append-only `STALE` failure from current deterministic state and atomically moves the exact pending QA gate
   into the shared correction loop; optimistic versions, the unique Run-to-failure edge, command receipts and a

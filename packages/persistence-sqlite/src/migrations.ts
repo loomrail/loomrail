@@ -239,6 +239,11 @@ const migrations: readonly Migration[] = [
     name: "stale_verification_correction",
     filename: "0048_stale_verification_correction.sql",
   },
+  {
+    version: 49,
+    name: "interrupted_verification_correction",
+    filename: "0049_interrupted_verification_correction.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

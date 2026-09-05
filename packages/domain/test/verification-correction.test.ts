@@ -205,6 +205,44 @@ describe("Project verification correction transition", () => {
     });
   });
 
+  it("starts correction for daemon-interrupted evidence", () => {
+    const interruptedRun: VerificationRun = {
+      ...verificationRun,
+      status: "INTERRUPTED",
+      terminalReason: "DAEMON_RESTART",
+    };
+    const interruptedFailure: VerificationFailure = {
+      ...failure,
+      verificationRunId: interruptedRun.id,
+      reason: "RUN_INTERRUPTED",
+    };
+    const input = {
+      verificationRun: interruptedRun,
+      failure: interruptedFailure,
+      workItem,
+      pipelineRun,
+      stageAttempt,
+      dispatch,
+      budgetUsage: { automaticUsed: 0, totalUsed: 0 },
+      ids: {
+        correctionRunId: "verification-correction-interrupted",
+        nextStageAttemptId: "stage-implement-interrupted",
+        nextDispatchId: "dispatch-implement-interrupted",
+      },
+      now,
+    } as const;
+
+    expect(decideInitialFailedVerificationCorrectionTransition(input)).toMatchObject({
+      action: "START_CORRECTION",
+      correctionRun: {
+        id: "verification-correction-interrupted",
+        sourceFailureId: interruptedFailure.id,
+        status: "ACTIVE",
+      },
+      nextStageAttempt: { stage: "IMPLEMENT" },
+    });
+  });
+
   it("preserves the active QA lineage while starting its nested verification correction", () => {
     const decision = decideInitialFailedVerificationCorrectionTransition({
       verificationRun,
@@ -624,6 +662,58 @@ describe("Project verification correction transition", () => {
         { type: "VERIFICATION_CORRECTION_SUPERSEDED" },
         { type: "VERIFICATION_CORRECTION_STARTED" },
       ],
+    });
+  });
+
+  it("supersedes a correction when its newer measured Run is interrupted by daemon restart", () => {
+    const interruptedRerun: VerificationRun = {
+      ...verificationRun,
+      id: "verification-run-interrupted-two",
+      implementationTree: "c".repeat(40),
+      ordinal: 2,
+      retryOfRunId: verificationRun.id,
+      verificationCorrectionRunId: correctionRun.id,
+      status: "INTERRUPTED",
+      terminalReason: "DAEMON_RESTART",
+      version: 4,
+    };
+    const interruptedFailure: VerificationFailure = {
+      ...failure,
+      id: "verification-failure-interrupted-two",
+      verificationRunId: interruptedRerun.id,
+      implementationTree: interruptedRerun.implementationTree,
+      reason: "RUN_INTERRUPTED",
+    };
+
+    expect(
+      decideSubsequentFailedVerificationCorrectionTransition({
+        verificationRun: interruptedRerun,
+        failure: interruptedFailure,
+        correctionRun,
+        correctionSourceVerificationRun: verificationRun,
+        workItem,
+        pipelineRun,
+        stageAttempt: { ...stageAttempt, verificationCorrectionRunId: correctionRun.id },
+        dispatch,
+        budgetUsage: { automaticUsed: 1, totalUsed: 1 },
+        ids: {
+          correctionRunId: "verification-correction-interrupted-two",
+          nextStageAttemptId: "stage-implement-interrupted-two",
+          nextDispatchId: "dispatch-implement-interrupted-two",
+          humanRequestId: "verification-correction-interrupted-request",
+          authorizeFinalOptionId: "authorize-final-interrupted-correction",
+          cancelOptionId: "cancel-interrupted-delivery",
+        },
+        now,
+      }),
+    ).toMatchObject({
+      action: "START_CORRECTION",
+      previousCorrection: { id: correctionRun.id, status: "SUPERSEDED" },
+      correctionRun: {
+        id: "verification-correction-interrupted-two",
+        sourceFailureId: interruptedFailure.id,
+        status: "ACTIVE",
+      },
     });
   });
 
@@ -1084,13 +1174,13 @@ describe("Project verification correction transition", () => {
     ).toThrow(expect.objectContaining({ code: "LINEAGE_MISMATCH" }));
   });
 
-  it("does not turn an interrupted verifier process into an implementation correction", () => {
+  it("does not turn an owner-cancelled verifier process into an implementation correction", () => {
     expect(() =>
       decideInitialFailedVerificationCorrectionTransition({
         verificationRun: {
           ...verificationRun,
           status: "INTERRUPTED",
-          terminalReason: "DAEMON_RESTART",
+          terminalReason: "OWNER_CANCELLED",
         },
         failure: {
           ...failure,
