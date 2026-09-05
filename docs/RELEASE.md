@@ -93,7 +93,8 @@ its SQL migrations relative to their own module URL:
 | Fixtures   | `../../../fixtures/projects` | `fixtures/projects`     |
 | Migrations | `../migrations`              | `apps/cli/migrations`   |
 
-Bundling collapses the launcher and the daemon into `apps/cli/dist/index.js`, so the packaged tree reproduces the
+Bundling collapses the launcher and the daemon into `apps/cli/dist/index.js` and emits the trusted MCP and verification
+child-process entrypoints beside it, so the packaged tree reproduces the
 directory depths those lookups expect. This keeps packaging entirely inside the release scripts: no product code
 branches on whether it is running from a clone or from an install.
 

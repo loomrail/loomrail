@@ -3788,6 +3788,16 @@ body.is-resizing {
   margin: 0;
 }
 
+.verification-current-plan {
+  display: grid;
+  gap: var(--lr-space-1);
+}
+
+.verification-current-plan > strong {
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-xs);
+}
+
 .verification-run__summary > span:last-child {
   font-family: var(--lr-font-mono);
 }

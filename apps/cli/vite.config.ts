@@ -28,6 +28,7 @@ export default defineConfig({
         index: "src/index.ts",
         proxy: "../../packages/mcp-gateway/src/proxy.ts",
         supervisor: "../../packages/mcp-gateway/src/supervisor.ts",
+        "verification-supervisor": "../../packages/process-supervision/src/verification-supervisor.ts",
       },
       output: { entryFileNames: "[name].js", format: "esm" },
     },

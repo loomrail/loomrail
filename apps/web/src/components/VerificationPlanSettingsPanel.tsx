@@ -214,7 +214,7 @@ export const VerificationPlanSettingsView = ({
         </div>
       ) : null}
 
-      {plan?.status === "ACTIVE" && publicationApplied ? (
+      {plan?.status === "ACTIVE" ? (
         <div className="verification-settings__actions">
           <Button loading={disabling} onClick={onDisable} type="button">
             {t("settings.verification.disable")}

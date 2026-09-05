@@ -32,6 +32,7 @@ const utf8ByteLength = (value: string): number => {
   }
   return bytes;
 };
+const invalidPortableDirectoryCharacterPattern = /[<>:"\\|?*]|\p{Cc}/u;
 const portableRelativeDirectorySchema = z
   .string()
   .min(1)
@@ -45,8 +46,16 @@ const portableRelativeDirectorySchema = z
     }
     const parts = value.split("/");
     return (
-      parts.every((part) => /^[A-Za-z0-9._-]+$/u.test(part) && part !== "." && part !== "..") &&
-      !value.includes("\\")
+      value === value.normalize("NFC") &&
+      utf8ByteLength(value) <= 240 &&
+      parts.every(
+        (part) =>
+          part.length > 0 &&
+          part !== "." &&
+          part !== ".." &&
+          !invalidPortableDirectoryCharacterPattern.test(part) &&
+          !/[ .]$/u.test(part),
+      )
     );
   }, "Verification cwd must be a portable directory below the Project root");
 
@@ -521,12 +530,20 @@ export const verificationPlatformSchema = z.enum(["darwin", "linux", "win32"]);
 export const verificationRunStatusSchema = z.enum([
   "QUEUED",
   "RUNNING",
+  "CANCELLING",
   "PASSED",
   "FAILED",
   "ERROR",
   "INTERRUPTED",
 ]);
-export const verificationCheckStatusSchema = verificationRunStatusSchema;
+export const verificationCheckStatusSchema = z.enum([
+  "QUEUED",
+  "RUNNING",
+  "PASSED",
+  "FAILED",
+  "ERROR",
+  "INTERRUPTED",
+]);
 export const verificationCheckErrorCodeSchema = z.enum([
   "RECIPE_NOT_APPROVED",
   "POLICY_UNAVAILABLE",
@@ -747,6 +764,12 @@ export const verificationRunSchema = z
     if (run.status === "RUNNING") {
       if (run.startedAt === null || run.completedAt !== null || run.terminalReason !== null) {
         issue("A running verification Run requires a start and no terminal state");
+      }
+      return;
+    }
+    if (run.status === "CANCELLING") {
+      if (run.completedAt !== null || run.terminalReason !== null) {
+        issue("A cancelling verification Run keeps its execution state until process stop is confirmed");
       }
       return;
     }
@@ -1013,6 +1036,16 @@ export const cancelVerificationRunCommandSchema = commandBaseSchema.extend({
     .strict(),
 });
 
+export const finalizeVerificationRunCancellationCommandSchema = commandBaseSchema.extend({
+  type: z.literal("FINALIZE_VERIFICATION_RUN_CANCELLATION"),
+  payload: z
+    .object({
+      runId: opaqueIdSchema,
+      expectedRunVersion: z.number().int().positive(),
+    })
+    .strict(),
+});
+
 export const interruptVerificationRunCommandSchema = commandBaseSchema.extend({
   type: z.literal("INTERRUPT_VERIFICATION_RUN"),
   payload: z
@@ -1113,6 +1146,11 @@ export const verificationRunInterruptedEventSchema = verificationRunEventBaseSch
     .strict(),
 });
 
+export const verificationRunCancellationRequestedEventSchema = verificationRunEventBaseSchema.extend({
+  type: z.literal("VERIFICATION_RUN_CANCELLATION_REQUESTED"),
+  data: z.object({ run: verificationRunSchema }).strict(),
+});
+
 export const verificationFailureRecordedEventSchema = verificationRunEventBaseSchema.extend({
   type: z.literal("VERIFICATION_FAILURE_RECORDED"),
   data: z.object({ failure: verificationFailureSchema }).strict(),
@@ -1185,6 +1223,16 @@ export const verificationRunInterruptedResultSchema = z
     run: verificationRunSchema,
     interruptedCheck: verificationCheckSchema.nullable(),
     event: verificationRunInterruptedEventSchema,
+  })
+  .strict();
+
+export const verificationRunCancellationRequestedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    replayed: z.boolean(),
+    type: z.literal("VERIFICATION_RUN_CANCELLATION_REQUESTED"),
+    run: verificationRunSchema,
+    event: verificationRunCancellationRequestedEventSchema,
   })
   .strict();
 
@@ -1290,6 +1338,9 @@ export type MaterializeStaleVerificationFailureCommand = z.infer<
 export type StartVerificationCheckCommand = z.infer<typeof startVerificationCheckCommandSchema>;
 export type CompleteVerificationCheckCommand = z.infer<typeof completeVerificationCheckCommandSchema>;
 export type CancelVerificationRunCommand = z.infer<typeof cancelVerificationRunCommandSchema>;
+export type FinalizeVerificationRunCancellationCommand = z.infer<
+  typeof finalizeVerificationRunCancellationCommandSchema
+>;
 export type InterruptVerificationRunCommand = z.infer<typeof interruptVerificationRunCommandSchema>;
 export type RecordVerificationOutputRetentionCommand = z.infer<
   typeof recordVerificationOutputRetentionCommandSchema

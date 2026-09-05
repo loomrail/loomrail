@@ -486,6 +486,10 @@ export type VerificationRunReservedIntent = {
 export type VerificationRunEventIntent =
   | VerificationRunReservedIntent
   | {
+      type: "VERIFICATION_RUN_CANCELLATION_REQUESTED";
+      data: { run: VerificationRun };
+    }
+  | {
       type: "VERIFICATION_CHECK_STARTED" | "VERIFICATION_CHECK_COMPLETED";
       data: { run: VerificationRun; check: VerificationCheck };
     }
@@ -590,7 +594,8 @@ export const decideVerificationRunReservation = (
       retryOfRun.version !== command.payload.expectedRetryOfRunVersion ||
       retryOfRun.workItemId !== workItem.id ||
       retryOfRun.status === "QUEUED" ||
-      retryOfRun.status === "RUNNING")
+      retryOfRun.status === "RUNNING" ||
+      retryOfRun.status === "CANCELLING")
   ) {
     throw new VerificationDomainError("RETRY_RUN_INVALID", "Only a terminal Run can be retried");
   }
@@ -847,23 +852,23 @@ export const decideVerificationRunInterruption = (input: {
   reason: "OWNER_CANCELLED" | "DAEMON_RESTART";
   now: string;
 }): { run: VerificationRun; checks: VerificationCheck[] } => {
-  if (input.reason === "OWNER_CANCELLED") {
-    if (input.actor.type !== "HUMAN") {
-      throw new VerificationDomainError("OWNER_REQUIRED", "Only the owner can cancel verification");
-    }
-  } else {
-    requireRunner(input.actor);
-  }
+  requireRunner(input.actor);
   if (input.run.version !== input.expectedRunVersion) {
     throw new VerificationDomainError("RUN_VERSION_CONFLICT", "The verification Run version changed", {
       expectedVersion: input.expectedRunVersion,
       actualVersion: input.run.version,
     });
   }
-  if (input.run.status !== "QUEUED" && input.run.status !== "RUNNING") {
+  const expectedStatus = input.reason === "OWNER_CANCELLED" ? "CANCELLING" : null;
+  if (
+    (expectedStatus !== null && input.run.status !== expectedStatus) ||
+    (expectedStatus === null && input.run.status !== "QUEUED" && input.run.status !== "RUNNING")
+  ) {
     throw new VerificationDomainError(
       "RUN_STATUS_INVALID",
-      "Only a queued or running verification Run can be interrupted",
+      input.reason === "OWNER_CANCELLED"
+        ? "Only a cancellation-requested verification Run can be finalized"
+        : "Only a queued or running verification Run can be interrupted on restart",
     );
   }
   const checks = orderedChecks(input.run, input.checks).map((check) => {
@@ -897,6 +902,37 @@ export const decideVerificationRunInterruption = (input: {
       version: input.run.version + 1,
     },
     checks,
+  };
+};
+
+export const decideVerificationRunCancellationRequest = (input: {
+  actor: Actor;
+  run: VerificationRun;
+  expectedRunVersion: number;
+}): { run: VerificationRun; event: VerificationRunEventIntent } => {
+  if (input.actor.type !== "HUMAN") {
+    throw new VerificationDomainError("OWNER_REQUIRED", "Only the owner can cancel verification");
+  }
+  if (input.run.version !== input.expectedRunVersion) {
+    throw new VerificationDomainError("RUN_VERSION_CONFLICT", "The verification Run version changed", {
+      expectedVersion: input.expectedRunVersion,
+      actualVersion: input.run.version,
+    });
+  }
+  if (input.run.status !== "QUEUED" && input.run.status !== "RUNNING") {
+    throw new VerificationDomainError(
+      "RUN_STATUS_INVALID",
+      "Only a queued or running verification Run can request cancellation",
+    );
+  }
+  const run = verificationRunSchema.parse({
+    ...input.run,
+    status: "CANCELLING",
+    version: input.run.version + 1,
+  });
+  return {
+    run,
+    event: { type: "VERIFICATION_RUN_CANCELLATION_REQUESTED", data: { run } },
   };
 };
 
@@ -1051,6 +1087,7 @@ export type ProjectVerificationAcceptanceBlocker =
   | "RUN_MISSING"
   | "RUN_QUEUED"
   | "RUN_RUNNING"
+  | "RUN_CANCELLING"
   | "RUN_FAILED"
   | "RUN_ERROR"
   | "RUN_INTERRUPTED"

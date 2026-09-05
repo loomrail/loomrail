@@ -632,7 +632,11 @@ executable/argv, working directory, timeout, environment/network policy и об�
 
 Каждый `VerificationRun` связывает recipe revision, exact tested tree, platform, exit status, duration и
 bounded/redacted output. Результат становится `STALE` после изменения tree. Required `FAILED | ERROR | STALE` не
-может открыть Acceptance. Запуск проверки не получает commit/push/merge/deploy authority.
+может открыть Acceptance. Запуск проверки не получает commit/push/merge/deploy authority. Durable launch-intent и
+trusted supervisor удерживают workspace до подтверждённой остановки process tree: owner cancel сначала становится
+`CANCELLING`, а missing/mismatched process identity после restart блокирует освобождение authority. Windows startup
+не выводит descendant identity из исчезнувшего root PID; process proof удаляется только после bounded SQLite commit.
+Ручной terminal rerun будит parked QA автоматически, но non-terminal runner failure не запускает скрытый retry-loop.
 
 QA работает через общий `BrowserDriver`:
 
@@ -1584,12 +1588,17 @@ deploy или package-install authority.
 workflow/correction/Acceptance, Task Cockpit и T48 test matrix реализованы. Локально прошли все package tests,
 58/58 Browser QA, fault injection и clean packed release. `STALE` после уже успешной correction сохраняет исходные
 Run/correction terminal facts и продолжает общий bounded budget новой authority; restart-interruption разрешается и
-после исчерпания automatic positions. На `05cab6279e0cf9f772cafbd32caba9558474d3fb` clean install, 58/58 Browser
+после исчерпания automatic positions. Двухфазная отмена и отдельный process supervisor теперь не освобождают
+workspace до `STOPPED` proof даже при потере daemon control pipe; startup сверяет PID/start-time и fail-closed
+останавливается при недоказанной process identity. Windows missing-root recovery, 1001-Run bounded reconcile,
+commit-before-proof-unlink и terminal-only manual-rerun wake покрыты отдельными regressions. Standards и Spec review
+после correction rounds не нашли оставшихся P0–P2. На `05cab6279e0cf9f772cafbd32caba9558474d3fb` clean install, 58/58 Browser
 smoke, Q17 workflow gate и fault recovery прошли на macOS/Windows; Windows process-tree lifecycle отдельно зелёный в
 [CI run 33952514299](https://github.com/loomrail/loomrail/actions/runs/33952514299). Оба Verify остановились только на
 трёх заранее известных protected landing lint findings, поэтому общий workflow conclusion честно остаётся
-`failure`. Live Windows provider verification по решению владельца отложена. До закрытия Q17 остаётся independent
-Standards/Spec review; sanitized evidence хранится в `docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md`.
+`failure`. Live Windows provider verification по решению владельца отложена. Для нового cancellation/supervisor
+изменения ещё требуется fresh fixed-commit CI; sanitized evidence хранится в
+`docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md`.
 
 ### Оценка первого цикла
 

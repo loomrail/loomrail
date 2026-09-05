@@ -1308,7 +1308,11 @@ export const approveBudgetOverrideCommandSchema = commandBaseSchema.extend({
 
 export const reconcileWorkflowsCommandSchema = commandBaseSchema.extend({
   type: z.literal("RECONCILE_WORKFLOWS"),
-  payload: z.object({}).strict(),
+  payload: z
+    .object({
+      verificationProcessAuthorityReleasedRunIds: z.array(opaqueIdSchema).max(1_000).optional(),
+    })
+    .strict(),
 });
 
 export const resolveAcceptanceCommandSchema = commandBaseSchema.extend({

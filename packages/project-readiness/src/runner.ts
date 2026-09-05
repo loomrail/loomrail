@@ -33,6 +33,11 @@ export type ExecuteVerificationRecipeInput = {
   systemEnvironment?: EnvironmentSource;
   platform?: VerificationPlatform;
   signal?: AbortSignal;
+  processGuard?: {
+    runId: string;
+    registryDirectory: string;
+    supervisorEntrypoint?: string;
+  };
 };
 
 const samePath = (left: string, right: string, platform: VerificationPlatform): boolean => {
@@ -546,6 +551,7 @@ export const executeVerificationRecipe = async (
         input.artifactDirectory,
       ]),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
+      ...(input.processGuard === undefined ? {} : { orphanGuard: input.processGuard }),
     });
     let afterTree: string | null;
     try {

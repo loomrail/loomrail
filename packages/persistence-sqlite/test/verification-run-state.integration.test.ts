@@ -383,19 +383,38 @@ describe("verification Run local state", () => {
       type: "VERIFICATION_OUTPUT_ARTIFACT",
       artifact: { artifactId: output.artifactId, storageKey: "verification-output-one.txt" },
     });
+    const afterVerification = fixture.localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: fixture.workItemId,
+    });
+    if (afterVerification.type !== "WORKFLOW_SNAPSHOT" || afterVerification.snapshot.run === null) {
+      throw new Error("Expected PipelineRun after verification");
+    }
+    const workspace = fixture.localState.query({
+      type: "GET_WORKSPACE_BY_WORK_ITEM",
+      workItemId: fixture.workItemId,
+    });
+    if (workspace.type !== "WORKSPACE" || workspace.workspace === null) throw new Error("Expected workspace");
+    expect(
+      fixture.localState.execute({
+        schemaVersion: 1,
+        commandId: "writer-after-verification",
+        correlationId: "correlation-writer-after-verification",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "ACQUIRE_WORKSPACE_LEASE",
+        payload: {
+          workspaceId: fixture.workspaceId,
+          stageAttemptId: afterVerification.snapshot.run.currentStageAttemptId,
+          expectedVersion: workspace.workspace.version,
+        },
+      }),
+    ).toMatchObject({ type: "WORKSPACE_LEASE_ACQUIRED" });
     expect(
       fixture.localState.query({
         type: "LIST_EXPIRED_VERIFICATION_OUTPUTS",
         closedBefore: "2026-09-05T11:00:01.000Z",
       }),
     ).toEqual({ type: "VERIFICATION_OUTPUTS", artifacts: [] });
-    const beforeClose = fixture.localState.query({
-      type: "GET_WORKFLOW_SNAPSHOT",
-      workItemId: fixture.workItemId,
-    });
-    if (beforeClose.type !== "WORKFLOW_SNAPSHOT" || beforeClose.snapshot.run === null) {
-      throw new Error("Expected PipelineRun before retention close");
-    }
     fixture.localState.execute({
       schemaVersion: 1,
       commandId: "close-work-item-before-output-retention",
@@ -403,8 +422,8 @@ describe("verification Run local state", () => {
       actor: { type: "HUMAN", id: "local-owner" },
       type: "CANCEL_PIPELINE",
       payload: {
-        pipelineRunId: beforeClose.snapshot.run.id,
-        expectedVersion: beforeClose.snapshot.run.version,
+        pipelineRunId: afterVerification.snapshot.run.id,
+        expectedVersion: afterVerification.snapshot.run.version,
       },
     });
     expect(
@@ -450,25 +469,6 @@ describe("verification Run local state", () => {
         closedBefore: "2026-09-05T11:00:01.000Z",
       }),
     ).toEqual({ type: "VERIFICATION_OUTPUTS", artifacts: [] });
-    const workspace = fixture.localState.query({
-      type: "GET_WORKSPACE_BY_WORK_ITEM",
-      workItemId: fixture.workItemId,
-    });
-    if (workspace.type !== "WORKSPACE" || workspace.workspace === null) throw new Error("Expected workspace");
-    expect(
-      fixture.localState.execute({
-        schemaVersion: 1,
-        commandId: "writer-after-verification",
-        correlationId: "correlation-writer-after-verification",
-        actor: { type: "SYSTEM", id: "local-daemon" },
-        type: "ACQUIRE_WORKSPACE_LEASE",
-        payload: {
-          workspaceId: fixture.workspaceId,
-          stageAttemptId: fixture.stageAttemptId,
-          expectedVersion: workspace.workspace.version,
-        },
-      }),
-    ).toMatchObject({ type: "WORKSPACE_LEASE_ACQUIRED" });
   });
 
   it("atomically returns a failed QA verification gate to a distinct correction IMPLEMENT", async () => {
@@ -1751,13 +1751,26 @@ describe("verification Run local state", () => {
     state = undefined;
 
     const reopened = await open();
+    expect(
+      reopened.execute({
+        schemaVersion: 1,
+        commandId: "reconcile-without-verification-process-authority",
+        correlationId: "correlation-reconcile-without-verification-process-authority",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "RECONCILE_WORKFLOWS",
+        payload: {},
+      }),
+    ).toMatchObject({ type: "WORKFLOWS_RECONCILED", interruptedVerificationRuns: [] });
+    expect(reopened.query({ type: "LIST_ACTIVE_VERIFICATION_RUNS" })).toMatchObject({
+      runs: [{ id: started.run.id, status: "RUNNING" }],
+    });
     const reconcileCommand = {
       schemaVersion: 1,
       commandId: "reconcile-after-restart",
       correlationId: "correlation-reconcile-after-restart",
       actor: { type: "SYSTEM", id: "local-daemon" },
       type: "RECONCILE_WORKFLOWS",
-      payload: {},
+      payload: { verificationProcessAuthorityReleasedRunIds: [started.run.id] as string[] },
     } as const;
     const reconciled = reopened.execute(reconcileCommand);
     expect(reconciled).toMatchObject({
@@ -1838,6 +1851,71 @@ describe("verification Run local state", () => {
         workItemId: fixture.workItemId,
       }),
     ).toMatchObject({ correctionRuns: [{ id: correction.id, status: "ACTIVE" }] });
+  });
+
+  it("preserves a durable owner cancellation across restart without opening correction work", async () => {
+    const fixture = await prepare();
+    const reserved = reserve(fixture, "reserve-owner-cancellation");
+    if (reserved.type !== "VERIFICATION_RUN_RESERVED") throw new Error("Expected reserved Run");
+    const check = reserved.checks[0];
+    if (check === undefined) throw new Error("Expected Check");
+    const started = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "start-owner-cancellation-check",
+      correlationId: "correlation-start-owner-cancellation-check",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "START_VERIFICATION_CHECK",
+      payload: {
+        runId: reserved.run.id,
+        checkId: check.id,
+        expectedRunVersion: reserved.run.version,
+        expectedCheckVersion: check.version,
+      },
+    });
+    if (started.type !== "VERIFICATION_CHECK_STARTED") throw new Error("Expected started Check");
+    const requested = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "request-owner-cancellation",
+      correlationId: "correlation-request-owner-cancellation",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CANCEL_VERIFICATION_RUN",
+      payload: { runId: started.run.id, expectedRunVersion: started.run.version },
+    });
+    expect(requested).toMatchObject({
+      type: "VERIFICATION_RUN_CANCELLATION_REQUESTED",
+      replayed: false,
+      run: { status: "CANCELLING", currentCheckId: started.check.id },
+      event: { type: "VERIFICATION_RUN_CANCELLATION_REQUESTED" },
+    });
+    fixture.localState.close();
+    state = undefined;
+
+    const reopened = await open();
+    const reconciled = reopened.execute({
+      schemaVersion: 1,
+      commandId: "reconcile-owner-cancellation-after-restart",
+      correlationId: "correlation-reconcile-owner-cancellation-after-restart",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "RECONCILE_WORKFLOWS",
+      payload: { verificationProcessAuthorityReleasedRunIds: [started.run.id] },
+    });
+
+    expect(reconciled).toMatchObject({
+      type: "WORKFLOWS_RECONCILED",
+      interruptedVerificationRuns: [
+        { id: started.run.id, status: "INTERRUPTED", terminalReason: "OWNER_CANCELLED" },
+      ],
+    });
+    expect(
+      reopened.query({
+        type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+        workItemId: fixture.workItemId,
+      }),
+    ).toMatchObject({ correctionRuns: [] });
+    expect(reopened.query({ type: "LIST_ACTIVE_VERIFICATION_RUNS" })).toEqual({
+      type: "VERIFICATION_RUNS",
+      runs: [],
+    });
   });
 
   it("rejects a second active Run without writing a second reservation", async () => {

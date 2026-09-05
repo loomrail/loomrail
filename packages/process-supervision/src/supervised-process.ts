@@ -1,7 +1,13 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
+import { fileURLToPath } from "node:url";
 
 import { createProcessTreeOperations, type ProcessTreeOperations } from "./process-tree.js";
+import {
+  verificationProcessIsStopped,
+  verificationProcessRecordPath,
+} from "./verification-process-record.js";
 
 export type SupervisedProcessTermination =
   "EXITED" | "TIMED_OUT" | "OUTPUT_LIMIT_REACHED" | "CANCELLED" | "SPAWN_FAILED" | "TERMINATION_FAILED";
@@ -34,6 +40,11 @@ export type SupervisedProcessOptions = {
   redactValues: readonly string[];
   signal?: AbortSignal;
   processTree?: ProcessTreeOperations;
+  orphanGuard?: {
+    runId: string;
+    registryDirectory: string;
+    supervisorEntrypoint?: string;
+  };
 };
 
 const DEFAULT_GRACE_MS = 5_000;
@@ -140,6 +151,35 @@ export const runSupervisedProcess = async (
   const hasClosed = (): boolean => closeObserved;
   let settled = false;
   let stopPromise: Promise<void> | undefined;
+  const controlToken = options.orphanGuard === undefined ? null : randomBytes(32).toString("base64url");
+  const recordFile =
+    options.orphanGuard === undefined
+      ? null
+      : verificationProcessRecordPath(options.orphanGuard.registryDirectory, options.orphanGuard.runId);
+  const supervisedCommand = options.orphanGuard === undefined ? options.command : process.execPath;
+  const supervisedArgs =
+    options.orphanGuard === undefined || controlToken === null || recordFile === null
+      ? [...options.args]
+      : [
+          options.orphanGuard.supervisorEntrypoint ??
+            fileURLToPath(new URL("./verification-supervisor.js", import.meta.url)),
+          "--parent-pid",
+          process.pid.toString(),
+          "--control-token",
+          controlToken,
+          "--run-id",
+          options.orphanGuard.runId,
+          "--registry-file",
+          recordFile,
+          "--grace-ms",
+          graceMs.toString(),
+          "--",
+          options.command,
+          ...options.args,
+        ];
+  let supervisorReady = options.orphanGuard === undefined;
+  let targetExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  let controlBuffer = Buffer.alloc(0);
 
   const result = (): SupervisedProcessResult => {
     const sanitized = sanitizeSupervisedOutput(outputParts.join(""), options.redactValues);
@@ -160,15 +200,23 @@ export const runSupervisedProcess = async (
     };
   };
 
-  const child = spawn(options.command, [...options.args], {
+  const child = spawn(supervisedCommand, supervisedArgs, {
     cwd: options.cwd,
     detached: processTree.detachChild,
     env: { ...options.env },
     shell: false,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: options.orphanGuard === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe", "pipe"],
     windowsHide: true,
   });
   const rootPid = child.pid;
+  if (child.stdout === null || child.stderr === null) {
+    child.kill();
+    termination = "SPAWN_FAILED";
+    spawnErrorCode = "STDIO_UNAVAILABLE";
+    return result();
+  }
+  const childStdout = child.stdout;
+  const childStderr = child.stderr;
 
   return await new Promise<SupervisedProcessResult>((resolve) => {
     const finish = (): void => {
@@ -193,8 +241,14 @@ export const runSupervisedProcess = async (
       stopPromise = (async () => {
         if (rootPid === undefined) return;
         try {
-          await processTree.gracefulStop(rootPid);
-          await Promise.race([closed.promise, delay(graceMs)]);
+          if (options.orphanGuard !== undefined && child.stdin !== null) {
+            child.stdin.end();
+          } else {
+            await processTree.gracefulStop(rootPid);
+          }
+          const supervisorWaitMs =
+            options.orphanGuard === undefined ? graceMs : graceMs + FORCE_EXIT_WAIT_MS + 500;
+          await Promise.race([closed.promise, delay(supervisorWaitMs)]);
           if (processTree.treeExists(rootPid)) {
             await processTree.forceStop(rootPid);
             await Promise.race([closed.promise, delay(FORCE_EXIT_WAIT_MS)]);
@@ -206,6 +260,13 @@ export const runSupervisedProcess = async (
           if (!hasClosed() && processTree.treeExists(rootPid)) {
             termination = "TERMINATION_FAILED";
           }
+        }
+        if (
+          recordFile !== null &&
+          options.orphanGuard !== undefined &&
+          !(await verificationProcessIsStopped(recordFile, options.orphanGuard.runId))
+        ) {
+          termination = "TERMINATION_FAILED";
         }
       })();
     };
@@ -240,18 +301,56 @@ export const runSupervisedProcess = async (
     }, options.deadlineMs);
     deadlineTimer.unref();
 
-    child.stdout.on("data", (chunk: Buffer) => {
+    childStdout.on("data", (chunk: Buffer) => {
       append("stdout", chunk);
     });
-    child.stderr.on("data", (chunk: Buffer) => {
+    childStderr.on("data", (chunk: Buffer) => {
       append("stderr", chunk);
     });
-    child.stdout.once("end", () => {
+    childStdout.once("end", () => {
       flush("stdout");
     });
-    child.stderr.once("end", () => {
+    childStderr.once("end", () => {
       flush("stderr");
     });
+    if (options.orphanGuard !== undefined && controlToken !== null) {
+      const control = child.stdio[3];
+      control?.on("data", (chunk: Buffer) => {
+        controlBuffer = Buffer.concat([controlBuffer, chunk]);
+        if (controlBuffer.byteLength > 1_024) {
+          stop("TERMINATION_FAILED");
+          return;
+        }
+        let newline = controlBuffer.indexOf(0x0a);
+        while (newline !== -1) {
+          const message = controlBuffer.subarray(0, newline).toString("utf8");
+          controlBuffer = controlBuffer.subarray(newline + 1);
+          if (message === `READY:${controlToken}` && !supervisorReady) {
+            supervisorReady = true;
+            child.stdin?.write(`GO:${controlToken}\n`);
+          } else {
+            const exit = new RegExp(`^EXIT:${controlToken}:(-?\\d+|null):(SIG[A-Z0-9]+|null)$`, "u").exec(
+              message,
+            );
+            if (exit === null) {
+              stop("TERMINATION_FAILED");
+              return;
+            }
+            const code = exit[1] === "null" ? null : Number(exit[1]);
+            const signal = exit[2] === "null" ? null : (exit[2] as NodeJS.Signals);
+            if ((code !== null && !Number.isSafeInteger(code)) || targetExit !== null) {
+              stop("TERMINATION_FAILED");
+              return;
+            }
+            targetExit = { code, signal };
+          }
+          newline = controlBuffer.indexOf(0x0a);
+        }
+      });
+      control?.once("error", () => {
+        stop("TERMINATION_FAILED");
+      });
+    }
     child.once("error", (error: Error) => {
       termination = "SPAWN_FAILED";
       spawnErrorCode = "code" in error && typeof error.code === "string" ? error.code : "UNKNOWN_SPAWN_ERROR";
@@ -260,11 +359,30 @@ export const runSupervisedProcess = async (
       finish();
     });
     child.once("close", (code, signal) => {
-      exitCode = code;
-      exitSignal = signal;
-      closeObserved = true;
-      closed.resolve(true);
-      finishAfterStop();
+      void (async (): Promise<void> => {
+        const recordStopped =
+          recordFile === null ||
+          options.orphanGuard === undefined ||
+          (await verificationProcessIsStopped(recordFile, options.orphanGuard.runId));
+        if (!recordStopped) {
+          termination = "TERMINATION_FAILED";
+          exitCode = null;
+          exitSignal = null;
+        } else if (options.orphanGuard !== undefined && (!supervisorReady || targetExit === null)) {
+          if (termination === "EXITED") {
+            termination = "SPAWN_FAILED";
+            spawnErrorCode = "SUPERVISOR_START_FAILED";
+          }
+          exitCode = code;
+          exitSignal = signal;
+        } else {
+          exitCode = targetExit?.code ?? code;
+          exitSignal = targetExit?.signal ?? signal;
+        }
+        closeObserved = true;
+        closed.resolve(true);
+        finishAfterStop();
+      })();
     });
     if (options.signal?.aborted === true) cancel();
     else options.signal?.addEventListener("abort", cancel, { once: true });

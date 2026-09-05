@@ -192,6 +192,13 @@ const run = async () => {
     }
     const mcpProxyPath = join(installedRoot, "apps", "cli", "dist", "proxy.js");
     const mcpSupervisorPath = join(installedRoot, "apps", "cli", "dist", "supervisor.js");
+    const verificationSupervisorPath = join(
+      installedRoot,
+      "apps",
+      "cli",
+      "dist",
+      "verification-supervisor.js",
+    );
     await assertEntrypointRejectsInvalidInvocation(
       mcpProxyPath,
       "The Loomrail MCP proxy arguments are invalid.",
@@ -199,6 +206,10 @@ const run = async () => {
     await assertEntrypointRejectsInvalidInvocation(
       mcpSupervisorPath,
       "Invalid Loomrail MCP supervisor invocation",
+    );
+    await assertEntrypointRejectsInvalidInvocation(
+      verificationSupervisorPath,
+      "Invalid Loomrail verification supervisor invocation",
     );
     const diagnosticEnvironment = {
       ...process.env,

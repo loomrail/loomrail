@@ -46,7 +46,6 @@ describe("daemon Project verification output retention", () => {
           recordedAt: "2026-09-05T12:00:00.000Z",
         };
       },
-      inspectCommandReceipt: () => null,
       query: (query: StateQuery): StateQueryResult => {
         if (query.type === "HAS_VERIFICATION_OUTPUT_STORAGE_KEY") {
           return { type: "VERIFICATION_OUTPUT_STORAGE_KEY", exists: query.storageKey === storageKey };
@@ -104,7 +103,6 @@ describe("daemon Project verification output retention", () => {
       execute: () => {
         throw new Error("Unsafe output must not be recorded as deleted");
       },
-      inspectCommandReceipt: () => null,
       query: (query: StateQuery): StateQueryResult => {
         if (query.type !== "LIST_EXPIRED_VERIFICATION_OUTPUTS") {
           throw new Error(`Unexpected query ${query.type}`);
@@ -138,7 +136,6 @@ describe("daemon Project verification output retention", () => {
       execute: () => {
         throw new Error("An orphan has no durable artifact identity to record");
       },
-      inspectCommandReceipt: () => null,
       query: (query: StateQuery): StateQueryResult => {
         if (query.type === "HAS_VERIFICATION_OUTPUT_STORAGE_KEY") {
           return { type: "VERIFICATION_OUTPUT_STORAGE_KEY", exists: false };
@@ -185,7 +182,6 @@ describe("daemon Project verification output retention", () => {
       execute: () => {
         throw new Error("Orphan cleanup does not record a durable output result");
       },
-      inspectCommandReceipt: () => null,
       query: (query: StateQuery): StateQueryResult => {
         if (query.type === "HAS_VERIFICATION_OUTPUT_STORAGE_KEY") {
           return { type: "VERIFICATION_OUTPUT_STORAGE_KEY", exists: false };

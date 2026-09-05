@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-05
 
-**Статус:** in progress — Q17.1/Q17.2/Q17.3 complete, Q17.4 verification in progress
+**Статус:** implementation and independent review complete; fresh fixed-commit CI in progress
 
 **Спецификация:**
 [79-q17-project-verification-gate-spec.ru.md](79-q17-project-verification-gate-spec.ru.md)
@@ -107,14 +107,22 @@ output; restart сохраняет failure, а crash во время process д�
       остаётся forbidden source. Stale после уже `PASSED` correction сохраняет terminal history, продолжает общий
       budget либо открывает owner gate и переживает reopen. Light/dark/keyboard/narrow UI и восстановление после
       daemon restart закрыты отдельным Playwright case.
+- [x] Не освобождать verification workspace до доказанной остановки process tree. Owner cancel теперь durable проходит
+      `RUNNING -> CANCELLING -> INTERRUPTED`; launch intent создаётся до state transition, trusted supervisor пишет
+      ACTIVE/STOPPED proof и убивает resistant descendants при потере daemon control pipe. Startup сверяет PID/start
+      time и передаёт storage только exact released Run IDs; missing/mismatched identity при active Check fail-closed.
+      Windows startup не выводит descendant authority из уже исчезнувшего числового root PID. Reconcile идёт batches
+      по 1000 и удаляет proof только после commit; manual terminal rerun будит parked QA, а non-terminal exit — нет.
 - [x] Выполнить RU/EN, keyboard/focus, light/dark, 320 px и daemon-restart Browser QA. Q17 Playwright case
       детерминированно фиксирует English/light, keyboard-only Run/output focus, Russian/dark на 320 px, затем
       перезапускает daemon с той же SQLite-базой и повторно проверяет восстановленный measured result без overflow.
 - [x] Выполнить focused lint/typecheck/unit/integration, full non-landing gates, fault injection и clean release.
       Full source typecheck, все package tests, 58/58 Playwright, fault injection и clean packed release прошли;
-      repository-wide format/lint остаются заблокированы только unrelated untracked research и тремя protected
-      landing findings, которые не изменялись.
-- [ ] Выполнить independent Standards/Spec review и исправить все P0–P2.
+      repository-wide lint прошёл. Format check остаётся заблокирован только двумя unrelated untracked research
+      files, которые не изменялись и не входят в Q17.
+- [x] Выполнить independent Standards/Spec review и исправить все P0–P2. Два независимых reviewer после correction
+      rounds не нашли оставшихся P0–P2; отдельно закрыты packaged supervisor, descendant races, Windows PID-reuse,
+      terminal-only workflow wake и commit-before-proof-removal.
 - [x] Зафиксировать macOS/Windows fixed-commit fixture CI evidence; не заявлять live Windows provider evidence.
       На `05cab6279e0cf9f772cafbd32caba9558474d3fb` clean install, 58/58 Browser smoke, Q17 workflow gate и fault
       recovery прошли на обеих платформах; Windows process-tree lifecycle отдельно зелёный. Оба Verify остановились

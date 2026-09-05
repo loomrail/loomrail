@@ -26,3 +26,10 @@ export {
   type ExecuteVerificationRecipeInput,
   type VerificationRecipeExecution,
 } from "./runner.js";
+export {
+  prepareVerificationProcessIntent,
+  recoverVerificationRunProcesses,
+  removeVerificationProcessRecord,
+  verificationProcessRecordPath,
+  type VerificationProcessRecoveryReport,
+} from "@loomrail/process-supervision";

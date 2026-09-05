@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import {
   decideVerificationCheckCompletion,
   decideVerificationCheckStart,
+  decideVerificationRunCancellationRequest,
   decideVerificationRunReservation,
   decideVerificationRunInterruption,
   deriveStaleVerificationFailure,
@@ -513,11 +514,23 @@ describe("verification Run lifecycle", () => {
   });
 
   it("lets the owner cancel a queued Run without inventing a start time", () => {
-    const decision = decideVerificationRunInterruption({
+    const requested = decideVerificationRunCancellationRequest({
       actor: { type: "HUMAN", id: "local-owner" },
       run,
-      checks,
       expectedRunVersion: 1,
+    });
+    expect(requested.run).toMatchObject({
+      status: "CANCELLING",
+      terminalReason: null,
+      startedAt: null,
+      completedAt: null,
+      version: 2,
+    });
+    const decision = decideVerificationRunInterruption({
+      actor: system,
+      run: requested.run,
+      checks,
+      expectedRunVersion: 2,
       reason: "OWNER_CANCELLED",
       now: "2026-09-05T10:00:02.000Z",
     });
@@ -527,7 +540,7 @@ describe("verification Run lifecycle", () => {
       terminalReason: "OWNER_CANCELLED",
       startedAt: null,
       completedAt: "2026-09-05T10:00:02.000Z",
-      version: 2,
+      version: 3,
     });
     expect(decision.checks).toEqual(checks);
     expect(
@@ -543,6 +556,40 @@ describe("verification Run lifecycle", () => {
         reason: "RUN_INTERRUPTED",
       },
     });
+    expect(() =>
+      decideVerificationRunCancellationRequest({
+        actor: system,
+        run,
+        expectedRunVersion: 1,
+      }),
+    ).toThrow(expect.objectContaining({ code: "OWNER_REQUIRED" }));
+    expect(() =>
+      decideVerificationRunCancellationRequest({
+        actor: { type: "HUMAN", id: "local-owner" },
+        run: requested.run,
+        expectedRunVersion: requested.run.version,
+      }),
+    ).toThrow(expect.objectContaining({ code: "RUN_STATUS_INVALID" }));
+    expect(() =>
+      decideVerificationRunInterruption({
+        actor: { type: "HUMAN", id: "local-owner" },
+        run: requested.run,
+        checks,
+        expectedRunVersion: requested.run.version,
+        reason: "OWNER_CANCELLED",
+        now: "2026-09-05T10:00:02.000Z",
+      }),
+    ).toThrow(expect.objectContaining({ code: "SYSTEM_REQUIRED" }));
+    expect(() =>
+      decideVerificationRunInterruption({
+        actor: system,
+        run: requested.run,
+        checks,
+        expectedRunVersion: requested.run.version,
+        reason: "DAEMON_RESTART",
+        now: "2026-09-05T10:00:02.000Z",
+      }),
+    ).toThrow(expect.objectContaining({ code: "RUN_STATUS_INVALID" }));
   });
 
   it("interrupts only the current Check during daemon restart", () => {

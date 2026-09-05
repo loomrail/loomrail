@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-05
 
-**Статус:** approved product contract; implementation pending
+**Статус:** implemented; final review and fresh fixed-commit CI pending
 
 **Основание:** QD-002, QD-003, T48 и Phase 8 Q17 в
 [MASTER-PLAN.ru.md](../product/MASTER-PLAN.ru.md)
@@ -121,8 +121,19 @@ cleanup, commit/push/merge, deploy или secret profile. Если project тр�
   после команды с tree до spawn. Изменение tracked tree даёт `ERROR / TREE_MUTATED`, даже если exit code 0.
 - Non-zero exit — `FAILED`; spawn/policy/path/output/timeout/tree mutation — typed `ERROR`; owner cancellation —
   `INTERRUPTED`. Signal/exit code хранятся структурно, без parsing error strings.
-- После daemon crash startup помечает durable `RUNNING` как `INTERRUPTED / DAEMON_RESTART`; неизвестный внешний
-  outcome никогда не replay автоматически. Явный owner retry создаёт новый ordinal.
+- До запуска child daemon синхронно фиксирует launch intent в app-owned process registry. Trusted supervisor сначала
+  публикует свою process identity, затем по отдельному control handshake запускает recipe и записывает identity child;
+  исчезновение daemon control pipe останавливает всё дерево и только после этого оставляет `STOPPED` proof.
+- Owner cancel сначала durable переводит Run в `CANCELLING`; workspace и проверка остаются зарезервированы. Только
+  подтверждённый `STOPPED` позволяет SYSTEM-команде записать `INTERRUPTED / OWNER_CANCELLED` и освободить authority.
+- После daemon crash startup сверяет PID и время старта из bounded registry, завершает сохранившееся дерево и лишь
+  затем передаёт storage exact список Run с доказанно освобождённой process authority. Missing/invalid/mismatched
+  record при активной Check блокирует startup и не освобождает workspace. На Windows исчезнувший до проверки root
+  PID тоже блокирует startup: числовая parent lineage без живой identity не даёт права сигналить возможный reused PID.
+  Live supervisor, который сам запустил child, завершает descendants до `STOPPED`. `INTENT | STOPPED` proof
+  сохраняется до успешного bounded SQLite reconcile и удаляется только после его commit; crash между OS recovery и
+  DB transition поэтому остаётся повторяемым. Неизвестный outcome не replay автоматически. Явный owner retry создаёт
+  новый ordinal; его durable terminal result будит ожидающий QA dispatch, а non-terminal runner failure — нет.
 
 ## 8. Output и privacy
 
@@ -150,7 +161,8 @@ Allowed Run transitions:
 
 ```text
 QUEUED -> RUNNING -> PASSED | FAILED | ERROR | INTERRUPTED
-QUEUED -> INTERRUPTED
+QUEUED | RUNNING -> CANCELLING -> INTERRUPTED / OWNER_CANCELLED
+QUEUED | RUNNING -> INTERRUPTED / DAEMON_RESTART
 ```
 
 `STALE` — query/Acceptance projection, не destructive rewrite terminal history. Она возникает, если current Plan
@@ -206,11 +218,13 @@ owner видит exact argv и risk disclosure до подтверждения.
 - scanner/publisher: malicious manifest/script body, lifecycle names, oversized input, symlink/path escape, changed hash,
   unknown existing `.loomrail` file and atomic publish recovery;
 - runner: argv injection, cwd escape, scrubbed env/secret canaries, unsupported denied-network policy, stdout/stderr cap,
-  ANSI/HTML, timeout, stubborn descendants, cancel, spawn failure, tree mutation and exact close;
+  ANSI/HTML, timeout, stubborn descendants, cancel, spawn failure, tree mutation, daemon-control loss, durable
+  process-identity recovery, vanished Windows root и exact close;
 - persistence: migration, transactional reservation/completion, duplicate completion, rollback, restart interruption,
-  output reference and current-tree query;
+  output reference and current-tree query; daemon recovery отдельно проверяет batches >1000 и commit-before-unlink;
 - workflow: required failure blocks QA/Acceptance, optional failure does not, correction/re-review/fresh rerun opens the
-  next gate, stale/foreign/old-plan pass rejected, bounds cannot reset on restart;
+  next gate, manual terminal rerun будит parked QA, non-terminal failure не создаёт hot loop,
+  stale/foreign/old-plan pass rejected, bounds cannot reset on restart;
 - HTTP/UI: auth/Origin/CSRF, inert preview/output, Settings adoption, Task Cockpit states, keyboard, RU/EN,
   light/dark/narrow and daemon restart;
 - macOS/Windows: paths with spaces/non-ASCII, package-manager executable resolution, process-tree kill, exit/signal

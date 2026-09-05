@@ -2,8 +2,9 @@
 
 **Date:** 2026-09-05
 
-**Scope:** implemented and locally verified owner-approved Project verification gate; automated macOS/Windows CI
-evidence recorded below; independent Standards/Spec review and Windows live-provider verification remain open
+**Scope:** implemented, independently reviewed and locally verified owner-approved Project verification gate;
+automated macOS/Windows CI evidence recorded below; fresh fixed-commit CI and Windows live-provider verification
+remain open
 
 ## Implemented boundary
 
@@ -32,6 +33,17 @@ remaining shared budget. If a previously passing correction supplied that Run, i
 the next correction or owner gate receives new authority. The same owner gate now resolves daemon-restart
 interruptions after the automatic budget is spent.
 
+Owner cancellation is a durable two-phase operation. The HUMAN command first records `CANCELLING` and leaves the
+workspace reservation intact. A create-new launch intent and trusted supervisor bind repository execution to a
+bounded process record; loss of the daemon control pipe stops resistant descendants and writes `STOPPED`. Only this
+proof allows the SYSTEM finalizer or startup reconciliation to release the Run. Startup validates PID creation time
+and fails closed on missing, invalid, reused or still-running identities instead of treating a DB row as evidence that
+the OS process ended. Windows startup also blocks when the recorded root vanished before identity verification, so it
+never signals descendants derived only from a reusable numeric PID. Recovery retains `INTENT | STOPPED` proof until
+the corresponding bounded SQLite reconciliation batch commits, so a crash between process cleanup and durable state
+cannot turn the next startup into an unrecoverable missing-record state. Manual durable terminal runs wake a parked QA
+dispatch; non-terminal runner failures do not create automatic retry loops.
+
 Task Cockpit groups adopted recipes, exact commands, required/optional labels, measured status, duration, platform,
 stale reasons, correction history and output-on-demand behind one primary action. The correction owner gate also
 recognizes a historically passed correction whose evidence later became stale. It is verified in English/light and
@@ -39,29 +51,29 @@ Russian/dark, by keyboard, at 320 px and across a real daemon restart over the s
 
 ## T48 threat-to-test matrix
 
-| Threat                                 | Enforced boundary                                                  | Verification                                                   |
-| -------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------- |
-| Hostile script or shell metacharacters | Owner adopts exact argv; runner uses `shell: false`                | scanner, proposal/adoption and runner injection tests          |
-| cwd/path/symlink escape                | Canonical workspace-relative cwd and marker-bound publication      | publisher and runner path/symlink tests                        |
-| Secret/environment disclosure          | Closed baseline environment and redacted bounded output            | env canaries plus output/privacy tests                         |
-| Unsupported network denial             | Fail closed before spawn                                           | runner network-policy tests                                    |
-| Timeout/output exhaustion              | Bounded capture followed by process-tree stop                      | supervised-process and runner integration tests                |
-| Resistant descendant/orphan            | Platform process-tree termination, verified with real PIDs         | process-supervision lifecycle test in named macOS/Windows lane |
-| Tree changed during verification       | Before/after tree observation produces typed failure               | runner tree-mutation tests                                     |
-| Duplicate/late completion              | Expected versions, terminal-state checks and command receipt       | domain/persistence idempotency and rollback tests              |
-| Daemon crash/restart                   | Interrupt once, release reservation, never replay child            | persistence/daemon restart and fault-injection tests           |
-| Stale passing evidence                 | Append-only failure; immutable pass; bounded new authority         | domain/SQLite/UI stale-after-pass regression tests             |
-| Forged workflow or owner action        | Internal actor IDs, HUMAN-only resolution, Origin/CSRF             | domain forbidden matrix and daemon HTTP tests                  |
-| Acceptance bypass                      | Latest active Plan + current tree + every required Check must pass | acceptance binding/export and workflow tests                   |
+| Threat                                 | Enforced boundary                                                  | Verification                                               |
+| -------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------- |
+| Hostile script or shell metacharacters | Owner adopts exact argv; runner uses `shell: false`                | scanner, proposal/adoption and runner injection tests      |
+| cwd/path/symlink escape                | Canonical workspace-relative cwd and marker-bound publication      | publisher and runner path/symlink tests                    |
+| Secret/environment disclosure          | Closed baseline environment and redacted bounded output            | env canaries plus output/privacy tests                     |
+| Unsupported network denial             | Fail closed before spawn                                           | runner network-policy tests                                |
+| Timeout/output exhaustion              | Bounded capture followed by process-tree stop                      | supervised-process and runner integration tests            |
+| Resistant descendant/orphan            | Durable supervisor identity, control-loss reap, STOPPED proof      | root-exit and process-supervision lifecycle/recovery tests |
+| Tree changed during verification       | Before/after tree observation produces typed failure               | runner tree-mutation tests                                 |
+| Duplicate/late completion              | Expected versions, terminal-state checks and command receipt       | domain/persistence idempotency and rollback tests          |
+| Daemon crash/restart                   | Reap proven identity before release; fail closed; never replay     | PID reuse, 1001 batching, SQLite-failure and fault tests   |
+| Stale passing evidence                 | Append-only failure; immutable pass; bounded new authority         | domain/SQLite/UI stale-after-pass regression tests         |
+| Forged workflow or owner action        | Internal actor IDs, HUMAN-only resolution, Origin/CSRF             | domain forbidden matrix and daemon HTTP tests              |
+| Acceptance bypass                      | Latest active Plan + current tree + every required Check must pass | acceptance binding/export and workflow tests               |
 
 ## Local verification
 
 - Changed-file Prettier and ESLint passed; repository-wide source typecheck built and typechecked every workspace
   project.
-- Final sequential `pnpm test` passed every workspace package. Relevant counts include contracts 194/194,
-  process-supervision 10/10, web 95/95, Browser QA 27/27, domain 292/292, Project readiness 17/17,
-  persistence 138/138, daemon 234/234, provider adapters 159/159, MCP 20/20 and CLI 38/38. Landing passed 13/13 with
-  its known jsdom `HTMLMediaElement` warnings.
+- Final sequential `pnpm test` passed every workspace package. Relevant counts include contracts 197/197,
+  process-supervision 18/18, web 100/100, Browser QA 27/27, domain 299/299, Project readiness 24/24,
+  persistence 143/143, daemon 241/241, provider core 68/68, provider adapters 159/159, MCP 21/21 and CLI 38/38.
+  Landing passed 13/13 with its known jsdom `HTMLMediaElement` warnings.
 - `pnpm test:e2e`: 58/58 passed. The Q17 case verifies exact command display, keyboard Run/output focus, inert hostile
   output, stale owner gate from a historically `PASSED` correction, no unavailable final authorization, RU/EN,
   light/dark, 320 px, no horizontal overflow and daemon restart over the same database.
@@ -73,9 +85,11 @@ Russian/dark, by keyboard, at 320 px and across a real daemon restart over the s
   cancellation and SQLite reopen; the new `VerificationFailure(STALE)` remains durable and Acceptance stays closed.
 - The restart-interruption owner-gate matrix now covers both a direct Project verification correction and a Project
   verification failure nested inside active Browser QA.
-- Repository-wide formatting remains blocked only by unrelated untracked research files. Repository-wide lint still
-  has the same three protected `apps/landing/src/main.ts` findings at lines 630, 631 and 634. Neither surface belongs
-  to Q17, and `apps/landing/**` was not changed.
+- Windows missing-root recovery refuses ambiguous lineage; live supervisor root-exit cleanup, manual terminal
+  workflow wake, non-terminal no-wake, 1001-Run batching, commit-before-unlink and SQLite-failure proof retention have
+  dedicated regressions. Independent Standards and Spec reviewers report no remaining P0–P2 findings.
+- Repository-wide lint passes. Repository-wide formatting remains blocked only by two unrelated untracked research
+  files; they were neither changed nor included in this work. `apps/landing/**` was not changed.
 
 ## Fixed-commit macOS/Windows CI
 
@@ -101,8 +115,7 @@ surface stopped repository-wide lint.
 
 ## Remaining gates
 
-- independent Standards and Spec review with every P0–P2 finding fixed or explicitly resolved;
 - Windows live provider compatibility remains deferred by the owner; automated Windows runner, process-tree,
   browser and clean-install evidence is not a substitute for it;
-- protected landing lint, private dogfood, trusted publisher provenance and an explicit publish/release decision are
-  separate first-stable-version gates.
+- private dogfood, trusted publisher provenance and an explicit publish/release decision are separate
+  first-stable-version gates.

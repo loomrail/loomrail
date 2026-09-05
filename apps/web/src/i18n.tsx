@@ -268,6 +268,7 @@ const en = {
   "verification.status.NOT_RUN": "Not run",
   "verification.status.QUEUED": "Queued",
   "verification.status.RUNNING": "Running",
+  "verification.status.CANCELLING": "Cancelling",
   "verification.status.PASSED": "Passed",
   "verification.status.FAILED": "Failed",
   "verification.status.ERROR": "Error",
@@ -275,6 +276,9 @@ const en = {
   "verification.status.STALE": "Stale",
   "verification.runMeta": "Run {ordinal} · Plan r{revision} · {platform}",
   "verification.evidenceMeta": "Checks {passed}/{total} passed · tree {tree}",
+  "verification.evidenceCounts":
+    "Passed {passed} · failed {failed} · errors {errors} · interrupted {interrupted} · remaining {remaining} · tree {tree}",
+  "verification.currentPlan": "Current active Plan · revision {revision}",
   "verification.group": "{kind} checks",
   "verification.acceptanceBlocker":
     "Acceptance is blocked unless every required check passes for the current code and Plan.",
@@ -978,6 +982,8 @@ const en = {
   "event.verificationCheckCompletedDetail": "Check {ordinal} · {status}",
   "event.verificationRunInterrupted": "Project verification interrupted",
   "event.verificationRunInterruptedDetail": "Run {ordinal}",
+  "event.verificationRunCancellationRequested": "Project verification cancellation requested",
+  "event.verificationRunCancellationRequestedDetail": "Run {ordinal} is stopping safely",
   "event.verificationFailureRecorded": "Project verification blocked delivery",
   "event.verificationFailureRecordedDetail": "Measured reason: {reason}",
   "event.verificationCorrectionStarted": "Project check correction started",
@@ -1349,6 +1355,7 @@ const ru = {
   "verification.status.NOT_RUN": "Не запускалась",
   "verification.status.QUEUED": "В очереди",
   "verification.status.RUNNING": "Выполняется",
+  "verification.status.CANCELLING": "Отменяется",
   "verification.status.PASSED": "Пройдена",
   "verification.status.FAILED": "Не пройдена",
   "verification.status.ERROR": "Ошибка",
@@ -1356,6 +1363,9 @@ const ru = {
   "verification.status.STALE": "Устарела",
   "verification.runMeta": "Запуск {ordinal} · План r{revision} · {platform}",
   "verification.evidenceMeta": "Пройдено {passed}/{total} · tree {tree}",
+  "verification.evidenceCounts":
+    "Пройдено {passed} · не пройдено {failed} · ошибок {errors} · прервано {interrupted} · осталось {remaining} · tree {tree}",
+  "verification.currentPlan": "Текущий активный План · ревизия {revision}",
   "verification.group": "Проверки {kind}",
   "verification.acceptanceBlocker":
     "Acceptance заблокирован, пока все обязательные проверки не пройдут для текущего кода и Плана.",
@@ -2061,6 +2071,8 @@ const ru = {
   "event.verificationCheckCompletedDetail": "Проверка {ordinal} · {status}",
   "event.verificationRunInterrupted": "Проверка проекта прервана",
   "event.verificationRunInterruptedDetail": "Запуск {ordinal}",
+  "event.verificationRunCancellationRequested": "Запрошена отмена проверки проекта",
+  "event.verificationRunCancellationRequestedDetail": "Запуск {ordinal} безопасно останавливается",
   "event.verificationFailureRecorded": "Проверка проекта заблокировала поставку",
   "event.verificationFailureRecordedDetail": "Измеренная причина: {reason}",
   "event.verificationCorrectionStarted": "Запущено исправление проверки проекта",

@@ -393,7 +393,11 @@ test.describe("project verification Task Cockpit", () => {
     await expect(run).toBeFocused();
     await run.press("Enter");
     await expect(verification.getByText("Passed", { exact: true }).first()).toBeVisible();
-    await expect(verification.getByText("Checks 1/1 passed · tree dddddddddddd")).toBeVisible();
+    await expect(
+      verification.getByText(
+        "Passed 1 · failed 0 · errors 0 · interrupted 0 · remaining 0 · tree dddddddddddd",
+      ),
+    ).toBeVisible();
     await expect(verification.getByRole("heading", { name: "UNIT checks" })).toBeVisible();
     await expect(verification.getByRole("button", { name: "Run again" })).toBeVisible();
 
@@ -444,7 +448,11 @@ test.describe("project verification Task Cockpit", () => {
     await expect(narrowVerification.getByRole("button", { name: "Отменить поставку" })).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(page.locator("html")).toHaveAttribute("lang", "ru");
-    await expect(narrowVerification.getByText("Пройдено 1/1 · tree dddddddddddd")).toBeVisible();
+    await expect(
+      narrowVerification.getByText(
+        "Пройдено 1 · не пройдено 0 · ошибок 0 · прервано 0 · осталось 0 · tree dddddddddddd",
+      ),
+    ).toBeVisible();
     const narrowOverflow = await narrowVerification.evaluate(
       (element) => element.scrollWidth - element.clientWidth,
     );

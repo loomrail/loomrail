@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +11,8 @@ import {
 } from "@loomrail/contracts";
 import { openLocalState } from "@loomrail/persistence-sqlite";
 import {
+  prepareVerificationProcessIntent,
+  verificationProcessRecordPath,
   verificationPlanProposalHash,
   type ExecuteVerificationRecipeInput,
   type VerificationRecipeExecution,
@@ -19,6 +21,7 @@ import { addWorktree, inspectRepository } from "@loomrail/workspace";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { startDaemon, type RunningDaemon } from "../src/server.js";
+import { createProjectVerificationRunner } from "../src/verification-runner.js";
 import { authenticate, bootstrapToken, mutationHeaders } from "./daemon-fixtures.js";
 import { makeThrowawayRepo } from "./repo-fixtures.js";
 
@@ -256,6 +259,171 @@ describe("project verification HTTP boundary", () => {
     await daemon?.close();
     daemon = undefined;
     await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  });
+
+  it("notifies the workflow after a manually reserved Run settles successfully", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail verification workflow wake "));
+    directories.push(directory);
+    const fixture = await seedVerification(directory);
+    const state = await openLocalState({
+      databasePath: fixture.databasePath,
+      now: () => new Date(timestamp),
+    });
+    try {
+      const reserved = state.execute({
+        schemaVersion: 1,
+        commandId: "reserve-manual-workflow-wake",
+        correlationId: "correlation-manual-workflow-wake",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_VERIFICATION_RUN",
+        payload: {
+          workItemId: fixture.workItemId,
+          expectedWorkItemVersion: fixture.workItemVersion,
+          expectedPlanRevision: fixture.planRevision,
+          expectedPlanContentHash: fixture.planContentHash,
+          implementationTree: "b".repeat(40),
+          platform: "darwin",
+        },
+      });
+      if (reserved.type !== "VERIFICATION_RUN_RESERVED") throw new Error("Expected reserved Run");
+      const settledRunIds: string[] = [];
+      let commandId = 0;
+      let artifactId = 0;
+      const runner = createProjectVerificationRunner({
+        state,
+        artifactsDirectory: fixture.artifactsDirectory,
+        createCommandId: () => `manual-wake-command-${(commandId++).toString()}`,
+        createArtifactId: () => `manual-wake-output-${(artifactId++).toString()}`,
+        now: () => new Date(timestamp),
+        logger: { error: () => undefined },
+        executeRecipe: passingExecution,
+        onSettled: (runId) => {
+          settledRunIds.push(runId);
+        },
+      });
+
+      runner.wake(reserved.run.id);
+      await runner.whenIdle(reserved.run.id);
+
+      const completed = state.query({ type: "GET_VERIFICATION_RUN", runId: reserved.run.id });
+      expect(completed.type === "VERIFICATION_RUN" ? completed.run?.status : null).toBe("PASSED");
+      expect(settledRunIds).toEqual([reserved.run.id]);
+      await runner.stop();
+    } finally {
+      state.close();
+    }
+  });
+
+  it("does not wake the workflow after a non-terminal runner failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail verification failed workflow wake "));
+    directories.push(directory);
+    const fixture = await seedVerification(directory);
+    const state = await openLocalState({
+      databasePath: fixture.databasePath,
+      now: () => new Date(timestamp),
+    });
+    try {
+      const reserved = state.execute({
+        schemaVersion: 1,
+        commandId: "reserve-failed-workflow-wake",
+        correlationId: "correlation-failed-workflow-wake",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_VERIFICATION_RUN",
+        payload: {
+          workItemId: fixture.workItemId,
+          expectedWorkItemVersion: fixture.workItemVersion,
+          expectedPlanRevision: fixture.planRevision,
+          expectedPlanContentHash: fixture.planContentHash,
+          implementationTree: "b".repeat(40),
+          platform: "darwin",
+        },
+      });
+      if (reserved.type !== "VERIFICATION_RUN_RESERVED") throw new Error("Expected reserved Run");
+      const settledRunIds: string[] = [];
+      const runner = createProjectVerificationRunner({
+        state,
+        artifactsDirectory: fixture.artifactsDirectory,
+        createCommandId: () => "failed-workflow-wake-command",
+        createArtifactId: () => "failed-workflow-wake-output",
+        now: () => new Date(timestamp),
+        logger: { error: () => undefined },
+        executeRecipe: () => Promise.reject(new Error("synthetic runner boundary failure")),
+        onSettled: (runId) => {
+          settledRunIds.push(runId);
+        },
+      });
+
+      runner.wake(reserved.run.id);
+      await runner.whenIdle(reserved.run.id);
+
+      const incomplete = state.query({ type: "GET_VERIFICATION_RUN", runId: reserved.run.id });
+      expect(incomplete.type === "VERIFICATION_RUN" ? incomplete.run?.status : null).toBe("RUNNING");
+      expect(settledRunIds).toEqual([]);
+      await runner.stop();
+    } finally {
+      state.close();
+    }
+  });
+
+  it("removes recovered process proof before notifying workflow of owner cancellation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail recovered verification cancel "));
+    directories.push(directory);
+    const fixture = await seedVerification(directory);
+    const state = await openLocalState({
+      databasePath: fixture.databasePath,
+      now: () => new Date(timestamp),
+    });
+    try {
+      const reserved = state.execute({
+        schemaVersion: 1,
+        commandId: "reserve-recovered-cancel",
+        correlationId: "correlation-recovered-cancel",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_VERIFICATION_RUN",
+        payload: {
+          workItemId: fixture.workItemId,
+          expectedWorkItemVersion: fixture.workItemVersion,
+          expectedPlanRevision: fixture.planRevision,
+          expectedPlanContentHash: fixture.planContentHash,
+          implementationTree: "b".repeat(40),
+          platform: "darwin",
+        },
+      });
+      if (reserved.type !== "VERIFICATION_RUN_RESERVED") throw new Error("Expected reserved Run");
+      const registryDirectory = join(fixture.artifactsDirectory, ".processes");
+      const proofPath = await prepareVerificationProcessIntent(registryDirectory, reserved.run.id);
+      expect(proofPath).toBe(verificationProcessRecordPath(registryDirectory, reserved.run.id));
+      const settledRunIds: string[] = [];
+      const runner = createProjectVerificationRunner({
+        state,
+        artifactsDirectory: fixture.artifactsDirectory,
+        createCommandId: () => "recovered-cancel-command",
+        createArtifactId: () => "unused-recovered-cancel-output",
+        now: () => new Date(timestamp),
+        logger: { error: () => undefined },
+        onSettled: (runId) => {
+          settledRunIds.push(runId);
+        },
+      });
+
+      await runner.cancel({
+        runId: reserved.run.id,
+        expectedVersion: reserved.run.version,
+        commandId: "owner-recovered-cancel",
+        correlationId: "correlation-owner-recovered-cancel",
+      });
+
+      const cancelled = state.query({ type: "GET_VERIFICATION_RUN", runId: reserved.run.id });
+      expect(cancelled.type === "VERIFICATION_RUN" ? cancelled.run : null).toMatchObject({
+        status: "INTERRUPTED",
+        terminalReason: "OWNER_CANCELLED",
+      });
+      await expect(access(proofPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(settledRunIds).toEqual([reserved.run.id]);
+      await runner.stop();
+    } finally {
+      state.close();
+    }
   });
 
   it("starts, measures, lists, retries and serves output as inert text", async () => {
@@ -511,6 +679,12 @@ describe("project verification HTTP boundary", () => {
     });
     await abortObserved;
     expect(responseSettled).toBe(false);
+    const cancellingResponse = await fetch(
+      `${daemon.baseUrl}/api/v1/work-items/${fixture.workItemId}/verification-runs`,
+      { headers: { cookie: session.cookie } },
+    );
+    const cancelling = verificationRunsResponseSchema.parse(await cancellingResponse.json()).runs[0];
+    expect(cancelling?.run).toMatchObject({ status: "CANCELLING", terminalReason: null });
     const inFlightReuse = await fetch(`${daemon.baseUrl}/api/v1/verification-runs/${running.run.id}/cancel`, {
       method: "POST",
       headers,

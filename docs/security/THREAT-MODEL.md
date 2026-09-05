@@ -112,7 +112,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T45 | Public issue intake exposes private data or routes a vulnerability publicly  | High     | closed forms; explicit public-data acknowledgement; enabled private reporting; no uploads/log requests; no runtime ingestion                                                                 | see Q11 public-intake delta below                                                 |
 | T46 | Insights/report export leaks sensitive local workflow or machine metadata    | High     | numeric/enum facts; strict nested schemas; exact preview/download object; authenticated loopback; no network sender                                                                          | see Q12 private-reporting delta below                                             |
 | T47 | Forged, stale or ambiguous provider allowance misleads scheduling or spend   | High     | official structured surface only; closed adapter schema; explicit used/remaining label; observed/reset time and freshness; advisory-only scheduling; no account/credential persistence       | Q16 provider-allowance delta below                                                |
-| T48 | Repository-proposed verification recipe executes attacker-controlled code    | Critical | proposal is inert; exact owner-approved revision; argv/no-shell trusted runner; scoped cwd/env/network; time/output bounds; no install/Git/deploy authority; durable idempotent execution    | planned Q17 Project-verification delta below                                      |
+| T48 | Repository-proposed verification recipe executes attacker-controlled code    | Critical | inert proposal; exact owner revision; argv/no-shell supervisor; scoped cwd/env/network; bounded output/time; durable process identity; stop-before-release; no install/Git/deploy authority  | see Q17 Project-verification delta below                                          |
 | T49 | Guided activation hides authority or publishes an unsafe install sequence    | High     | exact closed install contract; Mock-only preflight; explicit side effects and owner actions; fragment-only bootstrap; durable idempotent Task; no parallel progress truth                    | see Q15 canonical-activation delta below                                          |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
@@ -718,7 +718,7 @@ packaged build is exercised on a real Windows host. Claude allowance needs a fut
 and a new exact compatibility decision; Desktop/TUI presence is not evidence. These are release-evidence gates, not
 permission to reinterpret unavailable data as zero or to make allowance authoritative meanwhile.
 
-### Q17 Project-verification delta (T48, implemented; independent review pending)
+### Q17 Project-verification delta (T48, implemented and independently reviewed; fresh CI pending)
 
 Q17 promotes repository build/test/lint/integration/E2E commands from provider prose to executable acceptance evidence.
 Repository manifests and agent instructions are untrusted data, so a discovered script name is a proposal, not launch
@@ -731,13 +731,26 @@ Critical and stays open until the Q17 spec and implementation provide:
   filesystem/environment/network permissions. Adoption and execution are separate optimistic-versioned commands;
 - trusted runner uses argv arrays with `shell: false`, a canonical task worktree, scrubbed environment, no provider or
   production secrets, explicit network policy, process-tree cancellation, deadline and stdout/stderr caps;
+- before a Check becomes `RUNNING`, daemon fsyncs a create-new launch intent in its app-owned registry. A trusted Node
+  supervisor replaces it with bounded `ACTIVE` PID/start-time evidence before acknowledging readiness, starts the
+  repository command only after an authenticated control handshake, and treats daemon stdin/control loss as a stop;
+- owner cancel commits `CANCELLING` and its audit Event before signalling. Workspace/read authority remains held until
+  the supervisor writes `STOPPED`; only then may the SYSTEM finalizer persist `INTERRUPTED / OWNER_CANCELLED`;
+- startup validates record shape, basename, run identity and OS-reported process start time before signalling target
+  then supervisor. It passes storage only exact Run IDs whose authority is proven released. A missing record for an
+  active Check, invalid record, PID reuse, unknown target identity, refused signal or surviving tree fails startup
+  closed instead of reconciling the Run or releasing its workspace. Windows recovery never infers authority from a
+  vanished numeric root PID, where parent lineage could belong to a reused identity; only the continuous live
+  supervisor may reap that root-exit race. Recovery retains `INTENT | STOPPED` proof until the corresponding bounded
+  SQLite batch commits, then removes it; a crash between OS cleanup and DB reconcile is therefore safe to retry;
 - verification has no package-install, commit, push, merge, cleanup or deploy authority. A recipe needing setup is a
   separate owner action and cannot smuggle it into a test command;
 - reservation, exact tree/recipe snapshot, terminal result, evidence, workflow transition and receipt follow durable
   transaction/idempotency rules; restart never silently replays an unknown external execution;
 - automatic execution is admitted only after a successful Review has advanced the WorkItem to QA. The exact internal
   `verification-workflow` actor may reserve only a first `START_VERIFICATION_RUN`; manual start/retry/cancel remains
-  owner-only, and Browser QA receives no AgentRun or browser authority while this gate is blocked;
+  owner-only, and Browser QA receives no AgentRun or browser authority while this gate is blocked. A manual Run wakes
+  that parked dispatch only after a durable terminal result; a fail-closed non-terminal runner exit cannot hot-loop;
 - daemon derives `PASSED | FAILED | ERROR | STALE`; provider text cannot create a pass. Required failed/error/stale
   evidence blocks Acceptance and any correction requires fresh review plus exact rerun on the current tree;
 - a terminal required non-pass or interrupted Run creates one append-only `VerificationFailure` in the same SQLite
@@ -770,8 +783,10 @@ Critical and stays open until the Q17 spec and implementation provide:
   of the package; the release renderer revalidates delivery lineage, current tree and the complete required check set;
 - required verification covers shell metacharacters, hostile package scripts/manifests, cwd/path and symlink escape,
   env/secret canaries, denied network, timeout/output exhaustion, child orphaning, duplicate completion, crash/restart,
-  stale tree/recipe, and the same macOS/Windows fixture behavior. Sanitized implementation and verification evidence
-  is recorded in `docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md`.
+  lost daemon control pipe, vanished/reused Windows PID, two-phase owner cancellation, terminal-only workflow wake,
+  1001-Run recovery batching, SQLite-failure proof retention, stale tree/recipe, and the same macOS/Windows fixture
+  behavior. Sanitized implementation and verification evidence is recorded in
+  `docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md`.
 
 ### A1.5 event-channel delta (T03)
 

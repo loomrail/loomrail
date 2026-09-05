@@ -44,7 +44,6 @@ describe("daemon Browser QA retention", () => {
     let selectedCutoff = "";
     const state: LocalState = {
       startup: { appliedMigrations: [] },
-      inspectCommandReceipt: () => null,
       execute: (command) => {
         if (command.type !== "RECORD_QA_ATTACHMENT_RETENTION") {
           throw new Error(`Unexpected command ${command.type}`);

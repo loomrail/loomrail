@@ -23,7 +23,7 @@ export type ProjectVerificationWorkflowGate = {
 type GateSnapshot = {
   gate: ReturnType<typeof projectVerificationAcceptanceGate>;
   latestRunId: string | null;
-  latestRunStatus: "QUEUED" | "RUNNING" | "PASSED" | "FAILED" | "ERROR" | "INTERRUPTED" | null;
+  latestRunStatus: "QUEUED" | "RUNNING" | "CANCELLING" | "PASSED" | "FAILED" | "ERROR" | "INTERRUPTED" | null;
   latestRunVersion: number | null;
   latestRunFailureMaterialized: boolean;
   planRevision: number | null;
@@ -140,7 +140,9 @@ export const createProjectVerificationWorkflowGate = (input: {
   const awaitActiveRun = async (snapshot: GateSnapshot): Promise<void> => {
     if (
       snapshot.latestRunId !== null &&
-      (snapshot.latestRunStatus === "QUEUED" || snapshot.latestRunStatus === "RUNNING")
+      (snapshot.latestRunStatus === "QUEUED" ||
+        snapshot.latestRunStatus === "RUNNING" ||
+        snapshot.latestRunStatus === "CANCELLING")
     ) {
       input.runner.wake(snapshot.latestRunId);
       await input.runner.whenIdle(snapshot.latestRunId);
@@ -154,7 +156,11 @@ export const createProjectVerificationWorkflowGate = (input: {
 
       await awaitActiveRun(snapshot);
       if (!dispatchIsStillPending(dispatch.id)) return { status: "MOVED" };
-      if (snapshot.latestRunStatus === "QUEUED" || snapshot.latestRunStatus === "RUNNING") {
+      if (
+        snapshot.latestRunStatus === "QUEUED" ||
+        snapshot.latestRunStatus === "RUNNING" ||
+        snapshot.latestRunStatus === "CANCELLING"
+      ) {
         snapshot = readSnapshot(dispatch, testedTree);
         if (snapshot.gate.status !== "BLOCKED") return resultOf(snapshot);
       }

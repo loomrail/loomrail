@@ -97,6 +97,12 @@ describe("project verification contract", () => {
     expect(verificationPlanProposalSchema.parse(proposal)).toEqual(proposal);
   });
 
+  it("accepts a normalized portable cwd with spaces and non-ASCII characters", () => {
+    expect(verificationRecipeSchema.parse({ ...recipe, cwd: "packages/app with spaces-ёж" }).cwd).toBe(
+      "packages/app with spaces-ёж",
+    );
+  });
+
   it.each([
     { ...recipe, executable: "./node_modules/.bin/vitest" },
     { ...recipe, executable: "sh", argv: ["-c", "vitest run"] },

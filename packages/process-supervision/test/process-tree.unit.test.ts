@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { createProcessTreeOperations, type ProcessTreeDependencies } from "../src/index.js";
+import {
+  createProcessTreeOperations,
+  stopAndReapProcessTree,
+  type ProcessTreeDependencies,
+} from "../src/index.js";
 
 type SignalCall = {
   pid: number;
@@ -93,6 +97,43 @@ describe("shared process-tree platform operations", () => {
       "-Command",
     ]);
     expect(fixture.executeCalls[0]?.args[4]).toContain("ProcessId = 7301");
+  });
+
+  it("reaps descendants after a Windows root exits through a bounded trusted query", async () => {
+    const fixture = dependencies({ stdout: "STOPPED\r\n" });
+    const operations = createProcessTreeOperations("win32", fixture.value);
+    const startedAt = new Date("2026-08-31T11:59:58.750Z");
+
+    await expect(operations.reapDescendants(7301, startedAt)).resolves.toBe(true);
+    expect(fixture.executeCalls[0]?.file).toBe("powershell.exe");
+    expect(fixture.executeCalls[0]?.args.slice(0, 4)).toEqual([
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+    ]);
+    expect(fixture.executeCalls[0]?.args[4]).toContain("$rootProcessId = 7301");
+    expect(fixture.executeCalls[0]?.args[4]).toContain(startedAt.getTime().toString());
+  });
+
+  it("reaps Windows descendants when cancellation observes an already-exited root", async () => {
+    const fixture = dependencies({ signalSucceeds: false, stdout: "STOPPED\r\n" });
+    const operations = createProcessTreeOperations("win32", fixture.value);
+    const startedAt = new Date("2026-08-31T11:59:58.750Z");
+
+    await expect(
+      stopAndReapProcessTree({
+        operations,
+        rootPid: 7301,
+        rootStartedAt: startedAt,
+        gracefulWaitMs: 100,
+        forceWaitMs: 100,
+      }),
+    ).resolves.toBe(true);
+
+    expect(fixture.executeCalls).toHaveLength(1);
+    expect(fixture.executeCalls[0]?.file).toBe("powershell.exe");
+    expect(fixture.executeCalls[0]?.args[4]).toContain("$rootProcessId = 7301");
   });
 
   it("rejects invalid process identifiers before constructing an OS command", async () => {

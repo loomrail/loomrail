@@ -321,8 +321,6 @@ export type StateStoreStartup = {
 export type LocalState = {
   readonly startup: StateStoreStartup;
   execute: (command: StateCommand) => StateCommandResult;
-  /** Returns an exact replay, null for a fresh id, and rejects a reused id before external effects. */
-  inspectCommandReceipt: (command: StateCommand) => StateCommandResult | null;
   query: (query: StateQuery) => StateQueryResult;
   close: () => void;
 };

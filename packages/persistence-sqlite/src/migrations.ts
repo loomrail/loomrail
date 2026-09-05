@@ -250,6 +250,12 @@ const migrations: readonly Migration[] = [
     filename: "0050_verification_plan_disabled_event.sql",
     rebuildsAReferencedTable: true,
   },
+  {
+    version: 51,
+    name: "verification_cancellation_intent",
+    filename: "0051_verification_cancellation_intent.sql",
+    rebuildsAReferencedTable: true,
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

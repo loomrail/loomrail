@@ -818,6 +818,15 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.verificationCheckCompleted"),
         tone: event.data.check.status === "PASSED" ? "success" : "warning",
       };
+    case "VERIFICATION_RUN_CANCELLATION_REQUESTED":
+      return {
+        detail: t("event.verificationRunCancellationRequestedDetail", {
+          ordinal: event.data.run.ordinal,
+        }),
+        icon: "pause",
+        label: t("event.verificationRunCancellationRequested"),
+        tone: "warning",
+      };
     case "VERIFICATION_RUN_INTERRUPTED":
       return {
         detail: t("event.verificationRunInterruptedDetail", { ordinal: event.data.run.ordinal }),

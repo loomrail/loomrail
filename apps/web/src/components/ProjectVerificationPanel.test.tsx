@@ -179,6 +179,27 @@ describe("ProjectVerificationView", () => {
     expect(html).not.toContain("<script>window.mustNotRun = true</script>");
   });
 
+  it("does not offer a second Cancel while durable cancellation is already pending", () => {
+    const current = snapshot();
+    const html = renderView({
+      runs: [
+        {
+          ...current,
+          run: {
+            ...current.run,
+            status: "CANCELLING",
+            currentCheckId: current.checks[0]?.id ?? null,
+            terminalReason: null,
+            completedAt: null,
+          },
+        },
+      ],
+    });
+
+    expect(html).toContain("Cancelling");
+    expect(html).not.toContain("Cancel run");
+  });
+
   it("uses the stable Unit, Integration, E2E, Build, Lint, Custom group order", () => {
     const unit = plan.recipes[0];
     if (unit === undefined) throw new Error("Expected the fixture plan to carry a recipe");

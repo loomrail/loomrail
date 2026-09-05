@@ -1,6 +1,17 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  copyFile,
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -346,10 +357,15 @@ describe("verification recipe runner", () => {
 
   it("recognizes a standalone Windows pnpm executable", async () => {
     const { artifacts, repositoryPath } = await makeRepo();
-    const approvedRecipe = await installRecipe(repositoryPath, "process.exit(0);", "pnpm");
+    const approvedRecipe = {
+      ...(await installRecipe(repositoryPath, "process.exit(0);", "pnpm")),
+      timeoutSeconds: 10,
+    } satisfies VerificationRecipe;
     const tools = join(artifacts, "windows-standalone-tools");
     await mkdir(tools, { recursive: true });
-    await copyFile(process.execPath, join(tools, "pnpm.exe"));
+    await link(process.execPath, join(tools, "pnpm.exe")).catch(async () => {
+      await copyFile(process.execPath, join(tools, "pnpm.exe"));
+    });
     await chmod(join(tools, "pnpm.exe"), 0o700);
 
     const result = await executeVerificationRecipe({

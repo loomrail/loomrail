@@ -28,7 +28,7 @@ import {
   useWorkItemQA,
 } from "../workspace";
 
-const activeRunStatuses = new Set<VerificationRun["status"]>(["QUEUED", "RUNNING"]);
+const activeRunStatuses = new Set<VerificationRun["status"]>(["QUEUED", "RUNNING", "CANCELLING"]);
 const terminalPipelineStatuses = new Set(["SUCCEEDED", "FAILED", "CANCELLED"]);
 
 const correctionStatusTones: Record<VerificationCorrectionRun["status"], StatusTone> = {
@@ -49,6 +49,7 @@ type VerificationCorrectionGate = {
 const runStatusKeys: Record<VerificationRun["status"], TranslationKey> = {
   QUEUED: "verification.status.QUEUED",
   RUNNING: "verification.status.RUNNING",
+  CANCELLING: "verification.status.CANCELLING",
   PASSED: "verification.status.PASSED",
   FAILED: "verification.status.FAILED",
   ERROR: "verification.status.ERROR",
@@ -58,6 +59,7 @@ const runStatusKeys: Record<VerificationRun["status"], TranslationKey> = {
 const runStatusTones: Record<VerificationRun["status"], StatusTone> = {
   QUEUED: "queued",
   RUNNING: "running",
+  CANCELLING: "running",
   PASSED: "complete",
   FAILED: "paused",
   ERROR: "paused",
@@ -217,6 +219,7 @@ const outcomeMessage = (snapshot: VerificationRunSnapshotResponse, t: Translator
   switch (snapshot.run.status) {
     case "QUEUED":
     case "RUNNING":
+    case "CANCELLING":
       return t("verification.outcome.active");
     case "PASSED":
       return t("verification.outcome.passed");
@@ -245,6 +248,12 @@ const RunEvidence = ({
   const checks = new Map(snapshot.checks.map((check) => [check.recipeId, check]));
   const stale = snapshot.freshness === "STALE";
   const passedChecks = snapshot.checks.filter((check) => check.status === "PASSED").length;
+  const failedChecks = snapshot.checks.filter((check) => check.status === "FAILED").length;
+  const errorChecks = snapshot.checks.filter((check) => check.status === "ERROR").length;
+  const interruptedChecks = snapshot.checks.filter((check) => check.status === "INTERRUPTED").length;
+  const remainingChecks = snapshot.checks.filter(
+    (check) => check.status === "QUEUED" || check.status === "RUNNING",
+  ).length;
 
   return (
     <div className="verification-run">
@@ -262,9 +271,12 @@ const RunEvidence = ({
         </span>
       </div>
       <p className="verification-run__evidence">
-        {t("verification.evidenceMeta", {
+        {t("verification.evidenceCounts", {
+          errors: errorChecks,
+          failed: failedChecks,
+          interrupted: interruptedChecks,
           passed: passedChecks,
-          total: snapshot.checks.length,
+          remaining: remainingChecks,
           tree: snapshot.run.implementationTree.slice(0, 12),
         })}
       </p>
@@ -321,6 +333,7 @@ export const ProjectVerificationView = ({
   const { t } = useI18n();
   const latest = runs[0];
   const active = latest !== undefined && activeRunStatuses.has(latest.run.status) ? latest : null;
+  const cancellable = active !== null && (active.run.status === "QUEUED" || active.run.status === "RUNNING");
   const availabilityMessage: Record<Exclude<RunAvailability, "READY">, TranslationKey> = {
     PLAN_REQUIRED: "verification.unavailable.plan",
     PIPELINE_REQUIRED: "verification.unavailable.pipeline",
@@ -341,9 +354,10 @@ export const ProjectVerificationView = ({
         ) : (
           <>
             {currentPlan ? (
-              <p className="verification-acceptance-blocker" role="note">
-                {t("verification.acceptanceBlocker")}
-              </p>
+              <div className="verification-current-plan" role="note">
+                <strong>{t("verification.currentPlan", { revision: currentPlan.revision })}</strong>
+                <p className="verification-acceptance-blocker">{t("verification.acceptanceBlocker")}</p>
+              </div>
             ) : null}
             {latest ? (
               <RunEvidence onToggleOutput={onToggleOutput} output={output} snapshot={latest} />
@@ -459,7 +473,7 @@ export const ProjectVerificationView = ({
             ) : null}
 
             <div className="verification-actions">
-              {correctionGate ? null : active ? (
+              {correctionGate ? null : cancellable ? (
                 <Button
                   loading={actionPending}
                   onClick={() => {
@@ -577,7 +591,7 @@ export const ProjectVerificationPanel = ({ item }: { item: WorkItem }): React.JS
       correctionGate={correctionGate}
       correctionPendingAction={resolveCorrection.isPending ? resolveCorrection.variables.action : null}
       correctionRuns={runsQuery.data?.correctionRuns ?? []}
-      currentPlan={planReady ? plan : null}
+      currentPlan={plan?.status === "ACTIVE" ? plan : null}
       loadError={loadError ?? null}
       loading={
         runsQuery.isPending ||

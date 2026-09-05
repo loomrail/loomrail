@@ -15,11 +15,60 @@ export type ProcessTreeDependencies = {
 
 export type ProcessTreeOperations = {
   detachChild: boolean;
+  /** Startup may only infer orphan lineage after the root exits when the OS has a stable group identity. */
+  orphanRecoveryRequiresLiveRootIdentity: boolean;
   pidExists: (pid: number) => boolean;
   treeExists: (rootPid: number) => boolean;
   gracefulStop: (rootPid: number) => Promise<void>;
   forceStop: (rootPid: number) => Promise<void>;
+  reapDescendants: (rootPid: number, rootStartedAt: Date) => Promise<boolean>;
   startedAt: (pid: number, now: Date) => Promise<Date | null>;
+};
+
+export type StopAndReapProcessTreeOptions = {
+  operations: ProcessTreeOperations;
+  rootPid: number;
+  rootStartedAt: Date;
+  gracefulWaitMs: number;
+  forceWaitMs: number;
+};
+
+const DESCENDANT_REAP_GRACE_MS = 500;
+const DESCENDANT_REAP_FORCE_MS = 2_000;
+
+const delay = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+
+const waitForTreeExit = async (exists: () => boolean, milliseconds: number): Promise<boolean> => {
+  const deadline = Date.now() + milliseconds;
+  while (Date.now() < deadline) {
+    if (!exists()) return true;
+    await delay(25);
+  }
+  return !exists();
+};
+
+export const stopAndReapProcessTree = async ({
+  operations,
+  rootPid,
+  rootStartedAt,
+  gracefulWaitMs,
+  forceWaitMs,
+}: StopAndReapProcessTreeOptions): Promise<boolean> => {
+  if (operations.treeExists(rootPid)) {
+    await operations.gracefulStop(rootPid).catch(() => undefined);
+    if (!(await waitForTreeExit(() => operations.treeExists(rootPid), gracefulWaitMs))) {
+      await operations.forceStop(rootPid).catch(() => undefined);
+      await waitForTreeExit(() => operations.treeExists(rootPid), forceWaitMs);
+    }
+  }
+  if (operations.treeExists(rootPid)) return false;
+
+  // On Windows treeExists only observes the root PID. The root can exit before
+  // its descendants, so descendant reaping is required even when it is already absent.
+  return operations.reapDescendants(rootPid, rootStartedAt);
 };
 
 const executeFile = (file: string, args: readonly string[]): Promise<ExecutionResult> =>
@@ -67,6 +116,7 @@ const elapsedToStartedAt = (value: string, now: Date): Date | null => {
 
 const createPosixOperations = (dependencies: ProcessTreeDependencies): ProcessTreeOperations => ({
   detachChild: true,
+  orphanRecoveryRequiresLiveRootIdentity: false,
   pidExists: (pid) => signalExists(dependencies, pid, false),
   treeExists: (rootPid) => signalExists(dependencies, rootPid, true),
   gracefulStop: (rootPid) => {
@@ -77,11 +127,75 @@ const createPosixOperations = (dependencies: ProcessTreeDependencies): ProcessTr
     dependencies.signal(-Number(requirePid(rootPid)), "SIGKILL");
     return Promise.resolve();
   },
+  reapDescendants: async (rootPid) => {
+    const exists = (): boolean => signalExists(dependencies, rootPid, true);
+    if (!exists()) return true;
+    try {
+      dependencies.signal(-Number(requirePid(rootPid)), "SIGTERM");
+      if (await waitForTreeExit(exists, DESCENDANT_REAP_GRACE_MS)) return true;
+      dependencies.signal(-Number(requirePid(rootPid)), "SIGKILL");
+      return await waitForTreeExit(exists, DESCENDANT_REAP_FORCE_MS);
+    } catch {
+      return !exists();
+    }
+  },
   startedAt: async (pid, now) => {
     const output = await dependencies.execute("ps", ["-o", "etime=", "-p", requirePid(pid)]);
     return output.ok ? elapsedToStartedAt(output.stdout, now) : null;
   },
 });
+
+const reapWindowsDescendants = async (
+  dependencies: ProcessTreeDependencies,
+  rootPid: number,
+  rootStartedAt: Date,
+): Promise<boolean> => {
+  const pidText = requirePid(rootPid);
+  const startedAtMilliseconds = rootStartedAt.getTime();
+  if (!Number.isSafeInteger(startedAtMilliseconds) || startedAtMilliseconds < 0) return false;
+  const script = [
+    "$ErrorActionPreference = 'Stop';",
+    `$rootProcessId = ${pidText};`,
+    `$minimumCreation = [DateTimeOffset]::FromUnixTimeMilliseconds(${startedAtMilliseconds.toString()}).UtcDateTime.AddSeconds(-3);`,
+    "$known = [System.Collections.Generic.HashSet[int]]::new();",
+    "[void]$known.Add($rootProcessId);",
+    "$quietScans = 0;",
+    "for ($attempt = 0; $attempt -lt 80; $attempt++) {",
+    "$all = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId,ParentProcessId,CreationDate);",
+    "$expanded = $true;",
+    "while ($expanded) {",
+    "$expanded = $false;",
+    "foreach ($candidate in $all) {",
+    "$candidateId = [int]$candidate.ProcessId;",
+    "$parentId = [int]$candidate.ParentProcessId;",
+    "if ($known.Contains($candidateId) -or -not $known.Contains($parentId)) { continue; }",
+    "if ($null -eq $candidate.CreationDate -or $candidate.CreationDate.ToUniversalTime() -lt $minimumCreation) { throw 'Process identity mismatch'; }",
+    "[void]$known.Add($candidateId);",
+    "$expanded = $true;",
+    "}",
+    "}",
+    "$alive = @($all | Where-Object { ([int]$_.ProcessId) -ne $rootProcessId -and $known.Contains([int]$_.ProcessId) });",
+    "if ($alive.Count -eq 0) {",
+    "$quietScans++;",
+    "if ($quietScans -ge 2) { Write-Output 'STOPPED'; exit 0; }",
+    "} else {",
+    "$quietScans = 0;",
+    "foreach ($candidate in $alive) { Stop-Process -Id ([int]$candidate.ProcessId) -Force -ErrorAction SilentlyContinue; }",
+    "}",
+    "Start-Sleep -Milliseconds 25;",
+    "}",
+    "Write-Output 'RUNNING';",
+    "exit 1;",
+  ].join(" ");
+  const result = await dependencies.execute("powershell.exe", [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    script,
+  ]);
+  return result.ok && result.stdout.trim() === "STOPPED";
+};
 
 const stopWindowsTree = async (
   dependencies: ProcessTreeDependencies,
@@ -99,10 +213,12 @@ const stopWindowsTree = async (
 
 const createWindowsOperations = (dependencies: ProcessTreeDependencies): ProcessTreeOperations => ({
   detachChild: false,
+  orphanRecoveryRequiresLiveRootIdentity: true,
   pidExists: (pid) => signalExists(dependencies, pid, false),
   treeExists: (rootPid) => signalExists(dependencies, rootPid, false),
   gracefulStop: (rootPid) => stopWindowsTree(dependencies, rootPid, false),
   forceStop: (rootPid) => stopWindowsTree(dependencies, rootPid, true),
+  reapDescendants: (rootPid, rootStartedAt) => reapWindowsDescendants(dependencies, rootPid, rootStartedAt),
   startedAt: async (pid, _now) => {
     const pidText = requirePid(pid);
     const output = await dependencies.execute("powershell.exe", [

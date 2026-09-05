@@ -250,7 +250,14 @@ Project verification follows the same deterministic boundary. A read-only scanne
 only an owner-adopted, versioned exact recipe can reach the daemon-owned runner. The runner uses argv without a shell,
 the canonical WorkItem workspace, a scrubbed environment, explicit time/output/network bounds and process-tree
 termination. Provider prose cannot create measured evidence. Run/Check/Failure state and workflow continuation are
-transactional; restart interrupts unknown execution once and never replays it.
+transactional. A durable launch-intent plus a trusted child supervisor binds each active Check to PID/start-time
+evidence before repository code starts. Owner cancellation first enters `CANCELLING`; restart or cancellation may
+release the workspace only after the supervisor or startup recovery proves the process tree ended. Unknown execution
+is interrupted once and never replayed; missing or mismatched process identity fails closed. Windows startup also
+refuses to infer descendant identity after the recorded root vanished, avoiding signals based on a reusable numeric
+PID. Recovery reconciles released Runs in bounded batches and retains each `INTENT | STOPPED` proof until the matching
+SQLite transaction commits, closing the crash gap between OS cleanup and durable workflow state. A manual terminal
+rerun wakes the parked QA dispatch; a non-terminal runner failure deliberately does not.
 
 Required non-pass or stale evidence blocks Browser QA and Acceptance and enters the delivery-wide correction ceiling
 shared with Browser QA. Their evaluator-specific failure identities stay separate. A stale projection never rewrites

@@ -150,6 +150,7 @@ import {
   ProjectReadinessScanError,
   ProjectVerificationPublicationError,
   ProjectVerificationScanError,
+  recoverVerificationRunProcesses,
   publishVerificationPlan,
   scanVerificationPlanProposal,
 } from "@loomrail/project-readiness";
@@ -178,6 +179,7 @@ import { resolveProjectBrowserQAConfig, type BrowserQAConfigResolver } from "./b
 import { reconcileBrowserQAArtifacts } from "./browser-qa-recovery.js";
 import { cleanupExpiredBrowserQAArtifacts } from "./browser-qa-retention.js";
 import { cleanupExpiredVerificationOutputs } from "./verification-output-retention.js";
+import { reconcileVerificationProcessProofs } from "./verification-recovery.js";
 import { createBrowserQAStageRunner } from "./browser-qa-runner.js";
 import { buildAgentFleet } from "./agent-fleet.js";
 import {
@@ -1310,14 +1312,46 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     done();
   });
 
-  localState.execute({
-    schemaVersion: 1,
-    commandId: `reconcile-${randomUUID()}`,
-    correlationId: `startup-${randomUUID()}`,
-    actor: { type: "SYSTEM", id: "local-daemon" },
-    type: "RECONCILE_WORKFLOWS",
-    payload: {},
+  const activeVerificationRuns = localState.query({ type: "LIST_ACTIVE_VERIFICATION_RUNS" });
+  if (activeVerificationRuns.type !== "VERIFICATION_RUNS") {
+    throw new StateStoreError(
+      "PERSISTENCE_FAILURE",
+      "Active verification Runs could not be read before recovery",
+    );
+  }
+  const verificationProcessRecovery = await recoverVerificationRunProcesses({
+    registryDirectory: join(verificationArtifactsDirectory, ".processes"),
+    runIds: activeVerificationRuns.runs.map(({ id }) => id),
+    now,
   });
+  const activeVerificationById = new Map(activeVerificationRuns.runs.map((run) => [run.id, run]));
+  for (const report of verificationProcessRecovery) {
+    app.log.warn(
+      { action: report.action, reason: report.reason, runId: report.runId },
+      "Verification process authority reconciliation completed",
+    );
+  }
+  const unsafeVerificationRecovery = verificationProcessRecovery.find((report) => {
+    const run = activeVerificationById.get(report.runId);
+    return report.action === "BLOCKED" || (report.action === "NO_RECORD" && run?.currentCheckId !== null);
+  });
+  if (unsafeVerificationRecovery !== undefined) {
+    throw new StateStoreError(
+      "PERSISTENCE_FAILURE",
+      "Verification process authority could not be released safely",
+      { runId: unsafeVerificationRecovery.runId, reason: unsafeVerificationRecovery.reason },
+    );
+  }
+
+  const releasedVerificationRunIds = activeVerificationRuns.runs.map(({ id }) => id);
+  await reconcileVerificationProcessProofs({
+    runIds: releasedVerificationRunIds,
+    registryDirectory: join(verificationArtifactsDirectory, ".processes"),
+    execute: (command) => {
+      localState.execute(command);
+    },
+  });
+  let wakeWorkflowAfterVerification = (): void => undefined;
   const verificationRunner = createProjectVerificationRunner({
     state: localState,
     artifactsDirectory: verificationArtifactsDirectory,
@@ -1325,6 +1359,9 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     createArtifactId: () => `verification-output-${randomUUID()}`,
     now,
     logger: app.log,
+    onSettled: () => {
+      wakeWorkflowAfterVerification();
+    },
     ...(options.verificationRecipeExecutor === undefined
       ? {}
       : { executeRecipe: options.verificationRecipeExecutor }),
@@ -1377,6 +1414,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       createCommandId: (kind) => `mcp-call-${kind.toLowerCase()}-${randomUUID()}`,
     }),
   });
+  wakeWorkflowAfterVerification = worker.wake;
 
   const readVerificationTree = async (worktreePath: string): Promise<string> => {
     try {

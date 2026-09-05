@@ -174,6 +174,7 @@ import {
   decideVerificationCorrectionCancellation,
   decideVerificationCorrectionGateResolution,
   deriveVerificationFailure,
+  decideVerificationRunCancellationRequest,
   decideVerificationRunInterruption,
   decideVerificationRunReservation,
   decideRecordProviderAllowance,
@@ -3093,11 +3094,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       "SELECT * FROM verification_runs WHERE work_item_id = ? ORDER BY ordinal DESC LIMIT ?",
     );
     const selectActiveVerificationRuns = database.prepare(
-      "SELECT * FROM verification_runs WHERE status IN ('QUEUED', 'RUNNING') ORDER BY created_at, id",
+      "SELECT * FROM verification_runs WHERE status IN ('QUEUED', 'RUNNING', 'CANCELLING') ORDER BY created_at, id",
     );
     const selectActiveVerificationRunByWorkspace = database.prepare(
       `SELECT * FROM verification_runs
-       WHERE workspace_id = ? AND status IN ('QUEUED', 'RUNNING') LIMIT 1`,
+       WHERE workspace_id = ? AND status IN ('QUEUED', 'RUNNING', 'CANCELLING') LIMIT 1`,
     );
     const selectMaxVerificationRunOrdinal = database.prepare(
       "SELECT COALESCE(MAX(ordinal), 0) AS max_ordinal FROM verification_runs WHERE work_item_id = ?",
@@ -7523,7 +7524,37 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
-      if (command.type === "CANCEL_VERIFICATION_RUN" || command.type === "INTERRUPT_VERIFICATION_RUN") {
+      if (command.type === "CANCEL_VERIFICATION_RUN") {
+        const run = readVerificationRun(command.payload.runId);
+        if (run === null) {
+          throw new StateStoreError("VERIFICATION_RUN_NOT_FOUND", "The verification Run does not exist");
+        }
+        const decision = decideVerificationRunCancellationRequest({
+          actor: command.actor,
+          run,
+          expectedRunVersion: command.payload.expectedRunVersion,
+        });
+        persistVerificationRunUpdate(decision.run, run.version);
+        const event = appendVerificationRunEvent(decision.event, {
+          workItemId: run.workItemId,
+          projectId: run.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "VERIFICATION_RUN_CANCELLATION_REQUESTED",
+          replayed: false,
+          run: decision.run,
+          event,
+        });
+      }
+
+      if (
+        command.type === "FINALIZE_VERIFICATION_RUN_CANCELLATION" ||
+        command.type === "INTERRUPT_VERIFICATION_RUN"
+      ) {
         const run = readVerificationRun(command.payload.runId);
         if (run === null) {
           throw new StateStoreError("VERIFICATION_RUN_NOT_FOUND", "The verification Run does not exist");
@@ -7535,7 +7566,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           run,
           checks,
           expectedRunVersion: command.payload.expectedRunVersion,
-          reason: command.type === "CANCEL_VERIFICATION_RUN" ? "OWNER_CANCELLED" : command.payload.reason,
+          reason:
+            command.type === "FINALIZE_VERIFICATION_RUN_CANCELLATION"
+              ? "OWNER_CANCELLED"
+              : command.payload.reason,
           now: occurredAt,
         });
         persistVerificationRunUpdate(decision.run, run.version);
@@ -10003,17 +10037,22 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const interruptedVerificationRuns: VerificationRun[] = [];
         const verificationEvents: DomainEvent[] = [];
         const interruptedAgentRunLeases: { stageAttemptId: string; workItemId: string }[] = [];
-        // A queued/running verification process has no daemon loop after restart. Record the
-        // uncertainty and release read authority, but never replay the command automatically.
+        const verificationProcessAuthorityReleasedRunIds = new Set(
+          command.payload.verificationProcessAuthorityReleasedRunIds ?? [],
+        );
+        // An active verification process has no daemon loop after restart. A durable owner
+        // cancellation keeps its reason; otherwise record restart uncertainty. Never replay work.
         for (const runRow of selectActiveVerificationRuns.all()) {
           const current = verificationRunFromRow(runRow);
+          if (!verificationProcessAuthorityReleasedRunIds.has(current.id)) continue;
           const checks = readVerificationChecks(current.id);
+          const interruptionReason = current.status === "CANCELLING" ? "OWNER_CANCELLED" : "DAEMON_RESTART";
           const decision = decideVerificationRunInterruption({
             actor: command.actor,
             run: current,
             checks,
             expectedRunVersion: current.version,
-            reason: "DAEMON_RESTART",
+            reason: interruptionReason,
             now: occurredAt,
           });
           persistVerificationRunUpdate(decision.run, current.version);
@@ -10059,11 +10098,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               correlationId: command.correlationId,
             }),
           );
-          const correctionWorkflow = persistVerificationFailureWorkflow(
-            decision.run,
-            failureDecision.failure,
-            occurredAt,
-          );
+          const correctionWorkflow =
+            interruptionReason === "DAEMON_RESTART"
+              ? persistVerificationFailureWorkflow(decision.run, failureDecision.failure, occurredAt)
+              : null;
           if (correctionWorkflow !== null) {
             verificationEvents.push(
               ...appendWorkflowEvents(correctionWorkflow.events, {
@@ -11479,12 +11517,6 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       return asReplayed(stateCommandResultSchema.parse(parseJson(receipt.result_json)));
     };
 
-    const inspectCommandReceipt = (input: StateCommand): StateCommandResult | null => {
-      assertOpen();
-      const command = stateCommandSchema.parse(input);
-      return readCommandReceipt(command, commandHash(command));
-    };
-
     const execute = (input: StateCommand): StateCommandResult => {
       assertOpen();
       const command = stateCommandSchema.parse(input);
@@ -12127,7 +12159,6 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     return {
       startup,
       execute,
-      inspectCommandReceipt,
       query,
       close: () => {
         if (closed) return;
