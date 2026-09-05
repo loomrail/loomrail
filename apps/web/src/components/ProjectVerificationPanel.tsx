@@ -469,10 +469,12 @@ export const ProjectVerificationPanel = ({ item }: { item: WorkItem }): React.JS
     currentAttempt?.stage === "QA" &&
     currentAttempt.status === "WAITING_HUMAN" &&
     currentAttempt.failureCode === "VERIFICATION_CORRECTION_EXHAUSTED";
-  const exhaustedCorrection =
+  const gateCorrection =
     hasCorrectionGate && (currentAttempt.verificationCorrectionRunId ?? null) !== null
       ? (runsQuery.data?.correctionRuns.find(
-          ({ id, status }) => id === currentAttempt.verificationCorrectionRunId && status === "EXHAUSTED",
+          ({ id, status }) =>
+            id === currentAttempt.verificationCorrectionRunId &&
+            (status === "EXHAUSTED" || status === "PASSED"),
         ) ?? null)
       : null;
   const suspendedQACorrection =
@@ -489,11 +491,11 @@ export const ProjectVerificationPanel = ({ item }: { item: WorkItem }): React.JS
   const correctionGate =
     currentRun !== null &&
     correctionRequest !== null &&
-    ((exhaustedCorrection !== null &&
-      (exhaustedCorrection.resumesQACorrectionRunId ?? null) === (suspendedQACorrection?.id ?? null)) ||
-      (exhaustedCorrection === null && suspendedQACorrection !== null))
+    ((gateCorrection !== null &&
+      (gateCorrection.resumesQACorrectionRunId ?? null) === (suspendedQACorrection?.id ?? null)) ||
+      (gateCorrection === null && suspendedQACorrection !== null))
       ? {
-          correctionRun: exhaustedCorrection,
+          correctionRun: gateCorrection,
           qaCorrectionRun: suspendedQACorrection,
           request: correctionRequest,
           run: currentRun,

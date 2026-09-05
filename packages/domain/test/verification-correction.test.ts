@@ -5,6 +5,8 @@ import type {
   StageAttempt,
   VerificationCorrectionRun,
   VerificationFailure,
+  VerificationPlan,
+  VerificationPlanPublication,
   VerificationRun,
   WorkItem,
   WorkflowDispatch,
@@ -17,6 +19,7 @@ import {
   decideMixedVerificationCorrectionGateResolution,
   decidePassedVerificationCorrectionQAHandoff,
   decidePassedVerificationCorrectionTransition,
+  decideStaleVerificationFailureTransition,
   decideSubsequentFailedVerificationCorrectionTransition,
   decideVerificationCorrectionCancellation,
   decideVerificationCorrectionGateResolution,
@@ -157,7 +160,274 @@ const qaCorrectionRun: QACorrectionRun = {
   version: 1,
 };
 
+const verificationPlan: VerificationPlan = {
+  schemaVersion: 1,
+  id: verificationRun.planId,
+  projectId: verificationRun.projectId,
+  revision: verificationRun.planRevision,
+  status: "ACTIVE",
+  recipes: [
+    {
+      schemaVersion: 1,
+      id: "package-test",
+      kind: "UNIT",
+      label: "Tests",
+      required: true,
+      executable: "pnpm",
+      argv: ["run", "test"],
+      cwd: ".",
+      timeoutSeconds: 300,
+      outputLimitBytes: 65_536,
+      environmentProfile: "VERIFICATION_BASELINE",
+      networkPolicy: "INHERIT_HOST",
+      provenance: {
+        source: "PACKAGE_JSON_SCRIPT",
+        manifestPath: "package.json",
+        manifestContentHash: "c".repeat(64),
+        scriptName: "test",
+        scriptBodyPreview: "vitest run",
+      },
+    },
+  ],
+  sourceProposalHash: "d".repeat(64),
+  contentHash: verificationRun.planContentHash,
+  createdAt: now,
+};
+const verificationPublication: VerificationPlanPublication = {
+  schemaVersion: 1,
+  id: "verification-publication-one",
+  projectId: verificationPlan.projectId,
+  planId: verificationPlan.id,
+  targetPath: ".loomrail/verification-plan.json",
+  expectedTargetDigest: null,
+  contentHash: verificationPlan.contentHash,
+  status: "APPLIED",
+  attempts: 1,
+  lastErrorCode: null,
+  version: 2,
+  createdAt: now,
+  updatedAt: now,
+  appliedAt: now,
+};
+
 describe("Project verification correction transition", () => {
+  it("starts another bounded correction when a passing correction result becomes stale", () => {
+    const passedCorrection: VerificationCorrectionRun = {
+      ...correctionRun,
+      status: "PASSED",
+      completedAt: now,
+      version: 2,
+    };
+    const passingRun: VerificationRun = {
+      ...verificationRun,
+      id: "verification-run-two",
+      implementationTree: "e".repeat(40),
+      ordinal: 2,
+      retryOfRunId: verificationRun.id,
+      verificationCorrectionRunId: passedCorrection.id,
+      status: "PASSED",
+      terminalReason: "ALL_REQUIRED_PASSED",
+      version: 4,
+    };
+    const correctionStage: StageAttempt = {
+      ...stageAttempt,
+      verificationCorrectionRunId: passedCorrection.id,
+    };
+    const command = {
+      schemaVersion: 1 as const,
+      commandId: "materialize-stale-passing-correction",
+      correlationId: "correlation-stale-passing-correction",
+      actor: { type: "SYSTEM" as const, id: "verification-workflow" },
+      type: "MATERIALIZE_STALE_VERIFICATION_FAILURE" as const,
+      payload: {
+        workItemId: workItem.id,
+        verificationRunId: passingRun.id,
+        expectedWorkItemVersion: workItem.version,
+        expectedPipelineRunVersion: pipelineRun.version,
+        expectedStageAttemptVersion: correctionStage.version,
+        expectedVerificationRunVersion: passingRun.version,
+        expectedPlanRevision: verificationPlan.revision,
+        expectedPlanContentHash: verificationPlan.contentHash,
+        currentTree: "f".repeat(40),
+      },
+    };
+
+    const decision = decideStaleVerificationFailureTransition({
+      command,
+      verificationRun: passingRun,
+      latestVerificationRunId: passingRun.id,
+      existingFailure: null,
+      currentPlan: verificationPlan,
+      publication: verificationPublication,
+      workItem,
+      pipelineRun,
+      stageAttempt: correctionStage,
+      dispatch,
+      previousPassedCorrectionRun: passedCorrection,
+      budgetUsage: { automaticUsed: 1, totalUsed: 1 },
+      ids: {
+        failureId: "verification-failure-stale-two",
+        correctionRunId: "verification-correction-two",
+        nextStageAttemptId: "stage-implement-correction-two",
+        nextDispatchId: "dispatch-implement-correction-two",
+        humanRequestId: "unused-request",
+        authorizeFinalOptionId: "unused-authorize",
+        cancelOptionId: "unused-cancel",
+      },
+      now,
+    });
+
+    expect(decision).toMatchObject({
+      action: "START_CORRECTION",
+      failure: {
+        verificationRunId: passingRun.id,
+        reason: "STALE",
+        staleReasons: ["TREE_CHANGED"],
+      },
+      correctionRun: {
+        id: "verification-correction-two",
+        budgetPosition: 2,
+        sourceVerificationRunId: passingRun.id,
+        status: "ACTIVE",
+      },
+      completedStageAttempt: {
+        id: correctionStage.id,
+        verificationCorrectionRunId: passedCorrection.id,
+        status: "SUCCEEDED",
+      },
+      nextStageAttempt: {
+        verificationCorrectionRunId: "verification-correction-two",
+        stage: "IMPLEMENT",
+      },
+    });
+    expect(passedCorrection).toMatchObject({ status: "PASSED", version: 2 });
+  });
+
+  it("keeps a passed correction immutable while the owner authorizes the final stale-evidence cycle", () => {
+    const passedCorrection: VerificationCorrectionRun = {
+      ...correctionRun,
+      id: "verification-correction-two",
+      budgetPosition: 2,
+      status: "PASSED",
+      completedAt: now,
+      version: 2,
+    };
+    const passingRun: VerificationRun = {
+      ...verificationRun,
+      id: "verification-run-three",
+      implementationTree: "e".repeat(40),
+      ordinal: 3,
+      retryOfRunId: verificationRun.id,
+      verificationCorrectionRunId: passedCorrection.id,
+      status: "PASSED",
+      terminalReason: "ALL_REQUIRED_PASSED",
+      version: 4,
+    };
+    const correctionStage: StageAttempt = {
+      ...stageAttempt,
+      verificationCorrectionRunId: passedCorrection.id,
+    };
+    const stale = decideStaleVerificationFailureTransition({
+      command: {
+        schemaVersion: 1,
+        commandId: "materialize-stale-before-final",
+        correlationId: "correlation-stale-before-final",
+        actor: { type: "SYSTEM", id: "verification-workflow" },
+        type: "MATERIALIZE_STALE_VERIFICATION_FAILURE",
+        payload: {
+          workItemId: workItem.id,
+          verificationRunId: passingRun.id,
+          expectedWorkItemVersion: workItem.version,
+          expectedPipelineRunVersion: pipelineRun.version,
+          expectedStageAttemptVersion: correctionStage.version,
+          expectedVerificationRunVersion: passingRun.version,
+          expectedPlanRevision: verificationPlan.revision,
+          expectedPlanContentHash: verificationPlan.contentHash,
+          currentTree: "f".repeat(40),
+        },
+      },
+      verificationRun: passingRun,
+      latestVerificationRunId: passingRun.id,
+      existingFailure: null,
+      currentPlan: verificationPlan,
+      publication: verificationPublication,
+      workItem,
+      pipelineRun,
+      stageAttempt: correctionStage,
+      dispatch,
+      previousPassedCorrectionRun: passedCorrection,
+      budgetUsage: { automaticUsed: 2, totalUsed: 2 },
+      ids: {
+        failureId: "verification-failure-stale-three",
+        correctionRunId: "unused-correction",
+        nextStageAttemptId: "unused-stage",
+        nextDispatchId: "unused-dispatch",
+        humanRequestId: "stale-owner-request",
+        authorizeFinalOptionId: "authorize-stale-final",
+        cancelOptionId: "cancel-stale-delivery",
+      },
+      now,
+    });
+    expect(stale).toMatchObject({
+      action: "WAIT_FOR_OWNER",
+      correctionRun: null,
+      completedStageAttempt: {
+        verificationCorrectionRunId: passedCorrection.id,
+        status: "WAITING_HUMAN",
+      },
+      request: { options: [{ id: "authorize-stale-final" }, { id: "cancel-stale-delivery" }] },
+    });
+    if (stale.action !== "WAIT_FOR_OWNER") throw new Error("Expected owner gate");
+
+    const resolved = decideVerificationCorrectionGateResolution({
+      command: {
+        schemaVersion: 1,
+        commandId: "authorize-stale-final",
+        correlationId: "correlation-authorize-stale-final",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "RESOLVE_VERIFICATION_CORRECTION_GATE",
+        payload: {
+          humanRequestId: stale.request.id,
+          expectedRequestVersion: stale.request.version,
+          correctionRunId: passedCorrection.id,
+          expectedCorrectionVersion: passedCorrection.version,
+          expectedPipelineRunVersion: stale.pipelineRun.version,
+          action: "AUTHORIZE_FINAL",
+        },
+      },
+      workItem: stale.workItem,
+      run: stale.pipelineRun,
+      stageAttempt: stale.completedStageAttempt,
+      request: stale.request,
+      correctionRun: passedCorrection,
+      correctionSourceVerificationRun: verificationRun,
+      failedVerificationRun: passingRun,
+      failure: stale.failure,
+      ids: {
+        decisionId: "stale-owner-decision",
+        correctionRunId: "verification-correction-three",
+        nextStageAttemptId: "stage-implement-correction-three",
+        dispatchId: "dispatch-implement-correction-three",
+      },
+      now,
+    });
+    expect(resolved).toMatchObject({
+      action: "AUTHORIZE_FINAL",
+      previousCorrection: { id: passedCorrection.id, status: "PASSED", version: 2 },
+      correctionRun: {
+        id: "verification-correction-three",
+        budgetPosition: 3,
+        automatic: false,
+        sourceVerificationRunId: passingRun.id,
+      },
+    });
+    expect(resolved.events.map(({ type }) => type)).toEqual([
+      "HUMAN_REQUEST_RESOLVED",
+      "VERIFICATION_CORRECTION_STARTED",
+      "STAGE_ATTEMPT_CHANGED",
+    ]);
+  });
+
   it("starts a distinct automatic correction and returns the pending QA stage to IMPLEMENT", () => {
     const decision = decideInitialFailedVerificationCorrectionTransition({
       verificationRun,

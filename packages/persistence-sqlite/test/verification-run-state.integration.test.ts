@@ -1370,11 +1370,15 @@ describe("verification Run local state", () => {
         outputStorageKey: "passing-final-correction-output.txt",
       },
     } as const;
-    expect(fixture.localState.execute(passingCommand)).toMatchObject({
+    const passedFinalRun = fixture.localState.execute(passingCommand);
+    expect(passedFinalRun).toMatchObject({
       type: "VERIFICATION_CHECK_COMPLETED",
       replayed: false,
       run: { status: "PASSED", verificationCorrectionRunId: finalCorrection.id },
     });
+    if (passedFinalRun.type !== "VERIFICATION_CHECK_COMPLETED") {
+      throw new Error("Expected passing final correction Run");
+    }
     expect(fixture.localState.execute(passingCommand)).toMatchObject({
       type: "VERIFICATION_CHECK_COMPLETED",
       replayed: true,
@@ -1404,6 +1408,112 @@ describe("verification Run local state", () => {
     expect(events.events.filter(({ type }) => type === "VERIFICATION_CORRECTION_EXHAUSTED")).toHaveLength(1);
     expect(events.events.filter(({ type }) => type === "HUMAN_REQUEST_RESOLVED")).toHaveLength(1);
 
+    const beforeStale = currentWorkItem();
+    const workflowBeforeStale = fixture.localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: fixture.workItemId,
+    });
+    if (workflowBeforeStale.type !== "WORKFLOW_SNAPSHOT" || workflowBeforeStale.snapshot.run === null) {
+      throw new Error("Expected workflow before stale materialization");
+    }
+    const stageBeforeStale = workflowBeforeStale.snapshot.stageAttempts.find(
+      ({ id }) => id === workflowBeforeStale.snapshot.run?.currentStageAttemptId,
+    );
+    if (stageBeforeStale === undefined)
+      throw new Error("Expected current QA stage before stale materialization");
+    expect(stageBeforeStale).toMatchObject({
+      stage: "QA",
+      status: "QUEUED",
+      verificationCorrectionRunId: finalCorrection.id,
+    });
+    const staleCommand = {
+      schemaVersion: 1,
+      commandId: "materialize-stale-final-correction-pass",
+      correlationId: "correlation-stale-final-correction-pass",
+      actor: { type: "SYSTEM", id: "verification-workflow" },
+      type: "MATERIALIZE_STALE_VERIFICATION_FAILURE",
+      payload: {
+        workItemId: fixture.workItemId,
+        verificationRunId: passedFinalRun.run.id,
+        expectedWorkItemVersion: beforeStale.version,
+        expectedPipelineRunVersion: workflowBeforeStale.snapshot.run.version,
+        expectedStageAttemptVersion: stageBeforeStale.version,
+        expectedVerificationRunVersion: passedFinalRun.run.version,
+        expectedPlanRevision: fixture.planRevision,
+        expectedPlanContentHash: fixture.planContentHash,
+        currentTree: "7".repeat(40),
+      },
+    } as const;
+    const staleFinal = fixture.localState.execute(staleCommand);
+    if (staleFinal.type !== "VERIFICATION_STALE_FAILURE_MATERIALIZED") {
+      throw new Error("Expected stale final correction materialization");
+    }
+    expect(staleFinal).toMatchObject({
+      replayed: false,
+      action: "WAIT_FOR_OWNER",
+      failure: {
+        verificationRunId: passedFinalRun.run.id,
+        reason: "STALE",
+        staleReasons: ["TREE_CHANGED"],
+      },
+      correctionRun: null,
+      request: { status: "OPEN" },
+      run: { status: "WAITING_HUMAN" },
+      stageAttempt: {
+        status: "WAITING_HUMAN",
+        verificationCorrectionRunId: finalCorrection.id,
+      },
+    });
+    expect(staleFinal.request?.options).toHaveLength(1);
+    expect(fixture.localState.execute(staleCommand)).toMatchObject({ replayed: true });
+    const passedCorrectionAfterStale = fixture.localState.query({
+      type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+      workItemId: fixture.workItemId,
+    });
+    if (passedCorrectionAfterStale.type !== "VERIFICATION_CORRECTIONS") {
+      throw new Error("Expected corrections after stale materialization");
+    }
+    expect(passedCorrectionAfterStale.correctionRuns[0]).toMatchObject({
+      id: finalCorrection.id,
+      status: "PASSED",
+      version: 2,
+    });
+    if (staleFinal.request === null) throw new Error("Expected stale owner request");
+    const cancelStaleCommand = {
+      schemaVersion: 1,
+      commandId: "cancel-stale-final-correction-pass",
+      correlationId: "correlation-cancel-stale-final-correction-pass",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "RESOLVE_VERIFICATION_CORRECTION_GATE",
+      payload: {
+        humanRequestId: staleFinal.request.id,
+        expectedRequestVersion: staleFinal.request.version,
+        correctionRunId: finalCorrection.id,
+        expectedCorrectionVersion: 2,
+        expectedPipelineRunVersion: staleFinal.run.version,
+        action: "CANCEL",
+      },
+    } as const;
+    const cancelledStale = fixture.localState.execute(cancelStaleCommand);
+    expect(cancelledStale).toMatchObject({
+      type: "VERIFICATION_CORRECTION_GATE_RESOLVED",
+      replayed: false,
+      action: "CANCEL",
+      previousCorrection: { id: finalCorrection.id, status: "PASSED", version: 2 },
+      correctionRun: null,
+      run: { status: "CANCELLED" },
+      stageAttempt: { status: "CANCELLED" },
+    });
+    if (cancelledStale.type !== "VERIFICATION_CORRECTION_GATE_RESOLVED") {
+      throw new Error("Expected stale correction cancellation");
+    }
+    expect(cancelledStale.events.map(({ type }) => type)).toEqual([
+      "HUMAN_REQUEST_RESOLVED",
+      "STAGE_ATTEMPT_CHANGED",
+      "PIPELINE_CANCELLED",
+    ]);
+    expect(fixture.localState.execute(cancelStaleCommand)).toMatchObject({ replayed: true });
+
     fixture.localState.close();
     state = undefined;
     const reopened = await open();
@@ -1418,6 +1528,17 @@ describe("verification Run local state", () => {
         { id: secondCorrection.id, status: "SUPERSEDED", completedAt: timestamp, version: 3 },
         { id: activeCorrection.id, status: "SUPERSEDED", completedAt: timestamp, version: 2 },
       ],
+    });
+    const reopenedFailures = reopened.query({
+      type: "LIST_WORK_ITEM_VERIFICATION_FAILURES",
+      workItemId: fixture.workItemId,
+    });
+    if (reopenedFailures.type !== "VERIFICATION_FAILURES") throw new Error("Expected reopened failures");
+    expect(
+      reopenedFailures.failures.find(({ verificationRunId }) => verificationRunId === passedFinalRun.run.id),
+    ).toMatchObject({ reason: "STALE", staleReasons: ["TREE_CHANGED"] });
+    expect(reopened.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: fixture.workItemId })).toMatchObject({
+      snapshot: { run: { status: "CANCELLED" } },
     });
     const reopenedEvents = reopened.query({
       type: "LIST_EVENTS",

@@ -189,6 +189,7 @@ export const decideInitialFailedVerificationCorrectionTransition = (input: {
   stageAttempt: StageAttempt;
   dispatch: WorkflowDispatch;
   qaCorrectionRun?: QACorrectionRun;
+  previousPassedCorrectionRun?: VerificationCorrectionRun;
   budgetUsage: { automaticUsed: number; totalUsed: number };
   ids: { correctionRunId: string; nextStageAttemptId: string; nextDispatchId: string };
   now: string;
@@ -197,6 +198,10 @@ export const decideInitialFailedVerificationCorrectionTransition = (input: {
   const failure = verificationFailureSchema.parse(input.failure);
   const qaCorrectionRun =
     input.qaCorrectionRun === undefined ? null : qaCorrectionRunSchema.parse(input.qaCorrectionRun);
+  const previousPassedCorrectionRun =
+    input.previousPassedCorrectionRun === undefined
+      ? null
+      : verificationCorrectionRunSchema.parse(input.previousPassedCorrectionRun);
   const sourceStatusMatches =
     (verificationRun.status === "FAILED" && failure.reason === "REQUIRED_CHECK_FAILED") ||
     (verificationRun.status === "ERROR" && failure.reason === "REQUIRED_CHECK_ERROR") ||
@@ -234,8 +239,8 @@ export const decideInitialFailedVerificationCorrectionTransition = (input: {
     input.stageAttempt.stage !== "QA" ||
     input.stageAttempt.status !== "QUEUED" ||
     input.stageAttempt.correctionRunId !== (qaCorrectionRun?.id ?? null) ||
-    (input.stageAttempt.verificationCorrectionRunId ?? null) !== null ||
-    ((verificationRun.verificationCorrectionRunId ?? null) !== null && failure.reason !== "STALE") ||
+    (input.stageAttempt.verificationCorrectionRunId ?? null) !== (previousPassedCorrectionRun?.id ?? null) ||
+    (verificationRun.verificationCorrectionRunId ?? null) !== (previousPassedCorrectionRun?.id ?? null) ||
     input.dispatch.projectId !== verificationRun.projectId ||
     input.dispatch.workItemId !== verificationRun.workItemId ||
     input.dispatch.pipelineRunId !== verificationRun.pipelineRunId ||
@@ -245,7 +250,14 @@ export const decideInitialFailedVerificationCorrectionTransition = (input: {
       (qaCorrectionRun.status !== "ACTIVE" ||
         qaCorrectionRun.projectId !== verificationRun.projectId ||
         qaCorrectionRun.workItemId !== verificationRun.workItemId ||
-        qaCorrectionRun.pipelineRunId !== verificationRun.pipelineRunId))
+        qaCorrectionRun.pipelineRunId !== verificationRun.pipelineRunId)) ||
+    (previousPassedCorrectionRun !== null &&
+      (failure.reason !== "STALE" ||
+        previousPassedCorrectionRun.status !== "PASSED" ||
+        previousPassedCorrectionRun.projectId !== verificationRun.projectId ||
+        previousPassedCorrectionRun.workItemId !== verificationRun.workItemId ||
+        previousPassedCorrectionRun.pipelineRunId !== verificationRun.pipelineRunId ||
+        (previousPassedCorrectionRun.resumesQACorrectionRunId ?? null) !== (qaCorrectionRun?.id ?? null)))
   ) {
     throw new VerificationCorrectionError(
       "LINEAGE_MISMATCH",
@@ -361,7 +373,7 @@ export type InitialVerificationCorrectionGateTransition = {
   pipelineRun: PipelineRun;
   completedStageAttempt: StageAttempt;
   completedDispatch: WorkflowDispatch;
-  qaCorrectionRun: QACorrectionRun;
+  qaCorrectionRun: QACorrectionRun | null;
   correctionRun: null;
   request: HumanRequest;
   events: readonly FailedVerificationCorrectionEvent[];
@@ -371,7 +383,8 @@ export type InitialVerificationCorrectionGateTransition = {
 export const decideInitialFailedVerificationCorrectionGateTransition = (input: {
   verificationRun: VerificationRun;
   failure: VerificationFailure;
-  qaCorrectionRun: QACorrectionRun;
+  qaCorrectionRun?: QACorrectionRun;
+  previousPassedCorrectionRun?: VerificationCorrectionRun;
   workItem: WorkItem;
   pipelineRun: PipelineRun;
   stageAttempt: StageAttempt;
@@ -382,7 +395,12 @@ export const decideInitialFailedVerificationCorrectionGateTransition = (input: {
 }): InitialVerificationCorrectionGateTransition => {
   const verificationRun = verificationRunSchema.parse(input.verificationRun);
   const failure = verificationFailureSchema.parse(input.failure);
-  const qaCorrectionRun = qaCorrectionRunSchema.parse(input.qaCorrectionRun);
+  const qaCorrectionRun =
+    input.qaCorrectionRun === undefined ? null : qaCorrectionRunSchema.parse(input.qaCorrectionRun);
+  const previousPassedCorrectionRun =
+    input.previousPassedCorrectionRun === undefined
+      ? null
+      : verificationCorrectionRunSchema.parse(input.previousPassedCorrectionRun);
   const sourceStatusMatches =
     (verificationRun.status === "FAILED" && failure.reason === "REQUIRED_CHECK_FAILED") ||
     (verificationRun.status === "ERROR" && failure.reason === "REQUIRED_CHECK_ERROR") ||
@@ -392,7 +410,7 @@ export const decideInitialFailedVerificationCorrectionGateTransition = (input: {
     (verificationRun.status === "PASSED" && failure.reason === "STALE");
   const lineageMatches =
     sourceStatusMatches &&
-    ((verificationRun.verificationCorrectionRunId ?? null) === null || failure.reason === "STALE") &&
+    (verificationRun.verificationCorrectionRunId ?? null) === (previousPassedCorrectionRun?.id ?? null) &&
     failure.verificationRunId === verificationRun.id &&
     failure.projectId === verificationRun.projectId &&
     failure.workItemId === verificationRun.workItemId &&
@@ -401,10 +419,19 @@ export const decideInitialFailedVerificationCorrectionGateTransition = (input: {
     failure.planRevision === verificationRun.planRevision &&
     failure.planContentHash === verificationRun.planContentHash &&
     failure.implementationTree === verificationRun.implementationTree &&
-    qaCorrectionRun.status === "ACTIVE" &&
-    qaCorrectionRun.projectId === verificationRun.projectId &&
-    qaCorrectionRun.workItemId === verificationRun.workItemId &&
-    qaCorrectionRun.pipelineRunId === verificationRun.pipelineRunId &&
+    (qaCorrectionRun === null ||
+      (qaCorrectionRun.status === "ACTIVE" &&
+        qaCorrectionRun.projectId === verificationRun.projectId &&
+        qaCorrectionRun.workItemId === verificationRun.workItemId &&
+        qaCorrectionRun.pipelineRunId === verificationRun.pipelineRunId)) &&
+    (previousPassedCorrectionRun === null
+      ? qaCorrectionRun !== null
+      : failure.reason === "STALE" &&
+        previousPassedCorrectionRun.status === "PASSED" &&
+        previousPassedCorrectionRun.projectId === verificationRun.projectId &&
+        previousPassedCorrectionRun.workItemId === verificationRun.workItemId &&
+        previousPassedCorrectionRun.pipelineRunId === verificationRun.pipelineRunId &&
+        (previousPassedCorrectionRun.resumesQACorrectionRunId ?? null) === (qaCorrectionRun?.id ?? null)) &&
     input.workItem.id === verificationRun.workItemId &&
     input.workItem.projectId === verificationRun.projectId &&
     input.workItem.state === "IN_PROGRESS" &&
@@ -419,8 +446,8 @@ export const decideInitialFailedVerificationCorrectionGateTransition = (input: {
     input.stageAttempt.pipelineRunId === verificationRun.pipelineRunId &&
     input.stageAttempt.stage === "QA" &&
     input.stageAttempt.status === "QUEUED" &&
-    input.stageAttempt.correctionRunId === qaCorrectionRun.id &&
-    (input.stageAttempt.verificationCorrectionRunId ?? null) === null &&
+    input.stageAttempt.correctionRunId === (qaCorrectionRun?.id ?? null) &&
+    (input.stageAttempt.verificationCorrectionRunId ?? null) === (previousPassedCorrectionRun?.id ?? null) &&
     input.dispatch.projectId === verificationRun.projectId &&
     input.dispatch.workItemId === verificationRun.workItemId &&
     input.dispatch.pipelineRunId === verificationRun.pipelineRunId &&
@@ -473,8 +500,12 @@ export const decideInitialFailedVerificationCorrectionGateTransition = (input: {
     blocking: true,
     title: "Project verification correction needs a decision",
     context: canAuthorizeFinal
-      ? "Two automatic delivery corrections were consumed before this measured Project verification failure."
-      : "The owner-authorized final delivery correction was consumed before this measured Project verification failure.",
+      ? failure.reason === "STALE"
+        ? "Two automatic delivery corrections were consumed before this passing Project verification result became stale."
+        : "Two automatic delivery corrections were consumed before this measured Project verification failure."
+      : failure.reason === "STALE"
+        ? "The owner-authorized final delivery correction was consumed before this passing Project verification result became stale."
+        : "The owner-authorized final delivery correction was consumed before this measured Project verification failure.",
     recommendation: canAuthorizeFinal
       ? "Inspect the exact check output and QA correction history before authorizing the final shared position."
       : "Inspect the remaining failure and cancel this delivery because no bounded correction remains.",
@@ -568,6 +599,7 @@ export const decideStaleVerificationFailureTransition = (input: {
   stageAttempt: StageAttempt;
   dispatch: WorkflowDispatch;
   qaCorrectionRun?: QACorrectionRun;
+  previousPassedCorrectionRun?: VerificationCorrectionRun;
   budgetUsage: { automaticUsed: number; totalUsed: number };
   ids: {
     failureId: string;
@@ -630,6 +662,9 @@ export const decideStaleVerificationFailureTransition = (input: {
       stageAttempt: input.stageAttempt,
       dispatch: input.dispatch,
       ...(input.qaCorrectionRun === undefined ? {} : { qaCorrectionRun: input.qaCorrectionRun }),
+      ...(input.previousPassedCorrectionRun === undefined
+        ? {}
+        : { previousPassedCorrectionRun: input.previousPassedCorrectionRun }),
       budgetUsage: input.budgetUsage,
       ids: {
         correctionRunId: input.ids.correctionRunId,
@@ -645,16 +680,19 @@ export const decideStaleVerificationFailureTransition = (input: {
       request: null,
     };
   }
-  if (input.qaCorrectionRun === undefined) {
+  if (input.qaCorrectionRun === undefined && input.previousPassedCorrectionRun === undefined) {
     throw new VerificationCorrectionError(
       "BUDGET_UNAVAILABLE",
-      "Stale evidence exhausted the shared correction budget without an active QA owner gate",
+      "Stale evidence exhausted the shared correction budget without a current evaluator gate",
     );
   }
   const transition = decideInitialFailedVerificationCorrectionGateTransition({
     verificationRun: input.verificationRun,
     failure: failureDecision.failure,
-    qaCorrectionRun: input.qaCorrectionRun,
+    ...(input.qaCorrectionRun === undefined ? {} : { qaCorrectionRun: input.qaCorrectionRun }),
+    ...(input.previousPassedCorrectionRun === undefined
+      ? {}
+      : { previousPassedCorrectionRun: input.previousPassedCorrectionRun }),
     workItem: input.workItem,
     pipelineRun: input.pipelineRun,
     stageAttempt: input.stageAttempt,
@@ -1268,9 +1306,13 @@ export const decideVerificationCorrectionGateResolution = (input: {
     );
   }
 
+  const stalePassedGate =
+    correctionRun.status === "PASSED" &&
+    failedVerificationRun.status === "PASSED" &&
+    failure.reason === "STALE";
   const expectedOptionCount = correctionRun.budgetPosition === 2 ? 2 : 1;
   const sameDelivery =
-    correctionRun.status === "EXHAUSTED" &&
+    (correctionRun.status === "EXHAUSTED" || stalePassedGate) &&
     (correctionRun.resumesQACorrectionRunId ?? null) === (suspendedQACorrection?.id ?? null) &&
     (suspendedQACorrection === null ||
       (suspendedQACorrection.status === "ACTIVE" &&
@@ -1308,16 +1350,19 @@ export const decideVerificationCorrectionGateResolution = (input: {
     correctionSourceVerificationRun.projectId === workItem.projectId &&
     correctionSourceVerificationRun.workItemId === workItem.id &&
     correctionSourceVerificationRun.pipelineRunId === run.id &&
-    (failedVerificationRun.status === "FAILED" || failedVerificationRun.status === "ERROR") &&
+    (stalePassedGate ||
+      failedVerificationRun.status === "FAILED" ||
+      failedVerificationRun.status === "ERROR") &&
     (failedVerificationRun.verificationCorrectionRunId ?? null) === correctionRun.id &&
     failedVerificationRun.projectId === workItem.projectId &&
     failedVerificationRun.workItemId === workItem.id &&
     failedVerificationRun.pipelineRunId === run.id &&
     failedVerificationRun.ordinal > correctionSourceVerificationRun.ordinal &&
-    failedVerificationRun.planId === correctionSourceVerificationRun.planId &&
-    failedVerificationRun.planRevision === correctionSourceVerificationRun.planRevision &&
-    failedVerificationRun.planContentHash === correctionSourceVerificationRun.planContentHash &&
-    failedVerificationRun.implementationTree !== correctionSourceVerificationRun.implementationTree &&
+    (stalePassedGate ||
+      (failedVerificationRun.planId === correctionSourceVerificationRun.planId &&
+        failedVerificationRun.planRevision === correctionSourceVerificationRun.planRevision &&
+        failedVerificationRun.planContentHash === correctionSourceVerificationRun.planContentHash &&
+        failedVerificationRun.implementationTree !== correctionSourceVerificationRun.implementationTree)) &&
     failure.verificationRunId === failedVerificationRun.id &&
     failure.projectId === workItem.projectId &&
     failure.workItemId === workItem.id &&
@@ -1326,7 +1371,9 @@ export const decideVerificationCorrectionGateResolution = (input: {
     failure.planRevision === failedVerificationRun.planRevision &&
     failure.planContentHash === failedVerificationRun.planContentHash &&
     failure.implementationTree === failedVerificationRun.implementationTree &&
-    (failure.reason === "REQUIRED_CHECK_FAILED" || failure.reason === "REQUIRED_CHECK_ERROR");
+    (stalePassedGate ||
+      failure.reason === "REQUIRED_CHECK_FAILED" ||
+      failure.reason === "REQUIRED_CHECK_ERROR");
   if (!sameDelivery) {
     throw new VerificationCorrectionError(
       "LINEAGE_MISMATCH",
@@ -1370,12 +1417,14 @@ export const decideVerificationCorrectionGateResolution = (input: {
   };
 
   if (command.payload.action === "CANCEL") {
-    const cancelledCorrection = verificationCorrectionRunSchema.parse({
-      ...correctionRun,
-      status: "CANCELLED",
-      completedAt: input.now,
-      version: correctionRun.version + 1,
-    });
+    const cancelledCorrection = stalePassedGate
+      ? correctionRun
+      : verificationCorrectionRunSchema.parse({
+          ...correctionRun,
+          status: "CANCELLED",
+          completedAt: input.now,
+          version: correctionRun.version + 1,
+        });
     const cancelledStageAttempt: StageAttempt = {
       ...stageAttempt,
       status: "CANCELLED",
@@ -1427,7 +1476,14 @@ export const decideVerificationCorrectionGateResolution = (input: {
             previousStatus: stageAttempt.status,
           },
         },
-        { type: "VERIFICATION_CORRECTION_CANCELLED", data: { correctionRun: cancelledCorrection } },
+        ...(stalePassedGate
+          ? []
+          : [
+              {
+                type: "VERIFICATION_CORRECTION_CANCELLED" as const,
+                data: { correctionRun: cancelledCorrection },
+              },
+            ]),
         ...(cancelledQACorrection === null
           ? []
           : [{ type: "QA_CORRECTION_CANCELLED" as const, data: { correctionRun: cancelledQACorrection } }]),
@@ -1436,12 +1492,14 @@ export const decideVerificationCorrectionGateResolution = (input: {
     };
   }
 
-  const previousCorrection = verificationCorrectionRunSchema.parse({
-    ...correctionRun,
-    status: "SUPERSEDED",
-    completedAt: input.now,
-    version: correctionRun.version + 1,
-  });
+  const previousCorrection = stalePassedGate
+    ? correctionRun
+    : verificationCorrectionRunSchema.parse({
+        ...correctionRun,
+        status: "SUPERSEDED",
+        completedAt: input.now,
+        version: correctionRun.version + 1,
+      });
   const nextCorrection = verificationCorrectionRunSchema.parse({
     schemaVersion: 1,
     id: input.ids.correctionRunId,
@@ -1526,7 +1584,14 @@ export const decideVerificationCorrectionGateResolution = (input: {
     dispatch,
     events: [
       { type: "HUMAN_REQUEST_RESOLVED", data: { request: resolvedRequest, decision } },
-      { type: "VERIFICATION_CORRECTION_SUPERSEDED", data: { correctionRun: previousCorrection } },
+      ...(stalePassedGate
+        ? []
+        : [
+            {
+              type: "VERIFICATION_CORRECTION_SUPERSEDED" as const,
+              data: { correctionRun: previousCorrection },
+            },
+          ]),
       { type: "VERIFICATION_CORRECTION_STARTED", data: { correctionRun: nextCorrection } },
       {
         type: "STAGE_ATTEMPT_CHANGED",

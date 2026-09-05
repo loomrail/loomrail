@@ -145,6 +145,7 @@ test.describe("project verification Task Cockpit", () => {
     directories.push(directory);
     const databasePath = join(directory, "state.sqlite");
     let measured: VerificationRunSnapshotResponse | null = null;
+    let showStalePassedCorrectionGate = false;
     await page.addInitScript(() => {
       if (localStorage.getItem("loomrail-theme") === null) localStorage.setItem("loomrail-theme", "light");
       if (localStorage.getItem("loomrail.locale") === null) localStorage.setItem("loomrail.locale", "en");
@@ -204,8 +205,60 @@ test.describe("project verification Task Cockpit", () => {
             updatedAt: timestamp,
             finishedAt: null,
           },
-          stageAttempts: [],
-          humanRequests: [],
+          stageAttempts: showStalePassedCorrectionGate
+            ? [
+                {
+                  schemaVersion: 1,
+                  id: "stage-attempt-browser",
+                  pipelineRunId: "pipeline-run-browser",
+                  projectId,
+                  workItemId,
+                  correctionRunId: null,
+                  verificationCorrectionRunId: "verification-correction-browser",
+                  stage: "QA",
+                  attempt: 3,
+                  status: "WAITING_HUMAN",
+                  version: 2,
+                  startedAt: null,
+                  finishedAt: null,
+                  failureCode: "VERIFICATION_CORRECTION_EXHAUSTED",
+                  unproductiveSessions: 0,
+                  packShareBackoffs: 0,
+                  resultTree: null,
+                },
+              ]
+            : [],
+          humanRequests: showStalePassedCorrectionGate
+            ? [
+                {
+                  schemaVersion: 1,
+                  id: "verification-owner-request-browser",
+                  projectId,
+                  workItemId,
+                  stageAttemptId: "stage-attempt-browser",
+                  kind: "SINGLE_CHOICE",
+                  blocking: true,
+                  title: "Project verification correction needs a decision",
+                  context:
+                    "The owner-authorized final delivery correction was consumed before this passing Project verification result became stale.",
+                  recommendation:
+                    "Inspect the remaining failure and cancel this delivery because no bounded correction remains.",
+                  options: [
+                    {
+                      id: "cancel-stale-delivery-browser",
+                      label: "Cancel the delivery",
+                      consequence: "Stops this PipelineRun without acceptance.",
+                      recommended: false,
+                    },
+                  ],
+                  allowOther: false,
+                  status: "OPEN",
+                  version: 1,
+                  createdAt: timestamp,
+                  resolvedAt: null,
+                },
+              ]
+            : [],
           decisions: [],
           budgetPolicies: [],
           usageRecords: [],
@@ -243,7 +296,26 @@ test.describe("project verification Task Cockpit", () => {
                 schemaVersion: 1,
                 runs: measured === null ? [] : [measured],
                 failures: [],
-                correctionRuns: [],
+                correctionRuns: showStalePassedCorrectionGate
+                  ? [
+                      {
+                        schemaVersion: 1,
+                        id: "verification-correction-browser",
+                        projectId,
+                        workItemId,
+                        pipelineRunId: "pipeline-run-browser",
+                        budgetPosition: 3,
+                        automatic: false,
+                        sourceFailureId: "verification-failure-browser",
+                        sourceVerificationRunId: "verification-source-run-browser",
+                        sourceImplementationTree: "f".repeat(40),
+                        status: "PASSED",
+                        createdAt: timestamp,
+                        completedAt: timestamp,
+                        version: 2,
+                      },
+                    ]
+                  : [],
               },
         ),
       });
@@ -292,6 +364,21 @@ test.describe("project verification Task Cockpit", () => {
     );
     expect(desktopOverflow).toBeLessThanOrEqual(1);
 
+    showStalePassedCorrectionGate = true;
+    await page.reload();
+    const staleGateVerification = page
+      .getByRole("complementary", { name: "Measured project checks" })
+      .locator(".project-verification");
+    await expect(
+      staleGateVerification.getByRole("heading", { name: "Project verification needs your decision" }),
+    ).toBeVisible();
+    const cancelStaleDelivery = staleGateVerification.getByRole("button", { name: "Cancel delivery" });
+    await cancelStaleDelivery.focus();
+    await expect(cancelStaleDelivery).toBeFocused();
+    await expect(
+      staleGateVerification.getByRole("button", { name: "Authorize one final correction" }),
+    ).toHaveCount(0);
+
     const visualQaDirectory = process.env["LOOMRAIL_VISUAL_QA_DIR"];
     if (visualQaDirectory !== undefined) {
       await page.screenshot({ path: resolve(visualQaDirectory, "project-verification-light.png") });
@@ -307,7 +394,7 @@ test.describe("project verification Task Cockpit", () => {
     const narrowVerification = narrowInspector.locator(".project-verification");
     await narrowVerification.scrollIntoViewIfNeeded();
     await expect(narrowInspector.getByText("Проверка проекта", { exact: true })).toBeVisible();
-    await expect(narrowVerification.getByRole("button", { name: "Запустить снова" })).toBeVisible();
+    await expect(narrowVerification.getByRole("button", { name: "Отменить поставку" })).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(page.locator("html")).toHaveAttribute("lang", "ru");
     const narrowOverflow = await narrowVerification.evaluate(
@@ -341,7 +428,7 @@ test.describe("project verification Task Cockpit", () => {
     }
     const restoredVerification = restoredInspector.locator(".project-verification");
     await expect(restoredVerification.getByText("Пройдена", { exact: true }).first()).toBeVisible();
-    await expect(restoredVerification.getByRole("button", { name: "Запустить снова" })).toBeVisible();
+    await expect(restoredVerification.getByRole("button", { name: "Отменить поставку" })).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(page.locator("html")).toHaveAttribute("lang", "ru");
     await expect

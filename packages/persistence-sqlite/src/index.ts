@@ -3133,9 +3133,18 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        WHERE correction_run_id = ? AND stage = 'QA'`,
     );
     const selectLatestFailedVerificationRunForCorrection = database.prepare(
-      `SELECT * FROM verification_runs
-       WHERE verification_correction_run_id = ? AND status IN ('FAILED', 'ERROR')
-       ORDER BY ordinal DESC LIMIT 1`,
+      `SELECT verification_runs.* FROM verification_runs
+       INNER JOIN verification_failures
+         ON verification_failures.verification_run_id = verification_runs.id
+       WHERE verification_runs.verification_correction_run_id = ?
+         AND (
+           verification_runs.status IN ('FAILED', 'ERROR')
+           OR (
+             verification_runs.status = 'PASSED'
+             AND verification_failures.reason = 'STALE'
+           )
+         )
+       ORDER BY verification_runs.ordinal DESC LIMIT 1`,
     );
     const selectLatestFailedVerificationRunWithoutCorrection = database.prepare(
       `SELECT * FROM verification_runs
@@ -7037,6 +7046,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           stageAttempt?.correctionRunId === undefined || stageAttempt.correctionRunId === null
             ? null
             : readQACorrectionRun(stageAttempt.correctionRunId);
+        const previousPassedCorrectionRun =
+          verificationRun?.verificationCorrectionRunId === undefined ||
+          verificationRun.verificationCorrectionRunId === null
+            ? null
+            : readVerificationCorrectionRun(verificationRun.verificationCorrectionRunId);
         if (
           workItem === null ||
           verificationRun === null ||
@@ -7062,6 +7076,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           stageAttempt,
           dispatch,
           ...(qaCorrectionRun === null ? {} : { qaCorrectionRun }),
+          ...(previousPassedCorrectionRun === null ? {} : { previousPassedCorrectionRun }),
           budgetUsage: {
             automaticUsed: usage.automatic_used,
             totalUsed: usage.total_used,
@@ -9551,7 +9566,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
         updateHumanRequest(gateDecision.request);
         insertDecision(gateDecision.decision);
-        persistUpdatedVerificationCorrectionRun(gateDecision.previousCorrection);
+        if (gateDecision.previousCorrection.version !== correctionRun.version) {
+          persistUpdatedVerificationCorrectionRun(gateDecision.previousCorrection);
+        }
         if (gateDecision.cancelledQACorrection !== null) {
           persistUpdatedQACorrectionRun(gateDecision.cancelledQACorrection);
         }
