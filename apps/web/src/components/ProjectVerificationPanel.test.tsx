@@ -168,7 +168,9 @@ describe("ProjectVerificationView", () => {
 
     expect(html).toContain("Passed");
     expect(html).toContain("Run 1 · Plan r2 · macOS");
-    expect(html).toContain("Checks 1/1 passed · tree dddddddddddd");
+    expect(html).toContain(
+      "Passed 1 · failed 0 · errors 0 · interrupted 0 · remaining 0 · tree dddddddddddd",
+    );
     expect(html).toContain("UNIT checks");
     expect(html).toContain("1.3 s · exit 0");
     expect(html).toContain("All required checks passed for the current code and Plan.");
@@ -178,7 +180,8 @@ describe("ProjectVerificationView", () => {
   });
 
   it("uses the stable Unit, Integration, E2E, Build, Lint, Custom group order", () => {
-    const unit = plan.recipes[0]!;
+    const unit = plan.recipes[0];
+    if (unit === undefined) throw new Error("Expected the fixture plan to carry a recipe");
     const groupedPlan: VerificationPlan = {
       ...plan,
       recipes: [

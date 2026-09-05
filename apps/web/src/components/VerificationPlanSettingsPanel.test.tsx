@@ -201,7 +201,9 @@ describe("VerificationPlanSettingsView", () => {
       ...settings,
       proposal: {
         ...proposal,
-        recipes: [{ ...proposal.recipes[0]!, label: "Changed test command" }],
+        recipes: proposal.recipes.map((recipe, index) =>
+          index === 0 ? { ...recipe, label: "Changed test command" } : recipe,
+        ),
         proposalHash: "d".repeat(64),
       },
       plan,
@@ -262,6 +264,7 @@ describe("VerificationPlanSettingsView", () => {
     expect(activeHtml).toContain("Plan file was not published");
     expect(activeHtml).toContain("WRITE_FAILED");
     expect(activeHtml).toContain("Retry publication");
+    expect(activeHtml).toContain("Disable Plan");
     expect(activeHtml).toMatch(/<button[^>]*type="button"/);
   });
 });
