@@ -130,6 +130,7 @@ test("trusted stage workflow is manual, stage-only and OIDC-bound", async () => 
     "contents: read",
     "id-token: write",
     "persist-credentials: false",
+    "fetch-depth: 0",
     "node scripts/verify-release-stage.mjs",
     "pnpm test:fault-injection",
     "pnpm test:e2e",
@@ -147,4 +148,7 @@ test("trusted stage workflow is manual, stage-only and OIDC-bound", async () => 
   assert.doesNotMatch(workflow, /\bnpm publish\b/);
   assert.doesNotMatch(workflow, /NPM_TOKEN|NODE_AUTH_TOKEN|secrets\./);
   assert.doesNotMatch(workflow, /uses:\s+[^\s]+@(?![0-9a-f]{40}(?:\s|$))/);
+
+  const gate = await readFile(join(repositoryRoot, "scripts", "verify-release-stage.mjs"), "utf8");
+  assert.match(gate, /await verifyStableReleaseGates\(\{/);
 });

@@ -142,9 +142,25 @@ npm trust github loomrail --repository loomrail/loomrail --file npm-stage.yml --
 Do not run this command as an ordinary setup step. Creating the trust relationship is an owner-authorized external
 mutation and remains pending until the other stable gates are ready.
 
+The repository gate requires stable semver, an exact main SHA, matching typed confirmation, an unused registry
+version, npm `11.15.0+`, and a successful push-triggered CI run for that SHA with all six macOS/Windows Verify,
+Browser smoke and Clean install jobs. It also reads the versioned
+[`STABLE-RELEASE-GATES.json`](evidence/phase-8/STABLE-RELEASE-GATES.json) index and refuses staging unless all ten
+required gates are `PASSED`, the selected stable version matches, every evidence file is a bounded regular file with
+the recorded SHA-256, and the identical bytes exist at a recorded ancestor commit. Run `pnpm release:status` to inspect
+the current index without changing external state. The index currently proves six historical gates and deliberately
+keeps private dogfood, protected landing integration and both Windows live-provider rows `PENDING`; no stable version
+is selected.
+
+The index prevents an accidental premature workflow run; it is not a signature or an independent reviewer. A
+maintainer could forge repository evidence, so protected-environment owner review must still inspect the referenced
+reports and exact source diff. A staged package is still not public. A package owner must separately inspect it and
+approve it with interactive 2FA before npm makes the immutable name/version public.
+
 For every authorized candidate:
 
-1. Decide the version and set it in `apps/cli/package.json`; the release manifest reads it from there.
+1. Close every external stable gate, record sanitized evidence, run `pnpm release:status`, decide the version, and set
+   the same stable semver in `apps/cli/package.json` and `STABLE-RELEASE-GATES.json`.
 2. `pnpm test:fault-injection && pnpm verify && pnpm test:e2e` passes on macOS and Windows.
 3. `pnpm pack:release && pnpm test:release` passes on macOS and Windows with a clean receipt.
 4. Inspect the receipt and `dist-release/package/`; confirm exact source commit, expected files, no local paths, no

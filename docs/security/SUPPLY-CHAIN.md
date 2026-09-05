@@ -81,8 +81,12 @@ sets `publishConfig.provenance: true`; no long-lived npm write token is accepted
 
 The repository gate requires stable semver, an exact main SHA, matching typed confirmation, an unused registry
 version, npm `11.15.0+`, and a successful push-triggered CI run for that SHA with all six macOS/Windows Verify,
-Browser smoke and Clean install jobs. A staged package is still not public. A package owner must separately inspect it
-and approve it with interactive 2FA before npm makes the immutable name/version public.
+Browser smoke and Clean install jobs. A strict versioned stable-gate index additionally requires all ten named gates,
+the exact selected stable version, bounded non-symlink evidence files, matching SHA-256 for both current and committed
+bytes, and an evidence commit that is an ancestor of the release source. Its current honest state is 6/10 with no
+stable version selected. This index prevents accidental omission; it is repository-authored evidence, not a signature
+or a substitute for protected-environment owner review. A staged package is still not public. A package owner must
+separately inspect it and approve it with interactive 2FA before npm makes the immutable name/version public.
 
 npm provenance links the published bytes to source and build instructions through Sigstore and a transparency log.
 It does not certify code quality or safety. The local receipt, a checksum in release notes, a Git tag, and a

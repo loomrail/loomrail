@@ -1491,6 +1491,17 @@ rejection; create-new conflict tests; restart after each publication step; misma
 idempotent publish and Project registration; HTTP Origin/session/CSRF bounds; redaction canaries; RU/EN, keyboard and
 light/dark browser coverage on macOS and Windows.
 
+**T35 — an incomplete or stale checklist authorizes stable staging. High.** A manual confirmation and green CI prove
+intent and automated source health, but neither proves private dogfood, protected landing integration or exact live
+provider rows. The stage workflow therefore consumes one strict versioned index with an exact ten-gate key set and
+matching stable version. `PASSED` entries name only bounded repository evidence under `docs/evidence`, bind its
+SHA-256, require the same bytes at the recorded commit, and require that commit to be an ancestor of the release
+source; pending entries cannot carry evidence or pass the workflow. Evidence paths reject traversal and symlinks, and
+the trusted checkout fetches history for the ancestry check. Tests cover unknown fields, prerelease/version drift,
+unsafe paths, any pending gate, digest drift, non-ancestor evidence, and the workflow linkage. This closes accidental
+omission, not a malicious maintainer: repository-authored Markdown is not a signature, so protected-environment owner
+review must inspect the reports and exact source diff before OIDC staging. Separate npm 2FA approval remains terminal.
+
 Verification required by C1: proposal replay/digest/expiry; CSRF/Origin; shell/download denial; ambient-config canary;
 ungranted call never reaches fake server; revoke race; flood/invalid JSON; process orphan cleanup; unknown outcome/no
 retry; redaction canaries; RU/EN, keyboard, light/dark E2E.

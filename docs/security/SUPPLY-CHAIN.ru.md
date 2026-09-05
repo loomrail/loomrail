@@ -82,8 +82,12 @@ GitHub environment `npm-release` и не разрешает прямой `npm pu
 
 Repository gate требует stable semver, exact main SHA, совпадающее typed confirmation, свободную registry version,
 npm `11.15.0+` и успешный push-triggered CI для этого SHA со всеми шестью macOS/Windows Verify, Browser smoke и Clean
-install jobs. Staged package ещё не является публичной версией. Package owner отдельно проверяет его и подтверждает
-interactive 2FA, прежде чем npm сделает immutable name/version публичным.
+install jobs. Строгий versioned stable-gate index дополнительно требует все десять named gates, exact выбранную
+stable version, bounded non-symlink evidence files, совпадающий SHA-256 текущих и committed bytes и evidence commit,
+который является ancestor release source. Его текущее честное состояние — 6/10 без выбранной stable version. Index
+предотвращает случайный пропуск, но остаётся repository-authored evidence, а не подписью или заменой owner review в
+protected environment. Staged package ещё не является публичной версией. Package owner отдельно проверяет его и
+подтверждает interactive 2FA, прежде чем npm сделает immutable name/version публичным.
 
 npm provenance через Sigstore и transparency log связывает published bytes с source/build instructions. Он не
 сертифицирует качество или безопасность кода. Local receipt, checksum в release note, Git tag или заявление

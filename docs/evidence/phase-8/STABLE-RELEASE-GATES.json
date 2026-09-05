@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "releaseVersion": null,
+  "gates": {
+    "finalSecurityReview": {
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/Q13-FINAL-SECURITY-RELIABILITY-EVIDENCE.md",
+      "evidenceSha256": "12f8b042d5746cf71acbd4edda1a6d82a92929aa11889f61fbe3f599d4162453",
+      "evidenceCommit": "9722e1a7f4ce1982ee99dad57bfbd13ae6fe55fe"
+    },
+    "q15CanonicalActivationNonLanding": {
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/Q15-GUIDED-ACTIVATION-EVIDENCE.md",
+      "evidenceSha256": "ea8d15b0a6c7c0f62bb45f2cc08d6bbcf0b091cba0ed09d85701141e7344d7be",
+      "evidenceCommit": "345b435d06318d54bb007a2b2aaa8fe202e7386d"
+    },
+    "q17MeasuredProjectVerification": {
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md",
+      "evidenceSha256": "0acd2b3f52fc16dc33bae5329d39922d0413da119043eddd07b87f740046911c",
+      "evidenceCommit": "33f77994b3e707d0ccaa683890e68cc7d6625a6e"
+    },
+    "managedPublicDogfoodRehearsal": {
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/Q14-MACOS-LIVE-PROVIDERS-EVIDENCE.md",
+      "evidenceSha256": "9981c6753ff4fa24846d2836cd20057cf8c8eb53f4f45f32abb573e642d128bc",
+      "evidenceCommit": "ee0100565723941bb9c0b340979842ad925a4ebf"
+    },
+    "codexMacosCompatibility": {
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/Q14-MACOS-LIVE-PROVIDERS-EVIDENCE.md",
+      "evidenceSha256": "9981c6753ff4fa24846d2836cd20057cf8c8eb53f4f45f32abb573e642d128bc",
+      "evidenceCommit": "ee0100565723941bb9c0b340979842ad925a4ebf"
+    },
+    "claudeMacosCompatibility": {
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/Q14-MACOS-LIVE-PROVIDERS-EVIDENCE.md",
+      "evidenceSha256": "9981c6753ff4fa24846d2836cd20057cf8c8eb53f4f45f32abb573e642d128bc",
+      "evidenceCommit": "ee0100565723941bb9c0b340979842ad925a4ebf"
+    },
+    "privateDogfood": {
+      "status": "PENDING",
+      "reason": "Owner must choose one private full-stack repository and approve a bounded 2-3 Task dogfood Epic."
+    },
+    "protectedLandingCanonicalActivation": {
+      "status": "PENDING",
+      "reason": "The separately owned landing must consume the Q15 canonical activation contract and pass its protected gate."
+    },
+    "codexWindowsCompatibility": {
+      "status": "PENDING",
+      "reason": "Owner deferred the exact quota-bearing Codex compatibility capture on Windows."
+    },
+    "claudeWindowsCompatibility": {
+      "status": "PENDING",
+      "reason": "Owner deferred the exact quota-bearing Claude Code compatibility capture on Windows."
+    }
+  }
+}

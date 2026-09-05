@@ -3,6 +3,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import { releaseVersion, repositoryRoot, toolCommand, toolSpawnOptions } from "./release-manifest.mjs";
+import { verifyStableReleaseGates } from "./stable-release-gates.mjs";
 
 const expectedRepository = "loomrail/loomrail";
 const expectedRef = "refs/heads/main";
@@ -161,6 +162,10 @@ export const verifyReleaseStage = async (environment = process.env) => {
     workflowCommit: environment.GITHUB_SHA ?? "",
     checkedOutCommit,
     packageVersion: releaseVersion(),
+  });
+  await verifyStableReleaseGates({
+    releaseVersion: intent.version,
+    sourceCommit: intent.sourceCommit,
   });
 
   const query = new URLSearchParams({
