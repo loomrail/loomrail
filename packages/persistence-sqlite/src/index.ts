@@ -1128,6 +1128,7 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("GET_PROJECT_CONSTITUTION_SNAPSHOT"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_VERIFICATION_PLAN"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_VERIFICATION_RUN"), runId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_VERIFICATION_RUN_CONTEXT"), runId: opaqueIdSchema }).strict(),
   z
     .object({
       type: z.literal("LIST_WORK_ITEM_VERIFICATION_RUNS"),
@@ -10273,6 +10274,27 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             type: "VERIFICATION_RUN",
             run,
             checks: run === null ? [] : readVerificationChecks(run.id),
+          };
+        }
+        case "GET_VERIFICATION_RUN_CONTEXT": {
+          const run = readVerificationRun(queryValue.runId);
+          if (run === null) {
+            throw new StateStoreError("VERIFICATION_RUN_NOT_FOUND", "The verification Run does not exist");
+          }
+          const plan = readVerificationPlan(run.planId);
+          const workspace = readWorkItemWorkspace(run.workspaceId);
+          if (plan === null || workspace === null) {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "The verification Run has incomplete execution context",
+            );
+          }
+          return {
+            type: "VERIFICATION_RUN_CONTEXT",
+            run,
+            checks: readVerificationChecks(run.id),
+            plan,
+            workspace,
           };
         }
         case "LIST_WORK_ITEM_VERIFICATION_RUNS":

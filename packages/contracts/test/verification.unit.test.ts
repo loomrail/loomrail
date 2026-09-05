@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  cancelVerificationRunRequestSchema,
+  retryVerificationRunRequestSchema,
+  startVerificationRunRequestSchema,
   verificationCheckSchema,
   verificationPlanProposalSchema,
   verificationRecipeSchema,
@@ -167,6 +170,32 @@ const runningRun = {
 } as const;
 
 describe("verification run evidence contract", () => {
+  it("keeps owner start, retry and cancellation requests strict and version-bound", () => {
+    const start = {
+      schemaVersion: 1,
+      commandId: "start-verification",
+      expectedWorkItemVersion: 3,
+      expectedPlanRevision: 2,
+      expectedPlanContentHash: hash,
+    } as const;
+    expect(startVerificationRunRequestSchema.parse(start)).toEqual(start);
+    expect(
+      retryVerificationRunRequestSchema.parse({
+        ...start,
+        retryOfRunId: "verification-run-1",
+        expectedRetryOfRunVersion: 4,
+      }),
+    ).toMatchObject({ retryOfRunId: "verification-run-1", expectedRetryOfRunVersion: 4 });
+    expect(
+      cancelVerificationRunRequestSchema.parse({
+        schemaVersion: 1,
+        commandId: "cancel-verification",
+        expectedVersion: 2,
+      }),
+    ).toMatchObject({ expectedVersion: 2 });
+    expect(startVerificationRunRequestSchema.safeParse({ ...start, shell: true }).success).toBe(false);
+  });
+
   it("accepts a structurally measured passing check and current snapshot", () => {
     const check = {
       ...runningCheck,

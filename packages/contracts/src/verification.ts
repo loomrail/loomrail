@@ -371,6 +371,29 @@ export const retryVerificationPlanPublicationRequestSchema = z
   })
   .strict();
 
+export const startVerificationRunRequestSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    commandId: opaqueIdSchema,
+    expectedWorkItemVersion: z.number().int().positive(),
+    expectedPlanRevision: z.number().int().positive(),
+    expectedPlanContentHash: sha256Schema,
+  })
+  .strict();
+
+export const retryVerificationRunRequestSchema = startVerificationRunRequestSchema.extend({
+  retryOfRunId: opaqueIdSchema,
+  expectedRetryOfRunVersion: z.number().int().positive(),
+});
+
+export const cancelVerificationRunRequestSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    commandId: opaqueIdSchema,
+    expectedVersion: z.number().int().positive(),
+  })
+  .strict();
+
 export const verificationPlanSettingsResponseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -430,6 +453,7 @@ export const verificationCheckErrorCodeSchema = z.enum([
   "OUTPUT_WRITE_FAILED",
   "PROCESS_TERMINATION_FAILED",
   "EXIT_UNOBSERVED",
+  "RUNNER_INTERNAL_ERROR",
 ]);
 export const verificationRunTerminalReasonSchema = z.enum([
   "ALL_REQUIRED_PASSED",
@@ -886,6 +910,13 @@ export const verificationRunSnapshotResponseSchema = z
     }
   });
 
+export const verificationRunsResponseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    runs: z.array(verificationRunSnapshotResponseSchema).max(100),
+  })
+  .strict();
+
 export type VerificationRecipeKind = z.infer<typeof verificationRecipeKindSchema>;
 export type VerificationExecutable = z.infer<typeof verificationExecutableSchema>;
 export type VerificationNetworkPolicy = z.infer<typeof verificationNetworkPolicySchema>;
@@ -927,3 +958,4 @@ export type VerificationCheck = z.infer<typeof verificationCheckSchema>;
 export type VerificationRun = z.infer<typeof verificationRunSchema>;
 export type VerificationCheckObservation = z.infer<typeof verificationCheckObservationSchema>;
 export type VerificationRunSnapshotResponse = z.infer<typeof verificationRunSnapshotResponseSchema>;
+export type VerificationRunsResponse = z.infer<typeof verificationRunsResponseSchema>;

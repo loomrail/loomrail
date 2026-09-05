@@ -159,6 +159,21 @@ describe("verification recipe runner", () => {
     await expect(access(artifactDirectory)).rejects.toThrow();
   });
 
+  it("refuses a stale reserved tree before running the command", async () => {
+    const { artifacts, repositoryPath } = await makeRepo();
+    const marker = join(repositoryPath, "must-not-run-stale-tree");
+    const result = await executeVerificationRecipe({
+      recipe: recipe(`require("node:fs").writeFileSync(${JSON.stringify(marker)}, "bad")`),
+      worktreePath: repositoryPath,
+      artifactDirectory: artifacts,
+      artifactId: "verification-output-stale-tree",
+      expectedTree: "f".repeat(40),
+    });
+
+    expect(result.observation).toMatchObject({ status: "ERROR", errorCode: "TREE_MUTATED" });
+    await expect(access(marker)).rejects.toThrow();
+  });
+
   it("builds identical minimal baseline intent for POSIX and Windows without owner secrets", () => {
     const source = {
       PATH: "/usr/bin",

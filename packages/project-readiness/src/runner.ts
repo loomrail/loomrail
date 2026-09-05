@@ -27,6 +27,7 @@ export type ExecuteVerificationRecipeInput = {
   worktreePath: string;
   artifactDirectory: string;
   artifactId: string;
+  expectedTree?: string;
   systemEnvironment?: EnvironmentSource;
   platform?: VerificationPlatform;
   signal?: AbortSignal;
@@ -274,6 +275,14 @@ export const executeVerificationRecipe = async (
       artifactPath: null,
       beforeTree: null,
       afterTree: null,
+    };
+  }
+  if (input.expectedTree !== undefined && input.expectedTree !== beforeTree) {
+    return {
+      observation: errorObservation("TREE_MUTATED", completedNow()),
+      artifactPath: null,
+      beforeTree,
+      afterTree: beforeTree,
     };
   }
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u.test(input.artifactId)) {

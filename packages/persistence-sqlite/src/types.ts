@@ -128,6 +128,7 @@ export type StateQuery =
   | { type: "GET_PROJECT_CONSTITUTION_SNAPSHOT"; projectId: string }
   | { type: "GET_PROJECT_VERIFICATION_PLAN"; projectId: string }
   | { type: "GET_VERIFICATION_RUN"; runId: string }
+  | { type: "GET_VERIFICATION_RUN_CONTEXT"; runId: string }
   | { type: "LIST_WORK_ITEM_VERIFICATION_RUNS"; workItemId: string; limit?: number }
   | { type: "LIST_ACTIVE_VERIFICATION_RUNS" }
   | { type: "GET_VERIFICATION_OUTPUT_ARTIFACT"; checkId: string }
@@ -215,6 +216,13 @@ export type StateQueryResult =
       publication: VerificationPlanPublication | null;
     }
   | { type: "VERIFICATION_RUN"; run: VerificationRun | null; checks: VerificationCheck[] }
+  | {
+      type: "VERIFICATION_RUN_CONTEXT";
+      run: VerificationRun;
+      checks: VerificationCheck[];
+      plan: VerificationPlan;
+      workspace: WorkItemWorkspace;
+    }
   | { type: "VERIFICATION_RUNS"; runs: VerificationRun[] }
   | {
       type: "VERIFICATION_OUTPUT_ARTIFACT";

@@ -69,6 +69,7 @@ import {
   revokeMcpProfileGrantRequestSchema,
   retryProjectConstitutionPublicationRequestSchema,
   retryVerificationPlanPublicationRequestSchema,
+  retryVerificationRunRequestSchema,
   retryProjectScaffoldRequestSchema,
   scaffoldProposalSchema,
   runProjectReadinessRequestSchema,
@@ -81,6 +82,8 @@ import {
   sessionExchangeRequestSchema,
   sessionExchangeResponseSchema,
   startMockPipelineRequestSchema,
+  startVerificationRunRequestSchema,
+  cancelVerificationRunRequestSchema,
   updateWorkItemRequestSchema,
   workItemChangesResponseSchema,
   workItemFileDiffResponseSchema,
@@ -90,6 +93,8 @@ import {
   workItemWorkspaceResponseSchema,
   workflowSnapshotSchema,
   verificationPlanSettingsResponseSchema,
+  verificationRunSnapshotResponseSchema,
+  verificationRunsResponseSchema,
   type ApiErrorResponse,
   type DomainEvent,
   type PublishedWorkItemWorkspace,
@@ -113,6 +118,7 @@ import {
   QACorrectionError,
   ReadinessDomainError,
   VerificationDomainError,
+  projectVerificationRunFreshness,
   renderReleaseSummary,
   ReviewFindingDispositionError,
   ScaffoldDomainError,
@@ -158,6 +164,7 @@ import {
   PathUnresolvableError,
   readFileDiff,
   summariseChanges,
+  treeOfWorktree,
 } from "@loomrail/workspace";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
@@ -193,6 +200,7 @@ import {
   resolveRegisteredRepository,
 } from "./fixtures.js";
 import { createSessionWorker } from "./session-worker.js";
+import { createProjectVerificationRunner, type VerificationRecipeExecutor } from "./verification-runner.js";
 import { describeReportingRuntime } from "./reporting.js";
 import { createMcpProposalChallengeStore, McpProposalError } from "./mcp-proposals.js";
 import { createMcpConnectionOpener } from "./mcp-sessions.js";
@@ -272,6 +280,10 @@ export type StartDaemonOptions = {
   browserQAConfigResolver?: BrowserQAConfigResolver;
   /** Test seam; production stores heavy QA evidence beside the state database. */
   browserQAArtifactsDirectory?: string;
+  /** Test seam; production stores bounded verification output outside every Project worktree. */
+  verificationArtifactsDirectory?: string;
+  /** Test seam; production owns the exact-argv supervised recipe executor. */
+  verificationRecipeExecutor?: VerificationRecipeExecutor;
   /** Injected only for daemon route tests; production owns the real bounded stdio gateway. */
   mcpGateway?: McpGateway;
   // Injected for the same reason as `providerAdapter` above, and only for it: the heartbeat is the
@@ -353,6 +365,8 @@ const scaffoldParamsSchema = z.object({ operationId: opaqueIdSchema }).strict();
 const mcpProposalParamsSchema = z.object({ projectId: opaqueIdSchema, challengeId: opaqueIdSchema }).strict();
 const mcpRevisionParamsSchema = z.object({ projectId: opaqueIdSchema, revisionId: opaqueIdSchema }).strict();
 const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
+const verificationRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
+const verificationCheckParamsSchema = z.object({ checkId: opaqueIdSchema }).strict();
 const qaAttachmentParamsSchema = z
   .object({ workItemId: opaqueIdSchema, attachmentId: opaqueIdSchema })
   .strict();
@@ -554,7 +568,12 @@ const sendOperationError = (
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
   if (error instanceof VerificationDomainError) {
-    const status = error.code === "PROJECT_NOT_FOUND" || error.code === "PUBLICATION_NOT_FOUND" ? 404 : 409;
+    const status =
+      error.code === "PROJECT_NOT_FOUND" ||
+      error.code === "PUBLICATION_NOT_FOUND" ||
+      error.code === "WORK_ITEM_NOT_FOUND"
+        ? 404
+        : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
   if (error instanceof ScaffoldDomainError) {
@@ -648,7 +667,9 @@ const sendOperationError = (
   }
   if (error instanceof StateStoreError) {
     const status =
-      error.code === "PROJECT_NOT_FOUND"
+      error.code === "PROJECT_NOT_FOUND" ||
+      error.code === "VERIFICATION_RUN_NOT_FOUND" ||
+      error.code === "VERIFICATION_CHECK_NOT_FOUND"
         ? 404
         : error.code === "COMMAND_ID_REUSED" ||
             error.code === "PROJECT_ALREADY_REGISTERED" ||
@@ -862,6 +883,11 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     (databasePath === ":memory:"
       ? join(tmpdir(), "loomrail-browser-qa", randomUUID())
       : join(dirname(resolve(databasePath)), "artifacts"));
+  const verificationArtifactsDirectory =
+    options.verificationArtifactsDirectory ??
+    (databasePath === ":memory:"
+      ? join(tmpdir(), "loomrail-verification-output", randomUUID())
+      : join(dirname(resolve(databasePath)), "verification-output"));
 
   // The single seam every writer -- request handlers and `runStageAttempt` alike -- publishes
   // through, because there is exactly one `localState` and it is already wrapped by the time any
@@ -1283,6 +1309,78 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     type: "RECONCILE_WORKFLOWS",
     payload: {},
   });
+  const verificationRunner = createProjectVerificationRunner({
+    state: localState,
+    artifactsDirectory: verificationArtifactsDirectory,
+    createCommandId: () => `verification-command-${randomUUID()}`,
+    createArtifactId: () => `verification-output-${randomUUID()}`,
+    now,
+    logger: app.log,
+    ...(options.verificationRecipeExecutor === undefined
+      ? {}
+      : { executeRecipe: options.verificationRecipeExecutor }),
+  });
+
+  const verificationPlatform = (): "darwin" | "linux" | "win32" => {
+    const current = normalizePlatform();
+    if (current === "other") {
+      throw new StateStoreError(
+        "PERSISTENCE_FAILURE",
+        "Project verification is not supported on this operating system",
+      );
+    }
+    return current;
+  };
+
+  const readVerificationTree = async (worktreePath: string): Promise<string> => {
+    try {
+      return await treeOfWorktree({ worktreePath });
+    } catch (error: unknown) {
+      if (error instanceof GitMissingError) {
+        throw new WorkItemChangesError(
+          "GIT_UNAVAILABLE",
+          "The verification tree could not be read because git could not be started on this machine",
+          { cause: error },
+        );
+      }
+      throw new WorkItemChangesError(
+        "CHANGES_UNREADABLE",
+        "The verification tree could not be read from the WorkItem workspace",
+        { cause: error },
+      );
+    }
+  };
+
+  const readVerificationRunSnapshot = async (
+    runId: string,
+    treeCache: Map<string, Promise<string>> = new Map(),
+  ) => {
+    const context = localState.query({ type: "GET_VERIFICATION_RUN_CONTEXT", runId });
+    if (context.type !== "VERIFICATION_RUN_CONTEXT") {
+      throw new StateStoreError("PERSISTENCE_FAILURE", "The verification Run context is unavailable");
+    }
+    const current = localState.query({
+      type: "GET_PROJECT_VERIFICATION_PLAN",
+      projectId: context.run.projectId,
+    });
+    if (current.type !== "PROJECT_VERIFICATION_PLAN") {
+      throw new StateStoreError("PERSISTENCE_FAILURE", "The current verification Plan is unavailable");
+    }
+    const cachedTree = treeCache.get(context.workspace.worktreePath);
+    const treePromise = cachedTree ?? readVerificationTree(context.workspace.worktreePath);
+    if (cachedTree === undefined) treeCache.set(context.workspace.worktreePath, treePromise);
+    const freshness = projectVerificationRunFreshness(context.run, {
+      currentPlan: current.plan ?? undefined,
+      publication: current.publication ?? undefined,
+      currentTree: await treePromise,
+    });
+    return verificationRunSnapshotResponseSchema.parse({
+      schemaVersion: 1,
+      run: context.run,
+      checks: context.checks,
+      ...freshness,
+    });
+  };
   const sessionForRequest = (request: FastifyRequest): Session | undefined => {
     const sessionToken = request.cookies[SESSION_COOKIE];
     if (!sessionToken) return undefined;
@@ -2267,6 +2365,139 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         });
         await drainVerificationPlanPublications();
         return await readVerificationPlanSettings(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/work-items/:workItemId/verification-runs", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const workItem = localState.query({ type: "GET_WORK_ITEM", workItemId: params.workItemId });
+        if (workItem.type !== "WORK_ITEM" || workItem.workItem === null) {
+          throw new WorkItemDomainError("WORK_ITEM_NOT_FOUND", "The WorkItem does not exist");
+        }
+        const result = localState.query({
+          type: "LIST_WORK_ITEM_VERIFICATION_RUNS",
+          workItemId: params.workItemId,
+          limit: 25,
+        });
+        if (result.type !== "VERIFICATION_RUNS") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "Verification Runs could not be loaded");
+        }
+        const treeCache = new Map<string, Promise<string>>();
+        return verificationRunsResponseSchema.parse({
+          schemaVersion: 1,
+          runs: await Promise.all(result.runs.map(({ id }) => readVerificationRunSnapshot(id, treeCache))),
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/work-items/:workItemId/verification-runs", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const body = z
+          .union([retryVerificationRunRequestSchema, startVerificationRunRequestSchema])
+          .parse(request.body);
+        const workspaceResult = localState.query({
+          type: "GET_WORKSPACE_BY_WORK_ITEM",
+          workItemId: params.workItemId,
+        });
+        const workspace = workspaceResult.type === "WORKSPACE" ? workspaceResult.workspace : null;
+        if (workspace === null) {
+          throw new VerificationDomainError(
+            "WORKSPACE_UNAVAILABLE",
+            "Verification needs a prepared WorkItem workspace",
+          );
+        }
+        const commonPayload = {
+          workItemId: params.workItemId,
+          expectedWorkItemVersion: body.expectedWorkItemVersion,
+          expectedPlanRevision: body.expectedPlanRevision,
+          expectedPlanContentHash: body.expectedPlanContentHash,
+          implementationTree: await readVerificationTree(workspace.worktreePath),
+          platform: verificationPlatform(),
+        };
+        const reserved = localState.execute(
+          "retryOfRunId" in body
+            ? {
+                schemaVersion: 1,
+                commandId: body.commandId,
+                correlationId,
+                actor: { type: "HUMAN", id: "local-owner" },
+                type: "RETRY_VERIFICATION_RUN",
+                payload: {
+                  ...commonPayload,
+                  retryOfRunId: body.retryOfRunId,
+                  expectedRetryOfRunVersion: body.expectedRetryOfRunVersion,
+                },
+              }
+            : {
+                schemaVersion: 1,
+                commandId: body.commandId,
+                correlationId,
+                actor: { type: "HUMAN", id: "local-owner" },
+                type: "START_VERIFICATION_RUN",
+                payload: commonPayload,
+              },
+        );
+        if (reserved.type !== "VERIFICATION_RUN_RESERVED") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The verification Run was not reserved");
+        }
+        verificationRunner.wake(reserved.run.id);
+        return await readVerificationRunSnapshot(reserved.run.id);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/verification-runs/:runId/cancel", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = verificationRunParamsSchema.parse(request.params);
+        const body = cancelVerificationRunRequestSchema.parse(request.body);
+        verificationRunner.cancel({
+          runId: params.runId,
+          expectedVersion: body.expectedVersion,
+          commandId: body.commandId,
+          correlationId,
+        });
+        return await readVerificationRunSnapshot(params.runId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/verification-checks/:checkId/output", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = verificationCheckParamsSchema.parse(request.params);
+        const output = await verificationRunner.readOutput(params.checkId);
+        if (output === null) {
+          return await reply
+            .code(404)
+            .send(
+              createError(
+                "VERIFICATION_OUTPUT_UNAVAILABLE",
+                "Verification output is unavailable",
+                correlationId,
+              ),
+            );
+        }
+        return await reply
+          .header("cache-control", "no-store")
+          .header("x-content-type-options", "nosniff")
+          .header("content-security-policy", "default-src 'none'; sandbox")
+          .type("text/plain; charset=utf-8")
+          .send(output);
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }
@@ -3794,12 +4025,15 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         stages: providerCapabilities.stages,
         worksInRepository: adapterWorksInWorkspace(providerCapabilities.stages),
       },
-      whenIdle: () => worker.whenIdle(),
+      whenIdle: async () => {
+        await Promise.all([worker.whenIdle(), verificationRunner.whenIdle()]);
+      },
       close: async () => {
         if (closing) return;
         closing = true;
         try {
           // The live session must be asked to stop before the server starts closing connections.
+          await verificationRunner.stop();
           await worker.stop();
           await mcpGateway.shutdown();
           await app.close();
@@ -3809,6 +4043,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       },
     };
   } catch (error: unknown) {
+    await verificationRunner.stop().catch(() => undefined);
     await mcpGateway.shutdown().catch(() => undefined);
     localState.close();
     await app.close();
