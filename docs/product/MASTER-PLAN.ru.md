@@ -2,11 +2,11 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-05 — Q16 complete with macOS/Windows fixture evidence; Windows live-provider capture
-deferred
+**Последнее дополнение:** 2026-09-05 — Q17 complete; full automated macOS/Windows CI green; Windows live-provider
+capture deferred
 
-**Статус:** approved product direction; Q15 non-landing и Q16 complete; protected landing, Windows live providers и
-stable gates pending
+**Статус:** approved product direction; Q15 non-landing и Q16–Q17 complete; Q15 protected landing integration,
+private dogfood, Windows live providers и stable publish gates pending
 
 **Продукт:** Loomrail
 
@@ -1592,12 +1592,13 @@ Run/correction terminal facts и продолжает общий bounded budget 
 workspace до `STOPPED` proof даже при потере daemon control pipe; startup сверяет PID/start-time и fail-closed
 останавливается при недоказанной process identity. Windows missing-root recovery, 1001-Run bounded reconcile,
 commit-before-proof-unlink и terminal-only manual-rerun wake покрыты отдельными regressions. Standards и Spec review
-после correction rounds не нашли оставшихся P0–P2. На `05cab6279e0cf9f772cafbd32caba9558474d3fb` clean install, 58/58 Browser
-smoke, Q17 workflow gate и fault recovery прошли на macOS/Windows; Windows process-tree lifecycle отдельно зелёный в
-[CI run 33952514299](https://github.com/loomrail/loomrail/actions/runs/33952514299). Оба Verify остановились только на
-трёх заранее известных protected landing lint findings, поэтому общий workflow conclusion честно остаётся
-`failure`. Live Windows provider verification по решению владельца отложена. Для нового cancellation/supervisor
-изменения ещё требуется fresh fixed-commit CI; sanitized evidence хранится в
+после correction rounds не нашли оставшихся P0–P2. Финальная correction sequence отделила target exit от cleanup,
+сохранила fail-closed Windows descendant reap и исправила приоритет package-manager resolution: абсолютный owner
+`PATH` больше не подменяется глобальным runtime copy. На `bb7b15e352c5f55eecda1ca82cb94bfcf174f741` оба Verify,
+clean install, 58/58 Browser smoke, Q17 workflow gate и fault recovery прошли на macOS/Windows; Windows
+process-supervision прошёл 21/21 в
+[CI run 33970433849](https://github.com/loomrail/loomrail/actions/runs/33970433849). Общий workflow conclusion —
+`success`. Live Windows provider verification по решению владельца отложена; sanitized evidence хранится в
 `docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md`.
 
 ### Оценка первого цикла
@@ -1759,19 +1760,17 @@ human waiver с documented risk.
 
 ## 26. Immediate next actions
 
-1. Подключить protected landing к Q15 canonical contract и закрыть его три lint finding только в отдельной
-   authorized landing-сессии; non-landing macOS/Windows evidence уже зафиксирован.
-2. Сохранить Q16 provider allowance fail-closed: Claude headless/Desktop остаётся explicit unsupported, Windows
-   live-provider capture отложен владельцем; macOS/Windows fixture CI и review уже закрыты.
-3. Создать и выполнить Q17 spec/implementation plan для owner-approved Project verification recipes, measured test
-   evidence и threat verification T48.
-4. Провести private dogfood Epic из 2–3 зависимых Task через новые activation/verification surfaces, оба live provider,
+1. Сохранить Q16 provider allowance fail-closed: Claude headless/Desktop остаётся explicit unsupported, Windows
+   live-provider capture отложен владельцем; Q17 и полная автоматическая macOS/Windows matrix уже зелёные.
+2. Подключить protected landing к Q15 canonical contract только в отдельной authorized landing-сессии; прежние три
+   lint finding уже закрыты и repository-wide Verify проходит на обеих ОС.
+3. Провести private dogfood Epic из 2–3 зависимых Task через новые activation/verification surfaces, оба live provider,
    restart, review, Browser QA и owner Acceptance.
-5. После отдельной owner-authorized сессии закрыть Windows live-provider compatibility rows; до неё неизвестные
+4. После отдельной owner-authorized сессии закрыть Windows live-provider compatibility rows; до неё неизвестные
    версии оставить fail-closed и использовать Mock.
-6. Закрыть protected-source, clean macOS/Windows, registry/trusted-publisher provenance gates; только затем принимать
-   отдельное решение о stable publish.
-7. Не начинать marketplace, team mode, Jira sync, desktop wrapper, billing или deploy automation до закрытия Dogfood
+5. Настроить registry/trusted-publisher provenance; только после private dogfood, Q15 landing integration, exact live
+   rows и owner Acceptance принимать отдельное решение о stable publish.
+6. Не начинать marketplace, team mode, Jira sync, desktop wrapper, billing или deploy automation до закрытия Dogfood
    Alpha contract.
 
 ## 27. Primary-source anchors

@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-05
 
-**Статус:** implementation and independent review complete; fresh fixed-commit CI in progress
+**Статус:** complete; automated macOS/Windows fixed-commit CI green; external stable gates pending
 
 **Спецификация:**
 [79-q17-project-verification-gate-spec.ru.md](79-q17-project-verification-gate-spec.ru.md)
@@ -118,15 +118,16 @@ output; restart сохраняет failure, а crash во время process д�
       перезапускает daemon с той же SQLite-базой и повторно проверяет восстановленный measured result без overflow.
 - [x] Выполнить focused lint/typecheck/unit/integration, full non-landing gates, fault injection и clean release.
       Full source typecheck, все package tests, 58/58 Playwright, fault injection и clean packed release прошли;
-      repository-wide lint прошёл. Format check остаётся заблокирован только двумя unrelated untracked research
+      repository-wide lint прошёл. Local format check остаётся заблокирован только тремя unrelated untracked research
       files, которые не изменялись и не входят в Q17.
 - [x] Выполнить independent Standards/Spec review и исправить все P0–P2. Два независимых reviewer после correction
       rounds не нашли оставшихся P0–P2; отдельно закрыты packaged supervisor, descendant races, Windows PID-reuse,
       terminal-only workflow wake и commit-before-proof-removal.
 - [x] Зафиксировать macOS/Windows fixed-commit fixture CI evidence; не заявлять live Windows provider evidence.
-      На `05cab6279e0cf9f772cafbd32caba9558474d3fb` clean install, 58/58 Browser smoke, Q17 workflow gate и fault
-      recovery прошли на обеих платформах; Windows process-tree lifecycle отдельно зелёный. Оба Verify остановились
-      только на тех же трёх protected landing lint findings; общий CI conclusion честно остаётся `failure`.
+      На `bb7b15e352c5f55eecda1ca82cb94bfcf174f741` оба repository-wide Verify, clean install, 58/58 Browser smoke,
+      Q17 workflow gate и fault recovery прошли на macOS/Windows; Windows process-supervision отдельно прошёл 21/21.
+      Общий [CI run 33970433849](https://github.com/loomrail/loomrail/actions/runs/33970433849) завершился `success`.
+      Live Windows provider evidence по решению владельца остаётся отложенным и этим fixture gate не подменяется.
 - [x] Обновить threat model, architecture, master plan и sanitized Q17 evidence.
       Evidence: `docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md`.
 

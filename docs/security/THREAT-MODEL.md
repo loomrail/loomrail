@@ -718,7 +718,7 @@ packaged build is exercised on a real Windows host. Claude allowance needs a fut
 and a new exact compatibility decision; Desktop/TUI presence is not evidence. These are release-evidence gates, not
 permission to reinterpret unavailable data as zero or to make allowance authoritative meanwhile.
 
-### Q17 Project-verification delta (T48, implemented and independently reviewed; fresh CI pending)
+### Q17 Project-verification delta (T48, implemented, independently reviewed and cross-platform verified)
 
 Q17 promotes repository build/test/lint/integration/E2E commands from provider prose to executable acceptance evidence.
 Repository manifests and agent instructions are untrusted data, so a discovered script name is a proposal, not launch
@@ -731,6 +731,9 @@ Critical and stays open until the Q17 spec and implementation provide:
   filesystem/environment/network permissions. Adoption and execution are separate optimistic-versioned commands;
 - trusted runner uses argv arrays with `shell: false`, a canonical task worktree, scrubbed environment, no provider or
   production secrets, explicit network policy, process-tree cancellation, deadline and stdout/stderr caps;
+- package-manager resolution follows only canonical absolute directories in the owner's `PATH` order, rejects
+  relative/worktree entries and uses trusted runtime directories only as fallbacks. Windows shims resolve to a
+  regular JavaScript launcher or standalone executable instead of invoking `.cmd` through a shell;
 - before a Check becomes `RUNNING`, daemon fsyncs a create-new launch intent in its app-owned registry. A trusted Node
   supervisor replaces it with bounded `ACTIVE` PID/start-time evidence before acknowledging readiness, starts the
   repository command only after an authenticated control handshake, and treats daemon stdin/control loss as a stop;

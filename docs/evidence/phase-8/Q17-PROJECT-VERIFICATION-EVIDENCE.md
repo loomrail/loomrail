@@ -2,9 +2,8 @@
 
 **Date:** 2026-09-05
 
-**Scope:** implemented, independently reviewed and locally verified owner-approved Project verification gate;
-automated macOS/Windows CI evidence recorded below; fresh fixed-commit CI and Windows live-provider verification
-remain open
+**Scope:** implemented, independently reviewed and verified owner-approved Project verification gate; automated
+macOS/Windows CI evidence recorded below; Windows live-provider verification remains deferred
 
 ## Implemented boundary
 
@@ -71,7 +70,7 @@ Russian/dark, by keyboard, at 320 px and across a real daemon restart over the s
 - Changed-file Prettier and ESLint passed; repository-wide source typecheck built and typechecked every workspace
   project.
 - Final sequential `pnpm test` passed every workspace package. Relevant counts include contracts 197/197,
-  process-supervision 18/18, web 100/100, Browser QA 27/27, domain 299/299, Project readiness 24/24,
+  process-supervision 21/21, web 100/100, Browser QA 27/27, domain 299/299, Project readiness 24/24,
   persistence 143/143, daemon 241/241, provider core 68/68, provider adapters 159/159, MCP 21/21 and CLI 38/38.
   Landing passed 13/13 with its known jsdom `HTMLMediaElement` warnings.
 - `pnpm test:e2e`: 58/58 passed. The Q17 case verifies exact command display, keyboard Run/output focus, inert hostile
@@ -88,34 +87,36 @@ Russian/dark, by keyboard, at 320 px and across a real daemon restart over the s
 - Windows missing-root recovery refuses ambiguous lineage; live supervisor root-exit cleanup, manual terminal
   workflow wake, non-terminal no-wake, 1001-Run batching, commit-before-unlink and SQLite-failure proof retention have
   dedicated regressions. Independent Standards and Spec reviewers report no remaining P0–P2 findings.
-- Repository-wide lint passes. Repository-wide formatting remains blocked only by two unrelated untracked research
+- Repository-wide lint passes. Repository-wide formatting remains blocked locally only by three unrelated untracked research
   files; they were neither changed nor included in this work. `apps/landing/**` was not changed.
 
 ## Fixed-commit macOS/Windows CI
 
-The named Q17 lane was added in `160ea72`. It runs scanner/publisher/runner and shared process-supervision lifecycle
-tests on both macOS and Windows before repository-wide lint. Browser smoke and clean-install jobs independently
-exercise the packaged application on both platforms. Follow-up commits `ae2045d` and `05cab62` close stale-after-pass
-and restart-interruption owner-gate recovery without changing Windows product scope.
+The named Q17 lane runs scanner/publisher/runner and shared process-supervision lifecycle tests on both macOS and
+Windows before repository-wide verification. Browser smoke and clean-install jobs independently exercise the packaged
+application on both platforms. The final correction sequence made target exit independent from descendant cleanup,
+kept Windows cleanup fail-closed, and preserved the owner's absolute `PATH` order when resolving an adopted package
+manager instead of silently preferring a different global runtime copy.
 
-Fixed-commit CI for `05cab6279e0cf9f772cafbd32caba9558474d3fb` is recorded in
-[run 33952514299](https://github.com/loomrail/loomrail/actions/runs/33952514299):
+Fixed-commit CI for `bb7b15e352c5f55eecda1ca82cb94bfcf174f741` is recorded in
+[run 33970433849](https://github.com/loomrail/loomrail/actions/runs/33970433849):
 
+- both repository-wide Verify jobs passed, including formatting, lint, typecheck, all workspace tests and SQLite
+  portability;
 - clean-install release verification passed on macOS and Windows;
 - Browser smoke passed 58/58 on macOS and 58/58 on Windows;
 - the named Project verification workflow gate passed on macOS and Windows;
-- the Windows MCP process-tree lifecycle passed on Windows;
-- crash and fault recovery passed on macOS and Windows;
-- both repository-wide Verify jobs reached source verification and failed only on the same three protected
-  `apps/landing/src/main.ts` lint findings at lines 630, 631 and 634.
+- the Windows process-supervision suite passed 21/21, including resistant descendants, control-pipe loss, durable
+  stop proof and target-exit-versus-cleanup timing;
+- crash and fault recovery passed on macOS and Windows.
 
-The overall workflow conclusion is therefore `failure`; it is not reclassified as green. All Q17, packaged-browser,
-clean-install, fault-recovery and automated Windows compatibility evidence passed before that unrelated protected
-surface stopped repository-wide lint.
+The overall workflow conclusion is `success`. This is automated fixture, browser, package and source evidence; it is
+not a live-provider compatibility row or a private dogfood result.
 
 ## Remaining gates
 
 - Windows live provider compatibility remains deferred by the owner; automated Windows runner, process-tree,
   browser and clean-install evidence is not a substitute for it;
-- private dogfood, trusted publisher provenance and an explicit publish/release decision are separate
-  first-stable-version gates.
+- the protected landing now passes repository lint, but its separate Q15 canonical-contract integration remains open;
+- private dogfood, exact live-provider promotion, trusted publisher provenance, owner Acceptance and an explicit
+  publish/release decision are separate first-stable-version gates.
