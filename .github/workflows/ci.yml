@@ -23,7 +23,10 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Windows runs the explicit Q17 and fault-injection gates before the repository-wide verify.
+    # Keep the job cap above that intentional sequential matrix; individual process and test
+    # deadlines remain the hang detectors.
+    timeout-minutes: 40
 
     steps:
       - name: Check out repository

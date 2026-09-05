@@ -99,6 +99,51 @@ describe("supervised local process", () => {
     expect(Buffer.byteLength(result.output.text, "utf8")).toBeLessThanOrEqual(128);
   });
 
+  it("falls back to a forced stop when graceful tree termination fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "loomrail force fallback "));
+    roots.push(root);
+    let forced = false;
+    let fallbackCleanup: ReturnType<typeof setTimeout> | null = null;
+    const processTree: ProcessTreeOperations = {
+      detachChild: true,
+      orphanRecoveryRequiresLiveRootIdentity: false,
+      pidExists: processExists,
+      treeExists: processExists,
+      gracefulStop: (pid) => {
+        fallbackCleanup = setTimeout(() => {
+          if (processExists(pid)) process.kill(pid, "SIGKILL");
+        }, 100);
+        return Promise.reject(new Error("graceful stop unavailable"));
+      },
+      forceStop: (pid) => {
+        forced = true;
+        if (fallbackCleanup !== null) {
+          clearTimeout(fallbackCleanup);
+          fallbackCleanup = null;
+        }
+        process.kill(pid, "SIGKILL");
+        return Promise.resolve();
+      },
+      reapDescendants: () => Promise.resolve(true),
+      startedAt: () => Promise.resolve(new Date()),
+    };
+
+    const result = await runSupervisedProcess({
+      command: process.execPath,
+      args: ["-e", 'process.stdout.write("x".repeat(4096)); setInterval(() => {}, 1000)'],
+      cwd: root,
+      env: { PATH: process.env["PATH"] ?? "" },
+      deadlineMs: 2_000,
+      graceMs: 50,
+      outputLimitBytes: 128,
+      redactValues: [],
+      processTree,
+    });
+
+    expect(forced).toBe(true);
+    expect(result.termination).toBe("OUTPUT_LIMIT_REACHED");
+  });
+
   it("leaves no signal-resistant descendant after an output-bound stop", async () => {
     const root = await mkdtemp(join(tmpdir(), "loomrail descendant test "));
     roots.push(root);
@@ -159,6 +204,51 @@ describe("supervised local process", () => {
     ).resolves.toBe(true);
     await removeVerificationProcessRecord(registryDirectory, runId);
   }, 15_000);
+
+  it("waits for a slow supervisor to publish durable stop proof", async () => {
+    const root = await mkdtemp(join(tmpdir(), "loomrail slow supervisor "));
+    roots.push(root);
+    const registryDirectory = join(root, "processes");
+    const runId = "verification-run-slow-supervisor";
+    const supervisorEntrypoint = join(root, "slow-supervisor.mjs");
+    await writeFile(
+      supervisorEntrypoint,
+      [
+        'import { writeFileSync } from "node:fs";',
+        "const valueAfter = (flag) => process.argv[process.argv.indexOf(flag) + 1];",
+        'const token = valueAfter("--control-token");',
+        'const registryFile = valueAfter("--registry-file");',
+        'const runId = valueAfter("--run-id");',
+        "writeFileSync(3, `READY:${token}\\n`);",
+        'process.stdin.on("data", () => process.stdout.write("x".repeat(4096)));',
+        'process.stdin.once("end", () => {',
+        "  setTimeout(() => {",
+        '    writeFileSync(registryFile, JSON.stringify({ schemaVersion: 1, runId, state: "STOPPED", stoppedAt: new Date().toISOString() }));',
+        "    process.exit(0);",
+        "  }, 2800);",
+        "});",
+      ].join("\n"),
+    );
+    await prepareVerificationProcessIntent(registryDirectory, runId);
+
+    const result = await runSupervisedProcess({
+      command: process.execPath,
+      args: ["-e", "setInterval(() => {}, 1000)"],
+      cwd: root,
+      env: { PATH: process.env["PATH"] ?? "" },
+      deadlineMs: 10_000,
+      graceMs: 100,
+      outputLimitBytes: 128,
+      redactValues: [],
+      orphanGuard: { runId, registryDirectory, supervisorEntrypoint },
+    });
+
+    expect(result.termination).toBe("OUTPUT_LIMIT_REACHED");
+    await expect(
+      verificationProcessIsStopped(verificationProcessRecordPath(registryDirectory, runId), runId),
+    ).resolves.toBe(true);
+    await removeVerificationProcessRecord(registryDirectory, runId);
+  }, 10_000);
 
   it("reaps an ignored descendant before reporting a successful root exit", async () => {
     const root = await mkdtemp(join(tmpdir(), "loomrail successful descendant "));

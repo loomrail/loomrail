@@ -49,6 +49,10 @@ export type SupervisedProcessOptions = {
 
 const DEFAULT_GRACE_MS = 5_000;
 const FORCE_EXIT_WAIT_MS = 2_000;
+// The trusted supervisor may still be proving that a Windows descendant tree is gone after the
+// target's own graceful/forced stop windows elapsed. CIM startup and enumeration are materially
+// slower on a loaded runner, so do not kill the proof writer on the old 500 ms overhead budget.
+const SUPERVISOR_FINALIZATION_WAIT_MS = 10_000;
 
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => {
@@ -240,31 +244,31 @@ export const runSupervisedProcess = async (
       termination = reason;
       stopPromise = (async () => {
         if (rootPid === undefined) return;
-        try {
-          if (options.orphanGuard !== undefined && child.stdin !== null) {
+        if (options.orphanGuard !== undefined && child.stdin !== null) {
+          try {
             child.stdin.end();
-          } else {
-            await processTree.gracefulStop(rootPid);
+          } catch {
+            // A closed control pipe is already the supervisor's stop signal.
           }
-          const supervisorWaitMs =
-            options.orphanGuard === undefined ? graceMs : graceMs + FORCE_EXIT_WAIT_MS + 500;
-          await Promise.race([closed.promise, delay(supervisorWaitMs)]);
-          if (processTree.treeExists(rootPid)) {
-            await processTree.forceStop(rootPid);
-            await Promise.race([closed.promise, delay(FORCE_EXIT_WAIT_MS)]);
-          }
-          if (!hasClosed() && processTree.treeExists(rootPid)) {
-            termination = "TERMINATION_FAILED";
-          }
-        } catch {
-          if (!hasClosed() && processTree.treeExists(rootPid)) {
-            termination = "TERMINATION_FAILED";
-          }
+        } else {
+          await processTree.gracefulStop(rootPid).catch(() => undefined);
+        }
+        const supervisorWaitMs =
+          options.orphanGuard === undefined
+            ? graceMs
+            : graceMs + FORCE_EXIT_WAIT_MS + SUPERVISOR_FINALIZATION_WAIT_MS;
+        await Promise.race([closed.promise, delay(supervisorWaitMs)]);
+        if (processTree.treeExists(rootPid)) {
+          await processTree.forceStop(rootPid).catch(() => undefined);
+          await Promise.race([closed.promise, delay(FORCE_EXIT_WAIT_MS)]);
+        }
+        if (!hasClosed() && processTree.treeExists(rootPid)) {
+          termination = "TERMINATION_FAILED";
         }
         if (
           recordFile !== null &&
           options.orphanGuard !== undefined &&
-          !(await verificationProcessIsStopped(recordFile, options.orphanGuard.runId))
+          !(await verificationProcessIsStopped(recordFile, options.orphanGuard.runId).catch(() => false))
         ) {
           termination = "TERMINATION_FAILED";
         }
