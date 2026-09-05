@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a0724c-f5a7-7ec1-baff-fd7b08a97f20"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"result\":{\"summary\":\"Codex 0.153.4 read-only compatibility verified.\",\"completed\":[\"macOS arm64 synthetic probe\"],\"remaining\":[],\"deadEnds\":[],\"openQuestions\":[],\"type\":\"COMPLETED\"}}"}}
+{"type":"turn.completed","usage":{"input_tokens":14252,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":71,"reasoning_output_tokens":14}}

@@ -777,6 +777,15 @@ describe("createCodexProvider", () => {
       "codex-0.153.0-alpha.5-mcp-macos-arm64.jsonl",
       "The loomrail_q14 evidence_echo tool returned the marker `echo:macos-arm64`.",
     ],
+    ["codex-0.153.4-success-macos-arm64.jsonl", "Codex 0.153.4 read-only compatibility verified."],
+    [
+      "codex-0.153.4-workspace-macos-arm64.jsonl",
+      "Updated the exported status to verified and confirmed the repository check passes.",
+    ],
+    [
+      "codex-0.153.4-mcp-macos-arm64.jsonl",
+      "The exact marker returned by the tool is `echo:macos-arm64-01534`.",
+    ],
   ])("replays and independently validates the current macOS recording %s", async (file, summary) => {
     expect(
       providerStageResultSchemaFor("DISCOVERY", { humanRequests: "DISALLOWED" }).parse(
@@ -786,10 +795,13 @@ describe("createCodexProvider", () => {
     await expect(runAgainstRecording(file)).resolves.toMatchObject({ type: "COMPLETED", summary });
   });
 
-  it("keeps the current real invalid-model recording on the typed failure path", async () => {
-    const outcome = await runAgainstRecording("codex-0.153.0-alpha.5-failure-macos-arm64.jsonl");
+  it.each([
+    ["codex-0.153.0-alpha.5-failure-macos-arm64.jsonl", "loomrail-invalid-model-q14"],
+    ["codex-0.153.4-failure-macos-arm64.jsonl", "loomrail-invalid-model-01534"],
+  ])("keeps real invalid-model recording %s on the typed failure path", async (file, model) => {
+    const outcome = await runAgainstRecording(file);
     const request = expectNeedsHuman(outcome);
-    expect(request.context).toContain("loomrail-invalid-model-q14");
+    expect(request.context).toContain(model);
   });
 
   // The bare, un-enveloped shape the adapter originally assumed is still accepted -- kept so a CLI

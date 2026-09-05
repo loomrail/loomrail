@@ -61,18 +61,24 @@ describe("Codex provider diagnostics", () => {
   });
 
   it("scopes rate-limit reporting to its independently verified exact target", () => {
-    expect(
-      codexRateLimitReportingTargetVerified("0.153.1", { platform: "darwin", architecture: "arm64" }),
-    ).toBe(true);
+    for (const version of ["0.153.1", "0.153.4"]) {
+      expect(
+        codexRateLimitReportingTargetVerified(version, { platform: "darwin", architecture: "arm64" }),
+      ).toBe(true);
+    }
     expect(
       codexRateLimitReportingTargetVerified("0.153.0-alpha.5", {
         platform: "darwin",
         architecture: "arm64",
       }),
     ).toBe(false);
-    expect(codexRateLimitReportingTargetVerified("0.153.1", { platform: "win32", architecture: "x64" })).toBe(
-      false,
-    );
+    for (const target of [
+      { platform: "win32" as const, architecture: "arm64" as const },
+      { platform: "darwin" as const, architecture: "x64" as const },
+      { platform: "linux" as const, architecture: "arm64" as const },
+    ]) {
+      expect(codexRateLimitReportingTargetVerified("0.153.4", target)).toBe(false);
+    }
   });
   it("keeps versions without an exact runtime target unverified", () => {
     expect(codexProviderDiagnostics.classifyVersion("codex-cli 0.144.1\n")).toEqual({
@@ -85,12 +91,15 @@ describe("Codex provider diagnostics", () => {
     });
   });
 
-  it("verifies the recorded version only on its exact macOS arm64 target", () => {
-    expect(codexProviderDiagnostics.classifyVersion("codex-cli 0.153.0-alpha.5\n")).toEqual({
-      compatibility: process.platform === "darwin" && process.arch === "arm64" ? "VERIFIED" : "UNVERIFIED",
-      version: "0.153.0-alpha.5",
-    });
-  });
+  it.each(["0.153.0-alpha.5", "0.153.4"])(
+    "verifies recorded version %s only on its exact macOS arm64 target",
+    (version) => {
+      expect(codexProviderDiagnostics.classifyVersion(`codex-cli ${version}\n`)).toEqual({
+        compatibility: process.platform === "darwin" && process.arch === "arm64" ? "VERIFIED" : "UNVERIFIED",
+        version,
+      });
+    },
+  );
 
   it("rejects unknown shapes without returning their raw path or error text", () => {
     const canary = "/private/owner/provider-version-canary";

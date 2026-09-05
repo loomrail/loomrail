@@ -460,8 +460,9 @@ Required controls and verification:
   version. Raw output, executable path, environment, account and exception text never cross the module boundary;
 - `ProviderAvailability` is runtime-validated: a live provider is ready only when installed, exact `VERIFIED`, and
   authenticated. AUTO ignores every other live state; explicit selection stays visible but adapter start is false;
-- Q14 admits only the reviewed Codex `0.153.0-alpha.5` and Claude Code `2.1.260` targets on `darwin/arm64`. The same
-  versions on Windows, Linux or another architecture remain `UNVERIFIED`; Claude Code below 2.1.214 is `TOO_OLD`.
+- Q14 admits only the reviewed Codex `0.153.0-alpha.5`, Codex `0.153.4` and Claude Code `2.1.260` targets on
+  `darwin/arm64`. The same versions on Windows, Linux or another architecture remain `UNVERIFIED`; Claude Code below
+  2.1.214 is `TOO_OLD`.
   No package update, semver range, successful probe, setup or doctor invocation promotes a row;
 - promotion requires one reviewed change with sanitized real-CLI success/failure/workspace/MCP recordings, negative
   stream corpus and independent final-result validation for the exact version, platform, architecture and invocation

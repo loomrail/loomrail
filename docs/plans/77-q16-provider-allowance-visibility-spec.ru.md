@@ -25,8 +25,9 @@
   machine-readable source. Будущий bridge допустим только после отдельной live-проверки официального headless seam.
 - Mock: capability отсутствует и всегда возвращается как `UNAVAILABLE / PROVIDER_UNSUPPORTED`.
 - Provider surface читается только для exact compatibility row, где allowance capability отдельно разрешена. Semver,
-  более новая версия, другая ОС, архитектура или auth mode не наследуют это разрешение. Текущая Codex allowance-row
-  фиксирует `0.153.1 / darwin / arm64 / ChatGPT`; она не расширяет execution compatibility этой версии.
+  более новая версия, другая ОС, архитектура или auth mode не наследуют это разрешение. Codex allowance rows фиксируют
+  `0.153.1 / darwin / arm64 / ChatGPT` и `0.153.4 / darwin / arm64 / ChatGPT`; каждая capability подтверждается
+  отдельно от execution compatibility той же версии.
 - Чтение allowance не запускает model turn, не выполняет login/update/install и не выдаёт repository authority.
 
 Официальный Codex contract содержит `usedPercent`, `windowDurationMins`, Unix `resetsAt`, primary/secondary windows и

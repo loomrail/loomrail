@@ -1,6 +1,6 @@
 # Q14 macOS live-provider evidence
 
-**Date:** 2026-09-04
+**Date:** 2026-09-04; Codex exact-target refresh: 2026-09-05
 
 **Scope:** owner-authorized quota-bearing compatibility capture on macOS arm64; Windows explicitly pending
 
@@ -9,12 +9,26 @@
 | Provider    | CLI               | Runtime target                | Install kind                                                                          | FAST model                  | Invocation revision                        |
 | ----------- | ----------------- | ----------------------------- | ------------------------------------------------------------------------------------- | --------------------------- | ------------------------------------------ |
 | Codex       | `0.153.0-alpha.5` | Darwin 25.4.0, `darwin/arm64` | Native arm64 CLI bundled with ChatGPT desktop                                         | `gpt-5.6-luna`              | Q14 Codex JSONL/read-only/workspace/MCP v1 |
+| Codex       | `0.153.4`         | Darwin 25.4.0, `darwin/arm64` | Native arm64 CLI bundled with ChatGPT desktop                                         | `gpt-5.6-luna`              | Q14 Codex JSONL/read-only/workspace/MCP v1 |
 | Claude Code | `2.1.260`         | Darwin 25.4.0, `darwin/arm64` | npm global package in the active Node 24.19 NVM installation; native arm64 executable | `claude-haiku-4-5-20251001` | Q14 Claude stream-json/plan/strict-MCP v1  |
 
 Both exact version probes and provider-owned auth commands completed successfully. After the compatibility corrections
 below, packaged Doctor reports `VERIFIED`, `AUTHENTICATED`, and `ready=true` for both live providers on this target.
 The matrix key is exact `(version, platform, architecture)`: these rows do not admit Windows, Linux, macOS x64, or a
 newer provider version.
+
+The 2026-09-05 refresh promotes the installed Codex `0.153.4` target without inferring a version range. Its exact
+read-only invocation produced a schema-valid terminal result with 14,252 input, 71 output and 14 reasoning tokens.
+The writable synthetic-repository run changed only `status.mjs`, passed `npm run check`, and reported 74,883 input
+tokens (56,320 cached), 674 output tokens and 92 reasoning tokens. The session-scoped MCP run called exactly the
+annotated read-only `loomrail_q14.evidence_echo` tool, received `echo:macos-arm64-01534`, and reported 43,276 input
+tokens (28,160 cached), 289 output tokens and 91 reasoning tokens. The controlled invalid-model run produced a
+terminal provider failure before useful inference. The four sanitized recordings replay through the current adapter
+and the same independent final-result schema validation as the original Q14 captures.
+
+The allowance-specific `0.153.4 / darwin / arm64 / ChatGPT` row was checked independently through the bounded
+production App Server reader and returned a live three-window projection. That read started no model turn and does
+not substitute for the execution evidence above.
 
 ## Real CLI capture
 
@@ -74,6 +88,19 @@ boundary.
 
 Managed public dogfood is recorded after this compatibility slice. The protected `apps/landing/**` blocker remains
 outside this slice and is neither edited nor excluded.
+
+### 2026-09-05 exact Codex refresh verification
+
+- Codex adapter replay, negative corpus, process lifecycle and allowance suite: 5 files, 99/99 tests passed.
+- Focused Codex/Claude compatibility gate: 2 files, 15/15 tests passed.
+- Public-tree/toolchain/activation gate passed across 770 files; repository-wide lint, strict typecheck and the full
+  sequential workspace test suite passed.
+- Packaged Doctor reports Codex `0.153.4` and Claude Code `2.1.260` as exact `VERIFIED`, `AUTHENTICATED` and ready.
+  Its overall `WARN` is solely the closed `STATE_UPGRADE_REQUIRED` observation for an older local database; no state
+  was reset or migrated as part of compatibility verification.
+- The top-level `pnpm verify` reached formatting first and stopped only on two unrelated untracked research documents.
+  Every file in this compatibility change passes the committed formatter, and all remaining `verify` stages above
+  were run directly to completion. Remote CI receives neither unrelated untracked document.
 
 ## Managed public dogfood rehearsal
 

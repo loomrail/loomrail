@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a0724e-8e0d-78f0-ad94-7166ab0e79d1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"result\":{\"summary\":\"I’m locating the requested loomrail_q14 evidence_echo tool and will call it exactly once.\",\"completed\":[],\"remaining\":[],\"deadEnds\":[],\"openQuestions\":[],\"type\":\"COMPLETED\"}}"}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"loomrail_q14","tool":"evidence_echo","arguments":{},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"loomrail_q14","tool":"evidence_echo","arguments":{},"result":{"content":[{"type":"text","text":"echo:macos-arm64-01534"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"{\"result\":{\"summary\":\"The exact marker returned by the tool is `echo:macos-arm64-01534`.\",\"completed\":[\"Called loomrail_q14 evidence_echo exactly once.\"],\"remaining\":[],\"deadEnds\":[],\"openQuestions\":[],\"type\":\"COMPLETED\"}}"}}
+{"type":"turn.completed","usage":{"input_tokens":43276,"cached_input_tokens":28160,"cache_write_input_tokens":0,"output_tokens":289,"reasoning_output_tokens":91}}

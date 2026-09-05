@@ -109,13 +109,17 @@ export const probeCodexAuthenticationMode = (
 
 // Every row is platform- and architecture-scoped; never replace this with versions alone or a
 // semver range. Q14 evidence is recorded in docs/evidence/phase-8/Q14-MACOS-LIVE-PROVIDERS-EVIDENCE.md.
-const verifiedTargets = [{ version: "0.153.0-alpha.5", platform: "darwin", architecture: "arm64" }] as const;
+const verifiedTargets = [
+  { version: "0.153.0-alpha.5", platform: "darwin", architecture: "arm64" },
+  { version: "0.153.4", platform: "darwin", architecture: "arm64" },
+] as const;
 
 // Allowance compatibility is deliberately independent from execution compatibility. The App
-// Server rate-limit projection was observed live on this exact target, while its execution path is
-// not yet admitted. Neither row inherits support through SemVer, OS or architecture similarity.
+// Server rate-limit projection was observed live on every listed exact target independently from
+// its execution capture. Neither capability inherits support through SemVer, OS or architecture similarity.
 const rateLimitReportingTargets = [
   { version: "0.153.1", platform: "darwin", architecture: "arm64" },
+  { version: "0.153.4", platform: "darwin", architecture: "arm64" },
 ] as const;
 
 export const codexRateLimitReportingTargetVerified = (

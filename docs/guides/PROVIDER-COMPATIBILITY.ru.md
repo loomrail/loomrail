@@ -20,9 +20,11 @@ Loomrail считает provider CLI готовым, только когда с�
 | Codex       | 0.152.1         | Текущий upstream candidate; Loomrail adapter run не выполнялся        | `UNVERIFIED` — блок          |
 | Claude Code | 2.1.258         | Текущий upstream candidate; Loomrail adapter run не выполнялся        | `UNVERIFIED` — блок          |
 | Codex       | 0.153.0-alpha.5 | Настоящие success/failure/workspace/MCP recordings на macOS arm64     | `VERIFIED` на `darwin/arm64` |
+| Codex       | 0.153.4         | Настоящие success/failure/workspace/MCP recordings на macOS arm64     | `VERIFIED` на `darwin/arm64` |
 | Claude Code | 2.1.260         | Настоящие исправленные success/failure/MCP recordings на macOS arm64  | `VERIFIED` на `darwin/arm64` |
 
-Upstream versions — релизы на дату research-среза 2026-09-02, а не рекомендация установить или понизить версию.
+Unverified upstream candidate rows отражают релизы на дату research-среза 2026-09-02; exact verified rows отражают
+собственное датированное evidence Loomrail. Ни одна строка не является рекомендацией установить или понизить версию.
 First-party источники и точные границы утверждений находятся в
 [primary research](../product/PROVIDER-COMPATIBILITY-PRIMARY-RESEARCH-2026-09.md).
 

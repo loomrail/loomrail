@@ -18,8 +18,9 @@ process termination. Provider response objects are projected field-by-field befo
 credit, plan and spend-control fields never cross the adapter seam.
 
 The daemon admits allowance only behind an allowance-specific exact version/OS/architecture/auth-mode row, coalesces
-concurrent refreshes and persists one normalized snapshot plus its audit Event transactionally. The current Codex row
-is `0.153.1 / darwin / arm64 / ChatGPT`; it is intentionally independent from execution compatibility. Older
+concurrent refreshes and persists one normalized snapshot plus its audit Event transactionally. The admitted Codex
+rows are `0.153.1 / darwin / arm64 / ChatGPT` and `0.153.4 / darwin / arm64 / ChatGPT`; each is intentionally
+independent from execution compatibility. Older
 observations cannot replace newer ones; restart recalculates freshness. The daemon's three-second outer deadline
 releases a timed-out coalescing slot so a later retry can start a fresh bounded read. Authenticated GET and
 Origin/CSRF-protected POST routes expose only the normalized projection.
@@ -45,6 +46,11 @@ timestamps. The diagnostic printed only shape/validity facts; no percentages, ac
 stored. This exact read-only capability can be shown for a Project that explicitly selects Codex, but the separate
 execution compatibility row remains unverified, so `0.153.1` is not selected for dispatch by `AUTO` and cannot start
 a provider session.
+
+On 2026-09-05 the bundled CLI advanced to exact `0.153.4`. A fresh version/auth guard and the same bounded production
+reader returned `LIVE` with three complete windows through the closed normalized projection; only provider, freshness,
+window shape and bounded capacity fields were observed. No model turn, login, update or repository access occurred.
+This exact allowance row was admitted separately from the `0.153.4` execution row verified by the Q14 refresh.
 
 Claude Code's official rate-limit fields are inputs to its interactive status-line command. Two minimal owner-
 authorized FAST `claude -p` probes completed with actual usage, but the ephemeral command was not invoked after the
@@ -95,7 +101,5 @@ Commit `66e8fad` retained the POSIX escalation assertion and verified the Window
 
 ## Remaining gates
 
-- exact Codex 0.153.1 execution compatibility requalification before it can dispatch sessions (the independently
-  admitted read-only allowance surface does not grant execution readiness);
 - Windows live provider rows, protected landing, private dogfood and trusted publisher provenance remain separate
   stable-release gates.

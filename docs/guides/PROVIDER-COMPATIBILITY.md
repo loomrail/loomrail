@@ -20,11 +20,13 @@ different OS or architecture is not inferred compatible.
 | Codex       | 0.152.1         | Current upstream candidate; no Loomrail adapter run            | `UNVERIFIED` — blocked       |
 | Claude Code | 2.1.258         | Current upstream candidate; no Loomrail adapter run            | `UNVERIFIED` — blocked       |
 | Codex       | 0.153.0-alpha.5 | Real success/failure/workspace/MCP recordings on macOS arm64   | `VERIFIED` on `darwin/arm64` |
+| Codex       | 0.153.4         | Real success/failure/workspace/MCP recordings on macOS arm64   | `VERIFIED` on `darwin/arm64` |
 | Claude Code | 2.1.260         | Real corrected success/failure/MCP recordings on macOS arm64   | `VERIFIED` on `darwin/arm64` |
 
-Upstream versions are the releases current at the 2026-09-02 research cut, not recommendations to install or
-downgrade. See the [primary research](../product/PROVIDER-COMPATIBILITY-PRIMARY-RESEARCH-2026-09.md) for first-party
-sources and the exact limits of each claim.
+The unverified upstream-candidate rows are the releases current at the 2026-09-02 research cut; exact verified rows
+reflect their dated Loomrail evidence. None is a recommendation to install or downgrade. See the
+[primary research](../product/PROVIDER-COMPATIBILITY-PRIMARY-RESEARCH-2026-09.md) for first-party sources and the exact
+limits of each claim.
 
 On any target without an exact row, use the Mock walkthrough. AUTO stays on the clearly marked Mock fallback.
 Explicitly selecting an unverified Codex or Claude Code target keeps that choice visible but refuses a new provider

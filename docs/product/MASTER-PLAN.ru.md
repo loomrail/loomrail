@@ -1440,9 +1440,10 @@ fault recovery, clean package и 53/53 browser smoke прошли на macOS/Win
 на трёх protected landing lint findings. Q13 закрыт без stable claim. До private dogfood, exact live-provider
 promotion, protected landing и registry provenance stable npm publish запрещён.
 
-Q14 platform-scoped live-provider promotion выполняется по планам 73–74. Exact Codex `0.153.0-alpha.5` и Claude
-Code `2.1.260` получили owner-authorized success/failure/workspace/MCP evidence на `darwin/arm64`; admission теперь
-ключуется по version, platform и architecture, поэтому Windows не наследует macOS row. Реальный gate обнаружил и
+Q14 platform-scoped live-provider promotion выполняется по планам 73–74. Exact Codex `0.153.0-alpha.5`, обновлённый
+Codex `0.153.4` и Claude Code `2.1.260` получили owner-authorized success/failure/workspace/MCP evidence на
+`darwin/arm64`; admission теперь ключуется по version, platform и architecture, поэтому Windows не наследует macOS
+row. Реальный gate обнаружил и
 закрыл Claude JSON Schema dialect drift, отсутствие проекции typed MCP grant в `--allowedTools` и слишком узкий env
 auth probe. Обе CLI локально `VERIFIED`, `AUTHENTICATED` и ready; Windows live evidence остаётся blocking platform
 gap. Первый managed запуск дополнительно обнаружил, что Task Cockpit не сохранял выбранные hard budget/model tier:
