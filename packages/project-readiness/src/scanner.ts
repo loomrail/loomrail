@@ -171,32 +171,40 @@ const licensePresent = async (repositoryPath: string): Promise<boolean> => {
   return false;
 };
 
-const ciFindings = async (repositoryPath: string): Promise<readonly SecurityFindingDraft[]> => {
+type CiWorkflowFile = { path: string; content: string };
+
+const readBoundedCiWorkflows = async (
+  repositoryPath: string,
+): Promise<{ files: readonly CiWorkflowFile[]; unverifiable: readonly SecurityFindingDraft[] }> => {
   const directory = join(repositoryPath, ".github", "workflows");
   let entries: readonly import("node:fs").Dirent[];
   try {
     const metadata = await lstat(directory);
     if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-      return [
-        finding(
-          "CI_INPUT_UNVERIFIABLE",
-          "HIGH",
-          ".github/workflows",
-          "The CI workflow directory is not a regular directory and was not inspected.",
-        ),
-      ];
+      return {
+        files: [],
+        unverifiable: [
+          finding(
+            "CI_INPUT_UNVERIFIABLE",
+            "HIGH",
+            ".github/workflows",
+            "The CI workflow directory is not a regular directory and was not inspected.",
+          ),
+        ],
+      };
     }
     entries = await readdir(directory, { withFileTypes: true });
   } catch {
-    return [];
+    return { files: [], unverifiable: [] };
   }
 
   const candidates = entries
     .filter((entry) => /\.ya?ml$/i.test(entry.name))
     .sort((left, right) => left.name.localeCompare(right.name));
-  const findings: SecurityFindingDraft[] = [];
+  const files: CiWorkflowFile[] = [];
+  const unverifiable: SecurityFindingDraft[] = [];
   if (candidates.length > MAX_CI_FILES) {
-    findings.push(
+    unverifiable.push(
       finding(
         "CI_INPUT_UNVERIFIABLE",
         "HIGH",
@@ -214,13 +222,13 @@ const ciFindings = async (repositoryPath: string): Promise<readonly SecurityFind
     try {
       metadata = await lstat(absolutePath);
     } catch {
-      findings.push(
+      unverifiable.push(
         finding("CI_INPUT_UNVERIFIABLE", "HIGH", relativePath, "The CI workflow could not be inspected."),
       );
       continue;
     }
     if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.size > MAX_CI_FILE_BYTES) {
-      findings.push(
+      unverifiable.push(
         finding(
           "CI_INPUT_UNVERIFIABLE",
           "HIGH",
@@ -232,7 +240,7 @@ const ciFindings = async (repositoryPath: string): Promise<readonly SecurityFind
     }
     totalBytes += metadata.size;
     if (totalBytes > MAX_CI_TOTAL_BYTES) {
-      findings.push(
+      unverifiable.push(
         finding(
           "CI_INPUT_UNVERIFIABLE",
           "HIGH",
@@ -246,33 +254,36 @@ const ciFindings = async (repositoryPath: string): Promise<readonly SecurityFind
     try {
       content = (await readFile(absolutePath)).toString("utf8");
     } catch {
-      findings.push(
+      unverifiable.push(
         finding("CI_INPUT_UNVERIFIABLE", "HIGH", relativePath, "The CI workflow could not be read safely."),
       );
       continue;
     }
-    if (/^\s*pull_request_target\s*:/m.test(content)) {
+    files.push({ path: relativePath, content });
+  }
+  return { files, unverifiable };
+};
+
+const ciFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingDraft[] => {
+  const findings: SecurityFindingDraft[] = [];
+  for (const file of files) {
+    if (/^\s*pull_request_target\s*:/m.test(file.content)) {
       findings.push(
         finding(
           "CI_PULL_REQUEST_TARGET",
           "HIGH",
-          relativePath,
+          file.path,
           "The workflow uses pull_request_target and requires an explicit trust-boundary review.",
         ),
       );
     }
-    if (/^\s*permissions\s*:\s*write-all\s*(?:#.*)?$/im.test(content)) {
+    if (/^\s*permissions\s*:\s*write-all\s*(?:#.*)?$/im.test(file.content)) {
       findings.push(
-        finding(
-          "CI_WRITE_ALL_PERMISSIONS",
-          "HIGH",
-          relativePath,
-          "The workflow grants write-all permissions.",
-        ),
+        finding("CI_WRITE_ALL_PERMISSIONS", "HIGH", file.path, "The workflow grants write-all permissions."),
       );
     }
     const actionPattern = /^\s*-?\s*uses\s*:\s*["']?([^\s"'#]+)@([^\s"'#]+)["']?/gim;
-    for (const match of content.matchAll(actionPattern)) {
+    for (const match of file.content.matchAll(actionPattern)) {
       const target = match[1];
       const reference = match[2];
       if (
@@ -286,7 +297,7 @@ const ciFindings = async (repositoryPath: string): Promise<readonly SecurityFind
         finding(
           "CI_ACTION_NOT_PINNED",
           "MEDIUM",
-          relativePath,
+          file.path,
           `The action ${target ?? "unknown"} is not pinned to a full commit SHA.`,
         ),
       );
@@ -311,17 +322,25 @@ export const assessProjectReadiness = async (
     );
   }
 
-  const [headResult, statusResult, trackedResult, envIgnored, envLocalIgnored, npmrcIgnored, hasLicense, ci] =
-    await Promise.all([
-      runBoundedGit(["rev-parse", "HEAD"], canonicalRoot),
-      runBoundedGit(["status", "--porcelain=v1", "-z", "--untracked-files=normal"], canonicalRoot),
-      runBoundedGit(["ls-files", "-z"], canonicalRoot),
-      ignoredByGit(canonicalRoot, ".env"),
-      ignoredByGit(canonicalRoot, ".env.local"),
-      ignoredByGit(canonicalRoot, ".npmrc"),
-      licensePresent(canonicalRoot),
-      ciFindings(canonicalRoot),
-    ]);
+  const [
+    headResult,
+    statusResult,
+    trackedResult,
+    envIgnored,
+    envLocalIgnored,
+    npmrcIgnored,
+    hasLicense,
+    workflows,
+  ] = await Promise.all([
+    runBoundedGit(["rev-parse", "HEAD"], canonicalRoot),
+    runBoundedGit(["status", "--porcelain=v1", "-z", "--untracked-files=normal"], canonicalRoot),
+    runBoundedGit(["ls-files", "-z"], canonicalRoot),
+    ignoredByGit(canonicalRoot, ".env"),
+    ignoredByGit(canonicalRoot, ".env.local"),
+    ignoredByGit(canonicalRoot, ".npmrc"),
+    licensePresent(canonicalRoot),
+    readBoundedCiWorkflows(canonicalRoot),
+  ]);
 
   const repositoryHead =
     headResult.exitCode === 0 && !headResult.overflowed && /^[0-9a-f]{40,64}$/.test(outputText(headResult))
@@ -368,6 +387,8 @@ export const assessProjectReadiness = async (
       );
     }
   }
+
+  const ci = [...workflows.unverifiable, ...ciFindings(workflows.files)];
 
   const checks: readonly ReadinessCheckDraft[] = [
     automatedCheck(
