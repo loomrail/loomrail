@@ -158,6 +158,7 @@ import {
   qaWorkflowOutcome,
   decideProjectProviderPreference,
   decideVerificationPlanAdoption,
+  decideVerificationPlanDisable,
   decideVerificationPlanPublicationCompleted,
   decideVerificationPlanPublicationFailed,
   decideVerificationPlanPublicationRetry,
@@ -240,6 +241,7 @@ import {
   type ProjectReadinessAttestedIntent,
   type ProjectProviderPreferenceChangedIntent,
   type VerificationPlanAdoptedIntent,
+  type VerificationPlanDisabledIntent,
   type VerificationPlanPublicationIntent,
   type VerificationRunEventIntent,
   type ProviderAllowanceRecordedIntent,
@@ -1230,6 +1232,12 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("LIST_ACTIVE_VERIFICATION_RUNS") }).strict(),
   z.object({ type: z.literal("GET_VERIFICATION_OUTPUT_ARTIFACT"), checkId: opaqueIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal("HAS_VERIFICATION_OUTPUT_STORAGE_KEY"),
+      storageKey: z.string().min(1).max(512),
+    })
+    .strict(),
   z
     .object({
       type: z.literal("LIST_EXPIRED_VERIFICATION_OUTPUTS"),
@@ -3236,6 +3244,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectVerificationOutputArtifactById = database.prepare(
       "SELECT artifact_id FROM verification_output_artifacts WHERE artifact_id = ?",
     );
+    const selectVerificationOutputArtifactByStorageKey = database.prepare(
+      "SELECT artifact_id FROM verification_output_artifacts WHERE storage_key = ? LIMIT 1",
+    );
     const selectVerificationOutputRetentionById = database.prepare(
       "SELECT * FROM verification_output_retention_log WHERE artifact_id = ?",
     );
@@ -3246,10 +3257,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectExpiredVerificationOutputs = database.prepare(
       `SELECT artifact.artifact_id, artifact.run_id, artifact.check_id, artifact.storage_key
        FROM verification_output_artifacts AS artifact
+       JOIN work_items AS work_item ON work_item.id = artifact.work_item_id
        LEFT JOIN verification_output_retention_log AS retention
          ON retention.artifact_id = artifact.artifact_id
-       WHERE artifact.created_at < ? AND retention.artifact_id IS NULL
-       ORDER BY artifact.created_at, artifact.artifact_id
+       WHERE work_item.state IN ('DONE', 'CANCELLED')
+         AND work_item.updated_at < ?
+         AND retention.artifact_id IS NULL
+       ORDER BY work_item.updated_at, artifact.artifact_id
        LIMIT ?`,
     );
     const selectCriteria = database.prepare(
@@ -5237,7 +5251,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     };
 
     const appendVerificationPlanEvent = (
-      intent: VerificationPlanAdoptedIntent | VerificationPlanPublicationIntent,
+      intent:
+        VerificationPlanAdoptedIntent | VerificationPlanDisabledIntent | VerificationPlanPublicationIntent,
       metadata: {
         projectId: string;
         actor: Actor;
@@ -6975,6 +6990,64 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "VERIFICATION_PLAN_ADOPTED",
+          replayed: false,
+          plan: decision.plan,
+          publication: decision.publication,
+          event,
+        });
+      }
+
+      if (command.type === "DISABLE_VERIFICATION_PLAN") {
+        const project = readProject(command.payload.projectId);
+        const currentPlan = readLatestVerificationPlan(command.payload.projectId);
+        const newPlanId = createId("verificationPlan");
+        const newPublicationId = createId("verificationPlanPublication");
+        const planContent = {
+          schemaVersion: 1 as const,
+          id: newPlanId,
+          projectId: command.payload.projectId,
+          revision: (currentPlan?.revision ?? 0) + 1,
+          status: "DISABLED" as const,
+          recipes: currentPlan?.recipes ?? [],
+          sourceProposalHash: currentPlan?.sourceProposalHash ?? "",
+          createdAt: occurredAt,
+        };
+        const decision = decideVerificationPlanDisable(command, {
+          now: occurredAt,
+          newPlanId,
+          newPublicationId,
+          contentHash: currentPlan === null ? "0".repeat(64) : verificationPlanContentHash(planContent),
+          project: project ?? undefined,
+          currentPlan: currentPlan ?? undefined,
+        });
+        const update = database
+          .prepare(
+            `UPDATE projects SET version = ?, updated_at = ?
+             WHERE id = ? AND version = ?`,
+          )
+          .run(
+            decision.project.version,
+            decision.project.updatedAt,
+            decision.project.id,
+            decision.project.version - 1,
+          );
+        if (update.changes !== 1) {
+          throw new VerificationDomainError(
+            "PROJECT_VERSION_CONFLICT",
+            "The Project changed while the verification plan was disabled",
+          );
+        }
+        insertProjectVerificationPlan(decision.plan);
+        insertProjectVerificationPublication(decision.publication);
+        const event = appendVerificationPlanEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "VERIFICATION_PLAN_DISABLED",
           replayed: false,
           plan: decision.plan,
           publication: decision.publication,
@@ -11310,6 +11383,22 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       }
     };
 
+    const readCommandReceipt = (command: StateCommand, inputHash: string): StateCommandResult | null => {
+      const receiptValue = selectCommandReceipt.get(command.commandId);
+      if (receiptValue === undefined) return null;
+      const receipt = commandReceiptRowSchema.parse(receiptValue);
+      if (receipt.command_type !== command.type || receipt.input_hash !== inputHash) {
+        throw new StateStoreError("COMMAND_ID_REUSED", "The command ID was already used for different input");
+      }
+      return asReplayed(stateCommandResultSchema.parse(parseJson(receipt.result_json)));
+    };
+
+    const inspectCommandReceipt = (input: StateCommand): StateCommandResult | null => {
+      assertOpen();
+      const command = stateCommandSchema.parse(input);
+      return readCommandReceipt(command, commandHash(command));
+    };
+
     const execute = (input: StateCommand): StateCommandResult => {
       assertOpen();
       const command = stateCommandSchema.parse(input);
@@ -11318,16 +11407,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       try {
         database.exec("BEGIN IMMEDIATE");
         transactionStarted = true;
-        const receiptValue = selectCommandReceipt.get(command.commandId);
-        if (receiptValue !== undefined) {
-          const receipt = commandReceiptRowSchema.parse(receiptValue);
-          if (receipt.command_type !== command.type || receipt.input_hash !== inputHash) {
-            throw new StateStoreError(
-              "COMMAND_ID_REUSED",
-              "The command ID was already used for different input",
-            );
-          }
-          const replayed = asReplayed(stateCommandResultSchema.parse(parseJson(receipt.result_json)));
+        const replayed = readCommandReceipt(command, inputHash);
+        if (replayed !== null) {
           database.exec("COMMIT");
           transactionStarted = false;
           return replayed;
@@ -11552,6 +11633,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                   },
           };
         }
+        case "HAS_VERIFICATION_OUTPUT_STORAGE_KEY":
+          return {
+            type: "VERIFICATION_OUTPUT_STORAGE_KEY",
+            exists: selectVerificationOutputArtifactByStorageKey.get(queryValue.storageKey) !== undefined,
+          };
         case "LIST_EXPIRED_VERIFICATION_OUTPUTS":
           return {
             type: "VERIFICATION_OUTPUTS",
@@ -11955,6 +12041,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     return {
       startup,
       execute,
+      inspectCommandReceipt,
       query,
       close: () => {
         if (closed) return;

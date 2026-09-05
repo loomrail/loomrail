@@ -68,10 +68,13 @@ output; restart сохраняет failure, а crash во время process д�
       materialization теперь сохраняет исходный terminal `PASSED` неизменным, добавляет один append-only
       `VerificationFailure(STALE)` и в той же SQLite-транзакции переводит pending QA gate в bounded correction;
       exact-version conflict, command replay, повторный daemon gate и SQLite reopen не создают дубль. Fresh passing
-      rerun новой current Plan/tree authority закрывает эту correction. `RUN_INTERRUPTED` при `DAEMON_RESTART`
+      rerun новой current Plan/tree authority закрывает эту correction. Если stale стал Run уже успешно закрытой
+      correction, её исторический `PASSED` не переписывается и не отменяется: следующая позиция либо owner gate
+      получают новую authority, а исчерпанный budget предлагает только cancel; domain/SQLite/UI и reopen покрыты.
+      `RUN_INTERRUPTED` при `DAEMON_RESTART`
       теперь в той же транзакции переводит initial или subsequent QA gate в bounded correction, включая startup
-      reconciliation, replay и второй SQLite reopen; `OWNER_CANCELLED` остаётся окончательной owner action и никогда
-      не создаёт скрытый correction run.
+      reconciliation, replay, owner resolution после исчерпания automatic positions и второй SQLite reopen;
+      `OWNER_CANCELLED` остаётся окончательной owner action и никогда не создаёт скрытый correction run.
 - [x] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
       Общие constants и pure decision `2 automatic + 1 owner` уже заменили QA-only policy; durable usage/lineage,
       объединяющие оба evaluator без объединения их failure entities, закреплены транзакционным подсчётом обеих
@@ -95,20 +98,29 @@ output; restart сохраняет failure, а crash во время process д�
       Q17 named macOS/Windows CI lane теперь запускает scanner/publisher/runner и shared process-supervision tests до
       общего lint gate. Реальный signal-resistant descendant подтверждает process-tree reap после output-bound stop;
       остальные угрозы связаны с узкими contract/domain/persistence/runner тестами без подмены subprocess mock-ом.
-- [ ] Проверить every allowed/forbidden transition, rollback, idempotency, expected-version conflict и restart.
+- [x] Проверить every allowed/forbidden transition, rollback, idempotency, expected-version conflict и restart.
       Initial verification correction уже покрыта allowed/forbidden domain cases, replay idempotency и SQLite reopen;
       fresh reviewed passing rerun, второй automatic cycle и owner-authorized final cycle покрыты сквозным public
       workflow, command replay и SQLite reopen; cancel покрыт pure allowed transition, а stale versions, foreign
       lineage и non-owner actor запрещены domain-переходом. Daemon interruption отдельно покрыта для initial и
-      subsequent correction, direct stop и startup reconciliation; owner cancellation остаётся forbidden source.
-      Light/dark/keyboard/narrow UI и восстановление после daemon restart закрыты отдельным Playwright case.
+      subsequent correction, direct stop, startup reconciliation и exhausted owner resolution; owner cancellation
+      остаётся forbidden source. Stale после уже `PASSED` correction сохраняет terminal history, продолжает общий
+      budget либо открывает owner gate и переживает reopen. Light/dark/keyboard/narrow UI и восстановление после
+      daemon restart закрыты отдельным Playwright case.
 - [x] Выполнить RU/EN, keyboard/focus, light/dark, 320 px и daemon-restart Browser QA. Q17 Playwright case
       детерминированно фиксирует English/light, keyboard-only Run/output focus, Russian/dark на 320 px, затем
       перезапускает daemon с той же SQLite-базой и повторно проверяет восстановленный measured result без overflow.
-- [ ] Выполнить focused lint/typecheck/unit/integration, full non-landing gates, fault injection и clean release.
+- [x] Выполнить focused lint/typecheck/unit/integration, full non-landing gates, fault injection и clean release.
+      Full source typecheck, все package tests, 58/58 Playwright, fault injection и clean packed release прошли;
+      repository-wide format/lint остаются заблокированы только unrelated untracked research и тремя protected
+      landing findings, которые не изменялись.
 - [ ] Выполнить independent Standards/Spec review и исправить все P0–P2.
-- [ ] Зафиксировать macOS/Windows fixed-commit fixture CI evidence; не заявлять live Windows provider evidence.
-- [ ] Обновить threat model, architecture, master plan и sanitized Q17 evidence.
+- [x] Зафиксировать macOS/Windows fixed-commit fixture CI evidence; не заявлять live Windows provider evidence.
+      На `05cab6279e0cf9f772cafbd32caba9558474d3fb` clean install, 58/58 Browser smoke, Q17 workflow gate и fault
+      recovery прошли на обеих платформах; Windows process-tree lifecycle отдельно зелёный. Оба Verify остановились
+      только на тех же трёх protected landing lint findings; общий CI conclusion честно остаётся `failure`.
+- [x] Обновить threat model, architecture, master plan и sanitized Q17 evidence.
+      Evidence: `docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md`.
 
 ## Implementation order
 

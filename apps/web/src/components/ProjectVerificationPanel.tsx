@@ -160,6 +160,54 @@ const CheckRow = ({
   );
 };
 
+const verificationKindOrder: readonly VerificationRecipe["kind"][] = [
+  "UNIT",
+  "INTEGRATION",
+  "E2E",
+  "BUILD",
+  "LINT",
+  "CUSTOM",
+];
+
+const GroupedChecks = ({
+  checks,
+  onToggleOutput,
+  output,
+  recipes,
+}: {
+  checks: ReadonlyMap<string, VerificationCheck>;
+  onToggleOutput: (checkId: string) => void;
+  output: OutputState;
+  recipes: readonly VerificationRecipe[];
+}): React.JSX.Element => {
+  const { t } = useI18n();
+
+  return (
+    <>
+      {verificationKindOrder.map((kind) => {
+        const groupedRecipes = recipes.filter((recipe) => recipe.kind === kind);
+        if (groupedRecipes.length === 0) return null;
+        return (
+          <section className="verification-check-group" key={kind}>
+            <h4>{t("verification.group", { kind })}</h4>
+            <ol className="verification-checks">
+              {groupedRecipes.map((recipe) => (
+                <CheckRow
+                  check={checks.get(recipe.id)}
+                  key={recipe.id}
+                  onToggleOutput={onToggleOutput}
+                  output={output}
+                  recipe={recipe}
+                />
+              ))}
+            </ol>
+          </section>
+        );
+      })}
+    </>
+  );
+};
+
 const outcomeMessage = (snapshot: VerificationRunSnapshotResponse, t: Translator): string => {
   if (snapshot.freshness === "STALE") {
     return t("verification.outcome.stale", {
@@ -196,6 +244,7 @@ const RunEvidence = ({
   const { t } = useI18n();
   const checks = new Map(snapshot.checks.map((check) => [check.recipeId, check]));
   const stale = snapshot.freshness === "STALE";
+  const passedChecks = snapshot.checks.filter((check) => check.status === "PASSED").length;
 
   return (
     <div className="verification-run">
@@ -212,20 +261,22 @@ const RunEvidence = ({
           })}
         </span>
       </div>
+      <p className="verification-run__evidence">
+        {t("verification.evidenceMeta", {
+          passed: passedChecks,
+          total: snapshot.checks.length,
+          tree: snapshot.run.implementationTree.slice(0, 12),
+        })}
+      </p>
       <p className="verification-run__outcome" role="status">
         {outcomeMessage(snapshot, t)}
       </p>
-      <ol className="verification-checks">
-        {snapshot.plan.recipes.map((recipe) => (
-          <CheckRow
-            check={checks.get(recipe.id)}
-            key={recipe.id}
-            onToggleOutput={onToggleOutput}
-            output={output}
-            recipe={recipe}
-          />
-        ))}
-      </ol>
+      <GroupedChecks
+        checks={checks}
+        onToggleOutput={onToggleOutput}
+        output={output}
+        recipes={snapshot.plan.recipes}
+      />
     </div>
   );
 };
@@ -289,22 +340,22 @@ export const ProjectVerificationView = ({
           <LocalConnectionRecovery error={loadError} onRetry={onRetryLoad} retrying={false} />
         ) : (
           <>
+            {currentPlan ? (
+              <p className="verification-acceptance-blocker" role="note">
+                {t("verification.acceptanceBlocker")}
+              </p>
+            ) : null}
             {latest ? (
               <RunEvidence onToggleOutput={onToggleOutput} output={output} snapshot={latest} />
             ) : currentPlan ? (
               <div className="verification-run">
                 <p className="verification-run__outcome">{t("verification.intro")}</p>
-                <ol className="verification-checks">
-                  {currentPlan.recipes.map((recipe) => (
-                    <CheckRow
-                      check={undefined}
-                      key={recipe.id}
-                      onToggleOutput={onToggleOutput}
-                      output={output}
-                      recipe={recipe}
-                    />
-                  ))}
-                </ol>
+                <GroupedChecks
+                  checks={new Map()}
+                  onToggleOutput={onToggleOutput}
+                  output={output}
+                  recipes={currentPlan.recipes}
+                />
               </div>
             ) : null}
 

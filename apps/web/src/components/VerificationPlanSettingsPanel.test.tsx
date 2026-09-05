@@ -50,7 +50,9 @@ const renderView = (snapshot: VerificationPlanSettingsResponse = settings): stri
     <I18nProvider>
       <VerificationPlanSettingsView
         adopting={false}
+        disabling={false}
         onAdopt={vi.fn()}
+        onDisable={vi.fn()}
         onRetry={vi.fn()}
         retrying={false}
         settings={snapshot}
@@ -77,6 +79,9 @@ describe("VerificationPlanSettingsView", () => {
     expect(html).toContain("5 min");
     expect(html).toContain("64 KiB");
     expect(html).toContain("Host network");
+    expect(html).toContain("Minimal runtime path");
+    expect(html).toContain("Runs as your local user");
+    expect(html).toContain("not a security sandbox");
     expect(html).toContain("Approve Plan · required checks: 1");
     expect(html).not.toContain('tabindex="-1"');
   });
@@ -137,7 +142,89 @@ describe("VerificationPlanSettingsView", () => {
 
     expect(html).toContain("Active revision 1");
     expect(html).toContain("Published to .loomrail/verification-plan.json");
+    expect(html).toContain("Disable Plan");
     expect(html).not.toContain("Approve Plan · required checks: 1");
+  });
+
+  it("makes a disabled immutable revision explicit and offers a reviewed re-enable action", () => {
+    const plan = {
+      schemaVersion: 1 as const,
+      id: "verification-plan-2",
+      projectId: proposal.projectId,
+      revision: 2,
+      status: "DISABLED" as const,
+      recipes: proposal.recipes,
+      sourceProposalHash: proposal.proposalHash,
+      contentHash: "d".repeat(64),
+      createdAt: "2026-09-05T10:05:00.000Z",
+    };
+    const html = renderView({
+      ...settings,
+      projectVersion: 5,
+      plan,
+      publication: {
+        schemaVersion: 1,
+        id: "verification-publication-2",
+        projectId: proposal.projectId,
+        planId: plan.id,
+        targetPath: ".loomrail/verification-plan.json",
+        expectedTargetDigest: "c".repeat(64),
+        contentHash: plan.contentHash,
+        status: "APPLIED",
+        attempts: 1,
+        lastErrorCode: null,
+        version: 2,
+        createdAt: plan.createdAt,
+        updatedAt: "2026-09-05T10:05:01.000Z",
+        appliedAt: "2026-09-05T10:05:01.000Z",
+      },
+    });
+
+    expect(html).toContain("Disabled revision 2");
+    expect(html).toContain("Enable Plan · required checks: 1");
+    expect(html).not.toContain("Disable Plan");
+  });
+
+  it("keeps Disable available when the current manifest proposes a replacement", () => {
+    const plan = {
+      schemaVersion: 1 as const,
+      id: "verification-plan-1",
+      projectId: proposal.projectId,
+      revision: 1,
+      status: "ACTIVE" as const,
+      recipes: proposal.recipes,
+      sourceProposalHash: proposal.proposalHash,
+      contentHash: "c".repeat(64),
+      createdAt: "2026-09-05T10:00:00.000Z",
+    };
+    const html = renderView({
+      ...settings,
+      proposal: {
+        ...proposal,
+        recipes: [{ ...proposal.recipes[0]!, label: "Changed test command" }],
+        proposalHash: "d".repeat(64),
+      },
+      plan,
+      publication: {
+        schemaVersion: 1,
+        id: "verification-publication-1",
+        projectId: proposal.projectId,
+        planId: plan.id,
+        targetPath: ".loomrail/verification-plan.json",
+        expectedTargetDigest: null,
+        contentHash: plan.contentHash,
+        status: "APPLIED",
+        attempts: 1,
+        lastErrorCode: null,
+        version: 2,
+        createdAt: plan.createdAt,
+        updatedAt: "2026-09-05T10:00:01.000Z",
+        appliedAt: "2026-09-05T10:00:01.000Z",
+      },
+    });
+
+    expect(html).toContain("Approve replacement · required checks: 1");
+    expect(html).toContain("Disable Plan");
   });
 
   it("keeps a failed publication explicit and exposes a native retry button", () => {

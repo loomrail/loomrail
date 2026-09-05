@@ -2,6 +2,7 @@ import type {
   Actor,
   AdoptVerificationPlanCommand,
   CompleteVerificationPlanPublicationCommand,
+  DisableVerificationPlanCommand,
   FailVerificationPlanPublicationCommand,
   PipelineRun,
   Project,
@@ -80,6 +81,15 @@ export type VerificationPlanAdoptedIntent = {
     plan: VerificationPlan;
     publication: VerificationPlanPublication;
     previousPlanRevision: number | null;
+  };
+};
+
+export type VerificationPlanDisabledIntent = {
+  type: "VERIFICATION_PLAN_DISABLED";
+  data: {
+    plan: VerificationPlan;
+    publication: VerificationPlanPublication;
+    previousPlanRevision: number;
   };
 };
 
@@ -207,6 +217,100 @@ export const decideVerificationPlanAdoption = (
     event: {
       type: "VERIFICATION_PLAN_ADOPTED",
       data: { plan, publication, previousPlanRevision },
+    },
+  };
+};
+
+export const decideVerificationPlanDisable = (
+  command: DisableVerificationPlanCommand,
+  context: {
+    now: string;
+    newPlanId: string;
+    newPublicationId: string;
+    contentHash: string;
+    project: Project | undefined;
+    currentPlan: VerificationPlan | undefined;
+  },
+): {
+  project: Project;
+  plan: VerificationPlan;
+  publication: VerificationPlanPublication;
+  event: VerificationPlanDisabledIntent;
+} => {
+  if (command.actor.type !== "HUMAN") {
+    throw new VerificationDomainError("OWNER_REQUIRED", "Only the owner can disable a verification plan");
+  }
+  const currentProject = context.project;
+  if (currentProject === undefined) {
+    throw new VerificationDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+  }
+  if (currentProject.status !== "ACTIVE") {
+    throw new VerificationDomainError(
+      "PROJECT_NOT_ACTIVE",
+      "Only an active Project can disable a verification plan",
+    );
+  }
+  if (currentProject.version !== command.payload.expectedProjectVersion) {
+    throw new VerificationDomainError(
+      "PROJECT_VERSION_CONFLICT",
+      "The Project changed after the verification plan was loaded",
+      {
+        expectedVersion: command.payload.expectedProjectVersion,
+        actualVersion: currentProject.version,
+      },
+    );
+  }
+  const currentPlan = context.currentPlan;
+  if (currentPlan?.projectId !== currentProject.id) {
+    throw new VerificationDomainError("PLAN_UNAVAILABLE", "The Project has no current verification plan");
+  }
+  if (
+    currentPlan.status !== "ACTIVE" ||
+    currentPlan.revision !== command.payload.expectedPlanRevision ||
+    currentPlan.contentHash !== command.payload.expectedPlanContentHash
+  ) {
+    throw new VerificationDomainError(
+      "PLAN_VERSION_CONFLICT",
+      "The verification plan changed before it could be disabled",
+    );
+  }
+
+  const plan: VerificationPlan = {
+    ...currentPlan,
+    id: context.newPlanId,
+    revision: currentPlan.revision + 1,
+    status: "DISABLED",
+    contentHash: context.contentHash,
+    createdAt: context.now,
+  };
+  const project: Project = {
+    ...currentProject,
+    version: currentProject.version + 1,
+    updatedAt: context.now,
+  };
+  const publication: VerificationPlanPublication = {
+    schemaVersion: 1,
+    id: context.newPublicationId,
+    projectId: currentProject.id,
+    planId: plan.id,
+    targetPath: ".loomrail/verification-plan.json",
+    expectedTargetDigest: command.payload.expectedTargetDigest,
+    contentHash: plan.contentHash,
+    status: "PENDING",
+    attempts: 0,
+    lastErrorCode: null,
+    version: 1,
+    createdAt: context.now,
+    updatedAt: context.now,
+    appliedAt: null,
+  };
+  return {
+    project,
+    plan,
+    publication,
+    event: {
+      type: "VERIFICATION_PLAN_DISABLED",
+      data: { plan, publication, previousPlanRevision: currentPlan.revision },
     },
   };
 };

@@ -46,6 +46,7 @@ import {
   createWorkItem,
   createGuidedActivationWorkItem,
   disposeReviewFinding,
+  disableVerificationPlan,
   getProviderCapabilities,
   getProjectProviderAllowance,
   getProjectProviderSelection,
@@ -689,6 +690,19 @@ export const useAdoptVerificationPlan = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (settings: VerificationPlanSettingsResponse) => adoptVerificationPlan(settings),
+    onSuccess: async (settings) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectVerificationPlanKey(settings.projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectsKey }),
+      ]);
+    },
+  });
+};
+
+export const useDisableVerificationPlan = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (settings: VerificationPlanSettingsResponse) => disableVerificationPlan(settings),
     onSuccess: async (settings) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectVerificationPlanKey(settings.projectId) }),

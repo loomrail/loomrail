@@ -238,6 +238,19 @@ export const adoptVerificationPlanCommandSchema = commandBaseSchema.extend({
     .strict(),
 });
 
+export const disableVerificationPlanCommandSchema = commandBaseSchema.extend({
+  type: z.literal("DISABLE_VERIFICATION_PLAN"),
+  payload: z
+    .object({
+      projectId: opaqueIdSchema,
+      expectedProjectVersion: z.number().int().positive(),
+      expectedPlanRevision: z.number().int().positive(),
+      expectedPlanContentHash: sha256Schema,
+      expectedTargetDigest: sha256Schema.nullable(),
+    })
+    .strict(),
+});
+
 export const completeVerificationPlanPublicationCommandSchema = commandBaseSchema.extend({
   type: z.literal("COMPLETE_VERIFICATION_PLAN_PUBLICATION"),
   payload: z
@@ -295,6 +308,17 @@ export const verificationPlanAdoptedEventSchema = eventBaseSchema.extend({
     .strict(),
 });
 
+export const verificationPlanDisabledEventSchema = eventBaseSchema.extend({
+  type: z.literal("VERIFICATION_PLAN_DISABLED"),
+  data: z
+    .object({
+      plan: verificationPlanSchema,
+      publication: verificationPlanPublicationSchema,
+      previousPlanRevision: z.number().int().positive(),
+    })
+    .strict(),
+});
+
 const verificationPlanPublicationEventDataSchema = z
   .object({
     plan: verificationPlanSchema,
@@ -325,6 +349,17 @@ export const verificationPlanAdoptedResultSchema = z
     plan: verificationPlanSchema,
     publication: verificationPlanPublicationSchema,
     event: verificationPlanAdoptedEventSchema,
+  })
+  .strict();
+
+export const verificationPlanDisabledResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    replayed: z.boolean(),
+    type: z.literal("VERIFICATION_PLAN_DISABLED"),
+    plan: verificationPlanSchema,
+    publication: verificationPlanPublicationSchema,
+    event: verificationPlanDisabledEventSchema,
   })
   .strict();
 
@@ -361,6 +396,16 @@ export const adoptVerificationPlanRequestSchema = z
     commandId: opaqueIdSchema,
     expectedProjectVersion: z.number().int().positive(),
     proposalHash: sha256Schema,
+  })
+  .strict();
+
+export const disableVerificationPlanRequestSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    commandId: opaqueIdSchema,
+    expectedProjectVersion: z.number().int().positive(),
+    expectedPlanRevision: z.number().int().positive(),
+    expectedPlanContentHash: sha256Schema,
   })
   .strict();
 
@@ -483,6 +528,7 @@ export const verificationRunStatusSchema = z.enum([
 ]);
 export const verificationCheckStatusSchema = verificationRunStatusSchema;
 export const verificationCheckErrorCodeSchema = z.enum([
+  "RECIPE_NOT_APPROVED",
   "POLICY_UNAVAILABLE",
   "CWD_INVALID",
   "EXECUTABLE_NOT_FOUND",
@@ -560,11 +606,12 @@ export const verificationOutputSummarySchema = z
         message: "Captured verification output cannot exceed observed output",
       });
     }
-    if (output.truncated !== output.capturedBytes < observedBytes) {
+    if (!output.truncated && output.capturedBytes < observedBytes) {
       context.addIssue({
         code: "custom",
         path: ["truncated"],
-        message: "Verification output truncation must match its byte counters",
+        message:
+          "Verification output must report truncation when raw bytes were dropped; bounded channel metadata may also require truncation",
       });
     }
   });
@@ -1225,6 +1272,7 @@ export type VerificationPlanProposal = z.infer<typeof verificationPlanProposalSc
 export type VerificationPlan = z.infer<typeof verificationPlanSchema>;
 export type VerificationPlanPublication = z.infer<typeof verificationPlanPublicationSchema>;
 export type AdoptVerificationPlanCommand = z.infer<typeof adoptVerificationPlanCommandSchema>;
+export type DisableVerificationPlanCommand = z.infer<typeof disableVerificationPlanCommandSchema>;
 export type CompleteVerificationPlanPublicationCommand = z.infer<
   typeof completeVerificationPlanPublicationCommandSchema
 >;
@@ -1255,6 +1303,8 @@ export type ResolveVerificationCorrectionGateRequest = z.infer<
 export type VerificationCorrectionGateAction = z.infer<typeof verificationCorrectionGateActionSchema>;
 export type VerificationPlanAdoptedEvent = z.infer<typeof verificationPlanAdoptedEventSchema>;
 export type VerificationPlanAdoptedResult = z.infer<typeof verificationPlanAdoptedResultSchema>;
+export type VerificationPlanDisabledEvent = z.infer<typeof verificationPlanDisabledEventSchema>;
+export type VerificationPlanDisabledResult = z.infer<typeof verificationPlanDisabledResultSchema>;
 export type VerificationPlanSettingsResponse = z.infer<typeof verificationPlanSettingsResponseSchema>;
 export type VerificationPlatform = z.infer<typeof verificationPlatformSchema>;
 export type VerificationRunStatus = z.infer<typeof verificationRunStatusSchema>;

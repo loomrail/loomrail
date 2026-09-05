@@ -718,7 +718,7 @@ packaged build is exercised on a real Windows host. Claude allowance needs a fut
 and a new exact compatibility decision; Desktop/TUI presence is not evidence. These are release-evidence gates, not
 permission to reinterpret unavailable data as zero or to make allowance authoritative meanwhile.
 
-### Q17 Project-verification delta (T48, in progress)
+### Q17 Project-verification delta (T48, implemented; independent review pending)
 
 Q17 promotes repository build/test/lint/integration/E2E commands from provider prose to executable acceptance evidence.
 Repository manifests and agent instructions are untrusted data, so a discovered script name is a proposal, not launch
@@ -747,7 +747,9 @@ Critical and stays open until the Q17 spec and implementation provide:
 - a previously passing Run is never rewritten when its Plan/tree authority becomes stale. The daemon materializes
   one append-only `STALE` failure from current deterministic state and atomically moves the exact pending QA gate
   into the shared correction loop; optimistic versions, the unique Run-to-failure edge, command receipts and a
-  pending-dispatch check reject stale observations and duplicate materialization;
+  pending-dispatch check reject stale observations and duplicate materialization. If the passing Run closed a
+  verification correction, that correction remains historically `PASSED`; a new bounded correction or owner gate
+  receives new authority, including the cancel-only state after the final shared position;
 - Project verification shares the delivery-wide bound of two automatic corrections plus at most one final
   owner-authorized correction without merging its failure identity with Browser QA. An append-only shared SQLite
   ledger allocates positions monotonically in the same transaction as the evaluator-specific correction and storage
@@ -768,7 +770,8 @@ Critical and stays open until the Q17 spec and implementation provide:
   of the package; the release renderer revalidates delivery lineage, current tree and the complete required check set;
 - required verification covers shell metacharacters, hostile package scripts/manifests, cwd/path and symlink escape,
   env/secret canaries, denied network, timeout/output exhaustion, child orphaning, duplicate completion, crash/restart,
-  stale tree/recipe, and the same macOS/Windows fixture behavior.
+  stale tree/recipe, and the same macOS/Windows fixture behavior. Sanitized implementation and verification evidence
+  is recorded in `docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md`.
 
 ### A1.5 event-channel delta (T03)
 

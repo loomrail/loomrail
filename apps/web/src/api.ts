@@ -288,6 +288,26 @@ export const adoptVerificationPlan = async (settings: VerificationPlanSettingsRe
     },
   );
 
+export const disableVerificationPlan = async (settings: VerificationPlanSettingsResponse) => {
+  if (settings.plan === null) {
+    throw new Error("A current verification Plan is required before it can be disabled");
+  }
+  return requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(settings.projectId)}/verification-plan/disable`,
+    verificationPlanSettingsResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: settings.projectVersion,
+        expectedPlanRevision: settings.plan.revision,
+        expectedPlanContentHash: settings.plan.contentHash,
+      }),
+    },
+  );
+};
+
 export const retryVerificationPlanPublication = async (
   projectId: string,
   publication: VerificationPlanPublication,

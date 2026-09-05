@@ -8,13 +8,16 @@ import { Button, Icon, cn } from "@loomrail/ui";
 import { useI18n } from "../i18n";
 import {
   useAdoptVerificationPlan,
+  useDisableVerificationPlan,
   useRetryVerificationPlanPublication,
   useVerificationPlanSettings,
 } from "../workspace";
 
 type VerificationPlanSettingsViewProps = {
   adopting: boolean;
+  disabling: boolean;
   onAdopt: () => void;
+  onDisable: () => void;
   onRetry: () => void;
   retrying: boolean;
   settings: VerificationPlanSettingsResponse;
@@ -54,6 +57,10 @@ const RecipePolicy = ({ recipe }: { recipe: VerificationRecipe }): React.JSX.Ele
               : "settings.verification.networkUnavailable",
           )}
         </dd>
+      </div>
+      <div>
+        <dt>{t("settings.verification.environment")}</dt>
+        <dd>{t("settings.verification.environmentBaseline")}</dd>
       </div>
     </dl>
   );
@@ -101,7 +108,9 @@ const RecipePreview = ({ recipe }: { recipe: VerificationRecipe }): React.JSX.El
 
 export const VerificationPlanSettingsView = ({
   adopting,
+  disabling,
   onAdopt,
+  onDisable,
   onRetry,
   retrying,
   settings,
@@ -113,7 +122,7 @@ export const VerificationPlanSettingsView = ({
   // hash even when the command set did not. Recipe equality is the owner-visible "same Plan"
   // signal; target integrity remains a separate blocking state below.
   const proposalIsCurrent =
-    plan !== null && JSON.stringify(plan.recipes) === JSON.stringify(proposal.recipes);
+    plan?.status === "ACTIVE" && JSON.stringify(plan.recipes) === JSON.stringify(proposal.recipes);
   const targetBlocked = proposal.target.state === "BLOCKED";
   const cannotAdopt = targetBlocked || proposal.recipes.length === 0 || requiredCount === 0;
   const showAdopt = !proposalIsCurrent;
@@ -129,15 +138,27 @@ export const VerificationPlanSettingsView = ({
           <p>{t("settings.verification.description")}</p>
         </div>
         {plan === null ? null : (
-          <span className={cn("verification-settings__state", publicationApplied && "is-ready")}>
-            <Icon name={publicationApplied ? "check" : "warning"} size={13} />
-            {publicationApplied
-              ? t("settings.verification.active", { revision: plan.revision })
-              : publicationPending
-                ? t("settings.verification.publishing", { revision: plan.revision })
-                : t("settings.verification.unpublished", { revision: plan.revision })}
+          <span
+            className={cn(
+              "verification-settings__state",
+              publicationApplied && plan.status === "ACTIVE" && "is-ready",
+            )}
+          >
+            <Icon name={publicationApplied && plan.status === "ACTIVE" ? "check" : "warning"} size={13} />
+            {publicationApplied && plan.status === "DISABLED"
+              ? t("settings.verification.disabled", { revision: plan.revision })
+              : publicationApplied
+                ? t("settings.verification.active", { revision: plan.revision })
+                : publicationPending
+                  ? t("settings.verification.publishing", { revision: plan.revision })
+                  : t("settings.verification.unpublished", { revision: plan.revision })}
           </span>
         )}
+      </div>
+
+      <div className="verification-settings__local-warning" role="note">
+        <strong>{t("settings.verification.localExecutionTitle")}</strong>
+        <p>{t("settings.verification.localExecutionNotice")}</p>
       </div>
 
       {proposal.recipes.length === 0 ? (
@@ -169,18 +190,36 @@ export const VerificationPlanSettingsView = ({
 
       {showAdopt ? (
         <div className="verification-settings__adoption">
-          <p>{t("settings.verification.adoptionNotice")}</p>
+          <p>
+            {t(
+              plan?.status === "DISABLED"
+                ? "settings.verification.enableNotice"
+                : "settings.verification.adoptionNotice",
+            )}
+          </p>
           <Button disabled={cannotAdopt} loading={adopting} onClick={onAdopt} type="button" variant="primary">
             {plan === null
               ? t("settings.verification.adopt", { count: requiredCount })
-              : t("settings.verification.replace", { count: requiredCount })}
+              : plan.status === "DISABLED"
+                ? t("settings.verification.enable", { count: requiredCount })
+                : t("settings.verification.replace", { count: requiredCount })}
           </Button>
         </div>
       ) : publicationApplied ? (
-        <p className="verification-settings__published">
-          <Icon name="check" size={14} />
-          <span>{t("settings.verification.published")}</span>
-        </p>
+        <div className="verification-settings__adoption">
+          <p className="verification-settings__published">
+            <Icon name="check" size={14} />
+            <span>{t("settings.verification.published")}</span>
+          </p>
+        </div>
+      ) : null}
+
+      {plan?.status === "ACTIVE" && publicationApplied ? (
+        <div className="verification-settings__actions">
+          <Button loading={disabling} onClick={onDisable} type="button">
+            {t("settings.verification.disable")}
+          </Button>
+        </div>
       ) : null}
 
       {publicationFailed ? (
@@ -202,16 +241,19 @@ export const VerificationPlanSettingsPanel = ({ project }: { project: ListedProj
   const { t } = useI18n();
   const settingsQuery = useVerificationPlanSettings(project.id);
   const adopt = useAdoptVerificationPlan();
+  const disable = useDisableVerificationPlan();
   const retry = useRetryVerificationPlanPublication();
   const settings = settingsQuery.data;
   const operationError =
     adopt.error instanceof Error
       ? adopt.error
-      : retry.error instanceof Error
-        ? retry.error
-        : settingsQuery.error instanceof Error
-          ? settingsQuery.error
-          : null;
+      : disable.error instanceof Error
+        ? disable.error
+        : retry.error instanceof Error
+          ? retry.error
+          : settingsQuery.error instanceof Error
+            ? settingsQuery.error
+            : null;
 
   if (settings === undefined) {
     return (
@@ -233,8 +275,12 @@ export const VerificationPlanSettingsPanel = ({ project }: { project: ListedProj
     <>
       <VerificationPlanSettingsView
         adopting={adopt.isPending}
+        disabling={disable.isPending}
         onAdopt={() => {
           adopt.mutate(settings);
+        }}
+        onDisable={() => {
+          disable.mutate(settings);
         }}
         onRetry={() => {
           if (settings.publication !== null) {

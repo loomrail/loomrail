@@ -396,6 +396,16 @@ describe("project verification HTTP boundary", () => {
     directories.push(directory);
     const fixture = await seedVerification(directory);
     const token = bootstrapToken();
+    let abortCount = 0;
+    let stopCompleted = false;
+    let observeAbort: () => void = () => undefined;
+    let releaseStop: () => void = () => undefined;
+    const abortObserved = new Promise<void>((resolve) => {
+      observeAbort = resolve;
+    });
+    const stopGate = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
     daemon = await startDaemon({
       bootstrapToken: token,
       logger: false,
@@ -404,19 +414,24 @@ describe("project verification HTTP boundary", () => {
       verificationRecipeExecutor: (input) =>
         new Promise((resolve) => {
           const interrupted = (): void => {
-            resolve({
-              observation: {
-                status: "INTERRUPTED",
-                completedAt: timestamp,
-                durationMs: 1,
-                exitCode: null,
-                signal: null,
-                reason: "OWNER_CANCELLED",
-                output: null,
-              },
-              artifactPath: null,
-              beforeTree: null,
-              afterTree: null,
+            abortCount += 1;
+            observeAbort();
+            void stopGate.then(() => {
+              stopCompleted = true;
+              resolve({
+                observation: {
+                  status: "INTERRUPTED",
+                  completedAt: timestamp,
+                  durationMs: 1,
+                  exitCode: null,
+                  signal: null,
+                  reason: "OWNER_CANCELLED",
+                  output: null,
+                },
+                artifactPath: null,
+                beforeTree: null,
+                afterTree: null,
+              });
             });
           };
           if (input.signal?.aborted) interrupted();
@@ -456,19 +471,64 @@ describe("project verification HTTP boundary", () => {
     const running = verificationRunsResponseSchema.parse(await runningResponse.json()).runs[0];
     expect(running?.run.status).toBe("RUNNING");
     if (running === undefined) throw new Error("Expected running verification");
-    const cancelledResponse = await fetch(
-      `${daemon.baseUrl}/api/v1/verification-runs/${running.run.id}/cancel`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          schemaVersion: 1,
-          commandId: "owner-cancel-verification",
-          expectedVersion: running.run.version,
-        }),
-      },
-    );
+    const reusedCancel = await fetch(`${daemon.baseUrl}/api/v1/verification-runs/${running.run.id}/cancel`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "register-verification-project",
+        expectedVersion: running.run.version,
+      }),
+    });
+    expect(reusedCancel.status).toBe(409);
+    await expect(reusedCancel.json()).resolves.toMatchObject({ error: { code: "COMMAND_ID_REUSED" } });
+    expect(abortCount).toBe(0);
+
+    const staleCancel = await fetch(`${daemon.baseUrl}/api/v1/verification-runs/${running.run.id}/cancel`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "stale-owner-cancel-verification",
+        expectedVersion: running.run.version + 1,
+      }),
+    });
+    expect(staleCancel.status).toBe(409);
+    expect(abortCount).toBe(0);
+
+    let responseSettled = false;
+    const cancellation = fetch(`${daemon.baseUrl}/api/v1/verification-runs/${running.run.id}/cancel`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "owner-cancel-verification",
+        expectedVersion: running.run.version,
+      }),
+    }).then((response) => {
+      responseSettled = true;
+      return response;
+    });
+    await abortObserved;
+    expect(responseSettled).toBe(false);
+    const inFlightReuse = await fetch(`${daemon.baseUrl}/api/v1/verification-runs/${running.run.id}/cancel`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "owner-cancel-verification",
+        expectedVersion: running.run.version + 1,
+      }),
+    });
+    expect(inFlightReuse.status).toBe(409);
+    await expect(inFlightReuse.json()).resolves.toMatchObject({
+      error: { code: "COMMAND_ID_REUSED" },
+    });
+    expect(abortCount).toBe(1);
+    releaseStop();
+    const cancelledResponse = await cancellation;
     const cancelled = verificationRunSnapshotResponseSchema.parse(await cancelledResponse.json());
+    expect(stopCompleted).toBe(true);
     expect(cancelled.run).toMatchObject({ status: "INTERRUPTED", terminalReason: "OWNER_CANCELLED" });
     expect(cancelled.checks).toMatchObject([{ status: "INTERRUPTED" }]);
     await daemon.whenIdle();

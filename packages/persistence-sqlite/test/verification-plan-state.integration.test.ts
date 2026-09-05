@@ -2,7 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AdoptVerificationPlanCommand, VerificationPlanProposal } from "@loomrail/contracts";
+import type {
+  AdoptVerificationPlanCommand,
+  DisableVerificationPlanCommand,
+  VerificationPlanProposal,
+} from "@loomrail/contracts";
 import { VerificationDomainError } from "@loomrail/domain";
 import { verificationPlanProposalHash } from "@loomrail/project-readiness";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -94,6 +98,23 @@ describe("Project verification plan local state", () => {
     payload: { projectId: "project-one", expectedProjectVersion, proposal },
   });
 
+  const disable = (
+    current: Extract<ReturnType<LocalState["execute"]>, { type: "VERIFICATION_PLAN_ADOPTED" }>,
+  ): DisableVerificationPlanCommand => ({
+    schemaVersion: 1,
+    commandId: "disable-verification-plan",
+    correlationId: "correlation-disable-verification-plan",
+    actor: { type: "HUMAN", id: "local-owner" },
+    type: "DISABLE_VERIFICATION_PLAN",
+    payload: {
+      projectId: "project-one",
+      expectedProjectVersion: 2,
+      expectedPlanRevision: current.plan.revision,
+      expectedPlanContentHash: current.plan.contentHash,
+      expectedTargetDigest: null,
+    },
+  });
+
   it("atomically stores plan, Project version, Event, publication follow-up, and replay receipt", async () => {
     const localState = await open();
     register(localState);
@@ -157,6 +178,45 @@ describe("Project verification plan local state", () => {
         payload: { publicationId: publication.id, expectedVersion: publication.version },
       }),
     ).toMatchObject({ replayed: true, type: "VERIFICATION_PLAN_PUBLICATION_APPLIED" });
+  });
+
+  it("atomically disables into a new immutable revision and recovers its publication after restart", async () => {
+    const first = await open();
+    register(first);
+    const adopted = first.execute(adopt());
+    if (adopted.type !== "VERIFICATION_PLAN_ADOPTED") throw new Error("Plan was not adopted");
+    const command = disable(adopted);
+
+    const disabled = first.execute(command);
+    expect(disabled).toMatchObject({
+      type: "VERIFICATION_PLAN_DISABLED",
+      plan: { revision: 2, status: "DISABLED", recipes: adopted.plan.recipes },
+      publication: { status: "PENDING", expectedTargetDigest: null },
+      event: { data: { previousPlanRevision: 1 } },
+    });
+    expect(first.execute(command)).toMatchObject({
+      type: "VERIFICATION_PLAN_DISABLED",
+      replayed: true,
+    });
+    const project = first.query({ type: "GET_PROJECT", projectId: "project-one" });
+    expect(project).toMatchObject({ type: "PROJECT", project: { version: 3 } });
+    first.close();
+    state = undefined;
+
+    const reopened = await open();
+    expect(reopened.query({ type: "GET_PROJECT_VERIFICATION_PLAN", projectId: "project-one" })).toMatchObject(
+      {
+        type: "PROJECT_VERIFICATION_PLAN",
+        plan: { revision: 2, status: "DISABLED" },
+        publication: { status: "PENDING" },
+      },
+    );
+    const events = reopened.query({ type: "LIST_EVENTS", projectId: "project-one" });
+    expect(events.type === "EVENTS" ? events.events.map((event) => event.type) : []).toEqual([
+      "PROJECT_REGISTERED",
+      "VERIFICATION_PLAN_ADOPTED",
+      "VERIFICATION_PLAN_DISABLED",
+    ]);
   });
 
   it("persists a typed failure and only an explicit owner retry returns it to pending", async () => {

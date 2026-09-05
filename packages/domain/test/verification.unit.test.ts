@@ -1,7 +1,16 @@
-import type { AdoptVerificationPlanCommand, Project, VerificationPlanProposal } from "@loomrail/contracts";
+import type {
+  AdoptVerificationPlanCommand,
+  DisableVerificationPlanCommand,
+  Project,
+  VerificationPlanProposal,
+} from "@loomrail/contracts";
 import { describe, expect, it } from "vitest";
 
-import { VerificationDomainError, decideVerificationPlanAdoption } from "../src/verification.js";
+import {
+  VerificationDomainError,
+  decideVerificationPlanAdoption,
+  decideVerificationPlanDisable,
+} from "../src/verification.js";
 
 const now = "2026-09-05T09:00:00.000Z";
 const proposalHash = "a".repeat(64);
@@ -206,5 +215,85 @@ describe("verification plan adoption", () => {
         },
       ),
     ).toThrow(expect.objectContaining({ code: "PROPOSAL_TARGET_BLOCKED" }));
+  });
+});
+
+describe("verification plan disable", () => {
+  const adopted = decideVerificationPlanAdoption(command, {
+    now,
+    newPlanId: "verification-plan-1",
+    newPublicationId: "verification-publication-1",
+    contentHash,
+    observedProposalHash: proposalHash,
+    project,
+  });
+  const disableCommand: DisableVerificationPlanCommand = {
+    schemaVersion: 1,
+    commandId: "command-disable-plan",
+    correlationId: "correlation-disable-plan",
+    actor: { type: "HUMAN", id: "local-owner" },
+    type: "DISABLE_VERIFICATION_PLAN",
+    payload: {
+      projectId: project.id,
+      expectedProjectVersion: adopted.project.version,
+      expectedPlanRevision: adopted.plan.revision,
+      expectedPlanContentHash: adopted.plan.contentHash,
+      expectedTargetDigest: "e".repeat(64),
+    },
+  };
+
+  it("creates an immutable disabled revision and a marker-bound publication", () => {
+    const decision = decideVerificationPlanDisable(disableCommand, {
+      now: "2026-09-05T09:05:00.000Z",
+      newPlanId: "verification-plan-2",
+      newPublicationId: "verification-publication-2",
+      contentHash: "d".repeat(64),
+      project: adopted.project,
+      currentPlan: adopted.plan,
+    });
+
+    expect(decision.plan).toMatchObject({
+      id: "verification-plan-2",
+      revision: 2,
+      status: "DISABLED",
+      recipes: adopted.plan.recipes,
+      contentHash: "d".repeat(64),
+    });
+    expect(decision.publication).toMatchObject({
+      planId: "verification-plan-2",
+      expectedTargetDigest: "e".repeat(64),
+      status: "PENDING",
+    });
+    expect(decision.project.version).toBe(adopted.project.version + 1);
+    expect(decision.event).toMatchObject({
+      type: "VERIFICATION_PLAN_DISABLED",
+      data: { previousPlanRevision: adopted.plan.revision },
+    });
+  });
+
+  it.each([
+    ["OWNER_REQUIRED", { actor: { type: "SYSTEM" as const, id: "provider" } }],
+    [
+      "PROJECT_VERSION_CONFLICT",
+      { payload: { ...disableCommand.payload, expectedProjectVersion: adopted.project.version + 1 } },
+    ],
+    [
+      "PLAN_VERSION_CONFLICT",
+      { payload: { ...disableCommand.payload, expectedPlanRevision: adopted.plan.revision + 1 } },
+    ],
+  ])("fails closed with %s", (code, override) => {
+    expect(() =>
+      decideVerificationPlanDisable(
+        { ...disableCommand, ...override },
+        {
+          now,
+          newPlanId: "verification-plan-2",
+          newPublicationId: "verification-publication-2",
+          contentHash: "d".repeat(64),
+          project: adopted.project,
+          currentPlan: adopted.plan,
+        },
+      ),
+    ).toThrow(expect.objectContaining({ code }));
   });
 });

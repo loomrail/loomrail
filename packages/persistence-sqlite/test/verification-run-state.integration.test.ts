@@ -388,6 +388,30 @@ describe("verification Run local state", () => {
         type: "LIST_EXPIRED_VERIFICATION_OUTPUTS",
         closedBefore: "2026-09-05T11:00:01.000Z",
       }),
+    ).toEqual({ type: "VERIFICATION_OUTPUTS", artifacts: [] });
+    const beforeClose = fixture.localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: fixture.workItemId,
+    });
+    if (beforeClose.type !== "WORKFLOW_SNAPSHOT" || beforeClose.snapshot.run === null) {
+      throw new Error("Expected PipelineRun before retention close");
+    }
+    fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "close-work-item-before-output-retention",
+      correlationId: "correlation-close-work-item-before-output-retention",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CANCEL_PIPELINE",
+      payload: {
+        pipelineRunId: beforeClose.snapshot.run.id,
+        expectedVersion: beforeClose.snapshot.run.version,
+      },
+    });
+    expect(
+      fixture.localState.query({
+        type: "LIST_EXPIRED_VERIFICATION_OUTPUTS",
+        closedBefore: "2026-09-05T11:00:01.000Z",
+      }),
     ).toEqual({
       type: "VERIFICATION_OUTPUTS",
       artifacts: [{ artifactId: output.artifactId, storageKey: "verification-output-one.txt" }],

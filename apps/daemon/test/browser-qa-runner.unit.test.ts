@@ -91,6 +91,7 @@ describe("daemon Browser QA runner", () => {
     };
     const state: LocalState = {
       startup: { appliedMigrations: [] },
+      inspectCommandReceipt: () => null,
       execute: (command) => {
         if (command.type === "RESERVE_QA_RUN") {
           return stateCommandResultSchema.parse({
@@ -377,6 +378,7 @@ describe("daemon Browser QA runner", () => {
     let completion: CompleteQARunCommand | undefined;
     const state: LocalState = {
       startup: { appliedMigrations: [] },
+      inspectCommandReceipt: () => null,
       execute: (command) => {
         if (command.type === "RESERVE_QA_RUN") {
           reservation = command;

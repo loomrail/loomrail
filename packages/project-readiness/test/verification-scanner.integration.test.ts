@@ -114,4 +114,42 @@ describe("verification plan scanner", () => {
       ]),
     );
   });
+
+  it("does not propose a package script with an implicit pre/post lifecycle hook", async () => {
+    const repositoryPath = await makeRoot("hidden-hooks");
+    await writeFile(
+      join(repositoryPath, "package.json"),
+      JSON.stringify({
+        scripts: {
+          pretest: "node hidden-before.js",
+          test: "node visible-test.js",
+          posttest: "node hidden-after.js",
+        },
+      }),
+    );
+
+    const proposal = await scanVerificationPlanProposal({ projectId: "project-1", repositoryPath });
+
+    expect(proposal.recipes).toEqual([]);
+    expect(proposal.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "SCRIPT_UNSAFE" }),
+        expect.objectContaining({ code: "NO_SUPPORTED_SCRIPTS" }),
+      ]),
+    );
+  });
+
+  it("fails closed when the manifest has more script entries than the bounded scanner limit", async () => {
+    const repositoryPath = await makeRoot("too-many-scripts");
+    const scripts = Object.fromEntries(
+      Array.from({ length: 65 }, (_, index) => [`script:${index.toString()}`, "node noop.js"]),
+    );
+    scripts["test"] = "node test.js";
+    await writeFile(join(repositoryPath, "package.json"), JSON.stringify({ scripts }));
+
+    const proposal = await scanVerificationPlanProposal({ projectId: "project-1", repositoryPath });
+
+    expect(proposal.recipes).toEqual([]);
+    expect(proposal.warnings).toContainEqual(expect.objectContaining({ code: "SCRIPT_LIMIT_REACHED" }));
+  });
 });

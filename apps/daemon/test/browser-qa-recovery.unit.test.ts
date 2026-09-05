@@ -53,6 +53,7 @@ const qaRun = (id: string, status: QARun["status"]): QARun => ({
 
 const stateFor = (run: QARun | null, attachments: QAAttachmentRef[]): LocalState => ({
   startup: { appliedMigrations: [] },
+  inspectCommandReceipt: () => null,
   execute: () => {
     throw new Error("Recovery is read-only");
   },

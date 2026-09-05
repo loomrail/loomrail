@@ -149,6 +149,8 @@ describe("ProjectVerificationView", () => {
     expect(html).toContain("run");
     expect(html).toContain("test");
     expect(html).toContain("Not run");
+    expect(html).toContain("UNIT checks");
+    expect(html).toContain("Acceptance is blocked unless every required check passes");
     expect(html).toContain("Run checks");
     expect(html).not.toContain("Cancel run");
   });
@@ -166,11 +168,43 @@ describe("ProjectVerificationView", () => {
 
     expect(html).toContain("Passed");
     expect(html).toContain("Run 1 · Plan r2 · macOS");
+    expect(html).toContain("Checks 1/1 passed · tree dddddddddddd");
+    expect(html).toContain("UNIT checks");
     expect(html).toContain("1.3 s · exit 0");
     expect(html).toContain("All required checks passed for the current code and Plan.");
     expect(html).toContain("Run again");
     expect(html).toContain("&lt;script&gt;window.mustNotRun = true&lt;/script&gt;");
     expect(html).not.toContain("<script>window.mustNotRun = true</script>");
+  });
+
+  it("uses the stable Unit, Integration, E2E, Build, Lint, Custom group order", () => {
+    const unit = plan.recipes[0]!;
+    const groupedPlan: VerificationPlan = {
+      ...plan,
+      recipes: [
+        {
+          ...unit,
+          id: "package-lint",
+          kind: "LINT",
+          label: "Lint",
+          argv: ["run", "lint"],
+          provenance: { ...unit.provenance, scriptName: "lint", scriptBodyPreview: "eslint ." },
+        },
+        {
+          ...unit,
+          id: "package-build",
+          kind: "BUILD",
+          label: "Build",
+          argv: ["run", "build"],
+          provenance: { ...unit.provenance, scriptName: "build", scriptBodyPreview: "vite build" },
+        },
+        unit,
+      ],
+    };
+    const html = renderView({ currentPlan: groupedPlan });
+
+    expect(html.indexOf("UNIT checks")).toBeLessThan(html.indexOf("BUILD checks"));
+    expect(html.indexOf("BUILD checks")).toBeLessThan(html.indexOf("LINT checks"));
   });
 
   it("makes stale evidence and the reason explicit instead of presenting it as passed", () => {

@@ -246,6 +246,18 @@ IMPLEMENT tree before provider spawn, and the renderer reapplies file/path/per-f
 untrusted-data frame. A filesystem-isolated provider therefore sees actual changed code without receiving repository
 authority. Author checkpoints and transcripts are not sources for a new review round.
 
+Project verification follows the same deterministic boundary. A read-only scanner may propose bounded recipes, but
+only an owner-adopted, versioned exact recipe can reach the daemon-owned runner. The runner uses argv without a shell,
+the canonical WorkItem workspace, a scrubbed environment, explicit time/output/network bounds and process-tree
+termination. Provider prose cannot create measured evidence. Run/Check/Failure state and workflow continuation are
+transactional; restart interrupts unknown execution once and never replays it.
+
+Required non-pass or stale evidence blocks Browser QA and Acceptance and enters the delivery-wide correction ceiling
+shared with Browser QA. Their evaluator-specific failure identities stay separate. A stale projection never rewrites
+a passing Run, and a correction that previously produced that pass remains `PASSED`; the append-only stale failure
+receives a new bounded correction or owner gate. Acceptance consumes only the latest pass for the active Plan and
+current implementation tree, without raw output or local paths.
+
 ### `packages/workflow-engine`
 
 - validated declarative templates;

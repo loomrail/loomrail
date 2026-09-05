@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, open, realpath } from "node:fs/promises";
-import { join, normalize } from "node:path";
+import { isAbsolute, join, normalize, relative, sep } from "node:path";
 
 import {
   verificationPlanProposalSchema,
@@ -18,6 +18,7 @@ import { parseMarkerBoundVerificationPlan, verificationPlanProposalHash } from "
 const MANIFEST_PATH = "package.json";
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_SCRIPT_BODY_CHARACTERS = 1_024;
+const MAX_SCRIPT_ENTRIES = 64;
 const TARGET_DIRECTORY = ".loomrail";
 const TARGET_PATH = ".loomrail/verification-plan.json";
 const MAX_TARGET_BYTES = 512 * 1024;
@@ -284,6 +285,20 @@ export const scanVerificationPlanProposal = async (input: {
 
   const scripts = parsed["scripts"];
   const scriptRecord = isRecord(scripts) ? scripts : {};
+  if (Object.keys(scriptRecord).length > MAX_SCRIPT_ENTRIES) {
+    return proposal(
+      input.projectId,
+      target.target,
+      [],
+      [
+        ...target.warnings,
+        warning(
+          "SCRIPT_LIMIT_REACHED",
+          `package.json has more than ${MAX_SCRIPT_ENTRIES.toString()} script entries; no command was proposed.`,
+        ),
+      ],
+    );
+  }
   const manifestContentHash = sha256(manifest.bytes);
   const executable = packageManagerFor(parsed);
   const recipes: VerificationRecipe[] = [];
@@ -291,6 +306,17 @@ export const scanVerificationPlanProposal = async (input: {
   for (const definition of supportedScripts) {
     const body = scriptRecord[definition.name];
     if (typeof body !== "string") continue;
+    const beforeHook = scriptRecord[`pre${definition.name}`];
+    const afterHook = scriptRecord[`post${definition.name}`];
+    if (typeof beforeHook === "string" || typeof afterHook === "string") {
+      warnings.push(
+        warning(
+          "SCRIPT_UNSAFE",
+          `The ${definition.name} script has an implicit pre/post lifecycle hook that is not safe to hide from the owner preview.`,
+        ),
+      );
+      continue;
+    }
     if (body.trim().length === 0 || body.includes("\u0000") || body.length > MAX_SCRIPT_BODY_CHARACTERS) {
       warnings.push(
         warning(
@@ -308,6 +334,60 @@ export const scanVerificationPlanProposal = async (input: {
     );
   }
   return proposal(input.projectId, target.target, recipes, warnings);
+};
+
+/** Revalidates the exact manifest-backed authority immediately before a recipe can spawn. */
+export const verificationRecipeAuthorityIsCurrent = async (input: {
+  canonicalCwd: string;
+  canonicalWorktree: string;
+  recipe: VerificationRecipe;
+}): Promise<boolean> => {
+  const { recipe } = input;
+  const expectedCwd = await realpath(join(input.canonicalWorktree, recipe.cwd)).catch(() => null);
+  const relativeCwd = relative(input.canonicalWorktree, input.canonicalCwd);
+  if (
+    expectedCwd === null ||
+    !samePath(expectedCwd, input.canonicalCwd) ||
+    relativeCwd === ".." ||
+    relativeCwd.startsWith(`..${sep}`) ||
+    isAbsolute(relativeCwd)
+  ) {
+    return false;
+  }
+  const manifest = await readManifest(input.canonicalCwd);
+  if (manifest.state !== "PRESENT" || sha256(manifest.bytes) !== recipe.provenance.manifestContentHash) {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(manifest.text);
+  } catch {
+    return false;
+  }
+  if (!isRecord(parsed)) return false;
+  const scripts = parsed["scripts"];
+  if (!isRecord(scripts)) return false;
+  const scriptName = recipe.provenance.scriptName;
+  if (
+    scripts[scriptName] !== recipe.provenance.scriptBodyPreview ||
+    typeof scripts[`pre${scriptName}`] === "string" ||
+    typeof scripts[`post${scriptName}`] === "string"
+  ) {
+    return false;
+  }
+  if (recipe.executable === "node") {
+    const prohibitedNodeFlags = new Set(["-e", "--eval", "-p", "--print", "-r", "--require", "--import"]);
+    return (
+      !prohibitedNodeFlags.has(recipe.argv[0] ?? "") &&
+      recipe.provenance.scriptBodyPreview === ["node", ...recipe.argv].join(" ")
+    );
+  }
+  return (
+    packageManagerFor(parsed) === recipe.executable &&
+    recipe.argv.length === 2 &&
+    recipe.argv[0] === "run" &&
+    recipe.argv[1] === scriptName
+  );
 };
 
 export type ProjectVerificationScanErrorCode = "REPOSITORY_UNAVAILABLE";

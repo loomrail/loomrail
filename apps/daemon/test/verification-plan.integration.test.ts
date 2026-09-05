@@ -106,6 +106,34 @@ describe("Project verification Plan HTTP boundary", () => {
       JSON.parse(await readFile(join(repositoryPath, ".loomrail", "verification-plan.json"), "utf8")),
     ).toEqual(settings.plan);
     await expect(access(executionMarker)).rejects.toThrow();
+
+    await writeFile(
+      join(repositoryPath, "package.json"),
+      JSON.stringify({ packageManager: "pnpm@10.17.1", scripts: { test: "changed after approval" } }),
+    );
+
+    const disable = await fetch(`${route}/disable`, {
+      method: "POST",
+      headers: mutationHeaders(daemon, session),
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "disable-verification-plan",
+        expectedProjectVersion: settings.projectVersion,
+        expectedPlanRevision: settings.plan?.revision,
+        expectedPlanContentHash: settings.plan?.contentHash,
+      }),
+    });
+    expect(disable.status).toBe(200);
+    const disabled = verificationPlanSettingsResponseSchema.parse(await disable.json());
+    expect(disabled).toMatchObject({
+      projectVersion: project.version + 2,
+      plan: { revision: 2, status: "DISABLED" },
+      publication: { status: "APPLIED", attempts: 1 },
+    });
+    expect(
+      JSON.parse(await readFile(join(repositoryPath, ".loomrail", "verification-plan.json"), "utf8")),
+    ).toEqual(disabled.plan);
+    await expect(access(executionMarker)).rejects.toThrow();
   });
 
   it("rescans at adoption and rejects a stale preview before creating durable authority", async () => {

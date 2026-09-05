@@ -146,44 +146,70 @@ test.describe("project verification Task Cockpit", () => {
     const databasePath = join(directory, "state.sqlite");
     let measured: VerificationRunSnapshotResponse | null = null;
     let showStalePassedCorrectionGate = false;
+    let settingsPlan = plan;
+    let settingsProjectVersion = 3;
     await page.addInitScript(() => {
       if (localStorage.getItem("loomrail-theme") === null) localStorage.setItem("loomrail-theme", "light");
       if (localStorage.getItem("loomrail.locale") === null) localStorage.setItem("loomrail.locale", "en");
     });
-    await page.route("**/api/v1/projects/*/verification-plan", async (route) => {
+    const settingsResponse = () => ({
+      schemaVersion: 1 as const,
+      projectId,
+      projectVersion: settingsProjectVersion,
+      proposal: {
+        schemaVersion: 1 as const,
+        projectId,
+        target: { state: "PRESENT" as const, digest: settingsPlan.contentHash },
+        recipes: plan.recipes,
+        warnings: [],
+        proposalHash: plan.sourceProposalHash,
+      },
+      plan: settingsPlan,
+      publication: {
+        schemaVersion: 1 as const,
+        id: `verification-publication-browser-${settingsPlan.revision.toString()}`,
+        projectId,
+        planId: settingsPlan.id,
+        targetPath: ".loomrail/verification-plan.json" as const,
+        expectedTargetDigest: null,
+        contentHash: settingsPlan.contentHash,
+        status: "APPLIED" as const,
+        attempts: 1,
+        lastErrorCode: null,
+        version: 2,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        appliedAt: timestamp,
+      },
+    });
+    const fulfillSettings = async (route: Route): Promise<void> => {
       await route.fulfill({
         contentType: "application/json",
-        body: JSON.stringify({
-          schemaVersion: 1,
-          projectId,
-          projectVersion: 3,
-          proposal: {
-            schemaVersion: 1,
-            projectId,
-            target: { state: "PRESENT", digest: plan.contentHash },
-            recipes: plan.recipes,
-            warnings: [],
-            proposalHash: plan.sourceProposalHash,
-          },
-          plan,
-          publication: {
-            schemaVersion: 1,
-            id: "verification-publication-browser",
-            projectId,
-            planId: plan.id,
-            targetPath: ".loomrail/verification-plan.json",
-            expectedTargetDigest: null,
-            contentHash: plan.contentHash,
-            status: "APPLIED",
-            attempts: 1,
-            lastErrorCode: null,
-            version: 2,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-            appliedAt: timestamp,
-          },
-        }),
+        body: JSON.stringify(settingsResponse()),
       });
+    };
+    await page.route("**/api/v1/projects/*/verification-plan", fulfillSettings);
+    await page.route("**/api/v1/projects/*/verification-plan/disable", async (route) => {
+      settingsProjectVersion += 1;
+      settingsPlan = {
+        ...settingsPlan,
+        id: "verification-plan-browser-disabled",
+        revision: settingsPlan.revision + 1,
+        status: "DISABLED",
+        contentHash: "f".repeat(64),
+      };
+      await fulfillSettings(route);
+    });
+    await page.route("**/api/v1/projects/*/verification-plan/adopt", async (route) => {
+      settingsProjectVersion += 1;
+      settingsPlan = {
+        ...settingsPlan,
+        id: "verification-plan-browser-enabled",
+        revision: settingsPlan.revision + 1,
+        status: "ACTIVE",
+        contentHash: "9".repeat(64),
+      };
+      await fulfillSettings(route);
     });
     await page.route("**/api/v1/work-items/*/workflow", async (route) => {
       const workItemId = decodeURIComponent(new URL(route.request().url()).pathname.split("/")[4] ?? "");
@@ -337,6 +363,25 @@ test.describe("project verification Task Cockpit", () => {
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
     await initializeWorkspace(page);
+
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    const verificationSettings = settings.locator(".verification-settings");
+    const disablePlan = verificationSettings.getByRole("button", { name: "Disable Plan" });
+    await disablePlan.focus();
+    await expect(disablePlan).toBeFocused();
+    await disablePlan.press("Enter");
+    await expect(verificationSettings.getByText("Disabled revision 3", { exact: true })).toBeVisible();
+    const enablePlan = verificationSettings.getByRole("button", {
+      name: "Enable Plan · required checks: 1",
+    });
+    await enablePlan.focus();
+    await expect(enablePlan).toBeFocused();
+    await enablePlan.press("Enter");
+    await expect(verificationSettings.getByText("Active revision 4", { exact: true })).toBeVisible();
+    await settings.locator(".lr-dialog__header button").click();
+    await expect(settings).toHaveCount(0);
+
     await createTask(page, "Measured project checks");
 
     const inspector = page.getByRole("complementary", { name: "Measured project checks" });
@@ -348,6 +393,8 @@ test.describe("project verification Task Cockpit", () => {
     await expect(run).toBeFocused();
     await run.press("Enter");
     await expect(verification.getByText("Passed", { exact: true }).first()).toBeVisible();
+    await expect(verification.getByText("Checks 1/1 passed · tree dddddddddddd")).toBeVisible();
+    await expect(verification.getByRole("heading", { name: "UNIT checks" })).toBeVisible();
     await expect(verification.getByRole("button", { name: "Run again" })).toBeVisible();
 
     const viewOutput = verification.getByRole("button", { name: "View output" });
@@ -397,10 +444,22 @@ test.describe("project verification Task Cockpit", () => {
     await expect(narrowVerification.getByRole("button", { name: "Отменить поставку" })).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(page.locator("html")).toHaveAttribute("lang", "ru");
+    await expect(narrowVerification.getByText("Пройдено 1/1 · tree dddddddddddd")).toBeVisible();
     const narrowOverflow = await narrowVerification.evaluate(
       (element) => element.scrollWidth - element.clientWidth,
     );
     expect(narrowOverflow).toBeLessThanOrEqual(1);
+
+    const openNarrowSettings = page.getByRole("button", { name: "Открыть настройки" });
+    if (!(await openNarrowSettings.isVisible())) {
+      await page.getByRole("button", { name: "Открыть навигацию" }).click();
+    }
+    await openNarrowSettings.click();
+    const narrowSettings = page.getByRole("dialog", { name: "Настройки" });
+    const narrowDisable = narrowSettings.getByRole("button", { name: "Отключить План" });
+    await narrowDisable.focus();
+    await expect(narrowDisable).toBeFocused();
+    await narrowSettings.locator(".lr-dialog__header button").click();
 
     if (visualQaDirectory !== undefined) {
       await page.screenshot({

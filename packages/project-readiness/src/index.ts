@@ -6,6 +6,7 @@ export {
 export {
   ProjectVerificationScanError,
   scanVerificationPlanProposal,
+  verificationRecipeAuthorityIsCurrent,
   type ProjectVerificationScanErrorCode,
 } from "./verification.js";
 export {

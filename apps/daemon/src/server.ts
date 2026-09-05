@@ -19,6 +19,7 @@ import {
   answerHumanRequestRequestSchema,
   attestProjectReadinessRequestSchema,
   adoptVerificationPlanRequestSchema,
+  disableVerificationPlanRequestSchema,
   adoptProjectConstitutionRequestSchema,
   apiErrorResponseSchema,
   budgetOverrideRequestSchema,
@@ -2368,6 +2369,35 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
+    app.post("/api/v1/projects/:projectId/verification-plan/disable", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = disableVerificationPlanRequestSchema.parse(request.body);
+        const settings = await readVerificationPlanSettings(params.projectId);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "DISABLE_VERIFICATION_PLAN",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            expectedPlanRevision: body.expectedPlanRevision,
+            expectedPlanContentHash: body.expectedPlanContentHash,
+            expectedTargetDigest:
+              settings.proposal.target.state === "PRESENT" ? settings.proposal.target.digest : null,
+          },
+        });
+        await drainVerificationPlanPublications();
+        return await readVerificationPlanSettings(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
     app.post("/api/v1/projects/:projectId/verification-plan/publication/retry", async (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!authorizeMutation(request, reply, correlationId)) return;
@@ -2504,7 +2534,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       try {
         const params = verificationRunParamsSchema.parse(request.params);
         const body = cancelVerificationRunRequestSchema.parse(request.body);
-        verificationRunner.cancel({
+        await verificationRunner.cancel({
           runId: params.runId,
           expectedVersion: body.expectedVersion,
           commandId: body.commandId,

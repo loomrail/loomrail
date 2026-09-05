@@ -82,6 +82,7 @@ describe("supervised local process", () => {
     expect(result.output.capturedBytes).toBe(128);
     expect(result.output.stdoutBytes).toBeGreaterThan(128);
     expect(result.output.truncated).toBe(true);
+    expect(Buffer.byteLength(result.output.text, "utf8")).toBeLessThanOrEqual(128);
   });
 
   it("leaves no signal-resistant descendant after an output-bound stop", async () => {

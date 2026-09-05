@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, realpath, unlink } from "node:fs/promises";
+import { lstat, readdir, realpath, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import type { LocalState } from "@loomrail/persistence-sqlite";
@@ -16,6 +16,7 @@ export type VerificationOutputRetentionSummary = {
   selected: number;
   recorded: number;
   skipped: number;
+  orphansDeleted: number;
 };
 
 const commandIdFor = (artifactId: string): string =>
@@ -50,6 +51,45 @@ const deleteArtifact = async (input: {
   }
 };
 
+const cleanupExpiredOrphans = async (input: {
+  state: LocalState;
+  artifactsDirectory: string;
+  closedBeforeMs: number;
+}): Promise<number> => {
+  const root = await realpath(input.artifactsDirectory).catch(() => null);
+  if (root === null) return 0;
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+  let deleted = 0;
+  for (const entry of entries
+    .filter(({ name }) => STORAGE_KEY_PATTERN.test(name))
+    .sort((left, right) => left.name.localeCompare(right.name))) {
+    if (deleted >= RETENTION_BATCH_SIZE) break;
+    if (!entry.isFile() || entry.isSymbolicLink()) continue;
+    const reference = input.state.query({
+      type: "HAS_VERIFICATION_OUTPUT_STORAGE_KEY",
+      storageKey: entry.name,
+    });
+    if (reference.type !== "VERIFICATION_OUTPUT_STORAGE_KEY" || reference.exists) continue;
+    const path = join(root, entry.name);
+    const details = await lstat(path).catch(() => null);
+    if (
+      details === null ||
+      !details.isFile() ||
+      details.isSymbolicLink() ||
+      details.mtimeMs >= input.closedBeforeMs
+    ) {
+      continue;
+    }
+    try {
+      await unlink(path);
+      deleted += 1;
+    } catch {
+      // A concurrent disappearance is already the desired privacy outcome; other failures retry next startup.
+    }
+  }
+  return deleted;
+};
+
 /** Deletes bounded 30-day diagnostic output while preserving immutable measured Check history. */
 export const cleanupExpiredVerificationOutputs = async (input: {
   state: LocalState;
@@ -57,8 +97,18 @@ export const cleanupExpiredVerificationOutputs = async (input: {
   now: Date;
   logger: FastifyBaseLogger;
 }): Promise<VerificationOutputRetentionSummary> => {
-  const closedBefore = new Date(input.now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1_000).toISOString();
-  const summary: VerificationOutputRetentionSummary = { selected: 0, recorded: 0, skipped: 0 };
+  const closedBeforeMs = input.now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1_000;
+  const closedBefore = new Date(closedBeforeMs).toISOString();
+  const summary: VerificationOutputRetentionSummary = {
+    selected: 0,
+    recorded: 0,
+    skipped: 0,
+    orphansDeleted: await cleanupExpiredOrphans({
+      state: input.state,
+      artifactsDirectory: input.artifactsDirectory,
+      closedBeforeMs,
+    }),
+  };
 
   for (let batch = 0; batch < MAX_RETENTION_BATCHES_PER_STARTUP; batch += 1) {
     const candidates = input.state.query({
@@ -107,9 +157,14 @@ export const cleanupExpiredVerificationOutputs = async (input: {
     if (candidates.artifacts.length < RETENTION_BATCH_SIZE || recordedThisBatch === 0) break;
   }
 
-  if (summary.recorded > 0) {
+  if (summary.recorded > 0 || summary.orphansDeleted > 0) {
     input.logger.info(
-      { selected: summary.selected, recorded: summary.recorded, skipped: summary.skipped },
+      {
+        selected: summary.selected,
+        recorded: summary.recorded,
+        skipped: summary.skipped,
+        orphansDeleted: summary.orphansDeleted,
+      },
       "Project verification output retention cleanup completed",
     );
   }

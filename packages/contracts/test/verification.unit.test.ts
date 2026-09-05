@@ -10,6 +10,7 @@ import {
   verificationCorrectionRunSchema,
   verificationEvidenceSchema,
   verificationFailureSchema,
+  verificationOutputSummarySchema,
   verificationPlanProposalSchema,
   verificationRecipeSchema,
   verificationRunSchema,
@@ -172,6 +173,21 @@ const output = {
   truncated: false,
   available: true,
 } as const;
+
+describe("verification output summaries", () => {
+  it("allows bounded-channel truncation metadata even when all raw bytes were captured", () => {
+    expect(verificationOutputSummarySchema.parse({ ...output, truncated: true })).toEqual({
+      ...output,
+      truncated: true,
+    });
+  });
+
+  it("requires truncation metadata when raw output bytes were dropped", () => {
+    expect(
+      verificationOutputSummarySchema.safeParse({ ...output, capturedBytes: 127, truncated: false }).success,
+    ).toBe(false);
+  });
+});
 
 const runningCheck = {
   schemaVersion: 1,

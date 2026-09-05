@@ -757,6 +757,15 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.verificationPlanAdopted"),
         tone: "accent",
       };
+    case "VERIFICATION_PLAN_DISABLED":
+      return {
+        detail: t("event.verificationPlanDisabledDetail", {
+          revision: event.data.plan.revision,
+        }),
+        icon: "pause",
+        label: t("event.verificationPlanDisabled"),
+        tone: "warning",
+      };
     case "VERIFICATION_PLAN_PUBLICATION_APPLIED":
       return {
         detail: t("event.verificationPlanPublicationAppliedDetail", {

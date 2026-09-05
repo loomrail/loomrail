@@ -3,6 +3,7 @@ import type { VerificationPlanPublication, VerificationPlanSettingsResponse } fr
 
 import {
   LocalApiError,
+  disableVerificationPlan,
   guidedActivationCreateCommandId,
   getProjectProviderAllowance,
   getVerificationCheckOutput,
@@ -215,6 +216,31 @@ describe("local API client", () => {
       proposalHash: "b".repeat(64),
     });
 
+    const activeSettings: VerificationPlanSettingsResponse = {
+      ...response,
+      plan: {
+        schemaVersion: 1,
+        id: "verification-plan-1",
+        projectId: response.projectId,
+        revision: 1,
+        status: "ACTIVE",
+        recipes: response.proposal.recipes,
+        sourceProposalHash: response.proposal.proposalHash,
+        contentHash: "c".repeat(64),
+        createdAt: "2026-09-05T10:00:00.000Z",
+      },
+    };
+    await expect(disableVerificationPlan(activeSettings)).resolves.toEqual(response);
+    const [disableUrl, disableInit] = fetchMock.mock.calls[2] ?? [];
+    expect(disableUrl).toBe("/api/v1/projects/project%3Aone/verification-plan/disable");
+    expect(disableInit?.method).toBe("POST");
+    if (typeof disableInit?.body !== "string") throw new Error("Expected a disable JSON body");
+    expect(JSON.parse(disableInit.body)).toMatchObject({
+      expectedProjectVersion: 3,
+      expectedPlanRevision: 1,
+      expectedPlanContentHash: "c".repeat(64),
+    });
+
     const publication: VerificationPlanPublication = {
       schemaVersion: 1,
       id: "verification-publication-1",
@@ -234,7 +260,7 @@ describe("local API client", () => {
     await expect(retryVerificationPlanPublication(response.projectId, publication)).resolves.toEqual(
       response,
     );
-    const [retryUrl, retryInit] = fetchMock.mock.calls[2] ?? [];
+    const [retryUrl, retryInit] = fetchMock.mock.calls[3] ?? [];
     expect(retryUrl).toBe("/api/v1/projects/project%3Aone/verification-plan/publication/retry");
     expect(retryInit?.method).toBe("POST");
     if (typeof retryInit?.body !== "string") throw new Error("Expected a retry JSON body");

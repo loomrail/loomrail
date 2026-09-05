@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -46,7 +46,11 @@ describe("daemon Project verification output retention", () => {
           recordedAt: "2026-09-05T12:00:00.000Z",
         };
       },
+      inspectCommandReceipt: () => null,
       query: (query: StateQuery): StateQueryResult => {
+        if (query.type === "HAS_VERIFICATION_OUTPUT_STORAGE_KEY") {
+          return { type: "VERIFICATION_OUTPUT_STORAGE_KEY", exists: query.storageKey === storageKey };
+        }
         if (query.type !== "LIST_EXPIRED_VERIFICATION_OUTPUTS") {
           throw new Error(`Unexpected query ${query.type}`);
         }
@@ -67,7 +71,7 @@ describe("daemon Project verification output retention", () => {
         now: new Date("2026-09-05T12:00:00.000Z"),
         logger: app.log,
       }),
-    ).resolves.toEqual({ selected: 1, recorded: 1, skipped: 0 });
+    ).resolves.toEqual({ selected: 1, recorded: 1, skipped: 0, orphansDeleted: 0 });
     expect(selectedCutoff).toBe("2026-08-06T12:00:00.000Z");
     await expect(access(artifactPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
@@ -77,7 +81,7 @@ describe("daemon Project verification output retention", () => {
         now: new Date("2026-09-05T12:00:00.000Z"),
         logger: app.log,
       }),
-    ).resolves.toEqual({ selected: 0, recorded: 0, skipped: 0 });
+    ).resolves.toEqual({ selected: 0, recorded: 0, skipped: 0, orphansDeleted: 0 });
     await app.close();
   });
 
@@ -100,6 +104,7 @@ describe("daemon Project verification output retention", () => {
       execute: () => {
         throw new Error("Unsafe output must not be recorded as deleted");
       },
+      inspectCommandReceipt: () => null,
       query: (query: StateQuery): StateQueryResult => {
         if (query.type !== "LIST_EXPIRED_VERIFICATION_OUTPUTS") {
           throw new Error(`Unexpected query ${query.type}`);
@@ -117,8 +122,92 @@ describe("daemon Project verification output retention", () => {
         now: new Date("2026-09-05T12:00:00.000Z"),
         logger: app.log,
       }),
-    ).resolves.toEqual({ selected: 2, recorded: 0, skipped: 2 });
+    ).resolves.toEqual({ selected: 2, recorded: 0, skipped: 2, orphansDeleted: 0 });
     await expect(access(outsidePath)).resolves.toBeUndefined();
+    await app.close();
+  });
+
+  it("ages out a crash-orphaned flat output file with no database reference", async () => {
+    const storageKey = "verification-output-orphan.txt";
+    const artifactPath = join(artifactsDirectory, storageKey);
+    await writeFile(artifactPath, "orphaned output", { mode: 0o600 });
+    const old = new Date("2026-07-01T12:00:00.000Z");
+    await utimes(artifactPath, old, old);
+    const state: LocalState = {
+      startup: { appliedMigrations: [] },
+      execute: () => {
+        throw new Error("An orphan has no durable artifact identity to record");
+      },
+      inspectCommandReceipt: () => null,
+      query: (query: StateQuery): StateQueryResult => {
+        if (query.type === "HAS_VERIFICATION_OUTPUT_STORAGE_KEY") {
+          return { type: "VERIFICATION_OUTPUT_STORAGE_KEY", exists: false };
+        }
+        if (query.type === "LIST_EXPIRED_VERIFICATION_OUTPUTS") {
+          return { type: "VERIFICATION_OUTPUTS", artifacts: [] };
+        }
+        throw new Error(`Unexpected query ${query.type}`);
+      },
+      close: () => undefined,
+    };
+    const app = Fastify({ logger: false });
+
+    await expect(
+      cleanupExpiredVerificationOutputs({
+        state,
+        artifactsDirectory,
+        now: new Date("2026-09-05T12:00:00.000Z"),
+        logger: app.log,
+      }),
+    ).resolves.toEqual({ selected: 0, recorded: 0, skipped: 0, orphansDeleted: 1 });
+    await expect(access(artifactPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await app.close();
+  });
+
+  it("does not starve an old orphan behind more than one batch of fresh files", async () => {
+    const fresh = new Date("2026-09-05T11:59:00.000Z");
+    await Promise.all(
+      Array.from({ length: 1_000 }, async (_, index) => {
+        const path = join(
+          artifactsDirectory,
+          `verification-output-a-${index.toString().padStart(4, "0")}.txt`,
+        );
+        await writeFile(path, "fresh", { mode: 0o600 });
+        await utimes(path, fresh, fresh);
+      }),
+    );
+    const orphanPath = join(artifactsDirectory, "verification-output-z-old-orphan.txt");
+    await writeFile(orphanPath, "old", { mode: 0o600 });
+    const old = new Date("2026-07-01T12:00:00.000Z");
+    await utimes(orphanPath, old, old);
+    const state: LocalState = {
+      startup: { appliedMigrations: [] },
+      execute: () => {
+        throw new Error("Orphan cleanup does not record a durable output result");
+      },
+      inspectCommandReceipt: () => null,
+      query: (query: StateQuery): StateQueryResult => {
+        if (query.type === "HAS_VERIFICATION_OUTPUT_STORAGE_KEY") {
+          return { type: "VERIFICATION_OUTPUT_STORAGE_KEY", exists: false };
+        }
+        if (query.type === "LIST_EXPIRED_VERIFICATION_OUTPUTS") {
+          return { type: "VERIFICATION_OUTPUTS", artifacts: [] };
+        }
+        throw new Error(`Unexpected query ${query.type}`);
+      },
+      close: () => undefined,
+    };
+    const app = Fastify({ logger: false });
+
+    await expect(
+      cleanupExpiredVerificationOutputs({
+        state,
+        artifactsDirectory,
+        now: new Date("2026-09-05T12:00:00.000Z"),
+        logger: app.log,
+      }),
+    ).resolves.toMatchObject({ orphansDeleted: 1 });
+    await expect(access(orphanPath)).rejects.toMatchObject({ code: "ENOENT" });
     await app.close();
   });
 });

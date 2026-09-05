@@ -108,6 +108,13 @@ const requirePositiveSafeInteger = (value: number, field: string): void => {
   }
 };
 
+const boundUtf8Text = (text: string, limit: number): string => {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.byteLength <= limit) return text;
+  const decoder = new StringDecoder("utf8");
+  return decoder.write(bytes.subarray(0, limit));
+};
+
 export const runSupervisedProcess = async (
   options: SupervisedProcessOptions,
 ): Promise<SupervisedProcessResult> => {
@@ -134,20 +141,24 @@ export const runSupervisedProcess = async (
   let settled = false;
   let stopPromise: Promise<void> | undefined;
 
-  const result = (): SupervisedProcessResult => ({
-    termination,
-    spawnErrorCode,
-    exitCode,
-    signal: exitSignal,
-    durationMs: Math.max(0, Date.now() - startedAt),
-    output: {
-      text: sanitizeSupervisedOutput(outputParts.join(""), options.redactValues),
-      capturedBytes,
-      stdoutBytes,
-      stderrBytes,
-      truncated: capturedBytes < stdoutBytes + stderrBytes,
-    },
-  });
+  const result = (): SupervisedProcessResult => {
+    const sanitized = sanitizeSupervisedOutput(outputParts.join(""), options.redactValues);
+    const sanitizedBytes = Buffer.byteLength(sanitized, "utf8");
+    return {
+      termination,
+      spawnErrorCode,
+      exitCode,
+      signal: exitSignal,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      output: {
+        text: boundUtf8Text(sanitized, options.outputLimitBytes),
+        capturedBytes,
+        stdoutBytes,
+        stderrBytes,
+        truncated: capturedBytes < stdoutBytes + stderrBytes || sanitizedBytes > options.outputLimitBytes,
+      },
+    };
+  };
 
   const child = spawn(options.command, [...options.args], {
     cwd: options.cwd,

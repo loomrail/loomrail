@@ -1,8 +1,8 @@
 import { open, realpath, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-import type { StateCommandResult, VerificationRun } from "@loomrail/contracts";
-import type { LocalState } from "@loomrail/persistence-sqlite";
+import type { StateCommand, StateCommandResult, VerificationRun } from "@loomrail/contracts";
+import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
 import {
   executeVerificationRecipe,
   type ExecuteVerificationRecipeInput,
@@ -16,6 +16,16 @@ type VerificationLogger = {
 };
 
 type CancelledResult = Extract<StateCommandResult, { type: "VERIFICATION_RUN_INTERRUPTED" }>;
+type CancellationCommand = Extract<StateCommand, { type: "CANCEL_VERIFICATION_RUN" }>;
+
+type ActiveVerificationRun = {
+  controller: AbortController;
+  promise: Promise<void>;
+  stopRequested: boolean;
+  stopConfirmed: boolean;
+  cancelCommand: CancellationCommand | null;
+  cancelPromise: Promise<CancelledResult> | null;
+};
 
 export type VerificationRecipeExecutor = (
   input: ExecuteVerificationRecipeInput,
@@ -28,7 +38,7 @@ export type ProjectVerificationRunner = {
     expectedVersion: number;
     commandId: string;
     correlationId: string;
-  }) => CancelledResult;
+  }) => Promise<CancelledResult>;
   whenIdle: (runId?: string) => Promise<void>;
   readOutput: (checkId: string) => Promise<string | null>;
   stop: () => Promise<void>;
@@ -43,7 +53,7 @@ export const createProjectVerificationRunner = (input: {
   logger: VerificationLogger;
   executeRecipe?: VerificationRecipeExecutor;
 }): ProjectVerificationRunner => {
-  const active = new Map<string, { controller: AbortController; promise: Promise<void> }>();
+  const active = new Map<string, ActiveVerificationRun>();
   const executeRecipe = input.executeRecipe ?? executeVerificationRecipe;
 
   const discardUnclaimedArtifact = async (execution: VerificationRecipeExecution): Promise<void> => {
@@ -77,8 +87,9 @@ export const createProjectVerificationRunner = (input: {
     });
   };
 
-  const run = async (runId: string, controller: AbortController): Promise<void> => {
+  const run = async (runId: string, authority: ActiveVerificationRun): Promise<void> => {
     for (;;) {
+      if (authority.stopRequested) return;
       const context = input.state.query({ type: "GET_VERIFICATION_RUN_CONTEXT", runId });
       if (context.type !== "VERIFICATION_RUN_CONTEXT") return;
       if (context.run.status !== "QUEUED" && context.run.status !== "RUNNING") return;
@@ -107,13 +118,14 @@ export const createProjectVerificationRunner = (input: {
       let execution: VerificationRecipeExecution;
       try {
         const artifactId = input.createArtifactId();
+        authority.stopConfirmed = false;
         execution = await executeRecipe({
           recipe,
           worktreePath: context.workspace.worktreePath,
           artifactDirectory: input.artifactsDirectory,
           artifactId,
           expectedTree: context.run.implementationTree,
-          signal: controller.signal,
+          signal: authority.controller.signal,
         });
       } catch (error: unknown) {
         input.logger.error(
@@ -128,6 +140,13 @@ export const createProjectVerificationRunner = (input: {
         if (current.type === "VERIFICATION_RUN" && current.run?.status === "RUNNING") {
           completeUnexpectedFailure(current.run, started.check.id, started.check.version);
         }
+        return;
+      }
+      authority.stopConfirmed =
+        execution.observation.status !== "ERROR" ||
+        execution.observation.errorCode !== "PROCESS_TERMINATION_FAILED";
+      if (active.get(runId)?.stopRequested === true) {
+        await discardUnclaimedArtifact(execution);
         return;
       }
       const current = input.state.query({ type: "GET_VERIFICATION_RUN", runId });
@@ -163,34 +182,104 @@ export const createProjectVerificationRunner = (input: {
   const wake = (runId: string): void => {
     if (active.has(runId)) return;
     const controller = new AbortController();
+    const authority: ActiveVerificationRun = {
+      controller,
+      promise: Promise.resolve(),
+      stopRequested: false,
+      stopConfirmed: true,
+      cancelCommand: null,
+      cancelPromise: null,
+    };
     const promise = Promise.resolve()
-      .then(() => run(runId, controller))
+      .then(() => run(runId, authority))
       .catch((error: unknown) => {
         input.logger.error(
           { runId, errorName: error instanceof Error ? error.name : "UnknownError" },
           "Verification Run stopped unexpectedly",
         );
       })
-      .finally(() => active.delete(runId));
-    active.set(runId, { controller, promise });
+      .finally(() => {
+        if (!authority.stopRequested) active.delete(runId);
+      });
+    authority.promise = promise;
+    active.set(runId, authority);
+  };
+
+  const cancellationCommand = (request: {
+    runId: string;
+    expectedVersion: number;
+    commandId: string;
+    correlationId: string;
+  }): CancellationCommand => ({
+    schemaVersion: 1,
+    commandId: request.commandId,
+    correlationId: request.correlationId,
+    actor: { type: "HUMAN", id: "local-owner" },
+    type: "CANCEL_VERIFICATION_RUN",
+    payload: { runId: request.runId, expectedRunVersion: request.expectedVersion },
+  });
+
+  const requireCancelledResult = (result: StateCommandResult): CancelledResult => {
+    if (result.type !== "VERIFICATION_RUN_INTERRUPTED") {
+      throw new Error("Verification cancellation returned an unexpected command result");
+    }
+    return result;
+  };
+
+  const applyOwnerCancellation = (command: CancellationCommand): CancelledResult => {
+    const result = input.state.execute(command);
+    return requireCancelledResult(result);
+  };
+
+  const inspectOwnerCancellation = (command: CancellationCommand): CancelledResult | null => {
+    const replayed = input.state.inspectCommandReceipt(command);
+    return replayed === null ? null : requireCancelledResult(replayed);
   };
 
   return {
     wake,
-    cancel: ({ runId, expectedVersion, commandId, correlationId }) => {
-      active.get(runId)?.controller.abort();
-      const result = input.state.execute({
-        schemaVersion: 1,
-        commandId,
-        correlationId,
-        actor: { type: "HUMAN", id: "local-owner" },
-        type: "CANCEL_VERIFICATION_RUN",
-        payload: { runId, expectedRunVersion: expectedVersion },
-      });
-      if (result.type !== "VERIFICATION_RUN_INTERRUPTED") {
-        throw new Error("Verification cancellation returned an unexpected command result");
+    cancel: async (request) => {
+      const command = cancellationCommand(request);
+      const authority = active.get(request.runId);
+      if (authority === undefined) return applyOwnerCancellation(command);
+      if (authority.cancelPromise !== null) {
+        if (authority.cancelCommand?.commandId === request.commandId) {
+          if (
+            authority.cancelCommand.payload.runId !== command.payload.runId ||
+            authority.cancelCommand.payload.expectedRunVersion !== command.payload.expectedRunVersion
+          ) {
+            throw new StateStoreError(
+              "COMMAND_ID_REUSED",
+              "The command ID was already used for different input",
+            );
+          }
+          return await authority.cancelPromise;
+        }
+        await authority.cancelPromise;
+        return applyOwnerCancellation(command);
       }
-      return result;
+      const replayed = inspectOwnerCancellation(command);
+      if (replayed !== null) return replayed;
+      const current = input.state.query({ type: "GET_VERIFICATION_RUN", runId: request.runId });
+      const run = current.type === "VERIFICATION_RUN" ? current.run : null;
+      if (run?.version !== request.expectedVersion || (run.status !== "QUEUED" && run.status !== "RUNNING")) {
+        return applyOwnerCancellation(command);
+      }
+
+      authority.stopRequested = true;
+      authority.cancelCommand = command;
+      authority.controller.abort();
+      const cancellation = (async (): Promise<CancelledResult> => {
+        await authority.promise;
+        if (!authority.stopConfirmed) {
+          throw new Error("Verification process-tree termination was not confirmed");
+        }
+        const result = applyOwnerCancellation(command);
+        active.delete(request.runId);
+        return result;
+      })();
+      authority.cancelPromise = cancellation;
+      return await cancellation;
     },
     whenIdle: async (runId) => {
       if (runId !== undefined) {
@@ -222,8 +311,15 @@ export const createProjectVerificationRunner = (input: {
     },
     stop: async () => {
       const running = [...active.entries()];
-      for (const [runId, { controller }] of running) {
-        controller.abort();
+      for (const [, authority] of running) {
+        authority.stopRequested = true;
+        authority.controller.abort();
+      }
+      await Promise.all(running.map(([, { promise }]) => promise));
+      for (const [runId, authority] of running) {
+        if (!authority.stopConfirmed) {
+          throw new Error(`Verification process-tree termination was not confirmed for ${runId}`);
+        }
         const current = input.state.query({ type: "GET_VERIFICATION_RUN", runId });
         if (
           current.type === "VERIFICATION_RUN" &&
@@ -243,8 +339,8 @@ export const createProjectVerificationRunner = (input: {
             },
           });
         }
+        active.delete(runId);
       }
-      await Promise.all(running.map(([, { promise }]) => promise));
     },
   };
 };

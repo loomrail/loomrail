@@ -138,6 +138,7 @@ export type StateQuery =
   | { type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS"; workItemId: string; limit?: number }
   | { type: "LIST_ACTIVE_VERIFICATION_RUNS" }
   | { type: "GET_VERIFICATION_OUTPUT_ARTIFACT"; checkId: string }
+  | { type: "HAS_VERIFICATION_OUTPUT_STORAGE_KEY"; storageKey: string }
   | { type: "LIST_EXPIRED_VERIFICATION_OUTPUTS"; closedBefore: string; limit?: number }
   | { type: "GET_PROJECT_READINESS_SNAPSHOT"; projectId: string }
   | { type: "GET_PROJECT_MCP_PROFILES"; projectId: string }
@@ -237,6 +238,7 @@ export type StateQueryResult =
       type: "VERIFICATION_OUTPUT_ARTIFACT";
       artifact: { artifactId: string; checkId: string; runId: string; storageKey: string } | null;
     }
+  | { type: "VERIFICATION_OUTPUT_STORAGE_KEY"; exists: boolean }
   | {
       type: "VERIFICATION_OUTPUTS";
       artifacts: { artifactId: string; storageKey: string }[];
@@ -313,6 +315,8 @@ export type StateStoreStartup = {
 export type LocalState = {
   readonly startup: StateStoreStartup;
   execute: (command: StateCommand) => StateCommandResult;
+  /** Returns an exact replay, null for a fresh id, and rejects a reused id before external effects. */
+  inspectCommandReceipt: (command: StateCommand) => StateCommandResult | null;
   query: (query: StateQuery) => StateQueryResult;
   close: () => void;
 };

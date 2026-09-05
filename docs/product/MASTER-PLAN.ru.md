@@ -1580,6 +1580,17 @@ Browser QA, а не строкой «тесты прошли» в provider respo
 Scanner никогда не запускает предложенную команду до owner adoption; verification не получает commit, push, merge,
 deploy или package-install authority.
 
+**Состояние на 2026-09-05:** contracts/domain, inert scanner/publisher, measured runner, persistence/restart,
+workflow/correction/Acceptance, Task Cockpit и T48 test matrix реализованы. Локально прошли все package tests,
+58/58 Browser QA, fault injection и clean packed release. `STALE` после уже успешной correction сохраняет исходные
+Run/correction terminal facts и продолжает общий bounded budget новой authority; restart-interruption разрешается и
+после исчерпания automatic positions. На `05cab6279e0cf9f772cafbd32caba9558474d3fb` clean install, 58/58 Browser
+smoke, Q17 workflow gate и fault recovery прошли на macOS/Windows; Windows process-tree lifecycle отдельно зелёный в
+[CI run 33952514299](https://github.com/loomrail/loomrail/actions/runs/33952514299). Оба Verify остановились только на
+трёх заранее известных protected landing lint findings, поэтому общий workflow conclusion честно остаётся
+`failure`. Live Windows provider verification по решению владельца отложена. До закрытия Q17 остаётся independent
+Standards/Spec review; sanitized evidence хранится в `docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md`.
+
 ### Оценка первого цикла
 
 - internal dogfood alpha: примерно 12–16 недель;

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, open, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, open, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
@@ -12,6 +12,8 @@ import type {
 } from "@loomrail/contracts";
 import { runSupervisedProcess, type SupervisedProcessResult } from "@loomrail/process-supervision";
 import { treeOfWorktree } from "@loomrail/workspace";
+
+import { verificationRecipeAuthorityIsCurrent } from "./verification.js";
 
 type EnvironmentSource = Readonly<Record<string, string | undefined>>;
 
@@ -82,6 +84,7 @@ const copyEnvironmentValue = (
 export const verificationBaselineEnvironment = (input: {
   platform: VerificationPlatform;
   isolatedHome: string;
+  runtimePath: readonly string[];
   source: EnvironmentSource;
 }): Readonly<Record<string, string>> => {
   const environment: Record<string, string> = {
@@ -100,8 +103,7 @@ export const verificationBaselineEnvironment = (input: {
     npm_config_fund: "false",
     npm_config_audit: "false",
   };
-  const sourcePath = input.source["PATH"] ?? input.source["Path"] ?? input.source["path"];
-  if (sourcePath !== undefined && sourcePath !== "") environment["PATH"] = sourcePath;
+  environment["PATH"] = input.runtimePath.join(input.platform === "win32" ? ";" : ":");
   if (input.platform === "win32") {
     for (const key of ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT"] as const) {
       copyEnvironmentValue(environment, input.source, key);
@@ -140,6 +142,155 @@ const outputRedactions = (source: EnvironmentSource, paths: readonly string[]): 
   return [source["HOME"], source["USERPROFILE"], ...paths, ...secretValues].filter(
     (value): value is string => typeof value === "string" && value !== "",
   );
+};
+
+type VerificationInvocation = {
+  command: string;
+  args: readonly string[];
+  runtimePath: readonly string[];
+};
+
+const canonicalRegularFile = async (path: string): Promise<string | null> => {
+  const canonical = await realpath(path).catch(() => null);
+  if (canonical === null) return null;
+  const details = await lstat(canonical).catch(() => null);
+  return details?.isFile() === true && !details.isSymbolicLink() ? canonical : null;
+};
+
+const baselineRuntimeDirectories = (
+  platform: VerificationPlatform,
+  source: EnvironmentSource,
+): readonly string[] => {
+  const systemRoot = source["SystemRoot"] ?? source["WINDIR"];
+  const candidates =
+    platform === "win32"
+      ? [dirname(process.execPath), ...(systemRoot === undefined ? [] : [join(systemRoot, "System32")])]
+      : [dirname(process.execPath), "/usr/local/bin", "/usr/bin", "/bin", "/opt/homebrew/bin"];
+  return [...new Set(candidates.filter((candidate) => isAbsolute(candidate)))];
+};
+
+const executableSearchDirectories = async (input: {
+  canonicalWorktree: string;
+  platform: VerificationPlatform;
+  runtimeDirectories: readonly string[];
+  source: EnvironmentSource;
+}): Promise<readonly string[]> => {
+  const sourcePath = input.source["PATH"] ?? input.source["Path"] ?? input.source["path"] ?? "";
+  const candidates = [
+    ...input.runtimeDirectories,
+    ...sourcePath
+      .split(input.platform === "win32" ? ";" : ":")
+      .slice(0, 128)
+      .map((entry) => entry.trim().replace(/^"|"$/gu, "")),
+  ];
+  const directories: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (candidate.length === 0 || candidate.length > 4_096 || !isAbsolute(candidate)) continue;
+    const canonical = await realpath(candidate).catch(() => null);
+    if (canonical === null || inside(input.canonicalWorktree, canonical, input.platform)) continue;
+    const key = input.platform === "win32" ? canonical.toLowerCase() : canonical;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    directories.push(canonical);
+  }
+  return directories;
+};
+
+const invocationForFile = async (input: {
+  candidate: string;
+  args: readonly string[];
+  canonicalWorktree: string;
+  platform: VerificationPlatform;
+  runtimeDirectories: readonly string[];
+}): Promise<VerificationInvocation | null> => {
+  const command = await canonicalRegularFile(input.candidate);
+  if (command === null || inside(input.canonicalWorktree, command, input.platform)) return null;
+  return {
+    command,
+    args: input.args,
+    runtimePath: [...new Set([dirname(process.execPath), dirname(command), ...input.runtimeDirectories])],
+  };
+};
+
+const resolveWindowsInvocation = async (
+  recipe: VerificationRecipe,
+  canonicalWorktree: string,
+  directories: readonly string[],
+  runtimeDirectories: readonly string[],
+): Promise<VerificationInvocation | null> => {
+  for (const directory of directories) {
+    if (recipe.executable === "bun") {
+      const invocation = await invocationForFile({
+        candidate: join(directory, "bun.exe"),
+        args: recipe.argv,
+        canonicalWorktree,
+        platform: "win32",
+        runtimeDirectories,
+      });
+      if (invocation !== null) return invocation;
+      continue;
+    }
+    if (recipe.executable === "pnpm") {
+      const standalone = await invocationForFile({
+        candidate: join(directory, "pnpm.exe"),
+        args: recipe.argv,
+        canonicalWorktree,
+        platform: "win32",
+        runtimeDirectories,
+      });
+      if (standalone !== null) return standalone;
+    }
+    const launcherCandidates: readonly string[] =
+      recipe.executable === "npm"
+        ? [join(directory, "node_modules", "npm", "bin", "npm-cli.js")]
+        : recipe.executable === "pnpm"
+          ? [
+              join(directory, "node_modules", "corepack", "dist", "pnpm.js"),
+              join(directory, "node_modules", "pnpm", "bin", "pnpm.cjs"),
+            ]
+          : [
+              join(directory, "node_modules", "corepack", "dist", "yarn.js"),
+              join(directory, "node_modules", "yarn", "bin", "yarn.js"),
+            ];
+    for (const candidate of launcherCandidates) {
+      const launcher = await canonicalRegularFile(candidate);
+      if (launcher === null || inside(canonicalWorktree, launcher, "win32")) continue;
+      return {
+        command: process.execPath,
+        args: [launcher, ...recipe.argv],
+        runtimePath: [...new Set([dirname(process.execPath), dirname(launcher), ...runtimeDirectories])],
+      };
+    }
+  }
+  return null;
+};
+
+const resolvePosixInvocation = async (
+  recipe: VerificationRecipe,
+  canonicalWorktree: string,
+  directories: readonly string[],
+  runtimeDirectories: readonly string[],
+  platform: Extract<VerificationPlatform, "darwin" | "linux">,
+): Promise<VerificationInvocation | null> => {
+  if (recipe.executable === "node") {
+    return {
+      command: process.execPath,
+      args: recipe.argv,
+      runtimePath: [...new Set([dirname(process.execPath), ...runtimeDirectories])],
+    };
+  }
+  for (const directory of directories) {
+    const invocation = await invocationForFile({
+      candidate: join(directory, recipe.executable),
+      args: recipe.argv,
+      canonicalWorktree,
+      platform,
+      runtimeDirectories,
+    });
+    if (invocation !== null) return invocation;
+  }
+  return null;
 };
 
 const persistOutput = async (input: {
@@ -321,6 +472,20 @@ export const executeVerificationRecipe = async (
       afterTree: beforeTree,
     };
   }
+  if (
+    !(await verificationRecipeAuthorityIsCurrent({
+      canonicalCwd,
+      canonicalWorktree,
+      recipe: input.recipe,
+    }))
+  ) {
+    return {
+      observation: errorObservation("RECIPE_NOT_APPROVED", completedNow()),
+      artifactPath: null,
+      beforeTree,
+      afterTree: beforeTree,
+    };
+  }
 
   const isolatedHome = await mkdtemp(join(tmpdir(), "loomrail-verification-"));
   try {
@@ -331,11 +496,47 @@ export const executeVerificationRecipe = async (
       mkdir(join(isolatedHome, "tmp"), { recursive: true }),
     ]);
     const source = input.systemEnvironment ?? process.env;
+    const runtimeDirectories = baselineRuntimeDirectories(platform, source);
+    const directories = await executableSearchDirectories({
+      canonicalWorktree,
+      platform,
+      runtimeDirectories,
+      source,
+    });
+    const invocation =
+      platform === "win32"
+        ? input.recipe.executable === "node"
+          ? {
+              command: process.execPath,
+              args: input.recipe.argv,
+              runtimePath: runtimeDirectories,
+            }
+          : await resolveWindowsInvocation(input.recipe, canonicalWorktree, directories, runtimeDirectories)
+        : await resolvePosixInvocation(
+            input.recipe,
+            canonicalWorktree,
+            directories,
+            runtimeDirectories,
+            platform,
+          );
+    if (invocation === null) {
+      return {
+        observation: errorObservation("EXECUTABLE_NOT_FOUND", completedNow()),
+        artifactPath: null,
+        beforeTree,
+        afterTree: beforeTree,
+      };
+    }
     const processResult = await runSupervisedProcess({
-      command: input.recipe.executable,
-      args: input.recipe.argv,
+      command: invocation.command,
+      args: invocation.args,
       cwd: canonicalCwd,
-      env: verificationBaselineEnvironment({ platform, isolatedHome, source }),
+      env: verificationBaselineEnvironment({
+        platform,
+        isolatedHome,
+        runtimePath: invocation.runtimePath,
+        source,
+      }),
       deadlineMs: input.recipe.timeoutSeconds * 1_000,
       outputLimitBytes: input.recipe.outputLimitBytes,
       redactValues: outputRedactions(source, [
