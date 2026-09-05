@@ -67,7 +67,7 @@ test("rejects unknown fields, unsafe paths and malformed release identities", ()
   assert.throws(() => parseStableReleaseGateManifest(JSON.stringify(unsafe)), /evidencePath/);
 
   const unrelated = completeManifest();
-  unrelated.gates.privateDogfood.evidencePath = stableReleaseEvidencePaths.finalSecurityReview;
+  unrelated.gates.privateDogfood.evidencePath = stableReleaseEvidencePaths.q13FinalSecurityReliabilityReview;
   assert.throws(
     () => parseStableReleaseGateManifest(JSON.stringify(unrelated)),
     /privateDogfood evidencePath/,

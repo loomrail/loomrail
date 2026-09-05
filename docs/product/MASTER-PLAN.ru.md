@@ -1772,8 +1772,10 @@ human waiver с documented risk.
 5. Repository-side stage-only workflow уже подготовлен с exact-intent, six-job CI и strict ten-gate evidence index.
    Index сейчас честно показывает 6/10 и не содержит выбранной stable version; `PENDING` private dogfood, Q15 landing
    integration и оба Windows live rows машинно запрещают staging. После их закрытия владелец отдельно настраивает
-   protected main-only `npm-release` environment и npm OIDC trust только для `npm stage publish`; staged artifact
-   требует ещё одного owner 2FA approval. Только после этих gates принимать отдельное решение о stable release.
+   protected main-only `npm-release` environment и npm OIDC trust только для `npm stage publish`. Trusted job
+   read-only проверяет непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или
+   auto-created environment не сможет stage-ить package. Staged artifact требует ещё одного owner 2FA approval.
+   Только после этих gates принимать отдельное решение о stable release.
 6. Не начинать marketplace, team mode, Jira sync, desktop wrapper, billing или deploy automation до закрытия Dogfood
    Alpha contract.
 

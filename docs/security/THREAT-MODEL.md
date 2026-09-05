@@ -380,8 +380,11 @@ Required controls and verification:
   publisher with stage-only authority. It requires stable semver, exact owner confirmation, an unused registry
   version and six successful macOS/Windows jobs for the same SHA, then rebuilds and verifies the artifact before
   `npm stage publish`. Public release still requires separate owner inspection and interactive 2FA approval;
-- the trusted job uses hosted-workflow OIDC, `publishConfig.provenance=true` and no long-lived write token.
-  Post-publish registry integrity/signature/provenance checks remain mandatory;
+- the trusted job uses hosted-workflow OIDC, `publishConfig.provenance=true` and no long-lived write token. Before
+  build or staging it reads the named GitHub Environment and deployment branch policies with `actions: read`; one
+  non-empty required-reviewer rule and exactly one custom `main` branch policy are mandatory. A missing or
+  auto-created environment, unrestricted policy, hidden pagination or broader branch pattern fails closed without
+  mutating repository settings. Post-publish registry integrity/signature/provenance checks remain mandatory;
 - update is explicit and rollback remains Q4's matching pre-upgrade whole-directory restore. Q6 adds no self-update,
   background download, down-migration, publish command, tag, release or dist-tag mutation.
 
@@ -1501,7 +1504,8 @@ both source-CI platforms plus the trusted stage checkout fetch history for the a
 fields, prerelease/version drift, unsafe paths, any pending gate, digest drift, non-ancestor evidence, and both
 workflow linkages. This closes accidental omission, not a malicious maintainer: repository-authored Markdown is not a
 signature, so protected-environment owner review must inspect the reports and exact source diff before OIDC staging.
-Separate npm 2FA approval remains terminal.
+The passed Q13 row is named as the historical Q13 security/reliability review rather than an exact-source review of
+later slices. Separate npm 2FA approval remains terminal.
 
 Verification required by C1: proposal replay/digest/expiry; CSRF/Origin; shell/download denial; ambient-config canary;
 ungranted call never reaches fake server; revoke race; flood/invalid JSON; process orphan cleanup; unknown outcome/no

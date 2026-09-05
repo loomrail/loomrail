@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "releaseVersion": null,
   "gates": {
-    "finalSecurityReview": {
+    "q13FinalSecurityReliabilityReview": {
       "status": "PASSED",
       "evidencePath": "docs/evidence/phase-8/Q13-FINAL-SECURITY-RELIABILITY-EVIDENCE.md",
       "evidenceSha256": "12f8b042d5746cf71acbd4edda1a6d82a92929aa11889f61fbe3f599d4162453",

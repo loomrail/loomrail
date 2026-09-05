@@ -43,7 +43,9 @@
 - [x] Запушить Q13, дождаться macOS/Windows CI и записать evidence.
 - [x] Связать manual stage workflow со строгим stable-gate index: exact десять gate, stable version, evidence
       SHA-256/commit ancestry и fail-closed `PENDING`. Текущее состояние намеренно остаётся 6/10 без выбранной stable
-      version. Обе source-CI платформы перепроверяют текущие `PASSED` evidence по полной Git history.
+      version. Обе source-CI платформы перепроверяют текущие `PASSED` evidence по полной Git history. Stage job также
+      read-only проверяет, что `npm-release` действительно содержит required reviewer и ровно один custom branch
+      pattern `main`; ссылка на отсутствующий auto-created environment не считается защитой.
 - [ ] Провести private dogfood на явно выбранном владельцем private full-stack repository и сохранить evidence.
 - [ ] После отдельного разрешения на quota-bearing runs добавить exact live-provider row с macOS/Windows evidence.
 - [ ] Дождаться зелёного protected landing gate от отдельной landing-сессии, не меняя и не исключая её source.

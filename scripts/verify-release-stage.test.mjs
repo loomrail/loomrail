@@ -8,6 +8,7 @@ import {
   assertMinimumNpmVersion,
   requiredReleaseCiJobs,
   selectSuccessfulCiRun,
+  validateReleaseEnvironmentProtection,
   validateReleaseCiJobs,
   validateReleaseStageIntent,
 } from "./verify-release-stage.mjs";
@@ -118,6 +119,87 @@ test("requires one successful job for every blocking CI lane", () => {
         jobs: jobs.map((job, index) => (index === 0 ? { ...job, conclusion: "failure" } : job)),
       }),
     /must complete successfully/,
+  );
+});
+
+const protectedReleaseEnvironment = {
+  name: "npm-release",
+  protection_rules: [
+    {
+      type: "required_reviewers",
+      reviewers: [
+        {
+          type: "User",
+          reviewer: { id: 42, login: "release-owner" },
+        },
+      ],
+    },
+    { type: "branch_policy" },
+  ],
+  deployment_branch_policy: {
+    protected_branches: false,
+    custom_branch_policies: true,
+  },
+};
+
+const mainOnlyBranchPolicies = {
+  total_count: 1,
+  branch_policies: [{ id: 7, name: "main", type: "branch" }],
+};
+
+test("requires a reviewed main-only release environment", () => {
+  assert.doesNotThrow(() =>
+    validateReleaseEnvironmentProtection(protectedReleaseEnvironment, mainOnlyBranchPolicies),
+  );
+
+  const withWaitTimer = {
+    ...protectedReleaseEnvironment,
+    protection_rules: [...protectedReleaseEnvironment.protection_rules, { type: "wait_timer" }],
+  };
+  assert.doesNotThrow(() => validateReleaseEnvironmentProtection(withWaitTimer, mainOnlyBranchPolicies));
+});
+
+test("rejects an unreviewed, unrestricted or broader release environment", () => {
+  assert.throws(
+    () =>
+      validateReleaseEnvironmentProtection(
+        {
+          ...protectedReleaseEnvironment,
+          protection_rules: [{ type: "branch_policy" }],
+        },
+        mainOnlyBranchPolicies,
+      ),
+    /required reviewer/,
+  );
+  assert.throws(
+    () =>
+      validateReleaseEnvironmentProtection(
+        {
+          ...protectedReleaseEnvironment,
+          deployment_branch_policy: null,
+        },
+        mainOnlyBranchPolicies,
+      ),
+    /custom branch policy/,
+  );
+  assert.throws(
+    () =>
+      validateReleaseEnvironmentProtection(protectedReleaseEnvironment, {
+        total_count: 2,
+        branch_policies: [
+          { id: 7, name: "main", type: "branch" },
+          { id: 8, name: "release/*", type: "branch" },
+        ],
+      }),
+    /exactly one main branch policy/,
+  );
+  assert.throws(
+    () =>
+      validateReleaseEnvironmentProtection(protectedReleaseEnvironment, {
+        total_count: 2,
+        branch_policies: [{ id: 7, name: "main", type: "branch" }],
+      }),
+    /complete branch policy response/,
   );
 });
 

@@ -80,6 +80,11 @@ GitHub environment `npm-release` и не разрешает прямой `npm pu
 в этом trusted job и передаёт только exact tarball в `npm stage publish` с provenance. Staged package задаёт
 `publishConfig.provenance: true`; long-lived npm write token не принимается.
 
+До build или staging trusted job проверяет environment через read-only GitHub API. Обязательны ровно одно непустое
+правило required reviewers и одна custom branch policy с именем `main`; отсутствующий, unrestricted, неполный или
+более широкий policy response закрывает gate. Дополнительные более строгие protection rules разрешены. Проверка не
+создаёт и не изменяет environment.
+
 Repository gate требует stable semver, exact main SHA, совпадающее typed confirmation, свободную registry version,
 npm `11.15.0+` и успешный push-triggered CI для этого SHA со всеми шестью macOS/Windows Verify, Browser smoke и Clean
 install jobs. Строгий versioned stable-gate index дополнительно требует все десять named gates, exact выбранную
@@ -131,6 +136,8 @@ gates — в [release guide](../RELEASE.md).
 - [npm trusted publishers](https://docs.npmjs.com/trusted-publishers/)
 - [npm staged publishing](https://docs.npmjs.com/staged-publishing/)
 - [npm registry signature verification](https://docs.npmjs.com/verifying-registry-signatures/)
+- [GitHub deployment environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
+- [GitHub deployment branch policy API](https://docs.github.com/en/rest/deployments/branch-policies)
 - [pnpm supply-chain security](https://pnpm.io/supply-chain-security)
 - [pnpm dependency policy](https://pnpm.io/settings/dependency-resolution)
 - [pnpm lifecycle-script policy](https://pnpm.io/settings/build)

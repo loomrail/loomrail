@@ -79,6 +79,11 @@ review and restrict deployments to `main`. The job uses OIDC with `id-token: wri
 inside the trusted job, and submits only the exact tarball to `npm stage publish` with provenance. The staged package
 sets `publishConfig.provenance: true`; no long-lived npm write token is accepted.
 
+Before build or staging, the trusted job validates the environment through GitHub's read-only API. Exactly one
+non-empty required-reviewer rule and one custom branch policy named `main` are mandatory; missing, unrestricted,
+incomplete or broader policy responses fail closed. Stronger additional protection rules are allowed. The check
+cannot create or mutate the environment.
+
 The repository gate requires stable semver, an exact main SHA, matching typed confirmation, an unused registry
 version, npm `11.15.0+`, and a successful push-triggered CI run for that SHA with all six macOS/Windows Verify,
 Browser smoke and Clean install jobs. A strict versioned stable-gate index additionally requires all ten named gates,
@@ -130,6 +135,8 @@ artifact gates are in the [release guide](../RELEASE.md).
 - [npm trusted publishers](https://docs.npmjs.com/trusted-publishers/)
 - [npm staged publishing](https://docs.npmjs.com/staged-publishing/)
 - [npm registry signature verification](https://docs.npmjs.com/verifying-registry-signatures/)
+- [GitHub deployment environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
+- [GitHub deployment branch policy API](https://docs.github.com/en/rest/deployments/branch-policies)
 - [pnpm supply-chain security](https://pnpm.io/supply-chain-security)
 - [pnpm dependency policy](https://pnpm.io/settings/dependency-resolution)
 - [pnpm lifecycle-script policy](https://pnpm.io/settings/build)

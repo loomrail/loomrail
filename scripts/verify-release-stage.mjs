@@ -7,6 +7,7 @@ import { verifyStableReleaseGates } from "./stable-release-gates.mjs";
 
 const expectedRepository = "loomrail/loomrail";
 const expectedRef = "refs/heads/main";
+const expectedReleaseEnvironment = "npm-release";
 const maximumResponseBytes = 2 * 1024 * 1024;
 const minimumNpmVersion = [11, 15, 0];
 const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -24,6 +25,8 @@ export const requiredReleaseCiJobs = Object.freeze([
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
+
+const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
 const parseNumericVersion = (version, label) => {
   const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
@@ -103,6 +106,71 @@ export const validateReleaseCiJobs = (payload) => {
   }
 };
 
+export const validateReleaseEnvironmentProtection = (environment, branchPolicies) => {
+  assert(isRecord(environment), "release environment response must be an object");
+  assert(
+    environment.name === expectedReleaseEnvironment,
+    `release environment must be ${expectedReleaseEnvironment}`,
+  );
+  assert(Array.isArray(environment.protection_rules), "release environment protection_rules are missing");
+
+  const reviewerRules = environment.protection_rules.filter(
+    (rule) => isRecord(rule) && rule.type === "required_reviewers",
+  );
+  assert(reviewerRules.length === 1, "release environment must have exactly one required reviewer rule");
+  const reviewers = reviewerRules[0].reviewers;
+  assert(
+    Array.isArray(reviewers) && reviewers.length > 0 && reviewers.length <= 6,
+    "release environment must have at least one required reviewer",
+  );
+  for (const reviewer of reviewers) {
+    assert(isRecord(reviewer), "release environment reviewer must be an object");
+    assert(
+      reviewer.type === "User" || reviewer.type === "Team",
+      "release environment reviewer type must be User or Team",
+    );
+    assert(isRecord(reviewer.reviewer), "release environment reviewer identity is missing");
+    assert(
+      Number.isSafeInteger(reviewer.reviewer.id) && reviewer.reviewer.id > 0,
+      "release environment reviewer identity is invalid",
+    );
+  }
+
+  const branchRules = environment.protection_rules.filter(
+    (rule) => isRecord(rule) && rule.type === "branch_policy",
+  );
+  assert(branchRules.length === 1, "release environment must have exactly one branch policy rule");
+  assert(
+    isRecord(environment.deployment_branch_policy) &&
+      environment.deployment_branch_policy.protected_branches === false &&
+      environment.deployment_branch_policy.custom_branch_policies === true,
+    "release environment must use a custom branch policy",
+  );
+
+  assert(isRecord(branchPolicies), "release branch policy response must be an object");
+  assert(
+    Number.isSafeInteger(branchPolicies.total_count) && Array.isArray(branchPolicies.branch_policies),
+    "release branch policy response is invalid",
+  );
+  assert(
+    branchPolicies.total_count === branchPolicies.branch_policies.length,
+    "release environment requires a complete branch policy response",
+  );
+  assert(
+    branchPolicies.branch_policies.length === 1,
+    "release environment must have exactly one main branch policy",
+  );
+  const policy = branchPolicies.branch_policies[0];
+  assert(
+    isRecord(policy) &&
+      Number.isSafeInteger(policy.id) &&
+      policy.id > 0 &&
+      policy.name === "main" &&
+      (policy.type === undefined || policy.type === "branch"),
+    "release environment must have exactly one main branch policy",
+  );
+};
+
 const readBoundedJson = async (url, options, label) => {
   const response = await fetch(url, options);
   assert(response.ok, `${label} request failed closed with HTTP ${response.status.toString()}`);
@@ -167,6 +235,21 @@ export const verifyReleaseStage = async (environment = process.env) => {
     releaseVersion: intent.version,
     sourceCommit: intent.sourceCommit,
   });
+
+  const encodedEnvironment = encodeURIComponent(expectedReleaseEnvironment);
+  const [releaseEnvironment, branchPolicies] = await Promise.all([
+    readBoundedJson(
+      `https://api.github.com/repos/${expectedRepository}/environments/${encodedEnvironment}`,
+      githubRequestOptions(token),
+      "GitHub release environment",
+    ),
+    readBoundedJson(
+      `https://api.github.com/repos/${expectedRepository}/environments/${encodedEnvironment}/deployment-branch-policies?per_page=100`,
+      githubRequestOptions(token),
+      "GitHub release branch policies",
+    ),
+  ]);
+  validateReleaseEnvironmentProtection(releaseEnvironment, branchPolicies);
 
   const query = new URLSearchParams({
     event: "push",

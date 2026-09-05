@@ -16,7 +16,7 @@ const digestPattern = /^[0-9a-f]{64}$/;
 const evidencePathPattern = /^docs\/evidence\/[A-Za-z0-9._/-]+\.md$/;
 
 export const requiredStableReleaseGates = Object.freeze([
-  "finalSecurityReview",
+  "q13FinalSecurityReliabilityReview",
   "q15CanonicalActivationNonLanding",
   "q17MeasuredProjectVerification",
   "managedPublicDogfoodRehearsal",
@@ -29,7 +29,7 @@ export const requiredStableReleaseGates = Object.freeze([
 ]);
 
 export const stableReleaseEvidencePaths = Object.freeze({
-  finalSecurityReview: "docs/evidence/phase-8/Q13-FINAL-SECURITY-RELIABILITY-EVIDENCE.md",
+  q13FinalSecurityReliabilityReview: "docs/evidence/phase-8/Q13-FINAL-SECURITY-RELIABILITY-EVIDENCE.md",
   q15CanonicalActivationNonLanding: "docs/evidence/phase-8/Q15-GUIDED-ACTIVATION-EVIDENCE.md",
   q17MeasuredProjectVerification: "docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md",
   managedPublicDogfoodRehearsal: "docs/evidence/phase-8/Q14-MACOS-LIVE-PROVIDERS-EVIDENCE.md",

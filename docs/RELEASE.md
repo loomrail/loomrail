@@ -130,6 +130,11 @@ trust relationship. The workflow uses OIDC `id-token: write`, builds and verifie
 job, and stages the exact verified tarball with provenance. The generated package also sets
 `publishConfig.provenance: true`. No long-lived npm write token is accepted.
 
+The trusted job also reads that environment through GitHub's read-only API before building or staging. It requires
+one non-empty `required_reviewers` rule, custom deployment-branch policies, and exactly one branch policy named
+`main`; a missing, auto-created, unrestricted, incomplete or broader environment fails closed. Additional stronger
+rules such as a wait timer remain allowed. This check does not create or configure the environment.
+
 Trusted publishing requires npm `11.5.1+`; Loomrail's stage-only route requires npm `11.15.0+` and Node `22.14.0+`.
 The pinned Node `24.19.0` toolchain satisfies the Node floor and the workflow fails closed if its bundled npm is too
 old. After the protected GitHub environment exists, an authenticated package owner can create the stage-only trust
@@ -152,6 +157,10 @@ the current index without changing external state. The index currently proves si
 keeps private dogfood, protected landing integration and both Windows live-provider rows `PENDING`; no stable version
 is selected. Both ordinary source-CI platforms run the same status check from full Git history, so a changed or
 unreachable recorded evidence object fails the candidate before the longer verification matrix.
+
+The passed `q13FinalSecurityReliabilityReview` row names the historical Q13 review precisely; it does not claim that
+Q13 reviewed later Q14-Q17 or release-workflow changes. The protected-environment reviewer must still inspect the
+exact release-source diff and all later slice evidence before allowing the trusted job to continue.
 
 The index prevents an accidental premature workflow run; it is not a signature or an independent reviewer. A
 maintainer could forge repository evidence, so protected-environment owner review must still inspect the referenced
@@ -213,5 +222,7 @@ The trusted-publishing and verification semantics follow the primary
 [npm provenance](https://docs.npmjs.com/generating-provenance-statements/),
 [trusted publisher](https://docs.npmjs.com/trusted-publishers/),
 [staged publishing](https://docs.npmjs.com/staged-publishing/), and
-[registry signature](https://docs.npmjs.com/verifying-registry-signatures/) documentation. Provenance links bytes to
-source and build instructions; it is not a safety certification.
+[registry signature](https://docs.npmjs.com/verifying-registry-signatures/) documentation, plus GitHub's
+[deployment environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
+and [deployment branch policy API](https://docs.github.com/en/rest/deployments/branch-policies). Provenance links
+bytes to source and build instructions; it is not a safety certification.
