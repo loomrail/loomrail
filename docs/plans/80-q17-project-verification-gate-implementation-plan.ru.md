@@ -50,8 +50,9 @@ output; restart сохраняет failure, а crash во время process д�
       migration 0042 с раздельной lineage Stage/Review/QA/Verification готовы. Terminal `FAILED | ERROR` теперь в
       одной SQLite-транзакции завершает исходный QA gate, создаёт ровно одну active correction, переводит workflow в
       fresh `IMPLEMENT(1)`, сохраняет Event и после рестарта восстанавливает ту же lineage; replay команды не создаёт
-      дубль. Propagation re-review/rerun identity реализована в domain/persistence records; закрытие correction по
-      fresh pass, повторный bounded cycle и `STALE` materialization остаются в работе.
+      дубль. Propagation re-review/rerun identity реализована в domain/persistence records; после fresh independent
+      re-review passing rerun exact Plan на новом tree атомарно закрывает correction как `PASSED`, не дублирует Event
+      при replay и переживает restart. Повторный bounded cycle и `STALE` materialization остаются в работе.
 - [ ] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
       Общие constants и pure decision `2 automatic + 1 owner` уже заменили QA-only policy; durable usage/lineage,
       объединяющие оба evaluator без объединения их failure entities, закреплены транзакционным подсчётом обеих
@@ -69,7 +70,8 @@ output; restart сохраняет failure, а crash во время process д�
 - [ ] Закрыть T48 matrix: argv/path/env/network-policy/output/timeout/tree mutation/child orphan/duplicate completion.
 - [ ] Проверить every allowed/forbidden transition, rollback, idempotency, expected-version conflict и restart.
       Initial verification correction уже покрыта allowed/forbidden domain cases, replay idempotency и SQLite reopen;
-      passing/repeated/owner-gate paths ещё не закрыты.
+      fresh reviewed passing rerun также покрыт сквозным public workflow и SQLite reopen; repeated/owner-gate paths ещё
+      не закрыты.
 - [ ] Выполнить RU/EN, keyboard/focus, light/dark, 320 px и daemon-restart Browser QA.
 - [ ] Выполнить focused lint/typecheck/unit/integration, full non-landing gates, fault injection и clean release.
 - [ ] Выполнить independent Standards/Spec review и исправить все P0–P2.

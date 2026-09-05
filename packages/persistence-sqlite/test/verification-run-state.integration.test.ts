@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { VerificationPlanProposal } from "@loomrail/contracts";
+import type { StartMockPipelineCommand, VerificationPlanProposal } from "@loomrail/contracts";
 import { VerificationDomainError } from "@loomrail/domain";
 import { verificationPlanProposalHash } from "@loomrail/project-readiness";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -60,6 +60,38 @@ const template = {
     },
   ],
 };
+const correctionWorkflowTemplate: StartMockPipelineCommand["payload"]["template"] = {
+  schemaVersion: 1,
+  id: "verification-correction-workflow",
+  version: 1,
+  name: "Verification correction workflow",
+  stages: [
+    {
+      stage: "IMPLEMENT",
+      ordinal: 0,
+      contextPack: {
+        schemaVersion: 1,
+        sections: [{ id: "WORK_ITEM_BRIEF", ordinal: 0, required: true }],
+      },
+    },
+    {
+      stage: "REVIEW",
+      ordinal: 1,
+      contextPack: {
+        schemaVersion: 1,
+        sections: [{ id: "WORK_ITEM_BRIEF", ordinal: 0, required: true }],
+      },
+    },
+    {
+      stage: "QA",
+      ordinal: 2,
+      contextPack: {
+        schemaVersion: 1,
+        sections: [{ id: "WORK_ITEM_BRIEF", ordinal: 0, required: true }],
+      },
+    },
+  ],
+};
 
 describe("verification Run local state", () => {
   let directory = "";
@@ -92,7 +124,9 @@ describe("verification Run local state", () => {
     return state;
   };
 
-  const prepare = async (): Promise<{
+  const prepare = async (
+    workflowTemplate: StartMockPipelineCommand["payload"]["template"] = template,
+  ): Promise<{
     localState: LocalState;
     workItemId: string;
     workItemVersion: number;
@@ -170,7 +204,7 @@ describe("verification Run local state", () => {
       payload: {
         workItemId: ready.workItem.id,
         expectedVersion: ready.workItem.version,
-        template,
+        template: workflowTemplate,
         budget: { maxEstimatedTokens: 100_000, warningThresholds: [0.5, 0.8, 0.95] },
       },
     });
@@ -569,6 +603,306 @@ describe("verification Run local state", () => {
       stage: "IMPLEMENT",
       status: "QUEUED",
     });
+  });
+
+  it("closes the active correction only after a fresh reviewed passing rerun", async () => {
+    const fixture = await prepare(correctionWorkflowTemplate);
+    const nextDispatch = () => {
+      const pending = fixture.localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
+      const dispatch = pending.dispatches.find(({ workItemId }) => workItemId === fixture.workItemId);
+      if (dispatch === undefined) throw new Error("Expected pending workflow dispatch");
+      return dispatch;
+    };
+    const startAgent = (suffix: string, provider: "CODEX" | "CLAUDE_CODE") => {
+      const dispatch = nextDispatch();
+      const started = fixture.localState.execute({
+        schemaVersion: 1,
+        commandId: `start-${suffix}`,
+        correlationId: `correlation-start-${suffix}`,
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "START_AGENT_RUN",
+        payload: {
+          dispatchId: dispatch.id,
+          provider,
+          limits: { global: 3, project: 3, provider: 3 },
+        },
+      });
+      if (started.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun");
+      return dispatch;
+    };
+    const completeImplementation = (suffix: string, implementationTree: string): void => {
+      const dispatch = startAgent(`${suffix}-implement`, "CODEX");
+      expect(
+        fixture.localState.execute({
+          schemaVersion: 1,
+          commandId: `complete-${suffix}-implement`,
+          correlationId: `correlation-complete-${suffix}-implement`,
+          actor: { type: "SYSTEM", id: "codex-provider" },
+          type: "APPLY_PROVIDER_OUTCOME",
+          payload: {
+            dispatchId: dispatch.id,
+            provider: "CODEX",
+            template: correctionWorkflowTemplate,
+            outcome: { type: "COMPLETED", summary: "Implementation completed." },
+            resultTree: implementationTree,
+          },
+        }),
+      ).toMatchObject({ type: "MOCK_PROVIDER_OUTCOME_APPLIED", stageAttempt: { status: "SUCCEEDED" } });
+    };
+    const completeReview = (suffix: string, reviewedTree: string): void => {
+      const dispatch = startAgent(`${suffix}-review`, "CLAUDE_CODE");
+      expect(
+        fixture.localState.execute({
+          schemaVersion: 1,
+          commandId: `complete-${suffix}-review`,
+          correlationId: `correlation-complete-${suffix}-review`,
+          actor: { type: "SYSTEM", id: "claude-code-provider" },
+          type: "APPLY_PROVIDER_OUTCOME",
+          payload: {
+            dispatchId: dispatch.id,
+            provider: "CLAUDE_CODE",
+            template: correctionWorkflowTemplate,
+            outcome: {
+              type: "COMPLETED",
+              summary: "Independent review passed.",
+              artifacts: [
+                {
+                  kind: "REVIEW_REPORT",
+                  title: "Independent review",
+                  summary: "The implementation is ready for measured checks.",
+                  checks: ["Reviewed the exact implementation tree."],
+                },
+              ],
+              reviewReport: {
+                kind: "REVIEW_REPORT",
+                title: "Independent review",
+                summary: "The implementation is ready for measured checks.",
+                checks: ["Reviewed the exact implementation tree."],
+                verdict: "PASSED",
+                findings: [],
+              },
+            },
+            resultTree: reviewedTree,
+          },
+        }),
+      ).toMatchObject({ type: "MOCK_PROVIDER_OUTCOME_APPLIED", stageAttempt: { status: "SUCCEEDED" } });
+    };
+    const currentWorkItem = () => {
+      const result = fixture.localState.query({ type: "GET_WORK_ITEM", workItemId: fixture.workItemId });
+      if (result.type !== "WORK_ITEM" || result.workItem === null) throw new Error("Expected WorkItem");
+      return result.workItem;
+    };
+
+    completeImplementation("initial", tree);
+    completeReview("initial", tree);
+    const initialQA = nextDispatch();
+    const beforeFailure = currentWorkItem();
+    expect(beforeFailure.currentStage).toBe("QA");
+    const reservedSource = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "reserve-reviewed-source-run",
+      correlationId: "correlation-reserve-reviewed-source-run",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_VERIFICATION_RUN",
+      payload: {
+        workItemId: fixture.workItemId,
+        expectedWorkItemVersion: beforeFailure.version,
+        expectedPlanRevision: fixture.planRevision,
+        expectedPlanContentHash: fixture.planContentHash,
+        implementationTree: tree,
+        platform: "darwin",
+      },
+    });
+    if (reservedSource.type !== "VERIFICATION_RUN_RESERVED") throw new Error("Expected source Run");
+    expect(reservedSource.run.verificationCorrectionRunId).toBeNull();
+    const sourceCheck = reservedSource.checks[0];
+    if (sourceCheck === undefined) throw new Error("Expected source Check");
+    const startedSource = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "start-reviewed-source-check",
+      correlationId: "correlation-start-reviewed-source-check",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "START_VERIFICATION_CHECK",
+      payload: {
+        runId: reservedSource.run.id,
+        checkId: sourceCheck.id,
+        expectedRunVersion: reservedSource.run.version,
+        expectedCheckVersion: sourceCheck.version,
+      },
+    });
+    if (startedSource.type !== "VERIFICATION_CHECK_STARTED") throw new Error("Expected source Check start");
+    const failedSource = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "fail-reviewed-source-check",
+      correlationId: "correlation-fail-reviewed-source-check",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "COMPLETE_VERIFICATION_CHECK",
+      payload: {
+        runId: startedSource.run.id,
+        checkId: startedSource.check.id,
+        expectedRunVersion: startedSource.run.version,
+        expectedCheckVersion: startedSource.check.version,
+        observation: {
+          status: "FAILED",
+          completedAt: timestamp,
+          durationMs: 1,
+          exitCode: 1,
+          signal: null,
+          output: {
+            schemaVersion: 1,
+            artifactId: "reviewed-source-output",
+            sha256: "e".repeat(64),
+            capturedBytes: 1,
+            stdoutBytes: 0,
+            stderrBytes: 1,
+            truncated: false,
+            available: true,
+          },
+        },
+        outputStorageKey: "reviewed-source-output.txt",
+      },
+    });
+    if (failedSource.type !== "VERIFICATION_CHECK_COMPLETED") throw new Error("Expected source failure");
+    expect(initialQA.status).toBe("PENDING");
+    const activeCorrections = fixture.localState.query({
+      type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+      workItemId: fixture.workItemId,
+    });
+    if (activeCorrections.type !== "VERIFICATION_CORRECTIONS") throw new Error("Expected corrections");
+    const activeCorrection = activeCorrections.correctionRuns[0];
+    if (activeCorrection === undefined) throw new Error("Expected active correction");
+
+    const fixedTree = "f".repeat(40);
+    completeImplementation("correction", fixedTree);
+    completeReview("correction", fixedTree);
+    const correctionQA = nextDispatch();
+    const correctionSnapshot = fixture.localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: fixture.workItemId,
+    });
+    if (correctionSnapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected workflow snapshot");
+    expect(
+      correctionSnapshot.snapshot.stageAttempts.find(({ id }) => id === correctionQA.stageAttemptId),
+    ).toMatchObject({ stage: "QA", verificationCorrectionRunId: activeCorrection.id, status: "QUEUED" });
+    const beforePassingRerun = currentWorkItem();
+    const reservedPassing = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "reserve-passing-correction-run",
+      correlationId: "correlation-reserve-passing-correction-run",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "RETRY_VERIFICATION_RUN",
+      payload: {
+        workItemId: fixture.workItemId,
+        expectedWorkItemVersion: beforePassingRerun.version,
+        expectedPlanRevision: fixture.planRevision,
+        expectedPlanContentHash: fixture.planContentHash,
+        implementationTree: fixedTree,
+        platform: "darwin",
+        retryOfRunId: failedSource.run.id,
+        expectedRetryOfRunVersion: failedSource.run.version,
+      },
+    });
+    if (reservedPassing.type !== "VERIFICATION_RUN_RESERVED") throw new Error("Expected passing Run");
+    expect(reservedPassing.run).toMatchObject({
+      retryOfRunId: failedSource.run.id,
+      verificationCorrectionRunId: activeCorrection.id,
+      implementationTree: fixedTree,
+    });
+    const passingCheck = reservedPassing.checks[0];
+    if (passingCheck === undefined) throw new Error("Expected passing Check");
+    const startedPassing = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "start-passing-correction-check",
+      correlationId: "correlation-start-passing-correction-check",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "START_VERIFICATION_CHECK",
+      payload: {
+        runId: reservedPassing.run.id,
+        checkId: passingCheck.id,
+        expectedRunVersion: reservedPassing.run.version,
+        expectedCheckVersion: passingCheck.version,
+      },
+    });
+    if (startedPassing.type !== "VERIFICATION_CHECK_STARTED") throw new Error("Expected passing Check start");
+    const passingCommand = {
+      schemaVersion: 1,
+      commandId: "pass-correction-check",
+      correlationId: "correlation-pass-correction-check",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "COMPLETE_VERIFICATION_CHECK",
+      payload: {
+        runId: startedPassing.run.id,
+        checkId: startedPassing.check.id,
+        expectedRunVersion: startedPassing.run.version,
+        expectedCheckVersion: startedPassing.check.version,
+        observation: {
+          status: "PASSED",
+          completedAt: timestamp,
+          durationMs: 1,
+          exitCode: 0,
+          signal: null,
+          output: {
+            schemaVersion: 1,
+            artifactId: "passing-correction-output",
+            sha256: "f".repeat(64),
+            capturedBytes: 1,
+            stdoutBytes: 1,
+            stderrBytes: 0,
+            truncated: false,
+            available: true,
+          },
+        },
+        outputStorageKey: "passing-correction-output.txt",
+      },
+    } as const;
+    expect(fixture.localState.execute(passingCommand)).toMatchObject({
+      type: "VERIFICATION_CHECK_COMPLETED",
+      replayed: false,
+      run: { status: "PASSED", verificationCorrectionRunId: activeCorrection.id },
+    });
+    expect(fixture.localState.execute(passingCommand)).toMatchObject({
+      type: "VERIFICATION_CHECK_COMPLETED",
+      replayed: true,
+    });
+    expect(
+      fixture.localState.query({
+        type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+        workItemId: fixture.workItemId,
+      }),
+    ).toMatchObject({
+      correctionRuns: [{ id: activeCorrection.id, status: "PASSED", completedAt: timestamp, version: 2 }],
+    });
+    const events = fixture.localState.query({
+      type: "LIST_EVENTS",
+      aggregateId: fixture.workItemId,
+      direction: "ASC",
+      limit: 200,
+    });
+    if (events.type !== "EVENTS") throw new Error("Expected Events");
+    expect(events.events.filter(({ type }) => type === "VERIFICATION_CORRECTION_PASSED")).toHaveLength(1);
+
+    fixture.localState.close();
+    state = undefined;
+    const reopened = await open();
+    expect(
+      reopened.query({
+        type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+        workItemId: fixture.workItemId,
+      }),
+    ).toMatchObject({
+      correctionRuns: [{ id: activeCorrection.id, status: "PASSED", completedAt: timestamp, version: 2 }],
+    });
+    const reopenedEvents = reopened.query({
+      type: "LIST_EVENTS",
+      aggregateId: fixture.workItemId,
+      direction: "ASC",
+      limit: 200,
+    });
+    if (reopenedEvents.type !== "EVENTS") throw new Error("Expected reopened Events");
+    expect(
+      reopenedEvents.events.filter(({ type }) => type === "VERIFICATION_CORRECTION_PASSED"),
+    ).toHaveLength(1);
   });
 
   it("rolls back a stale completion without output, Event, or state change", async () => {

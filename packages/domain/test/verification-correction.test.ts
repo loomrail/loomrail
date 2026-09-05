@@ -1,6 +1,7 @@
 import type {
   PipelineRun,
   StageAttempt,
+  VerificationCorrectionRun,
   VerificationFailure,
   VerificationRun,
   WorkItem,
@@ -8,7 +9,10 @@ import type {
 } from "@loomrail/contracts";
 import { describe, expect, it } from "vitest";
 
-import { decideInitialFailedVerificationCorrectionTransition } from "../src/verification-correction.js";
+import {
+  decideInitialFailedVerificationCorrectionTransition,
+  decidePassedVerificationCorrectionTransition,
+} from "../src/verification-correction.js";
 
 const now = "2026-09-05T13:00:00.000Z";
 const tree = "a".repeat(40);
@@ -111,6 +115,22 @@ const failure: VerificationFailure = {
   staleReasons: [],
   createdAt: now,
 };
+const correctionRun: VerificationCorrectionRun = {
+  schemaVersion: 1,
+  id: "verification-correction-one",
+  projectId: workItem.projectId,
+  workItemId: workItem.id,
+  pipelineRunId: pipelineRun.id,
+  budgetPosition: 1,
+  automatic: true,
+  sourceFailureId: failure.id,
+  sourceVerificationRunId: verificationRun.id,
+  sourceImplementationTree: verificationRun.implementationTree,
+  status: "ACTIVE",
+  createdAt: now,
+  completedAt: null,
+  version: 1,
+};
 
 describe("Project verification correction transition", () => {
   it("starts a distinct automatic correction and returns the pending QA stage to IMPLEMENT", () => {
@@ -158,6 +178,68 @@ describe("Project verification correction transition", () => {
         },
       ],
     });
+  });
+
+  it("closes only a fresh passing rerun of the active correction and exact approved plan", () => {
+    const passingRun: VerificationRun = {
+      ...verificationRun,
+      id: "verification-run-two",
+      implementationTree: "c".repeat(40),
+      ordinal: 2,
+      retryOfRunId: verificationRun.id,
+      verificationCorrectionRunId: correctionRun.id,
+      status: "PASSED",
+      terminalReason: "ALL_REQUIRED_PASSED",
+      version: 4,
+    };
+
+    expect(
+      decidePassedVerificationCorrectionTransition({
+        verificationRun: passingRun,
+        sourceVerificationRun: verificationRun,
+        sourceFailure: failure,
+        correctionRun,
+        now,
+      }),
+    ).toMatchObject({
+      correctionRun: { id: correctionRun.id, status: "PASSED", completedAt: now, version: 2 },
+      event: {
+        type: "VERIFICATION_CORRECTION_PASSED",
+        data: { correctionRun: { id: correctionRun.id, status: "PASSED" } },
+      },
+    });
+  });
+
+  it("rejects a passing rerun with a changed plan or unchanged implementation tree", () => {
+    const passingRun: VerificationRun = {
+      ...verificationRun,
+      id: "verification-run-two",
+      ordinal: 2,
+      retryOfRunId: verificationRun.id,
+      verificationCorrectionRunId: correctionRun.id,
+      status: "PASSED",
+      terminalReason: "ALL_REQUIRED_PASSED",
+      version: 4,
+    };
+
+    expect(() =>
+      decidePassedVerificationCorrectionTransition({
+        verificationRun: passingRun,
+        sourceVerificationRun: verificationRun,
+        sourceFailure: failure,
+        correctionRun,
+        now,
+      }),
+    ).toThrow(expect.objectContaining({ code: "LINEAGE_MISMATCH" }));
+    expect(() =>
+      decidePassedVerificationCorrectionTransition({
+        verificationRun: { ...passingRun, implementationTree: "c".repeat(40), planRevision: 2 },
+        sourceVerificationRun: verificationRun,
+        sourceFailure: failure,
+        correctionRun,
+        now,
+      }),
+    ).toThrow(expect.objectContaining({ code: "LINEAGE_MISMATCH" }));
   });
 
   it("rejects foreign failure lineage before creating correction authority", () => {

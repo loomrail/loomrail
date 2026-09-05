@@ -5,6 +5,7 @@ import {
   type PipelineRun,
   type StageAttempt,
   type VerificationCorrectionRun,
+  type VerificationCorrectionPassedEvent,
   type VerificationCorrectionStartedEvent,
   type VerificationFailure,
   type VerificationRun,
@@ -42,6 +43,11 @@ export type StartedVerificationCorrectionTransition = {
         data: { run: PipelineRun; stageAttempt: StageAttempt; previousStatus: StageAttempt["status"] };
       }
   )[];
+};
+
+export type PassedVerificationCorrectionTransition = {
+  correctionRun: VerificationCorrectionRun;
+  event: Pick<VerificationCorrectionPassedEvent, "type" | "data">;
 };
 
 /** Starts one automatic fix cycle from daemon-measured Project verification evidence. */
@@ -200,5 +206,63 @@ export const decideInitialFailedVerificationCorrectionTransition = (input: {
       },
       { type: "VERIFICATION_CORRECTION_STARTED", data: { correctionRun } },
     ],
+  };
+};
+
+/** Closes correction authority only for a fresh green rerun of its exact owner-approved plan. */
+export const decidePassedVerificationCorrectionTransition = (input: {
+  verificationRun: VerificationRun;
+  sourceVerificationRun: VerificationRun;
+  sourceFailure: VerificationFailure;
+  correctionRun: VerificationCorrectionRun;
+  now: string;
+}): PassedVerificationCorrectionTransition => {
+  const verificationRun = verificationRunSchema.parse(input.verificationRun);
+  const sourceVerificationRun = verificationRunSchema.parse(input.sourceVerificationRun);
+  const sourceFailure = verificationFailureSchema.parse(input.sourceFailure);
+  const correctionRun = verificationCorrectionRunSchema.parse(input.correctionRun);
+  const lineageMatches =
+    verificationRun.status === "PASSED" &&
+    (verificationRun.verificationCorrectionRunId ?? null) === correctionRun.id &&
+    verificationRun.projectId === correctionRun.projectId &&
+    verificationRun.workItemId === correctionRun.workItemId &&
+    verificationRun.pipelineRunId === correctionRun.pipelineRunId &&
+    verificationRun.ordinal > sourceVerificationRun.ordinal &&
+    verificationRun.planId === sourceVerificationRun.planId &&
+    verificationRun.planRevision === sourceVerificationRun.planRevision &&
+    verificationRun.planContentHash === sourceVerificationRun.planContentHash &&
+    verificationRun.implementationTree !== sourceVerificationRun.implementationTree &&
+    correctionRun.status === "ACTIVE" &&
+    correctionRun.sourceFailureId === sourceFailure.id &&
+    correctionRun.sourceVerificationRunId === sourceVerificationRun.id &&
+    correctionRun.sourceImplementationTree === sourceVerificationRun.implementationTree &&
+    sourceFailure.verificationRunId === sourceVerificationRun.id &&
+    sourceFailure.projectId === sourceVerificationRun.projectId &&
+    sourceFailure.workItemId === sourceVerificationRun.workItemId &&
+    sourceFailure.pipelineRunId === sourceVerificationRun.pipelineRunId &&
+    sourceFailure.planId === sourceVerificationRun.planId &&
+    sourceFailure.planRevision === sourceVerificationRun.planRevision &&
+    sourceFailure.planContentHash === sourceVerificationRun.planContentHash &&
+    sourceFailure.implementationTree === sourceVerificationRun.implementationTree &&
+    (sourceFailure.reason === "REQUIRED_CHECK_FAILED" || sourceFailure.reason === "REQUIRED_CHECK_ERROR") &&
+    (sourceVerificationRun.status === "FAILED" || sourceVerificationRun.status === "ERROR") &&
+    sourceVerificationRun.projectId === correctionRun.projectId &&
+    sourceVerificationRun.workItemId === correctionRun.workItemId &&
+    sourceVerificationRun.pipelineRunId === correctionRun.pipelineRunId;
+  if (!lineageMatches) {
+    throw new VerificationCorrectionError(
+      "LINEAGE_MISMATCH",
+      "The passing Project verification Run is not a fresh rerun of the active correction's exact plan",
+    );
+  }
+  const passedCorrection = verificationCorrectionRunSchema.parse({
+    ...correctionRun,
+    status: "PASSED",
+    completedAt: input.now,
+    version: correctionRun.version + 1,
+  });
+  return {
+    correctionRun: passedCorrection,
+    event: { type: "VERIFICATION_CORRECTION_PASSED", data: { correctionRun: passedCorrection } },
   };
 };

@@ -164,6 +164,7 @@ import {
   decideVerificationCheckCompletion,
   decideVerificationCheckStart,
   decideInitialFailedVerificationCorrectionTransition,
+  decidePassedVerificationCorrectionTransition,
   deriveVerificationFailure,
   decideVerificationRunInterruption,
   decideVerificationRunReservation,
@@ -254,6 +255,7 @@ import {
   type StageAttemptPauseDecision,
   type StartWorkflowDecision,
   type StartedVerificationCorrectionTransition,
+  type PassedVerificationCorrectionTransition,
   type WorkItemCommand,
   type WorkItemDecision,
   type WorkItemEventIntent,
@@ -3097,9 +3099,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectVerificationFailuresByWorkItem = database.prepare(
       "SELECT * FROM verification_failures WHERE work_item_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
     );
+    const selectVerificationFailureById = database.prepare(
+      "SELECT * FROM verification_failures WHERE id = ?",
+    );
     const selectVerificationCorrectionsByWorkItem = database.prepare(
       `SELECT * FROM verification_correction_runs
        WHERE work_item_id = ? ORDER BY budget_position DESC, id DESC LIMIT ?`,
+    );
+    const selectVerificationCorrectionById = database.prepare(
+      "SELECT * FROM verification_correction_runs WHERE id = ?",
     );
     const selectCorrectionBudgetUsage = database.prepare(
       `SELECT
@@ -3118,6 +3126,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         automatic, source_failure_id, source_verification_run_id, source_implementation_tree,
         status, created_at, completed_at, version
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateVerificationCorrectionRun = database.prepare(
+      `UPDATE verification_correction_runs
+       SET status = ?, completed_at = ?, version = ?
+       WHERE id = ? AND version = ?`,
     );
     const insertVerificationFailure = database.prepare(
       `INSERT INTO verification_failures (
@@ -3762,6 +3775,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const readLatestVerificationRun = (workItemId: string): VerificationRun | null => {
       const row = selectVerificationRunsByWorkItem.get(workItemId, 1);
       return row === undefined ? null : verificationRunFromRow(row);
+    };
+
+    const readVerificationFailure = (id: string): VerificationFailure | null => {
+      const row = selectVerificationFailureById.get(id);
+      return row === undefined ? null : verificationFailureFromRow(row);
+    };
+
+    const readVerificationCorrectionRun = (id: string): VerificationCorrectionRun | null => {
+      const row = selectVerificationCorrectionById.get(id);
+      return row === undefined ? null : verificationCorrectionRunFromRow(row);
     };
 
     const persistVerificationFailure = (
@@ -5303,6 +5326,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       | QADefectDispositionDecision["events"][number]
       | FailedQACorrectionTransition["events"][number]
       | StartedVerificationCorrectionTransition["events"][number]
+      | PassedVerificationCorrectionTransition["event"]
       | PassedQACorrectionTransition["events"][number]
       | QACorrectionGateResolution["events"][number]
       | ReviewFindingDispositionDecision["events"][number]
@@ -6046,6 +6070,22 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         correctionRun.completedAt,
         correctionRun.version,
       );
+    };
+
+    const persistUpdatedVerificationCorrectionRun = (correctionRun: VerificationCorrectionRun): void => {
+      const update = updateVerificationCorrectionRun.run(
+        correctionRun.status,
+        correctionRun.completedAt,
+        correctionRun.version,
+        correctionRun.id,
+        correctionRun.version - 1,
+      );
+      if (update.changes !== 1) {
+        throw new StateStoreError(
+          "PERSISTENCE_FAILURE",
+          "The Project verification correction changed while its passing rerun was recorded",
+        );
+      }
     };
 
     const persistUpdatedQACorrectionRun = (correctionRun: QACorrectionRun): void => {
@@ -6950,6 +6990,33 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             insertWorkflowDispatch(correctionDecision.nextDispatch);
           }
         }
+        let passedCorrection: PassedVerificationCorrectionTransition | null = null;
+        const verificationCorrectionRunId = decision.run.verificationCorrectionRunId ?? null;
+        if (
+          decision.next === "TERMINAL" &&
+          decision.run.status === "PASSED" &&
+          verificationCorrectionRunId !== null
+        ) {
+          const correctionRun = readVerificationCorrectionRun(verificationCorrectionRunId);
+          const sourceVerificationRun =
+            correctionRun === null ? null : readVerificationRun(correctionRun.sourceVerificationRunId);
+          const sourceFailure =
+            correctionRun === null ? null : readVerificationFailure(correctionRun.sourceFailureId);
+          if (correctionRun === null || sourceVerificationRun === null || sourceFailure === null) {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "A passing Project verification rerun has incomplete correction lineage",
+            );
+          }
+          passedCorrection = decidePassedVerificationCorrectionTransition({
+            verificationRun: decision.run,
+            sourceVerificationRun,
+            sourceFailure,
+            correctionRun,
+            now: occurredAt,
+          });
+          persistUpdatedVerificationCorrectionRun(passedCorrection.correctionRun);
+        }
         const event = appendVerificationRunEvent(
           { type: "VERIFICATION_CHECK_COMPLETED", data: { run: decision.run, check: decision.check } },
           {
@@ -6973,6 +7040,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           appendWorkflowEvents(correctionDecision.events, {
             workItemId: correctionDecision.workItem.id,
             projectId: correctionDecision.workItem.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          });
+        }
+        if (passedCorrection !== null) {
+          appendWorkflowEvents([passedCorrection.event], {
+            workItemId: passedCorrection.correctionRun.workItemId,
+            projectId: passedCorrection.correctionRun.projectId,
             actor: command.actor,
             occurredAt,
             correlationId: command.correlationId,
