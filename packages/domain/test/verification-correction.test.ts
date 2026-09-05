@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   decideInitialFailedVerificationCorrectionTransition,
   decidePassedVerificationCorrectionTransition,
+  decideSubsequentFailedVerificationCorrectionTransition,
 } from "../src/verification-correction.js";
 
 const now = "2026-09-05T13:00:00.000Z";
@@ -240,6 +241,125 @@ describe("Project verification correction transition", () => {
         now,
       }),
     ).toThrow(expect.objectContaining({ code: "LINEAGE_MISMATCH" }));
+  });
+
+  it("supersedes the active verification correction and starts the second automatic cycle", () => {
+    const failedRerun: VerificationRun = {
+      ...verificationRun,
+      id: "verification-run-two",
+      implementationTree: "c".repeat(40),
+      ordinal: 2,
+      retryOfRunId: verificationRun.id,
+      verificationCorrectionRunId: correctionRun.id,
+      version: 4,
+    };
+    const rerunFailure: VerificationFailure = {
+      ...failure,
+      id: "verification-failure-two",
+      verificationRunId: failedRerun.id,
+      implementationTree: failedRerun.implementationTree,
+    };
+
+    expect(
+      decideSubsequentFailedVerificationCorrectionTransition({
+        verificationRun: failedRerun,
+        failure: rerunFailure,
+        correctionRun,
+        correctionSourceVerificationRun: verificationRun,
+        workItem,
+        pipelineRun,
+        stageAttempt: { ...stageAttempt, verificationCorrectionRunId: correctionRun.id },
+        dispatch,
+        budgetUsage: { automaticUsed: 1, totalUsed: 1 },
+        ids: {
+          correctionRunId: "verification-correction-two",
+          nextStageAttemptId: "stage-implement-correction-two",
+          nextDispatchId: "dispatch-implement-correction-two",
+          humanRequestId: "verification-correction-request",
+          authorizeFinalOptionId: "authorize-final-verification-correction",
+          cancelOptionId: "cancel-verification-delivery",
+        },
+        now,
+      }),
+    ).toMatchObject({
+      action: "START_CORRECTION",
+      previousCorrection: { id: correctionRun.id, status: "SUPERSEDED", version: 2 },
+      correctionRun: { id: "verification-correction-two", budgetPosition: 2, status: "ACTIVE" },
+      nextStageAttempt: {
+        verificationCorrectionRunId: "verification-correction-two",
+        stage: "IMPLEMENT",
+      },
+      events: [
+        { type: "STAGE_ATTEMPT_CHANGED" },
+        { type: "VERIFICATION_CORRECTION_SUPERSEDED" },
+        { type: "VERIFICATION_CORRECTION_STARTED" },
+      ],
+    });
+  });
+
+  it("opens the owner gate after the two automatic verification corrections are spent", () => {
+    const secondCorrection: VerificationCorrectionRun = {
+      ...correctionRun,
+      id: "verification-correction-two",
+      budgetPosition: 2,
+    };
+    const failedRerun: VerificationRun = {
+      ...verificationRun,
+      id: "verification-run-three",
+      implementationTree: "d".repeat(40),
+      ordinal: 3,
+      retryOfRunId: "verification-run-two",
+      verificationCorrectionRunId: secondCorrection.id,
+      version: 4,
+    };
+    const rerunFailure: VerificationFailure = {
+      ...failure,
+      id: "verification-failure-three",
+      verificationRunId: failedRerun.id,
+      implementationTree: failedRerun.implementationTree,
+    };
+
+    expect(
+      decideSubsequentFailedVerificationCorrectionTransition({
+        verificationRun: failedRerun,
+        failure: rerunFailure,
+        correctionRun: secondCorrection,
+        correctionSourceVerificationRun: verificationRun,
+        workItem,
+        pipelineRun,
+        stageAttempt: { ...stageAttempt, verificationCorrectionRunId: secondCorrection.id },
+        dispatch,
+        budgetUsage: { automaticUsed: 2, totalUsed: 2 },
+        ids: {
+          correctionRunId: "verification-correction-three",
+          nextStageAttemptId: "stage-implement-correction-three",
+          nextDispatchId: "dispatch-implement-correction-three",
+          humanRequestId: "verification-correction-request",
+          authorizeFinalOptionId: "authorize-final-verification-correction",
+          cancelOptionId: "cancel-verification-delivery",
+        },
+        now,
+      }),
+    ).toMatchObject({
+      action: "WAIT_FOR_OWNER",
+      previousCorrection: { id: secondCorrection.id, status: "EXHAUSTED", version: 2 },
+      correctionRun: null,
+      nextStageAttempt: null,
+      nextDispatch: null,
+      workItem: { state: "BLOCKED", currentStage: "QA" },
+      pipelineRun: { status: "WAITING_HUMAN" },
+      completedStageAttempt: {
+        verificationCorrectionRunId: secondCorrection.id,
+        status: "WAITING_HUMAN",
+        failureCode: "VERIFICATION_CORRECTION_EXHAUSTED",
+      },
+      request: { status: "OPEN", options: [{ recommended: true }, { recommended: false }] },
+      events: [
+        { type: "STAGE_ATTEMPT_CHANGED" },
+        { type: "HUMAN_REQUEST_OPENED" },
+        { type: "VERIFICATION_CORRECTION_EXHAUSTED", data: { canAuthorizeFinal: true } },
+      ],
+    });
   });
 
   it("rejects foreign failure lineage before creating correction authority", () => {

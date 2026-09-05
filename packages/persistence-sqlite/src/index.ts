@@ -165,6 +165,7 @@ import {
   decideVerificationCheckStart,
   decideInitialFailedVerificationCorrectionTransition,
   decidePassedVerificationCorrectionTransition,
+  decideSubsequentFailedVerificationCorrectionTransition,
   deriveVerificationFailure,
   decideVerificationRunInterruption,
   decideVerificationRunReservation,
@@ -256,6 +257,7 @@ import {
   type StartWorkflowDecision,
   type StartedVerificationCorrectionTransition,
   type PassedVerificationCorrectionTransition,
+  type SubsequentFailedVerificationCorrectionTransition,
   type WorkItemCommand,
   type WorkItemDecision,
   type WorkItemEventIntent,
@@ -5327,6 +5329,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       | FailedQACorrectionTransition["events"][number]
       | StartedVerificationCorrectionTransition["events"][number]
       | PassedVerificationCorrectionTransition["event"]
+      | SubsequentFailedVerificationCorrectionTransition["events"][number]
       | PassedQACorrectionTransition["events"][number]
       | QACorrectionGateResolution["events"][number]
       | ReviewFindingDispositionDecision["events"][number]
@@ -6927,11 +6930,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             ? persistVerificationFailure(decision.run, readVerificationChecks(run.id), occurredAt)
             : null;
         let correctionDecision: StartedVerificationCorrectionTransition | null = null;
+        let subsequentCorrectionDecision: SubsequentFailedVerificationCorrectionTransition | null = null;
         if (
           failureDecision !== null &&
           (failureDecision.failure.reason === "REQUIRED_CHECK_FAILED" ||
-            failureDecision.failure.reason === "REQUIRED_CHECK_ERROR") &&
-          (decision.run.verificationCorrectionRunId ?? null) === null
+            failureDecision.failure.reason === "REQUIRED_CHECK_ERROR")
         ) {
           const pipelineRun = readPipelineRun(decision.run.pipelineRunId);
           const workItem = readWorkItem(decision.run.workItemId);
@@ -6949,7 +6952,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           const canStartAutomatically =
             usage.automatic_used < MAX_AUTOMATIC_CORRECTION_RUNS &&
             usage.total_used < MAX_TOTAL_CORRECTION_RUNS;
+          const currentCorrectionId = decision.run.verificationCorrectionRunId ?? null;
           if (
+            currentCorrectionId === null &&
             canStartAutomatically &&
             pipelineRun !== null &&
             workItem !== null &&
@@ -6988,6 +6993,64 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             updateWorkflowWorkItem(correctionDecision.workItem);
             insertStageAttempt(correctionDecision.nextStageAttempt);
             insertWorkflowDispatch(correctionDecision.nextDispatch);
+          } else if (
+            currentCorrectionId !== null &&
+            pipelineRun !== null &&
+            workItem !== null &&
+            stageAttempt !== null &&
+            dispatch !== null
+          ) {
+            const currentCorrection = readVerificationCorrectionRun(currentCorrectionId);
+            const correctionSourceVerificationRun =
+              currentCorrection === null
+                ? null
+                : readVerificationRun(currentCorrection.sourceVerificationRunId);
+            if (currentCorrection === null || correctionSourceVerificationRun === null) {
+              throw new StateStoreError(
+                "PERSISTENCE_FAILURE",
+                "The active Project verification correction lineage is incomplete",
+              );
+            }
+            subsequentCorrectionDecision = decideSubsequentFailedVerificationCorrectionTransition({
+              verificationRun: decision.run,
+              failure: failureDecision.failure,
+              correctionRun: currentCorrection,
+              correctionSourceVerificationRun,
+              workItem,
+              pipelineRun,
+              stageAttempt,
+              dispatch,
+              budgetUsage: {
+                automaticUsed: usage.automatic_used,
+                totalUsed: usage.total_used,
+              },
+              ids: {
+                correctionRunId: createId("verificationCorrectionRun"),
+                nextStageAttemptId: createId("stageAttempt"),
+                nextDispatchId: createId("workflowDispatch"),
+                humanRequestId: createId("humanRequest"),
+                authorizeFinalOptionId: createId("humanRequestOption"),
+                cancelOptionId: createId("humanRequestOption"),
+              },
+              now: occurredAt,
+            });
+            persistUpdatedVerificationCorrectionRun(subsequentCorrectionDecision.previousCorrection);
+            updateWorkflowDispatch(subsequentCorrectionDecision.completedDispatch);
+            updateStageAttempt(subsequentCorrectionDecision.completedStageAttempt);
+            updatePipelineRun(subsequentCorrectionDecision.pipelineRun);
+            updateWorkflowWorkItem(subsequentCorrectionDecision.workItem);
+            if (subsequentCorrectionDecision.correctionRun !== null) {
+              persistVerificationCorrectionRun(subsequentCorrectionDecision.correctionRun);
+            }
+            if (subsequentCorrectionDecision.nextStageAttempt !== null) {
+              insertStageAttempt(subsequentCorrectionDecision.nextStageAttempt);
+            }
+            if (subsequentCorrectionDecision.nextDispatch !== null) {
+              insertWorkflowDispatch(subsequentCorrectionDecision.nextDispatch);
+            }
+            if (subsequentCorrectionDecision.request !== null) {
+              insertHumanRequest(subsequentCorrectionDecision.request);
+            }
           }
         }
         let passedCorrection: PassedVerificationCorrectionTransition | null = null;
@@ -7040,6 +7103,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           appendWorkflowEvents(correctionDecision.events, {
             workItemId: correctionDecision.workItem.id,
             projectId: correctionDecision.workItem.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          });
+        }
+        if (subsequentCorrectionDecision !== null) {
+          appendWorkflowEvents(subsequentCorrectionDecision.events, {
+            workItemId: subsequentCorrectionDecision.workItem.id,
+            projectId: subsequentCorrectionDecision.workItem.projectId,
             actor: command.actor,
             occurredAt,
             correlationId: command.correlationId,

@@ -843,6 +843,33 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.verificationCorrectionPassed"),
         tone: "success",
       };
+    case "VERIFICATION_CORRECTION_SUPERSEDED":
+      return {
+        detail: t("event.verificationCorrectionSupersededDetail", {
+          ordinal: event.data.correctionRun.budgetPosition,
+        }),
+        icon: "warning",
+        label: t("event.verificationCorrectionSuperseded"),
+        tone: "warning",
+      };
+    case "VERIFICATION_CORRECTION_EXHAUSTED":
+      return {
+        detail: t("event.verificationCorrectionExhaustedDetail", {
+          ordinal: event.data.correctionRun.budgetPosition,
+        }),
+        icon: "pause",
+        label: t("event.verificationCorrectionExhausted"),
+        tone: "warning",
+      };
+    case "VERIFICATION_CORRECTION_CANCELLED":
+      return {
+        detail: t("event.verificationCorrectionCancelledDetail", {
+          ordinal: event.data.correctionRun.budgetPosition,
+        }),
+        icon: "pause",
+        label: t("event.verificationCorrectionCancelled"),
+        tone: "warning",
+      };
     case "PROJECT_READINESS_ASSESSED":
       return {
         detail: t("event.readinessAssessedDetail", {

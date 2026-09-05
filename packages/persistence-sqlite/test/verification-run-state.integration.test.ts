@@ -785,6 +785,114 @@ describe("verification Run local state", () => {
     expect(
       correctionSnapshot.snapshot.stageAttempts.find(({ id }) => id === correctionQA.stageAttemptId),
     ).toMatchObject({ stage: "QA", verificationCorrectionRunId: activeCorrection.id, status: "QUEUED" });
+    const beforeFirstRerun = currentWorkItem();
+    const reservedFirstRerun = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "reserve-first-correction-rerun",
+      correlationId: "correlation-reserve-first-correction-rerun",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "RETRY_VERIFICATION_RUN",
+      payload: {
+        workItemId: fixture.workItemId,
+        expectedWorkItemVersion: beforeFirstRerun.version,
+        expectedPlanRevision: fixture.planRevision,
+        expectedPlanContentHash: fixture.planContentHash,
+        implementationTree: fixedTree,
+        platform: "darwin",
+        retryOfRunId: failedSource.run.id,
+        expectedRetryOfRunVersion: failedSource.run.version,
+      },
+    });
+    if (reservedFirstRerun.type !== "VERIFICATION_RUN_RESERVED") throw new Error("Expected first rerun");
+    expect(reservedFirstRerun.run).toMatchObject({
+      retryOfRunId: failedSource.run.id,
+      verificationCorrectionRunId: activeCorrection.id,
+      implementationTree: fixedTree,
+    });
+    const firstRerunCheck = reservedFirstRerun.checks[0];
+    if (firstRerunCheck === undefined) throw new Error("Expected first rerun Check");
+    const startedFirstRerun = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "start-first-correction-rerun",
+      correlationId: "correlation-start-first-correction-rerun",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "START_VERIFICATION_CHECK",
+      payload: {
+        runId: reservedFirstRerun.run.id,
+        checkId: firstRerunCheck.id,
+        expectedRunVersion: reservedFirstRerun.run.version,
+        expectedCheckVersion: firstRerunCheck.version,
+      },
+    });
+    if (startedFirstRerun.type !== "VERIFICATION_CHECK_STARTED") {
+      throw new Error("Expected first rerun Check start");
+    }
+    const failFirstRerunCommand = {
+      schemaVersion: 1,
+      commandId: "fail-first-correction-rerun",
+      correlationId: "correlation-fail-first-correction-rerun",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "COMPLETE_VERIFICATION_CHECK",
+      payload: {
+        runId: startedFirstRerun.run.id,
+        checkId: startedFirstRerun.check.id,
+        expectedRunVersion: startedFirstRerun.run.version,
+        expectedCheckVersion: startedFirstRerun.check.version,
+        observation: {
+          status: "FAILED",
+          completedAt: timestamp,
+          durationMs: 1,
+          exitCode: 1,
+          signal: null,
+          output: {
+            schemaVersion: 1,
+            artifactId: "failed-first-correction-output",
+            sha256: "1".repeat(64),
+            capturedBytes: 1,
+            stdoutBytes: 0,
+            stderrBytes: 1,
+            truncated: false,
+            available: true,
+          },
+        },
+        outputStorageKey: "failed-first-correction-output.txt",
+      },
+    } as const;
+    const failedFirstRerun = fixture.localState.execute(failFirstRerunCommand);
+    if (failedFirstRerun.type !== "VERIFICATION_CHECK_COMPLETED") {
+      throw new Error("Expected failed first correction rerun");
+    }
+    expect(fixture.localState.execute(failFirstRerunCommand)).toMatchObject({ replayed: true });
+    const repeatedCorrections = fixture.localState.query({
+      type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+      workItemId: fixture.workItemId,
+    });
+    if (repeatedCorrections.type !== "VERIFICATION_CORRECTIONS") throw new Error("Expected corrections");
+    const secondCorrection = repeatedCorrections.correctionRuns[0];
+    if (secondCorrection === undefined) throw new Error("Expected second correction");
+    expect(repeatedCorrections.correctionRuns).toMatchObject([
+      { id: secondCorrection.id, budgetPosition: 2, automatic: true, status: "ACTIVE", version: 1 },
+      { id: activeCorrection.id, budgetPosition: 1, status: "SUPERSEDED", version: 2 },
+    ]);
+
+    const finalTree = "9".repeat(40);
+    completeImplementation("second-correction", finalTree);
+    completeReview("second-correction", finalTree);
+    const secondCorrectionQA = nextDispatch();
+    const secondCorrectionSnapshot = fixture.localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: fixture.workItemId,
+    });
+    if (secondCorrectionSnapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected workflow snapshot");
+    expect(
+      secondCorrectionSnapshot.snapshot.stageAttempts.find(
+        ({ id }) => id === secondCorrectionQA.stageAttemptId,
+      ),
+    ).toMatchObject({
+      stage: "QA",
+      verificationCorrectionRunId: secondCorrection.id,
+      status: "QUEUED",
+    });
     const beforePassingRerun = currentWorkItem();
     const reservedPassing = fixture.localState.execute({
       schemaVersion: 1,
@@ -797,17 +905,17 @@ describe("verification Run local state", () => {
         expectedWorkItemVersion: beforePassingRerun.version,
         expectedPlanRevision: fixture.planRevision,
         expectedPlanContentHash: fixture.planContentHash,
-        implementationTree: fixedTree,
+        implementationTree: finalTree,
         platform: "darwin",
-        retryOfRunId: failedSource.run.id,
-        expectedRetryOfRunVersion: failedSource.run.version,
+        retryOfRunId: failedFirstRerun.run.id,
+        expectedRetryOfRunVersion: failedFirstRerun.run.version,
       },
     });
     if (reservedPassing.type !== "VERIFICATION_RUN_RESERVED") throw new Error("Expected passing Run");
     expect(reservedPassing.run).toMatchObject({
-      retryOfRunId: failedSource.run.id,
-      verificationCorrectionRunId: activeCorrection.id,
-      implementationTree: fixedTree,
+      retryOfRunId: failedFirstRerun.run.id,
+      verificationCorrectionRunId: secondCorrection.id,
+      implementationTree: finalTree,
     });
     const passingCheck = reservedPassing.checks[0];
     if (passingCheck === undefined) throw new Error("Expected passing Check");
@@ -859,7 +967,7 @@ describe("verification Run local state", () => {
     expect(fixture.localState.execute(passingCommand)).toMatchObject({
       type: "VERIFICATION_CHECK_COMPLETED",
       replayed: false,
-      run: { status: "PASSED", verificationCorrectionRunId: activeCorrection.id },
+      run: { status: "PASSED", verificationCorrectionRunId: secondCorrection.id },
     });
     expect(fixture.localState.execute(passingCommand)).toMatchObject({
       type: "VERIFICATION_CHECK_COMPLETED",
@@ -871,7 +979,10 @@ describe("verification Run local state", () => {
         workItemId: fixture.workItemId,
       }),
     ).toMatchObject({
-      correctionRuns: [{ id: activeCorrection.id, status: "PASSED", completedAt: timestamp, version: 2 }],
+      correctionRuns: [
+        { id: secondCorrection.id, status: "PASSED", completedAt: timestamp, version: 2 },
+        { id: activeCorrection.id, status: "SUPERSEDED", completedAt: timestamp, version: 2 },
+      ],
     });
     const events = fixture.localState.query({
       type: "LIST_EVENTS",
@@ -881,6 +992,8 @@ describe("verification Run local state", () => {
     });
     if (events.type !== "EVENTS") throw new Error("Expected Events");
     expect(events.events.filter(({ type }) => type === "VERIFICATION_CORRECTION_PASSED")).toHaveLength(1);
+    expect(events.events.filter(({ type }) => type === "VERIFICATION_CORRECTION_SUPERSEDED")).toHaveLength(1);
+    expect(events.events.filter(({ type }) => type === "VERIFICATION_CORRECTION_STARTED")).toHaveLength(2);
 
     fixture.localState.close();
     state = undefined;
@@ -891,7 +1004,10 @@ describe("verification Run local state", () => {
         workItemId: fixture.workItemId,
       }),
     ).toMatchObject({
-      correctionRuns: [{ id: activeCorrection.id, status: "PASSED", completedAt: timestamp, version: 2 }],
+      correctionRuns: [
+        { id: secondCorrection.id, status: "PASSED", completedAt: timestamp, version: 2 },
+        { id: activeCorrection.id, status: "SUPERSEDED", completedAt: timestamp, version: 2 },
+      ],
     });
     const reopenedEvents = reopened.query({
       type: "LIST_EVENTS",

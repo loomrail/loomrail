@@ -979,6 +979,21 @@ export const verificationCorrectionPassedEventSchema = verificationRunEventBaseS
   data: z.object({ correctionRun: verificationCorrectionRunSchema }).strict(),
 });
 
+export const verificationCorrectionSupersededEventSchema = verificationRunEventBaseSchema.extend({
+  type: z.literal("VERIFICATION_CORRECTION_SUPERSEDED"),
+  data: z.object({ correctionRun: verificationCorrectionRunSchema }).strict(),
+});
+
+export const verificationCorrectionExhaustedEventSchema = verificationRunEventBaseSchema.extend({
+  type: z.literal("VERIFICATION_CORRECTION_EXHAUSTED"),
+  data: z.object({ correctionRun: verificationCorrectionRunSchema, canAuthorizeFinal: z.boolean() }).strict(),
+});
+
+export const verificationCorrectionCancelledEventSchema = verificationRunEventBaseSchema.extend({
+  type: z.literal("VERIFICATION_CORRECTION_CANCELLED"),
+  data: z.object({ correctionRun: verificationCorrectionRunSchema }).strict(),
+});
+
 export const verificationRunReservedResultSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -1146,6 +1161,11 @@ export type VerificationCorrectionRun = z.infer<typeof verificationCorrectionRun
 export type VerificationFailureRecordedEvent = z.infer<typeof verificationFailureRecordedEventSchema>;
 export type VerificationCorrectionStartedEvent = z.infer<typeof verificationCorrectionStartedEventSchema>;
 export type VerificationCorrectionPassedEvent = z.infer<typeof verificationCorrectionPassedEventSchema>;
+export type VerificationCorrectionSupersededEvent = z.infer<
+  typeof verificationCorrectionSupersededEventSchema
+>;
+export type VerificationCorrectionExhaustedEvent = z.infer<typeof verificationCorrectionExhaustedEventSchema>;
+export type VerificationCorrectionCancelledEvent = z.infer<typeof verificationCorrectionCancelledEventSchema>;
 export type VerificationCheckObservation = z.infer<typeof verificationCheckObservationSchema>;
 export type VerificationRunSnapshotResponse = z.infer<typeof verificationRunSnapshotResponseSchema>;
 export type VerificationRunsResponse = z.infer<typeof verificationRunsResponseSchema>;
