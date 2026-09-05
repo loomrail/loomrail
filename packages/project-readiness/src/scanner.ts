@@ -398,6 +398,29 @@ export const prodEnvFindings = (
       ),
     );
 
+export const launchOwnerChecks = (): readonly ReadinessCheckDraft[] => [
+  ownerCheck(
+    "SECURITY_HEADERS_OWNER_REVIEW",
+    "SECURITY",
+    "Confirm the security header decision for this project, or mark it not applicable.",
+  ),
+  ownerCheck(
+    "OPS_HEALTH_ENDPOINT_DECLARED",
+    "OPERATIONS",
+    "Confirm a health or readiness path exists, or mark it not applicable.",
+  ),
+  ownerCheck(
+    "OPS_ROLLBACK_PLAN",
+    "OPERATIONS",
+    "Confirm what happens when a release fails and how the previous state is restored.",
+  ),
+  ownerCheck(
+    "OPS_BACKUP",
+    "OPERATIONS",
+    "Confirm how project data is backed up and restored, or mark it not applicable.",
+  ),
+];
+
 export const assessProjectReadiness = async (
   repositoryPath: string,
   options: { activeConstitution: boolean },

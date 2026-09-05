@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { assessProjectReadiness } from "../src/index.js";
-import { inlineSecretFindings, lockfileFindings, prodEnvFindings } from "../src/scanner.js";
+import { inlineSecretFindings, launchOwnerChecks, lockfileFindings, prodEnvFindings } from "../src/scanner.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -193,6 +193,23 @@ describe("lockfile findings", () => {
     const findings = lockfileFindings(null);
     expect(findings).toEqual([
       expect.objectContaining({ code: "DEPENDENCY_INPUT_UNVERIFIABLE", severity: "HIGH", path: null }),
+    ]);
+  });
+});
+
+describe("launch owner checks", () => {
+  it("starts every launch owner check unresolved and without findings", () => {
+    for (const draft of launchOwnerChecks()) {
+      expect(draft.mode).toBe("OWNER");
+      expect(draft.status).toBe("ACTION_REQUIRED");
+      expect(draft.findings).toEqual([]);
+      expect(draft.summary.length).toBeGreaterThan(0);
+    }
+    expect(launchOwnerChecks().map((draft) => draft.key)).toEqual([
+      "SECURITY_HEADERS_OWNER_REVIEW",
+      "OPS_HEALTH_ENDPOINT_DECLARED",
+      "OPS_ROLLBACK_PLAN",
+      "OPS_BACKUP",
     ]);
   });
 });
