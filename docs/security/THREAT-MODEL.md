@@ -1,7 +1,7 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-09-04
+**Updated:** 2026-09-06
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
@@ -1373,7 +1373,47 @@ secret-value canary, a malicious package script, risky CI and a symlink/non-top-
 secret value escapes and every unverifiable input fails closed. `packages/persistence-sqlite/test/readiness-state.integration.test.ts`
 covers the closed catalog, command replay, owner/automated boundaries, stale/latest-run checks, aggregate `READY` and
 restart durability. `apps/daemon/test/readiness.integration.test.ts` drives registration, owner-approved Constitution,
-session/CSRF-protected assessment, three owner attestations and the persisted final snapshot through HTTP.
+session/CSRF-protected assessment, seven owner attestations (widened from three by the L1 delta below) and the
+persisted final snapshot through HTTP.
+
+### L1 Readiness v2 delta (T53)
+
+L1 (`docs/plans/82-l-production-launch-track-spec.ru.md` §5.1) widens the B3+B2 catalog from 8 to 14 checks in 7
+categories without adding a new actor, a new trust boundary or any execution authority — every new check stays
+inside the bounded read-only interface described above. Two of the six new checks touch code paths that read
+repository content rather than only path names, so they are recorded explicitly instead of being assumed covered
+by the paragraph above:
+
+- `ENV_PROD_SEPARATION` calls a bounded `lstat` directly (not a Git subprocess) against exactly two fixed
+  repository-relative names, `.env.production` and `.env.production.local`, to observe existence only; it never
+  opens either file. Ignore coverage for both still goes through the existing `check-ignore` path used above;
+- the same check also inspects the CI workflow content already bounded above (`.github/workflows/*.yml|yaml`, at
+  most 32 files, 256 KiB each, 1 MiB total) for a secret-named variable
+  (`TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS`) assigned a literal value instead of a
+  managed reference (`${{ secrets.* }}`, `$VAR`, `${VAR}`). This is new: the pre-L1 CI checks only matched
+  structural risk (`pull_request_target`, `write-all`, unpinned actions), never a variable's value. The finding
+  this produces names only the variable, never the observed literal: `finding()` builds exactly
+  `{code, severity, path, message}`, and the message template's only interpolation is the variable name;
+- `DEPS_LOCKFILE_PRESENT` and the four new `OWNER`-mode checks (`SECURITY_HEADERS_OWNER_REVIEW`,
+  `OPS_HEALTH_ENDPOINT_DECLARED`, `OPS_ROLLBACK_PLAN`, `OPS_BACKUP`) add no new I/O: lockfile coverage reads the
+  same tracked-path list this scanner already obtains from `git ls-files`, and the owner checks reuse the existing
+  attestation mechanism unchanged (closed catalog, no execution, CSRF-protected mutation);
+- `project_readiness_checks` and `project_readiness_findings` were rebuilt (migration `0052`) to widen their
+  `CHECK` vocabularies, since SQLite cannot alter a `CHECK` constraint in place. Both append-only findings
+  triggers and both indexes were dropped and recreated identically; a database already holding a pre-v2 Run was
+  migrated separately and diffed row-for-row (checks, findings and attestations) to confirm the rebuild altered no
+  existing row, and `PRAGMA foreign_key_check`/`integrity_check` stayed clean.
+
+Verification: `packages/project-readiness/test/scanner.integration.test.ts`, describe block "production
+environment separation", proves the absence-passes and ignored-passes cases, the unverifiable-ignore-state case,
+one finding per file, and asserts the literal fixture value `"kx7Qm2ZpLr9TvWs4"` never appears in any finding
+message ("never repeats the observed value in the message"). A dedicated regression test, "marks
+ENV_PROD_SEPARATION action-required when CI workflows are unverifiable", proves the check fails closed rather than
+passing silently when its CI input is a symlink outside the bounded read. Residual risk, flagged during
+implementation and not yet closed: the literal-secret match is line-based rather than a YAML parser, so a
+coincidentally `identifier: value`-shaped line outside an actual `env:` block could produce a false positive; this
+affects completeness, not the value-secrecy guarantee above, which is structural (verified by inspecting every
+return path of `finding()`), not dependent on the one literal value exercised by the test.
 
 ### Provider CLI
 

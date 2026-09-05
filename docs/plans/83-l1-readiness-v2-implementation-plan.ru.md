@@ -48,13 +48,16 @@ scanner по-прежнему выдаёт 8 пунктов. Задача сущ
 - Modify: `packages/contracts/src/readiness.ts:11` (категории), `:22` (ключи), `:34` (коды findings)
 - Modify: `apps/web/src/i18n.tsx:343` (EN-блок), `:1431` (RU-блок)
 - Modify: `apps/web/src/shell/AppFrame.tsx:694-728` (четыре `satisfies Record` карты)
+- Modify: `apps/web/src/views/WorkbenchPage.tsx:482` (второй, независимый `Record<ReadinessCheck["key"],
+TranslationKey>`, дублирующий один из карт `AppFrame.tsx`; не был предусмотрен при написании плана и найден
+  typecheck'ом в реализации — без него Gate «typecheck зелёный» недостижим)
 - Test: `packages/contracts/test/readiness.unit.test.ts`
 
 **Interfaces:**
 
 - Produces: `readinessCheckKeySchema` с 14 членами; `readinessCategorySchema` с `DEPENDENCIES | ENVIRONMENT |
-  OPERATIONS` в дополнение к прежним; `securityFindingCodeSchema` с `LOCKFILE_MISSING | LOCKFILE_AMBIGUOUS |
-  DEPENDENCY_INPUT_UNVERIFIABLE | PROD_ENV_NOT_IGNORED | INLINE_SECRET_IN_CI`.
+OPERATIONS` в дополнение к прежним; `securityFindingCodeSchema` с `LOCKFILE_MISSING | LOCKFILE_AMBIGUOUS |
+DEPENDENCY_INPUT_UNVERIFIABLE | PROD_ENV_NOT_IGNORED | INLINE_SECRET_IN_CI`.
 - Consumes: ничего.
 
 - [ ] **Step 1: Написать падающий тест на новые члены словаря**
@@ -516,9 +519,7 @@ const ROOT_LOCKFILES = [
   "bun.lock",
 ] as const;
 
-export const lockfileFindings = (
-  trackedPaths: readonly string[] | null,
-): readonly SecurityFindingDraft[] => {
+export const lockfileFindings = (trackedPaths: readonly string[] | null): readonly SecurityFindingDraft[] => {
   if (trackedPaths === null) {
     return [
       finding(
@@ -674,9 +675,7 @@ const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KE
 const MANAGED_REFERENCE_PATTERN = /^\$\{\{.+\}\}$|^\$[A-Za-z_][A-Za-z0-9_]*$|^\$\{[^}]+\}$/;
 const MIN_LITERAL_SECRET_LENGTH = 8;
 
-export const inlineSecretFindings = (
-  files: readonly CiWorkflowFile[],
-): readonly SecurityFindingDraft[] => {
+export const inlineSecretFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingDraft[] => {
   const findings: SecurityFindingDraft[] = [];
   for (const file of files) {
     for (const line of file.content.split(/\r?\n/)) {
@@ -837,6 +836,12 @@ scanner, счётчики contracts, domain-каталог, схема SQLite и
 - Modify: `packages/domain/src/readiness.ts:41-54`
 - Create: `packages/persistence-sqlite/migrations/0052_readiness_catalog_v2.sql`
 - Modify: `packages/persistence-sqlite/src/migrations.ts` (реестр, после версии 51)
+- Modify: `packages/persistence-sqlite/src/index.ts` (`newCheckIds` — хардкод из восьми генерируемых
+  идентификаторов; не был предусмотрен при написании плана и, оставленный как есть, заставил бы каждый
+  `RecordProjectReadinessAssessmentCommand` бросать `READINESS_CATALOG_INVALID`)
+- Modify: `apps/web/src/shell/AppFrame.tsx` (хардкод из четырёх категорий в `ProjectReadinessPanel` расширяется
+  до семи по Ruling 5, и добавляется guard на пустую секцию по Ruling 8 — оба не были предусмотрены при
+  написании плана)
 - Modify: `packages/project-readiness/test/scanner.integration.test.ts:57`
 - Modify: `packages/persistence-sqlite/test/readiness-state.integration.test.ts:24` (фикстура каталога) и `:109` (счётчик)
 - Test: `apps/daemon/test/readiness.integration.test.ts`
@@ -878,42 +883,46 @@ const pathExists = async (repositoryPath: string, path: string): Promise<boolean
 `workflows` в задаче 2, порядок элементов массива и деструктуризации обязан совпадать:
 
 ```ts
-  const [
-    headResult,
-    statusResult,
-    trackedResult,
-    envIgnored,
-    envLocalIgnored,
-    npmrcIgnored,
-    hasLicense,
-    workflows,
-    prodEnvExists,
-    prodEnvLocalExists,
-    prodEnvIgnored,
-    prodEnvLocalIgnored,
-  ] = await Promise.all([
-    runBoundedGit(["rev-parse", "HEAD"], canonicalRoot),
-    runBoundedGit(["status", "--porcelain=v1", "-z", "--untracked-files=normal"], canonicalRoot),
-    runBoundedGit(["ls-files", "-z"], canonicalRoot),
-    ignoredByGit(canonicalRoot, ".env"),
-    ignoredByGit(canonicalRoot, ".env.local"),
-    ignoredByGit(canonicalRoot, ".npmrc"),
-    licensePresent(canonicalRoot),
-    readBoundedCiWorkflows(canonicalRoot),
-    pathExists(canonicalRoot, ".env.production"),
-    pathExists(canonicalRoot, ".env.production.local"),
-    ignoredByGit(canonicalRoot, ".env.production"),
-    ignoredByGit(canonicalRoot, ".env.production.local"),
-  ]);
+const [
+  headResult,
+  statusResult,
+  trackedResult,
+  envIgnored,
+  envLocalIgnored,
+  npmrcIgnored,
+  hasLicense,
+  workflows,
+  prodEnvExists,
+  prodEnvLocalExists,
+  prodEnvIgnored,
+  prodEnvLocalIgnored,
+] = await Promise.all([
+  runBoundedGit(["rev-parse", "HEAD"], canonicalRoot),
+  runBoundedGit(["status", "--porcelain=v1", "-z", "--untracked-files=normal"], canonicalRoot),
+  runBoundedGit(["ls-files", "-z"], canonicalRoot),
+  ignoredByGit(canonicalRoot, ".env"),
+  ignoredByGit(canonicalRoot, ".env.local"),
+  ignoredByGit(canonicalRoot, ".npmrc"),
+  licensePresent(canonicalRoot),
+  readBoundedCiWorkflows(canonicalRoot),
+  pathExists(canonicalRoot, ".env.production"),
+  pathExists(canonicalRoot, ".env.production.local"),
+  ignoredByGit(canonicalRoot, ".env.production"),
+  ignoredByGit(canonicalRoot, ".env.production.local"),
+]);
 ```
 
-и добавить в массив `checks` после `LEGAL_LICENSE` шесть новых записей:
+и добавить в конец массива `checks`, после `ANALYTICS_OWNER_REVIEW`, шесть новых записей — **не** «после
+`LEGAL_LICENSE`»: `decideProjectReadinessAssessment` строит вывод через `catalog.map(...)` и находит каждый
+draft по ключу через `find`, поэтому порядок именно в scanner-массиве нигде не наблюдается и не обязан ничему
+совпадать; порядок в UI полностью определяет `catalog` в домене (задача 5 ниже). Разместить здесь новые записи
+проще всего в конце, чтобы обе последовательности читались одинаково:
 
 ```ts
     automatedCheck(
       "DEPS_LOCKFILE_PRESENT",
       "DEPENDENCIES",
-      "Tracked dependency manifests have exactly one matching lockfile.",
+      "No missing or ambiguous lockfiles were found for tracked dependency manifests.",
       "Track a single lockfile so installs are reproducible.",
       lockfileFindings(
         trackedResult.exitCode !== 0 || trackedResult.overflowed ? null : splitNullPaths(trackedResult),
@@ -930,12 +939,18 @@ const pathExists = async (repositoryPath: string, path: string): Promise<boolean
           { path: ".env.production.local", exists: prodEnvLocalExists, ignored: prodEnvLocalIgnored },
         ]),
         ...inlineSecretFindings(workflows.files),
+        ...workflows.unverifiable,
       ],
     ),
     ...launchOwnerChecks(),
 ```
 
-Порядок массива определяет порядок в UI и обязан совпадать с `catalog` в домене.
+Обе строки, изменившиеся против первой реализации, отражены выше: pass-summary у `DEPS_LOCKFILE_PRESENT`
+переформулирован как утверждение об отсутствии («no missing or ambiguous lockfiles»), а не как утверждение о
+наличии manifest — исходная формулировка была бы ложной для репозитория без единого manifest, у которого этот
+пункт тоже обязан проходить (спека §4 D14). `ENV_PROD_SEPARATION` наследует `...workflows.unverifiable`: без
+этого репозиторий, чей единственный CI-workflow оказался symlink'ом вне безопасного чтения, получал бы
+`PASSED` по этой проверке вместо `ACTION_REQUIRED`, хотя ничего не было фактически проверено.
 
 - [ ] **Step 4: Синхронизировать счётчики contracts**
 
@@ -1136,11 +1151,11 @@ git commit -m "feat(readiness): assess the catalog v2 launch checks"
 заменить счётчик и добавить проверку новых пунктов сразу после него:
 
 ```ts
-    await expect(readiness.locator(".readiness-check")).toHaveCount(14);
-    await expect(readiness.getByText("Reproducible dependency lockfile")).toBeVisible();
-    await expect(readiness.getByText("Production values kept out of the repository")).toBeVisible();
-    await expect(readiness.getByText("Rollback plan")).toBeVisible();
-    await expect(readiness.getByText("Data backup")).toBeVisible();
+await expect(readiness.locator(".readiness-check")).toHaveCount(14);
+await expect(readiness.getByText("Reproducible dependency lockfile")).toBeVisible();
+await expect(readiness.getByText("Production values kept out of the repository")).toBeVisible();
+await expect(readiness.getByText("Rollback plan")).toBeVisible();
+await expect(readiness.getByText("Data backup")).toBeVisible();
 ```
 
 Строку `await expect(readiness.getByText("Passed automatically", { exact: true })).toHaveCount(2);` **не
@@ -1163,12 +1178,12 @@ export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use; corepack pnpm build &
 диалога решения:
 
 ```ts
-    const rollbackCheck = readiness.locator(".readiness-check").filter({ hasText: "Rollback plan" });
-    await rollbackCheck
-      .getByRole("textbox", { name: "Decision note" })
-      .fill("Redeploy the previous build from the hosting dashboard.");
-    await rollbackCheck.getByRole("button", { name: "Confirm" }).click();
-    await expect(rollbackCheck.getByText("Confirmed by owner", { exact: true })).toBeVisible();
+const rollbackCheck = readiness.locator(".readiness-check").filter({ hasText: "Rollback plan" });
+await rollbackCheck
+  .getByRole("textbox", { name: "Decision note" })
+  .fill("Redeploy the previous build from the hosting dashboard.");
+await rollbackCheck.getByRole("button", { name: "Confirm" }).click();
+await expect(rollbackCheck.getByText("Confirmed by owner", { exact: true })).toBeVisible();
 ```
 
 - [ ] **Step 4: Проверить RU, тёмную тему и клавиатуру**
@@ -1232,6 +1247,92 @@ git commit -m "docs(readiness): record catalog v2 implementation result"
 ```
 
 **Gate:** `pnpm verify` зелёный на обеих блокирующих платформах, документы отражают фактическое состояние.
+
+---
+
+## Результат реализации
+
+**Дата:** 2026-09-06. **Коммиты:** `d703458..5a25248` — 10 коммитов на ветке `worktree-l1-readiness-v2`, база
+`428b2c3`. Ничего не push'нуто.
+
+### Каталог
+
+- Пункты (`readinessCheckKeySchema`): 8 → **14**. Добавлены `DEPS_LOCKFILE_PRESENT`, `ENV_PROD_SEPARATION`,
+  `SECURITY_HEADERS_OWNER_REVIEW`, `OPS_HEALTH_ENDPOINT_DECLARED`, `OPS_ROLLBACK_PLAN`, `OPS_BACKUP`.
+- Категории (`readinessCategorySchema`): 4 → **7**. Добавлены `DEPENDENCIES`, `ENVIRONMENT`, `OPERATIONS`.
+- Коды findings (`securityFindingCodeSchema`): 8 → **13**. Добавлены `LOCKFILE_MISSING`, `LOCKFILE_AMBIGUOUS`,
+  `DEPENDENCY_INPUT_UNVERIFIABLE`, `PROD_ENV_NOT_IGNORED`, `INLINE_SECRET_IN_CI`.
+- Порядок scanner-массива (`packages/project-readiness/src/scanner.ts`) и domain-каталога
+  (`packages/domain/src/readiness.ts`) идентичен — проверено прямым чтением обоих файлов в этой задаче — но
+  наблюдаемо только второе: `decideProjectReadinessAssessment` строит вывод через `catalog.map(...)` и находит
+  каждый draft по ключу через `find`, порядок в scanner-массиве нигде не читается.
+- Миграция `packages/persistence-sqlite/migrations/0052_readiness_catalog_v2.sql` перестроила
+  `project_readiness_checks` и `project_readiness_findings` (SQLite не допускает изменение `CHECK` in place).
+  Задача 6 проверила сохранность существующих строк отдельным scratch-скриптом (не входит в состав репозитория):
+  БД с уже существующим pre-v2 Run из 8 checks мигрирована на версию 52, каждая строка всех трёх таблиц
+  (`checks`, `findings`, `attestations`) сверена `deepEqual` до и после, `PRAGMA foreign_key_check` и
+  `integrity_check` чистые, оба append-only триггера и оба индекса восстановлены.
+
+### Что прогнано в этой задаче и что оно показало
+
+Все команды — на macOS, активация `export PATH="$HOME/.nvm/versions/node/v24.19.0/bin:$PATH"; corepack pnpm ...`.
+
+| Команда                                                                                                          | Результат                                                                                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm verify` (полная цепочка)                                                                                   | **FAIL** на первом же шаге, `format:check` — см. ниже                                                                                                                   |
+| `pnpm format:check` (repo-wide, до правок)                                                                       | FAIL — 4 файла: `docs/plans/82-...md`, `docs/plans/83-...md` (мои), `docs/research/cripthub-...md`, `docs/research/skin-case-...md` (не мои)                            |
+| `pnpm exec prettier --write` на двух моих файлах, затем `pnpm format:check` снова                                | 2 моих файла исправлены (только выравнивание таблиц/переносы, без изменения текста — проверено `git diff`); **2 файла остаются красными** — см. «Известные ограничения» |
+| `pnpm test:public-readiness`                                                                                     | PASS — `Public-tree check passed for 779 files`, toolchain Node 24.19.0/pnpm 11.21.0, activation contract verified                                                      |
+| `pnpm lint` (`pnpm build && eslint .`)                                                                           | PASS, exit 0, без замечаний                                                                                                                                             |
+| `pnpm typecheck` (`pnpm build && tsc --noEmit` + все воркспейсы)                                                 | PASS, exit 0, без ошибок                                                                                                                                                |
+| `pnpm test` (6 `node --test` скриптов + `pnpm -r --workspace-concurrency=1 test` по 23 из 24 workspace-проектов) | PASS — node:test **33/33**; vitest **161 test files / 1545 tests**, 0 упавших, во всех пакетах                                                                          |
+| `pnpm audit --prod --audit-level high`                                                                           | `No known vulnerabilities found`                                                                                                                                        |
+| `pnpm exec playwright test e2e/walking-skeleton.spec.ts -g "runs project readiness"`                             | PASS — **1/1**, прогнан отдельно в этой задаче (сверх `pnpm verify`, который e2e не включает)                                                                           |
+
+Суммы `pnpm test` включают весь репозиторий (23 пакета/приложения), а не только readiness; отдельно, для
+пунктов из этого плана, точные числа (уже входящие в суммы выше, не отдельный прогон):
+
+| Набор                                                                  | Результат                                               |
+| ---------------------------------------------------------------------- | ------------------------------------------------------- |
+| `packages/contracts/test/readiness.unit.test.ts`                       | 7/7                                                     |
+| `packages/project-readiness/test/scanner.integration.test.ts`          | 19/19                                                   |
+| `packages/persistence-sqlite/test/readiness-state.integration.test.ts` | 4/4                                                     |
+| `apps/daemon/test/readiness.integration.test.ts`                       | 1/1 (7 owner-аттестаций, `version: 8`, `status: READY`) |
+| `apps/web` (полный пакет — `i18n`, `AppFrame`, `WorkbenchPage`)        | 100/100                                                 |
+| `e2e/walking-skeleton.spec.ts -g "runs project readiness"`             | 1/1                                                     |
+
+### Платформы
+
+- **macOS — verified в этой сессии.** Все команды из таблицы выше выполнены напрямую; `pnpm verify` зелёный за
+  вычетом двух унаследованных Markdown-файлов (см. ниже); `pnpm audit` и целевой e2e-сценарий — отдельно и оба
+  зелёные.
+- **Windows — NOT DONE.** В этой сессии нет доступа к Windows-хосту, поэтому набор задачи 6 не был прогнан на
+  Windows здесь; это не «пропущено молча», а зафиксированный пробел. Репозиторий держит Windows как блокирующую
+  платформу в CI (см. недавние `ci(release)` коммиты на этой же истории), и именно CI — маршрут владельца к
+  закрытию этого пробела, не эта сессия. Наиболее вероятное место, где могла бы вскрыться платформенная разница:
+  `lockfileFindings` фильтрует «не-корневые» пути условием `path.includes("/")`
+  (`packages/project-readiness/src/scanner.ts`) — `git ls-files` эмитит `/`-разделители даже на Windows, так что
+  это должно быть безопасно, но здесь это не доказано. Fixture-репозитории задачи 6 уже используют пути с
+  пробелами и кириллицей (подтверждено при этом прогоне — `apps/daemon` тесты создавали worktree-пути вида
+  `loomrail state тест <suffix>`), но только на macOS.
+
+### Известные ограничения
+
+- `pnpm format:check` остаётся красным на `docs/research/cripthub-gray-settlement-model-primary-sources.ru.md` и
+  `docs/research/skin-case-legal-primary-sources.ru.md`. Оба файла пришли в историю коммитом `b3f059c` («123»)
+  до появления этой ветки и уже были неотформатированы на тот момент — не относятся к этому треку и не
+  переформатированы намеренно: в этом checkout параллельно работает другая сессия, и перевыравнивание чужих
+  файлов создало бы ей merge-конфликт без какой-либо пользы. Gate этой задачи оценивается относительно этого
+  унаследованного состояния, а не против чистого repo-wide `format:check`.
+- Windows не проверен — см. выше.
+- `docs/security/THREAT-MODEL.md` дополнен разделом «L1 Readiness v2 delta (T53)», а не T50: на момент записи
+  T50–T52 уже используются в `docs/plans/81-i1-tracker-round-trip-youtrack-spec.ru.md` (незакоммиченный файл
+  той же параллельной сессии, что писала `b3f059c`) для трёх её собственных будущих threat-model-угроз; T53
+  выбран, чтобы не создавать коллизию номеров, когда та работа дойдёт до собственной дельты в THREAT-MODEL.md.
+  Помимо номера, добавленный раздел фиксирует, что две из шести новых проверок
+  читают содержимое репозитория, а не только имена путей (прямой `lstat` двух фиксированных путей и
+  построчный поиск литеральных секретов в уже ограниченном CI-контенте), что не было покрыто прежним текстом
+  T25 дословно.
 
 ---
 
