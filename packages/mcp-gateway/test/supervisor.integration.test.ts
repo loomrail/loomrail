@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -77,6 +78,15 @@ const waitUntilGone = async (pids: readonly number[]): Promise<void> => {
   throw new Error(`The supervised MCP process tree is still alive: ${pids.join(",")}`);
 };
 
+const waitUntilMissing = async (path: string): Promise<void> => {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (!existsSync(path)) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("The MCP supervisor process record was not removed");
+};
+
 describe("MCP process-tree supervisor", () => {
   let directory = "";
   let treePids: TreePids | undefined;
@@ -136,6 +146,10 @@ describe("MCP process-tree supervisor", () => {
       await client.close().catch(() => undefined);
     }
     await waitUntilGone([treePids.serverPid, treePids.helperPid]);
+    // Tree termination precedes the supervisor's registry cleanup. Windows can schedule the test
+    // between those two operations, so disappearance of the child pids is not itself the file
+    // deletion barrier. Keep the final ENOENT assertion, but wait boundedly for its own invariant.
+    await waitUntilMissing(recordFile);
     await expect(readFile(recordFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   }, 15_000);
 
