@@ -32,7 +32,9 @@ failing behavior test на соответствующем seam и заканчи
       cross-platform process-tree termination и exact-tree before/after check.
 - [x] Добавить transactional reservation/check completion/terminal Run commands и restart reconciliation без replay.
 - [x] Добавить manual start/cancel/retry/read-output HTTP seams и Task Cockpit states.
-- [ ] Проверить output privacy, path/control-sequence redaction и artifact retention/recovery.
+- [x] Проверить output privacy, path/control-sequence redaction и artifact retention/recovery: bounded redacted text
+      остаётся вне Events/export, missing artifact fail-closed даёт `OUTPUT_UNAVAILABLE`, а startup удаляет только
+      плоские regular output-файлы старше 30 дней и атомарно фиксирует идемпотентный retention outcome.
 
 **Tracer:** owner запускает adopted required fixture test, видит real non-zero `FAILED`, duration/platform и bounded
 output; restart сохраняет failure, а crash во время process даёт `INTERRUPTED`, не второй spawn.

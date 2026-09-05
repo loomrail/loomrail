@@ -348,6 +348,49 @@ describe("verification Run local state", () => {
       type: "VERIFICATION_OUTPUT_ARTIFACT",
       artifact: { artifactId: output.artifactId, storageKey: "verification-output-one.txt" },
     });
+    expect(
+      fixture.localState.query({
+        type: "LIST_EXPIRED_VERIFICATION_OUTPUTS",
+        closedBefore: "2026-09-05T11:00:01.000Z",
+      }),
+    ).toEqual({
+      type: "VERIFICATION_OUTPUTS",
+      artifacts: [{ artifactId: output.artifactId, storageKey: "verification-output-one.txt" }],
+    });
+    expect(() =>
+      fixture.localState.execute({
+        schemaVersion: 1,
+        commandId: "forbidden-output-retention",
+        correlationId: "correlation-forbidden-output-retention",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "RECORD_VERIFICATION_OUTPUT_RETENTION",
+        payload: { artifactId: output.artifactId, outcome: "DELETED" },
+      }),
+    ).toThrow(expect.objectContaining({ code: "VERIFICATION_RETENTION_ACTOR_FORBIDDEN" }));
+    const retentionCommand = {
+      schemaVersion: 1,
+      commandId: "record-output-retention",
+      correlationId: "correlation-record-output-retention",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "RECORD_VERIFICATION_OUTPUT_RETENTION",
+      payload: { artifactId: output.artifactId, outcome: "DELETED" },
+    } as const;
+    expect(fixture.localState.execute(retentionCommand)).toMatchObject({
+      type: "VERIFICATION_OUTPUT_RETENTION_RECORDED",
+      replayed: false,
+      artifactId: output.artifactId,
+      outcome: "DELETED",
+    });
+    expect(fixture.localState.execute(retentionCommand)).toMatchObject({
+      type: "VERIFICATION_OUTPUT_RETENTION_RECORDED",
+      replayed: true,
+    });
+    expect(
+      fixture.localState.query({
+        type: "LIST_EXPIRED_VERIFICATION_OUTPUTS",
+        closedBefore: "2026-09-05T11:00:01.000Z",
+      }),
+    ).toEqual({ type: "VERIFICATION_OUTPUTS", artifacts: [] });
     const workspace = fixture.localState.query({
       type: "GET_WORKSPACE_BY_WORK_ITEM",
       workItemId: fixture.workItemId,

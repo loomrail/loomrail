@@ -528,6 +528,8 @@ export const verificationOutputSummarySchema = z
     }
   });
 
+export const verificationOutputRetentionOutcomeSchema = z.enum(["DELETED", "ALREADY_ABSENT"]);
+
 export const verificationCheckSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -869,6 +871,16 @@ export const interruptVerificationRunCommandSchema = commandBaseSchema.extend({
     .strict(),
 });
 
+export const recordVerificationOutputRetentionCommandSchema = commandBaseSchema.extend({
+  type: z.literal("RECORD_VERIFICATION_OUTPUT_RETENTION"),
+  payload: z
+    .object({
+      artifactId: opaqueIdSchema,
+      outcome: verificationOutputRetentionOutcomeSchema,
+    })
+    .strict(),
+});
+
 const verificationRunEventBaseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -954,6 +966,17 @@ export const verificationRunInterruptedResultSchema = z
     run: verificationRunSchema,
     interruptedCheck: verificationCheckSchema.nullable(),
     event: verificationRunInterruptedEventSchema,
+  })
+  .strict();
+
+export const verificationOutputRetentionRecordedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    replayed: z.boolean(),
+    type: z.literal("VERIFICATION_OUTPUT_RETENTION_RECORDED"),
+    artifactId: opaqueIdSchema,
+    outcome: verificationOutputRetentionOutcomeSchema,
+    recordedAt: utcTimestampSchema,
   })
   .strict();
 
@@ -1043,6 +1066,9 @@ export type StartVerificationCheckCommand = z.infer<typeof startVerificationChec
 export type CompleteVerificationCheckCommand = z.infer<typeof completeVerificationCheckCommandSchema>;
 export type CancelVerificationRunCommand = z.infer<typeof cancelVerificationRunCommandSchema>;
 export type InterruptVerificationRunCommand = z.infer<typeof interruptVerificationRunCommandSchema>;
+export type RecordVerificationOutputRetentionCommand = z.infer<
+  typeof recordVerificationOutputRetentionCommandSchema
+>;
 export type VerificationPlanAdoptedEvent = z.infer<typeof verificationPlanAdoptedEventSchema>;
 export type VerificationPlanAdoptedResult = z.infer<typeof verificationPlanAdoptedResultSchema>;
 export type VerificationPlanSettingsResponse = z.infer<typeof verificationPlanSettingsResponseSchema>;
@@ -1055,6 +1081,7 @@ export type VerificationRunFreshness = z.infer<typeof verificationRunFreshnessSc
 export type VerificationRunStaleReason = z.infer<typeof verificationRunStaleReasonSchema>;
 export type VerificationEvidence = z.infer<typeof verificationEvidenceSchema>;
 export type VerificationOutputSummary = z.infer<typeof verificationOutputSummarySchema>;
+export type VerificationOutputRetentionOutcome = z.infer<typeof verificationOutputRetentionOutcomeSchema>;
 export type VerificationCheck = z.infer<typeof verificationCheckSchema>;
 export type VerificationRun = z.infer<typeof verificationRunSchema>;
 export type VerificationFailureReason = z.infer<typeof verificationFailureReasonSchema>;

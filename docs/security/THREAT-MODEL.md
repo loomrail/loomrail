@@ -743,6 +743,9 @@ Critical and stays open until the Q17 spec and implementation provide:
 - a terminal required non-pass or interrupted Run creates one append-only `VerificationFailure` in the same SQLite
   transaction as measured Run/Check state and its Event. It contains only typed Run/Check/Plan/tree lineage, not raw
   output or a local path; command replay and restart cannot duplicate the identity;
+- bounded redacted output lives only in the Loomrail artifact directory. Missing files fail closed, and 30-day startup
+  retention accepts only a basename-matched regular `.txt` file, refuses symlink/path escape, and records a durable
+  idempotent outcome without rewriting the measured Check;
 - Acceptance stores only the daemon-derived Plan/Run/tree/check identity summary. Raw output and local paths stay out
   of the package; the release renderer revalidates delivery lineage, current tree and the complete required check set;
 - required verification covers shell metacharacters, hostile package scripts/manifests, cwd/path and symlink escape,

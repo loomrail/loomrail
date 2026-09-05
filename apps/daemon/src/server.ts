@@ -173,6 +173,7 @@ import { broadcastingState } from "./broadcasting-state.js";
 import { resolveProjectBrowserQAConfig, type BrowserQAConfigResolver } from "./browser-qa-config.js";
 import { reconcileBrowserQAArtifacts } from "./browser-qa-recovery.js";
 import { cleanupExpiredBrowserQAArtifacts } from "./browser-qa-retention.js";
+import { cleanupExpiredVerificationOutputs } from "./verification-output-retention.js";
 import { createBrowserQAStageRunner } from "./browser-qa-runner.js";
 import { buildAgentFleet } from "./agent-fleet.js";
 import {
@@ -973,6 +974,12 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   await cleanupExpiredBrowserQAArtifacts({
     state: localState,
     artifactsDirectory: browserQAArtifactsDirectory,
+    now: now(),
+    logger: app.log,
+  });
+  await cleanupExpiredVerificationOutputs({
+    state: localState,
+    artifactsDirectory: verificationArtifactsDirectory,
     now: now(),
     logger: app.log,
   });

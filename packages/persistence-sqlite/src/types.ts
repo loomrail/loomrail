@@ -85,6 +85,8 @@ export type StateStoreErrorCode =
   | "VERIFICATION_RUN_ALREADY_ACTIVE"
   | "VERIFICATION_RUN_NOT_FOUND"
   | "VERIFICATION_CHECK_NOT_FOUND"
+  | "VERIFICATION_OUTPUT_NOT_FOUND"
+  | "VERIFICATION_RETENTION_ACTOR_FORBIDDEN"
   | "WORKSPACE_VERIFICATION_HELD"
   | "WORKSPACE_NOT_FOUND"
   // Storage invariant (migration 0011's UNIQUE on work_item_id, spec D1): the workspace belongs to
@@ -134,6 +136,7 @@ export type StateQuery =
   | { type: "LIST_WORK_ITEM_VERIFICATION_FAILURES"; workItemId: string; limit?: number }
   | { type: "LIST_ACTIVE_VERIFICATION_RUNS" }
   | { type: "GET_VERIFICATION_OUTPUT_ARTIFACT"; checkId: string }
+  | { type: "LIST_EXPIRED_VERIFICATION_OUTPUTS"; closedBefore: string; limit?: number }
   | { type: "GET_PROJECT_READINESS_SNAPSHOT"; projectId: string }
   | { type: "GET_PROJECT_MCP_PROFILES"; projectId: string }
   | { type: "LIST_PROVIDER_SESSION_MCP_SNAPSHOTS"; providerSessionId: string }
@@ -230,6 +233,10 @@ export type StateQueryResult =
   | {
       type: "VERIFICATION_OUTPUT_ARTIFACT";
       artifact: { artifactId: string; checkId: string; runId: string; storageKey: string } | null;
+    }
+  | {
+      type: "VERIFICATION_OUTPUTS";
+      artifacts: { artifactId: string; storageKey: string }[];
     }
   | { type: "PROJECT_READINESS_SNAPSHOT"; snapshot: ProjectReadinessSnapshot }
   | { type: "PROJECT_MCP_PROFILES"; project: Project; profiles: McpProfileView[] }

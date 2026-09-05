@@ -434,6 +434,12 @@ const verificationOutputArtifactRowSchema = z.object({
   storage_key: z.string(),
 });
 
+const verificationOutputRetentionRowSchema = z.object({
+  artifact_id: z.string(),
+  outcome: z.enum(["DELETED", "ALREADY_ABSENT"]),
+  recorded_at: z.string(),
+});
+
 const constitutionProposalRowSchema = z.object({
   id: z.string(),
   schema_version: z.number().int(),
@@ -1166,6 +1172,13 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("LIST_ACTIVE_VERIFICATION_RUNS") }).strict(),
   z.object({ type: z.literal("GET_VERIFICATION_OUTPUT_ARTIFACT"), checkId: opaqueIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal("LIST_EXPIRED_VERIFICATION_OUTPUTS"),
+      closedBefore: utcTimestampSchema,
+      limit: z.number().int().min(1).max(1_000).default(200),
+    })
+    .strict(),
   z.object({ type: z.literal("GET_PROJECT_READINESS_SNAPSHOT"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_MCP_PROFILES"), projectId: opaqueIdSchema }).strict(),
   z
@@ -3038,6 +3051,25 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectVerificationOutputArtifactByCheck = database.prepare(
       `SELECT artifact_id, run_id, check_id, storage_key
        FROM verification_output_artifacts WHERE check_id = ?`,
+    );
+    const selectVerificationOutputArtifactById = database.prepare(
+      "SELECT artifact_id FROM verification_output_artifacts WHERE artifact_id = ?",
+    );
+    const selectVerificationOutputRetentionById = database.prepare(
+      "SELECT * FROM verification_output_retention_log WHERE artifact_id = ?",
+    );
+    const insertVerificationOutputRetention = database.prepare(
+      `INSERT INTO verification_output_retention_log (artifact_id, outcome, recorded_at)
+       VALUES (?, ?, ?)`,
+    );
+    const selectExpiredVerificationOutputs = database.prepare(
+      `SELECT artifact.artifact_id, artifact.run_id, artifact.check_id, artifact.storage_key
+       FROM verification_output_artifacts AS artifact
+       LEFT JOIN verification_output_retention_log AS retention
+         ON retention.artifact_id = artifact.artifact_id
+       WHERE artifact.created_at < ? AND retention.artifact_id IS NULL
+       ORDER BY artifact.created_at, artifact.artifact_id
+       LIMIT ?`,
     );
     const selectCriteria = database.prepare(
       `SELECT criterion FROM work_item_acceptance_criteria
@@ -6781,6 +6813,45 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "RECORD_VERIFICATION_OUTPUT_RETENTION") {
+        if (command.actor.type !== "SYSTEM" || command.actor.id !== "local-daemon") {
+          throw new StateStoreError(
+            "VERIFICATION_RETENTION_ACTOR_FORBIDDEN",
+            "Only the local daemon can record Project verification output retention",
+          );
+        }
+        if (selectVerificationOutputArtifactById.get(command.payload.artifactId) === undefined) {
+          throw new StateStoreError(
+            "VERIFICATION_OUTPUT_NOT_FOUND",
+            "The Project verification output artifact does not exist",
+          );
+        }
+        const existing = selectVerificationOutputRetentionById.get(command.payload.artifactId);
+        const retention =
+          existing === undefined
+            ? {
+                artifact_id: command.payload.artifactId,
+                outcome: command.payload.outcome,
+                recorded_at: occurredAt,
+              }
+            : verificationOutputRetentionRowSchema.parse(existing);
+        if (existing === undefined) {
+          insertVerificationOutputRetention.run(
+            retention.artifact_id,
+            retention.outcome,
+            retention.recorded_at,
+          );
+        }
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "VERIFICATION_OUTPUT_RETENTION_RECORDED",
+          replayed: false,
+          artifactId: retention.artifact_id,
+          outcome: retention.outcome,
+          recordedAt: retention.recorded_at,
+        });
+      }
+
       if (command.type === "RECORD_PROVIDER_ALLOWANCE") {
         const project = readProject(command.payload.projectId);
         const currentRow = selectProviderAllowance.get(
@@ -10487,6 +10558,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                   },
           };
         }
+        case "LIST_EXPIRED_VERIFICATION_OUTPUTS":
+          return {
+            type: "VERIFICATION_OUTPUTS",
+            artifacts: selectExpiredVerificationOutputs
+              .all(queryValue.closedBefore, queryValue.limit)
+              .map((value) => {
+                const row = verificationOutputArtifactRowSchema.parse(value);
+                return { artifactId: row.artifact_id, storageKey: row.storage_key };
+              }),
+          };
         case "GET_PROJECT_READINESS_SNAPSHOT": {
           if (!readProject(queryValue.projectId)) {
             throw new ReadinessDomainError("PROJECT_NOT_FOUND", "The Project does not exist");

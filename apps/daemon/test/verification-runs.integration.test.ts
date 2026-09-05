@@ -317,6 +317,17 @@ describe("project verification HTTP boundary", () => {
     expect(output.headers.get("x-content-type-options")).toBe("nosniff");
     expect(output.headers.get("cache-control")).toBe("no-store");
     expect(await output.text()).toContain("<script>window.mustNotRun = true</script>");
+    const outputArtifactId = firstCheck.output?.artifactId;
+    if (outputArtifactId === undefined) throw new Error("Expected measured output identity");
+    await rm(join(fixture.artifactsDirectory, `${outputArtifactId}.txt`));
+    const unavailableOutput = await fetch(
+      `${daemon.baseUrl}/api/v1/verification-checks/${firstCheck.id}/output`,
+      { headers: { cookie: session.cookie } },
+    );
+    expect(unavailableOutput.status).toBe(404);
+    await expect(unavailableOutput.json()).resolves.toMatchObject({
+      error: { code: "VERIFICATION_OUTPUT_UNAVAILABLE" },
+    });
 
     const retry = await fetch(`${daemon.baseUrl}/api/v1/work-items/${fixture.workItemId}/verification-runs`, {
       method: "POST",
