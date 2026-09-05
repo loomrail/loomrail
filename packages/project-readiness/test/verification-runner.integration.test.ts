@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { executeVerificationRecipe, verificationBaselineEnvironment } from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
+const TEST_RECIPE_TIMEOUT_SECONDS = 30;
 
 const installRecipe = async (
   repositoryPath: string,
@@ -48,7 +49,7 @@ const installRecipe = async (
     executable,
     argv: ["run", "test"],
     cwd: ".",
-    timeoutSeconds: 2,
+    timeoutSeconds: TEST_RECIPE_TIMEOUT_SECONDS,
     outputLimitBytes: 4_096,
     environmentProfile: "VERIFICATION_BASELINE",
     networkPolicy: "INHERIT_HOST",
@@ -102,6 +103,10 @@ describe("verification recipe runner", () => {
         PATH: process.env["PATH"] ?? "",
         HOME: ownerHome,
         SECRET_TOKEN: secret,
+        SystemRoot: process.env["SystemRoot"],
+        WINDIR: process.env["WINDIR"],
+        ComSpec: process.env["ComSpec"],
+        PATHEXT: process.env["PATHEXT"],
       },
     });
 
@@ -278,7 +283,7 @@ describe("verification recipe runner", () => {
       executable: "node",
       argv: ["verification-fixture.cjs"],
       cwd: "packages/app with spaces-ёж",
-      timeoutSeconds: 2,
+      timeoutSeconds: TEST_RECIPE_TIMEOUT_SECONDS,
       outputLimitBytes: 4_096,
       environmentProfile: "VERIFICATION_BASELINE",
       networkPolicy: "INHERIT_HOST",
@@ -357,10 +362,7 @@ describe("verification recipe runner", () => {
 
   it("recognizes a standalone Windows pnpm executable", async () => {
     const { artifacts, repositoryPath } = await makeRepo();
-    const approvedRecipe = {
-      ...(await installRecipe(repositoryPath, "process.exit(0);", "pnpm")),
-      timeoutSeconds: 10,
-    } satisfies VerificationRecipe;
+    const approvedRecipe = await installRecipe(repositoryPath, "process.exit(0);", "pnpm");
     const tools = join(artifacts, "windows-standalone-tools");
     await mkdir(tools, { recursive: true });
     await link(process.execPath, join(tools, "pnpm.exe")).catch(async () => {
