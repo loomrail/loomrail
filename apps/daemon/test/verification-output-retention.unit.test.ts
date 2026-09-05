@@ -6,7 +6,10 @@ import type { LocalState, StateQuery, StateQueryResult } from "@loomrail/persist
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { cleanupExpiredVerificationOutputs } from "../src/verification-output-retention.js";
+import {
+  cleanupExpiredVerificationOutputs,
+  type VerificationOutputRetentionFileSystem,
+} from "../src/verification-output-retention.js";
 
 describe("daemon Project verification output retention", () => {
   let rootDirectory = "";
@@ -163,20 +166,34 @@ describe("daemon Project verification output retention", () => {
 
   it("does not starve an old orphan behind more than one batch of fresh files", async () => {
     const fresh = new Date("2026-09-05T11:59:00.000Z");
-    await Promise.all(
-      Array.from({ length: 1_000 }, async (_, index) => {
-        const path = join(
-          artifactsDirectory,
-          `verification-output-a-${index.toString().padStart(4, "0")}.txt`,
-        );
-        await writeFile(path, "fresh", { mode: 0o600 });
-        await utimes(path, fresh, fresh);
-      }),
+    const freshNames = Array.from(
+      { length: 1_000 },
+      (_, index) => `verification-output-a-${index.toString().padStart(4, "0")}.txt`,
     );
     const orphanPath = join(artifactsDirectory, "verification-output-z-old-orphan.txt");
-    await writeFile(orphanPath, "old", { mode: 0o600 });
     const old = new Date("2026-07-01T12:00:00.000Z");
-    await utimes(orphanPath, old, old);
+    const removed: string[] = [];
+    const fileSystem: VerificationOutputRetentionFileSystem = {
+      realpath: (path) => Promise.resolve(path),
+      readdir: () =>
+        Promise.resolve(
+          [...freshNames, "verification-output-z-old-orphan.txt"].map((name) => ({
+            name,
+            isFile: () => true,
+            isSymbolicLink: () => false,
+          })),
+        ),
+      lstat: (path) =>
+        Promise.resolve({
+          isFile: () => true,
+          isSymbolicLink: () => false,
+          mtimeMs: path === orphanPath ? old.getTime() : fresh.getTime(),
+        }),
+      unlink: (path) => {
+        removed.push(path);
+        return Promise.resolve();
+      },
+    };
     const state: LocalState = {
       startup: { appliedMigrations: [] },
       execute: () => {
@@ -201,9 +218,10 @@ describe("daemon Project verification output retention", () => {
         artifactsDirectory,
         now: new Date("2026-09-05T12:00:00.000Z"),
         logger: app.log,
+        fileSystem,
       }),
     ).resolves.toMatchObject({ orphansDeleted: 1 });
-    await expect(access(orphanPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(removed).toEqual([orphanPath]);
     await app.close();
   });
 });

@@ -12,6 +12,32 @@ const STORAGE_KEY_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*\.txt$/u;
 
 type CleanupAction = "DELETED" | "ALREADY_ABSENT" | "SKIPPED_UNSAFE" | "FAILED";
 
+type VerificationOutputDirectoryEntry = {
+  name: string;
+  isFile: () => boolean;
+  isSymbolicLink: () => boolean;
+};
+
+type VerificationOutputFileDetails = {
+  mtimeMs: number;
+  isFile: () => boolean;
+  isSymbolicLink: () => boolean;
+};
+
+export type VerificationOutputRetentionFileSystem = {
+  realpath: (path: string) => Promise<string>;
+  readdir: (path: string) => Promise<readonly VerificationOutputDirectoryEntry[]>;
+  lstat: (path: string) => Promise<VerificationOutputFileDetails>;
+  unlink: (path: string) => Promise<void>;
+};
+
+const nodeFileSystem: VerificationOutputRetentionFileSystem = {
+  realpath: (path) => realpath(path),
+  readdir: (path) => readdir(path, { withFileTypes: true }),
+  lstat: (path) => lstat(path),
+  unlink: (path) => unlink(path),
+};
+
 export type VerificationOutputRetentionSummary = {
   selected: number;
   recorded: number;
@@ -30,21 +56,22 @@ const errorCode = (error: unknown): string | null =>
 const deleteArtifact = async (input: {
   artifactsDirectory: string;
   storageKey: string;
+  fileSystem: VerificationOutputRetentionFileSystem;
 }): Promise<CleanupAction> => {
   if (basename(input.storageKey) !== input.storageKey || !STORAGE_KEY_PATTERN.test(input.storageKey)) {
     return "SKIPPED_UNSAFE";
   }
   let root: string;
   try {
-    root = await realpath(input.artifactsDirectory);
+    root = await input.fileSystem.realpath(input.artifactsDirectory);
   } catch (error: unknown) {
     return errorCode(error) === "ENOENT" ? "ALREADY_ABSENT" : "FAILED";
   }
   const candidate = join(root, input.storageKey);
   try {
-    const details = await lstat(candidate);
+    const details = await input.fileSystem.lstat(candidate);
     if (!details.isFile() || details.isSymbolicLink()) return "SKIPPED_UNSAFE";
-    await unlink(candidate);
+    await input.fileSystem.unlink(candidate);
     return "DELETED";
   } catch (error: unknown) {
     return errorCode(error) === "ENOENT" ? "ALREADY_ABSENT" : "FAILED";
@@ -55,10 +82,11 @@ const cleanupExpiredOrphans = async (input: {
   state: LocalState;
   artifactsDirectory: string;
   closedBeforeMs: number;
+  fileSystem: VerificationOutputRetentionFileSystem;
 }): Promise<number> => {
-  const root = await realpath(input.artifactsDirectory).catch(() => null);
+  const root = await input.fileSystem.realpath(input.artifactsDirectory).catch(() => null);
   if (root === null) return 0;
-  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const entries = await input.fileSystem.readdir(root).catch(() => []);
   let deleted = 0;
   for (const entry of entries
     .filter(({ name }) => STORAGE_KEY_PATTERN.test(name))
@@ -71,7 +99,7 @@ const cleanupExpiredOrphans = async (input: {
     });
     if (reference.type !== "VERIFICATION_OUTPUT_STORAGE_KEY" || reference.exists) continue;
     const path = join(root, entry.name);
-    const details = await lstat(path).catch(() => null);
+    const details = await input.fileSystem.lstat(path).catch(() => null);
     if (
       details === null ||
       !details.isFile() ||
@@ -81,7 +109,7 @@ const cleanupExpiredOrphans = async (input: {
       continue;
     }
     try {
-      await unlink(path);
+      await input.fileSystem.unlink(path);
       deleted += 1;
     } catch {
       // A concurrent disappearance is already the desired privacy outcome; other failures retry next startup.
@@ -96,7 +124,9 @@ export const cleanupExpiredVerificationOutputs = async (input: {
   artifactsDirectory: string;
   now: Date;
   logger: FastifyBaseLogger;
+  fileSystem?: VerificationOutputRetentionFileSystem;
 }): Promise<VerificationOutputRetentionSummary> => {
+  const fileSystem = input.fileSystem ?? nodeFileSystem;
   const closedBeforeMs = input.now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1_000;
   const closedBefore = new Date(closedBeforeMs).toISOString();
   const summary: VerificationOutputRetentionSummary = {
@@ -107,6 +137,7 @@ export const cleanupExpiredVerificationOutputs = async (input: {
       state: input.state,
       artifactsDirectory: input.artifactsDirectory,
       closedBeforeMs,
+      fileSystem,
     }),
   };
 
@@ -123,6 +154,7 @@ export const cleanupExpiredVerificationOutputs = async (input: {
       const action = await deleteArtifact({
         artifactsDirectory: input.artifactsDirectory,
         storageKey: artifact.storageKey,
+        fileSystem,
       });
       if (action === "DELETED" || action === "ALREADY_ABSENT") {
         try {
