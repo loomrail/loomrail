@@ -383,6 +383,8 @@ export type VerificationRunEventIntent =
       data: { run: VerificationRun; interruptedCheck: VerificationCheck | null };
     };
 
+export const VERIFICATION_WORKFLOW_ACTOR_ID = "verification-workflow";
+
 export const decideVerificationRunReservation = (
   command: StartVerificationRunCommand | RetryVerificationRunCommand,
   context: {
@@ -399,7 +401,12 @@ export const decideVerificationRunReservation = (
     retryOfRun?: VerificationRun;
   },
 ): { run: VerificationRun; checks: VerificationCheck[]; event: VerificationRunReservedIntent } => {
-  if (command.actor.type !== "HUMAN") {
+  const automatedWorkflowStart =
+    command.type === "START_VERIFICATION_RUN" &&
+    command.actor.type === "SYSTEM" &&
+    command.actor.id === VERIFICATION_WORKFLOW_ACTOR_ID &&
+    context.workItem?.currentStage === "QA";
+  if (command.actor.type !== "HUMAN" && !automatedWorkflowStart) {
     throw new VerificationDomainError("OWNER_REQUIRED", "Only the owner can start verification");
   }
   const workItem = context.workItem;

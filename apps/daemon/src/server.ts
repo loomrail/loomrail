@@ -200,6 +200,7 @@ import {
   resolveRegisteredRepository,
 } from "./fixtures.js";
 import { createSessionWorker } from "./session-worker.js";
+import { createProjectVerificationWorkflowGate } from "./project-verification-gate.js";
 import { createProjectVerificationRunner, type VerificationRecipeExecutor } from "./verification-runner.js";
 import { describeReportingRuntime } from "./reporting.js";
 import { createMcpProposalChallengeStore, McpProposalError } from "./mcp-proposals.js";
@@ -1271,36 +1272,6 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     done();
   });
 
-  // Spec §6: one stage attempt is a sequence of context-assembled provider sessions, not a single
-  // provider call. The worker owns the whole dispatch queue as a background pass (A1.5 spec D4/D5);
-  // `runStageAttempt` still owns everything inside one attempt.
-  const worker = createSessionWorker({
-    state: localState,
-    resolveAdapter: resolveProjectProvider,
-    template: mockDeliveryTemplate,
-    workspacesRoot,
-    createCommandId: () => `session-${randomUUID()}`,
-    logger: app.log,
-    schedulingLimits,
-    browserQA: createBrowserQAStageRunner({
-      state: localState,
-      driver:
-        options.browserQADriver ??
-        createPlaywrightDriver({ artifactsDirectory: browserQAArtifactsDirectory }),
-      resolveConfig:
-        options.browserQAConfigResolver ??
-        ((project) => resolveProjectBrowserQAConfig(project, { fixtureTargetOrigin: allowedOrigin })),
-      createCommandId: () => `browser-qa-command-${randomUUID()}`,
-      createAttachmentId: () => `browser-qa-attachment-${randomUUID()}`,
-      logger: app.log,
-    }),
-    openMcpConnections: createMcpConnectionOpener({
-      state: localState,
-      gateway: mcpGateway,
-      createCommandId: (kind) => `mcp-call-${kind.toLowerCase()}-${randomUUID()}`,
-    }),
-  });
-
   localState.execute({
     schemaVersion: 1,
     commandId: `reconcile-${randomUUID()}`,
@@ -1331,6 +1302,43 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     }
     return current;
   };
+
+  // Spec §6: one stage attempt is a sequence of context-assembled provider sessions, not a single
+  // provider call. The worker owns the whole dispatch queue as a background pass (A1.5 spec D4/D5);
+  // `runStageAttempt` still owns everything inside one attempt. An adopted Project Plan is measured
+  // at the Review -> QA seam before Browser QA gets an AgentRun or browser authority.
+  const worker = createSessionWorker({
+    state: localState,
+    resolveAdapter: resolveProjectProvider,
+    template: mockDeliveryTemplate,
+    workspacesRoot,
+    createCommandId: () => `session-${randomUUID()}`,
+    logger: app.log,
+    schedulingLimits,
+    browserQA: createBrowserQAStageRunner({
+      state: localState,
+      driver:
+        options.browserQADriver ??
+        createPlaywrightDriver({ artifactsDirectory: browserQAArtifactsDirectory }),
+      resolveConfig:
+        options.browserQAConfigResolver ??
+        ((project) => resolveProjectBrowserQAConfig(project, { fixtureTargetOrigin: allowedOrigin })),
+      createCommandId: () => `browser-qa-command-${randomUUID()}`,
+      createAttachmentId: () => `browser-qa-attachment-${randomUUID()}`,
+      logger: app.log,
+    }),
+    projectVerification: createProjectVerificationWorkflowGate({
+      state: localState,
+      runner: verificationRunner,
+      platform: verificationPlatform,
+      createCommandId: () => `verification-workflow-${randomUUID()}`,
+    }),
+    openMcpConnections: createMcpConnectionOpener({
+      state: localState,
+      gateway: mcpGateway,
+      createCommandId: (kind) => `mcp-call-${kind.toLowerCase()}-${randomUUID()}`,
+    }),
+  });
 
   const readVerificationTree = async (worktreePath: string): Promise<string> => {
     try {

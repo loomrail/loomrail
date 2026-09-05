@@ -487,6 +487,8 @@ describe("session worker", () => {
     let acceptanceModelTier: ProviderInvocation["modelTier"] | undefined;
     let acceptanceAgentRunId: string | undefined;
     let acceptanceWorkspaceLeaseHolder: string | null | undefined;
+    let projectVerificationReady = false;
+    const projectVerificationTrees: string[] = [];
     const adapter: ProviderAdapter = {
       capabilities: () => ({
         provider: "CODEX",
@@ -634,6 +636,16 @@ describe("session worker", () => {
         createAttachmentId: createCommandId,
         logger,
       }),
+      projectVerification: {
+        beforeBrowserQA: ({ testedTree }) => {
+          projectVerificationTrees.push(testedTree);
+          return Promise.resolve(
+            projectVerificationReady
+              ? { status: "READY", configured: true }
+              : { status: "BLOCKED", blocker: "RUN_MISSING" },
+          );
+        },
+      },
     });
     const seeded = seedQueuedAttempt(localState);
 
@@ -658,6 +670,23 @@ describe("session worker", () => {
     worker.wake();
     await awaitIdle(worker);
 
+    const verificationBlocked = snapshotOf(localState, seeded.workItemId);
+    expect(verificationBlocked.run).toMatchObject({ status: "RUNNING" });
+    expect(verificationBlocked.stageAttempts.at(-1)).toMatchObject({ stage: "QA", status: "QUEUED" });
+    expect(projectVerificationTrees.length).toBeGreaterThanOrEqual(1);
+    const blockedGateCalls = projectVerificationTrees.length;
+    const runsBeforeVerification = localState.query({ type: "LIST_AGENT_RUNS" });
+    if (runsBeforeVerification.type !== "AGENT_RUNS") throw new Error("Expected AgentRuns");
+    expect(
+      runsBeforeVerification.runs.some(
+        ({ stageAttemptId }) => stageAttemptId === verificationBlocked.stageAttempts.at(-1)?.id,
+      ),
+    ).toBe(false);
+
+    projectVerificationReady = true;
+    worker.wake();
+    await awaitIdle(worker);
+
     const completed = snapshotOf(localState, seeded.workItemId);
     expect(seenStages).toEqual(["DISCOVERY", "DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "ACCEPTANCE"]);
     expect(seenHumanRequestPolicies).toEqual([
@@ -679,6 +708,8 @@ describe("session worker", () => {
     expect(discoveryResumeContext).toContain("Never ask for permission to proceed or hand off");
     expect(discoveryResumeContext).toContain("Q: Choose the compatibility target");
     expect(discoveryResumeContext).toContain("A: Existing target");
+    expect(projectVerificationTrees).toHaveLength(blockedGateCalls + 1);
+    expect(new Set(projectVerificationTrees).size).toBe(1);
     expect(completed).toMatchObject({
       run: { status: "WAITING_HUMAN" },
       decisions: [{ answer: { type: "OPTION", optionIds: ["existing-target"] } }],

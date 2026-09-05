@@ -77,6 +77,16 @@ jobs:
       - name: Verify private Insights reporting
         run: pnpm test:reporting
 
+      # Q17 executes repository code and gates Browser QA. Keep its actor boundary, orchestration
+      # and exact-tree seam visible on both supported platforms even when protected landing lint
+      # prevents the repository-wide suite from reaching workspace tests.
+      - name: Verify Project verification workflow gate
+        run: |
+          pnpm --filter "@loomrail/daemon..." build
+          pnpm --dir packages/domain exec vitest run test/verification-run.unit.test.ts
+          pnpm --dir apps/daemon exec vitest run --project unit test/project-verification-gate.unit.test.ts
+          pnpm --dir apps/daemon exec vitest run --project integration test/session-worker.integration.test.ts -t "drives a CODEX-shaped"
+
       # The named fault matrix includes the real Playwright BrowserDriver suite. A fresh runner has
       # the package but no browser binary; keep that prerequisite explicit instead of weakening the
       # suite into a skip or treating a missing executable as crash-recovery evidence.

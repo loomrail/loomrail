@@ -39,7 +39,9 @@ output; restart сохраняет failure, а crash во время process д�
 
 ## Q17.3 — Workflow и Acceptance gate
 
-- [ ] Запускать active required Plan после fresh independent Review и до Browser QA.
+- [x] Запускать active required Plan после fresh independent Review и до Browser QA: внутренний
+      `verification-workflow` может зарезервировать только первый Run на стадии QA; Browser QA не получает AgentRun
+      или browser authority до свежего current-tree pass, а terminal non-pass не ретраится скрыто.
 - [ ] Добавить отдельный `VerificationFailure` и связать его с correction IMPLEMENT/re-review/rerun lineage.
 - [ ] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
 - [x] Сделать required failed/error/interrupted/stale детерминированным Acceptance blocker; optional failure оставить

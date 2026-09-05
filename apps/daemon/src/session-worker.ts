@@ -11,6 +11,7 @@ import type { FastifyBaseLogger } from "fastify";
 
 import { readAgentSchedulingSnapshot } from "./agent-scheduling.js";
 import type { BrowserQAStageRunner } from "./browser-qa-runner.js";
+import type { ProjectVerificationWorkflowGate } from "./project-verification-gate.js";
 import { runStageAttempt, type OpenMcpConnections } from "./session-loop.js";
 
 /**
@@ -47,6 +48,8 @@ export type SessionWorkerDeps = {
   openMcpConnections?: OpenMcpConnections;
   /** Daemon-owned deterministic baseline. When present, QA never opens a provider session. */
   browserQA?: BrowserQAStageRunner;
+  /** Runs an adopted Project verification Plan before Browser QA receives execution authority. */
+  projectVerification?: ProjectVerificationWorkflowGate;
   /** Validated once at construction; persistence repeats the resolved limits in every claim. */
   schedulingLimits?: SchedulerLimits;
 };
@@ -115,6 +118,34 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         throw new StateStoreError("PERSISTENCE_FAILURE", "A pending workflow dispatch is incomplete");
       }
 
+      const testedTree =
+        stageAttempt.stage === "QA" && deps.browserQA !== undefined
+          ? [...workflowSnapshot.stageAttempts]
+              .reverse()
+              .find(
+                ({ stage, status, resultTree }) =>
+                  stage === "IMPLEMENT" && status === "SUCCEEDED" && resultTree !== null,
+              )?.resultTree
+          : undefined;
+      if (stageAttempt.stage === "QA" && deps.browserQA !== undefined) {
+        if (testedTree === undefined || testedTree === null) {
+          throw new StateStoreError(
+            "QA_STABLE_TREE_MISSING",
+            "Browser QA requires a successful implementation tree",
+          );
+        }
+        if (deps.projectVerification !== undefined) {
+          const gate = await deps.projectVerification.beforeBrowserQA({ dispatch, testedTree });
+          if (gate.status === "BLOCKED") {
+            deps.logger.info(
+              { dispatchId: dispatch.id, blocker: gate.blocker },
+              "Browser QA is waiting for Project verification",
+            );
+            return { dispatchId: dispatch.id, moved: false };
+          }
+        }
+      }
+
       let agentRunId: string;
 
       // Every provider invocation is owned by one immutable AgentRun. ACCEPTANCE is preparation
@@ -155,12 +186,6 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
       }
 
       if (stageAttempt.stage === "QA" && deps.browserQA !== undefined) {
-        const testedTree = [...workflowSnapshot.stageAttempts]
-          .reverse()
-          .find(
-            ({ stage, status, resultTree }) =>
-              stage === "IMPLEMENT" && status === "SUCCEEDED" && resultTree !== null,
-          )?.resultTree;
         if (testedTree === undefined || testedTree === null) {
           throw new StateStoreError(
             "QA_STABLE_TREE_MISSING",

@@ -735,6 +735,9 @@ Critical and stays open until the Q17 spec and implementation provide:
   separate owner action and cannot smuggle it into a test command;
 - reservation, exact tree/recipe snapshot, terminal result, evidence, workflow transition and receipt follow durable
   transaction/idempotency rules; restart never silently replays an unknown external execution;
+- automatic execution is admitted only after a successful Review has advanced the WorkItem to QA. The exact internal
+  `verification-workflow` actor may reserve only a first `START_VERIFICATION_RUN`; manual start/retry/cancel remains
+  owner-only, and Browser QA receives no AgentRun or browser authority while this gate is blocked;
 - daemon derives `PASSED | FAILED | ERROR | STALE`; provider text cannot create a pass. Required failed/error/stale
   evidence blocks Acceptance and any correction requires fresh review plus exact rerun on the current tree;
 - Acceptance stores only the daemon-derived Plan/Run/tree/check identity summary. Raw output and local paths stay out

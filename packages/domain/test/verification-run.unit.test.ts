@@ -258,6 +258,61 @@ describe("verification Run lifecycle", () => {
       checks: [{ recipeId: "package-test", status: "QUEUED" }],
       event: { type: "VERIFICATION_RUN_RESERVED" },
     });
+    expect(
+      decideVerificationRunReservation(
+        {
+          ...command,
+          actor: { type: "SYSTEM", id: "verification-workflow" },
+        },
+        {
+          ...context,
+          workItem: { ...workItem, currentStage: "QA" },
+        },
+      ),
+    ).toMatchObject({
+      run: { status: "QUEUED", planContentHash: plan.contentHash },
+      checks: [{ recipeId: "package-test", status: "QUEUED" }],
+    });
+    expect(() =>
+      decideVerificationRunReservation(
+        {
+          ...command,
+          actor: { type: "SYSTEM", id: "local-daemon" },
+        },
+        {
+          ...context,
+          workItem: { ...workItem, currentStage: "QA" },
+        },
+      ),
+    ).toThrow(expect.objectContaining({ code: "OWNER_REQUIRED" }));
+    expect(() =>
+      decideVerificationRunReservation(
+        {
+          ...command,
+          actor: { type: "SYSTEM", id: "verification-workflow" },
+        },
+        context,
+      ),
+    ).toThrow(expect.objectContaining({ code: "OWNER_REQUIRED" }));
+    expect(() =>
+      decideVerificationRunReservation(
+        {
+          ...command,
+          actor: { type: "SYSTEM", id: "verification-workflow" },
+          type: "RETRY_VERIFICATION_RUN",
+          payload: {
+            ...command.payload,
+            retryOfRunId: run.id,
+            expectedRetryOfRunVersion: run.version,
+          },
+        },
+        {
+          ...context,
+          workItem: { ...workItem, currentStage: "QA" },
+          retryOfRun: { ...run, status: "FAILED" },
+        },
+      ),
+    ).toThrow(expect.objectContaining({ code: "OWNER_REQUIRED" }));
     expect(() =>
       decideVerificationRunReservation(command, {
         ...context,
