@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { assessProjectReadiness } from "../src/index.js";
+import { lockfileFindings } from "../src/scanner.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -98,5 +99,38 @@ describe("project readiness scanner", () => {
     await expect(
       assessProjectReadiness(join(repositoryPath, "nested"), { activeConstitution: true }),
     ).rejects.toMatchObject({ code: "REPOSITORY_UNAVAILABLE" });
+  });
+});
+
+describe("lockfile findings", () => {
+  it("passes a repository without a tracked manifest", () => {
+    expect(lockfileFindings(["README.md", "src/index.ts"])).toEqual([]);
+  });
+
+  it("passes a manifest with exactly one lockfile", () => {
+    expect(lockfileFindings(["package.json", "pnpm-lock.yaml"])).toEqual([]);
+  });
+
+  it("reports a manifest without any lockfile", () => {
+    const findings = lockfileFindings(["package.json"]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ code: "LOCKFILE_MISSING", severity: "HIGH", path: "package.json" });
+  });
+
+  it("reports every lockfile when more than one package manager is tracked", () => {
+    const findings = lockfileFindings(["package.json", "pnpm-lock.yaml", "package-lock.json"]);
+    expect(findings.map((entry) => entry.code)).toEqual(["LOCKFILE_AMBIGUOUS", "LOCKFILE_AMBIGUOUS"]);
+  });
+
+  it("ignores a lockfile that is not at the repository root", () => {
+    const findings = lockfileFindings(["package.json", "packages/api/pnpm-lock.yaml"]);
+    expect(findings.map((entry) => entry.code)).toEqual(["LOCKFILE_MISSING"]);
+  });
+
+  it("reports unverifiable inputs instead of guessing", () => {
+    const findings = lockfileFindings(null);
+    expect(findings).toEqual([
+      expect.objectContaining({ code: "DEPENDENCY_INPUT_UNVERIFIABLE", severity: "HIGH", path: null }),
+    ]);
   });
 });

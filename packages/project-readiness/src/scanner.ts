@@ -112,6 +112,52 @@ const isSecretLikePath = (path: string): boolean => {
   ].includes(name);
 };
 
+const ROOT_LOCKFILES = [
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lockb",
+  "bun.lock",
+] as const;
+
+export const lockfileFindings = (
+  trackedPaths: readonly string[] | null,
+): readonly SecurityFindingDraft[] => {
+  if (trackedPaths === null) {
+    return [
+      finding(
+        "DEPENDENCY_INPUT_UNVERIFIABLE",
+        "HIGH",
+        null,
+        "Tracked paths exceeded the safe inspection bound, so lockfile coverage was not checked.",
+      ),
+    ];
+  }
+  const rootPaths = new Set(trackedPaths.filter((path) => !path.includes("/")));
+  if (!rootPaths.has("package.json")) return [];
+  const present = ROOT_LOCKFILES.filter((name) => rootPaths.has(name));
+  if (present.length === 0) {
+    return [
+      finding(
+        "LOCKFILE_MISSING",
+        "HIGH",
+        "package.json",
+        "A tracked manifest has no tracked lockfile, so installed versions are not reproducible.",
+      ),
+    ];
+  }
+  if (present.length === 1) return [];
+  return present.map((name) =>
+    finding(
+      "LOCKFILE_AMBIGUOUS",
+      "MEDIUM",
+      name,
+      "More than one package manager lockfile is tracked, so the installed tree is ambiguous.",
+    ),
+  );
+};
+
 const finding = (
   code: SecurityFindingDraft["code"],
   severity: SecurityFindingDraft["severity"],
