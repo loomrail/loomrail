@@ -42,6 +42,7 @@ import {
   verificationPlanSchema,
   verificationPlanPublicationSchema,
   verificationCheckSchema,
+  verificationCorrectionRunSchema,
   verificationFailureSchema,
   verificationRunSchema,
   qaAttachmentRefSchema,
@@ -105,6 +106,7 @@ import {
   type VerificationPlan,
   type VerificationPlanPublication,
   type VerificationCheck,
+  type VerificationCorrectionRun,
   type VerificationFailure,
   type VerificationRun,
   type QAAttachmentRef,
@@ -380,6 +382,7 @@ const verificationRunRowSchema = z.object({
   implementation_tree: z.string(),
   ordinal: z.number().int(),
   retry_of_run_id: z.string().nullable(),
+  verification_correction_run_id: z.string().nullable().optional(),
   platform: z.string(),
   status: z.string(),
   current_check_id: z.string().nullable(),
@@ -425,6 +428,23 @@ const verificationFailureRowSchema = z.object({
   reason: z.string(),
   stale_reasons_json: z.string(),
   created_at: z.string(),
+});
+
+const verificationCorrectionRunRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  budget_position: z.number().int(),
+  automatic: z.number().int(),
+  source_failure_id: z.string(),
+  source_verification_run_id: z.string(),
+  source_implementation_tree: z.string(),
+  status: z.string(),
+  created_at: z.string(),
+  completed_at: z.string().nullable(),
+  version: z.number().int(),
 });
 
 const verificationOutputArtifactRowSchema = z.object({
@@ -803,6 +823,7 @@ const evidenceArtifactRowSchema = z.object({
   pipeline_run_id: z.string(),
   stage_attempt_id: z.string(),
   correction_run_id: z.string().nullable(),
+  verification_correction_run_id: z.string().nullable().optional(),
   stage: z.string(),
   kind: z.string(),
   status: z.string(),
@@ -825,6 +846,7 @@ const reviewReportRowSchema = z.object({
   pipeline_run_id: z.string(),
   stage_attempt_id: z.string(),
   correction_run_id: z.string().nullable(),
+  verification_correction_run_id: z.string().nullable().optional(),
   author_agent_run_id: z.string(),
   reviewer_agent_run_id: z.string(),
   provider_relation: z.string(),
@@ -846,6 +868,7 @@ const reviewFindingRowSchema = z.object({
   pipeline_run_id: z.string(),
   stage_attempt_id: z.string(),
   correction_run_id: z.string().nullable(),
+  verification_correction_run_id: z.string().nullable().optional(),
   review_artifact_id: z.string(),
   reviewed_tree: z.string(),
   ordinal: z.number().int(),
@@ -882,6 +905,7 @@ const qaRunRowSchema = z
     plan_json: z.string(),
     correction_run_id: z.string().nullable(),
     retest_plan_id: z.string().nullable(),
+    verification_correction_run_id: z.string().nullable().optional(),
     status: z.string(),
     error_code: z.string().nullable(),
     error_summary: z.string().nullable(),
@@ -902,6 +926,7 @@ const qaEvidenceBundleRowSchema = z.object({
   work_item_id: z.string(),
   pipeline_run_id: z.string(),
   stage_attempt_id: z.string(),
+  verification_correction_run_id: z.string().nullable().optional(),
   tested_tree: z.string(),
   verdict: z.string(),
   environment_json: z.string(),
@@ -1016,6 +1041,7 @@ const stageAttemptRowSchema = z.object({
   project_id: z.string(),
   work_item_id: z.string(),
   correction_run_id: z.string().nullable(),
+  verification_correction_run_id: z.string().nullable().optional(),
   stage: z.string(),
   attempt: z.number().int(),
   status: z.string(),
@@ -1166,6 +1192,13 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("LIST_WORK_ITEM_VERIFICATION_FAILURES"),
+      workItemId: opaqueIdSchema,
+      limit: z.number().int().min(1).max(100).default(20),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("LIST_WORK_ITEM_VERIFICATION_CORRECTIONS"),
       workItemId: opaqueIdSchema,
       limit: z.number().int().min(1).max(100).default(20),
     })
@@ -1636,6 +1669,9 @@ const verificationRunFromRow = (value: unknown): VerificationRun => {
     implementationTree: row.implementation_tree,
     ordinal: row.ordinal,
     retryOfRunId: row.retry_of_run_id,
+    ...(row.verification_correction_run_id === undefined || row.verification_correction_run_id === null
+      ? {}
+      : { verificationCorrectionRunId: row.verification_correction_run_id }),
     platform: row.platform,
     status: row.status,
     currentCheckId: row.current_check_id,
@@ -1687,6 +1723,26 @@ const verificationFailureFromRow = (value: unknown): VerificationFailure => {
     reason: row.reason,
     staleReasons: parseJson(row.stale_reasons_json),
     createdAt: row.created_at,
+  });
+};
+
+const verificationCorrectionRunFromRow = (value: unknown): VerificationCorrectionRun => {
+  const row = verificationCorrectionRunRowSchema.parse(value);
+  return verificationCorrectionRunSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    budgetPosition: row.budget_position,
+    automatic: row.automatic === 1,
+    sourceFailureId: row.source_failure_id,
+    sourceVerificationRunId: row.source_verification_run_id,
+    sourceImplementationTree: row.source_implementation_tree,
+    status: row.status,
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
+    version: row.version,
   });
 };
 
@@ -1843,6 +1899,9 @@ const evidenceArtifactFromRow = (value: unknown): EvidenceArtifact => {
     pipelineRunId: row.pipeline_run_id,
     stageAttemptId: row.stage_attempt_id,
     correctionRunId: row.correction_run_id,
+    ...(row.verification_correction_run_id === undefined || row.verification_correction_run_id === null
+      ? {}
+      : { verificationCorrectionRunId: row.verification_correction_run_id }),
     stage: row.stage,
     kind: row.kind,
     status: row.status,
@@ -1868,6 +1927,9 @@ const reviewReportFromRow = (value: unknown): ReviewReport => {
     pipelineRunId: row.pipeline_run_id,
     stageAttemptId: row.stage_attempt_id,
     correctionRunId: row.correction_run_id,
+    ...(row.verification_correction_run_id === undefined || row.verification_correction_run_id === null
+      ? {}
+      : { verificationCorrectionRunId: row.verification_correction_run_id }),
     authorAgentRunId: row.author_agent_run_id,
     reviewerAgentRunId: row.reviewer_agent_run_id,
     providerRelation: row.provider_relation,
@@ -1892,6 +1954,9 @@ const reviewFindingFromRow = (value: unknown): ReviewFinding => {
     pipelineRunId: row.pipeline_run_id,
     stageAttemptId: row.stage_attempt_id,
     correctionRunId: row.correction_run_id,
+    ...(row.verification_correction_run_id === undefined || row.verification_correction_run_id === null
+      ? {}
+      : { verificationCorrectionRunId: row.verification_correction_run_id }),
     reviewArtifactId: row.review_artifact_id,
     reviewedTree: row.reviewed_tree,
     ordinal: row.ordinal,
@@ -1925,6 +1990,9 @@ const qaRunFromRow = (value: unknown): QARun => {
     workItemId: row.work_item_id,
     pipelineRunId: row.pipeline_run_id,
     stageAttemptId: row.stage_attempt_id,
+    ...(row.verification_correction_run_id === undefined || row.verification_correction_run_id === null
+      ? {}
+      : { verificationCorrectionRunId: row.verification_correction_run_id }),
     agentRunId: row.agent_run_id,
     driverId: row.driver_id,
     testedTree: row.tested_tree,
@@ -1959,6 +2027,9 @@ const qaEvidenceBundleFromRow = (value: unknown): QAEvidenceBundle => {
     workItemId: row.work_item_id,
     pipelineRunId: row.pipeline_run_id,
     stageAttemptId: row.stage_attempt_id,
+    ...(row.verification_correction_run_id === undefined || row.verification_correction_run_id === null
+      ? {}
+      : { verificationCorrectionRunId: row.verification_correction_run_id }),
     testedTree: row.tested_tree,
     verdict: row.verdict,
     environment: parseJson(row.environment_json),
@@ -2124,6 +2195,9 @@ const stageAttemptFromRow = (value: unknown): StageAttempt => {
     projectId: row.project_id,
     workItemId: row.work_item_id,
     correctionRunId: row.correction_run_id,
+    ...(row.verification_correction_run_id === undefined || row.verification_correction_run_id === null
+      ? {}
+      : { verificationCorrectionRunId: row.verification_correction_run_id }),
     stage: row.stage,
     attempt: row.attempt,
     status: row.status,
@@ -3012,6 +3086,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     );
     const selectVerificationFailuresByWorkItem = database.prepare(
       "SELECT * FROM verification_failures WHERE work_item_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+    );
+    const selectVerificationCorrectionsByWorkItem = database.prepare(
+      `SELECT * FROM verification_correction_runs
+       WHERE work_item_id = ? ORDER BY budget_position DESC, id DESC LIMIT ?`,
     );
     const insertVerificationFailure = database.prepare(
       `INSERT INTO verification_failures (
@@ -10536,6 +10614,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             failures: selectVerificationFailuresByWorkItem
               .all(queryValue.workItemId, queryValue.limit)
               .map(verificationFailureFromRow),
+          };
+        case "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS":
+          return {
+            type: "VERIFICATION_CORRECTIONS",
+            correctionRuns: selectVerificationCorrectionsByWorkItem
+              .all(queryValue.workItemId, queryValue.limit)
+              .map(verificationCorrectionRunFromRow),
           };
         case "LIST_ACTIVE_VERIFICATION_RUNS":
           return {

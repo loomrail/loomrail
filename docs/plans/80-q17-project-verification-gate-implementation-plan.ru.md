@@ -46,11 +46,13 @@ output; restart сохраняет failure, а crash во время process д�
       или browser authority до свежего current-tree pass, а terminal non-pass не ретраится скрыто.
 - [ ] Добавить отдельный `VerificationFailure` и связать его с correction IMPLEMENT/re-review/rerun lineage.
       Immutable failure identity и атомарная запись `FAILED | ERROR | INTERRUPTED` уже готовы; correction transition,
-      отдельный bounded `VerificationCorrectionRun` и pure initial `QA gate → correction IMPLEMENT` decision готовы;
-      transactional wiring, re-review/rerun links и `STALE` materialization остаются в работе.
+      отдельный bounded `VerificationCorrectionRun`, pure initial `QA gate → correction IMPLEMENT` decision и
+      migration 0042 с раздельной lineage Stage/Review/QA/Verification готовы; transactional wiring,
+      re-review/rerun links и `STALE` materialization остаются в работе.
 - [ ] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
       Общие constants и pure decision `2 automatic + 1 owner` уже заменили QA-only policy; durable usage/lineage,
-      объединяющие оба evaluator без объединения их failure entities, остаются в работе.
+      объединяющие оба evaluator без объединения их failure entities, частично закреплены общим порядковым budget
+      position при создании VerificationCorrectionRun; единый ledger для обоих направлений остаётся в работе.
 - [x] Сделать required failed/error/interrupted/stale детерминированным Acceptance blocker; optional failure оставить
       advisory.
 - [x] Показать criterion-to-verification evidence в Acceptance Package/export без raw output/path leakage.

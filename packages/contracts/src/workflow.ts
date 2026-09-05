@@ -586,6 +586,7 @@ export const evidenceArtifactSchema = providerArtifactDraftSchema
     pipelineRunId: opaqueIdSchema,
     stageAttemptId: opaqueIdSchema,
     correctionRunId: opaqueIdSchema.nullable(),
+    verificationCorrectionRunId: opaqueIdSchema.nullable().optional(),
     stage: z.enum(["REVIEW", "QA"]),
     status: evidenceArtifactStatusSchema,
     provider: providerIdSchema,

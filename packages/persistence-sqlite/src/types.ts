@@ -44,6 +44,7 @@ import type {
   VerificationPlan,
   VerificationPlanPublication,
   VerificationCheck,
+  VerificationCorrectionRun,
   VerificationFailure,
   VerificationRun,
 } from "@loomrail/contracts";
@@ -134,6 +135,7 @@ export type StateQuery =
   | { type: "GET_VERIFICATION_RUN_CONTEXT"; runId: string }
   | { type: "LIST_WORK_ITEM_VERIFICATION_RUNS"; workItemId: string; limit?: number }
   | { type: "LIST_WORK_ITEM_VERIFICATION_FAILURES"; workItemId: string; limit?: number }
+  | { type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS"; workItemId: string; limit?: number }
   | { type: "LIST_ACTIVE_VERIFICATION_RUNS" }
   | { type: "GET_VERIFICATION_OUTPUT_ARTIFACT"; checkId: string }
   | { type: "LIST_EXPIRED_VERIFICATION_OUTPUTS"; closedBefore: string; limit?: number }
@@ -230,6 +232,7 @@ export type StateQueryResult =
     }
   | { type: "VERIFICATION_RUNS"; runs: VerificationRun[] }
   | { type: "VERIFICATION_FAILURES"; failures: VerificationFailure[] }
+  | { type: "VERIFICATION_CORRECTIONS"; correctionRuns: VerificationCorrectionRun[] }
   | {
       type: "VERIFICATION_OUTPUT_ARTIFACT";
       artifact: { artifactId: string; checkId: string; runId: string; storageKey: string } | null;
