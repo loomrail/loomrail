@@ -583,7 +583,7 @@ export const assessProjectReadiness = async (
     automatedCheck(
       "DEPS_LOCKFILE_PRESENT",
       "DEPENDENCIES",
-      "Tracked dependency manifests have exactly one matching lockfile.",
+      "No missing or ambiguous lockfiles were found for tracked dependency manifests.",
       "Track a single lockfile so installs are reproducible.",
       lockfileFindings(
         trackedResult.exitCode !== 0 || trackedResult.overflowed ? null : splitNullPaths(trackedResult),
@@ -600,6 +600,7 @@ export const assessProjectReadiness = async (
           { path: ".env.production.local", exists: prodEnvLocalExists, ignored: prodEnvLocalIgnored },
         ]),
         ...inlineSecretFindings(workflows.files),
+        ...workflows.unverifiable,
       ],
     ),
     ...launchOwnerChecks(),

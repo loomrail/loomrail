@@ -112,6 +112,21 @@ describe("project readiness scanner", () => {
       assessProjectReadiness(join(repositoryPath, "nested"), { activeConstitution: true }),
     ).rejects.toMatchObject({ code: "REPOSITORY_UNAVAILABLE" });
   });
+
+  it("marks ENV_PROD_SEPARATION action-required when CI workflows are unverifiable", async () => {
+    const repositoryPath = await createRepository("env-ci-unverifiable");
+    const outside = join(repositoryPath, "outside.yml");
+    await writeFile(outside, "on: push\n");
+    await mkdir(join(repositoryPath, ".github", "workflows"), { recursive: true });
+    await symlink(outside, join(repositoryPath, ".github", "workflows", "linked.yml"));
+    await commitAll(repositoryPath);
+
+    const assessment = await assessProjectReadiness(repositoryPath, { activeConstitution: true });
+
+    const envProdSeparation = assessment.checks.find((check) => check.key === "ENV_PROD_SEPARATION");
+    expect(envProdSeparation?.status).toBe("ACTION_REQUIRED");
+    expect(envProdSeparation?.findings).toEqual([expect.objectContaining({ code: "CI_INPUT_UNVERIFIABLE" })]);
+  });
 });
 
 describe("production environment separation", () => {
