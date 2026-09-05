@@ -969,6 +969,11 @@ export const verificationFailureRecordedEventSchema = verificationRunEventBaseSc
   data: z.object({ failure: verificationFailureSchema }).strict(),
 });
 
+export const verificationCorrectionStartedEventSchema = verificationRunEventBaseSchema.extend({
+  type: z.literal("VERIFICATION_CORRECTION_STARTED"),
+  data: z.object({ correctionRun: verificationCorrectionRunSchema }).strict(),
+});
+
 export const verificationRunReservedResultSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -1134,6 +1139,7 @@ export type VerificationFailure = z.infer<typeof verificationFailureSchema>;
 export type VerificationCorrectionRunStatus = z.infer<typeof verificationCorrectionRunStatusSchema>;
 export type VerificationCorrectionRun = z.infer<typeof verificationCorrectionRunSchema>;
 export type VerificationFailureRecordedEvent = z.infer<typeof verificationFailureRecordedEventSchema>;
+export type VerificationCorrectionStartedEvent = z.infer<typeof verificationCorrectionStartedEventSchema>;
 export type VerificationCheckObservation = z.infer<typeof verificationCheckObservationSchema>;
 export type VerificationRunSnapshotResponse = z.infer<typeof verificationRunSnapshotResponseSchema>;
 export type VerificationRunsResponse = z.infer<typeof verificationRunsResponseSchema>;

@@ -356,6 +356,7 @@ export type LocalStateIdKind =
   | "verificationRun"
   | "verificationCheck"
   | "verificationFailure"
+  | "verificationCorrectionRun"
   | "projectReadinessRun"
   | "readinessCheck"
   | "securityFinding"

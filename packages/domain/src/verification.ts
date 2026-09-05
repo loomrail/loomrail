@@ -407,6 +407,7 @@ export const decideVerificationRunReservation = (
     plan: VerificationPlan | undefined;
     publication: VerificationPlanPublication | undefined;
     retryOfRun?: VerificationRun;
+    verificationCorrectionRunId?: string | null;
   },
 ): { run: VerificationRun; checks: VerificationCheck[]; event: VerificationRunReservedIntent } => {
   const automatedWorkflowStart =
@@ -509,6 +510,7 @@ export const decideVerificationRunReservation = (
     implementationTree: command.payload.implementationTree,
     ordinal: context.ordinal,
     retryOfRunId: retryOfRun?.id ?? null,
+    verificationCorrectionRunId: context.verificationCorrectionRunId ?? null,
     platform: command.payload.platform,
     status: "QUEUED",
     currentCheckId: null,

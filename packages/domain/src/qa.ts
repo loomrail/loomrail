@@ -155,6 +155,7 @@ export const decideQAReservation = (
     workItemId: context.stageAttempt.workItemId,
     pipelineRunId: context.stageAttempt.pipelineRunId,
     stageAttemptId: context.stageAttempt.id,
+    verificationCorrectionRunId: context.stageAttempt.verificationCorrectionRunId ?? null,
     agentRunId: context.agentRun.id,
     driverId: "PLAYWRIGHT",
     testedTree: command.payload.testedTree,

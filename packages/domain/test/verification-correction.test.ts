@@ -150,6 +150,13 @@ describe("Project verification correction transition", () => {
       },
       nextDispatch: { id: "dispatch-implement-correction-one", status: "PENDING" },
       workItem: { currentStage: "IMPLEMENT", state: "IN_PROGRESS" },
+      events: [
+        { type: "STAGE_ATTEMPT_CHANGED", data: { previousStatus: "QUEUED" } },
+        {
+          type: "VERIFICATION_CORRECTION_STARTED",
+          data: { correctionRun: { id: "verification-correction-one" } },
+        },
+      ],
     });
   });
 
@@ -158,6 +165,34 @@ describe("Project verification correction transition", () => {
       decideInitialFailedVerificationCorrectionTransition({
         verificationRun,
         failure: { ...failure, verificationRunId: "foreign-run" },
+        workItem,
+        pipelineRun,
+        stageAttempt,
+        dispatch,
+        budgetUsage: { automaticUsed: 0, totalUsed: 0 },
+        ids: {
+          correctionRunId: "verification-correction-one",
+          nextStageAttemptId: "stage-implement-correction-one",
+          nextDispatchId: "dispatch-implement-correction-one",
+        },
+        now,
+      }),
+    ).toThrow(expect.objectContaining({ code: "LINEAGE_MISMATCH" }));
+  });
+
+  it("does not turn an interrupted verifier process into an implementation correction", () => {
+    expect(() =>
+      decideInitialFailedVerificationCorrectionTransition({
+        verificationRun: {
+          ...verificationRun,
+          status: "INTERRUPTED",
+          terminalReason: "DAEMON_RESTART",
+        },
+        failure: {
+          ...failure,
+          reason: "RUN_INTERRUPTED",
+          verificationCheckId: null,
+        },
         workItem,
         pipelineRun,
         stageAttempt,

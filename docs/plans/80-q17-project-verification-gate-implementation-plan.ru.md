@@ -47,12 +47,16 @@ output; restart сохраняет failure, а crash во время process д�
 - [ ] Добавить отдельный `VerificationFailure` и связать его с correction IMPLEMENT/re-review/rerun lineage.
       Immutable failure identity и атомарная запись `FAILED | ERROR | INTERRUPTED` уже готовы; correction transition,
       отдельный bounded `VerificationCorrectionRun`, pure initial `QA gate → correction IMPLEMENT` decision и
-      migration 0042 с раздельной lineage Stage/Review/QA/Verification готовы; transactional wiring,
-      re-review/rerun links и `STALE` materialization остаются в работе.
+      migration 0042 с раздельной lineage Stage/Review/QA/Verification готовы. Terminal `FAILED | ERROR` теперь в
+      одной SQLite-транзакции завершает исходный QA gate, создаёт ровно одну active correction, переводит workflow в
+      fresh `IMPLEMENT(1)`, сохраняет Event и после рестарта восстанавливает ту же lineage; replay команды не создаёт
+      дубль. Propagation re-review/rerun identity реализована в domain/persistence records; закрытие correction по
+      fresh pass, повторный bounded cycle и `STALE` materialization остаются в работе.
 - [ ] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
       Общие constants и pure decision `2 automatic + 1 owner` уже заменили QA-only policy; durable usage/lineage,
-      объединяющие оба evaluator без объединения их failure entities, частично закреплены общим порядковым budget
-      position при создании VerificationCorrectionRun; единый ledger для обоих направлений остаётся в работе.
+      объединяющие оба evaluator без объединения их failure entities, закреплены транзакционным подсчётом обеих
+      correction-таблиц и общим порядковым budget position при создании VerificationCorrectionRun. Единый durable
+      ledger и owner gate, одинаково работающие при чередовании Project verification и Browser QA, остаются в работе.
 - [x] Сделать required failed/error/interrupted/stale детерминированным Acceptance blocker; optional failure оставить
       advisory.
 - [x] Показать criterion-to-verification evidence в Acceptance Package/export без raw output/path leakage.
@@ -64,6 +68,8 @@ output; restart сохраняет failure, а crash во время process д�
 
 - [ ] Закрыть T48 matrix: argv/path/env/network-policy/output/timeout/tree mutation/child orphan/duplicate completion.
 - [ ] Проверить every allowed/forbidden transition, rollback, idempotency, expected-version conflict и restart.
+      Initial verification correction уже покрыта allowed/forbidden domain cases, replay idempotency и SQLite reopen;
+      passing/repeated/owner-gate paths ещё не закрыты.
 - [ ] Выполнить RU/EN, keyboard/focus, light/dark, 320 px и daemon-restart Browser QA.
 - [ ] Выполнить focused lint/typecheck/unit/integration, full non-landing gates, fault injection и clean release.
 - [ ] Выполнить independent Standards/Spec review и исправить все P0–P2.

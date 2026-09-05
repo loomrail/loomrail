@@ -5,6 +5,7 @@ import {
   type PipelineRun,
   type StageAttempt,
   type VerificationCorrectionRun,
+  type VerificationCorrectionStartedEvent,
   type VerificationFailure,
   type VerificationRun,
   type WorkItem,
@@ -34,6 +35,13 @@ export type StartedVerificationCorrectionTransition = {
   correctionRun: VerificationCorrectionRun;
   nextStageAttempt: StageAttempt;
   nextDispatch: WorkflowDispatch;
+  events: readonly (
+    | Pick<VerificationCorrectionStartedEvent, "type" | "data">
+    | {
+        type: "STAGE_ATTEMPT_CHANGED";
+        data: { run: PipelineRun; stageAttempt: StageAttempt; previousStatus: StageAttempt["status"] };
+      }
+  )[];
 };
 
 /** Starts one automatic fix cycle from daemon-measured Project verification evidence. */
@@ -50,11 +58,7 @@ export const decideInitialFailedVerificationCorrectionTransition = (input: {
 }): StartedVerificationCorrectionTransition => {
   const verificationRun = verificationRunSchema.parse(input.verificationRun);
   const failure = verificationFailureSchema.parse(input.failure);
-  if (
-    verificationRun.status !== "FAILED" &&
-    verificationRun.status !== "ERROR" &&
-    verificationRun.status !== "INTERRUPTED"
-  ) {
+  if (verificationRun.status !== "FAILED" && verificationRun.status !== "ERROR") {
     throw new VerificationCorrectionError(
       "LINEAGE_MISMATCH",
       "Only a terminal non-passing Project verification Run can start correction",
@@ -185,5 +189,16 @@ export const decideInitialFailedVerificationCorrectionTransition = (input: {
     correctionRun,
     nextStageAttempt,
     nextDispatch,
+    events: [
+      {
+        type: "STAGE_ATTEMPT_CHANGED",
+        data: {
+          run: pipelineRun,
+          stageAttempt: completedStageAttempt,
+          previousStatus: input.stageAttempt.status,
+        },
+      },
+      { type: "VERIFICATION_CORRECTION_STARTED", data: { correctionRun } },
+    ],
   };
 };

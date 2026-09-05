@@ -825,6 +825,15 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.verificationFailureRecorded"),
         tone: "warning",
       };
+    case "VERIFICATION_CORRECTION_STARTED":
+      return {
+        detail: t("event.verificationCorrectionStartedDetail", {
+          ordinal: event.data.correctionRun.budgetPosition,
+        }),
+        icon: "play",
+        label: t("event.verificationCorrectionStarted"),
+        tone: "accent",
+      };
     case "PROJECT_READINESS_ASSESSED":
       return {
         detail: t("event.readinessAssessedDetail", {

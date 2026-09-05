@@ -209,6 +209,11 @@ const migrations: readonly Migration[] = [
     name: "verification_correction_lineage",
     filename: "0042_verification_correction_lineage.sql",
   },
+  {
+    version: 43,
+    name: "verification_correction_started_event",
+    filename: "0043_verification_correction_started_event.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

@@ -24,6 +24,8 @@ import {
   evidenceArtifactSchema,
   humanRequestSchema,
   humanRequestStatusSchema,
+  MAX_AUTOMATIC_CORRECTION_RUNS,
+  MAX_TOTAL_CORRECTION_RUNS,
   maxContextPackRecipeSources,
   mcpCapabilitySnapshotSchema,
   mcpConsentSchema,
@@ -161,6 +163,7 @@ import {
   decideVerificationPlanPublicationRetry,
   decideVerificationCheckCompletion,
   decideVerificationCheckStart,
+  decideInitialFailedVerificationCorrectionTransition,
   deriveVerificationFailure,
   decideVerificationRunInterruption,
   decideVerificationRunReservation,
@@ -250,6 +253,7 @@ import {
   type ReviewFindingDispositionDecision,
   type StageAttemptPauseDecision,
   type StartWorkflowDecision,
+  type StartedVerificationCorrectionTransition,
   type WorkItemCommand,
   type WorkItemDecision,
   type WorkItemEventIntent,
@@ -445,6 +449,11 @@ const verificationCorrectionRunRowSchema = z.object({
   created_at: z.string(),
   completed_at: z.string().nullable(),
   version: z.number().int(),
+});
+
+const correctionBudgetUsageRowSchema = z.object({
+  automatic_used: z.number().int().nonnegative(),
+  total_used: z.number().int().nonnegative(),
 });
 
 const verificationOutputArtifactRowSchema = z.object({
@@ -3070,9 +3079,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const insertVerificationRun = database.prepare(
       `INSERT INTO verification_runs (
         id, schema_version, project_id, work_item_id, pipeline_run_id, workspace_id, plan_id,
-        plan_revision, plan_content_hash, implementation_tree, ordinal, retry_of_run_id, platform,
-        status, current_check_id, terminal_reason, started_at, completed_at, created_at, version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        plan_revision, plan_content_hash, implementation_tree, ordinal, retry_of_run_id,
+        verification_correction_run_id, platform, status, current_check_id, terminal_reason,
+        started_at, completed_at, created_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const updateVerificationRun = database.prepare(
       `UPDATE verification_runs SET
@@ -3090,6 +3100,24 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectVerificationCorrectionsByWorkItem = database.prepare(
       `SELECT * FROM verification_correction_runs
        WHERE work_item_id = ? ORDER BY budget_position DESC, id DESC LIMIT ?`,
+    );
+    const selectCorrectionBudgetUsage = database.prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM qa_correction_runs
+          WHERE pipeline_run_id = ? AND ordinal <= 2)
+         +
+         (SELECT COUNT(*) FROM verification_correction_runs
+          WHERE pipeline_run_id = ? AND automatic = 1) AS automatic_used,
+         (SELECT COUNT(*) FROM qa_correction_runs WHERE pipeline_run_id = ?)
+         +
+         (SELECT COUNT(*) FROM verification_correction_runs WHERE pipeline_run_id = ?) AS total_used`,
+    );
+    const insertVerificationCorrectionRun = database.prepare(
+      `INSERT INTO verification_correction_runs (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, budget_position,
+        automatic, source_failure_id, source_verification_run_id, source_implementation_tree,
+        status, created_at, completed_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const insertVerificationFailure = database.prepare(
       `INSERT INTO verification_failures (
@@ -3256,6 +3284,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        INNER JOIN stage_attempts ON stage_attempts.id = agent_runs.stage_attempt_id
        WHERE agent_runs.pipeline_run_id = ?
          AND stage_attempts.correction_run_id IS ?
+         AND stage_attempts.verification_correction_run_id IS ?
          AND agent_runs.profile_role = 'DEVELOPER'
          AND agent_runs.status = 'SUCCEEDED'
        ORDER BY agent_runs.finished_at DESC, agent_runs.rowid DESC LIMIT 1`,
@@ -3263,23 +3292,27 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectLatestSucceededImplementAttemptForCycle = database.prepare(
       `SELECT * FROM stage_attempts
        WHERE pipeline_run_id = ? AND correction_run_id IS ?
+         AND verification_correction_run_id IS ?
          AND stage = 'IMPLEMENT' AND status = 'SUCCEEDED' AND result_tree IS NOT NULL
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     );
     const selectLatestSucceededImplementTreeForCycle = database.prepare(
       `SELECT result_tree FROM stage_attempts
        WHERE pipeline_run_id = ? AND correction_run_id IS ?
+         AND verification_correction_run_id IS ?
          AND stage = 'IMPLEMENT' AND status = 'SUCCEEDED' AND result_tree IS NOT NULL
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     );
     const selectOpenReviewFindingsForCycle = database.prepare(
       `SELECT * FROM review_findings
-       WHERE pipeline_run_id = ? AND correction_run_id IS ? AND status = 'OPEN'
+       WHERE pipeline_run_id = ? AND correction_run_id IS ?
+         AND verification_correction_run_id IS ? AND status = 'OPEN'
        ORDER BY created_at, id LIMIT 200`,
     );
     const countReviewReportsForCycle = database.prepare(
       `SELECT COUNT(*) AS count FROM review_reports
-       WHERE pipeline_run_id = ? AND correction_run_id IS ?`,
+       WHERE pipeline_run_id = ? AND correction_run_id IS ?
+         AND verification_correction_run_id IS ?`,
     );
     const selectReviewReportByStageAttempt = database.prepare(
       "SELECT * FROM review_reports WHERE stage_attempt_id = ? ORDER BY rowid DESC LIMIT 1",
@@ -3324,8 +3357,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       `INSERT INTO qa_runs (
         id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
         agent_run_id, driver_id, tested_tree, target_origin, plan_json, correction_run_id,
-        retest_plan_id, status, error_code, error_summary, started_at, completed_at, version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        retest_plan_id, verification_correction_run_id, status, error_code, error_summary,
+        started_at, completed_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const completeQARun = database.prepare(
       `UPDATE qa_runs SET status = ?, error_code = ?, error_summary = ?, completed_at = ?, version = ?
@@ -3334,9 +3368,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const insertQAEvidenceBundle = database.prepare(
       `INSERT INTO qa_evidence_bundles (
         id, schema_version, qa_run_id, project_id, work_item_id, pipeline_run_id,
-        stage_attempt_id, tested_tree, verdict, environment_json, executions_json,
-        observations_json, attachment_ids_json, defect_ids_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        stage_attempt_id, verification_correction_run_id, tested_tree, verdict, environment_json,
+        executions_json, observations_json, attachment_ids_json, defect_ids_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const selectQAEvidenceBundleById = database.prepare("SELECT * FROM qa_evidence_bundles WHERE id = ?");
     const selectQAEvidenceBundleByQARun = database.prepare(
@@ -3877,13 +3911,19 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       artifacts: readonly EvidenceArtifact[],
     ): EvidenceArtifact[] => {
       if (stageAttempt.stage !== "ACCEPTANCE") return [];
-      const treeValue = selectLatestSucceededImplementTreeForCycle.get(run.id, stageAttempt.correctionRunId);
+      const treeValue = selectLatestSucceededImplementTreeForCycle.get(
+        run.id,
+        stageAttempt.correctionRunId,
+        stageAttempt.verificationCorrectionRunId ?? null,
+      );
       if (treeValue === undefined) return [];
       const currentTree = resultTreeRowSchema.parse(treeValue).result_tree;
       const qaArtifact = artifacts.find(
         (artifact) =>
           artifact.kind === "QA_REPORT" &&
           artifact.correctionRunId === stageAttempt.correctionRunId &&
+          (artifact.verificationCorrectionRunId ?? null) ===
+            (stageAttempt.verificationCorrectionRunId ?? null) &&
           artifact.testedTree === currentTree,
       );
       if (qaArtifact === undefined) return [];
@@ -3891,6 +3931,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         (artifact) =>
           artifact.kind === "REVIEW_REPORT" &&
           artifact.correctionRunId === qaArtifact.correctionRunId &&
+          (artifact.verificationCorrectionRunId ?? null) ===
+            (qaArtifact.verificationCorrectionRunId ?? null) &&
           (qaArtifact.correctionRunId === null
             ? artifact.testedTree === undefined || artifact.testedTree === qaArtifact.testedTree
             : artifact.reviewReportId !== undefined && artifact.testedTree === qaArtifact.testedTree),
@@ -4117,10 +4159,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 const implementationValue = selectLatestSucceededImplementAttemptForCycle.get(
                   run.id,
                   stageAttempt.correctionRunId,
+                  stageAttempt.verificationCorrectionRunId ?? null,
                 );
                 const authorValue = selectLatestSucceededDeveloperAgentRunForCycle.get(
                   run.id,
                   stageAttempt.correctionRunId,
+                  stageAttempt.verificationCorrectionRunId ?? null,
                 );
                 if (implementationValue === undefined || authorValue === undefined) return null;
                 const implementationAttempt = stageAttemptFromRow(implementationValue);
@@ -4143,7 +4187,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                   // if the measured tree no longer matches implementationAttempt.resultTree.
                   diffSummary: null,
                   openFindings: selectOpenReviewFindingsForCycle
-                    .all(run.id, stageAttempt.correctionRunId)
+                    .all(
+                      run.id,
+                      stageAttempt.correctionRunId,
+                      stageAttempt.verificationCorrectionRunId ?? null,
+                    )
                     .map(reviewFindingFromRow)
                     .map((finding) => ({
                       id: finding.id,
@@ -4224,6 +4272,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 const currentTreeValue = selectLatestSucceededImplementTreeForCycle.get(
                   run.id,
                   correctionRun.id,
+                  null,
                 );
                 const currentTree =
                   currentTreeValue === undefined
@@ -4526,6 +4575,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         run.implementationTree,
         run.ordinal,
         run.retryOfRunId,
+        run.verificationCorrectionRunId ?? null,
         run.platform,
         run.status,
         run.currentCheckId,
@@ -5252,6 +5302,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       | RecoveryDecision["events"][number]
       | QADefectDispositionDecision["events"][number]
       | FailedQACorrectionTransition["events"][number]
+      | StartedVerificationCorrectionTransition["events"][number]
       | PassedQACorrectionTransition["events"][number]
       | QACorrectionGateResolution["events"][number]
       | ReviewFindingDispositionDecision["events"][number]
@@ -5615,10 +5666,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       database
         .prepare(
           `INSERT INTO stage_attempts (
-            id, pipeline_run_id, project_id, work_item_id, correction_run_id, stage, attempt, status, version,
-            started_at, finished_at, failure_code, unproductive_sessions, pack_share_backoffs,
-            result_tree
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            id, pipeline_run_id, project_id, work_item_id, correction_run_id,
+            verification_correction_run_id, stage, attempt, status, version, started_at,
+            finished_at, failure_code, unproductive_sessions, pack_share_backoffs, result_tree
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           attempt.id,
@@ -5626,6 +5677,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           attempt.projectId,
           attempt.workItemId,
           attempt.correctionRunId,
+          attempt.verificationCorrectionRunId ?? null,
           attempt.stage,
           attempt.attempt,
           attempt.status,
@@ -5801,9 +5853,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO evidence_artifacts (
             id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
-            correction_run_id, stage, kind, status, provider, title, summary, checks_json,
-            review_report_id, qa_run_id, qa_evidence_bundle_id, tested_tree, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            correction_run_id, verification_correction_run_id, stage, kind, status, provider,
+            title, summary, checks_json, review_report_id, qa_run_id, qa_evidence_bundle_id,
+            tested_tree, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           artifact.id,
@@ -5813,6 +5866,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           artifact.pipelineRunId,
           artifact.stageAttemptId,
           artifact.correctionRunId,
+          artifact.verificationCorrectionRunId ?? null,
           artifact.stage,
           artifact.kind,
           artifact.status,
@@ -5833,9 +5887,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO review_reports (
             id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
-            correction_run_id, author_agent_run_id, reviewer_agent_run_id, provider_relation,
-            reviewed_tree, round, title, summary, checks_json, verdict, finding_ids_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            correction_run_id, verification_correction_run_id, author_agent_run_id,
+            reviewer_agent_run_id, provider_relation, reviewed_tree, round, title, summary,
+            checks_json, verdict, finding_ids_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           report.id,
@@ -5845,6 +5900,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           report.pipelineRunId,
           report.stageAttemptId,
           report.correctionRunId,
+          report.verificationCorrectionRunId ?? null,
           report.authorAgentRunId,
           report.reviewerAgentRunId,
           report.providerRelation,
@@ -5864,10 +5920,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .prepare(
           `INSERT INTO review_findings (
             id, schema_version, project_id, work_item_id, pipeline_run_id, stage_attempt_id,
-            correction_run_id, review_artifact_id, reviewed_tree, ordinal, severity, status, title, description,
-            path, start_line, end_line, reproduction, criterion, suggested_fix, resolution_reason,
-            resolved_by_type, resolved_by_id, created_at, resolved_at, version
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            correction_run_id, verification_correction_run_id, review_artifact_id, reviewed_tree,
+            ordinal, severity, status, title, description, path, start_line, end_line, reproduction,
+            criterion, suggested_fix, resolution_reason, resolved_by_type, resolved_by_id,
+            created_at, resolved_at, version
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           finding.id,
@@ -5877,6 +5934,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           finding.pipelineRunId,
           finding.stageAttemptId,
           finding.correctionRunId,
+          finding.verificationCorrectionRunId ?? null,
           finding.reviewArtifactId,
           finding.reviewedTree,
           finding.ordinal,
@@ -5962,6 +6020,27 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         correctionRun.sourceEvidenceBundleId,
         correctionRun.sourceTestedTree,
         JSON.stringify(correctionRun.defectIds),
+        correctionRun.status,
+        correctionRun.createdAt,
+        correctionRun.completedAt,
+        correctionRun.version,
+      );
+    };
+
+    const persistVerificationCorrectionRun = (
+      correctionRun: StartedVerificationCorrectionTransition["correctionRun"],
+    ): void => {
+      insertVerificationCorrectionRun.run(
+        correctionRun.id,
+        correctionRun.schemaVersion,
+        correctionRun.projectId,
+        correctionRun.workItemId,
+        correctionRun.pipelineRunId,
+        correctionRun.budgetPosition,
+        correctionRun.automatic ? 1 : 0,
+        correctionRun.sourceFailureId,
+        correctionRun.sourceVerificationRunId,
+        correctionRun.sourceImplementationTree,
         correctionRun.status,
         correctionRun.createdAt,
         correctionRun.completedAt,
@@ -6674,6 +6753,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           workItem === null
             ? 1
             : maxOrdinalRowSchema.parse(selectMaxVerificationRunOrdinal.get(workItem.id)).max_ordinal + 1;
+        const currentStageAttempt =
+          pipelineRun === null ? null : readStageAttempt(pipelineRun.currentStageAttemptId);
+        const verificationCorrectionRunId =
+          workItem?.currentStage === "QA" && currentStageAttempt?.stage === "QA"
+            ? (currentStageAttempt.verificationCorrectionRunId ?? null)
+            : null;
         const decision = decideVerificationRunReservation(command, {
           now: occurredAt,
           newRunId: createId("verificationRun"),
@@ -6685,6 +6770,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           workspace: workspace ?? undefined,
           plan: plan ?? undefined,
           publication: publication ?? undefined,
+          verificationCorrectionRunId,
           ...(retryOfRun === null ? {} : { retryOfRun }),
         });
         persistNewVerificationRun(decision.run, decision.checks);
@@ -6800,6 +6886,70 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           decision.next === "TERMINAL" && decision.run.status !== "PASSED"
             ? persistVerificationFailure(decision.run, readVerificationChecks(run.id), occurredAt)
             : null;
+        let correctionDecision: StartedVerificationCorrectionTransition | null = null;
+        if (
+          failureDecision !== null &&
+          (failureDecision.failure.reason === "REQUIRED_CHECK_FAILED" ||
+            failureDecision.failure.reason === "REQUIRED_CHECK_ERROR") &&
+          (decision.run.verificationCorrectionRunId ?? null) === null
+        ) {
+          const pipelineRun = readPipelineRun(decision.run.pipelineRunId);
+          const workItem = readWorkItem(decision.run.workItemId);
+          const stageAttempt =
+            pipelineRun === null ? null : readStageAttempt(pipelineRun.currentStageAttemptId);
+          const dispatch = stageAttempt === null ? null : readPendingDispatch(stageAttempt.id);
+          const usage = correctionBudgetUsageRowSchema.parse(
+            selectCorrectionBudgetUsage.get(
+              decision.run.pipelineRunId,
+              decision.run.pipelineRunId,
+              decision.run.pipelineRunId,
+              decision.run.pipelineRunId,
+            ),
+          );
+          const canStartAutomatically =
+            usage.automatic_used < MAX_AUTOMATIC_CORRECTION_RUNS &&
+            usage.total_used < MAX_TOTAL_CORRECTION_RUNS;
+          if (
+            canStartAutomatically &&
+            pipelineRun !== null &&
+            workItem !== null &&
+            stageAttempt !== null &&
+            dispatch !== null &&
+            workItem.currentStage === "QA" &&
+            pipelineRun.status === "RUNNING" &&
+            pipelineRun.currentStageAttemptId === stageAttempt.id &&
+            stageAttempt.stage === "QA" &&
+            stageAttempt.status === "QUEUED" &&
+            stageAttempt.correctionRunId === null &&
+            (stageAttempt.verificationCorrectionRunId ?? null) === null
+          ) {
+            correctionDecision = decideInitialFailedVerificationCorrectionTransition({
+              verificationRun: decision.run,
+              failure: failureDecision.failure,
+              workItem,
+              pipelineRun,
+              stageAttempt,
+              dispatch,
+              budgetUsage: {
+                automaticUsed: usage.automatic_used,
+                totalUsed: usage.total_used,
+              },
+              ids: {
+                correctionRunId: createId("verificationCorrectionRun"),
+                nextStageAttemptId: createId("stageAttempt"),
+                nextDispatchId: createId("workflowDispatch"),
+              },
+              now: occurredAt,
+            });
+            persistVerificationCorrectionRun(correctionDecision.correctionRun);
+            updateWorkflowDispatch(correctionDecision.completedDispatch);
+            updateStageAttempt(correctionDecision.completedStageAttempt);
+            updatePipelineRun(correctionDecision.pipelineRun);
+            updateWorkflowWorkItem(correctionDecision.workItem);
+            insertStageAttempt(correctionDecision.nextStageAttempt);
+            insertWorkflowDispatch(correctionDecision.nextDispatch);
+          }
+        }
         const event = appendVerificationRunEvent(
           { type: "VERIFICATION_CHECK_COMPLETED", data: { run: decision.run, check: decision.check } },
           {
@@ -6814,6 +6964,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           appendVerificationRunEvent(failureDecision.event, {
             workItemId: run.workItemId,
             projectId: run.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          });
+        }
+        if (correctionDecision !== null) {
+          appendWorkflowEvents(correctionDecision.events, {
+            workItemId: correctionDecision.workItem.id,
+            projectId: correctionDecision.workItem.projectId,
             actor: command.actor,
             occurredAt,
             correlationId: command.correlationId,
@@ -7825,6 +7984,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           JSON.stringify(qaRun.plan),
           qaRun.scope.type === "RETEST" ? qaRun.scope.correctionRunId : null,
           qaRun.scope.type === "RETEST" ? qaRun.scope.retestPlanId : null,
+          qaRun.verificationCorrectionRunId ?? null,
           qaRun.status,
           null,
           null,
@@ -7980,6 +8140,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 workItemId: decision.qaRun.workItemId,
                 pipelineRunId: decision.qaRun.pipelineRunId,
                 stageAttemptId: decision.qaRun.stageAttemptId,
+                verificationCorrectionRunId: decision.qaRun.verificationCorrectionRunId ?? null,
                 testedTree: decision.qaRun.testedTree,
                 verdict: decision.evidence.verdict,
                 environment: decision.evidence.environment,
@@ -7998,6 +8159,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             evidence.workItemId,
             evidence.pipelineRunId,
             evidence.stageAttemptId,
+            evidence.verificationCorrectionRunId ?? null,
             evidence.testedTree,
             evidence.verdict,
             JSON.stringify(evidence.environment),
@@ -8315,10 +8477,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 const authorValue = selectLatestSucceededDeveloperAgentRunForCycle.get(
                   run.id,
                   stageAttempt.correctionRunId,
+                  stageAttempt.verificationCorrectionRunId ?? null,
                 );
                 const treeValue = selectLatestSucceededImplementTreeForCycle.get(
                   run.id,
                   stageAttempt.correctionRunId,
+                  stageAttempt.verificationCorrectionRunId ?? null,
                 );
                 if (
                   authorValue === undefined ||
@@ -8335,10 +8499,19 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                   reviewerAgentRun: agentRunFromRow(runningReviewerValue),
                   currentTree: resultTreeRowSchema.parse(treeValue).result_tree,
                   round:
-                    countRowSchema.parse(countReviewReportsForCycle.get(run.id, stageAttempt.correctionRunId))
-                      .count + 1,
+                    countRowSchema.parse(
+                      countReviewReportsForCycle.get(
+                        run.id,
+                        stageAttempt.correctionRunId,
+                        stageAttempt.verificationCorrectionRunId ?? null,
+                      ),
+                    ).count + 1,
                   openFindings: selectOpenReviewFindingsForCycle
-                    .all(run.id, stageAttempt.correctionRunId)
+                    .all(
+                      run.id,
+                      stageAttempt.correctionRunId,
+                      stageAttempt.verificationCorrectionRunId ?? null,
+                    )
                     .map(reviewFindingFromRow),
                   reportId: createId("reviewReport"),
                   findingIds: command.payload.outcome.reviewReport.findings.map(() =>

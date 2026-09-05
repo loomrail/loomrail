@@ -1,7 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 import type { VerificationPlanProposal } from "@loomrail/contracts";
 import { VerificationDomainError } from "@loomrail/domain";
@@ -52,7 +51,7 @@ const template = {
   name: "Verification fixture",
   stages: [
     {
-      stage: "DISCOVERY" as const,
+      stage: "QA" as const,
       ordinal: 0,
       contextPack: {
         schemaVersion: 1 as const,
@@ -413,7 +412,7 @@ describe("verification Run local state", () => {
     ).toMatchObject({ type: "WORKSPACE_LEASE_ACQUIRED" });
   });
 
-  it("persists verification correction lineage without colliding with the initial delivery", async () => {
+  it("atomically returns a failed QA verification gate to a distinct correction IMPLEMENT", async () => {
     const fixture = await prepare();
     const reserved = reserve(fixture, "reserve-correction-source");
     if (reserved.type !== "VERIFICATION_RUN_RESERVED") throw new Error("Expected reserved Run");
@@ -433,7 +432,7 @@ describe("verification Run local state", () => {
       },
     });
     if (started.type !== "VERIFICATION_CHECK_STARTED") throw new Error("Expected started Check");
-    fixture.localState.execute({
+    const completeCommand = {
       schemaVersion: 1,
       commandId: "fail-correction-source-check",
       correlationId: "correlation-fail-correction-source-check",
@@ -463,6 +462,15 @@ describe("verification Run local state", () => {
         },
         outputStorageKey: "correction-source-output.txt",
       },
+    } as const;
+    expect(fixture.localState.execute(completeCommand)).toMatchObject({
+      type: "VERIFICATION_CHECK_COMPLETED",
+      replayed: false,
+      run: { status: "FAILED" },
+    });
+    expect(fixture.localState.execute(completeCommand)).toMatchObject({
+      type: "VERIFICATION_CHECK_COMPLETED",
+      replayed: true,
     });
     const failures = fixture.localState.query({
       type: "LIST_WORK_ITEM_VERIFICATION_FAILURES",
@@ -472,131 +480,94 @@ describe("verification Run local state", () => {
     const failure = failures.failures[0];
     if (failure === undefined) throw new Error("Expected source failure");
 
-    const raw = new DatabaseSync(databasePath);
-    raw.exec("PRAGMA foreign_keys = ON");
-    raw
-      .prepare(
-        `INSERT INTO stage_attempts (
-          id, pipeline_run_id, project_id, work_item_id, correction_run_id,
-          verification_correction_run_id, stage, attempt, status, version,
-          started_at, finished_at, failure_code, unproductive_sessions,
-          pack_share_backoffs, result_tree
-        ) VALUES (?, ?, ?, ?, NULL, NULL, 'IMPLEMENT', 1, 'SUCCEEDED', 1, ?, ?, NULL, 0, 0, ?)`,
-      )
-      .run(
-        "initial-implement",
-        fixture.pipelineRunId,
-        "project-one",
-        fixture.workItemId,
-        timestamp,
-        timestamp,
-        tree,
-      );
-    const insertCorrection = raw.prepare(
-      `INSERT INTO verification_correction_runs (
-        id, schema_version, project_id, work_item_id, pipeline_run_id, budget_position,
-        automatic, source_failure_id, source_verification_run_id, source_implementation_tree,
-        status, created_at, completed_at, version
-      ) VALUES (?, 1, ?, ?, ?, 1, 1, ?, ?, ?, 'ACTIVE', ?, NULL, 1)`,
-    );
-    expect(() =>
-      insertCorrection.run(
-        "verification-correction-wrong-tree",
-        "project-one",
-        fixture.workItemId,
-        fixture.pipelineRunId,
-        failure.id,
-        failure.verificationRunId,
-        "e".repeat(40),
-        timestamp,
-      ),
-    ).toThrow(/verification correction source lineage mismatch/);
-    insertCorrection.run(
-      "verification-correction-one",
-      "project-one",
-      fixture.workItemId,
-      fixture.pipelineRunId,
-      failure.id,
-      failure.verificationRunId,
-      failure.implementationTree,
-      timestamp,
-    );
-    raw
-      .prepare(
-        `INSERT INTO stage_attempts (
-          id, pipeline_run_id, project_id, work_item_id, correction_run_id,
-          verification_correction_run_id, stage, attempt, status, version,
-          started_at, finished_at, failure_code, unproductive_sessions,
-          pack_share_backoffs, result_tree
-        ) VALUES (?, ?, ?, ?, NULL, ?, 'IMPLEMENT', 1, 'QUEUED', 1, NULL, NULL, NULL, 0, 0, NULL)`,
-      )
-      .run(
-        "verification-correction-implement",
-        fixture.pipelineRunId,
-        "project-one",
-        fixture.workItemId,
-        "verification-correction-one",
-      );
-    expect(() =>
-      raw
-        .prepare(
-          `UPDATE verification_correction_runs
-           SET source_implementation_tree = ?, version = 2 WHERE id = ?`,
-        )
-        .run("e".repeat(40), "verification-correction-one"),
-    ).toThrow(/verification correction may only make a valid one-way state transition/);
-    expect(() =>
-      raw
-        .prepare(
-          `UPDATE stage_attempts SET verification_correction_run_id = NULL
-           WHERE id = ?`,
-        )
-        .run("verification-correction-implement"),
-    ).toThrow(/Stage attempt correction lineage is immutable/);
-    expect(() =>
-      raw.prepare("DELETE FROM verification_correction_runs WHERE id = ?").run("verification-correction-one"),
-    ).toThrow(/verification correction runs cannot be deleted/);
-    raw.close();
+    const corrections = fixture.localState.query({
+      type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+      workItemId: fixture.workItemId,
+    });
+    if (corrections.type !== "VERIFICATION_CORRECTIONS") throw new Error("Expected corrections");
+    const correction = corrections.correctionRuns[0];
+    if (correction === undefined) throw new Error("Expected correction");
 
     const workflow = fixture.localState.query({
       type: "GET_WORKFLOW_SNAPSHOT",
       workItemId: fixture.workItemId,
     });
     if (workflow.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected workflow snapshot");
-    expect(
-      workflow.snapshot.stageAttempts.find(({ id }) => id === "verification-correction-implement"),
-    ).toMatchObject({
+    const correctionAttempt = workflow.snapshot.stageAttempts.find(
+      ({ verificationCorrectionRunId }) => verificationCorrectionRunId === correction.id,
+    );
+    expect(correctionAttempt).toMatchObject({
       correctionRunId: null,
-      verificationCorrectionRunId: "verification-correction-one",
+      verificationCorrectionRunId: correction.id,
       stage: "IMPLEMENT",
       attempt: 1,
+      status: "QUEUED",
     });
+    if (correctionAttempt === undefined) throw new Error("Expected correction IMPLEMENT attempt");
+    expect(correction).toMatchObject({
+      projectId: "project-one",
+      workItemId: fixture.workItemId,
+      pipelineRunId: fixture.pipelineRunId,
+      budgetPosition: 1,
+      automatic: true,
+      sourceFailureId: failure.id,
+      sourceVerificationRunId: failure.verificationRunId,
+      sourceImplementationTree: tree,
+      status: "ACTIVE",
+      completedAt: null,
+      version: 1,
+    });
+    expect(workflow.snapshot.run).toMatchObject({
+      id: fixture.pipelineRunId,
+      currentStageAttemptId: correctionAttempt.id,
+      status: "RUNNING",
+    });
+    expect(fixture.localState.query({ type: "GET_WORK_ITEM", workItemId: fixture.workItemId })).toMatchObject(
+      { workItem: { state: "IN_PROGRESS", currentStage: "IMPLEMENT" } },
+    );
+    const events = fixture.localState.query({
+      type: "LIST_EVENTS",
+      aggregateId: fixture.workItemId,
+      direction: "ASC",
+      limit: 100,
+    });
+    if (events.type !== "EVENTS") throw new Error("Expected Events");
+    expect(events.events.map(({ type }) => type)).toEqual(
+      expect.arrayContaining([
+        "VERIFICATION_CHECK_COMPLETED",
+        "VERIFICATION_FAILURE_RECORDED",
+        "VERIFICATION_CORRECTION_STARTED",
+      ]),
+    );
+    expect(events.events.filter(({ type }) => type === "VERIFICATION_CORRECTION_STARTED")).toHaveLength(1);
 
+    fixture.localState.close();
+    state = undefined;
+    const reopened = await open();
     expect(
-      fixture.localState.query({
+      reopened.query({
         type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
         workItemId: fixture.workItemId,
       }),
-    ).toEqual({
+    ).toMatchObject({
       type: "VERIFICATION_CORRECTIONS",
-      correctionRuns: [
-        {
-          schemaVersion: 1,
-          id: "verification-correction-one",
-          projectId: "project-one",
-          workItemId: fixture.workItemId,
-          pipelineRunId: fixture.pipelineRunId,
-          budgetPosition: 1,
-          automatic: true,
-          sourceFailureId: failure.id,
-          sourceVerificationRunId: failure.verificationRunId,
-          sourceImplementationTree: tree,
-          status: "ACTIVE",
-          createdAt: timestamp,
-          completedAt: null,
-          version: 1,
-        },
-      ],
+      correctionRuns: [{ id: correction.id, status: "ACTIVE", version: 1 }],
+    });
+    const reopenedWorkflow = reopened.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: fixture.workItemId,
+    });
+    if (reopenedWorkflow.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected reopened workflow");
+    expect(reopenedWorkflow.snapshot.run).toMatchObject({
+      currentStageAttemptId: correctionAttempt.id,
+      status: "RUNNING",
+    });
+    expect(
+      reopenedWorkflow.snapshot.stageAttempts.find(({ id }) => id === correctionAttempt.id),
+    ).toMatchObject({
+      verificationCorrectionRunId: correction.id,
+      stage: "IMPLEMENT",
+      status: "QUEUED",
     });
   });
 
