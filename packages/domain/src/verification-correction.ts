@@ -1310,6 +1310,12 @@ export const decideVerificationCorrectionGateResolution = (input: {
     correctionRun.status === "PASSED" &&
     failedVerificationRun.status === "PASSED" &&
     failure.reason === "STALE";
+  const measuredFailureGate =
+    (failedVerificationRun.status === "FAILED" && failure.reason === "REQUIRED_CHECK_FAILED") ||
+    (failedVerificationRun.status === "ERROR" && failure.reason === "REQUIRED_CHECK_ERROR") ||
+    (failedVerificationRun.status === "INTERRUPTED" &&
+      failedVerificationRun.terminalReason === "DAEMON_RESTART" &&
+      failure.reason === "RUN_INTERRUPTED");
   const expectedOptionCount = correctionRun.budgetPosition === 2 ? 2 : 1;
   const sameDelivery =
     (correctionRun.status === "EXHAUSTED" || stalePassedGate) &&
@@ -1350,9 +1356,7 @@ export const decideVerificationCorrectionGateResolution = (input: {
     correctionSourceVerificationRun.projectId === workItem.projectId &&
     correctionSourceVerificationRun.workItemId === workItem.id &&
     correctionSourceVerificationRun.pipelineRunId === run.id &&
-    (stalePassedGate ||
-      failedVerificationRun.status === "FAILED" ||
-      failedVerificationRun.status === "ERROR") &&
+    (stalePassedGate || measuredFailureGate) &&
     (failedVerificationRun.verificationCorrectionRunId ?? null) === correctionRun.id &&
     failedVerificationRun.projectId === workItem.projectId &&
     failedVerificationRun.workItemId === workItem.id &&
@@ -1371,9 +1375,7 @@ export const decideVerificationCorrectionGateResolution = (input: {
     failure.planRevision === failedVerificationRun.planRevision &&
     failure.planContentHash === failedVerificationRun.planContentHash &&
     failure.implementationTree === failedVerificationRun.implementationTree &&
-    (stalePassedGate ||
-      failure.reason === "REQUIRED_CHECK_FAILED" ||
-      failure.reason === "REQUIRED_CHECK_ERROR");
+    (stalePassedGate || measuredFailureGate);
   if (!sameDelivery) {
     throw new VerificationCorrectionError(
       "LINEAGE_MISMATCH",
@@ -1684,6 +1686,13 @@ export const decideMixedVerificationCorrectionGateResolution = (input: {
   }
   const budget = decideCorrectionBudget(input.budgetUsage);
   const canAuthorizeFinal = budget.action === "WAIT_FOR_OWNER";
+  const sourceStatusMatches =
+    (failedVerificationRun.status === "FAILED" && failure.reason === "REQUIRED_CHECK_FAILED") ||
+    (failedVerificationRun.status === "ERROR" && failure.reason === "REQUIRED_CHECK_ERROR") ||
+    (failedVerificationRun.status === "INTERRUPTED" &&
+      failedVerificationRun.terminalReason === "DAEMON_RESTART" &&
+      failure.reason === "RUN_INTERRUPTED") ||
+    (failedVerificationRun.status === "PASSED" && failure.reason === "STALE");
   const sameDelivery =
     qaCorrectionRun.status === "ACTIVE" &&
     request.status === "OPEN" &&
@@ -1711,7 +1720,7 @@ export const decideMixedVerificationCorrectionGateResolution = (input: {
     request.projectId === workItem.projectId &&
     request.workItemId === workItem.id &&
     request.stageAttemptId === stageAttempt.id &&
-    (failedVerificationRun.status === "FAILED" || failedVerificationRun.status === "ERROR") &&
+    sourceStatusMatches &&
     (failedVerificationRun.verificationCorrectionRunId ?? null) === null &&
     failedVerificationRun.projectId === workItem.projectId &&
     failedVerificationRun.workItemId === workItem.id &&
@@ -1723,8 +1732,7 @@ export const decideMixedVerificationCorrectionGateResolution = (input: {
     failure.planId === failedVerificationRun.planId &&
     failure.planRevision === failedVerificationRun.planRevision &&
     failure.planContentHash === failedVerificationRun.planContentHash &&
-    failure.implementationTree === failedVerificationRun.implementationTree &&
-    (failure.reason === "REQUIRED_CHECK_FAILED" || failure.reason === "REQUIRED_CHECK_ERROR");
+    failure.implementationTree === failedVerificationRun.implementationTree;
   if (!sameDelivery) {
     throw new VerificationCorrectionError(
       "LINEAGE_MISMATCH",

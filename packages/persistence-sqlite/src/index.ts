@@ -3140,6 +3140,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
          AND (
            verification_runs.status IN ('FAILED', 'ERROR')
            OR (
+             verification_runs.status = 'INTERRUPTED'
+             AND verification_failures.reason = 'RUN_INTERRUPTED'
+           )
+           OR (
              verification_runs.status = 'PASSED'
              AND verification_failures.reason = 'STALE'
            )
@@ -3147,10 +3151,23 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        ORDER BY verification_runs.ordinal DESC LIMIT 1`,
     );
     const selectLatestFailedVerificationRunWithoutCorrection = database.prepare(
-      `SELECT * FROM verification_runs
-       WHERE pipeline_run_id = ? AND verification_correction_run_id IS NULL
-         AND status IN ('FAILED', 'ERROR')
-       ORDER BY ordinal DESC LIMIT 1`,
+      `SELECT verification_runs.* FROM verification_runs
+       INNER JOIN verification_failures
+         ON verification_failures.verification_run_id = verification_runs.id
+       WHERE verification_runs.pipeline_run_id = ?
+         AND verification_runs.verification_correction_run_id IS NULL
+         AND (
+           verification_runs.status IN ('FAILED', 'ERROR')
+           OR (
+             verification_runs.status = 'INTERRUPTED'
+             AND verification_failures.reason = 'RUN_INTERRUPTED'
+           )
+           OR (
+             verification_runs.status = 'PASSED'
+             AND verification_failures.reason = 'STALE'
+           )
+         )
+       ORDER BY verification_runs.ordinal DESC LIMIT 1`,
     );
     const selectCorrectionBudgetUsage = database.prepare(
       `SELECT

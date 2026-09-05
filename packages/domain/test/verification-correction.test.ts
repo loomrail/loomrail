@@ -633,6 +633,44 @@ describe("Project verification correction transition", () => {
       run: { status: "RUNNING" },
       workItem: { state: "IN_PROGRESS", currentStage: "IMPLEMENT" },
     });
+
+    const interruptedRun: VerificationRun = {
+      ...verificationRun,
+      status: "INTERRUPTED",
+      terminalReason: "DAEMON_RESTART",
+    };
+    const interruptedFailure: VerificationFailure = {
+      ...failure,
+      verificationRunId: interruptedRun.id,
+      verificationCheckId: null,
+      reason: "RUN_INTERRUPTED",
+    };
+    expect(
+      decideMixedVerificationCorrectionGateResolution({
+        command,
+        workItem: gate.workItem,
+        run: gate.pipelineRun,
+        stageAttempt: gate.completedStageAttempt,
+        request: gate.request,
+        qaCorrectionRun,
+        failedVerificationRun: interruptedRun,
+        failure: interruptedFailure,
+        budgetUsage: { automaticUsed: 2, totalUsed: 2 },
+        ids: {
+          decisionId: "mixed-interrupted-decision",
+          correctionRunId: "mixed-interrupted-final-correction",
+          nextStageAttemptId: "mixed-interrupted-implement",
+          dispatchId: "mixed-interrupted-dispatch",
+        },
+        now,
+      }),
+    ).toMatchObject({
+      action: "AUTHORIZE_FINAL",
+      correctionRun: {
+        sourceVerificationRunId: interruptedRun.id,
+        sourceFailureId: interruptedFailure.id,
+      },
+    });
   });
 
   it("cancels the suspended QA authority from the mixed verification gate", () => {
@@ -1180,6 +1218,43 @@ describe("Project verification correction transition", () => {
         { type: "VERIFICATION_CORRECTION_STARTED" },
         { type: "STAGE_ATTEMPT_CHANGED" },
       ],
+    });
+    const interruptedRerun: VerificationRun = {
+      ...failedRerun,
+      status: "INTERRUPTED",
+      terminalReason: "DAEMON_RESTART",
+    };
+    const interruptedFailure: VerificationFailure = {
+      ...rerunFailure,
+      verificationRunId: interruptedRerun.id,
+      verificationCheckId: null,
+      reason: "RUN_INTERRUPTED",
+    };
+    expect(
+      decideVerificationCorrectionGateResolution({
+        command,
+        workItem: waitingWorkItem,
+        run: waitingRun,
+        stageAttempt: waitingStage,
+        request,
+        correctionRun: secondCorrection,
+        correctionSourceVerificationRun: verificationRun,
+        failedVerificationRun: interruptedRerun,
+        failure: interruptedFailure,
+        ids: {
+          decisionId: "interrupted-owner-decision",
+          correctionRunId: "interrupted-verification-correction-three",
+          nextStageAttemptId: "interrupted-stage-implement-three",
+          dispatchId: "interrupted-dispatch-implement-three",
+        },
+        now,
+      }),
+    ).toMatchObject({
+      action: "AUTHORIZE_FINAL",
+      correctionRun: {
+        sourceVerificationRunId: interruptedRerun.id,
+        sourceFailureId: interruptedFailure.id,
+      },
     });
     expect(() =>
       decideVerificationCorrectionGateResolution({
