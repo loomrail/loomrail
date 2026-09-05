@@ -8,7 +8,15 @@ import {
   utcTimestampSchema,
 } from "./shared.js";
 
-export const readinessCategorySchema = z.enum(["SECURITY", "LEGAL", "PAYMENTS", "ANALYTICS"]);
+export const readinessCategorySchema = z.enum([
+  "SECURITY",
+  "LEGAL",
+  "PAYMENTS",
+  "ANALYTICS",
+  "DEPENDENCIES",
+  "ENVIRONMENT",
+  "OPERATIONS",
+]);
 export const readinessCheckModeSchema = z.enum(["AUTOMATED", "OWNER"]);
 export const readinessCheckStatusSchema = z.enum([
   "PASSED",
@@ -28,6 +36,12 @@ export const readinessCheckKeySchema = z.enum([
   "LEGAL_OWNER_REVIEW",
   "PAYMENTS_OWNER_REVIEW",
   "ANALYTICS_OWNER_REVIEW",
+  "DEPS_LOCKFILE_PRESENT",
+  "ENV_PROD_SEPARATION",
+  "SECURITY_HEADERS_OWNER_REVIEW",
+  "OPS_HEALTH_ENDPOINT_DECLARED",
+  "OPS_ROLLBACK_PLAN",
+  "OPS_BACKUP",
 ]);
 
 export const securityFindingSeveritySchema = z.enum(["CRITICAL", "HIGH", "MEDIUM", "LOW"]);
@@ -40,6 +54,11 @@ export const securityFindingCodeSchema = z.enum([
   "CI_ACTION_NOT_PINNED",
   "CI_INPUT_UNVERIFIABLE",
   "LICENSE_MISSING",
+  "LOCKFILE_MISSING",
+  "LOCKFILE_AMBIGUOUS",
+  "DEPENDENCY_INPUT_UNVERIFIABLE",
+  "PROD_ENV_NOT_IGNORED",
+  "INLINE_SECRET_IN_CI",
 ]);
 
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/);

@@ -5,6 +5,7 @@ import {
   projectReadinessSnapshotSchema,
   readinessCheckDraftSchema,
   runProjectReadinessRequestSchema,
+  securityFindingDraftSchema,
 } from "../src/index.js";
 
 describe("Project Readiness contracts", () => {
@@ -71,5 +72,56 @@ describe("Project Readiness contracts", () => {
         attestations: [],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("readiness catalog v2 vocabulary", () => {
+  it("accepts the six launch-readiness keys and their categories", () => {
+    const drafts = [
+      { key: "DEPS_LOCKFILE_PRESENT", category: "DEPENDENCIES", mode: "AUTOMATED" },
+      { key: "ENV_PROD_SEPARATION", category: "ENVIRONMENT", mode: "AUTOMATED" },
+      { key: "SECURITY_HEADERS_OWNER_REVIEW", category: "SECURITY", mode: "OWNER" },
+      { key: "OPS_HEALTH_ENDPOINT_DECLARED", category: "OPERATIONS", mode: "OWNER" },
+      { key: "OPS_ROLLBACK_PLAN", category: "OPERATIONS", mode: "OWNER" },
+      { key: "OPS_BACKUP", category: "OPERATIONS", mode: "OWNER" },
+    ] as const;
+
+    for (const draft of drafts) {
+      expect(
+        readinessCheckDraftSchema.parse({
+          ...draft,
+          status: "ACTION_REQUIRED",
+          summary: "fixture",
+          findings: [],
+        }).key,
+      ).toBe(draft.key);
+    }
+  });
+
+  it("accepts the five launch-readiness finding codes", () => {
+    for (const code of [
+      "LOCKFILE_MISSING",
+      "LOCKFILE_AMBIGUOUS",
+      "DEPENDENCY_INPUT_UNVERIFIABLE",
+      "PROD_ENV_NOT_IGNORED",
+      "INLINE_SECRET_IN_CI",
+    ] as const) {
+      expect(
+        securityFindingDraftSchema.parse({ code, severity: "HIGH", path: null, message: "fixture" }).code,
+      ).toBe(code);
+    }
+  });
+
+  it("still rejects a key outside the closed catalog", () => {
+    expect(() =>
+      readinessCheckDraftSchema.parse({
+        key: "OPS_MONITORING",
+        category: "OPERATIONS",
+        mode: "OWNER",
+        status: "ACTION_REQUIRED",
+        summary: "fixture",
+        findings: [],
+      }),
+    ).toThrow();
   });
 });

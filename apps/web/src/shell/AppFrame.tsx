@@ -697,6 +697,9 @@ const readinessCategoryKeys = {
   LEGAL: "settings.readiness.category.legal",
   PAYMENTS: "settings.readiness.category.payments",
   ANALYTICS: "settings.readiness.category.analytics",
+  DEPENDENCIES: "settings.readiness.category.dependencies",
+  ENVIRONMENT: "settings.readiness.category.environment",
+  OPERATIONS: "settings.readiness.category.operations",
 } as const satisfies Record<ReadinessCheck["category"], TranslationKey>;
 
 const readinessCheckKeys = {
@@ -708,6 +711,12 @@ const readinessCheckKeys = {
   LEGAL_OWNER_REVIEW: "settings.readiness.check.legalOwner",
   PAYMENTS_OWNER_REVIEW: "settings.readiness.check.paymentsOwner",
   ANALYTICS_OWNER_REVIEW: "settings.readiness.check.analyticsOwner",
+  DEPS_LOCKFILE_PRESENT: "settings.readiness.check.lockfile",
+  ENV_PROD_SEPARATION: "settings.readiness.check.envProdSeparation",
+  SECURITY_HEADERS_OWNER_REVIEW: "settings.readiness.check.securityHeadersOwner",
+  OPS_HEALTH_ENDPOINT_DECLARED: "settings.readiness.check.healthEndpoint",
+  OPS_ROLLBACK_PLAN: "settings.readiness.check.rollbackPlan",
+  OPS_BACKUP: "settings.readiness.check.backup",
 } as const satisfies Record<ReadinessCheck["key"], TranslationKey>;
 
 const readinessStatusKeys = {
@@ -726,6 +735,11 @@ const readinessFindingKeys = {
   CI_ACTION_NOT_PINNED: "settings.readiness.finding.actionPinned",
   CI_INPUT_UNVERIFIABLE: "settings.readiness.finding.ciUnverifiable",
   LICENSE_MISSING: "settings.readiness.finding.license",
+  LOCKFILE_MISSING: "settings.readiness.finding.lockfileMissing",
+  LOCKFILE_AMBIGUOUS: "settings.readiness.finding.lockfileAmbiguous",
+  DEPENDENCY_INPUT_UNVERIFIABLE: "settings.readiness.finding.dependencyUnverifiable",
+  PROD_ENV_NOT_IGNORED: "settings.readiness.finding.prodEnvNotIgnored",
+  INLINE_SECRET_IN_CI: "settings.readiness.finding.inlineSecretInCi",
 } as const satisfies Record<SecurityFinding["code"], TranslationKey>;
 
 const ProjectReadinessPanel = ({ project }: { project: ListedProject }): React.JSX.Element => {

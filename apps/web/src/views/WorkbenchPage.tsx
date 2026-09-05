@@ -488,6 +488,12 @@ const readinessCheckKeys: Record<ReadinessCheck["key"], TranslationKey> = {
   LEGAL_OWNER_REVIEW: "settings.readiness.check.legalOwner",
   PAYMENTS_OWNER_REVIEW: "settings.readiness.check.paymentsOwner",
   ANALYTICS_OWNER_REVIEW: "settings.readiness.check.analyticsOwner",
+  DEPS_LOCKFILE_PRESENT: "settings.readiness.check.lockfile",
+  ENV_PROD_SEPARATION: "settings.readiness.check.envProdSeparation",
+  SECURITY_HEADERS_OWNER_REVIEW: "settings.readiness.check.securityHeadersOwner",
+  OPS_HEALTH_ENDPOINT_DECLARED: "settings.readiness.check.healthEndpoint",
+  OPS_ROLLBACK_PLAN: "settings.readiness.check.rollbackPlan",
+  OPS_BACKUP: "settings.readiness.check.backup",
 };
 
 const readinessStatusKeys: Record<ReadinessCheck["status"], TranslationKey> = {
