@@ -332,12 +332,16 @@ const bindEvidenceListeners = async (input: {
     });
     await route.abort("blockedbyclient");
   };
+  // Keyed by URL and released as soon as a request settles: a page polling unique URLs would
+  // otherwise grow this map for the life of the context, aborted-by-cap requests included.
   input.page.on("request", (request) => started.set(request.url(), Date.now()));
   input.page.on("response", (response) => {
     const status = response.status();
     const targetId = input.targetId;
     const scenarioId = input.currentScenarioId();
-    const duration = Date.now() - (started.get(response.url()) ?? Date.now());
+    const startedAt = started.get(response.url());
+    started.delete(response.url());
+    const duration = Date.now() - (startedAt ?? Date.now());
     if (status >= 400) {
       observation(input.observations, {
         kind: "NETWORK",
@@ -359,6 +363,7 @@ const bindEvidenceListeners = async (input: {
     }
   });
   input.page.on("requestfailed", (request) => {
+    started.delete(request.url());
     observation(input.observations, {
       kind: "NETWORK",
       severity: "ERROR",

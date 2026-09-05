@@ -22,10 +22,15 @@ type QueryScope = readonly string[];
 export const scopesForSignal = (signal: EventSignal): readonly QueryScope[] => {
   switch (signal.aggregateType) {
     case "WORK_ITEM":
+      // The two project-level subtrees a work-item event can change, named explicitly rather than
+      // the whole `["projects", id]` prefix: that prefix also holds the constitution, readiness,
+      // MCP-profile and provider-selection queries, which are daemon-side git/filesystem scans and
+      // change on none of these events -- with Settings open they were refetched on every burst.
       return [
         ["attention"],
         ["agent-fleet"],
-        ["projects", signal.projectId],
+        ["projects", signal.projectId, "work-items"],
+        ["projects", signal.projectId, "human-requests"],
         ["work-items", signal.aggregateId],
         ["stage-attempts"],
       ];
@@ -128,6 +133,14 @@ export const connectEventStream = (options: {
   source: EventSourceLike;
   invalidateAll: () => void;
   invalidateScopes: (scopes: readonly (readonly string[])[]) => void;
+  /**
+   * Called once the browser has given up on this source (`readyState` CLOSED). `EventSource`
+   * retries transient drops on its own but never a non-200 response -- the daemon's stream cap
+   * (`STREAM_LIMIT_REACHED`) or a passing 5xx -- and without a new source the tab would silently
+   * stop receiving live updates for the rest of its life. The owner of the source decides when to
+   * build the next one; this only reports that the current one is dead.
+   */
+  onClosed?: () => void;
   windowMs?: number;
 }): (() => void) => {
   const coalescer = createSignalCoalescer(options.invalidateScopes, options.windowMs);
@@ -135,6 +148,7 @@ export const connectEventStream = (options: {
   const announce = (status: EventChannelStatus): void => {
     const scopes = scopesForChannelStatus(status);
     if (scopes.length > 0) options.invalidateScopes(scopes);
+    if (status === "closed") options.onClosed?.();
   };
 
   options.source.onopen = () => {

@@ -1917,6 +1917,83 @@ export const decideApplyProviderOutcomeWithUsage = (
   };
 };
 
+export type BudgetParkDecision = {
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  dispatch: WorkflowDispatch;
+  events: (EventIntent<StageAttemptChangedEvent> | EventIntent<PipelinePausedEvent>)[];
+};
+
+/**
+ * Parks a queued StageAttempt whose AgentRun cannot be reserved because the active budget is
+ * already spent -- the cap was crossed by a session whose terminal outcome parked nothing (it
+ * asked the owner a question, or handed the work to owner acceptance), and the owner's answer
+ * queued this attempt again. Refusing the reservation over and over would leave the run RUNNING
+ * with a dispatch nothing can ever start; parking it HARD_PAUSED puts it where a BudgetPolicy
+ * override is available, the same place a cap crossed between stages puts the next attempt.
+ */
+export const decideParkQueuedStageAttemptForBudget = (context: {
+  now: string;
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  dispatch: WorkflowDispatch;
+}): BudgetParkDecision => {
+  if (
+    context.stageAttempt.status !== "QUEUED" ||
+    context.run.status !== "RUNNING" ||
+    context.run.currentStageAttemptId !== context.stageAttempt.id ||
+    context.dispatch.stageAttemptId !== context.stageAttempt.id ||
+    context.dispatch.status !== "PENDING"
+  ) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "Only the queued current StageAttempt of a running pipeline can be parked for its budget",
+    );
+  }
+  const stageAttempt: StageAttempt = {
+    ...context.stageAttempt,
+    status: "HARD_PAUSED",
+    failureCode: null,
+    version: context.stageAttempt.version + 1,
+  };
+  const run: PipelineRun = {
+    ...context.run,
+    status: "HARD_PAUSED",
+    version: context.run.version + 1,
+    updatedAt: context.now,
+  };
+  const workItem: WorkItem = {
+    ...context.workItem,
+    state: "BLOCKED",
+    currentStage: stageAttempt.stage,
+    version: context.workItem.version + 1,
+    updatedAt: context.now,
+  };
+  return {
+    workItem,
+    run,
+    stageAttempt,
+    dispatch: { ...context.dispatch, status: "FAILED", completedAt: context.now },
+    events: [
+      {
+        type: "STAGE_ATTEMPT_CHANGED",
+        data: { run, stageAttempt, previousStatus: context.stageAttempt.status },
+      },
+      {
+        type: "PIPELINE_PAUSED",
+        data: {
+          run,
+          stageAttempt,
+          kind: "HARD",
+          reason: "The active budget was already exhausted when this stage was due to start.",
+        },
+      },
+    ],
+  };
+};
+
 const validateAnswer = (request: HumanRequest, answer: HumanRequestAnswer): void => {
   if (answer.type === "OTHER") {
     if (!request.allowOther) {
@@ -1936,7 +2013,12 @@ const validateAnswer = (request: HumanRequest, answer: HumanRequestAnswer): void
       "The answer contains an option that is not part of this HumanRequest",
     );
   }
-  if (request.kind === "SINGLE_CHOICE" && answer.optionIds.length !== 1) {
+  // A CONFIRMATION is a single choice between its options as much as SINGLE_CHOICE is: an answer
+  // that picks both "confirm" and "decline" is a contradiction, not a Decision to record.
+  if (
+    (request.kind === "SINGLE_CHOICE" || request.kind === "CONFIRMATION") &&
+    answer.optionIds.length !== 1
+  ) {
     throw new WorkflowDomainError(
       "HUMAN_REQUEST_INVALID_ANSWER",
       "A single-choice HumanRequest requires exactly one option",
@@ -2201,7 +2283,16 @@ export const decideAnswerHumanRequest = (
     decision,
     dispatch,
     nextStageAttempt: null,
-    events: [{ type: "HUMAN_REQUEST_RESOLVED", data: { request, decision } }],
+    // The attempt leaves its pause here (WAITING_HUMAN or a session-loop HARD_PAUSE -> QUEUED) and
+    // the run goes back to RUNNING; without this event the audit log recorded the answer but never
+    // the transition it caused, and a replay disagreed with the persisted current state.
+    events: [
+      { type: "HUMAN_REQUEST_RESOLVED", data: { request, decision } },
+      {
+        type: "STAGE_ATTEMPT_CHANGED",
+        data: { run, stageAttempt, previousStatus: context.stageAttempt.status },
+      },
+    ],
   };
 };
 

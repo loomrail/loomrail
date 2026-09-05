@@ -371,6 +371,20 @@ export const applyMigrations = async (
     }
   }
 
+  // A database written by a newer build carries versions this build has never heard of. Opening it
+  // anyway would let older code write into a schema it does not understand (the doctor already
+  // calls this INCOMPATIBLE); refusing is the only answer that never resets or reshapes user data.
+  const knownVersions = new Set(migrationSources.map((migration) => migration.version));
+  const unknownApplied = appliedRows.filter((row) => !knownVersions.has(row.version));
+  if (unknownApplied.length > 0) {
+    const newest = Math.max(...unknownApplied.map((row) => row.version));
+    throw new StateStoreError(
+      "MIGRATION_INCOMPATIBLE",
+      `The database was migrated to schema version ${newest.toString()} by a newer Loomrail than this one`,
+      { newestAppliedVersion: newest },
+    );
+  }
+
   const pending = migrationSources.filter((migration) => !appliedByVersion.has(migration.version));
   let backupPath: string | undefined;
   if (pending.length > 0 && options.databaseWasNonEmpty && options.databasePath !== ":memory:") {
@@ -391,7 +405,19 @@ export const applyMigrations = async (
     const foreignKeysWereOn = rebuild && foreignKeysAreOn(database);
     if (rebuild) database.exec("PRAGMA foreign_keys = OFF");
     try {
-      database.exec("BEGIN IMMEDIATE");
+      try {
+        database.exec("BEGIN IMMEDIATE");
+      } catch (error: unknown) {
+        // A second writer holding the database (another daemon, a test, a concurrent agent) makes
+        // this throw SQLITE_BUSY before any transaction exists. Typed, and without the ROLLBACK
+        // below -- there is nothing to roll back, and that error would replace this one.
+        throw new StateStoreError(
+          "MIGRATION_FAILED",
+          `Migration ${migration.version.toString()} could not begin`,
+          {},
+          { cause: error },
+        );
+      }
       try {
         database.exec(migration.sql);
         if (rebuild) assertForeignKeysIntact(database, migration.version);

@@ -483,7 +483,7 @@ const en = {
     "Check that the local process is still running. You can retry without losing saved work.",
   "connection.recovery.reopenTitle": "This local session has ended",
   "connection.recovery.reopenDescription":
-    "Stop the old process if needed, then start Loomrail from the repository. A fresh authenticated tab will open automatically.",
+    "Stop the old process if needed, then start Loomrail again. A fresh authenticated tab will open automatically.",
   "connection.recovery.command": "Run in a terminal",
   "connection.recovery.retryAction": "Try again",
   "theme.change": "Change color theme",
@@ -1566,7 +1566,7 @@ const ru = {
     "Проверьте, что локальный процесс ещё работает. Повторная попытка не затронет сохранённые данные.",
   "connection.recovery.reopenTitle": "Эта локальная сессия завершилась",
   "connection.recovery.reopenDescription":
-    "При необходимости остановите старый процесс, затем запустите Loomrail из репозитория. Новая авторизованная вкладка откроется автоматически.",
+    "При необходимости остановите старый процесс, затем запустите Loomrail заново. Новая авторизованная вкладка откроется автоматически.",
   "connection.recovery.command": "Выполните в терминале",
   "connection.recovery.retryAction": "Повторить",
   "theme.change": "Сменить тему",

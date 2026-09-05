@@ -25,10 +25,16 @@ const SNAPSHOT_GIT_IDENTITY = {
   GIT_COMMITTER_EMAIL: "loomrail@localhost",
 } as const;
 
-const splitLines = (text: string): readonly string[] => {
-  const trimmed = text.trim();
-  return trimmed.length === 0 ? [] : trimmed.split("\n");
-};
+// NUL-separated output (`-z`): a path with a space, a quote or a non-ASCII character reaches the
+// event log verbatim instead of as git's double-quoted octal escape, and a path containing a
+// newline cannot masquerade as two.
+const splitRecords = (text: string): readonly string[] =>
+  text.split("\0").filter((record) => record.length > 0);
+
+// Loomrail runs these as plumbing on the owner's behalf: the carry-in commit must never trigger the
+// owner's signing key (a passphrase prompt or an unreachable agent in a headless daemon turns into
+// "commit-tree failed (128)"), and quoting must stay off so `-z` output is the raw path.
+const PLUMBING_CONFIG = ["-c", "commit.gpgsign=false", "-c", "core.quotepath=false"] as const;
 
 // Carries everything the owner has not committed -- edits to tracked files, whatever is already
 // staged, untracked files including nested ones, and deletions -- into a standalone commit that
@@ -79,8 +85,8 @@ export const createCarryInSnapshot = async (context: {
 
     const commitTreeArgs =
       headCommit === null
-        ? ["commit-tree", tree, "-m", message]
-        : ["commit-tree", tree, "-p", headCommit, "-m", message];
+        ? [...PLUMBING_CONFIG, "commit-tree", tree, "-m", message]
+        : [...PLUMBING_CONFIG, "commit-tree", tree, "-p", headCommit, "-m", message];
     const commitTree = await runGit(commitTreeArgs, {
       cwd: topLevel,
       env: { ...process.env, ...SNAPSHOT_GIT_IDENTITY },
@@ -90,14 +96,21 @@ export const createCarryInSnapshot = async (context: {
     }
     const commit = commitTree.stdout.trim();
 
+    // `--no-renames`: the owner's `diff.renames` would otherwise fold a moved file into its new
+    // name only, and the path that disappeared would be missing from what the owner is shown.
     const carriedPathsResult =
       headCommit === null
-        ? await runGit(["ls-tree", "-r", "--name-only", commit], { cwd: topLevel })
-        : await runGit(["diff", "--name-only", headCommit, commit], { cwd: topLevel });
+        ? await runGit([...PLUMBING_CONFIG, "ls-tree", "-r", "-z", "--name-only", commit], {
+            cwd: topLevel,
+          })
+        : await runGit(
+            [...PLUMBING_CONFIG, "diff", "-z", "--no-renames", "--name-only", headCommit, commit],
+            { cwd: topLevel },
+          );
 
     return {
       commit,
-      carriedPaths: splitLines(carriedPathsResult.stdout),
+      carriedPaths: splitRecords(carriedPathsResult.stdout),
     };
   } finally {
     await rm(indexDir, { recursive: true, force: true });

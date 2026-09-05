@@ -23,6 +23,13 @@ export type AgentSchedulingSnapshot = {
   candidates: SchedulerCandidate[];
   activeRuns: ActiveAgentRun[];
   contexts: Map<string, SchedulingCandidateContext>;
+  /**
+   * Pending dispatches this pass could not turn into candidates: their workflow, work item or
+   * project could not be loaded, or no adapter resolves for their project. Skipped rather than
+   * thrown, because one poisoned row used to abort the whole pass -- and the Fleet view -- for
+   * every project at once. The caller logs them; startup reconciliation owns the repair.
+   */
+  skipped: { dispatchId: string; reason: "INCOMPLETE" | "ADAPTER_UNAVAILABLE" }[];
 };
 
 const latestCheckpoint = (snapshot: WorkflowSnapshot): string | null =>
@@ -63,6 +70,7 @@ export const readAgentSchedulingSnapshot = (input: {
   const dispatches = queued.type === "WORKFLOW_DISPATCHES" ? queued.dispatches : [];
   const contexts = new Map<string, SchedulingCandidateContext>();
   const candidates: SchedulerCandidate[] = [];
+  const skipped: AgentSchedulingSnapshot["skipped"] = [];
 
   for (const dispatch of dispatches) {
     if (input.excludedDispatchIds?.has(dispatch.id) === true) continue;
@@ -77,7 +85,8 @@ export const readAgentSchedulingSnapshot = (input: {
     const workItem = workItemResult.type === "WORK_ITEM" ? workItemResult.workItem : null;
     const project = projectResult.type === "PROJECT" ? projectResult.project : null;
     if (snapshot === null || attempt === undefined || workItem === null || project === null) {
-      throw new StateStoreError("PERSISTENCE_FAILURE", "A scheduler candidate is incomplete");
+      skipped.push({ dispatchId: dispatch.id, reason: "INCOMPLETE" });
+      continue;
     }
     const authorProvider =
       attempt.stage === "REVIEW" && snapshot.run !== null
@@ -89,7 +98,14 @@ export const readAgentSchedulingSnapshot = (input: {
             return author.type === "AGENT_RUNS" ? (author.runs[0]?.provider ?? null) : null;
           })()
         : null;
-    const adapter = input.resolveAdapter(dispatch.projectId, attempt.stage, authorProvider);
+    let adapter: ProviderAdapter;
+    try {
+      adapter = input.resolveAdapter(dispatch.projectId, attempt.stage, authorProvider);
+    } catch (error: unknown) {
+      if (!(error instanceof StateStoreError)) throw error;
+      skipped.push({ dispatchId: dispatch.id, reason: "ADAPTER_UNAVAILABLE" });
+      continue;
+    }
     contexts.set(dispatch.id, { dispatch, adapter, project, workItem, attempt });
     candidates.push({
       dispatchId: dispatch.id,
@@ -128,5 +144,5 @@ export const readAgentSchedulingSnapshot = (input: {
         })
       : [];
 
-  return { candidates, activeRuns, contexts };
+  return { candidates, activeRuns, contexts, skipped };
 };

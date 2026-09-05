@@ -1269,8 +1269,12 @@ const TaskEditDialog = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const [risk, setRisk] = useState(item.risk);
   const [criteriaText, setCriteriaText] = useState(item.acceptanceCriteria.join("\n"));
   const acceptanceCriteria = criteriaFromText(criteriaText);
+  // Same rule as the create dialog: the contract does not reject duplicates, and the acceptance
+  // binding refuses them only at the end of the pipeline.
   const criteriaValid =
-    acceptanceCriteria.length <= 50 && acceptanceCriteria.every((criterion) => criterion.length <= 500);
+    acceptanceCriteria.length <= 50 &&
+    new Set(acceptanceCriteria).size === acceptanceCriteria.length &&
+    acceptanceCriteria.every((criterion) => criterion.length <= 500);
   const changed =
     title.trim() !== item.title ||
     description.trim() !== item.description ||
@@ -3167,9 +3171,13 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
     );
   }
 
-  const workflowActive = ["RUNNING", "WAITING_HUMAN", "SOFT_PAUSED", "HARD_PAUSED", "INTERRUPTED"].includes(
-    workflowQuery.data?.run?.status ?? "",
-  );
+  // Fail closed while the workflow is still unknown: offering Move targets for a task a running
+  // pipeline owns, then withdrawing them a moment later, invites a click the daemon refuses.
+  const workflowActive =
+    workflowQuery.data === undefined ||
+    ["RUNNING", "WAITING_HUMAN", "SOFT_PAUSED", "HARD_PAUSED", "INTERRUPTED"].includes(
+      workflowQuery.data.run?.status ?? "",
+    );
   const targets = workflowActive ? [] : transitionTargets[item.state];
   const move = (targetState: WorkItemState): void => {
     setLastTarget(targetState);
@@ -3252,8 +3260,8 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
       <InspectorSection title={t("task.acceptanceCriteria")}>
         {item.acceptanceCriteria.length > 0 ? (
           <div className="inspector-checklist">
-            {item.acceptanceCriteria.map((criterion) => (
-              <Checkbox disabled key={criterion} label={criterion} />
+            {item.acceptanceCriteria.map((criterion, index) => (
+              <Checkbox disabled key={`${index.toString()}:${criterion}`} label={criterion} />
             ))}
           </div>
         ) : (

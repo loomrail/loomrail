@@ -26,6 +26,12 @@ export type SessionWorker = {
   pausePipeline: (pipelineRunId: string) => void;
   /** Revoke provider start authority and resolve only after every registered child has stopped. */
   revokePipeline: (pipelineRunId: string) => Promise<readonly string[]>;
+  /**
+   * ProviderSession ids this worker still holds a live execution for. A RUNNING session row that
+   * is NOT in this set has no child left to stop from Loomrail's side (its loop already unwound),
+   * which is what lets a cancellation finish instead of failing forever on a stop it can never prove.
+   */
+  liveSessionIds: (pipelineRunId: string) => ReadonlySet<string>;
   whenIdle: () => Promise<void>;
   stop: () => Promise<void>;
 };
@@ -169,6 +175,15 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
             limits: agentRunClaimLimits(schedulingLimits, dispatch.projectId, provider),
           },
         });
+        if (started.type === "AGENT_RUN_BUDGET_PARKED") {
+          // The store parked the attempt HARD_PAUSED and withdrew this dispatch: the owner now has
+          // a budget override to approve, and there is nothing for this pass to run.
+          deps.logger.info(
+            { dispatchId: dispatch.id, stageAttemptId: stageAttempt.id },
+            "The stage was parked before start because its budget is already exhausted",
+          );
+          return { dispatchId: dispatch.id, moved: true };
+        }
         if (started.type !== "AGENT_RUN_STARTED") {
           throw new StateStoreError("PERSISTENCE_FAILURE", "The AgentRun reservation did not start");
         }
@@ -231,10 +246,23 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
       activeExecutions.delete(dispatch.id);
     }
 
-    const queued = deps.state.query({ type: "LIST_PENDING_DISPATCHES" });
-    const moved =
-      queued.type === "WORKFLOW_DISPATCHES" && !queued.dispatches.some(({ id }) => id === dispatch.id);
-    return { dispatchId: dispatch.id, moved };
+    // This task's promise lives in `activeTasks` until `consumeOne` races it out, and nothing
+    // removes a rejected entry: one throw here (a store closed by shutdown while the task was still
+    // unwinding, a query failure) would make every later `Promise.race` reject immediately and wedge
+    // the worker until restart. The trailing read therefore never rejects; an unreadable queue is
+    // reported as "not moved", which only parks the dispatch for this pass.
+    try {
+      const queued = deps.state.query({ type: "LIST_PENDING_DISPATCHES" });
+      const moved =
+        queued.type === "WORKFLOW_DISPATCHES" && !queued.dispatches.some(({ id }) => id === dispatch.id);
+      return { dispatchId: dispatch.id, moved };
+    } catch (error: unknown) {
+      deps.logger.error(
+        { dispatchId: dispatch.id, error: error instanceof Error ? error.name : "unknown" },
+        "The pending dispatch queue could not be re-read after a background AgentRun",
+      );
+      return { dispatchId: dispatch.id, moved: false };
+    }
   };
 
   const runOnce = async (): Promise<void> => {
@@ -266,6 +294,14 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
           resolveAdapter,
           excludedDispatchIds,
         });
+        for (const { dispatchId, reason } of snapshot.skipped) {
+          // Parked for this pass, like a dispatch that could not start: it must neither abort the
+          // other projects' work nor spin the cycle counter.
+          if (!blocked.has(dispatchId)) {
+            deps.logger.warn({ dispatchId, reason }, "A pending workflow dispatch could not be scheduled");
+            blocked.add(dispatchId);
+          }
+        }
         const plan = planDispatchBatch({
           candidates: snapshot.candidates,
           activeRuns: snapshot.activeRuns,
@@ -381,6 +417,12 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         providerSessionId === null ? [] : [providerSessionId],
       );
     },
+    liveSessionIds: (pipelineRunId) =>
+      new Set(
+        [...activeExecutions.values()].flatMap(({ pipelineRunId: livePipelineRunId, providerSessionId }) =>
+          livePipelineRunId === pipelineRunId && providerSessionId !== null ? [providerSessionId] : [],
+        ),
+      ),
     whenIdle: () =>
       stopping || (!running && !pending && activeTasks.size === 0)
         ? Promise.resolve()

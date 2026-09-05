@@ -511,6 +511,17 @@ const sendOperationError = (
   correlationId: string,
 ): FastifyReply => {
   if (error instanceof ZodError) {
+    // Handlers parse their own responses through the same schemas inside the same `try`, so a
+    // ZodError here is not always the client's fault: a persisted row that no longer satisfies a
+    // response contract lands here too. It cannot be told apart at this point, so it is at least
+    // recorded -- issue paths only, never the values -- instead of being returned as a silent 400.
+    request.log.warn(
+      {
+        correlationId,
+        issues: error.issues.slice(0, 5).map((issue) => issue.path.map(String).join(".")),
+      },
+      "A request or response did not satisfy its contract",
+    );
     return reply
       .code(400)
       .send(createError("INVALID_REQUEST", "The request payload is invalid", correlationId));
@@ -1002,7 +1013,19 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       .update(`${publicationId}\0${version.toString()}`)
       .digest("hex")}`;
 
-  const drainConstitutionPublications = async (): Promise<void> => {
+  // Drains are serialised. Each one lists EVERY pending row, and two request handlers awaiting the
+  // same drain concurrently would publish the same operation twice: the loser then records a FAIL
+  // (EEXIST on the target) that lands before the winner's COMPLETE, and a fully written result is
+  // shown as failed. One chain per drain kind; a failed pass never blocks the next.
+  const serialised = (run: () => Promise<void>): (() => Promise<void>) => {
+    let chain: Promise<void> = Promise.resolve();
+    return () => {
+      chain = chain.then(run, run);
+      return chain;
+    };
+  };
+
+  const drainConstitutionPublications = serialised(async (): Promise<void> => {
     const result = localState.query({ type: "LIST_PENDING_CONSTITUTION_PUBLICATIONS" });
     if (result.type !== "CONSTITUTION_PUBLICATIONS") return;
     for (const bundle of result.publications) {
@@ -1071,7 +1094,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         }
       }
     }
-  };
+  });
 
   const verificationPlanPublisher = options.verificationPlanPublisher ?? publishVerificationPlan;
   const verificationPublicationCommandId = (
@@ -1213,7 +1236,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     }
   };
 
-  const drainScaffoldOperations = async (): Promise<void> => {
+  const drainScaffoldOperations = serialised(async (): Promise<void> => {
     const result = localState.query({ type: "LIST_PENDING_SCAFFOLD_OPERATIONS" });
     if (result.type !== "SCAFFOLD_OPERATIONS") return;
     for (const operation of result.operations) {
@@ -1258,7 +1281,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         }
       }
     }
-  };
+  });
 
   /**
    * Connections a client opened without ever sending a request on them.
@@ -1423,7 +1446,27 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     correlationId: string,
   ): Session | null => {
     const session = sessionForRequest(request);
-    if (session) return session;
+    if (session) {
+      // Sliding expiry. The bootstrap grant is single-use and the launcher mints exactly one per
+      // process, so a session that simply ran out after 12 h had no way back except restarting the
+      // daemon -- which aborts every live provider session. An owner who is still using the tab
+      // keeps it; a tab left idle for the full lifetime still expires, and the SSE heartbeat is
+      // deliberately not a renewal (it re-checks through `sessionForRequest`, which stays pure).
+      const remainingMs = session.expiresAt.getTime() - now().getTime();
+      if (remainingMs < SESSION_TTL_MS / 2) {
+        session.expiresAt = new Date(now().getTime() + SESSION_TTL_MS);
+        const sessionToken = request.cookies[SESSION_COOKIE];
+        if (sessionToken !== undefined) {
+          reply.setCookie(SESSION_COOKIE, sessionToken, {
+            httpOnly: true,
+            sameSite: "strict",
+            path: "/",
+            maxAge: Math.floor(SESSION_TTL_MS / 1_000),
+          });
+        }
+      }
+      return session;
+    }
     void reply
       .code(401)
       .send(createError("SESSION_REQUIRED", "A valid local session is required", correlationId));
@@ -1560,36 +1603,46 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     app.get("/api/v1/status", (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!requireSession(request, reply, correlationId)) return;
-
-      return daemonStatusResponseSchema.parse({
-        apiVersion: API_VERSION,
-        authenticated: true,
-        daemon: {
-          status: "online",
-          version: productVersion,
-          mode: "local",
-          startedAt: startedAt.toISOString(),
-          platform: normalizePlatform(),
-        },
-        foundation: {
-          phase: "phase-0",
-          milestone: "M6",
-          providers: "mock-only",
-          persistence: "sqlite",
-        },
-      });
+      try {
+        return daemonStatusResponseSchema.parse({
+          apiVersion: API_VERSION,
+          authenticated: true,
+          daemon: {
+            status: "online",
+            version: productVersion,
+            mode: "local",
+            startedAt: startedAt.toISOString(),
+            platform: normalizePlatform(),
+          },
+          foundation: {
+            phase: "phase-0",
+            milestone: "M6",
+            providers: "mock-only",
+            persistence: "sqlite",
+          },
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
     });
 
     app.get("/api/v1/insights", (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!requireSession(request, reply, correlationId)) return;
-      const result = localState.query({ type: "GET_REPORTING_FACTS" });
-      if (result.type !== "REPORTING_FACTS") {
-        throw new StateStoreError("PERSISTENCE_FAILURE", "The reporting facts could not be read");
+      // Same error boundary as every other route: without it a store failure here would reach
+      // Fastify's default handler and answer with a body outside `apiErrorResponseSchema`, with no
+      // correlation id for the owner to quote.
+      try {
+        const result = localState.query({ type: "GET_REPORTING_FACTS" });
+        if (result.type !== "REPORTING_FACTS") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The reporting facts could not be read");
+        }
+        return insightsResponseSchema.parse(
+          buildReportingSnapshot({ facts: result.facts, runtime: reportingRuntime }),
+        );
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
       }
-      return insightsResponseSchema.parse(
-        buildReportingSnapshot({ facts: result.facts, runtime: reportingRuntime }),
-      );
     });
 
     app.get("/api/v1/projects", async (request, reply) => {
@@ -3613,7 +3666,13 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         }
         const runningSessions = sessions.sessions.filter(({ status }) => status === "RUNNING");
         const stoppedSessionIds = new Set(await worker.revokePipeline(cancelled.run.id));
-        if (runningSessions.some(({ id }) => !stoppedSessionIds.has(id))) {
+        // Fail closed only for a session whose child this worker still holds and could not prove
+        // stopped. A RUNNING row with no live execution at all has already left the loop (a
+        // deadline abort that failed, a stop that raced the loop's unwind): there is nothing left
+        // to signal, and refusing here used to leave the run CANCELLED with its sessions RUNNING and
+        // every retry of this command answering 500 until the daemon restarted.
+        const liveSessionIds = worker.liveSessionIds(cancelled.run.id);
+        if (runningSessions.some(({ id }) => liveSessionIds.has(id) && !stoppedSessionIds.has(id))) {
           throw new StateStoreError(
             "PERSISTENCE_FAILURE",
             "A cancelled ProviderSession has no registered child-stop authority",
@@ -4125,7 +4184,10 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     );
 
     const address = await app.listen({ host, port: options.port ?? 0 });
-    const baseUrl = address.replace("[::1]", "127.0.0.1");
+    // The advertised origin must be the address the browser will actually reach: rewriting `[::1]`
+    // to `127.0.0.1` used to point the bootstrap URL at an address an IPv6-only bind does not
+    // serve, and made every mutation from the `[::1]` tab fail the exact-Origin check.
+    const baseUrl = address;
     allowedOrigin = baseUrl;
     // Startup reconciliation may have restored runnable work, including a bundled demo Browser QA
     // dispatch whose safe target is this exact dynamic origin. Do not let that work race ahead of

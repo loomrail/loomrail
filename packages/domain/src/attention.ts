@@ -28,6 +28,9 @@ export class AttentionProjectionError extends Error {
   }
 }
 
+// Code-unit order, never `localeCompare`: the inbox order must not depend on the host's collation.
+const compareText = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
+
 const sectionOrder: Readonly<Record<AttentionSection, number>> = {
   BLOCKING_NOW: 0,
   APPROVALS: 1,
@@ -146,8 +149,8 @@ export const buildAttentionInbox = (
       if (section !== 0) return section;
       const priority = priorityOrder[left.workItem.priority] - priorityOrder[right.workItem.priority];
       if (priority !== 0) return priority;
-      const age = left.request.createdAt.localeCompare(right.request.createdAt);
-      return age !== 0 ? age : left.id.localeCompare(right.id);
+      const age = compareText(left.request.createdAt, right.request.createdAt);
+      return age !== 0 ? age : compareText(left.id, right.id);
     });
 
   return attentionInboxResponseSchema.parse({

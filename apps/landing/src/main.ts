@@ -627,11 +627,17 @@ function setupDemo(doc: Document, win: Window): void {
   const reduced = win.matchMedia("(prefers-reduced-motion: reduce)").matches;
   for (const video of videos) {
     video.controls = false;
-    video.addEventListener("play", () => syncDemoTrigger(video));
-    video.addEventListener("pause", () => syncDemoTrigger(video));
+    video.addEventListener("play", () => {
+      syncDemoTrigger(video);
+    });
+    video.addEventListener("pause", () => {
+      syncDemoTrigger(video);
+    });
     video.parentElement
       ?.querySelector<HTMLButtonElement>("[data-demo-play]")
-      ?.addEventListener("click", () => playDemo(video));
+      ?.addEventListener("click", () => {
+        playDemo(video);
+      });
 
     if (!reduced) {
       video.autoplay = true;

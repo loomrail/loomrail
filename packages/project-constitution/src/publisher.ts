@@ -68,10 +68,10 @@ export const publishProjectConstitution = async (input: {
       "The approved Constitution content does not match its recorded digest",
     );
   }
-  const [canonicalInput, repository] = await Promise.all([
-    realpath(input.repositoryPath).catch(() => null),
-    inspectRepository(input.repositoryPath),
-  ]);
+  // Canonicalise before asking git (see scanProjectRepository): a missing directory as `cwd` would
+  // otherwise surface as "git is not installed" and be recorded as a write failure.
+  const canonicalInput = await realpath(input.repositoryPath).catch(() => null);
+  const repository = canonicalInput === null ? null : await inspectRepository(canonicalInput);
   if (canonicalInput === null || repository === null || !samePath(repository.topLevel, canonicalInput)) {
     throw new ConstitutionPublicationError(
       "REPOSITORY_UNAVAILABLE",

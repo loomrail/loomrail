@@ -22,7 +22,7 @@ import { z } from "zod";
 import type { ProviderAcceptanceInput, ProviderStageResultPolicy } from "./stage-result.js";
 
 export type { ProcessExitOutcome, ProcessRun, RunProcessOptions } from "./process-runner.js";
-export { ProcessSpawnError, runProcess } from "./process-runner.js";
+export { ProcessListenerError, ProcessSpawnError, runProcess } from "./process-runner.js";
 export type { UnproductiveSessionReason, UnproductiveSessionReport } from "./session-diagnosis.js";
 export { describeUnproductiveSession } from "./session-diagnosis.js";
 export type {

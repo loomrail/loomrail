@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { ProcessSpawnError, runProcess, type ProcessExitOutcome } from "../src/process-runner.js";
+import {
+  ProcessListenerError,
+  ProcessSpawnError,
+  runProcess,
+  type ProcessExitOutcome,
+} from "../src/process-runner.js";
 
 // A real child process, not a double: the thing under test IS the process boundary. A double
 // would only prove that the double behaves as written.
@@ -202,6 +207,60 @@ describe("runProcess", () => {
   // With no `error` listener on the child, a bad executable is an uncaught exception that takes
   // the daemon down instead of something a caller can react to -- and a later task has to turn
   // exactly this into "provider unavailable" when a CLI is not installed.
+  it("keeps a line that never ends bounded, not just its first megabyte", async () => {
+    // 3 MB without a newline, written in chunks: the cap used to reset after the first drop and let
+    // every later chunk accumulate again.
+    const lines: string[] = [];
+    const run = runProcess({
+      command: node,
+      args: [
+        "-e",
+        `const chunk = "x".repeat(65536); for (let i = 0; i < 48; i += 1) process.stdout.write(chunk); process.stdout.write("\\ntail\\n");`,
+      ],
+      cwd: process.cwd(),
+      onLine: (line) => lines.push(line),
+      onStderr: () => undefined,
+      deadlineMs: 20_000,
+    });
+    await run.exited;
+    expect(lines).toEqual(["tail"]);
+  });
+
+  it("turns a throwing line listener into a stopped child and a typed rejection", async () => {
+    const seen: string[] = [];
+    const run = runProcess({
+      command: node,
+      args: [
+        "-e",
+        `console.log("first"); console.log("second"); setInterval(() => console.log("more"), 50);`,
+      ],
+      cwd: process.cwd(),
+      onLine: (line) => {
+        seen.push(line);
+        if (line === "second") throw new Error("the store refused this line");
+      },
+      onStderr: () => undefined,
+      deadlineMs: 20_000,
+    });
+    await expect(run.exited).rejects.toBeInstanceOf(ProcessListenerError);
+    expect(seen).toEqual(["first", "second"]);
+    await expect(run.stop()).resolves.toBeUndefined();
+  });
+
+  it("reports an argument spawn refuses (a NUL byte) as a spawn failure, not a thrown TypeError", async () => {
+    const run = runProcess({
+      command: node,
+      args: ["-e", "process.exit(0)", "a\u0000b"],
+      cwd: process.cwd(),
+      onLine: () => undefined,
+      onStderr: () => undefined,
+      deadlineMs: 10_000,
+    });
+    await expect(run.exited).rejects.toBeInstanceOf(ProcessSpawnError);
+    expect(run.pid).toBeUndefined();
+    await expect(run.stop()).resolves.toBeUndefined();
+  });
+
   it("reports a spawn failure through `exited` instead of crashing the process", async () => {
     const run = runProcess({
       command: "/definitely/not/a/real/executable-loomrail-test",

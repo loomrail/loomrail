@@ -103,8 +103,28 @@ const start = async (options: StartCliCommand | TryCliCommand): Promise<void> =>
       options.command === "TRY" ? guidedBootstrapUrl(daemon.bootstrapUrl) : daemon.bootstrapUrl;
     let browserOpened = false;
     if (!options.noOpen) {
-      await open(launchUrl, { wait: false });
-      browserOpened = true;
+      // `open()` resolves as soon as the opener process is spawned, not when a browser actually
+      // appeared. On a headless or SSH host the opener exits non-zero a moment later; treating the
+      // spawn as success withheld the one-time sign-in URL, and the only way in was to restart with
+      // `--no-open`. A fast non-zero exit therefore counts as "not opened" and the URL is printed.
+      const OPENER_FAILURE_WINDOW_MS = 1_500;
+      const opener = await open(launchUrl, { wait: false });
+      browserOpened = await new Promise<boolean>((resolve) => {
+        const settle = (opened: boolean): void => {
+          clearTimeout(timer);
+          resolve(opened);
+        };
+        const timer = setTimeout(() => {
+          settle(true);
+        }, OPENER_FAILURE_WINDOW_MS);
+        timer.unref();
+        opener.once("exit", (code) => {
+          settle(code === 0 || code === null);
+        });
+        opener.once("error", () => {
+          settle(false);
+        });
+      });
     }
 
     for (const line of formatStartupReport({

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, realpath } from "node:fs/promises";
+import { lstat, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, parse, resolve } from "node:path";
 
 import { inspectRepository } from "@loomrail/workspace";
@@ -107,7 +107,9 @@ export const prepareProjectScaffold = async (input: {
   const requestedParent = dirname(requestedTarget);
   let canonicalParent: string;
   try {
-    const parentStat = await lstat(requestedParent);
+    // `stat`, not `lstat`: a parent that is a symlink to a directory (macOS `/tmp`, a linked
+    // `~/projects`) is a valid location, and the very next line canonicalises it anyway.
+    const parentStat = await stat(requestedParent);
     if (!parentStat.isDirectory()) {
       throw new ProjectScaffoldingError(
         "TARGET_PARENT_UNAVAILABLE",

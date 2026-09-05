@@ -169,30 +169,12 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
       return;
     }
 
+    let result: Awaited<ReturnType<typeof binding.client.callTool>>;
     try {
-      const result = await binding.client.callTool(
+      result = await binding.client.callTool(
         { name: request.name, arguments: request.arguments },
         { timeout: TOOL_DEADLINE_MS, maxTotalTimeout: TOOL_DEADLINE_MS },
       );
-      const encodedResult = JSON.stringify(result);
-      if (Buffer.byteLength(encodedResult, "utf8") > TOOL_RESULT_LIMIT_BYTES) {
-        await binding.finishToolCall(callId, {
-          status: "FAILED",
-          failureCode: "OUTPUT_LIMIT_REACHED",
-        });
-        writeResponse(socket, {
-          type: "ERROR",
-          id: request.id,
-          code: "CONNECTION_LOST",
-          message: "The MCP tool result exceeded the Loomrail limit",
-        });
-        return;
-      }
-      await binding.finishToolCall(
-        callId,
-        result.isError === true ? { status: "FAILED", failureCode: "SERVER_ERROR" } : { status: "SUCCEEDED" },
-      );
-      writeResponse(socket, { type: "RESULT", id: request.id, result });
     } catch (error: unknown) {
       await Promise.resolve(binding.finishToolCall(callId, callFailure(error))).catch(() => undefined);
       writeResponse(socket, {
@@ -201,7 +183,32 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
         code: "CONNECTION_LOST",
         message: "The MCP server connection was lost; Loomrail will not retry this call",
       });
+      return;
     }
+    // From here the tool HAS run. A failure to record that fact must not be reported to the agent
+    // as a lost connection: the natural response to "your call did not happen" is to call again,
+    // which for a side-effecting tool is exactly the duplicate this accounting exists to prevent.
+    // The outcome goes back as observed; the accounting failure stays in the daemon's diagnostics.
+    const encodedResult = JSON.stringify(result);
+    if (Buffer.byteLength(encodedResult, "utf8") > TOOL_RESULT_LIMIT_BYTES) {
+      await Promise.resolve(
+        binding.finishToolCall(callId, { status: "FAILED", failureCode: "OUTPUT_LIMIT_REACHED" }),
+      ).catch(() => undefined);
+      writeResponse(socket, {
+        type: "ERROR",
+        id: request.id,
+        code: "CONNECTION_LOST",
+        message: "The MCP tool result exceeded the Loomrail limit",
+      });
+      return;
+    }
+    await Promise.resolve(
+      binding.finishToolCall(
+        callId,
+        result.isError === true ? { status: "FAILED", failureCode: "SERVER_ERROR" } : { status: "SUCCEEDED" },
+      ),
+    ).catch(() => undefined);
+    writeResponse(socket, { type: "RESULT", id: request.id, result });
   };
 
   const acceptSocket = (socket: Socket): void => {
