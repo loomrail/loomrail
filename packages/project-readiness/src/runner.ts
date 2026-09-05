@@ -182,11 +182,13 @@ const executableSearchDirectories = async (input: {
 }): Promise<readonly string[]> => {
   const sourcePath = input.source["PATH"] ?? input.source["Path"] ?? input.source["path"] ?? "";
   const candidates = [
-    ...input.runtimeDirectories,
     ...sourcePath
       .split(input.platform === "win32" ? ";" : ":")
       .slice(0, 128)
       .map((entry) => entry.trim().replace(/^"|"$/gu, "")),
+    // Preserve the owner's absolute PATH order. Runtime directories are trusted fallbacks, but
+    // must not silently replace the package-manager executable shown in the adopted recipe.
+    ...input.runtimeDirectories,
   ];
   const directories: string[] = [];
   const seen = new Set<string>();

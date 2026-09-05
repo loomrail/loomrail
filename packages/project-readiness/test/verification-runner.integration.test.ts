@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { executeVerificationRecipe, verificationBaselineEnvironment } from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
-const TEST_RECIPE_TIMEOUT_SECONDS = 30;
+const TEST_RECIPE_TIMEOUT_SECONDS = 10;
 
 const installRecipe = async (
   repositoryPath: string,
