@@ -174,12 +174,16 @@ const eventBaseSchema = z
   })
   .strict();
 
+// Stored events are immutable, so this schema reads back every catalog size the product has ever
+// written -- eight before catalog v2, fourteen now. An exact length here would orphan the history
+// the shipped release already appended and stop the daemon from resolving its newest event at all.
+// Completeness of a *new* assessment is enforced on the write side, by the domain's catalog check.
 export const projectReadinessAssessedEventSchema = eventBaseSchema.extend({
   type: z.literal("PROJECT_READINESS_ASSESSED"),
   data: z
     .object({
       run: projectReadinessRunSchema,
-      checks: z.array(readinessCheckSchema).length(14),
+      checks: z.array(readinessCheckSchema).max(14),
       findings: z.array(securityFindingSchema).max(1_024),
     })
     .strict(),
@@ -240,10 +244,12 @@ const commandResultBaseSchema = z
   })
   .strict();
 
+// Replayed from a stored command receipt, so it carries the same historical catalog sizes as the
+// event above.
 export const projectReadinessAssessedResultSchema = commandResultBaseSchema.extend({
   type: z.literal("PROJECT_READINESS_ASSESSED"),
   run: projectReadinessRunSchema,
-  checks: z.array(readinessCheckSchema).length(14),
+  checks: z.array(readinessCheckSchema).max(14),
   findings: z.array(securityFindingSchema).max(1_024),
 });
 
