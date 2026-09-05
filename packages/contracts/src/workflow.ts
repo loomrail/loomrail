@@ -435,6 +435,7 @@ export const stageAttemptSchema = z
     projectId: opaqueIdSchema,
     workItemId: opaqueIdSchema,
     correctionRunId: opaqueIdSchema.nullable(),
+    verificationCorrectionRunId: opaqueIdSchema.nullable().optional(),
     stage: workflowStageSchema,
     attempt: z.number().int().positive(),
     status: stageAttemptStatusSchema,

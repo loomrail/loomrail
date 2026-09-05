@@ -46,7 +46,8 @@ output; restart сохраняет failure, а crash во время process д�
       или browser authority до свежего current-tree pass, а terminal non-pass не ретраится скрыто.
 - [ ] Добавить отдельный `VerificationFailure` и связать его с correction IMPLEMENT/re-review/rerun lineage.
       Immutable failure identity и атомарная запись `FAILED | ERROR | INTERRUPTED` уже готовы; correction transition,
-      re-review/rerun links и `STALE` materialization остаются в работе.
+      отдельный bounded `VerificationCorrectionRun` и pure initial `QA gate → correction IMPLEMENT` decision готовы;
+      transactional wiring, re-review/rerun links и `STALE` materialization остаются в работе.
 - [ ] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
       Общие constants и pure decision `2 automatic + 1 owner` уже заменили QA-only policy; durable usage/lineage,
       объединяющие оба evaluator без объединения их failure entities, остаются в работе.

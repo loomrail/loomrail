@@ -5,6 +5,7 @@ import {
   retryVerificationRunRequestSchema,
   startVerificationRunRequestSchema,
   verificationCheckSchema,
+  verificationCorrectionRunSchema,
   verificationEvidenceSchema,
   verificationFailureSchema,
   verificationPlanProposalSchema,
@@ -184,6 +185,33 @@ const activePlan = {
 };
 
 describe("verification run evidence contract", () => {
+  it("keeps Project verification correction identity separate and bounded", () => {
+    const correction = {
+      schemaVersion: 1,
+      id: "verification-correction-one",
+      projectId: runningRun.projectId,
+      workItemId: runningRun.workItemId,
+      pipelineRunId: runningRun.pipelineRunId,
+      budgetPosition: 1,
+      automatic: true,
+      sourceFailureId: "verification-failure-one",
+      sourceVerificationRunId: runningRun.id,
+      sourceImplementationTree: runningRun.implementationTree,
+      status: "ACTIVE",
+      createdAt: runningRun.createdAt,
+      completedAt: null,
+      version: 1,
+    } as const;
+
+    expect(verificationCorrectionRunSchema.parse(correction)).toEqual(correction);
+    expect(
+      verificationCorrectionRunSchema.safeParse({
+        ...correction,
+        budgetPosition: 3,
+      }).success,
+    ).toBe(false);
+  });
+
   it("keeps a verification failure as a path-free immutable evaluator identity", () => {
     const failure = {
       schemaVersion: 1,

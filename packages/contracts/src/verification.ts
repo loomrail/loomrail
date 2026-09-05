@@ -630,6 +630,7 @@ export const verificationRunSchema = z
     implementationTree: treeShaSchema,
     ordinal: z.number().int().positive(),
     retryOfRunId: opaqueIdSchema.nullable(),
+    verificationCorrectionRunId: opaqueIdSchema.nullable().optional(),
     platform: verificationPlatformSchema,
     status: verificationRunStatusSchema,
     currentCheckId: opaqueIdSchema.nullable(),
@@ -684,6 +685,14 @@ export const verificationFailureReasonSchema = z.enum([
   "STALE",
 ]);
 
+export const verificationCorrectionRunStatusSchema = z.enum([
+  "ACTIVE",
+  "PASSED",
+  "SUPERSEDED",
+  "EXHAUSTED",
+  "CANCELLED",
+]);
+
 /** Immutable evaluator identity; correction and resolution history reference it instead of mutating it. */
 export const verificationFailureSchema = z
   .object({
@@ -727,6 +736,42 @@ export const verificationFailureSchema = z
         code: "custom",
         path: ["verificationCheckId"],
         message: "A stale Run failure is not attributed to one Check",
+      });
+    }
+  });
+
+export const verificationCorrectionRunSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    workItemId: opaqueIdSchema,
+    pipelineRunId: opaqueIdSchema,
+    budgetPosition: z.number().int().min(1).max(3),
+    automatic: z.boolean(),
+    sourceFailureId: opaqueIdSchema,
+    sourceVerificationRunId: opaqueIdSchema,
+    sourceImplementationTree: treeShaSchema,
+    status: verificationCorrectionRunStatusSchema,
+    createdAt: utcTimestampSchema,
+    completedAt: utcTimestampSchema.nullable(),
+    version: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((run, context) => {
+    if (run.automatic !== run.budgetPosition <= 2) {
+      context.addIssue({
+        code: "custom",
+        path: ["automatic"],
+        message: "Only the first two correction positions are automatic",
+      });
+    }
+    const terminal = run.status === "PASSED" || run.status === "SUPERSEDED" || run.status === "CANCELLED";
+    if (terminal !== (run.completedAt !== null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["completedAt"],
+        message: "Only a terminal verification correction carries completion time",
       });
     }
   });
@@ -1086,6 +1131,8 @@ export type VerificationCheck = z.infer<typeof verificationCheckSchema>;
 export type VerificationRun = z.infer<typeof verificationRunSchema>;
 export type VerificationFailureReason = z.infer<typeof verificationFailureReasonSchema>;
 export type VerificationFailure = z.infer<typeof verificationFailureSchema>;
+export type VerificationCorrectionRunStatus = z.infer<typeof verificationCorrectionRunStatusSchema>;
+export type VerificationCorrectionRun = z.infer<typeof verificationCorrectionRunSchema>;
 export type VerificationFailureRecordedEvent = z.infer<typeof verificationFailureRecordedEventSchema>;
 export type VerificationCheckObservation = z.infer<typeof verificationCheckObservationSchema>;
 export type VerificationRunSnapshotResponse = z.infer<typeof verificationRunSnapshotResponseSchema>;
