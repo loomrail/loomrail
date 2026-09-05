@@ -128,6 +128,10 @@ describe("Project Readiness HTTP boundary", () => {
       ["LEGAL_OWNER_REVIEW", "CONFIRMED"],
       ["PAYMENTS_OWNER_REVIEW", "NOT_APPLICABLE"],
       ["ANALYTICS_OWNER_REVIEW", "NOT_APPLICABLE"],
+      ["SECURITY_HEADERS_OWNER_REVIEW", "CONFIRMED"],
+      ["OPS_HEALTH_ENDPOINT_DECLARED", "CONFIRMED"],
+      ["OPS_ROLLBACK_PLAN", "CONFIRMED"],
+      ["OPS_BACKUP", "NOT_APPLICABLE"],
     ] as const) {
       const run = snapshot.run;
       const check = snapshot.checks.find((candidate) => candidate.key === key);
@@ -152,8 +156,8 @@ describe("Project Readiness HTTP boundary", () => {
       snapshot = projectReadinessSnapshotSchema.parse(await response.json());
     }
 
-    expect(snapshot.run).toMatchObject({ status: "READY", version: 4 });
-    expect(snapshot.attestations).toHaveLength(3);
+    expect(snapshot.run).toMatchObject({ status: "READY", version: 8 });
+    expect(snapshot.attestations).toHaveLength(7);
     const fetched = await fetch(`${daemon.baseUrl}/api/v1/projects/${registered.project.id}/readiness`, {
       headers: { cookie: session.cookie },
     });

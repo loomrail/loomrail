@@ -808,7 +808,17 @@ const ProjectReadinessPanel = ({ project }: { project: ListedProject }): React.J
         <p className="settings__note">{t("settings.readiness.empty")}</p>
       ) : (
         <div className="readiness-checklist">
-          {(["SECURITY", "LEGAL", "PAYMENTS", "ANALYTICS"] as const).map((category) => {
+          {(
+            [
+              "SECURITY",
+              "LEGAL",
+              "PAYMENTS",
+              "ANALYTICS",
+              "DEPENDENCIES",
+              "ENVIRONMENT",
+              "OPERATIONS",
+            ] as const
+          ).map((category) => {
             const categoryChecks = snapshot.checks.filter((check) => check.category === category);
             return (
               <section className="readiness-group" key={category}>

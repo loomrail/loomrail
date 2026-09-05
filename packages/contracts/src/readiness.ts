@@ -143,7 +143,7 @@ export const projectReadinessSnapshotSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
     run: projectReadinessRunSchema.nullable(),
-    checks: z.array(readinessCheckSchema).max(8),
+    checks: z.array(readinessCheckSchema).max(14),
     findings: z.array(securityFindingSchema).max(1_024),
     attestations: z.array(readinessAttestationSchema).max(1_024),
   })
@@ -179,7 +179,7 @@ export const projectReadinessAssessedEventSchema = eventBaseSchema.extend({
   data: z
     .object({
       run: projectReadinessRunSchema,
-      checks: z.array(readinessCheckSchema).length(8),
+      checks: z.array(readinessCheckSchema).length(14),
       findings: z.array(securityFindingSchema).max(1_024),
     })
     .strict(),
@@ -214,7 +214,7 @@ export const recordProjectReadinessAssessmentCommandSchema = commandBaseSchema.e
       repositoryHead: gitHeadSchema,
       sourceDigest: digestSchema,
       workingTreeDirty: z.boolean(),
-      checks: z.array(readinessCheckDraftSchema).length(8),
+      checks: z.array(readinessCheckDraftSchema).length(14),
     })
     .strict(),
 });
@@ -243,7 +243,7 @@ const commandResultBaseSchema = z
 export const projectReadinessAssessedResultSchema = commandResultBaseSchema.extend({
   type: z.literal("PROJECT_READINESS_ASSESSED"),
   run: projectReadinessRunSchema,
-  checks: z.array(readinessCheckSchema).length(8),
+  checks: z.array(readinessCheckSchema).length(14),
   findings: z.array(securityFindingSchema).max(1_024),
 });
 

@@ -7,7 +7,12 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { assessProjectReadiness } from "../src/index.js";
-import { inlineSecretFindings, launchOwnerChecks, lockfileFindings, prodEnvFindings } from "../src/scanner.js";
+import {
+  inlineSecretFindings,
+  launchOwnerChecks,
+  lockfileFindings,
+  prodEnvFindings,
+} from "../src/scanner.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -55,7 +60,7 @@ describe("project readiness scanner", () => {
 
     expect(assessment.repositoryHead).toMatch(/^[0-9a-f]{40}$/);
     expect(assessment.workingTreeDirty).toBe(false);
-    expect(assessment.checks).toHaveLength(8);
+    expect(assessment.checks).toHaveLength(14);
     expect(assessment.checks.filter((check) => check.mode === "AUTOMATED")).toEqual(
       expect.arrayContaining([expect.objectContaining({ status: "PASSED" })]),
     );
@@ -67,11 +72,18 @@ describe("project readiness scanner", () => {
     const canary = "super-secret-canary-must-never-escape";
     await mkdir(join(repositoryPath, ".github", "workflows"), { recursive: true });
     await writeFile(join(repositoryPath, ".env.production"), canary);
+    await writeFile(join(repositoryPath, "package.json"), JSON.stringify({ name: "unsafe-fixture" }));
     await writeFile(
       join(repositoryPath, ".github", "workflows", "danger.yml"),
       "on:\n  pull_request_target:\npermissions: write-all\njobs:\n  x:\n    steps:\n      - uses: actions/checkout@v4\n",
     );
-    await git(repositoryPath, ["add", "-f", ".env.production", ".github/workflows/danger.yml"]);
+    await git(repositoryPath, [
+      "add",
+      "-f",
+      ".env.production",
+      "package.json",
+      ".github/workflows/danger.yml",
+    ]);
     await git(repositoryPath, ["commit", "--quiet", "-m", "unsafe fixture"]);
 
     const assessment = await assessProjectReadiness(repositoryPath, { activeConstitution: false });

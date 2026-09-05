@@ -121,9 +121,7 @@ const ROOT_LOCKFILES = [
   "bun.lock",
 ] as const;
 
-export const lockfileFindings = (
-  trackedPaths: readonly string[] | null,
-): readonly SecurityFindingDraft[] => {
+export const lockfileFindings = (trackedPaths: readonly string[] | null): readonly SecurityFindingDraft[] => {
   if (trackedPaths === null) {
     return [
       finding(
@@ -201,6 +199,15 @@ const ignoredByGit = async (repositoryPath: string, path: string): Promise<boole
   if (result.exitCode === 0) return true;
   if (result.exitCode === 1) return false;
   return null;
+};
+
+const pathExists = async (repositoryPath: string, path: string): Promise<boolean> => {
+  try {
+    await lstat(join(repositoryPath, path));
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 const licensePresent = async (repositoryPath: string): Promise<boolean> => {
@@ -356,9 +363,7 @@ const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KE
 const MANAGED_REFERENCE_PATTERN = /^\$\{\{.+\}\}$|^\$[A-Za-z_][A-Za-z0-9_]*$|^\$\{[^}]+\}$/;
 const MIN_LITERAL_SECRET_LENGTH = 8;
 
-export const inlineSecretFindings = (
-  files: readonly CiWorkflowFile[],
-): readonly SecurityFindingDraft[] => {
+export const inlineSecretFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingDraft[] => {
   const findings: SecurityFindingDraft[] = [];
   for (const file of files) {
     for (const line of file.content.split(/\r?\n/)) {
@@ -446,6 +451,10 @@ export const assessProjectReadiness = async (
     npmrcIgnored,
     hasLicense,
     workflows,
+    prodEnvExists,
+    prodEnvLocalExists,
+    prodEnvIgnored,
+    prodEnvLocalIgnored,
   ] = await Promise.all([
     runBoundedGit(["rev-parse", "HEAD"], canonicalRoot),
     runBoundedGit(["status", "--porcelain=v1", "-z", "--untracked-files=normal"], canonicalRoot),
@@ -455,6 +464,10 @@ export const assessProjectReadiness = async (
     ignoredByGit(canonicalRoot, ".npmrc"),
     licensePresent(canonicalRoot),
     readBoundedCiWorkflows(canonicalRoot),
+    pathExists(canonicalRoot, ".env.production"),
+    pathExists(canonicalRoot, ".env.production.local"),
+    ignoredByGit(canonicalRoot, ".env.production"),
+    ignoredByGit(canonicalRoot, ".env.production.local"),
   ]);
 
   const repositoryHead =
@@ -567,6 +580,29 @@ export const assessProjectReadiness = async (
       "ANALYTICS",
       "Confirm consent, retention, disclosure, and analytics data handling, or mark them not applicable.",
     ),
+    automatedCheck(
+      "DEPS_LOCKFILE_PRESENT",
+      "DEPENDENCIES",
+      "Tracked dependency manifests have exactly one matching lockfile.",
+      "Track a single lockfile so installs are reproducible.",
+      lockfileFindings(
+        trackedResult.exitCode !== 0 || trackedResult.overflowed ? null : splitNullPaths(trackedResult),
+      ),
+    ),
+    automatedCheck(
+      "ENV_PROD_SEPARATION",
+      "ENVIRONMENT",
+      "Production values are referenced, not stored in the repository.",
+      "Keep production values out of the repository and out of CI literals.",
+      [
+        ...prodEnvFindings([
+          { path: ".env.production", exists: prodEnvExists, ignored: prodEnvIgnored },
+          { path: ".env.production.local", exists: prodEnvLocalExists, ignored: prodEnvLocalIgnored },
+        ]),
+        ...inlineSecretFindings(workflows.files),
+      ],
+    ),
+    ...launchOwnerChecks(),
   ];
   const sourceDigest = createHash("sha256")
     .update(

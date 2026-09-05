@@ -30,6 +30,12 @@ const checkCatalog: readonly CheckCatalogEntry[] = [
   ["LEGAL_OWNER_REVIEW", "LEGAL", "OWNER"],
   ["PAYMENTS_OWNER_REVIEW", "PAYMENTS", "OWNER"],
   ["ANALYTICS_OWNER_REVIEW", "ANALYTICS", "OWNER"],
+  ["DEPS_LOCKFILE_PRESENT", "DEPENDENCIES", "AUTOMATED"],
+  ["ENV_PROD_SEPARATION", "ENVIRONMENT", "AUTOMATED"],
+  ["SECURITY_HEADERS_OWNER_REVIEW", "SECURITY", "OWNER"],
+  ["OPS_HEALTH_ENDPOINT_DECLARED", "OPERATIONS", "OWNER"],
+  ["OPS_ROLLBACK_PLAN", "OPERATIONS", "OWNER"],
+  ["OPS_BACKUP", "OPERATIONS", "OWNER"],
 ];
 
 const checks: readonly ReadinessCheckDraft[] = checkCatalog.map(([key, category, mode]) => ({
@@ -106,7 +112,7 @@ describe("Project Readiness local state", () => {
       type: "PROJECT_READINESS_ASSESSED",
       run: { status: "ACTION_REQUIRED", version: 1 },
     });
-    expect(assessed.type === "PROJECT_READINESS_ASSESSED" ? assessed.checks : []).toHaveLength(8);
+    expect(assessed.type === "PROJECT_READINESS_ASSESSED" ? assessed.checks : []).toHaveLength(14);
     expect(replayed).toMatchObject({ type: "PROJECT_READINESS_ASSESSED", replayed: true });
     const snapshot = localState.query({ type: "GET_PROJECT_READINESS_SNAPSHOT", projectId: "project-one" });
     if (snapshot.type !== "PROJECT_READINESS_SNAPSHOT") {
@@ -137,7 +143,15 @@ describe("Project Readiness local state", () => {
     if (assessed.type !== "PROJECT_READINESS_ASSESSED") throw new Error("Assessment was not recorded");
 
     let run = assessed.run;
-    for (const key of ["LEGAL_OWNER_REVIEW", "PAYMENTS_OWNER_REVIEW", "ANALYTICS_OWNER_REVIEW"] as const) {
+    for (const key of [
+      "LEGAL_OWNER_REVIEW",
+      "PAYMENTS_OWNER_REVIEW",
+      "ANALYTICS_OWNER_REVIEW",
+      "SECURITY_HEADERS_OWNER_REVIEW",
+      "OPS_HEALTH_ENDPOINT_DECLARED",
+      "OPS_ROLLBACK_PLAN",
+      "OPS_BACKUP",
+    ] as const) {
       const check = assessed.checks.find((candidate) => candidate.key === key);
       if (!check) throw new Error(`Missing ${key}`);
       const result = localState.execute({
@@ -158,7 +172,7 @@ describe("Project Readiness local state", () => {
       if (result.type !== "PROJECT_READINESS_ATTESTED") throw new Error("Attestation was not recorded");
       run = result.run;
     }
-    expect(run).toMatchObject({ status: "READY", version: 4 });
+    expect(run).toMatchObject({ status: "READY", version: 8 });
     localState.close();
     state = undefined;
 
@@ -168,7 +182,7 @@ describe("Project Readiness local state", () => {
       throw new Error("Readiness snapshot was not recovered");
     }
     const recoveredSnapshot = projectReadinessSnapshotSchema.parse(snapshot.snapshot);
-    expect(recoveredSnapshot.run).toMatchObject({ status: "READY", version: 4 });
+    expect(recoveredSnapshot.run).toMatchObject({ status: "READY", version: 8 });
     expect(
       recoveredSnapshot.attestations.some(
         (attestation) =>
