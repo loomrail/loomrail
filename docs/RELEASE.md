@@ -150,7 +150,8 @@ required gates are `PASSED`, the selected stable version matches, every evidence
 the recorded SHA-256, and the identical bytes exist at a recorded ancestor commit. Run `pnpm release:status` to inspect
 the current index without changing external state. The index currently proves six historical gates and deliberately
 keeps private dogfood, protected landing integration and both Windows live-provider rows `PENDING`; no stable version
-is selected.
+is selected. Both ordinary source-CI platforms run the same status check from full Git history, so a changed or
+unreachable recorded evidence object fails the candidate before the longer verification matrix.
 
 The index prevents an accidental premature workflow run; it is not a signature or an independent reviewer. A
 maintainer could forge repository evidence, so protected-environment owner review must still inspect the referenced

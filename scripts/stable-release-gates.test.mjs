@@ -126,3 +126,11 @@ test("rejects evidence drift and non-ancestor evidence commits", async () => {
     /not an ancestor/,
   );
 });
+
+test("source CI verifies recorded stable evidence from full history", async () => {
+  const workflow = await readFile(`${repositoryRoot}/.github/workflows/ci.yml`, "utf8");
+  const verifyJob = workflow.slice(workflow.indexOf("  verify:"), workflow.indexOf("\n  browser:"));
+  assert.ok(verifyJob.includes("fetch-depth: 0"));
+  assert.ok(verifyJob.includes("name: Verify recorded stable release evidence"));
+  assert.ok(verifyJob.includes("run: pnpm release:status"));
+});

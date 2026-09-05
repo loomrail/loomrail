@@ -85,7 +85,8 @@ Browser smoke and Clean install jobs. A strict versioned stable-gate index addit
 the exact selected stable version, bounded non-symlink evidence files, matching SHA-256 for both current and committed
 bytes, and an evidence commit that is an ancestor of the release source. Its current honest state is 6/10 with no
 stable version selected. This index prevents accidental omission; it is repository-authored evidence, not a signature
-or a substitute for protected-environment owner review. A staged package is still not public. A package owner must
+or a substitute for protected-environment owner review. Both source-CI platforms verify every current `PASSED` row
+against full Git history before their long matrix. A staged package is still not public. A package owner must
 separately inspect it and approve it with interactive 2FA before npm makes the immutable name/version public.
 
 npm provenance links the published bytes to source and build instructions through Sigstore and a transparency log.

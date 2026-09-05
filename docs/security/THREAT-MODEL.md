@@ -1497,10 +1497,11 @@ provider rows. The stage workflow therefore consumes one strict versioned index 
 matching stable version. `PASSED` entries name only bounded repository evidence under `docs/evidence`, bind its
 SHA-256, require the same bytes at the recorded commit, and require that commit to be an ancestor of the release
 source; pending entries cannot carry evidence or pass the workflow. Evidence paths reject traversal and symlinks, and
-the trusted checkout fetches history for the ancestry check. Tests cover unknown fields, prerelease/version drift,
-unsafe paths, any pending gate, digest drift, non-ancestor evidence, and the workflow linkage. This closes accidental
-omission, not a malicious maintainer: repository-authored Markdown is not a signature, so protected-environment owner
-review must inspect the reports and exact source diff before OIDC staging. Separate npm 2FA approval remains terminal.
+both source-CI platforms plus the trusted stage checkout fetch history for the ancestry check. Tests cover unknown
+fields, prerelease/version drift, unsafe paths, any pending gate, digest drift, non-ancestor evidence, and both
+workflow linkages. This closes accidental omission, not a malicious maintainer: repository-authored Markdown is not a
+signature, so protected-environment owner review must inspect the reports and exact source diff before OIDC staging.
+Separate npm 2FA approval remains terminal.
 
 Verification required by C1: proposal replay/digest/expiry; CSRF/Origin; shell/download denial; ambient-config canary;
 ungranted call never reaches fake server; revoke race; flood/invalid JSON; process orphan cleanup; unknown outcome/no

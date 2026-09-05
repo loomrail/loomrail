@@ -86,8 +86,9 @@ install jobs. Строгий versioned stable-gate index дополнитель�
 stable version, bounded non-symlink evidence files, совпадающий SHA-256 текущих и committed bytes и evidence commit,
 который является ancestor release source. Его текущее честное состояние — 6/10 без выбранной stable version. Index
 предотвращает случайный пропуск, но остаётся repository-authored evidence, а не подписью или заменой owner review в
-protected environment. Staged package ещё не является публичной версией. Package owner отдельно проверяет его и
-подтверждает interactive 2FA, прежде чем npm сделает immutable name/version публичным.
+protected environment. Обе source-CI платформы проверяют каждую текущую `PASSED` строку по полной Git history до
+длинной matrix. Staged package ещё не является публичной версией. Package owner отдельно проверяет его и подтверждает
+interactive 2FA, прежде чем npm сделает immutable name/version публичным.
 
 npm provenance через Sigstore и transparency log связывает published bytes с source/build instructions. Он не
 сертифицирует качество или безопасность кода. Local receipt, checksum в release note, Git tag или заявление

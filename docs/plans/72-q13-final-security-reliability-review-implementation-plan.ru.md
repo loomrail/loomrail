@@ -43,7 +43,7 @@
 - [x] Запушить Q13, дождаться macOS/Windows CI и записать evidence.
 - [x] Связать manual stage workflow со строгим stable-gate index: exact десять gate, stable version, evidence
       SHA-256/commit ancestry и fail-closed `PENDING`. Текущее состояние намеренно остаётся 6/10 без выбранной stable
-      version.
+      version. Обе source-CI платформы перепроверяют текущие `PASSED` evidence по полной Git history.
 - [ ] Провести private dogfood на явно выбранном владельцем private full-stack repository и сохранить evidence.
 - [ ] После отдельного разрешения на quota-bearing runs добавить exact live-provider row с macOS/Windows evidence.
 - [ ] Дождаться зелёного protected landing gate от отдельной landing-сессии, не меняя и не исключая её source.
