@@ -20,6 +20,8 @@ import type {
   ProviderPreference,
   QACorrectionGateAction,
   QACorrectionRun,
+  VerificationCorrectionGateAction,
+  VerificationCorrectionRun,
   QADefect,
   ReadinessAttestationOutcome,
   ReadinessCheck,
@@ -89,6 +91,7 @@ import {
   runProjectReadiness,
   resolveAcceptance,
   resolveQACorrectionGate,
+  resolveVerificationCorrectionGate,
   startMockPipeline,
   scanProjectConstitution,
   setProjectProviderPreference,
@@ -906,6 +909,36 @@ export const useResolveQACorrectionGate = () => {
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(request.projectId) }),
         queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(request.workItemId) }),
         queryClient.invalidateQueries({ queryKey: workItemQAKey(request.workItemId) }),
+        queryClient.invalidateQueries({
+          queryKey: workItemEventsKey(request.projectId, request.workItemId),
+        }),
+        queryClient.invalidateQueries({ queryKey: projectHumanRequestsKey(request.projectId) }),
+        queryClient.invalidateQueries({ queryKey: stageAttemptSessionsKey(request.stageAttemptId) }),
+        queryClient.invalidateQueries({ queryKey: attentionKey }),
+      ]);
+    },
+  });
+};
+
+export const useResolveVerificationCorrectionGate = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      action,
+      correctionRun,
+      request,
+      run,
+    }: {
+      action: VerificationCorrectionGateAction;
+      correctionRun: VerificationCorrectionRun;
+      request: HumanRequest;
+      run: PipelineRun;
+    }) => resolveVerificationCorrectionGate(request, correctionRun, run, action),
+    onSuccess: async (_, { request }) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(request.projectId) }),
+        queryClient.invalidateQueries({ queryKey: workItemWorkflowKey(request.workItemId) }),
+        queryClient.invalidateQueries({ queryKey: workItemVerificationRunsKey(request.workItemId) }),
         queryClient.invalidateQueries({
           queryKey: workItemEventsKey(request.projectId, request.workItemId),
         }),

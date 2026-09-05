@@ -1,4 +1,5 @@
 import type {
+  HumanRequest,
   PipelineRun,
   StageAttempt,
   VerificationCorrectionRun,
@@ -13,6 +14,8 @@ import {
   decideInitialFailedVerificationCorrectionTransition,
   decidePassedVerificationCorrectionTransition,
   decideSubsequentFailedVerificationCorrectionTransition,
+  decideVerificationCorrectionCancellation,
+  decideVerificationCorrectionGateResolution,
 } from "../src/verification-correction.js";
 
 const now = "2026-09-05T13:00:00.000Z";
@@ -362,6 +365,306 @@ describe("Project verification correction transition", () => {
     });
   });
 
+  it("lets only the owner authorize the third and final Project verification correction", () => {
+    const secondCorrection: VerificationCorrectionRun = {
+      ...correctionRun,
+      id: "verification-correction-two",
+      budgetPosition: 2,
+      status: "EXHAUSTED",
+      version: 2,
+    };
+    const failedRerun: VerificationRun = {
+      ...verificationRun,
+      id: "verification-run-three",
+      implementationTree: "d".repeat(40),
+      ordinal: 3,
+      retryOfRunId: "verification-run-two",
+      verificationCorrectionRunId: secondCorrection.id,
+      version: 4,
+    };
+    const rerunFailure: VerificationFailure = {
+      ...failure,
+      id: "verification-failure-three",
+      verificationRunId: failedRerun.id,
+      implementationTree: failedRerun.implementationTree,
+    };
+    const waitingStage: StageAttempt = {
+      ...stageAttempt,
+      verificationCorrectionRunId: secondCorrection.id,
+      status: "WAITING_HUMAN",
+      failureCode: "VERIFICATION_CORRECTION_EXHAUSTED",
+      version: 2,
+    };
+    const waitingRun: PipelineRun = {
+      ...pipelineRun,
+      status: "WAITING_HUMAN",
+      version: 8,
+    };
+    const waitingWorkItem: WorkItem = { ...workItem, state: "BLOCKED", version: 5 };
+    const request: HumanRequest = {
+      schemaVersion: 1,
+      id: "verification-correction-request",
+      projectId: workItem.projectId,
+      workItemId: workItem.id,
+      stageAttemptId: waitingStage.id,
+      kind: "SINGLE_CHOICE",
+      blocking: true,
+      title: "Project verification correction needs a decision",
+      context: "Two automatic corrections failed.",
+      recommendation: "Inspect evidence before continuing.",
+      options: [
+        {
+          id: "authorize-final-verification-correction",
+          label: "Authorize final correction",
+          consequence: "Starts correction 3.",
+          recommended: true,
+        },
+        {
+          id: "cancel-verification-delivery",
+          label: "Cancel delivery",
+          consequence: "Stops the run.",
+          recommended: false,
+        },
+      ],
+      allowOther: false,
+      status: "OPEN",
+      version: 1,
+      createdAt: now,
+      resolvedAt: null,
+    };
+    const command = {
+      schemaVersion: 1 as const,
+      commandId: "resolve-verification-correction",
+      correlationId: "correlation-one",
+      actor: { type: "HUMAN" as const, id: "owner-one" },
+      type: "RESOLVE_VERIFICATION_CORRECTION_GATE" as const,
+      payload: {
+        humanRequestId: request.id,
+        expectedRequestVersion: request.version,
+        correctionRunId: secondCorrection.id,
+        expectedCorrectionVersion: secondCorrection.version,
+        expectedPipelineRunVersion: waitingRun.version,
+        action: "AUTHORIZE_FINAL" as const,
+      },
+    };
+
+    const decision = decideVerificationCorrectionGateResolution({
+      command,
+      workItem: waitingWorkItem,
+      run: waitingRun,
+      stageAttempt: waitingStage,
+      request,
+      correctionRun: secondCorrection,
+      correctionSourceVerificationRun: verificationRun,
+      failedVerificationRun: failedRerun,
+      failure: rerunFailure,
+      ids: {
+        decisionId: "verification-owner-decision",
+        correctionRunId: "verification-correction-three",
+        nextStageAttemptId: "stage-implement-correction-three",
+        dispatchId: "dispatch-implement-correction-three",
+      },
+      now,
+    });
+
+    expect(decision).toMatchObject({
+      action: "AUTHORIZE_FINAL",
+      request: { status: "RESOLVED", version: 2 },
+      previousCorrection: { id: secondCorrection.id, status: "SUPERSEDED", version: 3 },
+      correctionRun: {
+        id: "verification-correction-three",
+        budgetPosition: 3,
+        automatic: false,
+        sourceFailureId: rerunFailure.id,
+        sourceVerificationRunId: failedRerun.id,
+        status: "ACTIVE",
+      },
+      stageAttempt: { status: "SUCCEEDED", failureCode: null },
+      nextStageAttempt: {
+        id: "stage-implement-correction-three",
+        verificationCorrectionRunId: "verification-correction-three",
+        stage: "IMPLEMENT",
+      },
+      run: { status: "RUNNING", currentStageAttemptId: "stage-implement-correction-three" },
+      workItem: { state: "IN_PROGRESS", currentStage: "IMPLEMENT" },
+      events: [
+        { type: "HUMAN_REQUEST_RESOLVED" },
+        { type: "VERIFICATION_CORRECTION_SUPERSEDED" },
+        { type: "VERIFICATION_CORRECTION_STARTED" },
+        { type: "STAGE_ATTEMPT_CHANGED" },
+      ],
+    });
+    expect(() =>
+      decideVerificationCorrectionGateResolution({
+        command: { ...command, actor: { type: "SYSTEM", id: "daemon" } },
+        workItem: waitingWorkItem,
+        run: waitingRun,
+        stageAttempt: waitingStage,
+        request,
+        correctionRun: secondCorrection,
+        correctionSourceVerificationRun: verificationRun,
+        failedVerificationRun: failedRerun,
+        failure: rerunFailure,
+        ids: {
+          decisionId: "verification-owner-decision",
+          correctionRunId: "verification-correction-three",
+          nextStageAttemptId: "stage-implement-correction-three",
+          dispatchId: "dispatch-implement-correction-three",
+        },
+        now,
+      }),
+    ).toThrow(expect.objectContaining({ code: "ACTOR_FORBIDDEN" }));
+    expect(() =>
+      decideVerificationCorrectionGateResolution({
+        command: {
+          ...command,
+          payload: { ...command.payload, expectedCorrectionVersion: secondCorrection.version + 1 },
+        },
+        workItem: waitingWorkItem,
+        run: waitingRun,
+        stageAttempt: waitingStage,
+        request,
+        correctionRun: secondCorrection,
+        correctionSourceVerificationRun: verificationRun,
+        failedVerificationRun: failedRerun,
+        failure: rerunFailure,
+        ids: {
+          decisionId: "verification-owner-decision",
+          correctionRunId: "verification-correction-three",
+          nextStageAttemptId: "stage-implement-correction-three",
+          dispatchId: "dispatch-implement-correction-three",
+        },
+        now,
+      }),
+    ).toThrow(expect.objectContaining({ code: "VERSION_CONFLICT" }));
+    expect(() =>
+      decideVerificationCorrectionGateResolution({
+        command,
+        workItem: waitingWorkItem,
+        run: waitingRun,
+        stageAttempt: waitingStage,
+        request,
+        correctionRun: secondCorrection,
+        correctionSourceVerificationRun: verificationRun,
+        failedVerificationRun: failedRerun,
+        failure: { ...rerunFailure, pipelineRunId: "foreign-pipeline" },
+        ids: {
+          decisionId: "verification-owner-decision",
+          correctionRunId: "verification-correction-three",
+          nextStageAttemptId: "stage-implement-correction-three",
+          dispatchId: "dispatch-implement-correction-three",
+        },
+        now,
+      }),
+    ).toThrow(expect.objectContaining({ code: "LINEAGE_MISMATCH" }));
+  });
+
+  it("cancels the delivery from an exhausted Project verification correction gate", () => {
+    const finalCorrection: VerificationCorrectionRun = {
+      ...correctionRun,
+      id: "verification-correction-three",
+      budgetPosition: 3,
+      automatic: false,
+      status: "EXHAUSTED",
+      version: 2,
+    };
+    const failedRerun: VerificationRun = {
+      ...verificationRun,
+      id: "verification-run-four",
+      implementationTree: "e".repeat(40),
+      ordinal: 4,
+      verificationCorrectionRunId: finalCorrection.id,
+      version: 4,
+    };
+    const rerunFailure: VerificationFailure = {
+      ...failure,
+      id: "verification-failure-four",
+      verificationRunId: failedRerun.id,
+      implementationTree: failedRerun.implementationTree,
+    };
+    const waitingStage: StageAttempt = {
+      ...stageAttempt,
+      verificationCorrectionRunId: finalCorrection.id,
+      status: "WAITING_HUMAN",
+      failureCode: "VERIFICATION_CORRECTION_EXHAUSTED",
+      version: 2,
+    };
+    const waitingRun: PipelineRun = { ...pipelineRun, status: "WAITING_HUMAN", version: 8 };
+    const request: HumanRequest = {
+      schemaVersion: 1,
+      id: "verification-correction-request",
+      projectId: workItem.projectId,
+      workItemId: workItem.id,
+      stageAttemptId: waitingStage.id,
+      kind: "SINGLE_CHOICE",
+      blocking: true,
+      title: "Project verification correction needs a decision",
+      context: "Final correction failed.",
+      recommendation: "Cancel this delivery.",
+      options: [
+        {
+          id: "cancel-verification-delivery",
+          label: "Cancel delivery",
+          consequence: "Stops the run.",
+          recommended: false,
+        },
+      ],
+      allowOther: false,
+      status: "OPEN",
+      version: 1,
+      createdAt: now,
+      resolvedAt: null,
+    };
+
+    expect(
+      decideVerificationCorrectionGateResolution({
+        command: {
+          schemaVersion: 1,
+          commandId: "cancel-verification-correction",
+          correlationId: "correlation-one",
+          actor: { type: "HUMAN", id: "owner-one" },
+          type: "RESOLVE_VERIFICATION_CORRECTION_GATE",
+          payload: {
+            humanRequestId: request.id,
+            expectedRequestVersion: request.version,
+            correctionRunId: finalCorrection.id,
+            expectedCorrectionVersion: finalCorrection.version,
+            expectedPipelineRunVersion: waitingRun.version,
+            action: "CANCEL",
+          },
+        },
+        workItem: { ...workItem, state: "BLOCKED", version: 5 },
+        run: waitingRun,
+        stageAttempt: waitingStage,
+        request,
+        correctionRun: finalCorrection,
+        correctionSourceVerificationRun: verificationRun,
+        failedVerificationRun: failedRerun,
+        failure: rerunFailure,
+        ids: {
+          decisionId: "verification-owner-decision",
+          correctionRunId: "unused-correction",
+          nextStageAttemptId: "unused-stage",
+          dispatchId: "unused-dispatch",
+        },
+        now,
+      }),
+    ).toMatchObject({
+      action: "CANCEL",
+      previousCorrection: { status: "CANCELLED", completedAt: now },
+      correctionRun: null,
+      run: { status: "CANCELLED", finishedAt: now },
+      stageAttempt: { status: "CANCELLED", finishedAt: now },
+      workItem: { state: "CANCELLED", currentStage: null },
+      events: [
+        { type: "HUMAN_REQUEST_RESOLVED" },
+        { type: "STAGE_ATTEMPT_CHANGED" },
+        { type: "VERIFICATION_CORRECTION_CANCELLED" },
+        { type: "PIPELINE_CANCELLED" },
+      ],
+    });
+  });
+
   it("rejects foreign failure lineage before creating correction authority", () => {
     expect(() =>
       decideInitialFailedVerificationCorrectionTransition({
@@ -405,6 +708,29 @@ describe("Project verification correction transition", () => {
           nextStageAttemptId: "stage-implement-correction-one",
           nextDispatchId: "dispatch-implement-correction-one",
         },
+        now,
+      }),
+    ).toThrow(expect.objectContaining({ code: "LINEAGE_MISMATCH" }));
+  });
+
+  it("closes active correction authority when its PipelineRun is cancelled normally", () => {
+    const correctionStage = { ...stageAttempt, verificationCorrectionRunId: correctionRun.id };
+    expect(
+      decideVerificationCorrectionCancellation({
+        correctionRun,
+        run: pipelineRun,
+        stageAttempt: correctionStage,
+        now,
+      }),
+    ).toMatchObject({
+      correctionRun: { id: correctionRun.id, status: "CANCELLED", completedAt: now, version: 2 },
+      events: [{ type: "VERIFICATION_CORRECTION_CANCELLED" }],
+    });
+    expect(() =>
+      decideVerificationCorrectionCancellation({
+        correctionRun,
+        run: pipelineRun,
+        stageAttempt: { ...correctionStage, verificationCorrectionRunId: "foreign-correction" },
         now,
       }),
     ).toThrow(expect.objectContaining({ code: "LINEAGE_MISMATCH" }));

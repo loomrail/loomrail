@@ -1,6 +1,10 @@
 import { useState } from "react";
 import type {
+  HumanRequest,
+  PipelineRun,
   VerificationCheck,
+  VerificationCorrectionGateAction,
+  VerificationCorrectionRun,
   VerificationPlan,
   VerificationRecipe,
   VerificationRun,
@@ -14,6 +18,7 @@ import { useI18n, type TranslationKey, type Translator } from "../i18n";
 import {
   useCancelVerificationRun,
   useStartVerificationRun,
+  useResolveVerificationCorrectionGate,
   useVerificationCheckOutput,
   useVerificationPlanSettings,
   useWorkItemVerificationRuns,
@@ -23,6 +28,20 @@ import {
 
 const activeRunStatuses = new Set<VerificationRun["status"]>(["QUEUED", "RUNNING"]);
 const terminalPipelineStatuses = new Set(["SUCCEEDED", "FAILED", "CANCELLED"]);
+
+const correctionStatusTones: Record<VerificationCorrectionRun["status"], StatusTone> = {
+  ACTIVE: "running",
+  PASSED: "complete",
+  SUPERSEDED: "queued",
+  EXHAUSTED: "paused",
+  CANCELLED: "paused",
+};
+
+type VerificationCorrectionGate = {
+  correctionRun: VerificationCorrectionRun;
+  request: HumanRequest;
+  run: PipelineRun;
+};
 
 const runStatusKeys: Record<VerificationRun["status"], TranslationKey> = {
   QUEUED: "verification.status.QUEUED",
@@ -213,11 +232,15 @@ type RunAvailability = "READY" | "PLAN_REQUIRED" | "PIPELINE_REQUIRED" | "WORKSP
 export const ProjectVerificationView = ({
   actionPending,
   availability,
+  correctionGate,
+  correctionPendingAction,
+  correctionRuns,
   currentPlan,
   loadError,
   loading,
   onCancel,
   onRetryLoad,
+  onResolveCorrection,
   onRun,
   onToggleOutput,
   operationError,
@@ -226,11 +249,15 @@ export const ProjectVerificationView = ({
 }: {
   actionPending: boolean;
   availability: RunAvailability;
+  correctionGate: VerificationCorrectionGate | null;
+  correctionPendingAction: VerificationCorrectionGateAction | null;
+  correctionRuns: readonly VerificationCorrectionRun[];
   currentPlan: VerificationPlan | null;
   loadError: Error | null;
   loading: boolean;
   onCancel: (run: VerificationRun) => void;
   onRetryLoad: () => void;
+  onResolveCorrection: (action: VerificationCorrectionGateAction) => void;
   onRun: (retryOf?: VerificationRun) => void;
   onToggleOutput: (checkId: string) => void;
   operationError: Error | null;
@@ -294,6 +321,77 @@ export const ProjectVerificationView = ({
               </details>
             ) : null}
 
+            {correctionRuns.length > 0 ? (
+              <div className="verification-corrections">
+                <strong>{t("verification.correction.timeline")}</strong>
+                <ol>
+                  {correctionRuns.map((correction) => (
+                    <li key={correction.id}>
+                      <div>
+                        <strong>
+                          {t("verification.correction.position", { position: correction.budgetPosition })}
+                        </strong>
+                        <span>
+                          {t(
+                            correction.automatic
+                              ? "verification.correction.automatic"
+                              : "verification.correction.ownerAuthorized",
+                          )}
+                        </span>
+                      </div>
+                      <Status
+                        label={t(`verification.correction.status.${correction.status}`)}
+                        tone={correctionStatusTones[correction.status]}
+                      />
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
+
+            {correctionGate ? (
+              <div className="human-request-card verification-correction-gate">
+                <h3>{t("verification.correctionGate.title")}</h3>
+                <p>
+                  {t("verification.correctionGate.description", {
+                    position: correctionGate.correctionRun.budgetPosition,
+                  })}
+                </p>
+                {correctionGate.request.recommendation ? (
+                  <div className="human-request-card__recommendation">
+                    <strong>{t("humanRequest.recommendation")}</strong>
+                    <span>{correctionGate.request.recommendation}</span>
+                  </div>
+                ) : null}
+                <div className="verification-actions">
+                  {correctionGate.correctionRun.budgetPosition === 2 ? (
+                    <Button
+                      disabled={correctionPendingAction !== null}
+                      loading={correctionPendingAction === "AUTHORIZE_FINAL"}
+                      onClick={() => {
+                        onResolveCorrection("AUTHORIZE_FINAL");
+                      }}
+                      type="button"
+                      variant="primary"
+                    >
+                      {t("verification.correctionGate.authorizeFinal")}
+                    </Button>
+                  ) : null}
+                  <Button
+                    disabled={correctionPendingAction !== null}
+                    loading={correctionPendingAction === "CANCEL"}
+                    onClick={() => {
+                      onResolveCorrection("CANCEL");
+                    }}
+                    type="button"
+                    variant="destructive"
+                  >
+                    {t("verification.correctionGate.cancel")}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
             {availability === "READY" || active !== null ? null : (
               <p className="verification-unavailable">{t(availabilityMessage[availability])}</p>
             )}
@@ -305,7 +403,7 @@ export const ProjectVerificationView = ({
             ) : null}
 
             <div className="verification-actions">
-              {active ? (
+              {correctionGate ? null : active ? (
                 <Button
                   loading={actionPending}
                   onClick={() => {
@@ -343,6 +441,7 @@ export const ProjectVerificationPanel = ({ item }: { item: WorkItem }): React.JS
   const workspaceQuery = useWorkItemWorkspace(item.id);
   const start = useStartVerificationRun();
   const cancel = useCancelVerificationRun();
+  const resolveCorrection = useResolveVerificationCorrectionGate();
   const outputMutation = useVerificationCheckOutput();
   const [outputCheckId, setOutputCheckId] = useState<string | null>(null);
   const plan = planQuery.data?.plan ?? null;
@@ -355,6 +454,30 @@ export const ProjectVerificationPanel = ({ item }: { item: WorkItem }): React.JS
   const pipelineStatus = workflowQuery.data?.run?.status;
   const pipelineReady = pipelineStatus !== undefined && !terminalPipelineStatuses.has(pipelineStatus);
   const workspaceReady = workspaceQuery.data?.workspace?.status === "READY";
+  const currentRun = workflowQuery.data?.run ?? null;
+  const currentAttempt =
+    currentRun === null
+      ? null
+      : (workflowQuery.data?.stageAttempts.find(({ id }) => id === currentRun.currentStageAttemptId) ?? null);
+  const exhaustedCorrection =
+    currentAttempt?.stage === "QA" &&
+    currentAttempt.status === "WAITING_HUMAN" &&
+    currentAttempt.failureCode === "VERIFICATION_CORRECTION_EXHAUSTED" &&
+    (currentAttempt.verificationCorrectionRunId ?? null) !== null
+      ? (runsQuery.data?.correctionRuns.find(
+          ({ id, status }) => id === currentAttempt.verificationCorrectionRunId && status === "EXHAUSTED",
+        ) ?? null)
+      : null;
+  const correctionRequest =
+    exhaustedCorrection === null
+      ? null
+      : (workflowQuery.data?.humanRequests.find(
+          ({ stageAttemptId, status }) => stageAttemptId === currentAttempt?.id && status === "OPEN",
+        ) ?? null);
+  const correctionGate =
+    currentRun !== null && exhaustedCorrection !== null && correctionRequest !== null
+      ? { correctionRun: exhaustedCorrection, request: correctionRequest, run: currentRun }
+      : null;
   const availability: RunAvailability = !planReady
     ? "PLAN_REQUIRED"
     : !pipelineReady
@@ -365,12 +488,17 @@ export const ProjectVerificationPanel = ({ item }: { item: WorkItem }): React.JS
   const loadError = [runsQuery.error, planQuery.error, workflowQuery.error, workspaceQuery.error].find(
     (error): error is Error => error instanceof Error,
   );
-  const operationError = [start.error, cancel.error].find((error): error is Error => error instanceof Error);
+  const operationError = [start.error, cancel.error, resolveCorrection.error].find(
+    (error): error is Error => error instanceof Error,
+  );
 
   return (
     <ProjectVerificationView
       actionPending={start.isPending || cancel.isPending}
       availability={availability}
+      correctionGate={correctionGate}
+      correctionPendingAction={resolveCorrection.isPending ? resolveCorrection.variables.action : null}
+      correctionRuns={runsQuery.data?.correctionRuns ?? []}
       currentPlan={planReady ? plan : null}
       loadError={loadError ?? null}
       loading={
@@ -386,6 +514,10 @@ export const ProjectVerificationPanel = ({ item }: { item: WorkItem }): React.JS
           workflowQuery.refetch(),
           workspaceQuery.refetch(),
         ]);
+      }}
+      onResolveCorrection={(action) => {
+        if (correctionGate === null) return;
+        resolveCorrection.mutate({ ...correctionGate, action });
       }}
       onRun={(retryOf) => {
         if (!planReady) return;

@@ -1,6 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { VerificationPlan, VerificationRunSnapshotResponse } from "@loomrail/contracts";
+import type {
+  HumanRequest,
+  PipelineRun,
+  VerificationCorrectionRun,
+  VerificationPlan,
+  VerificationRunSnapshotResponse,
+} from "@loomrail/contracts";
 
 import { I18nProvider } from "../i18n";
 import { ProjectVerificationView } from "./ProjectVerificationPanel";
@@ -107,11 +113,15 @@ const renderView = (overrides: Partial<Parameters<typeof ProjectVerificationView
       <ProjectVerificationView
         actionPending={false}
         availability="READY"
+        correctionGate={null}
+        correctionPendingAction={null}
+        correctionRuns={[]}
         currentPlan={plan}
         loadError={null}
         loading={false}
         onCancel={vi.fn()}
         onRetryLoad={vi.fn()}
+        onResolveCorrection={vi.fn()}
         onRun={vi.fn()}
         onToggleOutput={vi.fn()}
         operationError={null}
@@ -176,5 +186,93 @@ describe("ProjectVerificationView", () => {
 
     expect(html).toContain("Approve and publish Project checks in Settings");
     expect(html).not.toContain("Run checks");
+  });
+
+  it("shows one clear owner decision after automatic Project verification corrections are exhausted", () => {
+    const correctionRun: VerificationCorrectionRun = {
+      schemaVersion: 1,
+      id: "verification-correction-2",
+      projectId: plan.projectId,
+      workItemId: "work-item-1",
+      pipelineRunId: "pipeline-run-1",
+      budgetPosition: 2,
+      automatic: true,
+      sourceFailureId: "verification-failure-2",
+      sourceVerificationRunId: "verification-run-2",
+      sourceImplementationTree: "f".repeat(40),
+      status: "EXHAUSTED",
+      createdAt: "2026-09-05T10:02:00.000Z",
+      completedAt: null,
+      version: 2,
+    };
+    const run: PipelineRun = {
+      schemaVersion: 1,
+      id: correctionRun.pipelineRunId,
+      projectId: plan.projectId,
+      workItemId: correctionRun.workItemId,
+      workflowTemplateId: "delivery-v1",
+      workflowVersion: 1,
+      status: "WAITING_HUMAN",
+      currentStageAttemptId: "qa-stage-3",
+      version: 9,
+      createdAt: "2026-09-05T10:00:00.000Z",
+      updatedAt: "2026-09-05T10:03:00.000Z",
+      finishedAt: null,
+    };
+    const request: HumanRequest = {
+      schemaVersion: 1,
+      id: "verification-owner-request",
+      projectId: plan.projectId,
+      workItemId: correctionRun.workItemId,
+      stageAttemptId: run.currentStageAttemptId,
+      kind: "SINGLE_CHOICE",
+      blocking: true,
+      title: "Project verification correction needs a decision",
+      context: "Two automatic corrections failed.",
+      recommendation: "Inspect the exact output before continuing.",
+      options: [
+        {
+          id: "authorize-final",
+          label: "Authorize final",
+          consequence: "Starts correction 3.",
+          recommended: true,
+        },
+        {
+          id: "cancel-delivery",
+          label: "Cancel delivery",
+          consequence: "Stops this delivery.",
+          recommended: false,
+        },
+      ],
+      allowOther: false,
+      status: "OPEN",
+      version: 1,
+      createdAt: "2026-09-05T10:03:00.000Z",
+      resolvedAt: null,
+    };
+    const current = snapshot();
+    const html = renderView({
+      correctionGate: { correctionRun, request, run },
+      correctionRuns: [correctionRun],
+      runs: [
+        {
+          ...current,
+          run: {
+            ...current.run,
+            status: "FAILED",
+            terminalReason: "REQUIRED_CHECK_FAILED",
+          },
+        },
+      ],
+    });
+
+    expect(html).toContain("Correction history");
+    expect(html).toContain("Correction 2");
+    expect(html).toContain("Needs your decision");
+    expect(html).toContain("Project verification needs your decision");
+    expect(html).toContain("Inspect the exact output before continuing.");
+    expect(html).toContain("Authorize one final correction");
+    expect(html).toContain("Cancel delivery");
+    expect(html).not.toContain("Run again");
   });
 });

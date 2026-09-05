@@ -299,6 +299,8 @@ describe("project verification HTTP boundary", () => {
     );
     const listed = verificationRunsResponseSchema.parse(await listedResponse.json());
     expect(listed.runs).toHaveLength(1);
+    expect(listed.failures).toEqual([]);
+    expect(listed.correctionRuns).toEqual([]);
     expect(listed.runs[0]).toMatchObject({
       run: { ordinal: 1, status: "PASSED", terminalReason: "ALL_REQUIRED_PASSED" },
       checks: [{ status: "PASSED", durationMs: 7 }],
@@ -355,6 +357,38 @@ describe("project verification HTTP boundary", () => {
       { run: { ordinal: 2, retryOfRunId: first.run.id, status: "PASSED" } },
       { run: { ordinal: 1, status: "PASSED" } },
     ]);
+
+    const missingGateUrl =
+      `${daemon.baseUrl}/api/v1/work-items/${fixture.workItemId}` +
+      "/verification/correction-gate/missing-request";
+    const missingGateBody = JSON.stringify({
+      schemaVersion: 1,
+      commandId: "resolve-missing-verification-gate",
+      expectedRequestVersion: 1,
+      correctionRunId: "missing-correction",
+      expectedCorrectionVersion: 1,
+      expectedPipelineRunVersion: 1,
+      action: "CANCEL",
+    });
+    const unauthenticatedGate = await fetch(missingGateUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: missingGateBody,
+    });
+    expect(unauthenticatedGate.status).toBe(401);
+    const foreignOriginGate = await fetch(missingGateUrl, {
+      method: "POST",
+      headers: { ...headers, origin: "http://attacker.invalid" },
+      body: missingGateBody,
+    });
+    expect(foreignOriginGate.status).toBe(403);
+    const missingGate = await fetch(missingGateUrl, {
+      method: "POST",
+      headers,
+      body: missingGateBody,
+    });
+    expect(missingGate.status).toBe(404);
+    await expect(missingGate.json()).resolves.toMatchObject({ error: { code: "REQUEST_INVALID" } });
   });
 
   it("lets only the owner cancel a running measured check", async () => {

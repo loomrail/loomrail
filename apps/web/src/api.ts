@@ -15,6 +15,7 @@ import {
   providerSessionsResponseSchema,
   qaDefectWaivedResultSchema,
   qaCorrectionGateResolvedResultSchema,
+  verificationCorrectionGateResolvedResultSchema,
   qaStateResponseSchema,
   projectConstitutionSnapshotSchema,
   projectReadinessSnapshotSchema,
@@ -50,6 +51,8 @@ import {
   type QADefect,
   type QACorrectionGateAction,
   type QACorrectionRun,
+  type VerificationCorrectionGateAction,
+  type VerificationCorrectionRun,
   type ScaffoldOperation,
   type ScaffoldProposal,
   type ProviderPreference,
@@ -898,6 +901,29 @@ export const resolveQACorrectionGate = async (
   requestLocalApi(
     `/api/v1/work-items/${encodeURIComponent(request.workItemId)}/qa/correction-gate/${encodeURIComponent(request.id)}`,
     qaCorrectionGateResolvedResultSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedRequestVersion: request.version,
+        correctionRunId: correctionRun.id,
+        expectedCorrectionVersion: correctionRun.version,
+        expectedPipelineRunVersion: run.version,
+        action,
+      }),
+    },
+  );
+
+export const resolveVerificationCorrectionGate = async (
+  request: HumanRequest,
+  correctionRun: VerificationCorrectionRun,
+  run: PipelineRun,
+  action: VerificationCorrectionGateAction,
+) =>
+  requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(request.workItemId)}/verification/correction-gate/${encodeURIComponent(request.id)}`,
+    verificationCorrectionGateResolvedResultSchema,
     {
       method: "POST",
       body: JSON.stringify({

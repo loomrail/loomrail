@@ -226,7 +226,12 @@ test.describe("project verification Task Cockpit", () => {
         body: JSON.stringify(
           route.request().method() === "POST"
             ? measured
-            : { schemaVersion: 1, runs: measured === null ? [] : [measured] },
+            : {
+                schemaVersion: 1,
+                runs: measured === null ? [] : [measured],
+                failures: [],
+                correctionRuns: [],
+              },
         ),
       });
     });

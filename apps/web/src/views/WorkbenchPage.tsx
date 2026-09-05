@@ -2721,6 +2721,14 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
           run,
         }
       : null;
+  const verificationCorrectionGateRequest =
+    openRequest !== null &&
+    currentAttempt?.stage === "QA" &&
+    currentAttempt.status === "WAITING_HUMAN" &&
+    currentAttempt.failureCode === "VERIFICATION_CORRECTION_EXHAUSTED" &&
+    (currentAttempt.verificationCorrectionRunId ?? null) !== null
+      ? openRequest
+      : null;
   const used = snapshot.usageRecords.reduce((total, record) => total + record.amount, 0);
   const budgetPercent = budgetPolicy
     ? Math.min(100, Math.round((used / budgetPolicy.maxEstimatedTokens) * 100))
@@ -2837,7 +2845,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
           <span>{t("acceptance.evidenceCount", { count: snapshot.artifacts.length })}</span>
         </div>
       ) : null}
-      {openRequest && correctionGateRequest === null ? (
+      {openRequest && correctionGateRequest === null && verificationCorrectionGateRequest === null ? (
         <HumanRequestAnswerForm request={openRequest} />
       ) : null}
       {snapshot.recoveryReports.at(-1) ? (
@@ -2857,7 +2865,8 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
         />
       ) : null}
       {["RUNNING", "WAITING_HUMAN", "SOFT_PAUSED", "HARD_PAUSED", "INTERRUPTED"].includes(run.status) &&
-      snapshot.acceptancePackage?.status !== "PENDING" ? (
+      snapshot.acceptancePackage?.status !== "PENDING" &&
+      verificationCorrectionGateRequest === null ? (
         <div className="workflow-panel__actions">
           {run.status === "RUNNING" ? (
             <Button

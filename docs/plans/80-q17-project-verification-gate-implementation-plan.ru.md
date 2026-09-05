@@ -54,8 +54,11 @@ output; restart сохраняет failure, а crash во время process д�
       re-review passing rerun exact Plan на новом tree атомарно закрывает correction как `PASSED`, не дублирует Event
       при replay и переживает restart. Failed rerun теперь supersede-ит active correction и запускает второй
       automatic cycle; после двух automatic failures workflow атомарно переходит в `WAITING_HUMAN` с bounded owner
-      request, а после финального owner cycle предлагает только cancel. Семантическая owner action, смешанная
-      QA/Verification последовательность и `STALE` materialization остаются в работе.
+      request, а после финального owner cycle предлагает только cancel. Семантическая owner action теперь атомарно
+      разрешает единственную третью коррекцию либо отменяет delivery, защищена optimistic versions/receipts,
+      доступна через authenticated+CSRF HTTP и отдельный Task Cockpit gate с историей коррекций; полный путь
+      `2 automatic → owner authorization → final pass` переживает SQLite reopen. Смешанная QA/Verification
+      последовательность и `STALE` materialization остаются в работе.
 - [ ] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
       Общие constants и pure decision `2 automatic + 1 owner` уже заменили QA-only policy; durable usage/lineage,
       объединяющие оба evaluator без объединения их failure entities, закреплены транзакционным подсчётом обеих
@@ -73,8 +76,9 @@ output; restart сохраняет failure, а crash во время process д�
 - [ ] Закрыть T48 matrix: argv/path/env/network-policy/output/timeout/tree mutation/child orphan/duplicate completion.
 - [ ] Проверить every allowed/forbidden transition, rollback, idempotency, expected-version conflict и restart.
       Initial verification correction уже покрыта allowed/forbidden domain cases, replay idempotency и SQLite reopen;
-      fresh reviewed passing rerun и второй automatic cycle покрыты сквозным public workflow и SQLite reopen;
-      owner-gate state покрыт pure transition, но его HTTP/UI action и полный restart path ещё не закрыты.
+      fresh reviewed passing rerun, второй automatic cycle и owner-authorized final cycle покрыты сквозным public
+      workflow, command replay и SQLite reopen; cancel покрыт pure allowed transition, а stale versions, foreign
+      lineage и non-owner actor запрещены domain-переходом. Живая light/dark/keyboard проверка UI ещё не закрыта.
 - [ ] Выполнить RU/EN, keyboard/focus, light/dark, 320 px и daemon-restart Browser QA.
 - [ ] Выполнить focused lint/typecheck/unit/integration, full non-landing gates, fault injection и clean release.
 - [ ] Выполнить independent Standards/Spec review и исправить все P0–P2.

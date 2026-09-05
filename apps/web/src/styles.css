@@ -3907,6 +3907,52 @@ body.is-resizing {
   gap: var(--lr-space-2);
 }
 
+.verification-corrections {
+  border-block: 1px solid var(--lr-border-subtle);
+  display: grid;
+  gap: var(--lr-space-2);
+  padding-block: var(--lr-space-3);
+}
+
+.verification-corrections > strong {
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-xs);
+}
+
+.verification-corrections ol {
+  display: grid;
+  gap: var(--lr-space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.verification-corrections li,
+.verification-corrections li > div {
+  align-items: center;
+  display: flex;
+  gap: var(--lr-space-2);
+}
+
+.verification-corrections li {
+  justify-content: space-between;
+}
+
+.verification-corrections li > div {
+  align-items: baseline;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.verification-corrections li strong,
+.verification-corrections li span {
+  font-size: var(--lr-font-xs);
+}
+
+.verification-corrections li span {
+  color: var(--lr-text-faint);
+}
+
 /*
  * E1.5 §9: the files a task changed, and the diff inside the one the owner expanded.
  *

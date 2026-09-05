@@ -3,10 +3,16 @@ import {
   verificationCorrectionRunSchema,
   verificationFailureSchema,
   verificationRunSchema,
+  type Decision,
   type HumanRequest,
   type HumanRequestOpenedEvent,
+  type HumanRequestResolvedEvent,
   type PipelineRun,
+  type PipelineCancelledEvent,
+  type ResolveVerificationCorrectionGateCommand,
   type StageAttempt,
+  type StageAttemptChangedEvent,
+  type VerificationCorrectionCancelledEvent,
   type VerificationCorrectionExhaustedEvent,
   type VerificationCorrectionRun,
   type VerificationCorrectionPassedEvent,
@@ -20,7 +26,8 @@ import {
 
 import { decideCorrectionBudget } from "./correction-budget.js";
 
-export type VerificationCorrectionErrorCode = "LINEAGE_MISMATCH" | "BUDGET_UNAVAILABLE";
+export type VerificationCorrectionErrorCode =
+  "ACTOR_FORBIDDEN" | "VERSION_CONFLICT" | "REQUEST_INVALID" | "LINEAGE_MISMATCH" | "BUDGET_UNAVAILABLE";
 
 export class VerificationCorrectionError extends Error {
   readonly code: VerificationCorrectionErrorCode;
@@ -53,6 +60,48 @@ export type StartedVerificationCorrectionTransition = {
 export type PassedVerificationCorrectionTransition = {
   correctionRun: VerificationCorrectionRun;
   event: Pick<VerificationCorrectionPassedEvent, "type" | "data">;
+};
+
+export type VerificationCorrectionCancellation = {
+  correctionRun: VerificationCorrectionRun;
+  events: readonly Pick<VerificationCorrectionCancelledEvent, "type" | "data">[];
+};
+
+/** Closes verification correction authority when its containing PipelineRun is cancelled. */
+export const decideVerificationCorrectionCancellation = (input: {
+  correctionRun: VerificationCorrectionRun;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  now: string;
+}): VerificationCorrectionCancellation => {
+  const correctionRun = verificationCorrectionRunSchema.parse(input.correctionRun);
+  if (
+    (correctionRun.status !== "ACTIVE" && correctionRun.status !== "EXHAUSTED") ||
+    input.run.id !== correctionRun.pipelineRunId ||
+    input.run.workItemId !== correctionRun.workItemId ||
+    input.run.projectId !== correctionRun.projectId ||
+    input.run.currentStageAttemptId !== input.stageAttempt.id ||
+    input.stageAttempt.pipelineRunId !== input.run.id ||
+    input.stageAttempt.workItemId !== correctionRun.workItemId ||
+    input.stageAttempt.projectId !== correctionRun.projectId ||
+    input.stageAttempt.correctionRunId !== null ||
+    (input.stageAttempt.verificationCorrectionRunId ?? null) !== correctionRun.id
+  ) {
+    throw new VerificationCorrectionError(
+      "LINEAGE_MISMATCH",
+      "The current workflow stage does not belong to the Project verification correction being cancelled",
+    );
+  }
+  const cancelled = verificationCorrectionRunSchema.parse({
+    ...correctionRun,
+    status: "CANCELLED",
+    completedAt: input.now,
+    version: correctionRun.version + 1,
+  });
+  return {
+    correctionRun: cancelled,
+    events: [{ type: "VERIFICATION_CORRECTION_CANCELLED", data: { correctionRun: cancelled } }],
+  };
 };
 
 type FailedVerificationCorrectionEvent =
@@ -591,6 +640,337 @@ export const decideSubsequentFailedVerificationCorrectionTransition = (input: {
       {
         type: "VERIFICATION_CORRECTION_EXHAUSTED",
         data: { correctionRun: exhaustedCorrection, canAuthorizeFinal },
+      },
+    ],
+  };
+};
+
+type VerificationCorrectionGateEvent =
+  | Pick<HumanRequestResolvedEvent, "type" | "data">
+  | Pick<StageAttemptChangedEvent, "type" | "data">
+  | Pick<VerificationCorrectionSupersededEvent, "type" | "data">
+  | Pick<VerificationCorrectionStartedEvent, "type" | "data">
+  | Pick<VerificationCorrectionCancelledEvent, "type" | "data">
+  | Pick<PipelineCancelledEvent, "type" | "data">;
+
+export type VerificationCorrectionGateResolution =
+  | {
+      action: "AUTHORIZE_FINAL";
+      workItem: WorkItem;
+      run: PipelineRun;
+      stageAttempt: StageAttempt;
+      request: HumanRequest;
+      decision: Decision;
+      previousCorrection: VerificationCorrectionRun;
+      correctionRun: VerificationCorrectionRun;
+      nextStageAttempt: StageAttempt;
+      dispatch: WorkflowDispatch;
+      events: readonly VerificationCorrectionGateEvent[];
+    }
+  | {
+      action: "CANCEL";
+      workItem: WorkItem;
+      run: PipelineRun;
+      stageAttempt: StageAttempt;
+      request: HumanRequest;
+      decision: Decision;
+      previousCorrection: VerificationCorrectionRun;
+      correctionRun: null;
+      nextStageAttempt: null;
+      dispatch: null;
+      events: readonly VerificationCorrectionGateEvent[];
+    };
+
+/** Resolves the bounded Project verification correction gate as one owner-only transition. */
+export const decideVerificationCorrectionGateResolution = (input: {
+  command: ResolveVerificationCorrectionGateCommand;
+  workItem: WorkItem;
+  run: PipelineRun;
+  stageAttempt: StageAttempt;
+  request: HumanRequest;
+  correctionRun: VerificationCorrectionRun;
+  correctionSourceVerificationRun: VerificationRun;
+  failedVerificationRun: VerificationRun;
+  failure: VerificationFailure;
+  ids: {
+    decisionId: string;
+    correctionRunId: string;
+    nextStageAttemptId: string;
+    dispatchId: string;
+  };
+  now: string;
+}): VerificationCorrectionGateResolution => {
+  const correctionRun = verificationCorrectionRunSchema.parse(input.correctionRun);
+  const correctionSourceVerificationRun = verificationRunSchema.parse(input.correctionSourceVerificationRun);
+  const failedVerificationRun = verificationRunSchema.parse(input.failedVerificationRun);
+  const failure = verificationFailureSchema.parse(input.failure);
+  const { command, workItem, run, stageAttempt, request } = input;
+
+  if (command.actor.type !== "HUMAN") {
+    throw new VerificationCorrectionError(
+      "ACTOR_FORBIDDEN",
+      "Only the owner can resolve an exhausted Project verification correction gate",
+    );
+  }
+  if (request.id !== command.payload.humanRequestId || correctionRun.id !== command.payload.correctionRunId) {
+    throw new VerificationCorrectionError(
+      "REQUEST_INVALID",
+      "The owner action does not identify this Project verification correction gate",
+    );
+  }
+  if (
+    request.version !== command.payload.expectedRequestVersion ||
+    correctionRun.version !== command.payload.expectedCorrectionVersion ||
+    run.version !== command.payload.expectedPipelineRunVersion
+  ) {
+    throw new VerificationCorrectionError(
+      "VERSION_CONFLICT",
+      "The Project verification correction gate changed after it was loaded",
+    );
+  }
+
+  const expectedOptionCount = correctionRun.budgetPosition === 2 ? 2 : 1;
+  const sameDelivery =
+    correctionRun.status === "EXHAUSTED" &&
+    request.status === "OPEN" &&
+    request.kind === "SINGLE_CHOICE" &&
+    request.blocking &&
+    !request.allowOther &&
+    request.options.length === expectedOptionCount &&
+    workItem.id === correctionRun.workItemId &&
+    workItem.projectId === correctionRun.projectId &&
+    workItem.state === "BLOCKED" &&
+    workItem.currentStage === "QA" &&
+    run.id === correctionRun.pipelineRunId &&
+    run.projectId === workItem.projectId &&
+    run.workItemId === workItem.id &&
+    run.status === "WAITING_HUMAN" &&
+    run.currentStageAttemptId === stageAttempt.id &&
+    stageAttempt.projectId === workItem.projectId &&
+    stageAttempt.workItemId === workItem.id &&
+    stageAttempt.pipelineRunId === run.id &&
+    stageAttempt.correctionRunId === null &&
+    (stageAttempt.verificationCorrectionRunId ?? null) === correctionRun.id &&
+    stageAttempt.stage === "QA" &&
+    stageAttempt.status === "WAITING_HUMAN" &&
+    stageAttempt.failureCode === "VERIFICATION_CORRECTION_EXHAUSTED" &&
+    request.projectId === workItem.projectId &&
+    request.workItemId === workItem.id &&
+    request.stageAttemptId === stageAttempt.id &&
+    correctionRun.sourceVerificationRunId === correctionSourceVerificationRun.id &&
+    correctionRun.sourceFailureId !== failure.id &&
+    correctionRun.sourceImplementationTree === correctionSourceVerificationRun.implementationTree &&
+    correctionSourceVerificationRun.projectId === workItem.projectId &&
+    correctionSourceVerificationRun.workItemId === workItem.id &&
+    correctionSourceVerificationRun.pipelineRunId === run.id &&
+    (failedVerificationRun.status === "FAILED" || failedVerificationRun.status === "ERROR") &&
+    (failedVerificationRun.verificationCorrectionRunId ?? null) === correctionRun.id &&
+    failedVerificationRun.projectId === workItem.projectId &&
+    failedVerificationRun.workItemId === workItem.id &&
+    failedVerificationRun.pipelineRunId === run.id &&
+    failedVerificationRun.ordinal > correctionSourceVerificationRun.ordinal &&
+    failedVerificationRun.planId === correctionSourceVerificationRun.planId &&
+    failedVerificationRun.planRevision === correctionSourceVerificationRun.planRevision &&
+    failedVerificationRun.planContentHash === correctionSourceVerificationRun.planContentHash &&
+    failedVerificationRun.implementationTree !== correctionSourceVerificationRun.implementationTree &&
+    failure.verificationRunId === failedVerificationRun.id &&
+    failure.projectId === workItem.projectId &&
+    failure.workItemId === workItem.id &&
+    failure.pipelineRunId === run.id &&
+    failure.planId === failedVerificationRun.planId &&
+    failure.planRevision === failedVerificationRun.planRevision &&
+    failure.planContentHash === failedVerificationRun.planContentHash &&
+    failure.implementationTree === failedVerificationRun.implementationTree &&
+    (failure.reason === "REQUIRED_CHECK_FAILED" || failure.reason === "REQUIRED_CHECK_ERROR");
+  if (!sameDelivery) {
+    throw new VerificationCorrectionError(
+      "LINEAGE_MISMATCH",
+      "The request is not the current exhausted Project verification correction gate for this delivery",
+    );
+  }
+  if (command.payload.action === "AUTHORIZE_FINAL" && correctionRun.budgetPosition !== 2) {
+    throw new VerificationCorrectionError(
+      "BUDGET_UNAVAILABLE",
+      "The final owner-authorized Project verification correction is no longer available",
+    );
+  }
+
+  const optionId =
+    command.payload.action === "AUTHORIZE_FINAL" ? request.options[0]?.id : request.options.at(-1)?.id;
+  if (optionId === undefined) {
+    throw new VerificationCorrectionError(
+      "REQUEST_INVALID",
+      "The Project verification correction gate does not contain the requested action",
+    );
+  }
+  const resolvedRequest: HumanRequest = {
+    ...request,
+    status: "RESOLVED",
+    version: request.version + 1,
+    resolvedAt: input.now,
+  };
+  const decision: Decision = {
+    schemaVersion: 1,
+    id: input.ids.decisionId,
+    projectId: request.projectId,
+    workItemId: request.workItemId,
+    humanRequestId: request.id,
+    answer: { type: "OPTION", optionIds: [optionId] },
+    actor: command.actor,
+    reason:
+      command.payload.action === "AUTHORIZE_FINAL"
+        ? "Owner authorized the one final bounded Project verification correction."
+        : "Owner cancelled the delivery after the Project verification correction gate.",
+    createdAt: input.now,
+  };
+
+  if (command.payload.action === "CANCEL") {
+    const cancelledCorrection = verificationCorrectionRunSchema.parse({
+      ...correctionRun,
+      status: "CANCELLED",
+      completedAt: input.now,
+      version: correctionRun.version + 1,
+    });
+    const cancelledStageAttempt: StageAttempt = {
+      ...stageAttempt,
+      status: "CANCELLED",
+      version: stageAttempt.version + 1,
+      finishedAt: input.now,
+    };
+    const cancelledRun: PipelineRun = {
+      ...run,
+      status: "CANCELLED",
+      version: run.version + 1,
+      updatedAt: input.now,
+      finishedAt: input.now,
+    };
+    const cancelledWorkItem: WorkItem = {
+      ...workItem,
+      state: "CANCELLED",
+      currentStage: null,
+      version: workItem.version + 1,
+      updatedAt: input.now,
+    };
+    return {
+      action: "CANCEL",
+      workItem: cancelledWorkItem,
+      run: cancelledRun,
+      stageAttempt: cancelledStageAttempt,
+      request: resolvedRequest,
+      decision,
+      previousCorrection: cancelledCorrection,
+      correctionRun: null,
+      nextStageAttempt: null,
+      dispatch: null,
+      events: [
+        { type: "HUMAN_REQUEST_RESOLVED", data: { request: resolvedRequest, decision } },
+        {
+          type: "STAGE_ATTEMPT_CHANGED",
+          data: {
+            run: cancelledRun,
+            stageAttempt: cancelledStageAttempt,
+            previousStatus: stageAttempt.status,
+          },
+        },
+        { type: "VERIFICATION_CORRECTION_CANCELLED", data: { correctionRun: cancelledCorrection } },
+        { type: "PIPELINE_CANCELLED", data: { run: cancelledRun, stageAttempt: cancelledStageAttempt } },
+      ],
+    };
+  }
+
+  const previousCorrection = verificationCorrectionRunSchema.parse({
+    ...correctionRun,
+    status: "SUPERSEDED",
+    completedAt: input.now,
+    version: correctionRun.version + 1,
+  });
+  const nextCorrection = verificationCorrectionRunSchema.parse({
+    schemaVersion: 1,
+    id: input.ids.correctionRunId,
+    projectId: workItem.projectId,
+    workItemId: workItem.id,
+    pipelineRunId: run.id,
+    budgetPosition: 3,
+    automatic: false,
+    sourceFailureId: failure.id,
+    sourceVerificationRunId: failedVerificationRun.id,
+    sourceImplementationTree: failedVerificationRun.implementationTree,
+    status: "ACTIVE",
+    createdAt: input.now,
+    completedAt: null,
+    version: 1,
+  });
+  const completedStageAttempt: StageAttempt = {
+    ...stageAttempt,
+    status: "SUCCEEDED",
+    failureCode: null,
+    version: stageAttempt.version + 1,
+    finishedAt: input.now,
+    resultTree: failedVerificationRun.implementationTree,
+  };
+  const nextStageAttempt: StageAttempt = {
+    schemaVersion: 1,
+    id: input.ids.nextStageAttemptId,
+    pipelineRunId: run.id,
+    projectId: workItem.projectId,
+    workItemId: workItem.id,
+    correctionRunId: null,
+    verificationCorrectionRunId: nextCorrection.id,
+    stage: "IMPLEMENT",
+    attempt: 1,
+    status: "QUEUED",
+    version: 1,
+    startedAt: null,
+    finishedAt: null,
+    failureCode: null,
+    unproductiveSessions: 0,
+    packShareBackoffs: 0,
+    resultTree: null,
+  };
+  const resumedRun: PipelineRun = {
+    ...run,
+    status: "RUNNING",
+    currentStageAttemptId: nextStageAttempt.id,
+    version: run.version + 1,
+    updatedAt: input.now,
+  };
+  const resumedWorkItem: WorkItem = {
+    ...workItem,
+    state: "IN_PROGRESS",
+    currentStage: "IMPLEMENT",
+    version: workItem.version + 1,
+    updatedAt: input.now,
+  };
+  const dispatch: WorkflowDispatch = {
+    schemaVersion: 1,
+    id: input.ids.dispatchId,
+    projectId: workItem.projectId,
+    workItemId: workItem.id,
+    pipelineRunId: run.id,
+    stageAttemptId: nextStageAttempt.id,
+    mode: "START",
+    status: "PENDING",
+    createdAt: input.now,
+    completedAt: null,
+  };
+  return {
+    action: "AUTHORIZE_FINAL",
+    workItem: resumedWorkItem,
+    run: resumedRun,
+    stageAttempt: completedStageAttempt,
+    request: resolvedRequest,
+    decision,
+    previousCorrection,
+    correctionRun: nextCorrection,
+    nextStageAttempt,
+    dispatch,
+    events: [
+      { type: "HUMAN_REQUEST_RESOLVED", data: { request: resolvedRequest, decision } },
+      { type: "VERIFICATION_CORRECTION_SUPERSEDED", data: { correctionRun: previousCorrection } },
+      { type: "VERIFICATION_CORRECTION_STARTED", data: { correctionRun: nextCorrection } },
+      {
+        type: "STAGE_ATTEMPT_CHANGED",
+        data: { run: resumedRun, stageAttempt: completedStageAttempt, previousStatus: stageAttempt.status },
       },
     ],
   };

@@ -51,8 +51,10 @@ import {
   providerSessionsResponseSchema,
   qaDefectWaivedResultSchema,
   qaCorrectionGateResolvedResultSchema,
+  verificationCorrectionGateResolvedResultSchema,
   qaStateResponseSchema,
   resolveQACorrectionGateRequestSchema,
+  resolveVerificationCorrectionGateRequestSchema,
   waiveQADefectRequestSchema,
   proposeContext7PresetRequestSchema,
   proposeMcpProfileRequestSchema,
@@ -116,6 +118,7 @@ import {
   ProviderAllowanceDomainError,
   QADefectDispositionError,
   QACorrectionError,
+  VerificationCorrectionError,
   ReadinessDomainError,
   VerificationDomainError,
   projectVerificationRunFreshness,
@@ -656,6 +659,10 @@ const sendOperationError = (
   if (error instanceof QACorrectionError) {
     const status = error.code === "QA_CORRECTION_REQUEST_INVALID" ? 404 : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof VerificationCorrectionError) {
+    const status = error.code === "REQUEST_INVALID" ? 404 : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId));
   }
   if (error instanceof WorkflowDomainError) {
     const status =
@@ -2403,10 +2410,28 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         if (result.type !== "VERIFICATION_RUNS") {
           throw new StateStoreError("PERSISTENCE_FAILURE", "Verification Runs could not be loaded");
         }
+        const failures = localState.query({
+          type: "LIST_WORK_ITEM_VERIFICATION_FAILURES",
+          workItemId: params.workItemId,
+          limit: 100,
+        });
+        const corrections = localState.query({
+          type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+          workItemId: params.workItemId,
+          limit: 100,
+        });
+        if (failures.type !== "VERIFICATION_FAILURES" || corrections.type !== "VERIFICATION_CORRECTIONS") {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "Project verification correction history could not be loaded",
+          );
+        }
         const treeCache = new Map<string, Promise<string>>();
         return verificationRunsResponseSchema.parse({
           schemaVersion: 1,
           runs: await Promise.all(result.runs.map(({ id }) => readVerificationRunSnapshot(id, treeCache))),
+          failures: failures.failures,
+          correctionRuns: corrections.correctionRuns,
         });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
@@ -3764,6 +3789,52 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         return sendOperationError(error, request, reply, correlationId);
       }
     });
+
+    app.post(
+      "/api/v1/work-items/:workItemId/verification/correction-gate/:humanRequestId",
+      (request, reply) => {
+        const correlationId = requestCorrelationId(request);
+        if (!authorizeMutation(request, reply, correlationId)) return;
+        try {
+          const params = qaCorrectionGateParamsSchema.parse(request.params);
+          const body = resolveVerificationCorrectionGateRequestSchema.parse(request.body);
+          const current = localState.query({
+            type: "GET_WORKFLOW_SNAPSHOT",
+            workItemId: params.workItemId,
+          });
+          if (
+            current.type !== "WORKFLOW_SNAPSHOT" ||
+            !current.snapshot.humanRequests.some(
+              ({ id, status }) => id === params.humanRequestId && status === "OPEN",
+            )
+          ) {
+            throw new VerificationCorrectionError(
+              "REQUEST_INVALID",
+              "The exhausted Project verification correction gate does not exist",
+            );
+          }
+          return verificationCorrectionGateResolvedResultSchema.parse(
+            localState.execute({
+              schemaVersion: 1,
+              commandId: body.commandId,
+              correlationId,
+              actor: { type: "HUMAN", id: "local-owner" },
+              type: "RESOLVE_VERIFICATION_CORRECTION_GATE",
+              payload: {
+                humanRequestId: params.humanRequestId,
+                expectedRequestVersion: body.expectedRequestVersion,
+                correctionRunId: body.correctionRunId,
+                expectedCorrectionVersion: body.expectedCorrectionVersion,
+                expectedPipelineRunVersion: body.expectedPipelineRunVersion,
+                action: body.action,
+              },
+            }),
+          );
+        } catch (error: unknown) {
+          return sendOperationError(error, request, reply, correlationId);
+        }
+      },
+    );
 
     app.post("/api/v1/work-items/:workItemId/acceptance/:acceptancePackageId/resolve", (request, reply) => {
       const correlationId = requestCorrelationId(request);

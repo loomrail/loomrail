@@ -225,6 +225,8 @@ const commandBaseSchema = z
   })
   .strict();
 
+export const verificationCorrectionGateActionSchema = z.enum(["AUTHORIZE_FINAL", "CANCEL"]);
+
 export const adoptVerificationPlanCommandSchema = commandBaseSchema.extend({
   type: z.literal("ADOPT_VERIFICATION_PLAN"),
   payload: z
@@ -391,6 +393,18 @@ export const cancelVerificationRunRequestSchema = z
     schemaVersion: schemaVersionSchema,
     commandId: opaqueIdSchema,
     expectedVersion: z.number().int().positive(),
+  })
+  .strict();
+
+export const resolveVerificationCorrectionGateRequestSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    commandId: opaqueIdSchema,
+    expectedRequestVersion: z.number().int().positive(),
+    correctionRunId: opaqueIdSchema,
+    expectedCorrectionVersion: z.number().int().positive(),
+    expectedPipelineRunVersion: z.number().int().positive(),
+    action: verificationCorrectionGateActionSchema,
   })
   .strict();
 
@@ -926,6 +940,17 @@ export const recordVerificationOutputRetentionCommandSchema = commandBaseSchema.
     .strict(),
 });
 
+export const resolveVerificationCorrectionGateCommandSchema = commandBaseSchema.extend({
+  type: z.literal("RESOLVE_VERIFICATION_CORRECTION_GATE"),
+  payload: resolveVerificationCorrectionGateRequestSchema
+    .omit({
+      schemaVersion: true,
+      commandId: true,
+    })
+    .extend({ humanRequestId: opaqueIdSchema })
+    .strict(),
+});
+
 const verificationRunEventBaseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -1107,6 +1132,8 @@ export const verificationRunsResponseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
     runs: z.array(verificationRunSnapshotResponseSchema).max(100),
+    failures: z.array(verificationFailureSchema).max(100),
+    correctionRuns: z.array(verificationCorrectionRunSchema).max(100),
   })
   .strict();
 
@@ -1139,6 +1166,13 @@ export type InterruptVerificationRunCommand = z.infer<typeof interruptVerificati
 export type RecordVerificationOutputRetentionCommand = z.infer<
   typeof recordVerificationOutputRetentionCommandSchema
 >;
+export type ResolveVerificationCorrectionGateCommand = z.infer<
+  typeof resolveVerificationCorrectionGateCommandSchema
+>;
+export type ResolveVerificationCorrectionGateRequest = z.infer<
+  typeof resolveVerificationCorrectionGateRequestSchema
+>;
+export type VerificationCorrectionGateAction = z.infer<typeof verificationCorrectionGateActionSchema>;
 export type VerificationPlanAdoptedEvent = z.infer<typeof verificationPlanAdoptedEventSchema>;
 export type VerificationPlanAdoptedResult = z.infer<typeof verificationPlanAdoptedResultSchema>;
 export type VerificationPlanSettingsResponse = z.infer<typeof verificationPlanSettingsResponseSchema>;

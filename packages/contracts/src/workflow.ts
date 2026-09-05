@@ -13,6 +13,11 @@ import { mcpSessionSnapshotSchema } from "./mcp.js";
 import { workItemWorkspaceOrphanedEventSchema, workItemWorkspaceSchema } from "./workspace.js";
 import { reviewFindingSchema, reviewReportDraftSchema, reviewReportSchema } from "./review.js";
 import {
+  verificationCorrectionCancelledEventSchema,
+  verificationCorrectionGateActionSchema,
+  verificationCorrectionRunSchema,
+  verificationCorrectionStartedEventSchema,
+  verificationCorrectionSupersededEventSchema,
   verificationEvidenceSchema,
   verificationFailureRecordedEventSchema,
   verificationRunInterruptedEventSchema,
@@ -1600,11 +1605,39 @@ export const qaCorrectionGateResolvedResultSchema = z
   })
   .strict();
 
+export const verificationCorrectionGateResolvedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("VERIFICATION_CORRECTION_GATE_RESOLVED"),
+    replayed: z.boolean(),
+    action: verificationCorrectionGateActionSchema,
+    workItemId: opaqueIdSchema,
+    request: humanRequestSchema,
+    decision: decisionSchema,
+    previousCorrection: verificationCorrectionRunSchema,
+    correctionRun: verificationCorrectionRunSchema.nullable(),
+    run: pipelineRunSchema,
+    stageAttempt: stageAttemptSchema,
+    dispatch: workflowDispatchSchema.nullable(),
+    events: z.array(
+      z.discriminatedUnion("type", [
+        humanRequestResolvedEventSchema,
+        stageAttemptChangedEventSchema,
+        verificationCorrectionSupersededEventSchema,
+        verificationCorrectionStartedEventSchema,
+        verificationCorrectionCancelledEventSchema,
+        pipelineCancelledEventSchema,
+      ]),
+    ),
+  })
+  .strict();
+
 const pipelineControlEventSchema = z.discriminatedUnion("type", [
   pipelinePausedEventSchema,
   pipelineResumedEventSchema,
   pipelineCancelledEventSchema,
   qaCorrectionCancelledEventSchema,
+  verificationCorrectionCancelledEventSchema,
 ]);
 
 export const pipelineControlAppliedResultSchema = z
@@ -1992,6 +2025,9 @@ export type ResolveQACorrectionGateCommand = z.infer<typeof resolveQACorrectionG
 export type QACorrectionGateAction = z.infer<typeof qaCorrectionGateActionSchema>;
 export type QACorrectionGateResolvedResult = z.infer<typeof qaCorrectionGateResolvedResultSchema>;
 export type ResolveQACorrectionGateRequest = z.infer<typeof resolveQACorrectionGateRequestSchema>;
+export type VerificationCorrectionGateResolvedResult = z.infer<
+  typeof verificationCorrectionGateResolvedResultSchema
+>;
 export type PausePipelineCommand = z.infer<typeof pausePipelineCommandSchema>;
 export type ResumePipelineCommand = z.infer<typeof resumePipelineCommandSchema>;
 export type CancelPipelineCommand = z.infer<typeof cancelPipelineCommandSchema>;
