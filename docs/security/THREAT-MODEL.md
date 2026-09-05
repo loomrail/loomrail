@@ -743,6 +743,10 @@ Critical and stays open until the Q17 spec and implementation provide:
 - a terminal required non-pass or interrupted Run creates one append-only `VerificationFailure` in the same SQLite
   transaction as measured Run/Check state and its Event. It contains only typed Run/Check/Plan/tree lineage, not raw
   output or a local path; command replay and restart cannot duplicate the identity;
+- a previously passing Run is never rewritten when its Plan/tree authority becomes stale. The daemon materializes
+  one append-only `STALE` failure from current deterministic state and atomically moves the exact pending QA gate
+  into the shared correction loop; optimistic versions, the unique Run-to-failure edge, command receipts and a
+  pending-dispatch check reject stale observations and duplicate materialization;
 - Project verification shares the delivery-wide bound of two automatic corrections plus at most one final
   owner-authorized correction without merging its failure identity with Browser QA. An append-only shared SQLite
   ledger allocates positions monotonically in the same transaction as the evaluator-specific correction and storage

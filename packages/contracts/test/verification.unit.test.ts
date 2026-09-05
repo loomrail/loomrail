@@ -5,6 +5,7 @@ import {
   resolveVerificationCorrectionGateRequestSchema,
   retryVerificationRunRequestSchema,
   startVerificationRunRequestSchema,
+  stateCommandSchema,
   verificationCheckSchema,
   verificationCorrectionRunSchema,
   verificationEvidenceSchema,
@@ -313,6 +314,41 @@ describe("verification run evidence contract", () => {
       }),
     ).toMatchObject({ expectedVersion: 2 });
     expect(startVerificationRunRequestSchema.safeParse({ ...start, shell: true }).success).toBe(false);
+  });
+
+  it("keeps stale materialization internal, strict and bound to every observed version", () => {
+    const command = {
+      schemaVersion: 1,
+      commandId: "materialize-stale-verification",
+      correlationId: "correlation-materialize-stale-verification",
+      actor: { type: "SYSTEM", id: "verification-workflow" },
+      type: "MATERIALIZE_STALE_VERIFICATION_FAILURE",
+      payload: {
+        workItemId: "work-item-1",
+        verificationRunId: "verification-run-1",
+        expectedWorkItemVersion: 3,
+        expectedPipelineRunVersion: 4,
+        expectedStageAttemptVersion: 2,
+        expectedVerificationRunVersion: 5,
+        expectedPlanRevision: 2,
+        expectedPlanContentHash: hash,
+        currentTree: "b".repeat(40),
+      },
+    } as const;
+
+    expect(stateCommandSchema.parse(command)).toEqual(command);
+    expect(
+      stateCommandSchema.safeParse({
+        ...command,
+        payload: { ...command.payload, expectedStageAttemptVersion: 0 },
+      }).success,
+    ).toBe(false);
+    expect(
+      stateCommandSchema.safeParse({
+        ...command,
+        payload: { ...command.payload, providerPayload: "untrusted" },
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts a structurally measured passing check and current snapshot", () => {

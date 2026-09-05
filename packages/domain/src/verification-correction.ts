@@ -8,6 +8,7 @@ import {
   type HumanRequest,
   type HumanRequestOpenedEvent,
   type HumanRequestResolvedEvent,
+  type MaterializeStaleVerificationFailureCommand,
   type PipelineRun,
   type PipelineCancelledEvent,
   type QACorrectionCancelledEvent,
@@ -22,12 +23,16 @@ import {
   type VerificationCorrectionStartedEvent,
   type VerificationCorrectionSupersededEvent,
   type VerificationFailure,
+  type VerificationFailureRecordedEvent,
+  type VerificationPlan,
+  type VerificationPlanPublication,
   type VerificationRun,
   type WorkItem,
   type WorkflowDispatch,
 } from "@loomrail/contracts";
 
 import { decideCorrectionBudget } from "./correction-budget.js";
+import { deriveStaleVerificationFailure, VERIFICATION_WORKFLOW_ACTOR_ID } from "./verification.js";
 
 export type VerificationCorrectionErrorCode =
   "ACTOR_FORBIDDEN" | "VERSION_CONFLICT" | "REQUEST_INVALID" | "LINEAGE_MISMATCH" | "BUDGET_UNAVAILABLE";
@@ -192,10 +197,14 @@ export const decideInitialFailedVerificationCorrectionTransition = (input: {
   const failure = verificationFailureSchema.parse(input.failure);
   const qaCorrectionRun =
     input.qaCorrectionRun === undefined ? null : qaCorrectionRunSchema.parse(input.qaCorrectionRun);
-  if (verificationRun.status !== "FAILED" && verificationRun.status !== "ERROR") {
+  const sourceStatusMatches =
+    (verificationRun.status === "FAILED" && failure.reason === "REQUIRED_CHECK_FAILED") ||
+    (verificationRun.status === "ERROR" && failure.reason === "REQUIRED_CHECK_ERROR") ||
+    (verificationRun.status === "PASSED" && failure.reason === "STALE");
+  if (!sourceStatusMatches) {
     throw new VerificationCorrectionError(
       "LINEAGE_MISMATCH",
-      "Only a terminal non-passing Project verification Run can start correction",
+      "Only measured failed, errored, or stale Project verification evidence can start correction",
     );
   }
   if (
@@ -223,7 +232,7 @@ export const decideInitialFailedVerificationCorrectionTransition = (input: {
     input.stageAttempt.status !== "QUEUED" ||
     input.stageAttempt.correctionRunId !== (qaCorrectionRun?.id ?? null) ||
     (input.stageAttempt.verificationCorrectionRunId ?? null) !== null ||
-    (verificationRun.verificationCorrectionRunId ?? null) !== null ||
+    ((verificationRun.verificationCorrectionRunId ?? null) !== null && failure.reason !== "STALE") ||
     input.dispatch.projectId !== verificationRun.projectId ||
     input.dispatch.workItemId !== verificationRun.workItemId ||
     input.dispatch.pipelineRunId !== verificationRun.pipelineRunId ||
@@ -371,9 +380,13 @@ export const decideInitialFailedVerificationCorrectionGateTransition = (input: {
   const verificationRun = verificationRunSchema.parse(input.verificationRun);
   const failure = verificationFailureSchema.parse(input.failure);
   const qaCorrectionRun = qaCorrectionRunSchema.parse(input.qaCorrectionRun);
+  const sourceStatusMatches =
+    (verificationRun.status === "FAILED" && failure.reason === "REQUIRED_CHECK_FAILED") ||
+    (verificationRun.status === "ERROR" && failure.reason === "REQUIRED_CHECK_ERROR") ||
+    (verificationRun.status === "PASSED" && failure.reason === "STALE");
   const lineageMatches =
-    (verificationRun.status === "FAILED" || verificationRun.status === "ERROR") &&
-    (verificationRun.verificationCorrectionRunId ?? null) === null &&
+    sourceStatusMatches &&
+    ((verificationRun.verificationCorrectionRunId ?? null) === null || failure.reason === "STALE") &&
     failure.verificationRunId === verificationRun.id &&
     failure.projectId === verificationRun.projectId &&
     failure.workItemId === verificationRun.workItemId &&
@@ -382,7 +395,6 @@ export const decideInitialFailedVerificationCorrectionGateTransition = (input: {
     failure.planRevision === verificationRun.planRevision &&
     failure.planContentHash === verificationRun.planContentHash &&
     failure.implementationTree === verificationRun.implementationTree &&
-    (failure.reason === "REQUIRED_CHECK_FAILED" || failure.reason === "REQUIRED_CHECK_ERROR") &&
     qaCorrectionRun.status === "ACTIVE" &&
     qaCorrectionRun.projectId === verificationRun.projectId &&
     qaCorrectionRun.workItemId === verificationRun.workItemId &&
@@ -507,6 +519,157 @@ export const decideInitialFailedVerificationCorrectionGateTransition = (input: {
   };
 };
 
+export type StaleVerificationFailureTransition =
+  | {
+      action: "START_CORRECTION";
+      failure: VerificationFailure;
+      failureEvent: Pick<VerificationFailureRecordedEvent, "type" | "data">;
+      workItem: WorkItem;
+      pipelineRun: PipelineRun;
+      completedStageAttempt: StageAttempt;
+      completedDispatch: WorkflowDispatch;
+      correctionRun: VerificationCorrectionRun;
+      nextStageAttempt: StageAttempt;
+      nextDispatch: WorkflowDispatch;
+      request: null;
+      events: StartedVerificationCorrectionTransition["events"];
+    }
+  | {
+      action: "WAIT_FOR_OWNER";
+      failure: VerificationFailure;
+      failureEvent: Pick<VerificationFailureRecordedEvent, "type" | "data">;
+      workItem: WorkItem;
+      pipelineRun: PipelineRun;
+      completedStageAttempt: StageAttempt;
+      completedDispatch: WorkflowDispatch;
+      correctionRun: null;
+      nextStageAttempt: null;
+      nextDispatch: null;
+      request: HumanRequest;
+      events: InitialVerificationCorrectionGateTransition["events"];
+    };
+
+/** Materializes one stale passing Run and atomically moves its exact QA gate into correction. */
+export const decideStaleVerificationFailureTransition = (input: {
+  command: MaterializeStaleVerificationFailureCommand;
+  verificationRun: VerificationRun;
+  latestVerificationRunId: string | null;
+  existingFailure: VerificationFailure | null;
+  currentPlan: VerificationPlan | undefined;
+  publication: VerificationPlanPublication | undefined;
+  workItem: WorkItem;
+  pipelineRun: PipelineRun;
+  stageAttempt: StageAttempt;
+  dispatch: WorkflowDispatch;
+  qaCorrectionRun?: QACorrectionRun;
+  budgetUsage: { automaticUsed: number; totalUsed: number };
+  ids: {
+    failureId: string;
+    correctionRunId: string;
+    nextStageAttemptId: string;
+    nextDispatchId: string;
+    humanRequestId: string;
+    authorizeFinalOptionId: string;
+    cancelOptionId: string;
+  };
+  now: string;
+}): StaleVerificationFailureTransition => {
+  const { command } = input;
+  if (command.actor.type !== "SYSTEM" || command.actor.id !== VERIFICATION_WORKFLOW_ACTOR_ID) {
+    throw new VerificationCorrectionError(
+      "ACTOR_FORBIDDEN",
+      "Only the verification workflow can materialize stale evidence",
+    );
+  }
+  if (
+    command.payload.workItemId !== input.workItem.id ||
+    command.payload.verificationRunId !== input.verificationRun.id ||
+    input.latestVerificationRunId !== input.verificationRun.id ||
+    input.existingFailure !== null
+  ) {
+    throw new VerificationCorrectionError(
+      "REQUEST_INVALID",
+      "The stale materialization does not identify the latest unmaterialized verification Run",
+    );
+  }
+  if (
+    input.currentPlan === undefined ||
+    command.payload.expectedWorkItemVersion !== input.workItem.version ||
+    command.payload.expectedPipelineRunVersion !== input.pipelineRun.version ||
+    command.payload.expectedStageAttemptVersion !== input.stageAttempt.version ||
+    command.payload.expectedVerificationRunVersion !== input.verificationRun.version ||
+    command.payload.expectedPlanRevision !== input.currentPlan.revision ||
+    command.payload.expectedPlanContentHash !== input.currentPlan.contentHash
+  ) {
+    throw new VerificationCorrectionError(
+      "VERSION_CONFLICT",
+      "The verification gate changed after stale evidence was observed",
+    );
+  }
+  const failureDecision = deriveStaleVerificationFailure({
+    failureId: input.ids.failureId,
+    run: input.verificationRun,
+    currentPlan: input.currentPlan,
+    publication: input.publication,
+    currentTree: command.payload.currentTree,
+    now: input.now,
+  });
+  const budget = decideCorrectionBudget(input.budgetUsage);
+  if (budget.action === "START_AUTOMATIC") {
+    const transition = decideInitialFailedVerificationCorrectionTransition({
+      verificationRun: input.verificationRun,
+      failure: failureDecision.failure,
+      workItem: input.workItem,
+      pipelineRun: input.pipelineRun,
+      stageAttempt: input.stageAttempt,
+      dispatch: input.dispatch,
+      ...(input.qaCorrectionRun === undefined ? {} : { qaCorrectionRun: input.qaCorrectionRun }),
+      budgetUsage: input.budgetUsage,
+      ids: {
+        correctionRunId: input.ids.correctionRunId,
+        nextStageAttemptId: input.ids.nextStageAttemptId,
+        nextDispatchId: input.ids.nextDispatchId,
+      },
+      now: input.now,
+    });
+    return {
+      ...transition,
+      failure: failureDecision.failure,
+      failureEvent: failureDecision.event,
+      request: null,
+    };
+  }
+  if (input.qaCorrectionRun === undefined) {
+    throw new VerificationCorrectionError(
+      "BUDGET_UNAVAILABLE",
+      "Stale evidence exhausted the shared correction budget without an active QA owner gate",
+    );
+  }
+  const transition = decideInitialFailedVerificationCorrectionGateTransition({
+    verificationRun: input.verificationRun,
+    failure: failureDecision.failure,
+    qaCorrectionRun: input.qaCorrectionRun,
+    workItem: input.workItem,
+    pipelineRun: input.pipelineRun,
+    stageAttempt: input.stageAttempt,
+    dispatch: input.dispatch,
+    budgetUsage: input.budgetUsage,
+    ids: {
+      humanRequestId: input.ids.humanRequestId,
+      authorizeFinalOptionId: input.ids.authorizeFinalOptionId,
+      cancelOptionId: input.ids.cancelOptionId,
+    },
+    now: input.now,
+  });
+  return {
+    ...transition,
+    failure: failureDecision.failure,
+    failureEvent: failureDecision.event,
+    nextStageAttempt: null,
+    nextDispatch: null,
+  };
+};
+
 /** Closes correction authority only for a fresh green rerun of its exact owner-approved plan. */
 export const decidePassedVerificationCorrectionTransition = (input: {
   verificationRun: VerificationRun;
@@ -519,6 +682,7 @@ export const decidePassedVerificationCorrectionTransition = (input: {
   const sourceVerificationRun = verificationRunSchema.parse(input.sourceVerificationRun);
   const sourceFailure = verificationFailureSchema.parse(input.sourceFailure);
   const correctionRun = verificationCorrectionRunSchema.parse(input.correctionRun);
+  const staleSource = sourceFailure.reason === "STALE" && sourceVerificationRun.status === "PASSED";
   const lineageMatches =
     verificationRun.status === "PASSED" &&
     (verificationRun.verificationCorrectionRunId ?? null) === correctionRun.id &&
@@ -526,10 +690,11 @@ export const decidePassedVerificationCorrectionTransition = (input: {
     verificationRun.workItemId === correctionRun.workItemId &&
     verificationRun.pipelineRunId === correctionRun.pipelineRunId &&
     verificationRun.ordinal > sourceVerificationRun.ordinal &&
-    verificationRun.planId === sourceVerificationRun.planId &&
-    verificationRun.planRevision === sourceVerificationRun.planRevision &&
-    verificationRun.planContentHash === sourceVerificationRun.planContentHash &&
-    verificationRun.implementationTree !== sourceVerificationRun.implementationTree &&
+    (staleSource ||
+      (verificationRun.planId === sourceVerificationRun.planId &&
+        verificationRun.planRevision === sourceVerificationRun.planRevision &&
+        verificationRun.planContentHash === sourceVerificationRun.planContentHash)) &&
+    (staleSource || verificationRun.implementationTree !== sourceVerificationRun.implementationTree) &&
     correctionRun.status === "ACTIVE" &&
     correctionRun.sourceFailureId === sourceFailure.id &&
     correctionRun.sourceVerificationRunId === sourceVerificationRun.id &&
@@ -542,8 +707,10 @@ export const decidePassedVerificationCorrectionTransition = (input: {
     sourceFailure.planRevision === sourceVerificationRun.planRevision &&
     sourceFailure.planContentHash === sourceVerificationRun.planContentHash &&
     sourceFailure.implementationTree === sourceVerificationRun.implementationTree &&
-    (sourceFailure.reason === "REQUIRED_CHECK_FAILED" || sourceFailure.reason === "REQUIRED_CHECK_ERROR") &&
-    (sourceVerificationRun.status === "FAILED" || sourceVerificationRun.status === "ERROR") &&
+    (staleSource ||
+      ((sourceFailure.reason === "REQUIRED_CHECK_FAILED" ||
+        sourceFailure.reason === "REQUIRED_CHECK_ERROR") &&
+        (sourceVerificationRun.status === "FAILED" || sourceVerificationRun.status === "ERROR"))) &&
     sourceVerificationRun.projectId === correctionRun.projectId &&
     sourceVerificationRun.workItemId === correctionRun.workItemId &&
     sourceVerificationRun.pipelineRunId === correctionRun.pipelineRunId;

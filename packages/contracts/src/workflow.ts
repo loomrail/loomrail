@@ -19,6 +19,7 @@ import {
   verificationCorrectionStartedEventSchema,
   verificationCorrectionSupersededEventSchema,
   verificationEvidenceSchema,
+  verificationFailureSchema,
   verificationFailureRecordedEventSchema,
   verificationRunInterruptedEventSchema,
   verificationRunSchema,
@@ -1639,6 +1640,43 @@ export const verificationCorrectionGateResolvedResultSchema = z
   })
   .strict();
 
+export const verificationStaleFailureMaterializedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    type: z.literal("VERIFICATION_STALE_FAILURE_MATERIALIZED"),
+    replayed: z.boolean(),
+    action: z.enum(["START_CORRECTION", "WAIT_FOR_OWNER"]),
+    workItemId: opaqueIdSchema,
+    failure: verificationFailureSchema,
+    correctionRun: verificationCorrectionRunSchema.nullable(),
+    request: humanRequestSchema.nullable(),
+    run: pipelineRunSchema,
+    stageAttempt: stageAttemptSchema,
+    dispatch: workflowDispatchSchema.nullable(),
+    events: z.array(
+      z.discriminatedUnion("type", [
+        verificationFailureRecordedEventSchema,
+        stageAttemptChangedEventSchema,
+        verificationCorrectionStartedEventSchema,
+        humanRequestOpenedEventSchema,
+      ]),
+    ),
+  })
+  .strict()
+  .superRefine((result, context) => {
+    const starts = result.action === "START_CORRECTION";
+    if (
+      starts !== (result.correctionRun !== null) ||
+      starts !== (result.dispatch !== null) ||
+      starts === (result.request !== null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "A stale verification result must expose exactly one correction or owner-gate continuation",
+      });
+    }
+  });
+
 const pipelineControlEventSchema = z.discriminatedUnion("type", [
   pipelinePausedEventSchema,
   pipelineResumedEventSchema,
@@ -2039,6 +2077,9 @@ export type QACorrectionGateResolvedResult = z.infer<typeof qaCorrectionGateReso
 export type ResolveQACorrectionGateRequest = z.infer<typeof resolveQACorrectionGateRequestSchema>;
 export type VerificationCorrectionGateResolvedResult = z.infer<
   typeof verificationCorrectionGateResolvedResultSchema
+>;
+export type VerificationStaleFailureMaterializedResult = z.infer<
+  typeof verificationStaleFailureMaterializedResultSchema
 >;
 export type PausePipelineCommand = z.infer<typeof pausePipelineCommandSchema>;
 export type ResumePipelineCommand = z.infer<typeof resumePipelineCommandSchema>;

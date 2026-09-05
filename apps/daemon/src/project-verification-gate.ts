@@ -24,9 +24,13 @@ type GateSnapshot = {
   gate: ReturnType<typeof projectVerificationAcceptanceGate>;
   latestRunId: string | null;
   latestRunStatus: "QUEUED" | "RUNNING" | "PASSED" | "FAILED" | "ERROR" | "INTERRUPTED" | null;
+  latestRunVersion: number | null;
+  latestRunFailureMaterialized: boolean;
   planRevision: number | null;
   planContentHash: string | null;
   workItemVersion: number | null;
+  pipelineRunVersion: number | null;
+  stageAttemptVersion: number | null;
 };
 
 const resultOf = (snapshot: GateSnapshot): ProjectVerificationWorkflowGateResult => {
@@ -37,7 +41,7 @@ const resultOf = (snapshot: GateSnapshot): ProjectVerificationWorkflowGateResult
 };
 
 const needsFreshRun = (blocker: ProjectVerificationAcceptanceBlocker): boolean =>
-  blocker === "RUN_MISSING" || blocker === "STALE" || blocker === "LINEAGE_MISMATCH";
+  blocker === "RUN_MISSING" || blocker === "LINEAGE_MISMATCH";
 
 /**
  * Runs the owner-approved Project Plan at the deterministic seam between independent Review and
@@ -90,6 +94,24 @@ export const createProjectVerificationWorkflowGate = (input: {
       throw new StateStoreError("PERSISTENCE_FAILURE", "Project verification evidence is unavailable");
     }
     const currentRun = runResult?.run ?? undefined;
+    const failuresResult = input.state.query({
+      type: "LIST_WORK_ITEM_VERIFICATION_FAILURES",
+      workItemId: dispatch.workItemId,
+      limit: 100,
+    });
+    const workflowResult = input.state.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: dispatch.workItemId,
+    });
+    if (failuresResult.type !== "VERIFICATION_FAILURES" || workflowResult.type !== "WORKFLOW_SNAPSHOT") {
+      throw new StateStoreError(
+        "PERSISTENCE_FAILURE",
+        "Project verification correction state is unavailable",
+      );
+    }
+    const currentStageAttempt = workflowResult.snapshot.stageAttempts.find(
+      ({ id }) => id === dispatch.stageAttemptId,
+    );
     return {
       gate: projectVerificationAcceptanceGate({
         projectId: dispatch.projectId,
@@ -103,9 +125,15 @@ export const createProjectVerificationWorkflowGate = (input: {
       }),
       latestRunId: currentRun?.id ?? null,
       latestRunStatus: currentRun?.status ?? null,
+      latestRunVersion: currentRun?.version ?? null,
+      latestRunFailureMaterialized:
+        currentRun !== undefined &&
+        failuresResult.failures.some(({ verificationRunId }) => verificationRunId === currentRun.id),
       planRevision: planResult.plan?.revision ?? null,
       planContentHash: planResult.plan?.contentHash ?? null,
       workItemVersion: workItemResult.workItem.version,
+      pipelineRunVersion: workflowResult.snapshot.run?.version ?? null,
+      stageAttemptVersion: currentStageAttempt?.version ?? null,
     };
   };
 
@@ -129,6 +157,44 @@ export const createProjectVerificationWorkflowGate = (input: {
       if (snapshot.latestRunStatus === "QUEUED" || snapshot.latestRunStatus === "RUNNING") {
         snapshot = readSnapshot(dispatch, testedTree);
         if (snapshot.gate.status !== "BLOCKED") return resultOf(snapshot);
+      }
+
+      if (
+        snapshot.gate.blocker === "STALE" &&
+        !snapshot.latestRunFailureMaterialized &&
+        snapshot.latestRunId !== null &&
+        snapshot.latestRunVersion !== null &&
+        snapshot.planRevision !== null &&
+        snapshot.planContentHash !== null &&
+        snapshot.workItemVersion !== null &&
+        snapshot.pipelineRunVersion !== null &&
+        snapshot.stageAttemptVersion !== null
+      ) {
+        const materialized = input.state.execute({
+          schemaVersion: 1,
+          commandId: input.createCommandId(),
+          correlationId: `verification-stale-${dispatch.id}`,
+          actor: { type: "SYSTEM", id: VERIFICATION_WORKFLOW_ACTOR_ID },
+          type: "MATERIALIZE_STALE_VERIFICATION_FAILURE",
+          payload: {
+            workItemId: dispatch.workItemId,
+            verificationRunId: snapshot.latestRunId,
+            expectedWorkItemVersion: snapshot.workItemVersion,
+            expectedPipelineRunVersion: snapshot.pipelineRunVersion,
+            expectedStageAttemptVersion: snapshot.stageAttemptVersion,
+            expectedVerificationRunVersion: snapshot.latestRunVersion,
+            expectedPlanRevision: snapshot.planRevision,
+            expectedPlanContentHash: snapshot.planContentHash,
+            currentTree: testedTree,
+          },
+        });
+        if (materialized.type !== "VERIFICATION_STALE_FAILURE_MATERIALIZED") {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "Stale verification evidence was not materialized",
+          );
+        }
+        return { status: "MOVED" };
       }
 
       if (

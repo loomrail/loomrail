@@ -65,7 +65,11 @@ output; restart сохраняет failure, а crash во время process д�
       shared position, либо открывает owner gate; immutable QA-parent edge, dual evidence envelope и passing handback
       возвращают exact locked Browser QA retest без потери review текущего tree. Полная alternating sequence
       `Verification 1 → QA 2 → owner Verification 3 → QA retest`, replay, cancel и SQLite reopen покрыты. `STALE`
-      materialization остаётся в работе.
+      materialization теперь сохраняет исходный terminal `PASSED` неизменным, добавляет один append-only
+      `VerificationFailure(STALE)` и в той же SQLite-транзакции переводит pending QA gate в bounded correction;
+      exact-version conflict, command replay, повторный daemon gate и SQLite reopen не создают дубль. Fresh passing
+      rerun новой current Plan/tree authority закрывает эту correction. Автоматический correction transition для
+      `RUN_INTERRUPTED` остаётся в работе.
 - [x] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
       Общие constants и pure decision `2 automatic + 1 owner` уже заменили QA-only policy; durable usage/lineage,
       объединяющие оба evaluator без объединения их failure entities, закреплены транзакционным подсчётом обеих

@@ -1372,7 +1372,7 @@ describe("SQLite local state", () => {
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-      29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+      29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -5206,7 +5206,9 @@ describe("SQLite local state", () => {
         type: "GET_WORKFLOW_SNAPSHOT",
         workItemId: created.workItem.id,
       });
-      if (handoffSnapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected QA handoff state");
+      if (handoffSnapshot.type !== "WORKFLOW_SNAPSHOT" || handoffSnapshot.snapshot.run === null) {
+        throw new Error("Expected QA handoff state");
+      }
       expect(handoffSnapshot.snapshot.run.status).toBe("RUNNING");
       expect(
         handoffSnapshot.snapshot.stageAttempts.find(
@@ -5312,7 +5314,9 @@ describe("SQLite local state", () => {
         type: "GET_WORKFLOW_SNAPSHOT",
         workItemId: created.workItem.id,
       });
-      if (erroredSnapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected errored retest state");
+      if (erroredSnapshot.type !== "WORKFLOW_SNAPSHOT" || erroredSnapshot.snapshot.run === null) {
+        throw new Error("Expected errored retest state");
+      }
       const retryRequest = erroredSnapshot.snapshot.humanRequests.at(-1);
       expect(erroredSnapshot.snapshot.run.status).toBe("WAITING_HUMAN");
       expect(erroredSnapshot.snapshot.humanRequests.some(({ status }) => status === "OPEN")).toBe(true);

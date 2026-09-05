@@ -889,6 +889,59 @@ export const projectVerificationRunFreshness = (
   };
 };
 
+/**
+ * Records that a previously passing Run no longer carries current authority without rewriting its
+ * measured terminal outcome. The failure keeps the old Plan/tree coordinates and only adds the
+ * independently derived reasons why that evidence cannot cross the current gate.
+ */
+export const deriveStaleVerificationFailure = (input: {
+  failureId: string;
+  run: VerificationRun;
+  currentPlan: VerificationPlan | undefined;
+  publication: VerificationPlanPublication | undefined;
+  currentTree: string;
+  now: string;
+}): { failure: VerificationFailure; event: VerificationFailureRecordedIntent } => {
+  const run = verificationRunSchema.parse(input.run);
+  if (run.status !== "PASSED") {
+    throw new VerificationDomainError(
+      "RUN_STATUS_INVALID",
+      "Only a previously passing verification Run can become stale",
+    );
+  }
+  const freshness = projectVerificationRunFreshness(run, {
+    currentPlan: input.currentPlan,
+    publication: input.publication,
+    currentTree: input.currentTree,
+  });
+  if (freshness.freshness !== "STALE") {
+    throw new VerificationDomainError(
+      "FAILURE_SOURCE_INVALID",
+      "Current verification evidence cannot create a stale failure",
+    );
+  }
+  const failure = verificationFailureSchema.parse({
+    schemaVersion: 1,
+    id: input.failureId,
+    projectId: run.projectId,
+    workItemId: run.workItemId,
+    pipelineRunId: run.pipelineRunId,
+    verificationRunId: run.id,
+    verificationCheckId: null,
+    planId: run.planId,
+    planRevision: run.planRevision,
+    planContentHash: run.planContentHash,
+    implementationTree: run.implementationTree,
+    reason: "STALE",
+    staleReasons: freshness.staleReasons,
+    createdAt: input.now,
+  });
+  return {
+    failure,
+    event: { type: "VERIFICATION_FAILURE_RECORDED", data: { failure } },
+  };
+};
+
 export type ProjectVerificationAcceptanceBlocker =
   | "PLAN_UNPUBLISHED"
   | "RUN_MISSING"

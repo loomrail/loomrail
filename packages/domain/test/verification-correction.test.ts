@@ -424,6 +424,51 @@ describe("Project verification correction transition", () => {
     });
   });
 
+  it("closes a stale-evidence correction after a newer passing Run replaces its authority", () => {
+    const staleSourceRun: VerificationRun = {
+      ...verificationRun,
+      status: "PASSED",
+      terminalReason: "ALL_REQUIRED_PASSED",
+    };
+    const staleFailure: VerificationFailure = {
+      ...failure,
+      verificationCheckId: null,
+      reason: "STALE",
+      staleReasons: ["TREE_CHANGED"],
+    };
+    const staleCorrection: VerificationCorrectionRun = {
+      ...correctionRun,
+      sourceFailureId: staleFailure.id,
+      sourceVerificationRunId: staleSourceRun.id,
+      sourceImplementationTree: staleSourceRun.implementationTree,
+    };
+    const replacementRun: VerificationRun = {
+      ...staleSourceRun,
+      id: "verification-run-two",
+      planId: "verification-plan-two",
+      planRevision: 2,
+      planContentHash: "c".repeat(64),
+      implementationTree: "d".repeat(40),
+      ordinal: 2,
+      retryOfRunId: staleSourceRun.id,
+      verificationCorrectionRunId: staleCorrection.id,
+      version: 4,
+    };
+
+    expect(
+      decidePassedVerificationCorrectionTransition({
+        verificationRun: replacementRun,
+        sourceVerificationRun: staleSourceRun,
+        sourceFailure: staleFailure,
+        correctionRun: staleCorrection,
+        now,
+      }),
+    ).toMatchObject({
+      correctionRun: { id: staleCorrection.id, status: "PASSED", completedAt: now, version: 2 },
+      event: { type: "VERIFICATION_CORRECTION_PASSED" },
+    });
+  });
+
   it("returns a passing nested verification correction to the exact suspended QA retest", () => {
     const nestedCorrection: VerificationCorrectionRun = {
       ...correctionRun,

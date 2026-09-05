@@ -635,6 +635,220 @@ describe("verification Run local state", () => {
     durableLedger.close();
   });
 
+  it("materializes stale passing evidence without rewriting it and survives restart", async () => {
+    const fixture = await prepare();
+    const reserved = reserve(fixture, "reserve-stale-source");
+    if (reserved.type !== "VERIFICATION_RUN_RESERVED") throw new Error("Expected reserved Run");
+    const check = reserved.checks[0];
+    if (check === undefined) throw new Error("Expected Check");
+    const started = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "start-stale-source-check",
+      correlationId: "correlation-start-stale-source-check",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "START_VERIFICATION_CHECK",
+      payload: {
+        runId: reserved.run.id,
+        checkId: check.id,
+        expectedRunVersion: reserved.run.version,
+        expectedCheckVersion: check.version,
+      },
+    });
+    if (started.type !== "VERIFICATION_CHECK_STARTED") throw new Error("Expected started Check");
+    const completed = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "pass-stale-source-check",
+      correlationId: "correlation-pass-stale-source-check",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "COMPLETE_VERIFICATION_CHECK",
+      payload: {
+        runId: started.run.id,
+        checkId: started.check.id,
+        expectedRunVersion: started.run.version,
+        expectedCheckVersion: started.check.version,
+        observation: {
+          status: "PASSED",
+          completedAt: timestamp,
+          durationMs: 1,
+          exitCode: 0,
+          signal: null,
+          output: {
+            schemaVersion: 1,
+            artifactId: "stale-source-output",
+            sha256: "e".repeat(64),
+            capturedBytes: 1,
+            stdoutBytes: 1,
+            stderrBytes: 0,
+            truncated: false,
+            available: true,
+          },
+        },
+        outputStorageKey: "stale-source-output.txt",
+      },
+    });
+    if (completed.type !== "VERIFICATION_CHECK_COMPLETED") throw new Error("Expected completed Check");
+    expect(completed.run).toMatchObject({ status: "PASSED", terminalReason: "ALL_REQUIRED_PASSED" });
+
+    const currentWorkItem = fixture.localState.query({
+      type: "GET_WORK_ITEM",
+      workItemId: fixture.workItemId,
+    });
+    const workflow = fixture.localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: fixture.workItemId,
+    });
+    if (currentWorkItem.type !== "WORK_ITEM" || currentWorkItem.workItem === null) {
+      throw new Error("Expected current WorkItem");
+    }
+    if (workflow.type !== "WORKFLOW_SNAPSHOT" || workflow.snapshot.run === null) {
+      throw new Error("Expected workflow snapshot");
+    }
+    const currentStage = workflow.snapshot.stageAttempts.find(
+      ({ id }) => id === workflow.snapshot.run?.currentStageAttemptId,
+    );
+    if (currentStage === undefined) throw new Error("Expected current StageAttempt");
+    const changedTree = "c".repeat(40);
+    const materializeCommand = {
+      schemaVersion: 1,
+      commandId: "materialize-stale-source",
+      correlationId: "correlation-materialize-stale-source",
+      actor: { type: "SYSTEM", id: "verification-workflow" },
+      type: "MATERIALIZE_STALE_VERIFICATION_FAILURE",
+      payload: {
+        workItemId: fixture.workItemId,
+        verificationRunId: completed.run.id,
+        expectedWorkItemVersion: currentWorkItem.workItem.version,
+        expectedPipelineRunVersion: workflow.snapshot.run.version,
+        expectedStageAttemptVersion: currentStage.version,
+        expectedVerificationRunVersion: completed.run.version,
+        expectedPlanRevision: fixture.planRevision,
+        expectedPlanContentHash: fixture.planContentHash,
+        currentTree: changedTree,
+      },
+    } as const;
+    expect(() =>
+      fixture.localState.execute({
+        ...materializeCommand,
+        commandId: "materialize-stale-source-version-conflict",
+        payload: {
+          ...materializeCommand.payload,
+          expectedStageAttemptVersion: materializeCommand.payload.expectedStageAttemptVersion + 1,
+        },
+      }),
+    ).toThrow(expect.objectContaining({ code: "VERSION_CONFLICT" }));
+    expect(
+      fixture.localState.query({
+        type: "LIST_WORK_ITEM_VERIFICATION_FAILURES",
+        workItemId: fixture.workItemId,
+      }),
+    ).toMatchObject({ failures: [] });
+
+    const materialized = fixture.localState.execute(materializeCommand);
+    if (materialized.type !== "VERIFICATION_STALE_FAILURE_MATERIALIZED") {
+      throw new Error("Expected stale materialization");
+    }
+    expect(materialized).toMatchObject({
+      replayed: false,
+      action: "START_CORRECTION",
+      failure: {
+        verificationRunId: completed.run.id,
+        verificationCheckId: null,
+        implementationTree: tree,
+        reason: "STALE",
+        staleReasons: ["TREE_CHANGED"],
+      },
+      correctionRun: {
+        budgetPosition: 1,
+        automatic: true,
+        sourceVerificationRunId: completed.run.id,
+        sourceImplementationTree: tree,
+        status: "ACTIVE",
+      },
+      run: { currentStageAttemptId: materialized.dispatch?.stageAttemptId, status: "RUNNING" },
+      stageAttempt: { id: currentStage.id, status: "SUCCEEDED", resultTree: tree },
+      dispatch: { status: "PENDING" },
+    });
+    expect(materialized.events.map(({ type }) => type)).toEqual([
+      "VERIFICATION_FAILURE_RECORDED",
+      "STAGE_ATTEMPT_CHANGED",
+      "VERIFICATION_CORRECTION_STARTED",
+    ]);
+    expect(fixture.localState.execute(materializeCommand)).toMatchObject({
+      type: "VERIFICATION_STALE_FAILURE_MATERIALIZED",
+      replayed: true,
+      failure: { id: materialized.failure.id },
+      correctionRun: { id: materialized.correctionRun?.id },
+    });
+
+    const sourceAfterMaterialization = fixture.localState.query({
+      type: "GET_VERIFICATION_RUN",
+      runId: completed.run.id,
+    });
+    expect(sourceAfterMaterialization).toMatchObject({
+      run: {
+        id: completed.run.id,
+        status: "PASSED",
+        terminalReason: "ALL_REQUIRED_PASSED",
+        implementationTree: tree,
+        version: completed.run.version,
+      },
+    });
+    expect(
+      fixture.localState.query({
+        type: "LIST_WORK_ITEM_VERIFICATION_FAILURES",
+        workItemId: fixture.workItemId,
+      }),
+    ).toMatchObject({
+      failures: [{ id: materialized.failure.id, reason: "STALE", staleReasons: ["TREE_CHANGED"] }],
+    });
+
+    fixture.localState.close();
+    state = undefined;
+    const reopened = await open();
+    expect(
+      reopened.query({
+        type: "GET_VERIFICATION_RUN",
+        runId: completed.run.id,
+      }),
+    ).toMatchObject({ run: { status: "PASSED", version: completed.run.version } });
+    expect(
+      reopened.query({
+        type: "LIST_WORK_ITEM_VERIFICATION_FAILURES",
+        workItemId: fixture.workItemId,
+      }),
+    ).toMatchObject({ failures: [{ id: materialized.failure.id, reason: "STALE" }] });
+    expect(
+      reopened.query({
+        type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+        workItemId: fixture.workItemId,
+      }),
+    ).toMatchObject({
+      correctionRuns: [
+        {
+          id: materialized.correctionRun?.id,
+          sourceFailureId: materialized.failure.id,
+          status: "ACTIVE",
+        },
+      ],
+    });
+    const reopenedWorkflow = reopened.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: fixture.workItemId,
+    });
+    if (reopenedWorkflow.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected reopened workflow");
+    expect(reopenedWorkflow.snapshot.run).toMatchObject({
+      currentStageAttemptId: materialized.dispatch?.stageAttemptId,
+      status: "RUNNING",
+    });
+    expect(
+      reopenedWorkflow.snapshot.stageAttempts.find(({ id }) => id === materialized.dispatch?.stageAttemptId),
+    ).toMatchObject({
+      stage: "IMPLEMENT",
+      verificationCorrectionRunId: materialized.correctionRun?.id,
+      status: "QUEUED",
+    });
+  });
+
   it("closes the active correction only after a fresh reviewed passing rerun", async () => {
     const fixture = await prepare(correctionWorkflowTemplate);
     const nextDispatch = () => {

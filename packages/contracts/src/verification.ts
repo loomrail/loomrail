@@ -900,6 +900,23 @@ export const retryVerificationRunCommandSchema = commandBaseSchema.extend({
   }),
 });
 
+export const materializeStaleVerificationFailureCommandSchema = commandBaseSchema.extend({
+  type: z.literal("MATERIALIZE_STALE_VERIFICATION_FAILURE"),
+  payload: z
+    .object({
+      workItemId: opaqueIdSchema,
+      verificationRunId: opaqueIdSchema,
+      expectedWorkItemVersion: z.number().int().positive(),
+      expectedPipelineRunVersion: z.number().int().positive(),
+      expectedStageAttemptVersion: z.number().int().positive(),
+      expectedVerificationRunVersion: z.number().int().positive(),
+      expectedPlanRevision: z.number().int().positive(),
+      expectedPlanContentHash: sha256Schema,
+      currentTree: treeShaSchema,
+    })
+    .strict(),
+});
+
 export const startVerificationCheckCommandSchema = commandBaseSchema.extend({
   type: z.literal("START_VERIFICATION_CHECK"),
   payload: z
@@ -1219,6 +1236,9 @@ export type RetryVerificationPlanPublicationCommand = z.infer<
 >;
 export type StartVerificationRunCommand = z.infer<typeof startVerificationRunCommandSchema>;
 export type RetryVerificationRunCommand = z.infer<typeof retryVerificationRunCommandSchema>;
+export type MaterializeStaleVerificationFailureCommand = z.infer<
+  typeof materializeStaleVerificationFailureCommandSchema
+>;
 export type StartVerificationCheckCommand = z.infer<typeof startVerificationCheckCommandSchema>;
 export type CompleteVerificationCheckCommand = z.infer<typeof completeVerificationCheckCommandSchema>;
 export type CancelVerificationRunCommand = z.infer<typeof cancelVerificationRunCommandSchema>;

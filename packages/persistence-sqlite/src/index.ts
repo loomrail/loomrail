@@ -168,6 +168,7 @@ import {
   decideMixedVerificationCorrectionGateResolution,
   decidePassedVerificationCorrectionQAHandoff,
   decidePassedVerificationCorrectionTransition,
+  decideStaleVerificationFailureTransition,
   decideSubsequentFailedVerificationCorrectionTransition,
   decideVerificationCorrectionCancellation,
   decideVerificationCorrectionGateResolution,
@@ -3833,18 +3834,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       return row === undefined ? null : verificationCorrectionRunFromRow(row);
     };
 
-    const persistVerificationFailure = (
-      run: VerificationRun,
-      checks: readonly VerificationCheck[],
-      createdAt: string,
-    ): ReturnType<typeof deriveVerificationFailure> => {
-      const decision = deriveVerificationFailure({
-        failureId: createId("verificationFailure"),
-        run,
-        checks,
-        now: createdAt,
-      });
-      const failure = decision.failure;
+    const insertVerificationFailureRecord = (failure: VerificationFailure): void => {
       insertVerificationFailure.run(
         failure.id,
         failure.schemaVersion,
@@ -3861,6 +3851,20 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         JSON.stringify(failure.staleReasons),
         failure.createdAt,
       );
+    };
+
+    const persistVerificationFailure = (
+      run: VerificationRun,
+      checks: readonly VerificationCheck[],
+      createdAt: string,
+    ): ReturnType<typeof deriveVerificationFailure> => {
+      const decision = deriveVerificationFailure({
+        failureId: createId("verificationFailure"),
+        run,
+        checks,
+        now: createdAt,
+      });
+      insertVerificationFailureRecord(decision.failure);
       return decision;
     };
 
@@ -6837,6 +6841,106 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           plan: decision.plan,
           publication: decision.publication,
           event,
+        });
+      }
+
+      if (command.type === "MATERIALIZE_STALE_VERIFICATION_FAILURE") {
+        const workItem = readWorkItem(command.payload.workItemId);
+        const verificationRun = readVerificationRun(command.payload.verificationRunId);
+        const latestVerificationRun = readLatestVerificationRun(command.payload.workItemId);
+        const pipelineRun = verificationRun === null ? null : readPipelineRun(verificationRun.pipelineRunId);
+        const stageAttempt =
+          pipelineRun === null ? null : readStageAttempt(pipelineRun.currentStageAttemptId);
+        const dispatch = stageAttempt === null ? null : readPendingDispatch(stageAttempt.id);
+        const currentPlan = workItem === null ? null : readLatestVerificationPlan(workItem.projectId);
+        const publicationRow =
+          workItem === null ? undefined : selectLatestVerificationPlanPublication.get(workItem.projectId);
+        const publication =
+          publicationRow === undefined ? null : verificationPlanPublicationFromRow(publicationRow);
+        const existingFailure =
+          verificationRun === null ? null : readVerificationFailureForRun(verificationRun.id);
+        const qaCorrectionRun =
+          stageAttempt?.correctionRunId === undefined || stageAttempt.correctionRunId === null
+            ? null
+            : readQACorrectionRun(stageAttempt.correctionRunId);
+        if (
+          workItem === null ||
+          verificationRun === null ||
+          pipelineRun === null ||
+          stageAttempt === null ||
+          dispatch === null
+        ) {
+          throw new VerificationCorrectionError(
+            "REQUEST_INVALID",
+            "The stale Project verification gate does not exist",
+          );
+        }
+        const usage = correctionBudgetUsageRowSchema.parse(selectCorrectionBudgetUsage.get(pipelineRun.id));
+        const decision = decideStaleVerificationFailureTransition({
+          command,
+          verificationRun,
+          latestVerificationRunId: latestVerificationRun?.id ?? null,
+          existingFailure,
+          currentPlan: currentPlan ?? undefined,
+          publication: publication ?? undefined,
+          workItem,
+          pipelineRun,
+          stageAttempt,
+          dispatch,
+          ...(qaCorrectionRun === null ? {} : { qaCorrectionRun }),
+          budgetUsage: {
+            automaticUsed: usage.automatic_used,
+            totalUsed: usage.total_used,
+          },
+          ids: {
+            failureId: createId("verificationFailure"),
+            correctionRunId: createId("verificationCorrectionRun"),
+            nextStageAttemptId: createId("stageAttempt"),
+            nextDispatchId: createId("workflowDispatch"),
+            humanRequestId: createId("humanRequest"),
+            authorizeFinalOptionId: createId("humanRequestOption"),
+            cancelOptionId: createId("humanRequestOption"),
+          },
+          now: occurredAt,
+        });
+        insertVerificationFailureRecord(decision.failure);
+        if (decision.correctionRun !== null) {
+          persistVerificationCorrectionRun(decision.correctionRun);
+        }
+        updateWorkflowDispatch(decision.completedDispatch);
+        updateStageAttempt(decision.completedStageAttempt);
+        updatePipelineRun(decision.pipelineRun);
+        updateWorkflowWorkItem(decision.workItem);
+        if (decision.nextStageAttempt !== null) insertStageAttempt(decision.nextStageAttempt);
+        if (decision.nextDispatch !== null) insertWorkflowDispatch(decision.nextDispatch);
+        if (decision.request !== null) insertHumanRequest(decision.request);
+        const failureEvent = appendVerificationRunEvent(decision.failureEvent, {
+          workItemId: decision.workItem.id,
+          projectId: decision.workItem.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        const workflowEvents = appendWorkflowEvents(decision.events, {
+          workItemId: decision.workItem.id,
+          projectId: decision.workItem.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "VERIFICATION_STALE_FAILURE_MATERIALIZED",
+          replayed: false,
+          action: decision.action,
+          workItemId: decision.workItem.id,
+          failure: decision.failure,
+          correctionRun: decision.correctionRun,
+          request: decision.request,
+          run: decision.pipelineRun,
+          stageAttempt: decision.completedStageAttempt,
+          dispatch: decision.nextDispatch,
+          events: [failureEvent, ...workflowEvents],
         });
       }
 
@@ -11198,6 +11302,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           error instanceof ProviderAllowanceDomainError ||
           error instanceof ProviderSelectionDomainError ||
           error instanceof VerificationDomainError ||
+          error instanceof VerificationCorrectionError ||
           error instanceof QACompletionError ||
           error instanceof QACorrectionError ||
           error instanceof QADefectDispositionError ||

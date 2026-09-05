@@ -1,8 +1,11 @@
 import type {
+  PipelineRun,
   Project,
+  StageAttempt,
   StateCommand,
   StateCommandResult,
   VerificationCheck,
+  VerificationFailure,
   VerificationPlan,
   VerificationPlanPublication,
   VerificationRun,
@@ -58,6 +61,39 @@ const dispatch: WorkflowDispatch = {
   status: "PENDING",
   createdAt: timestamp,
   completedAt: null,
+};
+const stageAttempt: StageAttempt = {
+  schemaVersion: 1,
+  id: dispatch.stageAttemptId,
+  pipelineRunId: dispatch.pipelineRunId,
+  projectId: project.id,
+  workItemId: workItem.id,
+  correctionRunId: null,
+  verificationCorrectionRunId: null,
+  stage: "QA",
+  attempt: 1,
+  status: "QUEUED",
+  version: 3,
+  startedAt: null,
+  finishedAt: null,
+  failureCode: null,
+  unproductiveSessions: 0,
+  packShareBackoffs: 0,
+  resultTree: null,
+};
+const pipelineRun: PipelineRun = {
+  schemaVersion: 1,
+  id: dispatch.pipelineRunId,
+  projectId: project.id,
+  workItemId: workItem.id,
+  workflowTemplateId: "delivery-v1",
+  workflowVersion: 1,
+  status: "RUNNING",
+  currentStageAttemptId: stageAttempt.id,
+  version: 5,
+  createdAt: timestamp,
+  updatedAt: timestamp,
+  finishedAt: null,
 };
 const plan: VerificationPlan = {
   schemaVersion: 1,
@@ -185,6 +221,7 @@ const createHarness = (options: {
   activePlan?: VerificationPlan | null;
   initialRun?: VerificationRun | null;
   initialChecks?: VerificationCheck[];
+  initialFailure?: VerificationFailure | null;
   completion?: "PASSED" | "FAILED";
   moveDispatchAfterCompletion?: boolean;
 }) => {
@@ -210,6 +247,30 @@ const createHarness = (options: {
         return { type: "VERIFICATION_RUNS", runs: currentRun === null ? [] : [currentRun] };
       case "GET_VERIFICATION_RUN":
         return { type: "VERIFICATION_RUN", run: currentRun, checks: currentChecks };
+      case "LIST_WORK_ITEM_VERIFICATION_FAILURES":
+        return {
+          type: "VERIFICATION_FAILURES",
+          failures:
+            options.initialFailure === undefined || options.initialFailure === null
+              ? []
+              : [options.initialFailure],
+        };
+      case "GET_WORKFLOW_SNAPSHOT":
+        return {
+          type: "WORKFLOW_SNAPSHOT",
+          snapshot: {
+            schemaVersion: 1,
+            run: pipelineRun,
+            stageAttempts: [stageAttempt],
+            humanRequests: [],
+            decisions: [],
+            budgetPolicies: [],
+            usageRecords: [],
+            recoveryReports: [],
+            artifacts: [],
+            acceptancePackage: null,
+          },
+        };
       case "LIST_PENDING_DISPATCHES":
         return { type: "WORKFLOW_DISPATCHES", dispatches: dispatchPending ? [dispatch] : [] };
       default:
@@ -217,6 +278,11 @@ const createHarness = (options: {
     }
   };
   const execute: LocalState["execute"] = (command): StateCommandResult => {
+    if (command.type === "MATERIALIZE_STALE_VERIFICATION_FAILURE") {
+      commands.push(command);
+      dispatchPending = false;
+      return { type: "VERIFICATION_STALE_FAILURE_MATERIALIZED" } as StateCommandResult;
+    }
     if (command.type !== "START_VERIFICATION_RUN") {
       throw new Error(`Unexpected gate command: ${command.type}`);
     }
@@ -310,6 +376,68 @@ describe("Project verification workflow gate", () => {
       status: "MOVED",
     });
     expect(harness.commands).toHaveLength(1);
+  });
+
+  it("materializes a stale pass once and moves Browser QA into correction", async () => {
+    const originalTree = "a".repeat(40);
+    const staleRun = passedRun({ ...queuedRun(), implementationTree: originalTree });
+    const harness = createHarness({
+      initialRun: staleRun,
+      initialChecks: [passedCheck(queuedCheck(staleRun.id))],
+    });
+
+    await expect(harness.gate.beforeBrowserQA({ dispatch, testedTree: tree })).resolves.toEqual({
+      status: "MOVED",
+    });
+    expect(harness.commands).toMatchObject([
+      {
+        actor: { type: "SYSTEM", id: "verification-workflow" },
+        type: "MATERIALIZE_STALE_VERIFICATION_FAILURE",
+        payload: {
+          workItemId: workItem.id,
+          verificationRunId: staleRun.id,
+          expectedWorkItemVersion: workItem.version,
+          expectedPipelineRunVersion: pipelineRun.version,
+          expectedStageAttemptVersion: stageAttempt.version,
+          expectedVerificationRunVersion: staleRun.version,
+          expectedPlanRevision: plan.revision,
+          expectedPlanContentHash: plan.contentHash,
+          currentTree: tree,
+        },
+      },
+    ]);
+  });
+
+  it("does not duplicate an already materialized stale failure", async () => {
+    const originalTree = "a".repeat(40);
+    const staleRun = passedRun({ ...queuedRun(), implementationTree: originalTree });
+    const staleFailure: VerificationFailure = {
+      schemaVersion: 1,
+      id: "verification-failure-stale-one",
+      projectId: staleRun.projectId,
+      workItemId: staleRun.workItemId,
+      pipelineRunId: staleRun.pipelineRunId,
+      verificationRunId: staleRun.id,
+      verificationCheckId: null,
+      planId: staleRun.planId,
+      planRevision: staleRun.planRevision,
+      planContentHash: staleRun.planContentHash,
+      implementationTree: staleRun.implementationTree,
+      reason: "STALE",
+      staleReasons: ["TREE_CHANGED"],
+      createdAt: completedAt,
+    };
+    const harness = createHarness({
+      initialRun: staleRun,
+      initialChecks: [passedCheck(queuedCheck(staleRun.id))],
+      initialFailure: staleFailure,
+    });
+
+    await expect(harness.gate.beforeBrowserQA({ dispatch, testedTree: tree })).resolves.toEqual({
+      status: "BLOCKED",
+      blocker: "STALE",
+    });
+    expect(harness.commands).toEqual([]);
   });
 
   it("preserves Projects without an adopted Plan and starts no verification process", async () => {

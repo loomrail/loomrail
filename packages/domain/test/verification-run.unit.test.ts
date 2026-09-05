@@ -17,6 +17,7 @@ import {
   decideVerificationCheckStart,
   decideVerificationRunReservation,
   decideVerificationRunInterruption,
+  deriveStaleVerificationFailure,
   deriveVerificationFailure,
   projectVerificationAcceptanceGate,
   projectVerificationRunFreshness,
@@ -650,6 +651,49 @@ describe("verification Run freshness", () => {
       freshness: "STALE",
       staleReasons: ["PLAN_REPLACED", "PLAN_UNPUBLISHED", "TREE_CHANGED"],
     });
+  });
+
+  it("materializes stale passing evidence as a separate immutable failure", () => {
+    const passedRun: VerificationRun = {
+      ...run,
+      status: "PASSED",
+      terminalReason: "ALL_REQUIRED_PASSED",
+      startedAt: now,
+      completedAt: "2026-09-05T10:00:02.000Z",
+      version: 4,
+    };
+    const replacedPlan = { ...plan, revision: 2, contentHash: "e".repeat(64) };
+
+    expect(
+      deriveStaleVerificationFailure({
+        failureId: "verification-failure-stale",
+        run: passedRun,
+        currentPlan: replacedPlan,
+        publication: { ...publication, planId: replacedPlan.id, contentHash: replacedPlan.contentHash },
+        currentTree: "f".repeat(40),
+        now: "2026-09-05T10:00:03.000Z",
+      }),
+    ).toMatchObject({
+      failure: {
+        id: "verification-failure-stale",
+        verificationRunId: passedRun.id,
+        verificationCheckId: null,
+        reason: "STALE",
+        staleReasons: ["PLAN_REPLACED", "TREE_CHANGED"],
+      },
+      event: { type: "VERIFICATION_FAILURE_RECORDED" },
+    });
+    expect(passedRun.status).toBe("PASSED");
+    expect(() =>
+      deriveStaleVerificationFailure({
+        failureId: "verification-failure-current",
+        run: passedRun,
+        currentPlan: plan,
+        publication,
+        currentTree: passedRun.implementationTree,
+        now: "2026-09-05T10:00:03.000Z",
+      }),
+    ).toThrow(expect.objectContaining({ code: "FAILURE_SOURCE_INVALID" }));
   });
 });
 
