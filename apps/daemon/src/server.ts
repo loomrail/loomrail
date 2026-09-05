@@ -1377,6 +1377,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     return verificationRunSnapshotResponseSchema.parse({
       schemaVersion: 1,
       run: context.run,
+      plan: context.plan,
       checks: context.checks,
       ...freshness,
     });

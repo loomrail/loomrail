@@ -874,12 +874,25 @@ export const verificationRunSnapshotResponseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
     run: verificationRunSchema,
+    plan: verificationPlanSchema,
     checks: z.array(verificationCheckSchema).min(1).max(12),
     freshness: verificationRunFreshnessSchema,
     staleReasons: z.array(verificationRunStaleReasonSchema).max(4),
   })
   .strict()
   .superRefine((snapshot, context) => {
+    if (
+      snapshot.plan.id !== snapshot.run.planId ||
+      snapshot.plan.projectId !== snapshot.run.projectId ||
+      snapshot.plan.revision !== snapshot.run.planRevision ||
+      snapshot.plan.contentHash !== snapshot.run.planContentHash
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["plan"],
+        message: "A verification snapshot must carry the exact Plan reserved by its Run",
+      });
+    }
     if (
       snapshot.checks.some(
         (check) =>

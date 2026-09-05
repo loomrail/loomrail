@@ -32,6 +32,7 @@ import type {
   WorkItemState,
   VerificationPlanPublication,
   VerificationPlanSettingsResponse,
+  VerificationRun,
 } from "@loomrail/contracts";
 
 import {
@@ -59,6 +60,7 @@ import {
   getWorkItemReviews,
   getWorkItemWorkflow,
   getWorkItemWorkspace,
+  getVerificationCheckOutput,
   listOpenHumanRequests,
   listOpenProjectScaffolds,
   listConstitutionPresets,
@@ -66,6 +68,7 @@ import {
   listProjectWorkItems,
   listProviderSessions,
   listWorkItemEvents,
+  listWorkItemVerificationRuns,
   confirmMcpProfile,
   grantMcpProfile,
   moveWorkItem,
@@ -81,6 +84,8 @@ import {
   retryNewProjectScaffold,
   retryProjectConstitutionPublication,
   retryVerificationPlanPublication,
+  startWorkItemVerificationRun,
+  cancelVerificationRun,
   runProjectReadiness,
   resolveAcceptance,
   resolveQACorrectionGate,
@@ -112,6 +117,8 @@ const projectWorkItemsKey = (projectId: string) => ["projects", projectId, "work
 const workItemEventsKey = (projectId: string, workItemId: string) =>
   ["projects", projectId, "work-items", workItemId, "events"] as const;
 const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "workflow"] as const;
+const workItemVerificationRunsKey = (workItemId: string) =>
+  ["work-items", workItemId, "verification-runs"] as const;
 const workItemReviewsKey = (workItemId: string) => ["work-items", workItemId, "reviews"] as const;
 const workItemQAKey = (workItemId: string) => ["work-items", workItemId, "qa"] as const;
 // Nested under the same `["work-items", <id>]` prefix the event channel invalidates for a WORK_ITEM
@@ -269,6 +276,45 @@ export const useWorkItemWorkflow = (workItemId: string | undefined) =>
     },
     enabled: workItemId !== undefined,
   });
+
+export const useWorkItemVerificationRuns = (workItemId: string | undefined) =>
+  useQuery({
+    queryKey: workItemId
+      ? workItemVerificationRunsKey(workItemId)
+      : ["work-items", "none", "verification-runs"],
+    queryFn: () => {
+      if (!workItemId) throw new Error("A work item is required to list verification Runs");
+      return listWorkItemVerificationRuns(workItemId);
+    },
+    enabled: workItemId !== undefined,
+  });
+
+export const useStartVerificationRun = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: startWorkItemVerificationRun,
+    onSuccess: async (snapshot) => {
+      await queryClient.invalidateQueries({
+        queryKey: workItemVerificationRunsKey(snapshot.run.workItemId),
+      });
+    },
+  });
+};
+
+export const useCancelVerificationRun = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (run: VerificationRun) => cancelVerificationRun(run),
+    onSuccess: async (snapshot) => {
+      await queryClient.invalidateQueries({
+        queryKey: workItemVerificationRunsKey(snapshot.run.workItemId),
+      });
+    },
+  });
+};
+
+export const useVerificationCheckOutput = () =>
+  useMutation<string, Error, string>({ mutationFn: getVerificationCheckOutput });
 
 export const useWorkItemReviews = (workItemId: string | undefined) =>
   useQuery({

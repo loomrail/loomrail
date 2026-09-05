@@ -3743,6 +3743,170 @@ body.is-resizing {
   overflow-wrap: anywhere;
 }
 
+/* Owner-approved project checks stay a compact evidence list, not another dashboard of cards. */
+.project-verification,
+.verification-run,
+.verification-loading {
+  display: grid;
+  gap: var(--lr-space-3);
+  min-width: 0;
+}
+
+.verification-loading {
+  padding-block: var(--lr-space-1);
+}
+
+.verification-run__summary {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lr-space-2);
+  justify-content: space-between;
+}
+
+.verification-run__summary > span:last-child,
+.verification-run__outcome,
+.verification-unavailable,
+.verification-operation-error,
+.verification-output > p {
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-xs);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.verification-run__summary > span:last-child {
+  font-family: var(--lr-font-mono);
+}
+
+.verification-operation-error,
+.verification-output > .verification-output__error {
+  color: var(--lr-danger);
+}
+
+.verification-unavailable {
+  border-left: 2px solid var(--lr-border);
+  padding-left: var(--lr-space-2);
+}
+
+.verification-checks {
+  display: grid;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.verification-check {
+  border-top: 1px solid var(--lr-border-subtle);
+  display: grid;
+  gap: var(--lr-space-2);
+  min-width: 0;
+  padding-block: var(--lr-space-3);
+}
+
+.verification-check:last-child {
+  border-bottom: 1px solid var(--lr-border-subtle);
+}
+
+.verification-check__main {
+  align-items: start;
+  display: flex;
+  gap: var(--lr-space-2);
+  justify-content: space-between;
+}
+
+.verification-check__main > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.verification-check__main strong {
+  color: var(--lr-text);
+  font-size: var(--lr-font-sm);
+  font-weight: var(--lr-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.verification-check__main > div > span,
+.verification-check__measurement {
+  color: var(--lr-text-faint);
+  font-size: var(--lr-font-xs);
+}
+
+.verification-command {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.verification-command code {
+  background: var(--lr-surface-inset);
+  border: 1px solid var(--lr-border-subtle);
+  border-radius: var(--lr-radius-xs);
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-xs);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 2px 5px;
+}
+
+.verification-output {
+  display: grid;
+  gap: var(--lr-space-2);
+  justify-items: start;
+}
+
+.verification-output pre {
+  background: var(--lr-surface-inset);
+  border: 1px solid var(--lr-border-subtle);
+  border-radius: var(--lr-radius-sm);
+  box-sizing: border-box;
+  color: var(--lr-text-secondary);
+  font-family: var(--lr-font-mono);
+  font-size: var(--lr-font-xs);
+  line-height: 1.5;
+  margin: 0;
+  max-height: 260px;
+  max-width: 100%;
+  overflow: auto;
+  padding: var(--lr-space-2);
+  white-space: pre;
+  width: 100%;
+}
+
+.verification-output pre:focus-visible,
+.verification-history summary:focus-visible {
+  box-shadow: 0 0 0 2px var(--lr-focus);
+  outline: none;
+}
+
+.verification-history {
+  border-bottom: 1px solid var(--lr-border-subtle);
+  padding-bottom: var(--lr-space-3);
+}
+
+.verification-history > summary {
+  border-radius: var(--lr-radius-xs);
+  color: var(--lr-text-secondary);
+  cursor: pointer;
+  font-size: var(--lr-font-xs);
+  font-weight: var(--lr-weight-medium);
+}
+
+.verification-history > div {
+  display: grid;
+  gap: var(--lr-space-5);
+  padding-top: var(--lr-space-4);
+}
+
+.verification-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lr-space-2);
+}
+
 /*
  * E1.5 §9: the files a task changed, and the diff inside the one the owner expanded.
  *

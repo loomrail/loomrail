@@ -169,6 +169,18 @@ const runningRun = {
   version: 2,
 } as const;
 
+const activePlan = {
+  schemaVersion: 1 as const,
+  id: runningRun.planId,
+  projectId: runningRun.projectId,
+  revision: runningRun.planRevision,
+  status: "ACTIVE" as const,
+  recipes: [recipe],
+  sourceProposalHash: "b".repeat(64),
+  contentHash: runningRun.planContentHash,
+  createdAt: "2026-09-05T09:59:00.000Z",
+};
+
 describe("verification run evidence contract", () => {
   it("keeps owner start, retry and cancellation requests strict and version-bound", () => {
     const start = {
@@ -221,11 +233,19 @@ describe("verification run evidence contract", () => {
       verificationRunSnapshotResponseSchema.parse({
         schemaVersion: 1,
         run,
+        plan: activePlan,
         checks: [check],
         freshness: "CURRENT",
         staleReasons: [],
       }),
-    ).toEqual({ schemaVersion: 1, run, checks: [check], freshness: "CURRENT", staleReasons: [] });
+    ).toEqual({
+      schemaVersion: 1,
+      run,
+      plan: activePlan,
+      checks: [check],
+      freshness: "CURRENT",
+      staleReasons: [],
+    });
   });
 
   it.each([
@@ -271,6 +291,7 @@ describe("verification run evidence contract", () => {
       verificationRunSnapshotResponseSchema.safeParse({
         schemaVersion: 1,
         run: runningRun,
+        plan: activePlan,
         checks: [{ ...runningCheck, runId: "verification-run-foreign" }],
         freshness: "STALE",
         staleReasons: ["TREE_CHANGED"],

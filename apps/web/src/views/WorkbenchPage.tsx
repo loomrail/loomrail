@@ -29,6 +29,7 @@ import {
   type SessionPauseFailureCode,
   type StageAttempt,
   type StageAttemptStatus,
+  type VerificationCheck,
   type WorkItem,
   type WorkItemChangedField,
   type WorkItemState,
@@ -86,6 +87,7 @@ import {
 } from "../boardView";
 import { PanelResizer } from "../components/PanelResizer";
 import { ProjectProviderAllowanceStrip } from "../components/ProviderAllowanceStrip";
+import { ProjectVerificationPanel } from "../components/ProjectVerificationPanel";
 import { HumanRequestAnswerForm } from "../components/HumanRequestAnswerForm";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
@@ -605,6 +607,15 @@ const agentRunStatusLabelKeys: Record<AgentRunStatus, TranslationKey> = {
   HARD_PAUSED: "agentRun.status.HARD_PAUSED",
 };
 
+const verificationCheckStatusLabelKeys: Record<VerificationCheck["status"], TranslationKey> = {
+  QUEUED: "verification.status.QUEUED",
+  RUNNING: "verification.status.RUNNING",
+  PASSED: "verification.status.PASSED",
+  FAILED: "verification.status.FAILED",
+  ERROR: "verification.status.ERROR",
+  INTERRUPTED: "verification.status.INTERRUPTED",
+};
+
 const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEventProps, "time"> => {
   switch (event.type) {
     case "WORK_ITEM_CREATED":
@@ -762,6 +773,40 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         icon: "clock",
         label: t("event.verificationPlanPublicationRetried"),
         tone: "accent",
+      };
+    case "VERIFICATION_RUN_RESERVED":
+      return {
+        detail: t("event.verificationRunReservedDetail", {
+          count: event.data.checks.length,
+          ordinal: event.data.run.ordinal,
+        }),
+        icon: "test",
+        label: t("event.verificationRunReserved"),
+        tone: "accent",
+      };
+    case "VERIFICATION_CHECK_STARTED":
+      return {
+        detail: t("event.verificationCheckStartedDetail", { ordinal: event.data.check.ordinal }),
+        icon: "play",
+        label: t("event.verificationCheckStarted"),
+        tone: "accent",
+      };
+    case "VERIFICATION_CHECK_COMPLETED":
+      return {
+        detail: t("event.verificationCheckCompletedDetail", {
+          ordinal: event.data.check.ordinal,
+          status: t(verificationCheckStatusLabelKeys[event.data.check.status]),
+        }),
+        icon: event.data.check.status === "PASSED" ? "check" : "warning",
+        label: t("event.verificationCheckCompleted"),
+        tone: event.data.check.status === "PASSED" ? "success" : "warning",
+      };
+    case "VERIFICATION_RUN_INTERRUPTED":
+      return {
+        detail: t("event.verificationRunInterruptedDetail", { ordinal: event.data.run.ordinal }),
+        icon: "pause",
+        label: t("event.verificationRunInterrupted"),
+        tone: "warning",
       };
     case "PROJECT_READINESS_ASSESSED":
       return {
@@ -3111,6 +3156,8 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
       </InspectorSection>
 
       <WorkspacePanel item={item} />
+
+      <ProjectVerificationPanel key={item.id} item={item} />
 
       {/* Keyed by work item, unlike its siblings, because this one holds state: which file the
           owner expanded. Without the key React would reconcile the same component across a switch

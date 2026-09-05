@@ -5,6 +5,7 @@ import {
   LocalApiError,
   guidedActivationCreateCommandId,
   getProjectProviderAllowance,
+  getVerificationCheckOutput,
   getVerificationPlanSettings,
   refreshProjectProviderAllowance,
   requestLocalApi,
@@ -98,6 +99,21 @@ describe("local API client", () => {
     const headers = new Headers(requestInit?.headers);
     expect(headers.get("x-loomrail-csrf")).toBe("csrf-fixture-token");
     expect(headers.get("content-type")).toBe("application/json");
+  });
+
+  it("reads measured verification output as text without treating it as JSON or markup", async () => {
+    fetchMock.mockResolvedValue(
+      new Response("<script>window.mustNotRun = true</script>\n", {
+        status: 200,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      }),
+    );
+
+    await expect(getVerificationCheckOutput("check / one")).resolves.toContain("<script>");
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("/api/v1/verification-checks/check%20%2F%20one/output");
+    expect(new Headers(init?.headers).get("accept")).toBe("text/plain");
+    expect(init).toMatchObject({ credentials: "same-origin" });
   });
 
   it("reads and refreshes provider allowance through the project-scoped authenticated routes", async () => {

@@ -30,6 +30,8 @@ import {
   workItemWorkspaceResponseSchema,
   workflowSnapshotSchema,
   verificationPlanSettingsResponseSchema,
+  verificationRunSnapshotResponseSchema,
+  verificationRunsResponseSchema,
   guidedActivationContract,
   type FixtureProjectId,
   type AcceptanceAction,
@@ -60,6 +62,9 @@ import {
   type WorkItemState,
   type VerificationPlanPublication,
   type VerificationPlanSettingsResponse,
+  type VerificationPlan,
+  type VerificationRun,
+  type VerificationRunSnapshotResponse,
 } from "@loomrail/contracts";
 
 type RuntimeSchema<T> = {
@@ -135,14 +140,14 @@ export const storeCsrfToken = (csrfToken: string): void => {
   window.sessionStorage.setItem(CSRF_STORAGE_KEY, csrfToken);
 };
 
-export const requestLocalApi = async <T>(
+const fetchLocalApi = async (
   path: string,
-  schema: RuntimeSchema<T>,
   init: RequestInit = {},
-): Promise<T> => {
+  accept = "application/json",
+): Promise<Response> => {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
-  headers.set("accept", "application/json");
+  headers.set("accept", accept);
 
   if (init.body !== undefined) {
     headers.set("content-type", "application/json");
@@ -175,6 +180,16 @@ export const requestLocalApi = async <T>(
   if (!response.ok) {
     throw await readLocalApiError(response);
   }
+
+  return response;
+};
+
+export const requestLocalApi = async <T>(
+  path: string,
+  schema: RuntimeSchema<T>,
+  init: RequestInit = {},
+): Promise<T> => {
+  const response = await fetchLocalApi(path, init);
 
   return schema.parse(await response.json());
 };
@@ -351,6 +366,57 @@ export const listWorkItemEvents = async (projectId: string, workItemId: string, 
 
 export const getWorkItemWorkflow = async (workItemId: string) =>
   requestLocalApi(`/api/v1/work-items/${encodeURIComponent(workItemId)}/workflow`, workflowSnapshotSchema);
+
+export const listWorkItemVerificationRuns = async (workItemId: string) =>
+  requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(workItemId)}/verification-runs`,
+    verificationRunsResponseSchema,
+  );
+
+export const startWorkItemVerificationRun = async (input: {
+  workItem: WorkItem;
+  plan: VerificationPlan;
+  retryOf?: VerificationRun;
+}): Promise<VerificationRunSnapshotResponse> =>
+  requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(input.workItem.id)}/verification-runs`,
+    verificationRunSnapshotResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedWorkItemVersion: input.workItem.version,
+        expectedPlanRevision: input.plan.revision,
+        expectedPlanContentHash: input.plan.contentHash,
+        ...(input.retryOf === undefined
+          ? {}
+          : {
+              retryOfRunId: input.retryOf.id,
+              expectedRetryOfRunVersion: input.retryOf.version,
+            }),
+      }),
+    },
+  );
+
+export const cancelVerificationRun = async (run: VerificationRun): Promise<VerificationRunSnapshotResponse> =>
+  requestLocalApi(
+    `/api/v1/verification-runs/${encodeURIComponent(run.id)}/cancel`,
+    verificationRunSnapshotResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedVersion: run.version,
+      }),
+    },
+  );
+
+export const getVerificationCheckOutput = async (checkId: string): Promise<string> =>
+  (
+    await fetchLocalApi(`/api/v1/verification-checks/${encodeURIComponent(checkId)}/output`, {}, "text/plain")
+  ).text();
 
 /** Where this work item's agent writes (spec §4): repository branch, base commit and worktree path. */
 export const getWorkItemWorkspace = async (workItemId: string) =>

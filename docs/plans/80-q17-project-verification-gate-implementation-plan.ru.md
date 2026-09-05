@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-05
 
-**Статус:** in progress — Q17.1 complete, Q17.2 daemon/API/UI in progress
+**Статус:** in progress — Q17.1 complete, Q17.2 manual runner/API/UI complete
 
 **Спецификация:**
 [79-q17-project-verification-gate-spec.ru.md](79-q17-project-verification-gate-spec.ru.md)
@@ -31,7 +31,7 @@ failing behavior test на соответствующем seam и заканчи
 - [x] Реализовать один daemon-owned runner: argv/no-shell, canonical cwd, scrubbed environment, output/deadline bounds,
       cross-platform process-tree termination и exact-tree before/after check.
 - [x] Добавить transactional reservation/check completion/terminal Run commands и restart reconciliation без replay.
-- [ ] Добавить manual start/cancel/retry/read-output HTTP seams и Task Cockpit states.
+- [x] Добавить manual start/cancel/retry/read-output HTTP seams и Task Cockpit states.
 - [ ] Проверить output privacy, path/control-sequence redaction и artifact retention/recovery.
 
 **Tracer:** owner запускает adopted required fixture test, видит real non-zero `FAILED`, duration/platform и bounded
