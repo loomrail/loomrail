@@ -45,6 +45,9 @@
 - [ ] После отдельного разрешения на quota-bearing runs добавить exact live-provider row с macOS/Windows evidence.
 - [ ] Дождаться зелёного protected landing gate от отдельной landing-сессии, не меняя и не исключая её source.
 - [ ] Настроить owner-authorized trusted publisher и доказать registry provenance в самом publish workflow.
+      Repository-side manual stage-only workflow и fail-closed intent/CI/version gate подготовлены; protected
+      `npm-release` environment, npm stage-only trust, фактический staging, отдельный 2FA approval и post-publish
+      provenance evidence остаются owner-authorized внешними действиями.
 - [ ] Только после всех gates подготовить отдельное решение о stable tag/publish.
 
 ## Ограничения

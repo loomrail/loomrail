@@ -73,10 +73,16 @@ Ordinary CI has read-only repository permission and never runs `npm publish`. No
 stable-release, cross-platform, and private-dogfood gates remain open.
 
 Before a future public release, maintainers must configure npm trusted publishing for the exact public repository and
-dedicated GitHub-hosted workflow. The publish job must use OIDC with `id-token: write`, build and verify the artifact
-inside that trusted job, and publish the exact tarball with provenance. The staged package sets
-`publishConfig.provenance: true`, so an unsupported local/manual publish cannot silently omit provenance. Long-lived
-npm write tokens are not the default publication credential.
+the dedicated `.github/workflows/npm-stage.yml` GitHub-hosted workflow. The npm relationship is stage-only, binds the
+`npm-release` GitHub environment and does not authorize direct `npm publish`. The environment must require owner
+review and restrict deployments to `main`. The job uses OIDC with `id-token: write`, rebuilds and verifies the artifact
+inside the trusted job, and submits only the exact tarball to `npm stage publish` with provenance. The staged package
+sets `publishConfig.provenance: true`; no long-lived npm write token is accepted.
+
+The repository gate requires stable semver, an exact main SHA, matching typed confirmation, an unused registry
+version, npm `11.15.0+`, and a successful push-triggered CI run for that SHA with all six macOS/Windows Verify,
+Browser smoke and Clean install jobs. A staged package is still not public. A package owner must separately inspect it
+and approve it with interactive 2FA before npm makes the immutable name/version public.
 
 npm provenance links the published bytes to source and build instructions through Sigstore and a transparency log.
 It does not certify code quality or safety. The local receipt, a checksum in release notes, a Git tag, and a
@@ -117,6 +123,7 @@ artifact gates are in the [release guide](../RELEASE.md).
 
 - [npm provenance](https://docs.npmjs.com/generating-provenance-statements/)
 - [npm trusted publishers](https://docs.npmjs.com/trusted-publishers/)
+- [npm staged publishing](https://docs.npmjs.com/staged-publishing/)
 - [npm registry signature verification](https://docs.npmjs.com/verifying-registry-signatures/)
 - [pnpm supply-chain security](https://pnpm.io/supply-chain-security)
 - [pnpm dependency policy](https://pnpm.io/settings/dependency-resolution)

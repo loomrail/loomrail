@@ -74,10 +74,16 @@ Receipt не подписан. Он обнаруживает случайную 
 cross-platform и private-dogfood gates открыты, publish не разрешён.
 
 До будущего public release maintainer настраивает npm trusted publishing для exact public repository и отдельного
-GitHub-hosted workflow. Publish job использует OIDC `id-token: write`, собирает и проверяет artifact в этом trusted
-job и публикует exact tarball с provenance. Staged package задаёт `publishConfig.provenance: true`, поэтому
-unsupported local/manual publish не может незаметно пропустить provenance. Long-lived npm write token не является
-default credential.
+GitHub-hosted workflow `.github/workflows/npm-stage.yml`. npm relationship разрешает только staging, привязан к
+GitHub environment `npm-release` и не разрешает прямой `npm publish`. Environment обязан требовать owner review и
+ограничивать deployments веткой `main`. Job использует OIDC `id-token: write`, заново собирает и проверяет artifact
+в этом trusted job и передаёт только exact tarball в `npm stage publish` с provenance. Staged package задаёт
+`publishConfig.provenance: true`; long-lived npm write token не принимается.
+
+Repository gate требует stable semver, exact main SHA, совпадающее typed confirmation, свободную registry version,
+npm `11.15.0+` и успешный push-triggered CI для этого SHA со всеми шестью macOS/Windows Verify, Browser smoke и Clean
+install jobs. Staged package ещё не является публичной версией. Package owner отдельно проверяет его и подтверждает
+interactive 2FA, прежде чем npm сделает immutable name/version публичным.
 
 npm provenance через Sigstore и transparency log связывает published bytes с source/build instructions. Он не
 сертифицирует качество или безопасность кода. Local receipt, checksum в release note, Git tag или заявление
@@ -118,6 +124,7 @@ gates — в [release guide](../RELEASE.md).
 
 - [npm provenance](https://docs.npmjs.com/generating-provenance-statements/)
 - [npm trusted publishers](https://docs.npmjs.com/trusted-publishers/)
+- [npm staged publishing](https://docs.npmjs.com/staged-publishing/)
 - [npm registry signature verification](https://docs.npmjs.com/verifying-registry-signatures/)
 - [pnpm supply-chain security](https://pnpm.io/supply-chain-security)
 - [pnpm dependency policy](https://pnpm.io/settings/dependency-resolution)

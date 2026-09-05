@@ -122,11 +122,25 @@ Publishing is a deliberate, human-authorized terminal action. Ordinary CI never 
 write token, and has only `contents: read`. No Q6 change authorizes a tag, GitHub Release, dist-tag mutation, or npm
 publication.
 
-Before the first stable publication, configure npm trusted publishing for the exact public repository and dedicated
-GitHub-hosted publish workflow. That workflow must use OIDC `id-token: write`, build and verify the candidate inside
-the trusted job, and publish the exact verified tarball with provenance. The generated package sets
-`publishConfig.provenance: true`; an unsupported local publish must fail instead of silently producing an
-unprovenanced version. Prefer short-lived workflow OIDC over a long-lived npm write token.
+Before the first stable publication, configure npm trusted publishing for the exact public repository and the
+dedicated `.github/workflows/npm-stage.yml` GitHub-hosted workflow. The trust relationship must allow only
+`npm stage publish`, bind the `npm-release` environment, and must not allow direct `npm publish`. Configure that
+environment with required owner review and a deployment-branch policy restricted to `main` before creating the npm
+trust relationship. The workflow uses OIDC `id-token: write`, builds and verifies the candidate inside the trusted
+job, and stages the exact verified tarball with provenance. The generated package also sets
+`publishConfig.provenance: true`. No long-lived npm write token is accepted.
+
+Trusted publishing requires npm `11.5.1+`; Loomrail's stage-only route requires npm `11.15.0+` and Node `22.14.0+`.
+The pinned Node `24.19.0` toolchain satisfies the Node floor and the workflow fails closed if its bundled npm is too
+old. After the protected GitHub environment exists, an authenticated package owner can create the stage-only trust
+relationship with npm `11.15.0+` and interactive 2FA:
+
+```bash
+npm trust github loomrail --repository loomrail/loomrail --file npm-stage.yml --environment npm-release --allow-stage-publish
+```
+
+Do not run this command as an ordinary setup step. Creating the trust relationship is an owner-authorized external
+mutation and remains pending until the other stable gates are ready.
 
 For every authorized candidate:
 
@@ -135,8 +149,11 @@ For every authorized candidate:
 3. `pnpm pack:release && pnpm test:release` passes on macOS and Windows with a clean receipt.
 4. Inspect the receipt and `dist-release/package/`; confirm exact source commit, expected files, no local paths, no
    state databases, and no logs.
-5. Human approval releases the dedicated trusted-publish job for that exact commit/version.
-6. Verify registry integrity, source commit/workflow provenance, signature audit, install, and startup before moving
+5. Human approval releases the manual stage-only workflow for that exact stable version and main commit. Its gate
+   independently requires a successful push-triggered CI run containing all six macOS/Windows jobs.
+6. Review the staged package and the workflow's seven-day candidate/receipt artifact, then use npm's separate
+   interactive 2FA approval. Staging alone is not a release and must never be reported as one.
+7. Verify registry integrity, source commit/workflow provenance, signature audit, install, and startup before moving
    any default channel.
 
 Any release that claims a live provider version also requires one exact row in the
@@ -149,16 +166,19 @@ Mock remains the only provider mode with complete macOS/Windows evidence.
 ### Pre-alpha channel
 
 The currently published pre-alpha version is `0.1.0-alpha.4`; the repository prepares `0.1.0-alpha.5`. Published
-pre-alpha releases use the explicit `next` dist-tag. Check the registry before publishing: a prepared repository
-version or local receipt is not evidence that the registry has already advanced.
+pre-alpha releases use the explicit `next` dist-tag. The stable stage workflow rejects prerelease versions and must
+not be used to publish the prepared alpha.5 candidate. Check the registry before any future publication: a prepared
+repository version or local receipt is not evidence that the registry has advanced. Review the
+[release notes](releases/0.1.0-alpha.5.md) as historical candidate evidence, not as publish authority.
+
+The manual stable workflow invokes only the following terminal operation after every gate and owner approval:
 
 ```bash
-npm publish ./dist-release/loomrail-0.1.0-alpha.5.tgz --tag next --access public --provenance
+npm stage publish ./dist-release/loomrail-<stable-version>.tgz --tag latest --access public --provenance
 ```
 
-This command belongs only inside the configured trusted workflow after explicit release approval; do not run it from
-a maintainer laptop or ordinary CI. npm trusted publishing may add provenance automatically, while the explicit flag
-also documents the fail-closed requirement. Review the [release notes](releases/0.1.0-alpha.5.md) before approval.
+This creates a staged package, not a public version. Only a subsequent owner `npm stage approve <stage-id>` with 2FA
+can make those bytes public. Neither command belongs on a maintainer laptop as an ordinary build step.
 After publishing, verify the registry rather than the local tarball:
 
 ```bash
@@ -174,6 +194,7 @@ new install will receive.
 
 The trusted-publishing and verification semantics follow the primary
 [npm provenance](https://docs.npmjs.com/generating-provenance-statements/),
-[trusted publisher](https://docs.npmjs.com/trusted-publishers/), and
+[trusted publisher](https://docs.npmjs.com/trusted-publishers/),
+[staged publishing](https://docs.npmjs.com/staged-publishing/), and
 [registry signature](https://docs.npmjs.com/verifying-registry-signatures/) documentation. Provenance links bytes to
 source and build instructions; it is not a safety certification.

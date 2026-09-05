@@ -93,9 +93,15 @@ Unit tests обязаны мутировать receipt, tarball и installed fil
 ## 6. Publish and update boundary
 
 До первой разрешённой публикации maintainer настраивает npm trusted publisher на exact public repository/workflow,
-GitHub-hosted runner и OIDC `id-token: write`; long-lived write token не является default. Publish job собирает и
-проверяет candidate в том же job, публикует exact tarball с provenance и никогда не скачивает для publish
-неаттестованный artifact из произвольного предыдущего run.
+GitHub-hosted runner, protected `npm-release` environment и OIDC `id-token: write`; long-lived write token не
+является default. Подготовленный после Q6 manual workflow разрешает только `npm stage publish`, требует stable
+semver, exact main SHA и шесть зелёных macOS/Windows jobs для этого SHA, собирает и проверяет candidate в том же job
+и никогда не скачивает для staging неаттестованный artifact из произвольного предыдущего run. npm relationship не
+получает право прямого `npm publish`.
+
+Staging не является publication. После проверки staged artifact только owner может отдельным interactive 2FA
+approval сделать immutable version публичной. GitHub Environment, npm trust relationship, staging и 2FA approval —
+внешние owner-authorized gates; наличие workflow в repository не закрывает Registry Provenance.
 
 Ни Q6, ни обычный CI не вызывают `npm publish`, не создают tag/release и не меняют dist-tag. Публикация остаётся
 отдельным human-authorized terminal action после зелёных macOS/Windows gates и private dogfood.
@@ -130,6 +136,7 @@ rollback требует restore matching pre-upgrade data, а не down-migratio
 
 - [npm provenance](https://docs.npmjs.com/generating-provenance-statements/)
 - [npm trusted publishers](https://docs.npmjs.com/trusted-publishers/)
+- [npm staged publishing](https://docs.npmjs.com/staged-publishing/)
 - [npm registry signature verification](https://docs.npmjs.com/verifying-registry-signatures/)
 - [pnpm supply-chain security](https://pnpm.io/supply-chain-security)
 - [pnpm dependency resolution settings](https://pnpm.io/settings/dependency-resolution)

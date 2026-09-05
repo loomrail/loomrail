@@ -375,9 +375,13 @@ Required controls and verification:
 - the unsigned Release Integrity Receipt contains no timestamp, user/runner, local path, environment or credential.
   Clean CI requires `source.tree=CLEAN`; verification checks the receipt before install and compares every
   package-owned extracted file afterward. Mutation tests cover receipt, tarball and installed-file refusal;
-- the receipt is explicitly not Registry Provenance. Ordinary CI stays `contents: read` and cannot publish. A future
-  authorized release requires an exact npm trusted publisher, hosted workflow OIDC, `publishConfig.provenance=true`,
-  an artifact built and verified inside that job, and post-publish registry integrity/signature/provenance checks;
+- the receipt is explicitly not Registry Provenance. Ordinary CI stays `contents: read` and cannot publish. The
+  dedicated manual release workflow is bound to a protected main-only GitHub Environment and an exact npm trusted
+  publisher with stage-only authority. It requires stable semver, exact owner confirmation, an unused registry
+  version and six successful macOS/Windows jobs for the same SHA, then rebuilds and verifies the artifact before
+  `npm stage publish`. Public release still requires separate owner inspection and interactive 2FA approval;
+- the trusted job uses hosted-workflow OIDC, `publishConfig.provenance=true` and no long-lived write token.
+  Post-publish registry integrity/signature/provenance checks remain mandatory;
 - update is explicit and rollback remains Q4's matching pre-upgrade whole-directory restore. Q6 adds no self-update,
   background download, down-migration, publish command, tag, release or dist-tag mutation.
 
