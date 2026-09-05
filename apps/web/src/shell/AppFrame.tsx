@@ -820,6 +820,9 @@ const ProjectReadinessPanel = ({ project }: { project: ListedProject }): React.J
             ] as const
           ).map((category) => {
             const categoryChecks = snapshot.checks.filter((check) => check.category === category);
+            if (categoryChecks.length === 0) {
+              return null;
+            }
             return (
               <section className="readiness-group" key={category}>
                 <h5>{t(readinessCategoryKeys[category])}</h5>
