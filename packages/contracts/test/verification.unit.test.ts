@@ -273,7 +273,7 @@ describe("verification run evidence contract", () => {
       errorCode: null,
     },
     { ...runningCheck, status: "QUEUED", startedAt: runningCheck.startedAt },
-    { ...runningCheck, ownerPath: "/Users/owner/project" },
+    { ...runningCheck, ownerPath: "/private/loomrail-fixture/project" },
   ])("rejects contradictory or privacy-expanding check evidence", (candidate) => {
     expect(verificationCheckSchema.safeParse(candidate).success).toBe(false);
   });

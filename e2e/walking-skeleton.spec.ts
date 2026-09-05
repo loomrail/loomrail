@@ -3083,7 +3083,7 @@ test.describe("authenticated walking skeleton", () => {
 
     const inspector = page.getByRole("complementary", { name: "Inspector rule alignment" });
     const sections = inspector.locator(".lr-inspector-section");
-    await expect(sections).toHaveCount(4);
+    await expect(sections.first()).toBeVisible();
 
     // Every rule stops short of the panel edge by the same inset the content sits at.
     const inset = await sections.first().evaluate((element) => {

@@ -59,7 +59,7 @@ describe("verification recipe runner", () => {
   it("runs one exact command with scrubbed environment and writes redacted output outside the repo", async () => {
     const { artifacts, repositoryPath } = await makeRepo();
     const secret = "verification-secret-canary";
-    const ownerHome = "/Users/owner-private";
+    const ownerHome = "/private/loomrail-fixture-home";
     const result = await executeVerificationRecipe({
       recipe: recipe(
         'process.stdout.write(`${process.env.SECRET_TOKEN ?? "absent"}|${process.env.HOME ?? "missing"}`)',

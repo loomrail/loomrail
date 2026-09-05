@@ -16,7 +16,7 @@ importers:
         specifier: ^9.39.0
         version: 9.39.5
       '@playwright/test':
-        specifier: ^1.55.0
+        specifier: 1.62.1
         version: 1.62.1
       '@types/node':
         specifier: ^24.0.0
@@ -61,7 +61,7 @@ importers:
         specifier: ^10.0.0
         version: 10.2.0
       playwright:
-        specifier: ^1.55.0
+        specifier: 1.62.1
         version: 1.62.1
     devDependencies:
       vite:
@@ -206,7 +206,7 @@ importers:
         specifier: workspace:*
         version: link:../contracts
       playwright:
-        specifier: ^1.55.0
+        specifier: 1.62.1
         version: 1.62.1
       zod:
         specifier: ^4.0.0
