@@ -352,6 +352,52 @@ const ciFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingD
   return findings;
 };
 
+const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS/i;
+const MANAGED_REFERENCE_PATTERN = /^\$\{\{.+\}\}$|^\$[A-Za-z_][A-Za-z0-9_]*$|^\$\{[^}]+\}$/;
+const MIN_LITERAL_SECRET_LENGTH = 8;
+
+export const inlineSecretFindings = (
+  files: readonly CiWorkflowFile[],
+): readonly SecurityFindingDraft[] => {
+  const findings: SecurityFindingDraft[] = [];
+  for (const file of files) {
+    for (const line of file.content.split(/\r?\n/)) {
+      const match = /^\s*-?\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?)\s*$/.exec(line);
+      const name = match?.[1];
+      const rawValue = match?.[2];
+      if (!name || !rawValue || !SECRET_NAME_PATTERN.test(name)) continue;
+      const value = rawValue.replace(/^["']/, "").replace(/["']$/, "");
+      if (value.length < MIN_LITERAL_SECRET_LENGTH || MANAGED_REFERENCE_PATTERN.test(value)) continue;
+      findings.push(
+        finding(
+          "INLINE_SECRET_IN_CI",
+          "CRITICAL",
+          file.path,
+          `The workflow assigns ${name} a literal value instead of referencing a managed secret.`,
+        ),
+      );
+      break;
+    }
+  }
+  return findings;
+};
+
+export const prodEnvFindings = (
+  entries: readonly { path: string; exists: boolean; ignored: boolean | null }[],
+): readonly SecurityFindingDraft[] =>
+  entries
+    .filter((entry) => entry.exists && entry.ignored !== true)
+    .map((entry) =>
+      finding(
+        "PROD_ENV_NOT_IGNORED",
+        "HIGH",
+        entry.path,
+        entry.ignored === null
+          ? "Ignore coverage could not be verified for an existing production environment file."
+          : "An existing production environment file is not covered by Git ignore rules.",
+      ),
+    );
+
 export const assessProjectReadiness = async (
   repositoryPath: string,
   options: { activeConstitution: boolean },

@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { assessProjectReadiness } from "../src/index.js";
-import { lockfileFindings } from "../src/scanner.js";
+import { inlineSecretFindings, lockfileFindings, prodEnvFindings } from "../src/scanner.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -99,6 +99,68 @@ describe("project readiness scanner", () => {
     await expect(
       assessProjectReadiness(join(repositoryPath, "nested"), { activeConstitution: true }),
     ).rejects.toMatchObject({ code: "REPOSITORY_UNAVAILABLE" });
+  });
+});
+
+describe("production environment separation", () => {
+  it("passes when no production env file exists", () => {
+    expect(prodEnvFindings([{ path: ".env.production", exists: false, ignored: false }])).toEqual([]);
+  });
+
+  it("reports an existing production env file that is not ignored", () => {
+    const findings = prodEnvFindings([{ path: ".env.production", exists: true, ignored: false }]);
+    expect(findings).toEqual([
+      expect.objectContaining({ code: "PROD_ENV_NOT_IGNORED", severity: "HIGH", path: ".env.production" }),
+    ]);
+  });
+
+  it("reports an existing production env file whose ignore state is unknown", () => {
+    const findings = prodEnvFindings([{ path: ".env.production", exists: true, ignored: null }]);
+    expect(findings.map((entry) => entry.code)).toEqual(["PROD_ENV_NOT_IGNORED"]);
+  });
+
+  it("passes an existing production env file that is ignored", () => {
+    expect(prodEnvFindings([{ path: ".env.production", exists: true, ignored: true }])).toEqual([]);
+  });
+
+  it("passes a workflow that references managed secrets", () => {
+    const files = [
+      {
+        path: ".github/workflows/ci.yml",
+        content: "env:\n  API_TOKEN: ${{ secrets.API_TOKEN }}\n  DB_PASSWORD: $DB_PASSWORD\n",
+      },
+    ];
+    expect(inlineSecretFindings(files)).toEqual([]);
+  });
+
+  it("reports one finding per workflow that assigns a literal secret value", () => {
+    const files = [
+      {
+        path: ".github/workflows/deploy.yml",
+        content: 'env:\n  DEPLOY_TOKEN: "kx7Qm2ZpLr9TvWs4"\n  OTHER_SECRET: aVeryLongLiteralValue\n',
+      },
+    ];
+    const findings = inlineSecretFindings(files);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      code: "INLINE_SECRET_IN_CI",
+      severity: "CRITICAL",
+      path: ".github/workflows/deploy.yml",
+    });
+  });
+
+  it("never repeats the observed value in the message", () => {
+    const files = [
+      { path: ".github/workflows/deploy.yml", content: 'env:\n  DEPLOY_TOKEN: "kx7Qm2ZpLr9TvWs4"\n' },
+    ];
+    expect(inlineSecretFindings(files)[0]?.message).not.toContain("kx7Qm2ZpLr9TvWs4");
+  });
+
+  it("ignores a short placeholder and a variable without a secret-shaped name", () => {
+    const files = [
+      { path: ".github/workflows/ci.yml", content: "env:\n  API_TOKEN: todo\n  NODE_VERSION: 24.19.0\n" },
+    ];
+    expect(inlineSecretFindings(files)).toEqual([]);
   });
 });
 
