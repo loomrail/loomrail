@@ -50,6 +50,13 @@ defects, while both consume one delivery-wide budget of two automatic correction
 cycle. The shared pure budget decision is evaluator-neutral; durable lineage still records which evaluator caused each
 cycle.
 
+When Project verification fails inside an active QA correction, the nested verification correction records an
+immutable `resumesQACorrectionRunId`. Its StageAttempts and current-tree Review/QA evidence carry both correction
+envelopes only while that edge matches. This overlap preserves one reviewed tree across the evaluator handoff; it does
+not turn a `VerificationFailure` into a `QADefect`, change either evaluator's local identity, or allocate another QA
+correction. A passing verification rerun returns the exact locked QA retest with both evidence coordinates, while
+cancellation closes every still-active envelope atomically.
+
 ## Consequences
 
 ### Positive

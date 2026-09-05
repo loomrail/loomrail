@@ -229,6 +229,11 @@ const migrations: readonly Migration[] = [
     name: "correction_budget_ledger",
     filename: "0046_correction_budget_ledger.sql",
   },
+  {
+    version: 47,
+    name: "verification_qa_handoff",
+    filename: "0047_verification_qa_handoff.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

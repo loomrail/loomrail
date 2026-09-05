@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   cancelVerificationRunRequestSchema,
+  resolveVerificationCorrectionGateRequestSchema,
   retryVerificationRunRequestSchema,
   startVerificationRunRequestSchema,
   verificationCheckSchema,
@@ -39,6 +40,48 @@ const recipe = {
 } as const;
 
 describe("project verification contract", () => {
+  it("identifies a verification authority and its optional suspended QA parent", () => {
+    const common = {
+      schemaVersion: 1,
+      commandId: "resolve-verification-gate",
+      expectedRequestVersion: 1,
+      expectedPipelineRunVersion: 3,
+      action: "AUTHORIZE_FINAL",
+    } as const;
+    expect(
+      resolveVerificationCorrectionGateRequestSchema.safeParse({
+        ...common,
+        correctionRunId: "verification-correction-two",
+        expectedCorrectionVersion: 2,
+      }).success,
+    ).toBe(true);
+    expect(
+      resolveVerificationCorrectionGateRequestSchema.safeParse({
+        ...common,
+        correctionRunId: "verification-correction-two",
+        expectedCorrectionVersion: 2,
+        qaCorrectionRunId: "qa-correction-two",
+        expectedQACorrectionVersion: 1,
+      }).success,
+    ).toBe(true);
+    expect(
+      resolveVerificationCorrectionGateRequestSchema.safeParse({
+        ...common,
+        correctionRunId: null,
+        expectedCorrectionVersion: null,
+        qaCorrectionRunId: "qa-correction-two",
+        expectedQACorrectionVersion: 1,
+      }).success,
+    ).toBe(true);
+    expect(
+      resolveVerificationCorrectionGateRequestSchema.safeParse({
+        ...common,
+        correctionRunId: null,
+        expectedCorrectionVersion: null,
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts a bounded no-shell package script proposal", () => {
     const proposal = {
       schemaVersion: 1,

@@ -401,12 +401,39 @@ export const resolveVerificationCorrectionGateRequestSchema = z
     schemaVersion: schemaVersionSchema,
     commandId: opaqueIdSchema,
     expectedRequestVersion: z.number().int().positive(),
-    correctionRunId: opaqueIdSchema,
-    expectedCorrectionVersion: z.number().int().positive(),
+    correctionRunId: opaqueIdSchema.nullable(),
+    expectedCorrectionVersion: z.number().int().positive().nullable(),
+    qaCorrectionRunId: opaqueIdSchema.nullable().optional(),
+    expectedQACorrectionVersion: z.number().int().positive().nullable().optional(),
     expectedPipelineRunVersion: z.number().int().positive(),
     action: verificationCorrectionGateActionSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const verificationPairMatches =
+      (value.correctionRunId === null) === (value.expectedCorrectionVersion === null);
+    const qaCorrectionRunId = value.qaCorrectionRunId ?? null;
+    const expectedQACorrectionVersion = value.expectedQACorrectionVersion ?? null;
+    const qaPairMatches = (qaCorrectionRunId === null) === (expectedQACorrectionVersion === null);
+    if (!verificationPairMatches) {
+      context.addIssue({
+        code: "custom",
+        message: "A verification correction ID and expected version must be supplied together",
+      });
+    }
+    if (!qaPairMatches) {
+      context.addIssue({
+        code: "custom",
+        message: "A QA correction ID and expected version must be supplied together",
+      });
+    }
+    if (value.correctionRunId === null && qaCorrectionRunId === null) {
+      context.addIssue({
+        code: "custom",
+        message: "A verification gate must identify a current evaluator correction",
+      });
+    }
+  });
 
 export const verificationPlanSettingsResponseSchema = z
   .object({
@@ -766,6 +793,9 @@ export const verificationCorrectionRunSchema = z
     sourceFailureId: opaqueIdSchema,
     sourceVerificationRunId: opaqueIdSchema,
     sourceImplementationTree: treeShaSchema,
+    // Added after the initial Q17 contract. Missing remains accepted for replay of old receipts;
+    // newly persisted rows always materialize an explicit null or exact suspended QA authority.
+    resumesQACorrectionRunId: opaqueIdSchema.nullable().optional(),
     status: verificationCorrectionRunStatusSchema,
     createdAt: utcTimestampSchema,
     completedAt: utcTimestampSchema.nullable(),
@@ -942,13 +972,43 @@ export const recordVerificationOutputRetentionCommandSchema = commandBaseSchema.
 
 export const resolveVerificationCorrectionGateCommandSchema = commandBaseSchema.extend({
   type: z.literal("RESOLVE_VERIFICATION_CORRECTION_GATE"),
-  payload: resolveVerificationCorrectionGateRequestSchema
-    .omit({
-      schemaVersion: true,
-      commandId: true,
+  payload: z
+    .object({
+      humanRequestId: opaqueIdSchema,
+      expectedRequestVersion: z.number().int().positive(),
+      correctionRunId: opaqueIdSchema.nullable(),
+      expectedCorrectionVersion: z.number().int().positive().nullable(),
+      qaCorrectionRunId: opaqueIdSchema.nullable().optional(),
+      expectedQACorrectionVersion: z.number().int().positive().nullable().optional(),
+      expectedPipelineRunVersion: z.number().int().positive(),
+      action: verificationCorrectionGateActionSchema,
     })
-    .extend({ humanRequestId: opaqueIdSchema })
-    .strict(),
+    .strict()
+    .superRefine((value, context) => {
+      const verificationPairMatches =
+        (value.correctionRunId === null) === (value.expectedCorrectionVersion === null);
+      const qaCorrectionRunId = value.qaCorrectionRunId ?? null;
+      const expectedQACorrectionVersion = value.expectedQACorrectionVersion ?? null;
+      const qaPairMatches = (qaCorrectionRunId === null) === (expectedQACorrectionVersion === null);
+      if (!verificationPairMatches) {
+        context.addIssue({
+          code: "custom",
+          message: "A verification correction ID and expected version must be supplied together",
+        });
+      }
+      if (!qaPairMatches) {
+        context.addIssue({
+          code: "custom",
+          message: "A QA correction ID and expected version must be supplied together",
+        });
+      }
+      if (value.correctionRunId === null && qaCorrectionRunId === null) {
+        context.addIssue({
+          code: "custom",
+          message: "A verification gate must identify a current evaluator correction",
+        });
+      }
+    }),
 });
 
 const verificationRunEventBaseSchema = z

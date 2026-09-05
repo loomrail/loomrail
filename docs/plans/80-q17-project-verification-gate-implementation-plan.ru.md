@@ -61,16 +61,21 @@ output; restart сохраняет failure, а crash во время process д�
       тоже bounded: после ранее занятых Project verification positions первый локальный QA failure использует
       следующую global position либо открывает owner gate без фиктивной QA CorrectionRun; semantic resolution,
       replay и restart для `verification positions 1+2 → QA owner position 3` покрыты. Обратная смена evaluator
-      при Project verification failure внутри active QA correction и `STALE` materialization остаются в работе.
-- [ ] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
+      теперь тоже детерминирована: Project verification failure внутри active QA correction либо занимает следующую
+      shared position, либо открывает owner gate; immutable QA-parent edge, dual evidence envelope и passing handback
+      возвращают exact locked Browser QA retest без потери review текущего tree. Полная alternating sequence
+      `Verification 1 → QA 2 → owner Verification 3 → QA retest`, replay, cancel и SQLite reopen покрыты. `STALE`
+      materialization остаётся в работе.
+- [x] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
       Общие constants и pure decision `2 automatic + 1 owner` уже заменили QA-only policy; durable usage/lineage,
       объединяющие оба evaluator без объединения их failure entities, закреплены транзакционным подсчётом обеих
       correction-таблиц и общим порядковым budget position при создании VerificationCorrectionRun. Migration 0046
       теперь backfill-ит append-only `correction_budget_entries`; новые QA и Verification corrections резервируют
       одну последовательную position в той же транзакции, storage guard запрещает пропуск и position > 3, а QA
       сохраняет свой evaluator-local ordinal отдельно. QA owner gate умеет безопасно разрешить final shared position,
-      даже если обе automatic positions принадлежали Verification. До закрытия пункта остаётся обратный handoff
-      active QA correction → Verification correction/gate.
+      даже если обе automatic positions принадлежали Verification. Обратный handoff active QA correction →
+      Verification correction/gate сохраняет обе evaluator-specific identities, один reviewed current tree и общий
+      абсолютный bound после restart.
 - [x] Сделать required failed/error/interrupted/stale детерминированным Acceptance blocker; optional failure оставить
       advisory.
 - [x] Показать criterion-to-verification evidence в Acceptance Package/export без raw output/path leakage.

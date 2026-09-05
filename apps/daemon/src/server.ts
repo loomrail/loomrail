@@ -3825,6 +3825,8 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
                 expectedRequestVersion: body.expectedRequestVersion,
                 correctionRunId: body.correctionRunId,
                 expectedCorrectionVersion: body.expectedCorrectionVersion,
+                qaCorrectionRunId: body.qaCorrectionRunId ?? null,
+                expectedQACorrectionVersion: body.expectedQACorrectionVersion ?? null,
                 expectedPipelineRunVersion: body.expectedPipelineRunVersion,
                 action: body.action,
               },

@@ -2,6 +2,7 @@ import { useState } from "react";
 import type {
   HumanRequest,
   PipelineRun,
+  QACorrectionRun,
   VerificationCheck,
   VerificationCorrectionGateAction,
   VerificationCorrectionRun,
@@ -24,6 +25,7 @@ import {
   useWorkItemVerificationRuns,
   useWorkItemWorkflow,
   useWorkItemWorkspace,
+  useWorkItemQA,
 } from "../workspace";
 
 const activeRunStatuses = new Set<VerificationRun["status"]>(["QUEUED", "RUNNING"]);
@@ -38,7 +40,8 @@ const correctionStatusTones: Record<VerificationCorrectionRun["status"], StatusT
 };
 
 type VerificationCorrectionGate = {
-  correctionRun: VerificationCorrectionRun;
+  correctionRun: VerificationCorrectionRun | null;
+  qaCorrectionRun: QACorrectionRun | null;
   request: HumanRequest;
   run: PipelineRun;
 };
@@ -353,9 +356,11 @@ export const ProjectVerificationView = ({
               <div className="human-request-card verification-correction-gate">
                 <h3>{t("verification.correctionGate.title")}</h3>
                 <p>
-                  {t("verification.correctionGate.description", {
-                    position: correctionGate.correctionRun.budgetPosition,
-                  })}
+                  {correctionGate.correctionRun === null
+                    ? correctionGate.request.context
+                    : t("verification.correctionGate.description", {
+                        position: correctionGate.correctionRun.budgetPosition,
+                      })}
                 </p>
                 {correctionGate.request.recommendation ? (
                   <div className="human-request-card__recommendation">
@@ -364,7 +369,7 @@ export const ProjectVerificationView = ({
                   </div>
                 ) : null}
                 <div className="verification-actions">
-                  {correctionGate.correctionRun.budgetPosition === 2 ? (
+                  {correctionGate.request.options.length === 2 ? (
                     <Button
                       disabled={correctionPendingAction !== null}
                       loading={correctionPendingAction === "AUTHORIZE_FINAL"}
@@ -439,6 +444,7 @@ export const ProjectVerificationPanel = ({ item }: { item: WorkItem }): React.JS
   const planQuery = useVerificationPlanSettings(item.projectId);
   const workflowQuery = useWorkItemWorkflow(item.id);
   const workspaceQuery = useWorkItemWorkspace(item.id);
+  const qaQuery = useWorkItemQA(item.id);
   const start = useStartVerificationRun();
   const cancel = useCancelVerificationRun();
   const resolveCorrection = useResolveVerificationCorrectionGate();
@@ -459,24 +465,39 @@ export const ProjectVerificationPanel = ({ item }: { item: WorkItem }): React.JS
     currentRun === null
       ? null
       : (workflowQuery.data?.stageAttempts.find(({ id }) => id === currentRun.currentStageAttemptId) ?? null);
-  const exhaustedCorrection =
+  const hasCorrectionGate =
     currentAttempt?.stage === "QA" &&
     currentAttempt.status === "WAITING_HUMAN" &&
-    currentAttempt.failureCode === "VERIFICATION_CORRECTION_EXHAUSTED" &&
-    (currentAttempt.verificationCorrectionRunId ?? null) !== null
+    currentAttempt.failureCode === "VERIFICATION_CORRECTION_EXHAUSTED";
+  const exhaustedCorrection =
+    hasCorrectionGate && (currentAttempt.verificationCorrectionRunId ?? null) !== null
       ? (runsQuery.data?.correctionRuns.find(
           ({ id, status }) => id === currentAttempt.verificationCorrectionRunId && status === "EXHAUSTED",
         ) ?? null)
       : null;
-  const correctionRequest =
-    exhaustedCorrection === null
-      ? null
-      : (workflowQuery.data?.humanRequests.find(
-          ({ stageAttemptId, status }) => stageAttemptId === currentAttempt?.id && status === "OPEN",
-        ) ?? null);
+  const suspendedQACorrection =
+    hasCorrectionGate && currentAttempt.correctionRunId !== null
+      ? (qaQuery.data?.correctionRuns.find(
+          ({ id, status }) => id === currentAttempt.correctionRunId && status === "ACTIVE",
+        ) ?? null)
+      : null;
+  const correctionRequest = !hasCorrectionGate
+    ? null
+    : (workflowQuery.data?.humanRequests.find(
+        ({ stageAttemptId, status }) => stageAttemptId === currentAttempt.id && status === "OPEN",
+      ) ?? null);
   const correctionGate =
-    currentRun !== null && exhaustedCorrection !== null && correctionRequest !== null
-      ? { correctionRun: exhaustedCorrection, request: correctionRequest, run: currentRun }
+    currentRun !== null &&
+    correctionRequest !== null &&
+    ((exhaustedCorrection !== null &&
+      (exhaustedCorrection.resumesQACorrectionRunId ?? null) === (suspendedQACorrection?.id ?? null)) ||
+      (exhaustedCorrection === null && suspendedQACorrection !== null))
+      ? {
+          correctionRun: exhaustedCorrection,
+          qaCorrectionRun: suspendedQACorrection,
+          request: correctionRequest,
+          run: currentRun,
+        }
       : null;
   const availability: RunAvailability = !planReady
     ? "PLAN_REQUIRED"
@@ -485,9 +506,13 @@ export const ProjectVerificationPanel = ({ item }: { item: WorkItem }): React.JS
       : !workspaceReady
         ? "WORKSPACE_REQUIRED"
         : "READY";
-  const loadError = [runsQuery.error, planQuery.error, workflowQuery.error, workspaceQuery.error].find(
-    (error): error is Error => error instanceof Error,
-  );
+  const loadError = [
+    runsQuery.error,
+    planQuery.error,
+    workflowQuery.error,
+    workspaceQuery.error,
+    qaQuery.error,
+  ].find((error): error is Error => error instanceof Error);
   const operationError = [start.error, cancel.error, resolveCorrection.error].find(
     (error): error is Error => error instanceof Error,
   );
@@ -502,7 +527,11 @@ export const ProjectVerificationPanel = ({ item }: { item: WorkItem }): React.JS
       currentPlan={planReady ? plan : null}
       loadError={loadError ?? null}
       loading={
-        runsQuery.isPending || planQuery.isPending || workflowQuery.isPending || workspaceQuery.isPending
+        runsQuery.isPending ||
+        planQuery.isPending ||
+        workflowQuery.isPending ||
+        workspaceQuery.isPending ||
+        qaQuery.isPending
       }
       onCancel={(run) => {
         cancel.mutate(run);
@@ -513,6 +542,7 @@ export const ProjectVerificationPanel = ({ item }: { item: WorkItem }): React.JS
           planQuery.refetch(),
           workflowQuery.refetch(),
           workspaceQuery.refetch(),
+          qaQuery.refetch(),
         ]);
       }}
       onResolveCorrection={(action) => {

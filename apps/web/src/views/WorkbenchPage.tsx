@@ -2730,8 +2730,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
     openRequest !== null &&
     currentAttempt?.stage === "QA" &&
     currentAttempt.status === "WAITING_HUMAN" &&
-    currentAttempt.failureCode === "VERIFICATION_CORRECTION_EXHAUSTED" &&
-    (currentAttempt.verificationCorrectionRunId ?? null) !== null
+    currentAttempt.failureCode === "VERIFICATION_CORRECTION_EXHAUSTED"
       ? openRequest
       : null;
   const used = snapshot.usageRecords.reduce((total, record) => total + record.amount, 0);

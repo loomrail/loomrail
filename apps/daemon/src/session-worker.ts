@@ -136,6 +136,9 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         }
         if (deps.projectVerification !== undefined) {
           const gate = await deps.projectVerification.beforeBrowserQA({ dispatch, testedTree });
+          if (gate.status === "MOVED") {
+            return { dispatchId: dispatch.id, moved: true };
+          }
           if (gate.status === "BLOCKED") {
             deps.logger.info(
               { dispatchId: dispatch.id, blocker: gate.blocker },

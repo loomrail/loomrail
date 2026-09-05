@@ -751,6 +751,11 @@ Critical and stays open until the Q17 spec and implementation provide:
   that evaluator already owns one (or an explicit null pair for the first local QA failure), and complete measured
   source lineage. Its authenticated Origin+CSRF route can only authorize position 3 or cancel, and request resolution,
   Decision, correction/stage/run/work-item state, Events, ledger allocation and receipt are one transaction;
+- a Project verification correction nested inside Browser QA has one immutable QA-parent edge. Storage accepts both
+  correction IDs on Stage/Review/QA evidence only when that edge and the full delivery lineage match, so the repaired
+  and independently reviewed tree is the exact tree returned to the locked Browser QA retest. Restart preserves the
+  handoff; cancellation closes every active envelope in one transaction, while an already-passed verification
+  correction is never reopened or cancelled merely because later QA/Acceptance still carries its evidence coordinate;
 - bounded redacted output lives only in the Loomrail artifact directory. Missing files fail closed, and 30-day startup
   retention accepts only a basename-matched regular `.txt` file, refuses symlink/path escape, and records a durable
   idempotent outcome without rewriting the measured Check;

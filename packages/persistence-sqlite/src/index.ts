@@ -164,6 +164,9 @@ import {
   decideVerificationCheckCompletion,
   decideVerificationCheckStart,
   decideInitialFailedVerificationCorrectionTransition,
+  decideInitialFailedVerificationCorrectionGateTransition,
+  decideMixedVerificationCorrectionGateResolution,
+  decidePassedVerificationCorrectionQAHandoff,
   decidePassedVerificationCorrectionTransition,
   decideSubsequentFailedVerificationCorrectionTransition,
   decideVerificationCorrectionCancellation,
@@ -259,6 +262,9 @@ import {
   type StageAttemptPauseDecision,
   type StartWorkflowDecision,
   type StartedVerificationCorrectionTransition,
+  type InitialVerificationCorrectionGateTransition,
+  type MixedVerificationCorrectionGateResolution,
+  type PassedVerificationCorrectionQAHandoff,
   type PassedVerificationCorrectionTransition,
   type SubsequentFailedVerificationCorrectionTransition,
   type VerificationCorrectionGateResolution,
@@ -454,6 +460,7 @@ const verificationCorrectionRunRowSchema = z.object({
   source_failure_id: z.string(),
   source_verification_run_id: z.string(),
   source_implementation_tree: z.string(),
+  resumes_qa_correction_run_id: z.string().nullable(),
   status: z.string(),
   created_at: z.string(),
   completed_at: z.string().nullable(),
@@ -1757,6 +1764,7 @@ const verificationCorrectionRunFromRow = (value: unknown): VerificationCorrectio
     sourceFailureId: row.source_failure_id,
     sourceVerificationRunId: row.source_verification_run_id,
     sourceImplementationTree: row.source_implementation_tree,
+    resumesQACorrectionRunId: row.resumes_qa_correction_run_id,
     status: row.status,
     createdAt: row.created_at,
     completedAt: row.completed_at,
@@ -3119,9 +3127,20 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectVerificationCorrectionById = database.prepare(
       "SELECT * FROM verification_correction_runs WHERE id = ?",
     );
+    const selectMaxQAStageAttemptForCorrection = database.prepare(
+      `SELECT COALESCE(MAX(attempt), 0) AS max_ordinal
+       FROM stage_attempts
+       WHERE correction_run_id = ? AND stage = 'QA'`,
+    );
     const selectLatestFailedVerificationRunForCorrection = database.prepare(
       `SELECT * FROM verification_runs
        WHERE verification_correction_run_id = ? AND status IN ('FAILED', 'ERROR')
+       ORDER BY ordinal DESC LIMIT 1`,
+    );
+    const selectLatestFailedVerificationRunWithoutCorrection = database.prepare(
+      `SELECT * FROM verification_runs
+       WHERE pipeline_run_id = ? AND verification_correction_run_id IS NULL
+         AND status IN ('FAILED', 'ERROR')
        ORDER BY ordinal DESC LIMIT 1`,
     );
     const selectCorrectionBudgetUsage = database.prepare(
@@ -3141,8 +3160,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       `INSERT INTO verification_correction_runs (
         id, schema_version, project_id, work_item_id, pipeline_run_id, budget_position,
         automatic, source_failure_id, source_verification_run_id, source_implementation_tree,
-        status, created_at, completed_at, version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        resumes_qa_correction_run_id, status, created_at, completed_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const updateVerificationCorrectionRun = database.prepare(
       `UPDATE verification_correction_runs
@@ -6120,6 +6139,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         correctionRun.sourceFailureId,
         correctionRun.sourceVerificationRunId,
         correctionRun.sourceImplementationTree,
+        correctionRun.resumesQACorrectionRunId ?? null,
         correctionRun.status,
         correctionRun.createdAt,
         correctionRun.completedAt,
@@ -6982,6 +7002,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             ? persistVerificationFailure(decision.run, readVerificationChecks(run.id), occurredAt)
             : null;
         let correctionDecision: StartedVerificationCorrectionTransition | null = null;
+        let initialGateDecision: InitialVerificationCorrectionGateTransition | null = null;
         let subsequentCorrectionDecision: SubsequentFailedVerificationCorrectionTransition | null = null;
         if (
           failureDecision !== null &&
@@ -7012,9 +7033,18 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             pipelineRun.currentStageAttemptId === stageAttempt.id &&
             stageAttempt.stage === "QA" &&
             stageAttempt.status === "QUEUED" &&
-            stageAttempt.correctionRunId === null &&
             (stageAttempt.verificationCorrectionRunId ?? null) === null
           ) {
+            const qaCorrectionRun =
+              stageAttempt.correctionRunId === null
+                ? null
+                : readQACorrectionRun(stageAttempt.correctionRunId);
+            if (stageAttempt.correctionRunId !== null && qaCorrectionRun === null) {
+              throw new StateStoreError(
+                "PERSISTENCE_FAILURE",
+                "The active Browser QA correction lineage is incomplete",
+              );
+            }
             correctionDecision = decideInitialFailedVerificationCorrectionTransition({
               verificationRun: decision.run,
               failure: failureDecision.failure,
@@ -7022,6 +7052,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               pipelineRun,
               stageAttempt,
               dispatch,
+              ...(qaCorrectionRun === null ? {} : { qaCorrectionRun }),
               budgetUsage: {
                 automaticUsed: usage.automatic_used,
                 totalUsed: usage.total_used,
@@ -7040,6 +7071,47 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             updateWorkflowWorkItem(correctionDecision.workItem);
             insertStageAttempt(correctionDecision.nextStageAttempt);
             insertWorkflowDispatch(correctionDecision.nextDispatch);
+          } else if (
+            currentCorrectionId === null &&
+            !canStartAutomatically &&
+            pipelineRun !== null &&
+            workItem !== null &&
+            stageAttempt !== null &&
+            dispatch !== null &&
+            stageAttempt.correctionRunId !== null &&
+            (stageAttempt.verificationCorrectionRunId ?? null) === null
+          ) {
+            const qaCorrectionRun = readQACorrectionRun(stageAttempt.correctionRunId);
+            if (qaCorrectionRun === null) {
+              throw new StateStoreError(
+                "PERSISTENCE_FAILURE",
+                "The mixed Project verification owner gate has no active Browser QA correction",
+              );
+            }
+            initialGateDecision = decideInitialFailedVerificationCorrectionGateTransition({
+              verificationRun: decision.run,
+              failure: failureDecision.failure,
+              qaCorrectionRun,
+              workItem,
+              pipelineRun,
+              stageAttempt,
+              dispatch,
+              budgetUsage: {
+                automaticUsed: usage.automatic_used,
+                totalUsed: usage.total_used,
+              },
+              ids: {
+                humanRequestId: createId("humanRequest"),
+                authorizeFinalOptionId: createId("humanRequestOption"),
+                cancelOptionId: createId("humanRequestOption"),
+              },
+              now: occurredAt,
+            });
+            updateWorkflowDispatch(initialGateDecision.completedDispatch);
+            updateStageAttempt(initialGateDecision.completedStageAttempt);
+            updatePipelineRun(initialGateDecision.pipelineRun);
+            updateWorkflowWorkItem(initialGateDecision.workItem);
+            insertHumanRequest(initialGateDecision.request);
           } else if (
             currentCorrectionId !== null &&
             pipelineRun !== null &&
@@ -7101,6 +7173,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           }
         }
         let passedCorrection: PassedVerificationCorrectionTransition | null = null;
+        let qaHandoff: PassedVerificationCorrectionQAHandoff | null = null;
         const verificationCorrectionRunId = decision.run.verificationCorrectionRunId ?? null;
         if (
           decision.next === "TERMINAL" &&
@@ -7126,6 +7199,51 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             now: occurredAt,
           });
           persistUpdatedVerificationCorrectionRun(passedCorrection.correctionRun);
+          const resumesQACorrectionRunId = passedCorrection.correctionRun.resumesQACorrectionRunId ?? null;
+          if (resumesQACorrectionRunId !== null) {
+            const qaCorrectionRun = readQACorrectionRun(resumesQACorrectionRunId);
+            const pipelineRun = readPipelineRun(decision.run.pipelineRunId);
+            const workItem = readWorkItem(decision.run.workItemId);
+            const stageAttempt =
+              pipelineRun === null ? null : readStageAttempt(pipelineRun.currentStageAttemptId);
+            const dispatch = stageAttempt === null ? null : readPendingDispatch(stageAttempt.id);
+            if (
+              qaCorrectionRun === null ||
+              pipelineRun === null ||
+              workItem === null ||
+              stageAttempt === null ||
+              dispatch === null
+            ) {
+              throw new StateStoreError(
+                "PERSISTENCE_FAILURE",
+                "The passing Project verification correction cannot restore its Browser QA lineage",
+              );
+            }
+            const nextQAAttempt =
+              maxOrdinalRowSchema.parse(selectMaxQAStageAttemptForCorrection.get(qaCorrectionRun.id))
+                .max_ordinal + 1;
+            qaHandoff = decidePassedVerificationCorrectionQAHandoff({
+              verificationRun: decision.run,
+              verificationCorrectionRun: passedCorrection.correctionRun,
+              qaCorrectionRun,
+              workItem,
+              pipelineRun,
+              stageAttempt,
+              dispatch,
+              nextQAAttempt,
+              ids: {
+                nextStageAttemptId: createId("stageAttempt"),
+                nextDispatchId: createId("workflowDispatch"),
+              },
+              now: occurredAt,
+            });
+            updateWorkflowDispatch(qaHandoff.completedDispatch);
+            updateStageAttempt(qaHandoff.completedStageAttempt);
+            updatePipelineRun(qaHandoff.pipelineRun);
+            updateWorkflowWorkItem(qaHandoff.workItem);
+            insertStageAttempt(qaHandoff.nextStageAttempt);
+            insertWorkflowDispatch(qaHandoff.nextDispatch);
+          }
         }
         const event = appendVerificationRunEvent(
           { type: "VERIFICATION_CHECK_COMPLETED", data: { run: decision.run, check: decision.check } },
@@ -7155,6 +7273,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             correlationId: command.correlationId,
           });
         }
+        if (initialGateDecision !== null) {
+          appendWorkflowEvents(initialGateDecision.events, {
+            workItemId: initialGateDecision.workItem.id,
+            projectId: initialGateDecision.workItem.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          });
+        }
         if (subsequentCorrectionDecision !== null) {
           appendWorkflowEvents(subsequentCorrectionDecision.events, {
             workItemId: subsequentCorrectionDecision.workItem.id,
@@ -7168,6 +7295,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           appendWorkflowEvents([passedCorrection.event], {
             workItemId: passedCorrection.correctionRun.workItemId,
             projectId: passedCorrection.correctionRun.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          });
+        }
+        if (qaHandoff !== null) {
+          appendWorkflowEvents(qaHandoff.events, {
+            workItemId: qaHandoff.workItem.id,
+            projectId: qaHandoff.workItem.projectId,
             actor: command.actor,
             occurredAt,
             correlationId: command.correlationId,
@@ -9165,12 +9301,104 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
       if (command.type === "RESOLVE_VERIFICATION_CORRECTION_GATE") {
         const request = readHumanRequest(command.payload.humanRequestId);
-        const correctionRun = readVerificationCorrectionRun(command.payload.correctionRunId);
         const stageAttempt = request ? readStageAttempt(request.stageAttemptId) : null;
         const run = stageAttempt ? readPipelineRun(stageAttempt.pipelineRunId) : null;
         const workItem = request ? readWorkItem(request.workItemId) : null;
+        if (command.payload.correctionRunId === null) {
+          const qaCorrectionRunId = command.payload.qaCorrectionRunId ?? null;
+          const qaCorrectionRun = qaCorrectionRunId === null ? null : readQACorrectionRun(qaCorrectionRunId);
+          const failedValue =
+            run === null ? undefined : selectLatestFailedVerificationRunWithoutCorrection.get(run.id);
+          const failedVerificationRun =
+            failedValue === undefined ? null : verificationRunFromRow(failedValue);
+          const failure =
+            failedVerificationRun === null ? null : readVerificationFailureForRun(failedVerificationRun.id);
+          if (
+            request === null ||
+            stageAttempt === null ||
+            run === null ||
+            workItem === null ||
+            qaCorrectionRun === null ||
+            failedVerificationRun === null ||
+            failure === null
+          ) {
+            throw new VerificationCorrectionError(
+              "REQUEST_INVALID",
+              "The mixed Project verification correction gate does not exist",
+            );
+          }
+          const usage = correctionBudgetUsageRowSchema.parse(selectCorrectionBudgetUsage.get(run.id));
+          const mixedDecision: MixedVerificationCorrectionGateResolution =
+            decideMixedVerificationCorrectionGateResolution({
+              command,
+              workItem,
+              run,
+              stageAttempt,
+              request,
+              qaCorrectionRun,
+              failedVerificationRun,
+              failure,
+              budgetUsage: {
+                automaticUsed: usage.automatic_used,
+                totalUsed: usage.total_used,
+              },
+              ids: {
+                decisionId: createId("decision"),
+                correctionRunId: createId("verificationCorrectionRun"),
+                nextStageAttemptId: createId("stageAttempt"),
+                dispatchId: createId("workflowDispatch"),
+              },
+              now: occurredAt,
+            });
+          updateHumanRequest(mixedDecision.request);
+          insertDecision(mixedDecision.decision);
+          if (mixedDecision.action === "CANCEL") {
+            persistUpdatedQACorrectionRun(mixedDecision.qaCorrection);
+          }
+          if (mixedDecision.correctionRun !== null) {
+            persistVerificationCorrectionRun(mixedDecision.correctionRun);
+          }
+          updateStageAttempt(mixedDecision.stageAttempt);
+          updatePipelineRun(mixedDecision.run);
+          updateWorkflowWorkItem(mixedDecision.workItem);
+          if (mixedDecision.nextStageAttempt !== null) {
+            insertStageAttempt(mixedDecision.nextStageAttempt);
+          }
+          if (mixedDecision.dispatch !== null) {
+            insertWorkflowDispatch(mixedDecision.dispatch);
+          }
+          const events = appendWorkflowEvents(mixedDecision.events, {
+            workItemId: mixedDecision.workItem.id,
+            projectId: mixedDecision.workItem.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          });
+          return stateCommandResultSchema.parse({
+            schemaVersion: 1,
+            type: "VERIFICATION_CORRECTION_GATE_RESOLVED",
+            replayed: false,
+            action: mixedDecision.action,
+            workItemId: mixedDecision.workItem.id,
+            request: mixedDecision.request,
+            decision: mixedDecision.decision,
+            previousCorrection: null,
+            qaCorrection: mixedDecision.qaCorrection,
+            correctionRun: mixedDecision.correctionRun,
+            run: mixedDecision.run,
+            stageAttempt: mixedDecision.stageAttempt,
+            dispatch: mixedDecision.dispatch,
+            events,
+          });
+        }
+        const correctionRun = readVerificationCorrectionRun(command.payload.correctionRunId);
         const correctionSourceVerificationRun =
           correctionRun === null ? null : readVerificationRun(correctionRun.sourceVerificationRunId);
+        const suspendedQACorrection =
+          correctionRun?.resumesQACorrectionRunId === undefined ||
+          correctionRun.resumesQACorrectionRunId === null
+            ? null
+            : readQACorrectionRun(correctionRun.resumesQACorrectionRunId);
         const failedValue =
           correctionRun === null
             ? undefined
@@ -9185,6 +9413,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           run === null ||
           workItem === null ||
           correctionSourceVerificationRun === null ||
+          (correctionRun.resumesQACorrectionRunId !== undefined &&
+            correctionRun.resumesQACorrectionRunId !== null &&
+            suspendedQACorrection === null) ||
           failedVerificationRun === null ||
           failure === null
         ) {
@@ -9200,6 +9431,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           stageAttempt,
           request,
           correctionRun,
+          suspendedQACorrection,
           correctionSourceVerificationRun,
           failedVerificationRun,
           failure,
@@ -9214,6 +9446,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         updateHumanRequest(gateDecision.request);
         insertDecision(gateDecision.decision);
         persistUpdatedVerificationCorrectionRun(gateDecision.previousCorrection);
+        if (gateDecision.cancelledQACorrection !== null) {
+          persistUpdatedQACorrectionRun(gateDecision.cancelledQACorrection);
+        }
         if (gateDecision.correctionRun !== null) {
           persistVerificationCorrectionRun(gateDecision.correctionRun);
         }
@@ -9242,6 +9477,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           request: gateDecision.request,
           decision: gateDecision.decision,
           previousCorrection: gateDecision.previousCorrection,
+          qaCorrection: gateDecision.cancelledQACorrection ?? suspendedQACorrection,
           correctionRun: gateDecision.correctionRun,
           run: gateDecision.run,
           stageAttempt: gateDecision.stageAttempt,
@@ -9326,10 +9562,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const pendingDispatch = readPendingDispatch(stageAttempt.id);
         const currentCorrection = readCurrentQACorrectionRun(run.id);
         const currentVerificationCorrectionId = stageAttempt.verificationCorrectionRunId ?? null;
-        const currentVerificationCorrection =
+        const currentVerificationCorrectionValue =
           currentVerificationCorrectionId === null
             ? null
             : readVerificationCorrectionRun(currentVerificationCorrectionId);
+        const currentVerificationCorrection =
+          currentVerificationCorrectionValue?.status === "ACTIVE" ||
+          currentVerificationCorrectionValue?.status === "EXHAUSTED"
+            ? currentVerificationCorrectionValue
+            : null;
         const correctionCancellation =
           command.type === "CANCEL_PIPELINE" && currentCorrection !== null
             ? decideQACorrectionCancellation({
@@ -9345,6 +9586,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 correctionRun: currentVerificationCorrection,
                 run,
                 stageAttempt,
+                suspendedQACorrection:
+                  currentVerificationCorrection.resumesQACorrectionRunId === undefined ||
+                  currentVerificationCorrection.resumesQACorrectionRunId === null
+                    ? null
+                    : readQACorrectionRun(currentVerificationCorrection.resumesQACorrectionRunId),
                 now: occurredAt,
               })
             : null;
@@ -9385,6 +9631,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         }
         if (verificationCorrectionCancellation !== null) {
           persistUpdatedVerificationCorrectionRun(verificationCorrectionCancellation.correctionRun);
+          if (verificationCorrectionCancellation.suspendedQACorrection !== null) {
+            persistUpdatedQACorrectionRun(verificationCorrectionCancellation.suspendedQACorrection);
+          }
         }
         if (decision.action === "CANCEL") {
           database

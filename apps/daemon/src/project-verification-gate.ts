@@ -10,7 +10,8 @@ import type { ProjectVerificationRunner } from "./verification-runner.js";
 
 export type ProjectVerificationWorkflowGateResult =
   | { status: "READY"; configured: boolean }
-  | { status: "BLOCKED"; blocker: ProjectVerificationAcceptanceBlocker };
+  | { status: "BLOCKED"; blocker: ProjectVerificationAcceptanceBlocker }
+  | { status: "MOVED" };
 
 export type ProjectVerificationWorkflowGate = {
   beforeBrowserQA: (input: {
@@ -49,6 +50,14 @@ export const createProjectVerificationWorkflowGate = (input: {
   platform: () => "darwin" | "linux" | "win32";
   createCommandId: () => string;
 }): ProjectVerificationWorkflowGate => {
+  const dispatchIsStillPending = (dispatchId: string): boolean => {
+    const pending = input.state.query({ type: "LIST_PENDING_DISPATCHES" });
+    if (pending.type !== "WORKFLOW_DISPATCHES") {
+      throw new StateStoreError("PERSISTENCE_FAILURE", "Project verification dispatch state is unavailable");
+    }
+    return pending.dispatches.some(({ id }) => id === dispatchId);
+  };
+
   const readSnapshot = (dispatch: WorkflowDispatch, testedTree: string): GateSnapshot => {
     const planResult = input.state.query({
       type: "GET_PROJECT_VERIFICATION_PLAN",
@@ -116,6 +125,7 @@ export const createProjectVerificationWorkflowGate = (input: {
       if (snapshot.gate.status !== "BLOCKED") return resultOf(snapshot);
 
       await awaitActiveRun(snapshot);
+      if (!dispatchIsStillPending(dispatch.id)) return { status: "MOVED" };
       if (snapshot.latestRunStatus === "QUEUED" || snapshot.latestRunStatus === "RUNNING") {
         snapshot = readSnapshot(dispatch, testedTree);
         if (snapshot.gate.status !== "BLOCKED") return resultOf(snapshot);
@@ -150,6 +160,7 @@ export const createProjectVerificationWorkflowGate = (input: {
       }
       input.runner.wake(reserved.run.id);
       await input.runner.whenIdle(reserved.run.id);
+      if (!dispatchIsStillPending(dispatch.id)) return { status: "MOVED" };
       return resultOf(readSnapshot(dispatch, testedTree));
     },
   };

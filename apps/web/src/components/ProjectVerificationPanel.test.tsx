@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HumanRequest,
   PipelineRun,
+  QACorrectionRun,
   VerificationCorrectionRun,
   VerificationPlan,
   VerificationRunSnapshotResponse,
@@ -252,7 +253,7 @@ describe("ProjectVerificationView", () => {
     };
     const current = snapshot();
     const html = renderView({
-      correctionGate: { correctionRun, request, run },
+      correctionGate: { correctionRun, qaCorrectionRun: null, request, run },
       correctionRuns: [correctionRun],
       runs: [
         {
@@ -271,6 +272,84 @@ describe("ProjectVerificationView", () => {
     expect(html).toContain("Needs your decision");
     expect(html).toContain("Project verification needs your decision");
     expect(html).toContain("Inspect the exact output before continuing.");
+    expect(html).toContain("Authorize one final correction");
+    expect(html).toContain("Cancel delivery");
+    expect(html).not.toContain("Run again");
+  });
+
+  it("shows the shared owner gate when Project verification interrupts a Browser QA correction", () => {
+    const qaCorrectionRun: QACorrectionRun = {
+      schemaVersion: 1,
+      id: "qa-correction-2",
+      projectId: plan.projectId,
+      workItemId: "work-item-1",
+      pipelineRunId: "pipeline-run-1",
+      ordinal: 1,
+      sourceQARunId: "qa-run-1",
+      baselineQARunId: "qa-run-1",
+      sourceEvidenceBundleId: "qa-evidence-1",
+      sourceTestedTree: "f".repeat(40),
+      defectIds: ["qa-defect-1"],
+      status: "ACTIVE",
+      createdAt: "2026-09-05T10:02:00.000Z",
+      completedAt: null,
+      version: 1,
+    };
+    const run: PipelineRun = {
+      schemaVersion: 1,
+      id: qaCorrectionRun.pipelineRunId,
+      projectId: plan.projectId,
+      workItemId: qaCorrectionRun.workItemId,
+      workflowTemplateId: "delivery-v1",
+      workflowVersion: 1,
+      status: "WAITING_HUMAN",
+      currentStageAttemptId: "qa-stage-2",
+      version: 9,
+      createdAt: "2026-09-05T10:00:00.000Z",
+      updatedAt: "2026-09-05T10:03:00.000Z",
+      finishedAt: null,
+    };
+    const request: HumanRequest = {
+      schemaVersion: 1,
+      id: "mixed-verification-owner-request",
+      projectId: plan.projectId,
+      workItemId: qaCorrectionRun.workItemId,
+      stageAttemptId: run.currentStageAttemptId,
+      kind: "SINGLE_CHOICE",
+      blocking: true,
+      title: "Project verification correction needs a decision",
+      context: "Project verification failed while Browser QA correction 1 was waiting for its exact retest.",
+      recommendation: "Inspect the failed command output before authorizing the final shared correction.",
+      options: [
+        {
+          id: "authorize-final",
+          label: "Authorize final",
+          consequence: "Starts shared correction 3, then returns to the same Browser QA retest.",
+          recommended: true,
+        },
+        {
+          id: "cancel-delivery",
+          label: "Cancel delivery",
+          consequence: "Stops the delivery and closes the suspended Browser QA correction.",
+          recommended: false,
+        },
+      ],
+      allowOther: false,
+      status: "OPEN",
+      version: 1,
+      createdAt: "2026-09-05T10:03:00.000Z",
+      resolvedAt: null,
+    };
+
+    const html = renderView({
+      correctionGate: { correctionRun: null, qaCorrectionRun, request, run },
+      runs: [snapshot()],
+    });
+
+    expect(html).toContain("Project verification needs your decision");
+    expect(html).toContain(
+      "Project verification failed while Browser QA correction 1 was waiting for its exact retest.",
+    );
     expect(html).toContain("Authorize one final correction");
     expect(html).toContain("Cancel delivery");
     expect(html).not.toContain("Run again");

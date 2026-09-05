@@ -186,12 +186,14 @@ const createHarness = (options: {
   initialRun?: VerificationRun | null;
   initialChecks?: VerificationCheck[];
   completion?: "PASSED" | "FAILED";
+  moveDispatchAfterCompletion?: boolean;
 }) => {
   let currentRun = options.initialRun ?? null;
   let currentChecks = options.initialChecks ?? [];
   const commands: StateCommand[] = [];
   const wakes: string[] = [];
   const waits: string[] = [];
+  let dispatchPending = true;
 
   const query: LocalState["query"] = (request): StateQueryResult => {
     switch (request.type) {
@@ -208,6 +210,8 @@ const createHarness = (options: {
         return { type: "VERIFICATION_RUNS", runs: currentRun === null ? [] : [currentRun] };
       case "GET_VERIFICATION_RUN":
         return { type: "VERIFICATION_RUN", run: currentRun, checks: currentChecks };
+      case "LIST_PENDING_DISPATCHES":
+        return { type: "WORKFLOW_DISPATCHES", dispatches: dispatchPending ? [dispatch] : [] };
       default:
         throw new Error(`Unexpected gate query: ${request.type}`);
     }
@@ -237,6 +241,7 @@ const createHarness = (options: {
         if (runId === undefined) throw new Error("The workflow gate must await one exact Run");
         waits.push(runId);
         if (currentRun === null || currentChecks[0] === undefined) return Promise.resolve();
+        if (options.moveDispatchAfterCompletion === true) dispatchPending = false;
         if (options.completion === "FAILED") {
           currentRun = {
             ...currentRun,
@@ -296,6 +301,15 @@ describe("Project verification workflow gate", () => {
     });
     expect(harness.commands).toHaveLength(1);
     expect(harness.wakes).toEqual(["verification-run-one"]);
+  });
+
+  it("stops the old dispatch when verification atomically moved the correction workflow", async () => {
+    const harness = createHarness({ completion: "PASSED", moveDispatchAfterCompletion: true });
+
+    await expect(harness.gate.beforeBrowserQA({ dispatch, testedTree: tree })).resolves.toEqual({
+      status: "MOVED",
+    });
+    expect(harness.commands).toHaveLength(1);
   });
 
   it("preserves Projects without an adopted Plan and starts no verification process", async () => {

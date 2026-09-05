@@ -1,6 +1,7 @@
 import type {
   HumanRequest,
   PipelineRun,
+  QACorrectionRun,
   StageAttempt,
   VerificationCorrectionRun,
   VerificationFailure,
@@ -12,6 +13,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   decideInitialFailedVerificationCorrectionTransition,
+  decideInitialFailedVerificationCorrectionGateTransition,
+  decideMixedVerificationCorrectionGateResolution,
+  decidePassedVerificationCorrectionQAHandoff,
   decidePassedVerificationCorrectionTransition,
   decideSubsequentFailedVerificationCorrectionTransition,
   decideVerificationCorrectionCancellation,
@@ -135,6 +139,23 @@ const correctionRun: VerificationCorrectionRun = {
   completedAt: null,
   version: 1,
 };
+const qaCorrectionRun: QACorrectionRun = {
+  schemaVersion: 1,
+  id: "qa-correction-one",
+  projectId: workItem.projectId,
+  workItemId: workItem.id,
+  pipelineRunId: pipelineRun.id,
+  ordinal: 1,
+  sourceQARunId: "qa-run-failed",
+  baselineQARunId: "qa-run-failed",
+  sourceEvidenceBundleId: "qa-evidence-failed",
+  sourceTestedTree: "9".repeat(40),
+  defectIds: ["qa-defect-one"],
+  status: "ACTIVE",
+  createdAt: now,
+  completedAt: null,
+  version: 1,
+};
 
 describe("Project verification correction transition", () => {
   it("starts a distinct automatic correction and returns the pending QA stage to IMPLEMENT", () => {
@@ -184,6 +205,195 @@ describe("Project verification correction transition", () => {
     });
   });
 
+  it("preserves the active QA lineage while starting its nested verification correction", () => {
+    const decision = decideInitialFailedVerificationCorrectionTransition({
+      verificationRun,
+      failure,
+      workItem,
+      pipelineRun,
+      stageAttempt: { ...stageAttempt, correctionRunId: qaCorrectionRun.id },
+      dispatch,
+      qaCorrectionRun,
+      budgetUsage: { automaticUsed: 1, totalUsed: 1 },
+      ids: {
+        correctionRunId: "verification-correction-two",
+        nextStageAttemptId: "stage-implement-verification-two",
+        nextDispatchId: "dispatch-implement-verification-two",
+      },
+      now,
+    });
+
+    expect(decision).toMatchObject({
+      correctionRun: {
+        budgetPosition: 2,
+        sourceFailureId: failure.id,
+        resumesQACorrectionRunId: qaCorrectionRun.id,
+      },
+      completedStageAttempt: { correctionRunId: qaCorrectionRun.id, status: "SUCCEEDED" },
+      nextStageAttempt: {
+        correctionRunId: qaCorrectionRun.id,
+        verificationCorrectionRunId: "verification-correction-two",
+        stage: "IMPLEMENT",
+      },
+    });
+    expect(qaCorrectionRun.status).toBe("ACTIVE");
+  });
+
+  it("opens and resolves the shared owner gate before the first local verification correction", () => {
+    const qaStage = { ...stageAttempt, correctionRunId: qaCorrectionRun.id };
+    const gate = decideInitialFailedVerificationCorrectionGateTransition({
+      verificationRun,
+      failure,
+      qaCorrectionRun,
+      workItem,
+      pipelineRun,
+      stageAttempt: qaStage,
+      dispatch,
+      budgetUsage: { automaticUsed: 2, totalUsed: 2 },
+      ids: {
+        humanRequestId: "mixed-verification-request",
+        authorizeFinalOptionId: "authorize-mixed-final",
+        cancelOptionId: "cancel-mixed-delivery",
+      },
+      now,
+    });
+    expect(gate).toMatchObject({
+      action: "WAIT_FOR_OWNER",
+      qaCorrectionRun: { id: qaCorrectionRun.id, status: "ACTIVE" },
+      correctionRun: null,
+      completedStageAttempt: {
+        correctionRunId: qaCorrectionRun.id,
+        status: "WAITING_HUMAN",
+        failureCode: "VERIFICATION_CORRECTION_EXHAUSTED",
+      },
+      pipelineRun: { status: "WAITING_HUMAN" },
+      workItem: { state: "BLOCKED" },
+      request: { options: [{ recommended: true }, { recommended: false }] },
+    });
+
+    const command = {
+      schemaVersion: 1 as const,
+      commandId: "resolve-mixed-verification",
+      correlationId: "correlation-mixed-verification",
+      actor: { type: "HUMAN" as const, id: "owner-one" },
+      type: "RESOLVE_VERIFICATION_CORRECTION_GATE" as const,
+      payload: {
+        humanRequestId: gate.request.id,
+        expectedRequestVersion: gate.request.version,
+        correctionRunId: null,
+        expectedCorrectionVersion: null,
+        qaCorrectionRunId: qaCorrectionRun.id,
+        expectedQACorrectionVersion: qaCorrectionRun.version,
+        expectedPipelineRunVersion: gate.pipelineRun.version,
+        action: "AUTHORIZE_FINAL" as const,
+      },
+    };
+    expect(
+      decideMixedVerificationCorrectionGateResolution({
+        command,
+        workItem: gate.workItem,
+        run: gate.pipelineRun,
+        stageAttempt: gate.completedStageAttempt,
+        request: gate.request,
+        qaCorrectionRun,
+        failedVerificationRun: verificationRun,
+        failure,
+        budgetUsage: { automaticUsed: 2, totalUsed: 2 },
+        ids: {
+          decisionId: "mixed-verification-decision",
+          correctionRunId: "verification-correction-three",
+          nextStageAttemptId: "stage-implement-verification-three",
+          dispatchId: "dispatch-implement-verification-three",
+        },
+        now,
+      }),
+    ).toMatchObject({
+      action: "AUTHORIZE_FINAL",
+      previousCorrection: null,
+      qaCorrection: { id: qaCorrectionRun.id, status: "ACTIVE" },
+      correctionRun: {
+        id: "verification-correction-three",
+        budgetPosition: 3,
+        automatic: false,
+        resumesQACorrectionRunId: qaCorrectionRun.id,
+      },
+      nextStageAttempt: {
+        stage: "IMPLEMENT",
+        correctionRunId: qaCorrectionRun.id,
+        verificationCorrectionRunId: "verification-correction-three",
+      },
+      run: { status: "RUNNING" },
+      workItem: { state: "IN_PROGRESS", currentStage: "IMPLEMENT" },
+    });
+  });
+
+  it("cancels the suspended QA authority from the mixed verification gate", () => {
+    const qaStage = { ...stageAttempt, correctionRunId: qaCorrectionRun.id };
+    const gate = decideInitialFailedVerificationCorrectionGateTransition({
+      verificationRun,
+      failure,
+      qaCorrectionRun,
+      workItem,
+      pipelineRun,
+      stageAttempt: qaStage,
+      dispatch,
+      budgetUsage: { automaticUsed: 2, totalUsed: 2 },
+      ids: {
+        humanRequestId: "mixed-verification-request",
+        authorizeFinalOptionId: "authorize-mixed-final",
+        cancelOptionId: "cancel-mixed-delivery",
+      },
+      now,
+    });
+    const cancelled = decideMixedVerificationCorrectionGateResolution({
+      command: {
+        schemaVersion: 1,
+        commandId: "cancel-mixed-verification",
+        correlationId: "correlation-cancel-mixed-verification",
+        actor: { type: "HUMAN", id: "owner-one" },
+        type: "RESOLVE_VERIFICATION_CORRECTION_GATE",
+        payload: {
+          humanRequestId: gate.request.id,
+          expectedRequestVersion: gate.request.version,
+          correctionRunId: null,
+          expectedCorrectionVersion: null,
+          qaCorrectionRunId: qaCorrectionRun.id,
+          expectedQACorrectionVersion: qaCorrectionRun.version,
+          expectedPipelineRunVersion: gate.pipelineRun.version,
+          action: "CANCEL",
+        },
+      },
+      workItem: gate.workItem,
+      run: gate.pipelineRun,
+      stageAttempt: gate.completedStageAttempt,
+      request: gate.request,
+      qaCorrectionRun,
+      failedVerificationRun: verificationRun,
+      failure,
+      budgetUsage: { automaticUsed: 2, totalUsed: 2 },
+      ids: {
+        decisionId: "mixed-verification-cancel-decision",
+        correctionRunId: "unused-verification-correction",
+        nextStageAttemptId: "unused-stage",
+        dispatchId: "unused-dispatch",
+      },
+      now,
+    });
+    expect(cancelled).toMatchObject({
+      action: "CANCEL",
+      qaCorrection: { id: qaCorrectionRun.id, status: "CANCELLED", version: 2 },
+      correctionRun: null,
+      run: { status: "CANCELLED" },
+      workItem: { state: "CANCELLED", currentStage: null },
+      events: [
+        { type: "HUMAN_REQUEST_RESOLVED" },
+        { type: "STAGE_ATTEMPT_CHANGED" },
+        { type: "QA_CORRECTION_CANCELLED" },
+        { type: "PIPELINE_CANCELLED" },
+      ],
+    });
+  });
+
   it("closes only a fresh passing rerun of the active correction and exact approved plan", () => {
     const passingRun: VerificationRun = {
       ...verificationRun,
@@ -211,6 +421,78 @@ describe("Project verification correction transition", () => {
         type: "VERIFICATION_CORRECTION_PASSED",
         data: { correctionRun: { id: correctionRun.id, status: "PASSED" } },
       },
+    });
+  });
+
+  it("returns a passing nested verification correction to the exact suspended QA retest", () => {
+    const nestedCorrection: VerificationCorrectionRun = {
+      ...correctionRun,
+      id: "verification-correction-two",
+      budgetPosition: 2,
+      resumesQACorrectionRunId: qaCorrectionRun.id,
+      status: "PASSED",
+      completedAt: now,
+      version: 2,
+    };
+    const passingRun: VerificationRun = {
+      ...verificationRun,
+      id: "verification-run-two",
+      implementationTree: "c".repeat(40),
+      ordinal: 2,
+      verificationCorrectionRunId: nestedCorrection.id,
+      status: "PASSED",
+      terminalReason: "ALL_REQUIRED_PASSED",
+      version: 4,
+    };
+    const nestedStage: StageAttempt = {
+      ...stageAttempt,
+      id: "stage-qa-verification-two",
+      correctionRunId: qaCorrectionRun.id,
+      verificationCorrectionRunId: nestedCorrection.id,
+    };
+    const nestedRun: PipelineRun = {
+      ...pipelineRun,
+      currentStageAttemptId: nestedStage.id,
+    };
+    const nestedDispatch: WorkflowDispatch = {
+      ...dispatch,
+      id: "dispatch-qa-verification-two",
+      stageAttemptId: nestedStage.id,
+    };
+
+    expect(
+      decidePassedVerificationCorrectionQAHandoff({
+        verificationRun: passingRun,
+        verificationCorrectionRun: nestedCorrection,
+        qaCorrectionRun,
+        workItem,
+        pipelineRun: nestedRun,
+        stageAttempt: nestedStage,
+        dispatch: nestedDispatch,
+        nextQAAttempt: 2,
+        ids: {
+          nextStageAttemptId: "stage-qa-resumed",
+          nextDispatchId: "dispatch-qa-resumed",
+        },
+        now,
+      }),
+    ).toMatchObject({
+      completedStageAttempt: {
+        id: nestedStage.id,
+        status: "SUCCEEDED",
+        resultTree: passingRun.implementationTree,
+      },
+      completedDispatch: { id: nestedDispatch.id, status: "COMPLETED" },
+      nextStageAttempt: {
+        id: "stage-qa-resumed",
+        correctionRunId: qaCorrectionRun.id,
+        verificationCorrectionRunId: nestedCorrection.id,
+        stage: "QA",
+        attempt: 2,
+        status: "QUEUED",
+      },
+      pipelineRun: { currentStageAttemptId: "stage-qa-resumed" },
+      workItem: { currentStage: "QA", state: "IN_PROGRESS" },
     });
   });
 
@@ -557,6 +839,78 @@ describe("Project verification correction transition", () => {
         now,
       }),
     ).toThrow(expect.objectContaining({ code: "LINEAGE_MISMATCH" }));
+
+    const nestedCorrection: VerificationCorrectionRun = {
+      ...secondCorrection,
+      resumesQACorrectionRunId: qaCorrectionRun.id,
+    };
+    const nestedStage: StageAttempt = {
+      ...waitingStage,
+      correctionRunId: qaCorrectionRun.id,
+    };
+    const nestedCommand = {
+      ...command,
+      payload: {
+        ...command.payload,
+        qaCorrectionRunId: qaCorrectionRun.id,
+        expectedQACorrectionVersion: qaCorrectionRun.version,
+      },
+    };
+    expect(
+      decideVerificationCorrectionGateResolution({
+        command: nestedCommand,
+        workItem: waitingWorkItem,
+        run: waitingRun,
+        stageAttempt: nestedStage,
+        request,
+        correctionRun: nestedCorrection,
+        suspendedQACorrection: qaCorrectionRun,
+        correctionSourceVerificationRun: verificationRun,
+        failedVerificationRun: failedRerun,
+        failure: rerunFailure,
+        ids: {
+          decisionId: "nested-verification-owner-decision",
+          correctionRunId: "nested-verification-correction-three",
+          nextStageAttemptId: "nested-stage-implement-correction-three",
+          dispatchId: "nested-dispatch-implement-correction-three",
+        },
+        now,
+      }),
+    ).toMatchObject({
+      action: "AUTHORIZE_FINAL",
+      correctionRun: { resumesQACorrectionRunId: qaCorrectionRun.id },
+      nextStageAttempt: {
+        correctionRunId: qaCorrectionRun.id,
+        verificationCorrectionRunId: "nested-verification-correction-three",
+      },
+    });
+    expect(() =>
+      decideVerificationCorrectionGateResolution({
+        command: {
+          ...nestedCommand,
+          payload: {
+            ...nestedCommand.payload,
+            expectedQACorrectionVersion: qaCorrectionRun.version + 1,
+          },
+        },
+        workItem: waitingWorkItem,
+        run: waitingRun,
+        stageAttempt: nestedStage,
+        request,
+        correctionRun: nestedCorrection,
+        suspendedQACorrection: qaCorrectionRun,
+        correctionSourceVerificationRun: verificationRun,
+        failedVerificationRun: failedRerun,
+        failure: rerunFailure,
+        ids: {
+          decisionId: "nested-verification-owner-decision",
+          correctionRunId: "nested-verification-correction-three",
+          nextStageAttemptId: "nested-stage-implement-correction-three",
+          dispatchId: "nested-dispatch-implement-correction-three",
+        },
+        now,
+      }),
+    ).toThrow(expect.objectContaining({ code: "VERSION_CONFLICT" }));
   });
 
   it("cancels the delivery from an exhausted Project verification correction gate", () => {
@@ -734,5 +1088,33 @@ describe("Project verification correction transition", () => {
         now,
       }),
     ).toThrow(expect.objectContaining({ code: "LINEAGE_MISMATCH" }));
+  });
+
+  it("closes both active evaluator envelopes when a nested correction is cancelled", () => {
+    const nestedCorrection: VerificationCorrectionRun = {
+      ...correctionRun,
+      id: "verification-correction-nested",
+      budgetPosition: 2,
+      resumesQACorrectionRunId: qaCorrectionRun.id,
+    };
+    const nestedStage: StageAttempt = {
+      ...stageAttempt,
+      correctionRunId: qaCorrectionRun.id,
+      verificationCorrectionRunId: nestedCorrection.id,
+    };
+
+    expect(
+      decideVerificationCorrectionCancellation({
+        correctionRun: nestedCorrection,
+        run: pipelineRun,
+        stageAttempt: nestedStage,
+        suspendedQACorrection: qaCorrectionRun,
+        now,
+      }),
+    ).toMatchObject({
+      correctionRun: { id: nestedCorrection.id, status: "CANCELLED", version: 2 },
+      suspendedQACorrection: { id: qaCorrectionRun.id, status: "CANCELLED", version: 2 },
+      events: [{ type: "VERIFICATION_CORRECTION_CANCELLED" }, { type: "QA_CORRECTION_CANCELLED" }],
+    });
   });
 });

@@ -926,14 +926,16 @@ export const useResolveVerificationCorrectionGate = () => {
     mutationFn: ({
       action,
       correctionRun,
+      qaCorrectionRun,
       request,
       run,
     }: {
       action: VerificationCorrectionGateAction;
-      correctionRun: VerificationCorrectionRun;
+      correctionRun: VerificationCorrectionRun | null;
+      qaCorrectionRun: QACorrectionRun | null;
       request: HumanRequest;
       run: PipelineRun;
-    }) => resolveVerificationCorrectionGate(request, correctionRun, run, action),
+    }) => resolveVerificationCorrectionGate(request, correctionRun, qaCorrectionRun, run, action),
     onSuccess: async (_, { request }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(request.projectId) }),

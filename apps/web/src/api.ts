@@ -917,7 +917,8 @@ export const resolveQACorrectionGate = async (
 
 export const resolveVerificationCorrectionGate = async (
   request: HumanRequest,
-  correctionRun: VerificationCorrectionRun,
+  correctionRun: VerificationCorrectionRun | null,
+  qaCorrectionRun: QACorrectionRun | null,
   run: PipelineRun,
   action: VerificationCorrectionGateAction,
 ) =>
@@ -930,8 +931,10 @@ export const resolveVerificationCorrectionGate = async (
         schemaVersion: 1,
         commandId: crypto.randomUUID(),
         expectedRequestVersion: request.version,
-        correctionRunId: correctionRun.id,
-        expectedCorrectionVersion: correctionRun.version,
+        correctionRunId: correctionRun?.id ?? null,
+        expectedCorrectionVersion: correctionRun?.version ?? null,
+        qaCorrectionRunId: qaCorrectionRun?.id ?? null,
+        expectedQACorrectionVersion: qaCorrectionRun?.version ?? null,
         expectedPipelineRunVersion: run.version,
         action,
       }),

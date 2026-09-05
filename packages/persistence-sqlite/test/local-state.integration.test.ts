@@ -1372,7 +1372,7 @@ describe("SQLite local state", () => {
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-      29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
+      29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -4013,8 +4013,66 @@ describe("SQLite local state", () => {
     });
 
     it("uses the next shared position while starting the first local QA correction", async () => {
-      const localState = await open();
+      let localState = await open();
       localState.execute(registerProject());
+      const mixedVerificationProposalContent: Omit<VerificationPlanProposal, "proposalHash"> = {
+        schemaVersion: 1,
+        projectId: "project-web",
+        target: { state: "ABSENT", digest: null },
+        recipes: [
+          {
+            schemaVersion: 1,
+            id: "mixed-correction-unit-recipe",
+            kind: "UNIT",
+            label: "Mixed correction tests",
+            required: true,
+            executable: "pnpm",
+            argv: ["run", "test"],
+            cwd: ".",
+            timeoutSeconds: 300,
+            outputLimitBytes: 65_536,
+            environmentProfile: "VERIFICATION_BASELINE",
+            networkPolicy: "INHERIT_HOST",
+            provenance: {
+              source: "PACKAGE_JSON_SCRIPT",
+              manifestPath: "package.json",
+              manifestContentHash: "b".repeat(64),
+              scriptName: "test",
+              scriptBodyPreview: "vitest run",
+            },
+          },
+        ],
+        warnings: [],
+      };
+      const mixedVerificationPlan = localState.execute({
+        schemaVersion: 1,
+        commandId: "adopt-mixed-correction-verification-plan",
+        correlationId: "correlation-adopt-mixed-correction-verification-plan",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "ADOPT_VERIFICATION_PLAN",
+        payload: {
+          projectId: "project-web",
+          expectedProjectVersion: 1,
+          proposal: {
+            ...mixedVerificationProposalContent,
+            proposalHash: verificationPlanProposalHash(mixedVerificationProposalContent),
+          },
+        },
+      });
+      if (mixedVerificationPlan.type !== "VERIFICATION_PLAN_ADOPTED") {
+        throw new Error("Expected the mixed correction verification Plan");
+      }
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "publish-mixed-correction-verification-plan",
+        correlationId: "correlation-publish-mixed-correction-verification-plan",
+        actor: { type: "SYSTEM", id: "verification-publisher" },
+        type: "COMPLETE_VERIFICATION_PLAN_PUBLICATION",
+        payload: {
+          publicationId: mixedVerificationPlan.publication.id,
+          expectedVersion: mixedVerificationPlan.publication.version,
+        },
+      });
       const created = localState.execute(createWorkItem("create-q1-failed-qa"));
       if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
       localState.execute(moveWorkItem("ready-q1-failed-qa", created.workItem.id, 1, "READY"));
@@ -4044,28 +4102,30 @@ describe("SQLite local state", () => {
         },
       });
       if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
-      const priorAllocation = new DatabaseSync(databasePath);
-      priorAllocation
-        .prepare(
-          `INSERT INTO correction_budget_entries (
-            id, project_id, work_item_id, pipeline_run_id, position, automatic, evaluator,
-            correction_run_id, created_at
-          ) VALUES (?, ?, ?, ?, 1, 1, 'PROJECT_VERIFICATION', ?, ?)`,
-        )
-        .run(
-          "prior-verification-budget-entry",
-          created.workItem.projectId,
-          created.workItem.id,
-          pipeline.run.id,
-          "prior-verification-correction",
-          timestamp,
-        );
-      priorAllocation.close();
+      const mixedCorrectionWorkspace = localState.execute({
+        schemaVersion: 1,
+        commandId: "create-mixed-correction-workspace",
+        correlationId: "correlation-create-mixed-correction-workspace",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "CREATE_WORK_ITEM_WORKSPACE",
+        payload: {
+          projectId: created.workItem.projectId,
+          workItemId: created.workItem.id,
+          branch: "loomrail/mixed-correction-handoff",
+          worktreePath: join(temporaryDirectory, "mixed correction worktree-ёж"),
+          baseCommit: null,
+          snapshotCommit: null,
+          carriedPaths: [],
+        },
+      });
+      if (mixedCorrectionWorkspace.type !== "WORK_ITEM_WORKSPACE_CREATED") {
+        throw new Error("Expected the mixed correction workspace");
+      }
       const initialAuthor = localState.execute(
         startAgentRun("q1-failed-initial-author", pipeline.dispatch.id),
       );
       if (initialAuthor.type !== "AGENT_RUN_STARTED") throw new Error("Expected initial author AgentRun");
-      const testedTree = "c".repeat(40);
+      const initialTree = "c".repeat(40);
       localState.execute({
         schemaVersion: 1,
         commandId: "apply-q1-failed-implementation",
@@ -4077,7 +4137,7 @@ describe("SQLite local state", () => {
           provider: "CODEX",
           template,
           outcome: { type: "COMPLETED", summary: "Implementation is ready for browser QA." },
-          resultTree: testedTree,
+          resultTree: initialTree,
         },
       });
       const pendingReview = localState.query({ type: "LIST_PENDING_DISPATCHES" });
@@ -4121,14 +4181,294 @@ describe("SQLite local state", () => {
               findings: [],
             },
           },
-          resultTree: testedTree,
+          resultTree: initialTree,
         },
       });
       const pendingQA = localState.query({ type: "LIST_PENDING_DISPATCHES" });
       if (pendingQA.type !== "WORKFLOW_DISPATCHES" || !pendingQA.dispatches[0]) {
         throw new Error("Expected QA dispatch");
       }
-      const qaDispatch = pendingQA.dispatches[0];
+      const beforeInitialVerification = localState.query({
+        type: "GET_WORK_ITEM",
+        workItemId: created.workItem.id,
+      });
+      if (beforeInitialVerification.type !== "WORK_ITEM" || beforeInitialVerification.workItem === null) {
+        throw new Error("Expected the WorkItem before initial Project verification");
+      }
+      const initialVerification = localState.execute({
+        schemaVersion: 1,
+        commandId: "reserve-initial-shared-verification",
+        correlationId: "correlation-reserve-initial-shared-verification",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_VERIFICATION_RUN",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedWorkItemVersion: beforeInitialVerification.workItem.version,
+          expectedPlanRevision: mixedVerificationPlan.plan.revision,
+          expectedPlanContentHash: mixedVerificationPlan.plan.contentHash,
+          implementationTree: initialTree,
+          platform: "darwin",
+        },
+      });
+      if (initialVerification.type !== "VERIFICATION_RUN_RESERVED") {
+        throw new Error("Expected initial shared Project verification");
+      }
+      const initialVerificationCheck = initialVerification.checks[0];
+      if (initialVerificationCheck === undefined) {
+        throw new Error("Expected initial shared Project verification Check");
+      }
+      const startedInitialVerification = localState.execute({
+        schemaVersion: 1,
+        commandId: "start-initial-shared-verification",
+        correlationId: "correlation-start-initial-shared-verification",
+        actor: { type: "SYSTEM", id: "verification-runner" },
+        type: "START_VERIFICATION_CHECK",
+        payload: {
+          runId: initialVerification.run.id,
+          checkId: initialVerificationCheck.id,
+          expectedRunVersion: initialVerification.run.version,
+          expectedCheckVersion: initialVerificationCheck.version,
+        },
+      });
+      if (startedInitialVerification.type !== "VERIFICATION_CHECK_STARTED") {
+        throw new Error("Expected initial shared Project verification Check start");
+      }
+      const failedInitialVerification = localState.execute({
+        schemaVersion: 1,
+        commandId: "fail-initial-shared-verification",
+        correlationId: "correlation-fail-initial-shared-verification",
+        actor: { type: "SYSTEM", id: "verification-runner" },
+        type: "COMPLETE_VERIFICATION_CHECK",
+        payload: {
+          runId: startedInitialVerification.run.id,
+          checkId: startedInitialVerification.check.id,
+          expectedRunVersion: startedInitialVerification.run.version,
+          expectedCheckVersion: startedInitialVerification.check.version,
+          observation: {
+            status: "FAILED",
+            completedAt: timestamp,
+            durationMs: 20,
+            exitCode: 1,
+            signal: null,
+            output: {
+              schemaVersion: 1,
+              artifactId: "initial-shared-verification-output",
+              sha256: "5".repeat(64),
+              capturedBytes: 4,
+              stdoutBytes: 0,
+              stderrBytes: 4,
+              truncated: false,
+              available: true,
+            },
+          },
+          outputStorageKey: "initial-shared-verification-output.txt",
+        },
+      });
+      if (failedInitialVerification.type !== "VERIFICATION_CHECK_COMPLETED") {
+        throw new Error("Expected failed initial shared Project verification");
+      }
+      const initialVerificationCorrections = localState.query({
+        type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+        workItemId: created.workItem.id,
+      });
+      if (
+        initialVerificationCorrections.type !== "VERIFICATION_CORRECTIONS" ||
+        initialVerificationCorrections.correctionRuns[0] === undefined
+      ) {
+        throw new Error("Expected first shared Project verification correction");
+      }
+      const priorVerificationCorrection = initialVerificationCorrections.correctionRuns[0];
+      expect(priorVerificationCorrection).toMatchObject({
+        budgetPosition: 1,
+        automatic: true,
+        resumesQACorrectionRunId: null,
+        status: "ACTIVE",
+      });
+      const initialVerificationCorrectionDispatches = localState.query({
+        type: "LIST_PENDING_DISPATCHES",
+      });
+      if (
+        initialVerificationCorrectionDispatches.type !== "WORKFLOW_DISPATCHES" ||
+        initialVerificationCorrectionDispatches.dispatches[0] === undefined
+      ) {
+        throw new Error("Expected first shared Project verification correction dispatch");
+      }
+      const initialVerificationCorrectionDispatch = initialVerificationCorrectionDispatches.dispatches[0];
+      const initialVerificationCorrectionAuthor = localState.execute(
+        startAgentRun(
+          "initial-shared-verification-correction-author",
+          initialVerificationCorrectionDispatch.id,
+        ),
+      );
+      if (initialVerificationCorrectionAuthor.type !== "AGENT_RUN_STARTED") {
+        throw new Error("Expected first shared Project verification correction author");
+      }
+      const testedTree = "d".repeat(40);
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-initial-shared-verification-correction",
+        correlationId: "correlation-apply-initial-shared-verification-correction",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: initialVerificationCorrectionDispatch.id,
+          provider: "CODEX",
+          template,
+          outcome: { type: "COMPLETED", summary: "The first Project verification failure is fixed." },
+          resultTree: testedTree,
+        },
+      });
+      const initialVerificationReviewDispatches = localState.query({
+        type: "LIST_PENDING_DISPATCHES",
+      });
+      if (
+        initialVerificationReviewDispatches.type !== "WORKFLOW_DISPATCHES" ||
+        initialVerificationReviewDispatches.dispatches[0] === undefined
+      ) {
+        throw new Error("Expected first shared Project verification correction REVIEW dispatch");
+      }
+      const initialVerificationReviewDispatch = initialVerificationReviewDispatches.dispatches[0];
+      const initialVerificationReviewerCommand = startAgentRun(
+        "initial-shared-verification-correction-reviewer",
+        initialVerificationReviewDispatch.id,
+      );
+      const initialVerificationReviewer = localState.execute({
+        ...initialVerificationReviewerCommand,
+        payload: { ...initialVerificationReviewerCommand.payload, provider: "CLAUDE_CODE" },
+      });
+      if (initialVerificationReviewer.type !== "AGENT_RUN_STARTED") {
+        throw new Error("Expected first shared Project verification correction reviewer");
+      }
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-initial-shared-verification-review",
+        correlationId: "correlation-apply-initial-shared-verification-review",
+        actor: { type: "SYSTEM", id: "claude-code-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: initialVerificationReviewDispatch.id,
+          provider: "CLAUDE_CODE",
+          template,
+          outcome: {
+            type: "COMPLETED",
+            summary: "The first Project verification correction passed independent review.",
+            artifacts: [
+              {
+                kind: "REVIEW_REPORT",
+                title: "Initial Project verification correction review",
+                summary: "The first Project verification correction is ready for rerun.",
+                checks: ["Reviewed the exact corrected tree."],
+              },
+            ],
+            reviewReport: {
+              kind: "REVIEW_REPORT",
+              title: "Initial Project verification correction review",
+              summary: "The first Project verification correction is ready for rerun.",
+              checks: ["Reviewed the exact corrected tree."],
+              verdict: "PASSED",
+              findings: [],
+            },
+          },
+          resultTree: testedTree,
+        },
+      });
+      const beforeInitialVerificationRerun = localState.query({
+        type: "GET_WORK_ITEM",
+        workItemId: created.workItem.id,
+      });
+      if (
+        beforeInitialVerificationRerun.type !== "WORK_ITEM" ||
+        beforeInitialVerificationRerun.workItem === null
+      ) {
+        throw new Error("Expected the WorkItem before first shared Project verification rerun");
+      }
+      const initialVerificationRerun = localState.execute({
+        schemaVersion: 1,
+        commandId: "reserve-initial-shared-verification-rerun",
+        correlationId: "correlation-reserve-initial-shared-verification-rerun",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "RETRY_VERIFICATION_RUN",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedWorkItemVersion: beforeInitialVerificationRerun.workItem.version,
+          expectedPlanRevision: mixedVerificationPlan.plan.revision,
+          expectedPlanContentHash: mixedVerificationPlan.plan.contentHash,
+          implementationTree: testedTree,
+          platform: "darwin",
+          retryOfRunId: failedInitialVerification.run.id,
+          expectedRetryOfRunVersion: failedInitialVerification.run.version,
+        },
+      });
+      if (initialVerificationRerun.type !== "VERIFICATION_RUN_RESERVED") {
+        throw new Error("Expected first shared Project verification rerun");
+      }
+      const initialVerificationRerunCheck = initialVerificationRerun.checks[0];
+      if (initialVerificationRerunCheck === undefined) {
+        throw new Error("Expected first shared Project verification rerun Check");
+      }
+      const startedInitialVerificationRerun = localState.execute({
+        schemaVersion: 1,
+        commandId: "start-initial-shared-verification-rerun",
+        correlationId: "correlation-start-initial-shared-verification-rerun",
+        actor: { type: "SYSTEM", id: "verification-runner" },
+        type: "START_VERIFICATION_CHECK",
+        payload: {
+          runId: initialVerificationRerun.run.id,
+          checkId: initialVerificationRerunCheck.id,
+          expectedRunVersion: initialVerificationRerun.run.version,
+          expectedCheckVersion: initialVerificationRerunCheck.version,
+        },
+      });
+      if (startedInitialVerificationRerun.type !== "VERIFICATION_CHECK_STARTED") {
+        throw new Error("Expected first shared Project verification rerun Check start");
+      }
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "pass-initial-shared-verification-rerun",
+        correlationId: "correlation-pass-initial-shared-verification-rerun",
+        actor: { type: "SYSTEM", id: "verification-runner" },
+        type: "COMPLETE_VERIFICATION_CHECK",
+        payload: {
+          runId: startedInitialVerificationRerun.run.id,
+          checkId: startedInitialVerificationRerun.check.id,
+          expectedRunVersion: startedInitialVerificationRerun.run.version,
+          expectedCheckVersion: startedInitialVerificationRerun.check.version,
+          observation: {
+            status: "PASSED",
+            completedAt: timestamp,
+            durationMs: 15,
+            exitCode: 0,
+            signal: null,
+            output: {
+              schemaVersion: 1,
+              artifactId: "initial-shared-verification-passed-output",
+              sha256: "6".repeat(64),
+              capturedBytes: 4,
+              stdoutBytes: 4,
+              stderrBytes: 0,
+              truncated: false,
+              available: true,
+            },
+          },
+          outputStorageKey: "initial-shared-verification-passed-output.txt",
+        },
+      });
+      expect(
+        localState.query({
+          type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+          workItemId: created.workItem.id,
+        }),
+      ).toMatchObject({
+        correctionRuns: [{ id: priorVerificationCorrection.id, status: "PASSED" }],
+      });
+      const verifiedQADispatches = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (
+        verifiedQADispatches.type !== "WORKFLOW_DISPATCHES" ||
+        verifiedQADispatches.dispatches[0] === undefined
+      ) {
+        throw new Error("Expected Browser QA after the first Project verification correction");
+      }
+      const qaDispatch = verifiedQADispatches.dispatches[0];
       const qaAgent = localState.execute(startAgentRun("q1-failed-browser-qa", qaDispatch.id));
       if (qaAgent.type !== "AGENT_RUN_STARTED") throw new Error("Expected Browser QA AgentRun");
       const plan = {
@@ -4267,10 +4607,19 @@ describe("SQLite local state", () => {
       if (failedSnapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected failed QA snapshot");
       expect(failedSnapshot.snapshot).toMatchObject({
         run: { status: "RUNNING" },
-        artifacts: [{ kind: "REVIEW_REPORT", correctionRunId: null, testedTree }],
         acceptancePackage: null,
         humanRequests: [],
       });
+      expect(failedSnapshot.snapshot.artifacts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "REVIEW_REPORT",
+            correctionRunId: null,
+            verificationCorrectionRunId: priorVerificationCorrection.id,
+            testedTree,
+          }),
+        ]),
+      );
       expect(localState.query({ type: "GET_WORK_ITEM", workItemId: created.workItem.id })).toMatchObject({
         type: "WORK_ITEM",
         workItem: { state: "IN_PROGRESS", currentStage: "IMPLEMENT" },
@@ -4352,7 +4701,7 @@ describe("SQLite local state", () => {
           position: 1,
           automatic: 1,
           evaluator: "PROJECT_VERIFICATION",
-          correction_run_id: "prior-verification-correction",
+          correction_run_id: priorVerificationCorrection.id,
         },
         {
           position: 2,
@@ -4476,7 +4825,439 @@ describe("SQLite local state", () => {
       if (retestDispatches.type !== "WORKFLOW_DISPATCHES" || retestDispatches.dispatches[0] === undefined) {
         throw new Error("Expected the correction QA dispatch");
       }
-      const retestDispatch = retestDispatches.dispatches[0];
+      const suspendedRetestDispatch = retestDispatches.dispatches[0];
+      const beforeMixedVerification = localState.query({
+        type: "GET_WORK_ITEM",
+        workItemId: created.workItem.id,
+      });
+      if (beforeMixedVerification.type !== "WORK_ITEM" || beforeMixedVerification.workItem === null) {
+        throw new Error("Expected the WorkItem before mixed Project verification");
+      }
+      const mixedVerification = localState.execute({
+        schemaVersion: 1,
+        commandId: "reserve-mixed-correction-verification",
+        correlationId: "correlation-reserve-mixed-correction-verification",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_VERIFICATION_RUN",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedWorkItemVersion: beforeMixedVerification.workItem.version,
+          expectedPlanRevision: mixedVerificationPlan.plan.revision,
+          expectedPlanContentHash: mixedVerificationPlan.plan.contentHash,
+          implementationTree: correctedTree,
+          platform: "darwin",
+        },
+      });
+      if (mixedVerification.type !== "VERIFICATION_RUN_RESERVED") {
+        throw new Error("Expected mixed Project verification reservation");
+      }
+      const mixedVerificationCheck = mixedVerification.checks[0];
+      if (mixedVerificationCheck === undefined) {
+        throw new Error("Expected mixed Project verification Check");
+      }
+      const startedMixedVerification = localState.execute({
+        schemaVersion: 1,
+        commandId: "start-mixed-correction-verification",
+        correlationId: "correlation-start-mixed-correction-verification",
+        actor: { type: "SYSTEM", id: "verification-runner" },
+        type: "START_VERIFICATION_CHECK",
+        payload: {
+          runId: mixedVerification.run.id,
+          checkId: mixedVerificationCheck.id,
+          expectedRunVersion: mixedVerification.run.version,
+          expectedCheckVersion: mixedVerificationCheck.version,
+        },
+      });
+      if (startedMixedVerification.type !== "VERIFICATION_CHECK_STARTED") {
+        throw new Error("Expected mixed Project verification Check start");
+      }
+      const failedMixedVerification = localState.execute({
+        schemaVersion: 1,
+        commandId: "fail-mixed-correction-verification",
+        correlationId: "correlation-fail-mixed-correction-verification",
+        actor: { type: "SYSTEM", id: "verification-runner" },
+        type: "COMPLETE_VERIFICATION_CHECK",
+        payload: {
+          runId: startedMixedVerification.run.id,
+          checkId: startedMixedVerification.check.id,
+          expectedRunVersion: startedMixedVerification.run.version,
+          expectedCheckVersion: startedMixedVerification.check.version,
+          observation: {
+            status: "FAILED",
+            completedAt: timestamp,
+            durationMs: 25,
+            exitCode: 1,
+            signal: null,
+            output: {
+              schemaVersion: 1,
+              artifactId: "mixed-correction-verification-output",
+              sha256: "3".repeat(64),
+              capturedBytes: 8,
+              stdoutBytes: 0,
+              stderrBytes: 8,
+              truncated: false,
+              available: true,
+            },
+          },
+          outputStorageKey: "mixed-correction-verification-output.txt",
+        },
+      });
+      if (failedMixedVerification.type !== "VERIFICATION_CHECK_COMPLETED") {
+        throw new Error("Expected failed mixed Project verification");
+      }
+      const mixedGateSnapshot = localState.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: created.workItem.id,
+      });
+      if (mixedGateSnapshot.type !== "WORKFLOW_SNAPSHOT" || mixedGateSnapshot.snapshot.run === null) {
+        throw new Error("Expected mixed Project verification owner gate");
+      }
+      const mixedOwnerRequest = mixedGateSnapshot.snapshot.humanRequests.find(
+        ({ status }) => status === "OPEN",
+      );
+      if (mixedOwnerRequest === undefined) {
+        throw new Error("Expected a mixed Project verification owner request");
+      }
+      expect(mixedGateSnapshot.snapshot.run).toMatchObject({ status: "WAITING_HUMAN" });
+      expect(
+        mixedGateSnapshot.snapshot.stageAttempts.find(
+          ({ id }) => id === suspendedRetestDispatch.stageAttemptId,
+        ),
+      ).toMatchObject({
+        correctionRunId: activeCorrection.id,
+        status: "WAITING_HUMAN",
+        failureCode: "VERIFICATION_CORRECTION_EXHAUSTED",
+      });
+      expect(
+        localState.query({
+          type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+          workItemId: created.workItem.id,
+        }),
+      ).toMatchObject({
+        type: "VERIFICATION_CORRECTIONS",
+        correctionRuns: [{ id: priorVerificationCorrection.id, status: "PASSED" }],
+      });
+      expect(localState.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id })).toMatchObject({
+        type: "QA_STATE",
+        correctionRuns: [{ id: activeCorrection.id, status: "ACTIVE", version: 1 }],
+        defects: [{ status: "OPEN" }],
+      });
+
+      const authorizeMixedVerification = {
+        schemaVersion: 1 as const,
+        commandId: "authorize-mixed-correction-verification",
+        correlationId: "correlation-authorize-mixed-correction-verification",
+        actor: { type: "HUMAN" as const, id: "local-owner" },
+        type: "RESOLVE_VERIFICATION_CORRECTION_GATE" as const,
+        payload: {
+          humanRequestId: mixedOwnerRequest.id,
+          expectedRequestVersion: mixedOwnerRequest.version,
+          correctionRunId: null,
+          expectedCorrectionVersion: null,
+          qaCorrectionRunId: activeCorrection.id,
+          expectedQACorrectionVersion: activeCorrection.version,
+          expectedPipelineRunVersion: mixedGateSnapshot.snapshot.run.version,
+          action: "AUTHORIZE_FINAL" as const,
+        },
+      };
+      const authorizedMixedVerification = localState.execute(authorizeMixedVerification);
+      if (
+        authorizedMixedVerification.type !== "VERIFICATION_CORRECTION_GATE_RESOLVED" ||
+        authorizedMixedVerification.correctionRun === null ||
+        authorizedMixedVerification.dispatch === null
+      ) {
+        throw new Error("Expected mixed Project verification final correction authorization");
+      }
+      const mixedCorrection = authorizedMixedVerification.correctionRun;
+      expect(authorizedMixedVerification).toMatchObject({
+        replayed: false,
+        action: "AUTHORIZE_FINAL",
+        previousCorrection: null,
+        qaCorrection: { id: activeCorrection.id, status: "ACTIVE" },
+        correctionRun: {
+          budgetPosition: 3,
+          automatic: false,
+          resumesQACorrectionRunId: activeCorrection.id,
+          status: "ACTIVE",
+        },
+        run: { status: "RUNNING" },
+        stageAttempt: { status: "SUCCEEDED", failureCode: null },
+        dispatch: { status: "PENDING" },
+      });
+      expect(localState.execute(authorizeMixedVerification)).toMatchObject({ replayed: true });
+      const mixedBudget = new DatabaseSync(databasePath, { readOnly: true });
+      expect(
+        mixedBudget
+          .prepare(
+            `SELECT position, automatic, evaluator, correction_run_id
+             FROM correction_budget_entries
+             WHERE pipeline_run_id = ?
+             ORDER BY position`,
+          )
+          .all(pipeline.run.id),
+      ).toEqual([
+        {
+          position: 1,
+          automatic: 1,
+          evaluator: "PROJECT_VERIFICATION",
+          correction_run_id: priorVerificationCorrection.id,
+        },
+        {
+          position: 2,
+          automatic: 1,
+          evaluator: "BROWSER_QA",
+          correction_run_id: activeCorrection.id,
+        },
+        {
+          position: 3,
+          automatic: 0,
+          evaluator: "PROJECT_VERIFICATION",
+          correction_run_id: mixedCorrection.id,
+        },
+      ]);
+      mixedBudget.close();
+
+      const mixedCorrectionAuthor = localState.execute(
+        startAgentRun("mixed-correction-verification-author", authorizedMixedVerification.dispatch.id),
+      );
+      if (mixedCorrectionAuthor.type !== "AGENT_RUN_STARTED") {
+        throw new Error("Expected mixed Project verification correction author");
+      }
+      const retestTree = "7".repeat(40);
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-mixed-correction-verification-implementation",
+        correlationId: "correlation-apply-mixed-correction-verification-implementation",
+        actor: { type: "SYSTEM", id: "mock-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: authorizedMixedVerification.dispatch.id,
+          provider: "CODEX",
+          template,
+          outcome: {
+            type: "COMPLETED",
+            summary: "The Project verification failure is corrected.",
+          },
+          resultTree: retestTree,
+        },
+      });
+      const mixedReviewDispatches = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (
+        mixedReviewDispatches.type !== "WORKFLOW_DISPATCHES" ||
+        mixedReviewDispatches.dispatches[0] === undefined
+      ) {
+        throw new Error("Expected mixed Project verification correction REVIEW dispatch");
+      }
+      const mixedReviewDispatch = mixedReviewDispatches.dispatches[0];
+      const mixedReviewerCommand = startAgentRun(
+        "mixed-correction-verification-reviewer",
+        mixedReviewDispatch.id,
+      );
+      const mixedReviewer = localState.execute({
+        ...mixedReviewerCommand,
+        payload: { ...mixedReviewerCommand.payload, provider: "CLAUDE_CODE" },
+      });
+      if (mixedReviewer.type !== "AGENT_RUN_STARTED") {
+        throw new Error("Expected mixed Project verification correction reviewer");
+      }
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-mixed-correction-verification-review",
+        correlationId: "correlation-apply-mixed-correction-verification-review",
+        actor: { type: "SYSTEM", id: "claude-code-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: mixedReviewDispatch.id,
+          provider: "CLAUDE_CODE",
+          template,
+          outcome: {
+            type: "COMPLETED",
+            summary: "The Project verification correction passed independent review.",
+            artifacts: [
+              {
+                kind: "REVIEW_REPORT",
+                title: "Mixed correction independent review",
+                summary: "The Project verification repair is scoped and complete.",
+                checks: ["Reviewed the exact repaired tree."],
+              },
+            ],
+            reviewReport: {
+              kind: "REVIEW_REPORT",
+              title: "Mixed correction independent review",
+              summary: "The Project verification repair is scoped and complete.",
+              checks: ["Reviewed the exact repaired tree."],
+              verdict: "PASSED",
+              findings: [],
+            },
+          },
+          resultTree: retestTree,
+        },
+      });
+      const mixedVerificationDispatches = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (
+        mixedVerificationDispatches.type !== "WORKFLOW_DISPATCHES" ||
+        mixedVerificationDispatches.dispatches[0] === undefined
+      ) {
+        throw new Error("Expected mixed Project verification correction QA dispatch");
+      }
+      const mixedVerificationDispatch = mixedVerificationDispatches.dispatches[0];
+      const beforeMixedRerun = localState.query({
+        type: "GET_WORK_ITEM",
+        workItemId: created.workItem.id,
+      });
+      if (beforeMixedRerun.type !== "WORK_ITEM" || beforeMixedRerun.workItem === null) {
+        throw new Error("Expected the WorkItem before the mixed Project verification rerun");
+      }
+      const mixedRerun = localState.execute({
+        schemaVersion: 1,
+        commandId: "reserve-mixed-correction-verification-rerun",
+        correlationId: "correlation-reserve-mixed-correction-verification-rerun",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "RETRY_VERIFICATION_RUN",
+        payload: {
+          workItemId: created.workItem.id,
+          expectedWorkItemVersion: beforeMixedRerun.workItem.version,
+          expectedPlanRevision: mixedVerificationPlan.plan.revision,
+          expectedPlanContentHash: mixedVerificationPlan.plan.contentHash,
+          implementationTree: retestTree,
+          platform: "darwin",
+          retryOfRunId: failedMixedVerification.run.id,
+          expectedRetryOfRunVersion: failedMixedVerification.run.version,
+        },
+      });
+      if (mixedRerun.type !== "VERIFICATION_RUN_RESERVED") {
+        throw new Error("Expected mixed Project verification rerun");
+      }
+      expect(mixedRerun.run).toMatchObject({
+        verificationCorrectionRunId: mixedCorrection.id,
+        implementationTree: retestTree,
+      });
+      const mixedRerunCheck = mixedRerun.checks[0];
+      if (mixedRerunCheck === undefined) {
+        throw new Error("Expected mixed Project verification rerun Check");
+      }
+      const startedMixedRerun = localState.execute({
+        schemaVersion: 1,
+        commandId: "start-mixed-correction-verification-rerun",
+        correlationId: "correlation-start-mixed-correction-verification-rerun",
+        actor: { type: "SYSTEM", id: "verification-runner" },
+        type: "START_VERIFICATION_CHECK",
+        payload: {
+          runId: mixedRerun.run.id,
+          checkId: mixedRerunCheck.id,
+          expectedRunVersion: mixedRerun.run.version,
+          expectedCheckVersion: mixedRerunCheck.version,
+        },
+      });
+      if (startedMixedRerun.type !== "VERIFICATION_CHECK_STARTED") {
+        throw new Error("Expected mixed Project verification rerun Check start");
+      }
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "pass-mixed-correction-verification-rerun",
+        correlationId: "correlation-pass-mixed-correction-verification-rerun",
+        actor: { type: "SYSTEM", id: "verification-runner" },
+        type: "COMPLETE_VERIFICATION_CHECK",
+        payload: {
+          runId: startedMixedRerun.run.id,
+          checkId: startedMixedRerun.check.id,
+          expectedRunVersion: startedMixedRerun.run.version,
+          expectedCheckVersion: startedMixedRerun.check.version,
+          observation: {
+            status: "PASSED",
+            completedAt: timestamp,
+            durationMs: 20,
+            exitCode: 0,
+            signal: null,
+            output: {
+              schemaVersion: 1,
+              artifactId: "mixed-correction-verification-passed-output",
+              sha256: "4".repeat(64),
+              capturedBytes: 4,
+              stdoutBytes: 4,
+              stderrBytes: 0,
+              truncated: false,
+              available: true,
+            },
+          },
+          outputStorageKey: "mixed-correction-verification-passed-output.txt",
+        },
+      });
+      expect(
+        localState.query({
+          type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+          workItemId: created.workItem.id,
+        }),
+      ).toMatchObject({
+        correctionRuns: [
+          {
+            id: mixedCorrection.id,
+            status: "PASSED",
+            resumesQACorrectionRunId: activeCorrection.id,
+          },
+          {
+            id: priorVerificationCorrection.id,
+            status: "PASSED",
+            resumesQACorrectionRunId: null,
+          },
+        ],
+      });
+      const handoffSnapshot = localState.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: created.workItem.id,
+      });
+      if (handoffSnapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected QA handoff state");
+      expect(handoffSnapshot.snapshot.run.status).toBe("RUNNING");
+      expect(
+        handoffSnapshot.snapshot.stageAttempts.find(
+          ({ id }) => id === mixedVerificationDispatch.stageAttemptId,
+        ),
+      ).toMatchObject({
+        verificationCorrectionRunId: mixedCorrection.id,
+        status: "SUCCEEDED",
+      });
+      expect(
+        handoffSnapshot.snapshot.stageAttempts.find(
+          ({ correctionRunId, verificationCorrectionRunId, stage, attempt, status }) =>
+            correctionRunId === activeCorrection.id &&
+            verificationCorrectionRunId === mixedCorrection.id &&
+            stage === "QA" &&
+            attempt === 2 &&
+            status === "QUEUED",
+        ),
+      ).toBeDefined();
+
+      localState.close();
+      state = undefined;
+      localState = await open();
+      const resumedRetestDispatches = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (
+        resumedRetestDispatches.type !== "WORKFLOW_DISPATCHES" ||
+        resumedRetestDispatches.dispatches[0] === undefined
+      ) {
+        throw new Error("Expected the exact Browser QA retest after restart");
+      }
+      const retestDispatch = resumedRetestDispatches.dispatches[0];
+      expect(retestDispatch).toMatchObject({
+        workItemId: created.workItem.id,
+        status: "PENDING",
+      });
+      const resumedMixedSnapshot = localState.query({
+        type: "GET_WORKFLOW_SNAPSHOT",
+        workItemId: created.workItem.id,
+      });
+      if (resumedMixedSnapshot.type !== "WORKFLOW_SNAPSHOT") {
+        throw new Error("Expected the resumed mixed correction workflow");
+      }
+      expect(
+        resumedMixedSnapshot.snapshot.stageAttempts.find(({ id }) => id === retestDispatch.stageAttemptId),
+      ).toMatchObject({
+        correctionRunId: activeCorrection.id,
+        verificationCorrectionRunId: mixedCorrection.id,
+        stage: "QA",
+        attempt: 2,
+        status: "QUEUED",
+      });
       const retestAgent = localState.execute(startAgentRun("q2-correction-browser-qa", retestDispatch.id));
       if (retestAgent.type !== "AGENT_RUN_STARTED") throw new Error("Expected retest Browser QA AgentRun");
       const erroredRetestReservation = localState.execute({
@@ -4488,7 +5269,7 @@ describe("SQLite local state", () => {
         payload: {
           stageAttemptId: retestDispatch.stageAttemptId,
           agentRunId: retestAgent.run.id,
-          testedTree: correctedTree,
+          testedTree: retestTree,
           targetOrigin: reserved.qaRun.targetOrigin,
           plan: reserved.qaRun.plan,
           scope: {
@@ -4502,7 +5283,7 @@ describe("SQLite local state", () => {
         throw new Error("Expected QA retest reservation");
       }
       expect(erroredRetestReservation.qaRun).toMatchObject({
-        testedTree: correctedTree,
+        testedTree: retestTree,
         scope: {
           type: "RETEST",
           correctionRunId: activeCorrection.id,
@@ -4518,7 +5299,7 @@ describe("SQLite local state", () => {
         payload: {
           qaRunId: erroredRetestReservation.qaRun.id,
           expectedVersion: 1,
-          currentTree: correctedTree,
+          currentTree: retestTree,
           result: {
             outcome: "ERROR",
             code: "TARGET_UNHEALTHY",
@@ -4533,10 +5314,8 @@ describe("SQLite local state", () => {
       });
       if (erroredSnapshot.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected errored retest state");
       const retryRequest = erroredSnapshot.snapshot.humanRequests.at(-1);
-      expect(erroredSnapshot.snapshot).toMatchObject({
-        run: { status: "WAITING_HUMAN" },
-        humanRequests: [expect.objectContaining({ status: "OPEN" })],
-      });
+      expect(erroredSnapshot.snapshot.run.status).toBe("WAITING_HUMAN");
+      expect(erroredSnapshot.snapshot.humanRequests.some(({ status }) => status === "OPEN")).toBe(true);
       expect(
         erroredSnapshot.snapshot.stageAttempts.some(
           ({ id, correctionRunId, status }) =>
@@ -4545,11 +5324,13 @@ describe("SQLite local state", () => {
             status === "WAITING_HUMAN",
         ),
       ).toBe(true);
-      expect(localState.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id })).toMatchObject({
-        type: "QA_STATE",
-        runs: [{ status: "FAILED" }, { status: "ERROR" }],
-        correctionRuns: [{ id: activeCorrection.id, ordinal: 1, status: "ACTIVE", version: 1 }],
-      });
+      const erroredQAState = localState.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id });
+      if (erroredQAState.type !== "QA_STATE") throw new Error("Expected errored QA state");
+      expect(erroredQAState.runs.map(({ status }) => status)).toContain("FAILED");
+      expect(erroredQAState.runs.map(({ status }) => status)).toContain("ERROR");
+      expect(erroredQAState.correctionRuns).toMatchObject([
+        { id: activeCorrection.id, ordinal: 1, status: "ACTIVE", version: 1 },
+      ]);
       if (retryRequest === undefined) throw new Error("Expected environment retry request");
       localState.execute({
         schemaVersion: 1,
@@ -4581,7 +5362,7 @@ describe("SQLite local state", () => {
         payload: {
           stageAttemptId: retryDispatch.stageAttemptId,
           agentRunId: retryAgent.run.id,
-          testedTree: correctedTree,
+          testedTree: retestTree,
           targetOrigin: reserved.qaRun.targetOrigin,
           plan: reserved.qaRun.plan,
           scope: {
@@ -4603,7 +5384,7 @@ describe("SQLite local state", () => {
         payload: {
           qaRunId: passingRetestReservation.qaRun.id,
           expectedVersion: 1,
-          currentTree: correctedTree,
+          currentTree: retestTree,
           result: {
             outcome: "MEASURED",
             environment: completionCommand.payload.result.environment,
@@ -4651,9 +5432,7 @@ describe("SQLite local state", () => {
       );
       const authoritativeReview = passingSnapshot.snapshot.artifacts.find(
         ({ correctionRunId, kind, testedTree: artifactTree }) =>
-          correctionRunId === activeCorrection.id &&
-          kind === "REVIEW_REPORT" &&
-          artifactTree === correctedTree,
+          correctionRunId === activeCorrection.id && kind === "REVIEW_REPORT" && artifactTree === retestTree,
       );
       const authoritativeQA = passingSnapshot.snapshot.artifacts.find(
         ({ kind, qaRunId }) => kind === "QA_REPORT" && qaRunId === passingRetestReservation.qaRun.id,
@@ -4766,13 +5545,14 @@ describe("SQLite local state", () => {
         type: "QA_RUN",
         qaRun: { status: "FAILED" },
       });
-      expect(reopened.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id })).toMatchObject({
-        type: "QA_STATE",
-        runs: [{ status: "FAILED" }, { status: "ERROR" }, { status: "PASSED" }],
-        defects: [{ status: "RESOLVED" }],
-        correctionRuns: [{ ordinal: 1, status: "PASSED" }],
-        retestPlans: [{ baselineQARunId: reserved.qaRun.id }],
-      });
+      const reopenedQAState = reopened.query({ type: "GET_QA_STATE", pipelineRunId: pipeline.run.id });
+      if (reopenedQAState.type !== "QA_STATE") throw new Error("Expected reopened QA state");
+      expect(reopenedQAState.runs.map(({ status }) => status)).toContain("FAILED");
+      expect(reopenedQAState.runs.map(({ status }) => status)).toContain("ERROR");
+      expect(reopenedQAState.runs.map(({ status }) => status)).toContain("PASSED");
+      expect(reopenedQAState.defects).toMatchObject([{ status: "RESOLVED" }]);
+      expect(reopenedQAState.correctionRuns).toMatchObject([{ ordinal: 1, status: "PASSED" }]);
+      expect(reopenedQAState.retestPlans).toMatchObject([{ baselineQARunId: reserved.qaRun.id }]);
     });
 
     it("persists one owner-authorized review round and prevents a fourth round after restart", async () => {
