@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { resolve } from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { VerificationPlan, VerificationRunSnapshotResponse } from "../packages/contracts/dist/index.js";
@@ -128,14 +130,25 @@ const createTask = async (page: Page, title: string): Promise<void> => {
 
 test.describe("project verification Task Cockpit", () => {
   let daemon: RunningDaemon | undefined;
+  const directories: string[] = [];
 
   test.afterEach(async () => {
     await daemon?.close();
     daemon = undefined;
+    await Promise.all(
+      directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+    );
   });
 
-  test("keeps one easy action, inert output and a narrow dark Russian layout", async ({ page }) => {
+  test("keeps one easy action, inert output and a durable bilingual narrow layout", async ({ page }) => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail verification browser restart "));
+    directories.push(directory);
+    const databasePath = join(directory, "state.sqlite");
     let measured: VerificationRunSnapshotResponse | null = null;
+    await page.addInitScript(() => {
+      if (localStorage.getItem("loomrail-theme") === null) localStorage.setItem("loomrail-theme", "light");
+      if (localStorage.getItem("loomrail.locale") === null) localStorage.setItem("loomrail.locale", "en");
+    });
     await page.route("**/api/v1/projects/*/verification-plan", async (route) => {
       await route.fulfill({
         contentType: "application/json",
@@ -245,9 +258,12 @@ test.describe("project verification Task Cockpit", () => {
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
       logger: false,
+      stateDatabasePath: databasePath,
       webRoot: resolve("apps/web/dist"),
     });
     await page.goto(daemon.bootstrapUrl);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(page.locator("html")).toHaveAttribute("lang", "en");
     await initializeWorkspace(page);
     await createTask(page, "Measured project checks");
 
@@ -268,6 +284,8 @@ test.describe("project verification Task Cockpit", () => {
     const output = verification.locator("pre");
     await expect(output).toContainText("<script>window.mustNotRun = true</script>");
     expect(await output.locator("script").count()).toBe(0);
+    await output.focus();
+    await expect(output).toBeFocused();
 
     const desktopOverflow = await verification.evaluate(
       (element) => element.scrollWidth - element.clientWidth,
@@ -303,5 +321,31 @@ test.describe("project verification Task Cockpit", () => {
         path: resolve(visualQaDirectory, "project-verification-dark-ru-320.png"),
       });
     }
+
+    await daemon.close();
+    daemon = undefined;
+    await page.addInitScript(() => {
+      localStorage.setItem("loomrail-theme", "dark");
+      localStorage.setItem("loomrail.locale", "ru");
+    });
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      stateDatabasePath: databasePath,
+      webRoot: resolve("apps/web/dist"),
+    });
+    await page.goto(daemon.bootstrapUrl);
+    const restoredInspector = page.getByRole("complementary", { name: "Measured project checks" });
+    if (!(await restoredInspector.isVisible())) {
+      await page.getByRole("button", { name: "Measured project checks", exact: true }).first().click();
+    }
+    const restoredVerification = restoredInspector.locator(".project-verification");
+    await expect(restoredVerification.getByText("Пройдена", { exact: true }).first()).toBeVisible();
+    await expect(restoredVerification.getByRole("button", { name: "Запустить снова" })).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(page.locator("html")).toHaveAttribute("lang", "ru");
+    await expect
+      .poll(() => restoredVerification.evaluate((element) => element.scrollWidth <= element.clientWidth))
+      .toBe(true);
   });
 });

@@ -91,15 +91,20 @@ output; restart сохраняет failure, а crash во время process д�
 
 ## Q17.4 — Security, restart и cross-platform exit
 
-- [ ] Закрыть T48 matrix: argv/path/env/network-policy/output/timeout/tree mutation/child orphan/duplicate completion.
+- [x] Закрыть T48 matrix: argv/path/env/network-policy/output/timeout/tree mutation/child orphan/duplicate completion.
+      Q17 named macOS/Windows CI lane теперь запускает scanner/publisher/runner и shared process-supervision tests до
+      общего lint gate. Реальный signal-resistant descendant подтверждает process-tree reap после output-bound stop;
+      остальные угрозы связаны с узкими contract/domain/persistence/runner тестами без подмены subprocess mock-ом.
 - [ ] Проверить every allowed/forbidden transition, rollback, idempotency, expected-version conflict и restart.
       Initial verification correction уже покрыта allowed/forbidden domain cases, replay idempotency и SQLite reopen;
       fresh reviewed passing rerun, второй automatic cycle и owner-authorized final cycle покрыты сквозным public
       workflow, command replay и SQLite reopen; cancel покрыт pure allowed transition, а stale versions, foreign
       lineage и non-owner actor запрещены domain-переходом. Daemon interruption отдельно покрыта для initial и
       subsequent correction, direct stop и startup reconciliation; owner cancellation остаётся forbidden source.
-      Живая light/dark/keyboard проверка UI ещё не закрыта.
-- [ ] Выполнить RU/EN, keyboard/focus, light/dark, 320 px и daemon-restart Browser QA.
+      Light/dark/keyboard/narrow UI и восстановление после daemon restart закрыты отдельным Playwright case.
+- [x] Выполнить RU/EN, keyboard/focus, light/dark, 320 px и daemon-restart Browser QA. Q17 Playwright case
+      детерминированно фиксирует English/light, keyboard-only Run/output focus, Russian/dark на 320 px, затем
+      перезапускает daemon с той же SQLite-базой и повторно проверяет восстановленный measured result без overflow.
 - [ ] Выполнить focused lint/typecheck/unit/integration, full non-landing gates, fault injection и clean release.
 - [ ] Выполнить independent Standards/Spec review и исправить все P0–P2.
 - [ ] Зафиксировать macOS/Windows fixed-commit fixture CI evidence; не заявлять live Windows provider evidence.

@@ -86,6 +86,8 @@ jobs:
           pnpm --dir packages/contracts exec vitest run test/verification.unit.test.ts
           pnpm --dir packages/domain exec vitest run test/verification-run.unit.test.ts
           pnpm --dir packages/domain exec vitest run test/qa-correction.test.ts -t "delivery-wide|shared owner gate"
+          pnpm --dir packages/process-supervision exec vitest run test/process-tree.unit.test.ts test/supervised-process.integration.test.ts
+          pnpm --dir packages/project-readiness exec vitest run test/verification-scanner.integration.test.ts test/verification-publisher.integration.test.ts test/verification-runner.integration.test.ts
           pnpm --dir packages/persistence-sqlite exec vitest run test/verification-run-state.integration.test.ts
           pnpm --dir packages/persistence-sqlite exec vitest run test/local-state.integration.test.ts -t "next shared position|mixed-evaluator QA gate"
           pnpm --dir apps/daemon exec vitest run --project unit test/project-verification-gate.unit.test.ts
