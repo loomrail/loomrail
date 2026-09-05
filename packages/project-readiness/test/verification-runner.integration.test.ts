@@ -22,7 +22,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { executeVerificationRecipe, verificationBaselineEnvironment } from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
-const TEST_RECIPE_TIMEOUT_SECONDS = 10;
+// Production recipes default to 300 seconds. Fixtures stay much tighter while retaining enough
+// headroom for a cold package-manager launch on a contended Windows runner.
+const TEST_RECIPE_TIMEOUT_SECONDS = 30;
 
 const installRecipe = async (
   repositoryPath: string,
@@ -110,7 +112,7 @@ describe("verification recipe runner", () => {
       },
     });
 
-    expect(result.observation.status).toBe("PASSED");
+    expect(result.observation).toMatchObject({ status: "PASSED", exitCode: 0, signal: null });
     expect(result.beforeTree).toBe(result.afterTree);
     expect(result.artifactPath).not.toBeNull();
     if (result.artifactPath === null) throw new Error("Passing output artifact is missing");
@@ -322,7 +324,7 @@ describe("verification recipe runner", () => {
       await chmod(forgedLauncher, 0o700);
 
       await executeVerificationRecipe({
-        recipe: approvedRecipe,
+        recipe: { ...approvedRecipe, timeoutSeconds: 1 },
         worktreePath: repositoryPath,
         artifactDirectory: artifacts,
         artifactId: "verification-output-relative-path",
