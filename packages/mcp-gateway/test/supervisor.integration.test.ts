@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { mcpProbeEnvironment } from "../src/probe.js";
 import { recoverMcpOrphans } from "../src/process-registry.js";
+import type { ProcessTreeOperations } from "../src/process-tree.js";
 
 const fixturePath = fileURLToPath(new URL("./fixtures/modern-server.mjs", import.meta.url));
 const supervisorEntrypoint = fileURLToPath(new URL("../dist/supervisor.js", import.meta.url));
@@ -85,6 +86,39 @@ const waitUntilMissing = async (path: string): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error("The MCP supervisor process record was not removed");
+};
+
+const recoveryProcessTree = (
+  serverPid: number,
+  observations: readonly (Date | null)[],
+): {
+  value: ProcessTreeOperations;
+  forceStoppedPids: number[];
+  startedAtCalls: () => number;
+} => {
+  const forceStoppedPids: number[] = [];
+  let observationIndex = 0;
+  return {
+    value: {
+      detachChild: false,
+      orphanRecoveryRequiresLiveRootIdentity: true,
+      pidExists: (pid) => pid === serverPid,
+      treeExists: (pid) => pid === serverPid,
+      gracefulStop: () => Promise.resolve(),
+      forceStop: (pid) => {
+        forceStoppedPids.push(pid);
+        return Promise.resolve();
+      },
+      reapDescendants: () => Promise.resolve(true),
+      startedAt: () => {
+        const observation = observations[Math.min(observationIndex, observations.length - 1)] ?? null;
+        observationIndex += 1;
+        return Promise.resolve(observation);
+      },
+    },
+    forceStoppedPids,
+    startedAtCalls: () => observationIndex,
+  };
 };
 
 describe("MCP process-tree supervisor", () => {
@@ -192,22 +226,24 @@ describe("MCP process-tree supervisor", () => {
     directory = await mkdtemp(join(tmpdir(), "loomrail mcp durable orphan "));
     const pidFile = join(directory, "pids.json");
     const recordFile = join(directory, `mcp-${randomBytes(32).toString("base64url")}.json`);
+    const spawnStartedAt = new Date();
     orphanRoot = spawn(process.execPath, [fixturePath, "orphan-tree", pidFile], {
       detached: process.platform !== "win32",
       stdio: "ignore",
       windowsHide: true,
     });
+    const spawnCompletedAt = new Date();
     if (orphanRoot.pid === undefined) throw new Error("The durable MCP orphan fixture did not start");
-    const startedAt = new Date().toISOString();
     treePids = await waitForTreePids(pidFile);
     expect(treePids.serverPid).toBe(orphanRoot.pid);
     await writeFile(
       recordFile,
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         supervisorPid: 2_147_483_647,
         serverPid: treePids.serverPid,
-        startedAt,
+        spawnStartedAt: spawnStartedAt.toISOString(),
+        spawnCompletedAt: spawnCompletedAt.toISOString(),
       }),
       { encoding: "utf8", mode: 0o600 },
     );
@@ -224,6 +260,156 @@ describe("MCP process-tree supervisor", () => {
     await waitUntilGone([treePids.serverPid, treePids.helperPid]);
     await expect(readFile(recordFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   }, 15_000);
+
+  it("accepts an observed start within a bounded slow-spawn interval", async () => {
+    directory = await mkdtemp(join(tmpdir(), "loomrail mcp slow spawn "));
+    const serverPid = 7_301;
+    const recordFile = join(directory, `mcp-${randomBytes(32).toString("base64url")}.json`);
+    const processTree = recoveryProcessTree(serverPid, [new Date("2026-09-05T12:00:01.250Z")]);
+    await writeFile(
+      recordFile,
+      JSON.stringify({
+        schemaVersion: 2,
+        supervisorPid: 2_147_483_647,
+        serverPid,
+        spawnStartedAt: "2026-09-05T12:00:00.000Z",
+        spawnCompletedAt: "2026-09-05T12:00:05.000Z",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    await expect(
+      recoverMcpOrphans(directory, () => new Date("2026-09-05T12:01:00.000Z"), processTree.value),
+    ).resolves.toEqual([
+      {
+        recordFile: basename(recordFile),
+        serverPid,
+        action: "KILLED",
+        reason: "IDENTITY_CONFIRMED",
+      },
+    ]);
+    expect(processTree.forceStoppedPids).toEqual([serverPid]);
+  });
+
+  it("retries an unavailable start-time observation before failing closed", async () => {
+    directory = await mkdtemp(join(tmpdir(), "loomrail mcp start retry "));
+    const serverPid = 7_302;
+    const startedAt = new Date("2026-09-05T12:00:00.000Z");
+    const recordFile = join(directory, `mcp-${randomBytes(32).toString("base64url")}.json`);
+    const processTree = recoveryProcessTree(serverPid, [null, startedAt]);
+    await writeFile(
+      recordFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        supervisorPid: 2_147_483_647,
+        serverPid,
+        startedAt: startedAt.toISOString(),
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    await expect(recoverMcpOrphans(directory, () => startedAt, processTree.value)).resolves.toEqual([
+      {
+        recordFile: basename(recordFile),
+        serverPid,
+        action: "KILLED",
+        reason: "IDENTITY_CONFIRMED",
+      },
+    ]);
+    expect(processTree.startedAtCalls()).toBe(2);
+    expect(processTree.forceStoppedPids).toEqual([serverPid]);
+  });
+
+  it("fails closed after repeated unavailable start-time observations", async () => {
+    directory = await mkdtemp(join(tmpdir(), "loomrail mcp unavailable start "));
+    const serverPid = 7_304;
+    const recordFile = join(directory, `mcp-${randomBytes(32).toString("base64url")}.json`);
+    const processTree = recoveryProcessTree(serverPid, [null, null]);
+    await writeFile(
+      recordFile,
+      JSON.stringify({
+        schemaVersion: 2,
+        supervisorPid: 2_147_483_647,
+        serverPid,
+        spawnStartedAt: "2026-09-05T12:00:00.000Z",
+        spawnCompletedAt: "2026-09-05T12:00:00.250Z",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    await expect(
+      recoverMcpOrphans(directory, () => new Date("2026-09-05T12:01:00.000Z"), processTree.value),
+    ).resolves.toEqual([
+      {
+        recordFile: basename(recordFile),
+        serverPid,
+        action: "SKIPPED",
+        reason: "START_TIME_MISMATCH",
+      },
+    ]);
+    expect(processTree.startedAtCalls()).toBe(2);
+    expect(processTree.forceStoppedPids).toEqual([]);
+  });
+
+  it("fails closed when a start-time observation is outside the recorded spawn interval", async () => {
+    directory = await mkdtemp(join(tmpdir(), "loomrail mcp start mismatch "));
+    const serverPid = 7_305;
+    const recordFile = join(directory, `mcp-${randomBytes(32).toString("base64url")}.json`);
+    const processTree = recoveryProcessTree(serverPid, [new Date("2026-09-05T12:00:30.000Z")]);
+    await writeFile(
+      recordFile,
+      JSON.stringify({
+        schemaVersion: 2,
+        supervisorPid: 2_147_483_647,
+        serverPid,
+        spawnStartedAt: "2026-09-05T12:00:00.000Z",
+        spawnCompletedAt: "2026-09-05T12:00:00.250Z",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    await expect(
+      recoverMcpOrphans(directory, () => new Date("2026-09-05T12:01:00.000Z"), processTree.value),
+    ).resolves.toEqual([
+      {
+        recordFile: basename(recordFile),
+        serverPid,
+        action: "SKIPPED",
+        reason: "START_TIME_MISMATCH",
+      },
+    ]);
+    expect(processTree.startedAtCalls()).toBe(1);
+    expect(processTree.forceStoppedPids).toEqual([]);
+  });
+
+  it("rejects an unbounded spawn interval without signalling the recorded pid", async () => {
+    directory = await mkdtemp(join(tmpdir(), "loomrail mcp invalid spawn interval "));
+    const serverPid = 7_303;
+    const recordFile = join(directory, `mcp-${randomBytes(32).toString("base64url")}.json`);
+    const processTree = recoveryProcessTree(serverPid, [new Date("2026-09-05T12:00:01.000Z")]);
+    await writeFile(
+      recordFile,
+      JSON.stringify({
+        schemaVersion: 2,
+        supervisorPid: 2_147_483_647,
+        serverPid,
+        spawnStartedAt: "2026-09-05T12:00:00.000Z",
+        spawnCompletedAt: "2026-09-05T12:01:00.000Z",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    await expect(recoverMcpOrphans(directory, () => new Date(), processTree.value)).resolves.toEqual([
+      {
+        recordFile: basename(recordFile),
+        serverPid: null,
+        action: "SKIPPED",
+        reason: "INVALID_RECORD",
+      },
+    ]);
+    expect(processTree.startedAtCalls()).toBe(0);
+    expect(processTree.forceStoppedPids).toEqual([]);
+  });
 
   it("leaves a reused pid alone when the durable record identity does not match", async () => {
     directory = await mkdtemp(join(tmpdir(), "loomrail mcp reused pid "));

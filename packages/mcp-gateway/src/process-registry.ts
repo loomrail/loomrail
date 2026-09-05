@@ -6,9 +6,11 @@ import { z } from "zod";
 import { createProcessTreeOperations, type ProcessTreeOperations } from "./process-tree.js";
 
 const PROCESS_START_TOLERANCE_MS = 2_000;
+const PROCESS_SPAWN_WINDOW_LIMIT_MS = 10_000;
+const PROCESS_START_OBSERVATION_ATTEMPTS = 2;
 const REGISTRY_FILE_LIMIT_BYTES = 4_096;
 
-export const mcpProcessRecordSchema = z
+const legacyMcpProcessRecordSchema = z
   .object({
     schemaVersion: z.literal(1),
     supervisorPid: z.number().int().positive(),
@@ -17,7 +19,48 @@ export const mcpProcessRecordSchema = z
   })
   .strict();
 
+const boundedSpawnMcpProcessRecordSchema = z
+  .object({
+    schemaVersion: z.literal(2),
+    supervisorPid: z.number().int().positive(),
+    serverPid: z.number().int().positive(),
+    spawnStartedAt: z.iso.datetime({ offset: true }),
+    spawnCompletedAt: z.iso.datetime({ offset: true }),
+  })
+  .strict()
+  .refine(
+    (record) => {
+      const duration = Date.parse(record.spawnCompletedAt) - Date.parse(record.spawnStartedAt);
+      return duration >= 0 && duration <= PROCESS_SPAWN_WINDOW_LIMIT_MS;
+    },
+    { message: "MCP process spawn interval is invalid", path: ["spawnCompletedAt"] },
+  );
+
+export const mcpProcessRecordSchema = z.union([
+  legacyMcpProcessRecordSchema,
+  boundedSpawnMcpProcessRecordSchema,
+]);
+
 export type McpProcessRecord = z.infer<typeof mcpProcessRecordSchema>;
+
+export const createMcpProcessRecord = ({
+  supervisorPid,
+  serverPid,
+  spawnStartedAt,
+  spawnCompletedAt,
+}: {
+  supervisorPid: number;
+  serverPid: number;
+  spawnStartedAt: Date;
+  spawnCompletedAt: Date;
+}): McpProcessRecord =>
+  mcpProcessRecordSchema.parse({
+    schemaVersion: 2,
+    supervisorPid,
+    serverPid,
+    spawnStartedAt: spawnStartedAt.toISOString(),
+    spawnCompletedAt: spawnCompletedAt.toISOString(),
+  });
 
 export type McpOrphanRecoveryReport = {
   recordFile: string;
@@ -35,6 +78,31 @@ export type McpOrphanRecoveryReport = {
 
 const removeRecord = async (path: string): Promise<void> => {
   await unlink(path).catch(() => undefined);
+};
+
+const observeProcessStart = async (
+  processTree: ProcessTreeOperations,
+  pid: number,
+  now: () => Date,
+): Promise<Date | null> => {
+  for (let attempt = 0; attempt < PROCESS_START_OBSERVATION_ATTEMPTS; attempt += 1) {
+    const observed = await processTree.startedAt(pid, now()).catch(() => null);
+    if (observed !== null) return observed;
+    if (!processTree.pidExists(pid)) return null;
+  }
+  return null;
+};
+
+const processStartMatches = (record: McpProcessRecord, observed: Date): boolean => {
+  const observedMilliseconds = observed.getTime();
+  if (!Number.isSafeInteger(observedMilliseconds) || observedMilliseconds < 0) return false;
+  if (record.schemaVersion === 1) {
+    return Math.abs(observedMilliseconds - Date.parse(record.startedAt)) <= PROCESS_START_TOLERANCE_MS;
+  }
+  return (
+    observedMilliseconds >= Date.parse(record.spawnStartedAt) - PROCESS_START_TOLERANCE_MS &&
+    observedMilliseconds <= Date.parse(record.spawnCompletedAt) + PROCESS_START_TOLERANCE_MS
+  );
 };
 
 export const recoverMcpOrphans = async (
@@ -95,11 +163,8 @@ export const recoverMcpOrphans = async (
       });
       continue;
     }
-    const observedStartedAt = await processTree.startedAt(record.serverPid, now());
-    if (
-      observedStartedAt === null ||
-      Math.abs(observedStartedAt.getTime() - Date.parse(record.startedAt)) > PROCESS_START_TOLERANCE_MS
-    ) {
+    const observedStartedAt = await observeProcessStart(processTree, record.serverPid, now);
+    if (observedStartedAt === null || !processStartMatches(record, observedStartedAt)) {
       reports.push({
         recordFile: name,
         serverPid: record.serverPid,

@@ -38,6 +38,11 @@ Gate: SQLite не хранит challenge, raw input/output, env values или cr
       platform-adapter unit tests, POSIX process group — real-process tests локально, а workflow содержит отдельный
       Windows MCP process-tree step. Реальный Windows job, полный `verify`, audit, browser smoke и clean install
       прошли в [run 33502010465](https://github.com/loomrail/loomrail/actions/runs/33502010465).
+- [x] После более позднего Windows CI race заменить post-spawn timestamp на versioned bounded spawn interval. Slow
+      `CreateProcess` больше не выглядит как reused PID; временно недоступный start-time probe получает одну
+      дополнительную попытку, а over-wide interval, повторная недоступность и настоящий mismatch остаются
+      fail-closed без signal. Legacy v1 registry records продолжают восстанавливаться по прежнему контракту. Root
+      start-time probe использует быстрый bounded `Get-Process.StartTime`; CIM остаётся только для descendant graph.
 
 Gate: deletion test возвращает всю MCP complexity в daemon/adapters; gateway interface остаётся provider-neutral.
 

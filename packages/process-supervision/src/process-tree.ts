@@ -36,6 +36,7 @@ export type StopAndReapProcessTreeOptions = {
 const DESCENDANT_REAP_GRACE_MS = 500;
 const DESCENDANT_REAP_FORCE_MS = 2_000;
 const PROCESS_QUERY_TIMEOUT_MS = 10_000;
+const PROCESS_START_QUERY_TIMEOUT_MS = 2_000;
 const WINDOWS_TREE_STOP_TIMEOUT_MS = 10_000;
 const WINDOWS_DESCENDANT_REAP_TIMEOUT_MS = 60_000;
 
@@ -237,9 +238,9 @@ const createWindowsOperations = (dependencies: ProcessTreeDependencies): Process
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `$candidate = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = ${pidText}' -Property CreationDate; if ($null -ne $candidate) { [int64]([DateTimeOffset]$candidate.CreationDate).ToUnixTimeMilliseconds() }`,
+        `$candidate = Get-Process -Id ${pidText} -ErrorAction SilentlyContinue; if ($null -ne $candidate) { [int64]([DateTimeOffset]$candidate.StartTime).ToUnixTimeMilliseconds() }`,
       ],
-      PROCESS_QUERY_TIMEOUT_MS,
+      PROCESS_START_QUERY_TIMEOUT_MS,
     );
     if (!output.ok) return null;
     const startedAtMilliseconds = Number(output.stdout.trim());

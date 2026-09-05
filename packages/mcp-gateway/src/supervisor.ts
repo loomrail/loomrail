@@ -3,6 +3,7 @@ import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import process from "node:process";
 
+import { createMcpProcessRecord } from "./process-registry.js";
 import { createProcessTreeOperations } from "./process-tree.js";
 
 const GRACE_MS = 1_000;
@@ -51,6 +52,7 @@ if (invocation === null) {
   process.stderr.write("Invalid Loomrail MCP supervisor invocation\n");
   process.exitCode = 2;
 } else {
+  const spawnStartedAt = new Date();
   const child = spawn(invocation.command, invocation.args, {
     detached: processTree.detachChild,
     env: process.env,
@@ -58,6 +60,7 @@ if (invocation === null) {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
+  const spawnCompletedAt = new Date();
   let stopping = false;
   let stdoutBuffer = Buffer.alloc(0);
   let registryWritten = false;
@@ -132,12 +135,14 @@ if (invocation === null) {
       registryTemporaryFile = temporaryFile;
       writeFileSync(
         temporaryFile,
-        JSON.stringify({
-          schemaVersion: 1,
-          supervisorPid: process.pid,
-          serverPid: child.pid,
-          startedAt: new Date().toISOString(),
-        }),
+        JSON.stringify(
+          createMcpProcessRecord({
+            supervisorPid: process.pid,
+            serverPid: child.pid,
+            spawnStartedAt,
+            spawnCompletedAt,
+          }),
+        ),
         { encoding: "utf8", mode: 0o600 },
       );
       renameSync(temporaryFile, invocation.registryFile);

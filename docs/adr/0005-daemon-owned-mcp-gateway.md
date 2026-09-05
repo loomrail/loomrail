@@ -35,6 +35,14 @@ Loomrail implements a daemon-owned MCP gateway.
 - Before exposing a server, the supervisor atomically writes a mode-`0600` process record beside durable local
   state. Startup reconciliation validates that record and the OS process start time before force-closing a tree that
   survived both daemon and supervisor; a mismatched or unreadable identity is never signalled.
+- Process-record revision 2 captures the bounded wall-clock interval immediately around the synchronous `spawn`
+  call. Recovery accepts an OS creation time only inside that interval plus the fixed precision tolerance; the
+  interval itself may not exceed ten seconds. This avoids treating a slow Windows `CreateProcess` return as PID reuse
+  without widening identity to an arbitrary timestamp. Legacy revision 1 remains readable. A temporarily unavailable
+  OS start-time observation is retried once while the PID still exists; repeated absence or any actual mismatch still
+  leaves the process untouched. Windows reads this root identity from `Get-Process.StartTime` with a two-second
+  command deadline; the slower CIM graph query remains limited to descendant discovery, where parent relationships
+  are required.
 
 ## Alternatives rejected
 

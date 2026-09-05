@@ -1432,8 +1432,13 @@ start time before killing a tree that survived both daemon and supervisor; a reu
 release gate is a real green Windows CI run for the `taskkill /T` branch. A platform adapter test fixes the exact
 `taskkill.exe /PID <pid> /T [/F]` argument vector without shell interpolation, and CI exposes the Windows MCP lifecycle
 suite as a dedicated step. The Windows identity probe returns the process creation time as an absolute Unix timestamp;
-it does not combine a pre-spawn JavaScript clock with an elapsed duration measured after PowerShell startup. A fully
-compromised same-user account remains outside the local-mode boundary.
+it does not combine a JavaScript clock with an elapsed duration measured after PowerShell startup. Root identity uses
+bounded `Get-Process.StartTime`, while the slower CIM query is reserved for descendant relationships. Process-record
+v2 captures a maximum-ten-second interval directly around the synchronous spawn call, then recovery accepts only an
+OS creation time inside that interval plus the fixed two-second precision tolerance. One unavailable observation may
+be retried while the PID remains live; a second absence, an over-wide interval or an actual mismatch never signals
+the recorded PID. Legacy v1 records retain their stricter single-timestamp check. A fully compromised same-user
+account remains outside the local-mode boundary.
 
 **T29 — capability drift or provider ambient config widens authority. High.** Consent binds immutable revision digest;
 Grant is a separate closed tool allowlist; capability snapshot is observation only. Codex keeps
