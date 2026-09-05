@@ -740,6 +740,9 @@ Critical and stays open until the Q17 spec and implementation provide:
   owner-only, and Browser QA receives no AgentRun or browser authority while this gate is blocked;
 - daemon derives `PASSED | FAILED | ERROR | STALE`; provider text cannot create a pass. Required failed/error/stale
   evidence blocks Acceptance and any correction requires fresh review plus exact rerun on the current tree;
+- a terminal required non-pass or interrupted Run creates one append-only `VerificationFailure` in the same SQLite
+  transaction as measured Run/Check state and its Event. It contains only typed Run/Check/Plan/tree lineage, not raw
+  output or a local path; command replay and restart cannot duplicate the identity;
 - Acceptance stores only the daemon-derived Plan/Run/tree/check identity summary. Raw output and local paths stay out
   of the package; the release renderer revalidates delivery lineage, current tree and the complete required check set;
 - required verification covers shell metacharacters, hostile package scripts/manifests, cwd/path and symlink escape,

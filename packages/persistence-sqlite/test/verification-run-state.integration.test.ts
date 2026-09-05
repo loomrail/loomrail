@@ -282,7 +282,7 @@ describe("verification Run local state", () => {
       truncated: false,
       available: true,
     };
-    const completed = fixture.localState.execute({
+    const completeCommand = {
       schemaVersion: 1,
       commandId: "complete-check",
       correlationId: "correlation-complete-check",
@@ -303,13 +303,45 @@ describe("verification Run local state", () => {
         },
         outputStorageKey: "verification-output-one.txt",
       },
-    });
+    } as const;
+    const completed = fixture.localState.execute(completeCommand);
     expect(completed).toMatchObject({
       type: "VERIFICATION_CHECK_COMPLETED",
       run: { status: "FAILED", terminalReason: "REQUIRED_CHECK_FAILED" },
       check: { status: "FAILED", exitCode: 7 },
       next: "TERMINAL",
     });
+    if (completed.type !== "VERIFICATION_CHECK_COMPLETED") throw new Error("Expected completed Check");
+    expect(
+      fixture.localState.query({
+        type: "LIST_WORK_ITEM_VERIFICATION_FAILURES",
+        workItemId: fixture.workItemId,
+      }),
+    ).toMatchObject({
+      type: "VERIFICATION_FAILURES",
+      failures: [
+        {
+          verificationRunId: completed.run.id,
+          verificationCheckId: completed.check.id,
+          reason: "REQUIRED_CHECK_FAILED",
+          implementationTree: tree,
+        },
+      ],
+    });
+    expect(fixture.localState.execute(completeCommand)).toMatchObject({
+      type: "VERIFICATION_CHECK_COMPLETED",
+      replayed: true,
+    });
+    const failureEvents = fixture.localState.query({
+      type: "LIST_EVENTS",
+      aggregateId: fixture.workItemId,
+      direction: "ASC",
+      limit: 100,
+    });
+    if (failureEvents.type !== "EVENTS") throw new Error("Expected Events");
+    expect(failureEvents.events.filter(({ type }) => type === "VERIFICATION_FAILURE_RECORDED")).toHaveLength(
+      1,
+    );
     expect(
       fixture.localState.query({ type: "GET_VERIFICATION_OUTPUT_ARTIFACT", checkId: check.id }),
     ).toMatchObject({
@@ -432,6 +464,7 @@ describe("verification Run local state", () => {
     });
     if (reconciled.type !== "WORKFLOWS_RECONCILED") throw new Error("Expected reconciliation");
     expect(reconciled.events.map((event) => event.type)).toContain("VERIFICATION_RUN_INTERRUPTED");
+    expect(reconciled.events.map((event) => event.type)).toContain("VERIFICATION_FAILURE_RECORDED");
     expect(reopened.query({ type: "GET_VERIFICATION_RUN", runId: started.run.id })).toMatchObject({
       run: { status: "INTERRUPTED", terminalReason: "DAEMON_RESTART" },
       checks: [{ status: "INTERRUPTED" }],
@@ -439,6 +472,21 @@ describe("verification Run local state", () => {
     expect(reopened.query({ type: "LIST_ACTIVE_VERIFICATION_RUNS" })).toEqual({
       type: "VERIFICATION_RUNS",
       runs: [],
+    });
+    expect(
+      reopened.query({
+        type: "LIST_WORK_ITEM_VERIFICATION_FAILURES",
+        workItemId: fixture.workItemId,
+      }),
+    ).toMatchObject({
+      type: "VERIFICATION_FAILURES",
+      failures: [
+        {
+          verificationRunId: started.run.id,
+          verificationCheckId: started.check.id,
+          reason: "RUN_INTERRUPTED",
+        },
+      ],
     });
   });
 

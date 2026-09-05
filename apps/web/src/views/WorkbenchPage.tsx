@@ -30,6 +30,7 @@ import {
   type StageAttempt,
   type StageAttemptStatus,
   type VerificationCheck,
+  type VerificationFailure,
   type WorkItem,
   type WorkItemChangedField,
   type WorkItemState,
@@ -616,6 +617,13 @@ const verificationCheckStatusLabelKeys: Record<VerificationCheck["status"], Tran
   INTERRUPTED: "verification.status.INTERRUPTED",
 };
 
+const verificationFailureReasonLabelKeys: Record<VerificationFailure["reason"], TranslationKey> = {
+  REQUIRED_CHECK_FAILED: "verification.failure.REQUIRED_CHECK_FAILED",
+  REQUIRED_CHECK_ERROR: "verification.failure.REQUIRED_CHECK_ERROR",
+  RUN_INTERRUPTED: "verification.failure.RUN_INTERRUPTED",
+  STALE: "verification.failure.STALE",
+};
+
 const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEventProps, "time"> => {
   switch (event.type) {
     case "WORK_ITEM_CREATED":
@@ -806,6 +814,15 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         detail: t("event.verificationRunInterruptedDetail", { ordinal: event.data.run.ordinal }),
         icon: "pause",
         label: t("event.verificationRunInterrupted"),
+        tone: "warning",
+      };
+    case "VERIFICATION_FAILURE_RECORDED":
+      return {
+        detail: t("event.verificationFailureRecordedDetail", {
+          reason: t(verificationFailureReasonLabelKeys[event.data.failure.reason]),
+        }),
+        icon: "warning",
+        label: t("event.verificationFailureRecorded"),
         tone: "warning",
       };
     case "PROJECT_READINESS_ASSESSED":

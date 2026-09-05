@@ -42,6 +42,7 @@ import {
   verificationPlanSchema,
   verificationPlanPublicationSchema,
   verificationCheckSchema,
+  verificationFailureSchema,
   verificationRunSchema,
   qaAttachmentRefSchema,
   qaCorrectionRunSchema,
@@ -104,6 +105,7 @@ import {
   type VerificationPlan,
   type VerificationPlanPublication,
   type VerificationCheck,
+  type VerificationFailure,
   type VerificationRun,
   type QAAttachmentRef,
   type QACorrectionRun,
@@ -157,6 +159,7 @@ import {
   decideVerificationPlanPublicationRetry,
   decideVerificationCheckCompletion,
   decideVerificationCheckStart,
+  deriveVerificationFailure,
   decideVerificationRunInterruption,
   decideVerificationRunReservation,
   decideRecordProviderAllowance,
@@ -405,6 +408,23 @@ const verificationCheckRowSchema = z.object({
   error_code: z.string().nullable(),
   output_json: z.string().nullable(),
   version: z.number().int(),
+});
+
+const verificationFailureRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  verification_run_id: z.string(),
+  verification_check_id: z.string().nullable(),
+  plan_id: z.string(),
+  plan_revision: z.number().int(),
+  plan_content_hash: z.string(),
+  implementation_tree: z.string(),
+  reason: z.string(),
+  stale_reasons_json: z.string(),
+  created_at: z.string(),
 });
 
 const verificationOutputArtifactRowSchema = z.object({
@@ -1137,6 +1157,13 @@ const stateQuerySchema = z.discriminatedUnion("type", [
       limit: z.number().int().min(1).max(100).default(20),
     })
     .strict(),
+  z
+    .object({
+      type: z.literal("LIST_WORK_ITEM_VERIFICATION_FAILURES"),
+      workItemId: opaqueIdSchema,
+      limit: z.number().int().min(1).max(100).default(20),
+    })
+    .strict(),
   z.object({ type: z.literal("LIST_ACTIVE_VERIFICATION_RUNS") }).strict(),
   z.object({ type: z.literal("GET_VERIFICATION_OUTPUT_ARTIFACT"), checkId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_READINESS_SNAPSHOT"), projectId: opaqueIdSchema }).strict(),
@@ -1627,6 +1654,26 @@ const verificationCheckFromRow = (value: unknown): VerificationCheck => {
     errorCode: row.error_code,
     output: row.output_json === null ? null : parseJson(row.output_json),
     version: row.version,
+  });
+};
+
+const verificationFailureFromRow = (value: unknown): VerificationFailure => {
+  const row = verificationFailureRowSchema.parse(value);
+  return verificationFailureSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    verificationRunId: row.verification_run_id,
+    verificationCheckId: row.verification_check_id,
+    planId: row.plan_id,
+    planRevision: row.plan_revision,
+    planContentHash: row.plan_content_hash,
+    implementationTree: row.implementation_tree,
+    reason: row.reason,
+    staleReasons: parseJson(row.stale_reasons_json),
+    createdAt: row.created_at,
   });
 };
 
@@ -2950,6 +2997,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectVerificationChecksByRun = database.prepare(
       "SELECT * FROM verification_checks WHERE run_id = ? ORDER BY ordinal",
     );
+    const selectVerificationFailuresByWorkItem = database.prepare(
+      "SELECT * FROM verification_failures WHERE work_item_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+    );
+    const insertVerificationFailure = database.prepare(
+      `INSERT INTO verification_failures (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, verification_run_id,
+        verification_check_id, plan_id, plan_revision, plan_content_hash, implementation_tree,
+        reason, stale_reasons_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
     const insertVerificationCheck = database.prepare(
       `INSERT INTO verification_checks (
         id, schema_version, project_id, work_item_id, run_id, recipe_id, ordinal, required, status,
@@ -3561,6 +3618,37 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const readLatestVerificationRun = (workItemId: string): VerificationRun | null => {
       const row = selectVerificationRunsByWorkItem.get(workItemId, 1);
       return row === undefined ? null : verificationRunFromRow(row);
+    };
+
+    const persistVerificationFailure = (
+      run: VerificationRun,
+      checks: readonly VerificationCheck[],
+      createdAt: string,
+    ): ReturnType<typeof deriveVerificationFailure> => {
+      const decision = deriveVerificationFailure({
+        failureId: createId("verificationFailure"),
+        run,
+        checks,
+        now: createdAt,
+      });
+      const failure = decision.failure;
+      insertVerificationFailure.run(
+        failure.id,
+        failure.schemaVersion,
+        failure.projectId,
+        failure.workItemId,
+        failure.pipelineRunId,
+        failure.verificationRunId,
+        failure.verificationCheckId,
+        failure.planId,
+        failure.planRevision,
+        failure.planContentHash,
+        failure.implementationTree,
+        failure.reason,
+        JSON.stringify(failure.staleReasons),
+        failure.createdAt,
+      );
+      return decision;
     };
 
     const readWorkItem = (workItemId: string): WorkItem | null => {
@@ -6598,6 +6686,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             );
           }
         }
+        const failureDecision =
+          decision.next === "TERMINAL" && decision.run.status !== "PASSED"
+            ? persistVerificationFailure(decision.run, readVerificationChecks(run.id), occurredAt)
+            : null;
         const event = appendVerificationRunEvent(
           { type: "VERIFICATION_CHECK_COMPLETED", data: { run: decision.run, check: decision.check } },
           {
@@ -6608,6 +6700,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             correlationId: command.correlationId,
           },
         );
+        if (failureDecision !== null) {
+          appendVerificationRunEvent(failureDecision.event, {
+            workItemId: run.workItemId,
+            projectId: run.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          });
+        }
         return stateCommandResultSchema.parse({
           schemaVersion: 1,
           type: "VERIFICATION_CHECK_COMPLETED",
@@ -6656,6 +6757,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           data: { run: decision.run, interruptedCheck },
         };
         const event = appendVerificationRunEvent(intent, {
+          workItemId: run.workItemId,
+          projectId: run.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        const failureDecision = persistVerificationFailure(decision.run, decision.checks, occurredAt);
+        appendVerificationRunEvent(failureDecision.event, {
           workItemId: run.workItemId,
           projectId: run.projectId,
           actor: command.actor,
@@ -8761,6 +8870,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             );
           }
           interruptedVerificationRuns.push(decision.run);
+          const failureDecision = persistVerificationFailure(decision.run, decision.checks, occurredAt);
           verificationEvents.push(
             appendVerificationRunEvent(
               {
@@ -8775,6 +8885,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 correlationId: command.correlationId,
               },
             ),
+            appendVerificationRunEvent(failureDecision.event, {
+              workItemId: current.workItemId,
+              projectId: current.projectId,
+              actor: command.actor,
+              occurredAt,
+              correlationId: command.correlationId,
+            }),
           );
         }
         // AgentRun is the A3 concurrency authority. Every RUNNING row at startup is orphaned even
@@ -10341,6 +10458,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             runs: selectVerificationRunsByWorkItem
               .all(queryValue.workItemId, queryValue.limit)
               .map(verificationRunFromRow),
+          };
+        case "LIST_WORK_ITEM_VERIFICATION_FAILURES":
+          return {
+            type: "VERIFICATION_FAILURES",
+            failures: selectVerificationFailuresByWorkItem
+              .all(queryValue.workItemId, queryValue.limit)
+              .map(verificationFailureFromRow),
           };
         case "LIST_ACTIVE_VERIFICATION_RUNS":
           return {

@@ -675,6 +675,60 @@ export const verificationRunSchema = z
     if (!validReason) issue("A terminal verification Run has a contradictory reason");
   });
 
+export const verificationFailureReasonSchema = z.enum([
+  "REQUIRED_CHECK_FAILED",
+  "REQUIRED_CHECK_ERROR",
+  "RUN_INTERRUPTED",
+  "STALE",
+]);
+
+/** Immutable evaluator identity; correction and resolution history reference it instead of mutating it. */
+export const verificationFailureSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    workItemId: opaqueIdSchema,
+    pipelineRunId: opaqueIdSchema,
+    verificationRunId: opaqueIdSchema,
+    verificationCheckId: opaqueIdSchema.nullable(),
+    planId: opaqueIdSchema,
+    planRevision: z.number().int().positive(),
+    planContentHash: sha256Schema,
+    implementationTree: treeShaSchema,
+    reason: verificationFailureReasonSchema,
+    staleReasons: z.array(verificationRunStaleReasonSchema).max(4),
+    createdAt: utcTimestampSchema,
+  })
+  .strict()
+  .superRefine((failure, context) => {
+    const stale = failure.reason === "STALE";
+    if (stale !== failure.staleReasons.length > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["staleReasons"],
+        message: "Only a stale verification failure carries stale reasons",
+      });
+    }
+    if (
+      (failure.reason === "REQUIRED_CHECK_FAILED" || failure.reason === "REQUIRED_CHECK_ERROR") &&
+      failure.verificationCheckId === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["verificationCheckId"],
+        message: "A failed verification Check must identify its measured source",
+      });
+    }
+    if (stale && failure.verificationCheckId !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["verificationCheckId"],
+        message: "A stale Run failure is not attributed to one Check",
+      });
+    }
+  });
+
 export const verificationCheckObservationSchema = z.discriminatedUnion("status", [
   z
     .object({
@@ -853,6 +907,11 @@ export const verificationRunInterruptedEventSchema = verificationRunEventBaseSch
     .strict(),
 });
 
+export const verificationFailureRecordedEventSchema = verificationRunEventBaseSchema.extend({
+  type: z.literal("VERIFICATION_FAILURE_RECORDED"),
+  data: z.object({ failure: verificationFailureSchema }).strict(),
+});
+
 export const verificationRunReservedResultSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -998,6 +1057,9 @@ export type VerificationEvidence = z.infer<typeof verificationEvidenceSchema>;
 export type VerificationOutputSummary = z.infer<typeof verificationOutputSummarySchema>;
 export type VerificationCheck = z.infer<typeof verificationCheckSchema>;
 export type VerificationRun = z.infer<typeof verificationRunSchema>;
+export type VerificationFailureReason = z.infer<typeof verificationFailureReasonSchema>;
+export type VerificationFailure = z.infer<typeof verificationFailureSchema>;
+export type VerificationFailureRecordedEvent = z.infer<typeof verificationFailureRecordedEventSchema>;
 export type VerificationCheckObservation = z.infer<typeof verificationCheckObservationSchema>;
 export type VerificationRunSnapshotResponse = z.infer<typeof verificationRunSnapshotResponseSchema>;
 export type VerificationRunsResponse = z.infer<typeof verificationRunsResponseSchema>;

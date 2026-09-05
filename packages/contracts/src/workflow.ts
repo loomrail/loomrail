@@ -14,6 +14,7 @@ import { workItemWorkspaceOrphanedEventSchema, workItemWorkspaceSchema } from ".
 import { reviewFindingSchema, reviewReportDraftSchema, reviewReportSchema } from "./review.js";
 import {
   verificationEvidenceSchema,
+  verificationFailureRecordedEventSchema,
   verificationRunInterruptedEventSchema,
   verificationRunSchema,
 } from "./verification.js";
@@ -1652,6 +1653,7 @@ export const workflowsReconciledResultSchema = z
         recoveryReportCreatedEventSchema,
         providerSessionEndedEventSchema,
         verificationRunInterruptedEventSchema,
+        verificationFailureRecordedEventSchema,
         workItemWorkspaceOrphanedEventSchema,
       ]),
     ),

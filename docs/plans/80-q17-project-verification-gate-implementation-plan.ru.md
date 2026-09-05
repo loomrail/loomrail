@@ -43,6 +43,8 @@ output; restart сохраняет failure, а crash во время process д�
       `verification-workflow` может зарезервировать только первый Run на стадии QA; Browser QA не получает AgentRun
       или browser authority до свежего current-tree pass, а terminal non-pass не ретраится скрыто.
 - [ ] Добавить отдельный `VerificationFailure` и связать его с correction IMPLEMENT/re-review/rerun lineage.
+      Immutable failure identity и атомарная запись `FAILED | ERROR | INTERRUPTED` уже готовы; correction transition,
+      re-review/rerun links и `STALE` materialization остаются в работе.
 - [ ] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
 - [x] Сделать required failed/error/interrupted/stale детерминированным Acceptance blocker; optional failure оставить
       advisory.

@@ -13,12 +13,18 @@ import type {
   VerificationCheck,
   VerificationCheckObservation,
   VerificationEvidence,
+  VerificationFailure,
   VerificationRun,
   VerificationRunStaleReason,
   WorkItem,
   WorkItemWorkspace,
 } from "@loomrail/contracts";
-import { verificationEvidenceSchema } from "@loomrail/contracts";
+import {
+  verificationCheckSchema,
+  verificationEvidenceSchema,
+  verificationFailureSchema,
+  verificationRunSchema,
+} from "@loomrail/contracts";
 
 export type VerificationDomainErrorCode =
   | "OWNER_REQUIRED"
@@ -49,7 +55,8 @@ export type VerificationDomainErrorCode =
   | "WORKSPACE_UNAVAILABLE"
   | "PLAN_UNAVAILABLE"
   | "PLAN_VERSION_CONFLICT"
-  | "RETRY_RUN_INVALID";
+  | "RETRY_RUN_INVALID"
+  | "FAILURE_SOURCE_INVALID";
 
 export class VerificationDomainError extends Error {
   readonly code: VerificationDomainErrorCode;
@@ -381,7 +388,8 @@ export type VerificationRunEventIntent =
   | {
       type: "VERIFICATION_RUN_INTERRUPTED";
       data: { run: VerificationRun; interruptedCheck: VerificationCheck | null };
-    };
+    }
+  | VerificationFailureRecordedIntent;
 
 export const VERIFICATION_WORKFLOW_ACTOR_ID = "verification-workflow";
 
@@ -783,6 +791,67 @@ export const decideVerificationRunInterruption = (input: {
       version: input.run.version + 1,
     },
     checks,
+  };
+};
+
+export type VerificationFailureRecordedIntent = {
+  type: "VERIFICATION_FAILURE_RECORDED";
+  data: { failure: VerificationFailure };
+};
+
+/** Converts a terminal non-pass into the separate immutable identity used by correction workflow. */
+export const deriveVerificationFailure = (input: {
+  failureId: string;
+  run: VerificationRun;
+  checks: readonly VerificationCheck[];
+  now: string;
+}): { failure: VerificationFailure; event: VerificationFailureRecordedIntent } => {
+  const run = verificationRunSchema.parse(input.run);
+  const checks = input.checks.map((check) => verificationCheckSchema.parse(check));
+  if (run.status !== "FAILED" && run.status !== "ERROR" && run.status !== "INTERRUPTED") {
+    throw new VerificationDomainError(
+      "RUN_STATUS_INVALID",
+      "Only a terminal non-passing verification Run can create a failure",
+    );
+  }
+  const ordered = orderedChecks(run, checks);
+  const sourceCheck =
+    run.status === "FAILED"
+      ? ordered.find(({ required, status }) => required && status === "FAILED")
+      : run.status === "ERROR"
+        ? ordered.find(({ required, status }) => required && status === "ERROR")
+        : ordered.find(({ status }) => status === "INTERRUPTED");
+  if (run.status !== "INTERRUPTED" && sourceCheck === undefined) {
+    throw new VerificationDomainError(
+      "FAILURE_SOURCE_INVALID",
+      "A verification failure needs the required measured Check that ended its Run",
+    );
+  }
+  const reason =
+    run.status === "FAILED"
+      ? "REQUIRED_CHECK_FAILED"
+      : run.status === "ERROR"
+        ? "REQUIRED_CHECK_ERROR"
+        : "RUN_INTERRUPTED";
+  const failure = verificationFailureSchema.parse({
+    schemaVersion: 1,
+    id: input.failureId,
+    projectId: run.projectId,
+    workItemId: run.workItemId,
+    pipelineRunId: run.pipelineRunId,
+    verificationRunId: run.id,
+    verificationCheckId: sourceCheck?.id ?? null,
+    planId: run.planId,
+    planRevision: run.planRevision,
+    planContentHash: run.planContentHash,
+    implementationTree: run.implementationTree,
+    reason,
+    staleReasons: [],
+    createdAt: input.now,
+  });
+  return {
+    failure,
+    event: { type: "VERIFICATION_FAILURE_RECORDED", data: { failure } },
   };
 };
 

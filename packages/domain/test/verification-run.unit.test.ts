@@ -17,6 +17,7 @@ import {
   decideVerificationCheckStart,
   decideVerificationRunReservation,
   decideVerificationRunInterruption,
+  deriveVerificationFailure,
   projectVerificationAcceptanceGate,
   projectVerificationRunFreshness,
 } from "../src/verification.js";
@@ -361,6 +362,53 @@ describe("verification Run lifecycle", () => {
     expect(decision.next).toBe("START_NEXT_CHECK");
   });
 
+  it("derives one immutable VerificationFailure from terminal daemon evidence", () => {
+    const started = decideVerificationCheckStart({
+      actor: system,
+      run,
+      check: requiredCheck,
+      checks,
+      expectedRunVersion: 1,
+      expectedCheckVersion: 1,
+      now,
+    });
+    const completed = decideVerificationCheckCompletion({
+      actor: system,
+      run: started.run,
+      check: started.check,
+      checks: [started.check, optionalCheck],
+      expectedRunVersion: started.run.version,
+      expectedCheckVersion: started.check.version,
+      observation: observation("FAILED"),
+    });
+
+    expect(
+      deriveVerificationFailure({
+        failureId: "verification-failure-1",
+        run: completed.run,
+        checks: [completed.check, optionalCheck],
+        now: completed.check.completedAt ?? now,
+      }),
+    ).toMatchObject({
+      failure: {
+        id: "verification-failure-1",
+        verificationRunId: run.id,
+        verificationCheckId: requiredCheck.id,
+        reason: "REQUIRED_CHECK_FAILED",
+        staleReasons: [],
+      },
+      event: { type: "VERIFICATION_FAILURE_RECORDED" },
+    });
+    expect(() =>
+      deriveVerificationFailure({
+        failureId: "verification-failure-passed",
+        run: { ...completed.run, status: "PASSED", terminalReason: "ALL_REQUIRED_PASSED" },
+        checks: [completed.check, optionalCheck],
+        now,
+      }),
+    ).toThrow(expect.objectContaining({ code: "RUN_STATUS_INVALID" }));
+  });
+
   it.each([
     ["FAILED", "FAILED", "REQUIRED_CHECK_FAILED"],
     ["ERROR", "ERROR", "REQUIRED_CHECK_ERROR"],
@@ -386,6 +434,19 @@ describe("verification Run lifecycle", () => {
 
     expect(decision.run).toMatchObject({ status: runStatus, terminalReason });
     expect(decision.next).toBe("TERMINAL");
+    expect(
+      deriveVerificationFailure({
+        failureId: `verification-failure-${checkStatus.toLowerCase()}`,
+        run: decision.run,
+        checks: [decision.check, optionalCheck],
+        now: decision.check.completedAt ?? now,
+      }),
+    ).toMatchObject({
+      failure: {
+        verificationCheckId: requiredCheck.id,
+        reason: checkStatus === "FAILED" ? "REQUIRED_CHECK_FAILED" : "REQUIRED_CHECK_ERROR",
+      },
+    });
   });
 
   it("keeps an optional failure advisory and passes after all required Checks passed", () => {
@@ -468,6 +529,19 @@ describe("verification Run lifecycle", () => {
       version: 2,
     });
     expect(decision.checks).toEqual(checks);
+    expect(
+      deriveVerificationFailure({
+        failureId: "verification-failure-cancelled",
+        run: decision.run,
+        checks: decision.checks,
+        now: decision.run.completedAt ?? now,
+      }),
+    ).toMatchObject({
+      failure: {
+        verificationCheckId: null,
+        reason: "RUN_INTERRUPTED",
+      },
+    });
   });
 
   it("interrupts only the current Check during daemon restart", () => {

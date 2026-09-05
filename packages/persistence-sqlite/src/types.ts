@@ -44,6 +44,7 @@ import type {
   VerificationPlan,
   VerificationPlanPublication,
   VerificationCheck,
+  VerificationFailure,
   VerificationRun,
 } from "@loomrail/contracts";
 import type { WorktreeEntry } from "@loomrail/workspace";
@@ -130,6 +131,7 @@ export type StateQuery =
   | { type: "GET_VERIFICATION_RUN"; runId: string }
   | { type: "GET_VERIFICATION_RUN_CONTEXT"; runId: string }
   | { type: "LIST_WORK_ITEM_VERIFICATION_RUNS"; workItemId: string; limit?: number }
+  | { type: "LIST_WORK_ITEM_VERIFICATION_FAILURES"; workItemId: string; limit?: number }
   | { type: "LIST_ACTIVE_VERIFICATION_RUNS" }
   | { type: "GET_VERIFICATION_OUTPUT_ARTIFACT"; checkId: string }
   | { type: "GET_PROJECT_READINESS_SNAPSHOT"; projectId: string }
@@ -224,6 +226,7 @@ export type StateQueryResult =
       workspace: WorkItemWorkspace;
     }
   | { type: "VERIFICATION_RUNS"; runs: VerificationRun[] }
+  | { type: "VERIFICATION_FAILURES"; failures: VerificationFailure[] }
   | {
       type: "VERIFICATION_OUTPUT_ARTIFACT";
       artifact: { artifactId: string; checkId: string; runId: string; storageKey: string } | null;
@@ -342,6 +345,7 @@ export type LocalStateIdKind =
   | "verificationPlanPublication"
   | "verificationRun"
   | "verificationCheck"
+  | "verificationFailure"
   | "projectReadinessRun"
   | "readinessCheck"
   | "securityFinding"

@@ -6,6 +6,7 @@ import {
   startVerificationRunRequestSchema,
   verificationCheckSchema,
   verificationEvidenceSchema,
+  verificationFailureSchema,
   verificationPlanProposalSchema,
   verificationRecipeSchema,
   verificationRunSchema,
@@ -183,6 +184,40 @@ const activePlan = {
 };
 
 describe("verification run evidence contract", () => {
+  it("keeps a verification failure as a path-free immutable evaluator identity", () => {
+    const failure = {
+      schemaVersion: 1,
+      id: "verification-failure-1",
+      projectId: runningRun.projectId,
+      workItemId: runningRun.workItemId,
+      pipelineRunId: runningRun.pipelineRunId,
+      verificationRunId: runningRun.id,
+      verificationCheckId: runningCheck.id,
+      planId: runningRun.planId,
+      planRevision: runningRun.planRevision,
+      planContentHash: runningRun.planContentHash,
+      implementationTree: runningRun.implementationTree,
+      reason: "REQUIRED_CHECK_FAILED",
+      staleReasons: [],
+      createdAt: "2026-09-05T10:00:01.250Z",
+    } as const;
+
+    expect(verificationFailureSchema.parse(failure)).toEqual(failure);
+    expect(
+      verificationFailureSchema.safeParse({
+        ...failure,
+        reason: "STALE",
+        verificationCheckId: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      verificationFailureSchema.safeParse({
+        ...failure,
+        outputPath: "/private/loomrail-fixture/output.txt",
+      }).success,
+    ).toBe(false);
+  });
+
   it("keeps owner start, retry and cancellation requests strict and version-bound", () => {
     const start = {
       schemaVersion: 1,
