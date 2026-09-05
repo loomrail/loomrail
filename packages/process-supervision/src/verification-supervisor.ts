@@ -227,13 +227,17 @@ if (invocation === null) {
       if (stopping) return;
       stopping = true;
       void (async (): Promise<void> => {
-        if (!(await processTree.reapDescendants(targetPid, targetStartedAt)) || !markStopped()) {
+        const exitReported = writeControl(
+          `EXIT:${invocation.controlToken}:${code === null ? "null" : code.toString()}:${signal ?? "null"}`,
+        );
+        if (
+          !exitReported ||
+          !(await processTree.reapDescendants(targetPid, targetStartedAt)) ||
+          !markStopped()
+        ) {
           finish(1);
           return;
         }
-        writeControl(
-          `EXIT:${invocation.controlToken}:${code === null ? "null" : code.toString()}:${signal ?? "null"}`,
-        );
         finish(code ?? 1);
       })();
     });

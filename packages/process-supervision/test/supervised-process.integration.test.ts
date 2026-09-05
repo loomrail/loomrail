@@ -254,6 +254,52 @@ describe("supervised local process", () => {
     await removeVerificationProcessRecord(registryDirectory, runId);
   }, 10_000);
 
+  it("does not charge proven post-exit cleanup against the target deadline", async () => {
+    const root = await mkdtemp(join(tmpdir(), "loomrail post-exit cleanup "));
+    roots.push(root);
+    const registryDirectory = join(root, "processes");
+    const runId = "verification-run-post-exit-cleanup";
+    const supervisorEntrypoint = join(root, "post-exit-supervisor.mjs");
+    await writeFile(
+      supervisorEntrypoint,
+      [
+        'import { writeFileSync } from "node:fs";',
+        "const valueAfter = (flag) => process.argv[process.argv.indexOf(flag) + 1];",
+        'const token = valueAfter("--control-token");',
+        'const registryFile = valueAfter("--registry-file");',
+        'const runId = valueAfter("--run-id");',
+        "writeFileSync(3, `READY:${token}\\n`);",
+        'process.stdin.once("data", () => {',
+        "  writeFileSync(3, `EXIT:${token}:0:null\\n`);",
+        "  setTimeout(() => {",
+        '    writeFileSync(registryFile, JSON.stringify({ schemaVersion: 1, runId, state: "STOPPED", stoppedAt: new Date().toISOString() }));',
+        "    process.exit(0);",
+        "  }, 1200);",
+        "});",
+      ].join("\n"),
+    );
+    await prepareVerificationProcessIntent(registryDirectory, runId);
+
+    const result = await runSupervisedProcess({
+      command: process.execPath,
+      args: ["-e", "process.exit(0)"],
+      cwd: root,
+      env: { PATH: process.env["PATH"] ?? "" },
+      deadlineMs: 250,
+      graceMs: 100,
+      outputLimitBytes: 128,
+      redactValues: [],
+      orphanGuard: { runId, registryDirectory, supervisorEntrypoint },
+    });
+
+    expect(result).toMatchObject({ termination: "EXITED", exitCode: 0, signal: null });
+    expect(result.durationMs).toBeGreaterThanOrEqual(1_000);
+    await expect(
+      verificationProcessIsStopped(verificationProcessRecordPath(registryDirectory, runId), runId),
+    ).resolves.toBe(true);
+    await removeVerificationProcessRecord(registryDirectory, runId);
+  }, 10_000);
+
   it("reaps an ignored descendant before reporting a successful root exit", async () => {
     const root = await mkdtemp(join(tmpdir(), "loomrail successful descendant "));
     roots.push(root);

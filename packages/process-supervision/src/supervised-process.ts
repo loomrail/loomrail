@@ -347,6 +347,11 @@ export const runSupervisedProcess = async (
               return;
             }
             targetExit = { code, signal };
+            // EXIT proves the target met its execution deadline. The trusted supervisor still owns
+            // descendant cleanup and must publish STOPPED before this call can return, but that
+            // fail-closed finalization time is not target runtime and cannot rewrite a success.
+            clearTimeout(deadlineTimer);
+            options.signal?.removeEventListener("abort", cancel);
           }
           newline = controlBuffer.indexOf(0x0a);
         }
