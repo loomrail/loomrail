@@ -7,14 +7,14 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
-import { MAX_TOTAL_QA_CORRECTION_RUNS } from "./qa.js";
+import { MAX_TOTAL_CORRECTION_RUNS } from "./correction.js";
 
 export const MAX_REVIEW_FINDINGS_PER_REPORT = 20;
 export const MAX_OPEN_REVIEW_FINDINGS = 200;
 export const MAX_AUTOMATIC_REVIEW_ROUNDS = 2;
 export const MAX_OWNER_AUTHORIZED_REVIEW_ROUNDS = 1;
 export const MAX_TOTAL_REVIEW_ROUNDS = MAX_AUTOMATIC_REVIEW_ROUNDS + MAX_OWNER_AUTHORIZED_REVIEW_ROUNDS;
-export const MAX_REVIEW_REPORT_HISTORY = MAX_TOTAL_REVIEW_ROUNDS * (1 + MAX_TOTAL_QA_CORRECTION_RUNS);
+export const MAX_REVIEW_REPORT_HISTORY = MAX_TOTAL_REVIEW_ROUNDS * (1 + MAX_TOTAL_CORRECTION_RUNS);
 
 export const reviewVerdictSchema = z.enum(["PASSED", "CHANGES_REQUESTED"]);
 export const reviewFindingSeveritySchema = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]);

@@ -48,6 +48,8 @@ output; restart сохраняет failure, а crash во время process д�
       Immutable failure identity и атомарная запись `FAILED | ERROR | INTERRUPTED` уже готовы; correction transition,
       re-review/rerun links и `STALE` materialization остаются в работе.
 - [ ] Применить общий bounded correction ceiling, не смешивая VerificationFailure и QADefect identities.
+      Общие constants и pure decision `2 automatic + 1 owner` уже заменили QA-only policy; durable usage/lineage,
+      объединяющие оба evaluator без объединения их failure entities, остаются в работе.
 - [x] Сделать required failed/error/interrupted/stale детерминированным Acceptance blocker; optional failure оставить
       advisory.
 - [x] Показать criterion-to-verification evidence в Acceptance Package/export без raw output/path leakage.

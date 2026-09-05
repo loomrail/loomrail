@@ -7,6 +7,7 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
+import { MAX_AUTOMATIC_CORRECTION_RUNS, MAX_TOTAL_CORRECTION_RUNS } from "./correction.js";
 
 export const MAX_QA_TARGETS = 24;
 export const MAX_QA_SCENARIOS = 20;
@@ -17,8 +18,9 @@ export const MAX_QA_OBSERVATIONS = 100;
 export const MAX_QA_ATTACHMENTS = 50;
 export const MAX_QA_DEFECTS = 50;
 export const MAX_QA_RUN_HISTORY = 20;
-export const MAX_AUTOMATIC_QA_CORRECTION_RUNS = 2;
-export const MAX_TOTAL_QA_CORRECTION_RUNS = 3;
+/** Compatibility aliases; Q17 shares the same delivery-wide budget with Project verification. */
+export const MAX_AUTOMATIC_QA_CORRECTION_RUNS = MAX_AUTOMATIC_CORRECTION_RUNS;
+export const MAX_TOTAL_QA_CORRECTION_RUNS = MAX_TOTAL_CORRECTION_RUNS;
 export const MAX_QA_CORRECTION_DEFECTS = MAX_TOTAL_QA_CORRECTION_RUNS * MAX_QA_DEFECTS;
 export const MAX_QA_ATTACHMENT_BYTES = 32 * 1_024 * 1_024;
 export const MAX_QA_STORED_ATTACHMENT_BYTES = 1_024 * 1_024 * 1_024;

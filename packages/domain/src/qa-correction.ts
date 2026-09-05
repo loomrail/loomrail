@@ -1,6 +1,6 @@
 import {
-  MAX_AUTOMATIC_QA_CORRECTION_RUNS,
-  MAX_TOTAL_QA_CORRECTION_RUNS,
+  MAX_AUTOMATIC_CORRECTION_RUNS,
+  MAX_TOTAL_CORRECTION_RUNS,
   qaCorrectionRunSchema,
   qaDefectSchema,
   qaEvidenceBundleSchema,
@@ -35,6 +35,8 @@ import {
   type WorkflowDispatch,
   type WorkItem,
 } from "@loomrail/contracts";
+
+import { decideCorrectionBudget } from "./correction-budget.js";
 
 export type QADefectDispositionErrorCode =
   | "QA_DEFECT_NOT_FOUND"
@@ -396,21 +398,32 @@ export const decideQACorrectionLoop = (input: {
       }),
     };
   }
-  if (correction === undefined) {
-    return { action: "START_CORRECTION", automatic: true, nextOrdinal: 1, previousCorrection: null };
-  }
-  if (correction.ordinal < MAX_AUTOMATIC_QA_CORRECTION_RUNS) {
+  const totalUsed = correction?.ordinal ?? 0;
+  const budget = decideCorrectionBudget({
+    automaticUsed: Math.min(totalUsed, MAX_AUTOMATIC_CORRECTION_RUNS),
+    totalUsed,
+  });
+  if (budget.action === "START_AUTOMATIC") {
     return {
       action: "START_CORRECTION",
       automatic: true,
-      nextOrdinal: correction.ordinal + 1,
-      previousCorrection: qaCorrectionRunSchema.parse({
-        ...correction,
-        status: "SUPERSEDED",
-        completedAt: input.now,
-        version: correction.version + 1,
-      }),
+      nextOrdinal: budget.position,
+      previousCorrection:
+        correction === undefined
+          ? null
+          : qaCorrectionRunSchema.parse({
+              ...correction,
+              status: "SUPERSEDED",
+              completedAt: input.now,
+              version: correction.version + 1,
+            }),
     };
+  }
+  if (correction === undefined) {
+    throw new QACorrectionError(
+      "QA_CORRECTION_STATE_MISMATCH",
+      "Correction usage cannot be exhausted before its first durable QA correction",
+    );
   }
   return {
     action: "WAIT_FOR_OWNER",
@@ -420,7 +433,7 @@ export const decideQACorrectionLoop = (input: {
       completedAt: null,
       version: correction.version + 1,
     }),
-    canAuthorizeFinal: correction.ordinal < MAX_TOTAL_QA_CORRECTION_RUNS,
+    canAuthorizeFinal: budget.action === "WAIT_FOR_OWNER",
   };
 };
 
@@ -785,7 +798,7 @@ export const assertQACorrectionAcceptanceLineage = (input: {
   const retestPlanIds = new Set(retestPlans.map(({ id }) => id));
   if (
     correctionRuns.length === 0 ||
-    correctionRuns.length > MAX_TOTAL_QA_CORRECTION_RUNS ||
+    correctionRuns.length > MAX_TOTAL_CORRECTION_RUNS ||
     retestPlans.length !== correctionRuns.length ||
     correctionIds.size !== correctionRuns.length ||
     retestPlanIds.size !== retestPlans.length ||
@@ -1001,7 +1014,7 @@ export const decidePassedQACorrectionTransition = (input: {
 export type QACorrectionOwnerDecision =
   | {
       action: "START_FINAL_CORRECTION";
-      nextOrdinal: typeof MAX_TOTAL_QA_CORRECTION_RUNS;
+      nextOrdinal: typeof MAX_TOTAL_CORRECTION_RUNS;
       previousCorrection: QACorrectionRun;
     }
   | { action: "CANCEL_CORRECTION"; correctionRun: QACorrectionRun };
@@ -1021,7 +1034,7 @@ export const decideQACorrectionOwnerAction = (input: {
     );
   }
   if (input.action === "AUTHORIZE_FINAL") {
-    if (correction.ordinal !== MAX_AUTOMATIC_QA_CORRECTION_RUNS) {
+    if (correction.ordinal !== MAX_AUTOMATIC_CORRECTION_RUNS) {
       throw new QACorrectionError(
         "QA_CORRECTION_LIMIT_REACHED",
         "The final owner-authorized QA correction is no longer available",
@@ -1030,7 +1043,7 @@ export const decideQACorrectionOwnerAction = (input: {
     }
     return {
       action: "START_FINAL_CORRECTION",
-      nextOrdinal: MAX_TOTAL_QA_CORRECTION_RUNS,
+      nextOrdinal: MAX_TOTAL_CORRECTION_RUNS,
       previousCorrection: qaCorrectionRunSchema.parse({
         ...correction,
         status: "SUPERSEDED",
@@ -1219,7 +1232,7 @@ const assertQACorrectionGateLineage = (input: {
       "The exhausted correction no longer points to this QA baseline",
     );
   }
-  const expectedOptionCount = correctionRun.ordinal === MAX_AUTOMATIC_QA_CORRECTION_RUNS ? 2 : 1;
+  const expectedOptionCount = correctionRun.ordinal === MAX_AUTOMATIC_CORRECTION_RUNS ? 2 : 1;
   if (request.options.length !== expectedOptionCount) {
     throw new QACorrectionError(
       "QA_CORRECTION_REQUEST_INVALID",

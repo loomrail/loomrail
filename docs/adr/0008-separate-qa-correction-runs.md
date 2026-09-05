@@ -45,6 +45,11 @@ append-only history.
 - Current state, defect dispositions, events and the next dispatch or HumanRequest are persisted in one SQLite
   transaction. WebSocket/SSE remains invalidation delivery only.
 
+Q17 extends the ceiling, not the evaluator identity: Project verification failures remain separate from Browser QA
+defects, while both consume one delivery-wide budget of two automatic correction cycles plus one owner-authorized
+cycle. The shared pure budget decision is evaluator-neutral; durable lineage still records which evaluator caused each
+cycle.
+
 ## Consequences
 
 ### Positive
