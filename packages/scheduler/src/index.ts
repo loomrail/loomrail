@@ -108,6 +108,11 @@ export class SchedulerPlanningError extends Error {
   }
 }
 
+// Code-unit order, never `localeCompare`: the latter consults the host's ICU collation, so two
+// machines could pick different dispatches for the same tie -- the tiebreak has to be a fixed
+// total order over the same input.
+const compareText = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
+
 const priorityOrder: Readonly<Record<WorkItem["priority"], number>> = {
   URGENT: 0,
   HIGH: 1,
@@ -203,8 +208,8 @@ const workspaceClaimsConflict = (left: SchedulerWorkspaceClaim, right: Scheduler
 
 const compareCandidates = (left: SchedulerCandidate, right: SchedulerCandidate): number =>
   priorityOrder[left.priority] - priorityOrder[right.priority] ||
-  left.createdAt.localeCompare(right.createdAt) ||
-  left.dispatchId.localeCompare(right.dispatchId);
+  compareText(left.createdAt, right.createdAt) ||
+  compareText(left.dispatchId, right.dispatchId);
 
 /**
  * Plans a bounded scheduling batch without mutating workflow state.

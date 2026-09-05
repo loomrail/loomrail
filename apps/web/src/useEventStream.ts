@@ -1,10 +1,13 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { makeSummaryRefresher, SUMMARY_REFRESH_DEBOUNCE_MS, type SummaryRefresher } from "./changesView";
 import { connectEventStream, type EventSourceLike } from "./eventStream";
 
 type QueryScope = readonly string[];
+
+// How long a tab waits before building a new EventSource after the browser gave up on the old one.
+export const STREAM_RECONNECT_DELAY_MS = 5_000;
 
 const queryStartsWith = (queryKey: readonly unknown[], scope: QueryScope): boolean =>
   scope.every((part, index) => queryKey[index] === part);
@@ -101,6 +104,10 @@ export const createEventQueryInvalidator = (
  */
 export const useEventStream = (enabled: boolean): void => {
   const queryClient = useQueryClient();
+  // Bumped when the browser gives up on the current source, so the effect below builds a fresh
+  // one. `EventSource` never retries a non-200 response by itself (the daemon's stream cap, a
+  // passing 5xx), and a tab whose source died that way used to stay silent until a reload.
+  const [generation, setGeneration] = useState(0);
 
   useEffect(() => {
     if (!enabled) return;
@@ -110,14 +117,25 @@ export const useEventStream = (enabled: boolean): void => {
     // superset of EventSourceLike, so this bridges an interop mismatch, not an unsafe widening.
     const source = new EventSource("/api/v1/stream") as unknown as EventSourceLike;
     const invalidator = createEventQueryInvalidator(queryClient);
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     const disconnect = connectEventStream({
       source,
       invalidateAll: invalidator.invalidateAll,
       invalidateScopes: invalidator.invalidateScopes,
+      onClosed: () => {
+        // A fixed delay rather than an immediate retry: the usual cause is a stream slot that
+        // another tab still holds, and the reconnect is one GET the daemon answers instantly. The
+        // connection query is invalidated separately, so a session that is really gone still
+        // shows its recovery panel while this waits.
+        reconnectTimer ??= setTimeout(() => {
+          setGeneration((current) => current + 1);
+        }, STREAM_RECONNECT_DELAY_MS);
+      },
     });
     return () => {
+      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
       disconnect();
       invalidator.dispose();
     };
-  }, [enabled, queryClient]);
+  }, [enabled, queryClient, generation]);
 };

@@ -49,7 +49,7 @@ It uses only a synthetic fixture and is not a substitute for the private dogfood
 Run the provider compatibility process gate separately as well:
 
 ```bash
-pnpm exec vitest run apps/daemon/test/provider-compatibility.unit.test.ts
+pnpm test:provider-compatibility
 ```
 
 It exercises exact version parsing, timeout/output bounds and redaction through a real synthetic child process. CI

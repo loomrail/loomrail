@@ -58,7 +58,10 @@ export const connectToLocalDaemon = async (): Promise<ConnectionResult> => {
 
     return { status: "connected", daemon: await fetchDaemonStatus() };
   } catch (error: unknown) {
-    if (isLocalApiError(error) && error.recovery === "reopen") pendingBootstrapToken = null;
+    // Keep the token only for a transient failure (daemon unreachable, 5xx); any definitive answer
+    // -- rejected, or a 4xx the daemon will give again -- means re-posting it on every retry would
+    // just repeat the same refusal in front of the status check that explains the real state.
+    if (isLocalApiError(error) && error.recovery !== "retry") pendingBootstrapToken = null;
     const connectionError = error instanceof Error ? error : new Error("Could not connect to Loomrail");
     return {
       status: "error",

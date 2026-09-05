@@ -273,11 +273,13 @@ export class RepositoryScanError extends Error {
 }
 
 export const scanProjectRepository = async (repositoryPath: string): Promise<RepositoryScan> => {
-  const [canonicalRoot, repository] = await Promise.all([
-    realpath(repositoryPath).catch(() => null),
-    inspectRepository(repositoryPath),
-  ]);
-  if (canonicalRoot === null || repository === null || !samePath(canonicalRoot, repository.topLevel)) {
+  // Canonicalise first and only then ask git: spawning git with a missing directory as `cwd` fails
+  // with ENOENT, which `runGit` can only report as "git is not installed" -- the wrong diagnosis
+  // for a Project whose repository was moved or deleted.
+  const canonicalRoot = await realpath(repositoryPath).catch(() => null);
+  if (canonicalRoot === null) throw new RepositoryScanError();
+  const repository = await inspectRepository(canonicalRoot);
+  if (repository === null || !samePath(canonicalRoot, repository.topLevel)) {
     throw new RepositoryScanError();
   }
 

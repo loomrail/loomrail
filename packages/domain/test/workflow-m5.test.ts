@@ -11,8 +11,10 @@ import type {
 import { describe, expect, it } from "vitest";
 
 import {
+  decideAnswerHumanRequest,
   decideApplyProviderOutcome,
   decideApproveBudgetOverride,
+  decideParkQueuedStageAttemptForBudget,
   decidePausePipeline,
   decideRecordProviderUsage,
   decideRecoverInterruptedWorkflow,
@@ -498,5 +500,123 @@ describe("M5 workflow decisions", () => {
       dispatch: { status: "FAILED" },
       report: { reason: "DAEMON_RESTART" },
     });
+  });
+});
+
+describe("decideParkQueuedStageAttemptForBudget", () => {
+  const queuedAttempt: StageAttempt = { ...stageAttempt, status: "QUEUED", version: 3 };
+  const resumeDispatch: WorkflowDispatch = { ...dispatch, id: "dispatch-resume", mode: "RESUME" };
+
+  it("parks the queued current stage as a budget hard pause and withdraws its dispatch", () => {
+    const parked = decideParkQueuedStageAttemptForBudget({
+      now,
+      workItem,
+      run,
+      stageAttempt: queuedAttempt,
+      dispatch: resumeDispatch,
+    });
+    expect(parked).toMatchObject({
+      workItem: { state: "BLOCKED", currentStage: "IMPLEMENT", version: workItem.version + 1 },
+      run: { status: "HARD_PAUSED", version: run.version + 1, currentStageAttemptId: queuedAttempt.id },
+      stageAttempt: { status: "HARD_PAUSED", failureCode: null, version: queuedAttempt.version + 1 },
+      dispatch: { id: "dispatch-resume", status: "FAILED", completedAt: now },
+      events: [
+        { type: "STAGE_ATTEMPT_CHANGED", data: { previousStatus: "QUEUED" } },
+        { type: "PIPELINE_PAUSED", data: { kind: "HARD" } },
+      ],
+    });
+    // A budget pause carries no session failure code, which is what keeps the BudgetPolicy
+    // override -- the only thing that addresses it -- available for this attempt.
+    expect(parked.stageAttempt.failureCode).toBeNull();
+  });
+
+  it("refuses anything but the queued current stage of a running pipeline", () => {
+    expect(() =>
+      decideParkQueuedStageAttemptForBudget({
+        now,
+        workItem,
+        run,
+        stageAttempt,
+        dispatch: resumeDispatch,
+      }),
+    ).toThrow(expect.objectContaining({ code: "WORKFLOW_CONTROL_NOT_ALLOWED" }));
+    expect(() =>
+      decideParkQueuedStageAttemptForBudget({
+        now,
+        workItem,
+        run: { ...run, status: "WAITING_HUMAN" },
+        stageAttempt: queuedAttempt,
+        dispatch: resumeDispatch,
+      }),
+    ).toThrow(expect.objectContaining({ code: "WORKFLOW_CONTROL_NOT_ALLOWED" }));
+    expect(() =>
+      decideParkQueuedStageAttemptForBudget({
+        now,
+        workItem,
+        run,
+        stageAttempt: queuedAttempt,
+        dispatch: { ...resumeDispatch, status: "FAILED" },
+      }),
+    ).toThrow(expect.objectContaining({ code: "WORKFLOW_CONTROL_NOT_ALLOWED" }));
+  });
+});
+
+describe("decideAnswerHumanRequest option cardinality", () => {
+  const waitingRun: PipelineRun = { ...run, status: "WAITING_HUMAN" };
+  const waitingAttempt: StageAttempt = { ...stageAttempt, status: "WAITING_HUMAN" };
+  const confirmation = {
+    schemaVersion: 1 as const,
+    id: "request-confirm",
+    projectId: workItem.projectId,
+    workItemId: workItem.id,
+    stageAttemptId: stageAttempt.id,
+    kind: "CONFIRMATION" as const,
+    blocking: true,
+    title: "Proceed with the migration?",
+    context: "The migration rewrites the users table.",
+    recommendation: "Confirm only after a backup exists.",
+    options: [
+      { id: "confirm", label: "Confirm", consequence: "The migration runs.", recommended: false },
+      { id: "decline", label: "Decline", consequence: "The stage stops here.", recommended: true },
+    ],
+    allowOther: false,
+    status: "OPEN" as const,
+    version: 1,
+    createdAt: now,
+    resolvedAt: null,
+  };
+  const answer = (optionIds: string[]) =>
+    decideAnswerHumanRequest(
+      {
+        schemaVersion: 1,
+        commandId: `answer-${optionIds.join("-")}`,
+        correlationId: "correlation-answer-confirmation",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "ANSWER_HUMAN_REQUEST",
+        payload: {
+          humanRequestId: confirmation.id,
+          expectedVersion: 1,
+          answer: { type: "OPTION", optionIds },
+        },
+      },
+      {
+        now,
+        workItem: { ...workItem, state: "BLOCKED" },
+        run: waitingRun,
+        stageAttempt: waitingAttempt,
+        request: confirmation,
+        decisionId: "decision-confirmation",
+        dispatchId: "dispatch-confirmation",
+      },
+    );
+
+  it("accepts exactly one option for a CONFIRMATION and refuses a contradictory pair", () => {
+    expect(answer(["confirm"])).toMatchObject({
+      request: { status: "RESOLVED" },
+      stageAttempt: { status: "QUEUED" },
+    });
+    expect(() => answer(["confirm", "decline"])).toThrow(
+      expect.objectContaining({ code: "HUMAN_REQUEST_INVALID_ANSWER" }),
+    );
   });
 });

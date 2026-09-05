@@ -59,6 +59,7 @@ import {
   pipelineControlAppliedResultSchema,
   pipelinePausedEventSchema,
   pipelineResumedEventSchema,
+  pipelineRunSchema,
   pipelineStartedEventSchema,
   pipelineStartedResultSchema,
   providerSessionEndedEventSchema,
@@ -85,9 +86,11 @@ import {
   requestContextHandoffCommandSchema,
   stageAttemptChangedEventSchema,
   stageAttemptHardPausedResultSchema,
+  stageAttemptSchema,
   startMockPipelineCommandSchema,
   startProviderSessionCommandSchema,
   usageRecordedEventSchema,
+  workflowDispatchSchema,
   workflowDispatchStartedResultSchema,
   workflowStageSchema,
   workflowsReconciledResultSchema,
@@ -634,6 +637,19 @@ export const agentRunStartedResultSchema = commandResultBaseSchema.extend({
   ),
 });
 
+// START_AGENT_RUN found the active budget already exhausted. No run is reserved: the queued
+// StageAttempt is parked HARD_PAUSED before it starts, exactly as a cap crossed by the previous
+// stage's terminal usage parks the next one, so the owner sees the pause and can raise the cost
+// policy. Without this the daemon retried the reservation every pass with nothing to show for it.
+export const agentRunBudgetParkedResultSchema = commandResultBaseSchema.extend({
+  type: z.literal("AGENT_RUN_BUDGET_PARKED"),
+  workItemId: opaqueIdSchema,
+  run: pipelineRunSchema,
+  stageAttempt: stageAttemptSchema,
+  dispatch: workflowDispatchSchema,
+  events: z.array(z.discriminatedUnion("type", [stageAttemptChangedEventSchema, pipelinePausedEventSchema])),
+});
+
 export const reviewFindingDisposedResultSchema = commandResultBaseSchema.extend({
   type: z.literal("REVIEW_FINDING_DISPOSED"),
   workItemId: opaqueIdSchema,
@@ -663,6 +679,7 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   workItemUpdatedResultSchema,
   workItemMovedResultSchema,
   agentRunStartedResultSchema,
+  agentRunBudgetParkedResultSchema,
   qaRunReservedResultSchema,
   qaRunCompletedResultSchema,
   qaAttachmentRetentionRecordedResultSchema,
@@ -805,6 +822,7 @@ export type WorkItemUpdatedEvent = z.infer<typeof workItemUpdatedEventSchema>;
 export type WorkItemStateChangedEvent = z.infer<typeof workItemStateChangedEventSchema>;
 export type SquadAssignedEvent = z.infer<typeof squadAssignedEventSchema>;
 export type AgentRunStartedEvent = z.infer<typeof agentRunStartedEventSchema>;
+export type AgentRunBudgetParkedResult = z.infer<typeof agentRunBudgetParkedResultSchema>;
 export type AgentRunFinishedEvent = z.infer<typeof agentRunFinishedEventSchema>;
 export type RegisterProjectCommand = z.infer<typeof registerProjectCommandSchema>;
 export type RepointFixtureProjectCommand = z.infer<typeof repointFixtureProjectCommandSchema>;

@@ -27,6 +27,7 @@ export type McpOrphanRecoveryReport = {
     | "IDENTITY_CONFIRMED"
     | "ALREADY_GONE"
     | "INVALID_RECORD"
+    | "STALE_TEMPORARY"
     | "SUPERVISOR_STILL_RUNNING"
     | "START_TIME_MISMATCH"
     | "SIGNAL_REFUSED";
@@ -56,6 +57,16 @@ export const recoverMcpOrphans = async (
       }
       record = mcpProcessRecordSchema.parse(JSON.parse(await readFile(path, "utf8")) as unknown);
     } catch {
+      // A half-written `.json.tmp-<pid>` whose writer is gone is the residue of a supervisor that
+      // crashed between write and rename. It can never become a valid record, so it is removed
+      // instead of being reported as invalid on every start for the rest of the install's life. A
+      // final `.json` that fails to parse is left alone: unknown state is never deleted.
+      const temporaryWriter = /\.json\.tmp-(\d+)$/u.exec(name);
+      if (temporaryWriter?.[1] !== undefined && !processTree.pidExists(Number(temporaryWriter[1]))) {
+        await removeRecord(path);
+        reports.push({ recordFile: name, serverPid: null, action: "REMOVED", reason: "STALE_TEMPORARY" });
+        continue;
+      }
       reports.push({
         recordFile: name,
         serverPid: null,

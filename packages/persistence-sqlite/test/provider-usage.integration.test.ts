@@ -572,6 +572,133 @@ describe("durable provider usage", () => {
     });
   });
 
+  it("parks a re-queued stage whose budget was spent by a question-asking session, so an override can resume it", async () => {
+    const localState = await open();
+    const execution = startExecution(localState, 100);
+    // The session asks the owner a question; its terminal usage spends the whole budget. Nothing
+    // is parked here (the owner still has to answer), which is exactly the state that used to
+    // leave the run un-startable after the answer.
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "needs-human-at-the-cap",
+      correlationId: "correlation-needs-human-at-the-cap",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "APPLY_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId: execution.pipeline.dispatch.id,
+        provider: "CODEX",
+        template: execution.template,
+        resultTree: null,
+        outcome: {
+          type: "NEEDS_HUMAN",
+          request: {
+            kind: "SINGLE_CHOICE",
+            blocking: true,
+            title: "Choose the discovery depth",
+            context: "A decision is required before discovery can continue.",
+            recommendation: "Use the focused pass.",
+            options: [
+              { id: "focused", label: "Focused pass", consequence: "Bounded discovery.", recommended: true },
+              { id: "broad", label: "Broad pass", consequence: "Wider discovery.", recommended: false },
+            ],
+            allowOther: false,
+          },
+        },
+        sessionCompletion: {
+          providerSessionId: execution.session.session.id,
+          usage: { inputTokens: 80, outputTokens: 20, quality: "ACTUAL" },
+        },
+      },
+    });
+    const waiting = localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: execution.created.workItem.id,
+    });
+    if (waiting.type !== "WORKFLOW_SNAPSHOT") throw new Error("Expected a workflow snapshot");
+    const request = waiting.snapshot.humanRequests[0];
+    if (request === undefined) throw new Error("Expected the open HumanRequest");
+    const answered = localState.execute({
+      schemaVersion: 1,
+      commandId: "answer-at-the-cap",
+      correlationId: "correlation-answer-at-the-cap",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "ANSWER_HUMAN_REQUEST",
+      payload: {
+        humanRequestId: request.id,
+        expectedVersion: request.version,
+        answer: { type: "OPTION", optionIds: ["focused"] },
+      },
+    });
+    if (answered.type !== "HUMAN_REQUEST_ANSWERED" || answered.dispatch === null) {
+      throw new Error("Expected the answer to queue the stage");
+    }
+
+    const parked = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-agent-run-after-answer",
+      correlationId: "correlation-start-agent-run-after-answer",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: answered.dispatch.id,
+        provider: "CODEX",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    expect(parked).toMatchObject({
+      type: "AGENT_RUN_BUDGET_PARKED",
+      run: { status: "HARD_PAUSED" },
+      stageAttempt: { id: execution.pipeline.stageAttempt.id, status: "HARD_PAUSED", failureCode: null },
+      dispatch: { id: answered.dispatch.id, status: "FAILED" },
+      events: [{ type: "STAGE_ATTEMPT_CHANGED" }, { type: "PIPELINE_PAUSED", data: { kind: "HARD" } }],
+    });
+    expect(localState.query({ type: "LIST_PENDING_DISPATCHES" })).toMatchObject({ dispatches: [] });
+    expect(localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" })).toMatchObject({ runs: [] });
+    const pausedSnapshot = localState.query({
+      type: "GET_WORKFLOW_SNAPSHOT",
+      workItemId: execution.created.workItem.id,
+    });
+    if (pausedSnapshot.type !== "WORKFLOW_SNAPSHOT" || pausedSnapshot.snapshot.run === null) {
+      throw new Error("Expected a hard-paused workflow");
+    }
+    expect(
+      localState.query({ type: "GET_WORK_ITEM", workItemId: execution.created.workItem.id }),
+    ).toMatchObject({ workItem: { state: "BLOCKED" } });
+
+    const overridden = localState.execute({
+      schemaVersion: 1,
+      commandId: "override-after-park",
+      correlationId: "correlation-override-after-park",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "APPROVE_BUDGET_OVERRIDE",
+      payload: {
+        pipelineRunId: pausedSnapshot.snapshot.run.id,
+        expectedVersion: pausedSnapshot.snapshot.run.version,
+        maxEstimatedTokens: 300,
+      },
+    });
+    if (overridden.type !== "BUDGET_OVERRIDE_APPROVED")
+      throw new Error("Expected the override to be approved");
+    expect(overridden).toMatchObject({
+      stageAttempt: { status: "QUEUED" },
+      dispatch: { status: "PENDING" },
+    });
+    expect(
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "start-agent-run-after-override",
+        correlationId: "correlation-start-agent-run-after-override",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "START_AGENT_RUN",
+        payload: {
+          dispatchId: overridden.dispatch.id,
+          provider: "CODEX",
+          limits: { global: 3, project: 3, provider: 3 },
+        },
+      }),
+    ).toMatchObject({ type: "AGENT_RUN_STARTED" });
+  });
+
   it("rejects an external actor and keeps the report table append-only", async () => {
     const localState = await open();
     const execution = startExecution(localState, 200);

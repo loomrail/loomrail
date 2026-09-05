@@ -22,6 +22,10 @@ export type BindAcceptanceCriteriaResult =
 
 const unique = (values: readonly string[]): boolean => new Set(values).size === values.length;
 
+// Code-unit order, never `localeCompare`: the release summary is an audit artifact and its order
+// must be the same on every machine that renders it.
+const compareText = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
+
 /**
  * Turns a provider's criterion claims into authority-bound package rows.
  *
@@ -223,7 +227,7 @@ export const renderReleaseSummary = (input: RenderReleaseSummaryInput): RenderRe
   );
   const qaEvidence = input.qaEvidence
     .filter(({ qaRunId }) => relevantQARunIds.has(qaRunId))
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+    .sort((left, right) => compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id));
   if (
     qaEvidence.some(
       (evidence) =>
@@ -252,9 +256,7 @@ export const renderReleaseSummary = (input: RenderReleaseSummaryInput): RenderRe
   const relevantAttachmentIds = new Set(qaEvidence.flatMap(({ attachmentIds }) => attachmentIds));
   const attachments = input.qaAttachments
     .filter(({ id }) => relevantAttachmentIds.has(id))
-    .sort(
-      (left, right) => left.capturedAt.localeCompare(right.capturedAt) || left.id.localeCompare(right.id),
-    );
+    .sort((left, right) => compareText(left.capturedAt, right.capturedAt) || compareText(left.id, right.id));
   const attachmentIds = new Set(attachments.map(({ id }) => id));
   if (qaEvidence.some((evidence) => evidence.attachmentIds.some((id) => !attachmentIds.has(id)))) {
     return invalid("Measured QA evidence references unavailable attachment metadata");
@@ -272,7 +274,7 @@ export const renderReleaseSummary = (input: RenderReleaseSummaryInput): RenderRe
     return invalid("The release summary input crosses a WorkItem or Project boundary");
   }
   const decisions = [...input.decisions].sort(
-    (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    (left, right) => compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id),
   );
   const events = [...input.events].sort((left, right) => left.sequence - right.sequence);
   if (new Set(events.map(({ sequence }) => sequence)).size !== events.length) {

@@ -1003,6 +1003,16 @@ its own to that environment and scrubs nothing from it: SD-002 (an injected envi
 this milestone. This is a property of the CLI observed by probe, not something Loomrail asserts or enforces,
 and it is written here so that the `.env` control listed under §7 "Secrets" is not read as already true.
 
+**Repository hooks and the owner's signing key stay out of Loomrail's own Git plumbing.** Repository text is
+untrusted input, and a tracked `post-checkout` hook (husky-style repositories set `core.hooksPath` into the
+tree) would otherwise execute inside the daemon the moment a workspace is provisioned: `addWorktree` now runs
+`git worktree add` with `core.hooksPath` pointed at the null device, the same guard the readiness scanner
+already applied. The carry-in commit is created with `commit.gpgsign=false`: it is a machine-generated
+transport artifact, and an owner whose commits are normally signed must not get a passphrase prompt — or a
+failed provisioning — from a headless daemon. Carried paths are read with `-z` and `core.quotepath=false`, so a
+path with a space or a non-ASCII name is recorded verbatim in the workspace event rather than octal-escaped.
+Verified by `packages/workspace/test/plumbing-guards.integration.test.ts`.
+
 **T20 — the machine's own Codex config decides what the agent may do.** Rated High, and this weakening existed
 _before_ E1: `codex exec` launched without `--ignore-user-config` inherits the owner's entire
 `~/.codex/config.toml` — `approval_policy`, `sandbox_mode`, hooks, plugins, model providers **and MCP

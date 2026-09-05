@@ -270,4 +270,29 @@ describe("MCP process-tree supervisor", () => {
     ]);
     expect(processExists(watchedParent.pid)).toBe(true);
   });
+
+  it("removes a half-written temporary record whose writer is gone and keeps one whose writer lives", async () => {
+    directory = await mkdtemp(join(tmpdir(), "loomrail mcp stale temp "));
+    const staleName = `mcp-${randomBytes(32).toString("base64url")}.json.tmp-2147483647`;
+    const liveName = `mcp-${randomBytes(32).toString("base64url")}.json.tmp-${process.pid.toString()}`;
+    await writeFile(join(directory, staleName), '{"schemaVersion":1,"supervisorPid":', {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    await writeFile(join(directory, liveName), '{"schemaVersion":1,"supervisorPid":', {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+
+    const reports = await recoverMcpOrphans(directory);
+
+    expect(reports).toEqual(
+      expect.arrayContaining([
+        { recordFile: staleName, serverPid: null, action: "REMOVED", reason: "STALE_TEMPORARY" },
+        { recordFile: liveName, serverPid: null, action: "SKIPPED", reason: "INVALID_RECORD" },
+      ]),
+    );
+    await expect(readFile(join(directory, staleName), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(directory, liveName), "utf8")).resolves.toContain("supervisorPid");
+  });
 });

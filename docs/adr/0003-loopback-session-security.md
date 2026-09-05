@@ -43,6 +43,10 @@ Bootstrap tokens expire within one minute and cannot be replayed.
   session cookie, the same footing every other GET already stands on, and `Origin` is compared only when
   the browser does send it;
 - an open event stream is closed once its session expires, not merely refused a new connection;
+- session expiry slides: an authenticated HTTP request made in the second half of the 12-hour lifetime re-issues
+  the cookie for a fresh lifetime, so an owner who keeps using the tab is never locked out of a daemon whose
+  single-use bootstrap grant is already spent; an idle tab still expires, and the SSE heartbeat is deliberately
+  not a renewal;
 - session logout/revocation is durable;
 - daemon restart preserves valid sessions but never preserves unused plaintext bootstrap tokens.
 

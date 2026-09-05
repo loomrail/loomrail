@@ -40,7 +40,7 @@ export const LocalConnectionRecovery = ({
         {reopen ? (
           <div className="local-connection-recovery__command">
             <span>{t("connection.recovery.command")}</span>
-            <code>pnpm dev</code>
+            <code>npx loomrail</code>
           </div>
         ) : null}
       </div>

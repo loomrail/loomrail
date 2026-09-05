@@ -53,6 +53,8 @@ export type StateStoreErrorCode =
   // Project exists, this one refuses although one does, and only its narrow preconditions failed.
   | "PROJECT_REPOINT_REFUSED"
   | "MIGRATION_DRIFT"
+  // The database carries schema versions this build does not know: a newer Loomrail wrote it.
+  | "MIGRATION_INCOMPATIBLE"
   | "MIGRATION_FAILED"
   | "PERSISTENCE_FAILURE"
   | "STATE_CLOSED"
@@ -83,6 +85,10 @@ export type StateStoreErrorCode =
   | "WORKSPACE_VERSION_CONFLICT"
   // ACQUIRE_WORKSPACE_LEASE refuses to hand a workspace another StageAttempt is already writing in.
   | "WORKSPACE_LEASE_HELD"
+  // ACQUIRE_WORKSPACE_LEASE refuses an attempt that is no longer executable (cancelled, paused,
+  // finished): a claim landing after the attempt left its run would hold the writer lease with no
+  // session left to release it, and every later attempt on the WorkItem would be postponed.
+  | "WORKSPACE_LEASE_ATTEMPT_INACTIVE"
   // RELEASE_WORKSPACE_LEASE is only ever valid from the attempt currently holding the lease (spec
   // D6); anyone else is refused rather than trusted.
   | "WORKSPACE_LEASE_NOT_OWNED"

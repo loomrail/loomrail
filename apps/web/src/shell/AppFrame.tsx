@@ -138,7 +138,16 @@ const NewTaskDialog = (): React.JSX.Element => {
           </Button>
         </>
       }
-      onOpenChange={setOpen}
+      onOpenChange={(next) => {
+        // Closing without submitting drops the draft and, above all, the previous attempt's error:
+        // without this a failed create came back as a stale alert the next time the dialog opened.
+        if (!next) {
+          setTitle("");
+          setCriteriaText("");
+          createMutation.reset();
+        }
+        setOpen(next);
+      }}
       open={open}
       title={t("task.new")}
       trigger={

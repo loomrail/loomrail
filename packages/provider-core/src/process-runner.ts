@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 
 // A line longer than this is almost certainly a corrupted or adversarial stream rather than a
 // legitimate JSONL record (both `codex exec` and `claude` emit JSONL). Buffering it forever would
@@ -29,6 +30,16 @@ export class ProcessSpawnError extends Error {
   constructor(command: string, cause: Error) {
     super(`failed to start "${command}": ${cause.message}`, { cause });
     this.name = "ProcessSpawnError";
+  }
+}
+
+// Rejects `exited` when a caller-supplied line listener threw. The child was stopped and is gone;
+// what is missing is a trustworthy reading of what it said, so this is a failed session, never a
+// business outcome. Distinct from `ProcessSpawnError` (the child never ran) by `instanceof`.
+export class ProcessListenerError extends Error {
+  constructor(command: string, cause: unknown) {
+    super(`a line listener for "${command}" threw`, { cause });
+    this.name = "ProcessListenerError";
   }
 }
 
@@ -116,7 +127,12 @@ const createLineSplitter = (maxBytes: number, onLine: (line: string) => void): L
         newlineIndex = buffer.indexOf(0x0a);
       }
 
-      if (!discardingOverlongLine && buffer.length > maxBytes) {
+      if (discardingOverlongLine) {
+        // Still inside the overlong line (no newline has arrived since it was dropped): keep the
+        // residue out of memory too, or the cap would only bound the first megabyte of a line
+        // that never ends.
+        buffer = Buffer.alloc(0);
+      } else if (buffer.length > maxBytes) {
         // No newline yet and the buffer alone already exceeds the cap: stop accumulating this line
         // and discard everything up to (and including) its eventual newline.
         discardingOverlongLine = true;
@@ -151,18 +167,50 @@ const createLineSplitter = (maxBytes: number, onLine: (line: string) => void): L
 export const runProcess = (options: RunProcessOptions): ProcessRun => {
   const graceMs = options.graceMs ?? DEFAULT_GRACE_MS;
 
-  const child = spawn(options.command, options.args, {
-    cwd: options.cwd,
-    stdio: ["pipe", "pipe", "pipe"] as const,
-  });
+  let child: ChildProcessByStdio<Writable, Readable, Readable>;
+  try {
+    child = spawn(options.command, options.args, {
+      cwd: options.cwd,
+      stdio: ["pipe", "pipe", "pipe"] as const,
+    });
+  } catch (error: unknown) {
+    // `spawn` throws synchronously for an argument it will not pass at all -- a NUL byte inside a
+    // rendered pack is the realistic case. That is still "the process never ran", so it is
+    // reported the way every other never-started child is: a rejected `exited`, typed, and a
+    // `stop()` with nothing to stop.
+    const failed = Promise.reject(
+      new ProcessSpawnError(options.command, error instanceof Error ? error : new Error(String(error))),
+    );
+    failed.catch(() => undefined);
+    return { exited: failed, pid: undefined, stop: () => Promise.resolve() };
+  }
 
   // `codex exec` reads stdin even when the prompt arrives as a positional argument, and hangs
   // waiting for it. This module never writes a prompt of its own -- callers fold it into `args`
   // -- so stdin is simply closed right away.
   child.stdin.end();
 
-  const stdoutSplitter = createLineSplitter(MAX_STREAM_LINE_BYTES, options.onLine);
-  const stderrSplitter = createLineSplitter(MAX_STREAM_LINE_BYTES, options.onStderr);
+  // A listener that throws (an adapter callback that could not record what it saw) must not
+  // become an uncaught exception inside the child's `data` event -- that takes the whole daemon
+  // down mid-session. The first failure is kept, the child is stopped, and `exited` rejects with
+  // it once the process is gone, so the adapter reports a failed session rather than inventing an
+  // outcome from a stream it stopped reading.
+  let listenerFailure: unknown;
+  let listenerFailed = false;
+  const guarded =
+    (listener: (line: string) => void) =>
+    (line: string): void => {
+      if (listenerFailed) return;
+      try {
+        listener(line);
+      } catch (error: unknown) {
+        listenerFailed = true;
+        listenerFailure = error;
+        void stop();
+      }
+    };
+  const stdoutSplitter = createLineSplitter(MAX_STREAM_LINE_BYTES, guarded(options.onLine));
+  const stderrSplitter = createLineSplitter(MAX_STREAM_LINE_BYTES, guarded(options.onStderr));
   child.stdout.on("data", stdoutSplitter.push);
   child.stderr.on("data", stderrSplitter.push);
   child.stdout.on("end", stdoutSplitter.flush);
@@ -205,7 +253,11 @@ export const runProcess = (options: RunProcessOptions): ProcessRun => {
       stdoutSplitter.flush();
       stderrSplitter.flush();
     } finally {
-      deferredExit.resolve(outcome);
+      if (listenerFailed) {
+        deferredExit.reject(new ProcessListenerError(options.command, listenerFailure));
+      } else {
+        deferredExit.resolve(outcome);
+      }
     }
   };
 
@@ -248,14 +300,16 @@ export const runProcess = (options: RunProcessOptions): ProcessRun => {
     stopPromise ??= (async () => {
       if (!hasExited()) {
         child.kill("SIGTERM");
-        await Promise.race([exited, delay(graceMs)]);
+        await Promise.race([exited.catch(() => undefined), delay(graceMs)]);
         if (!hasExited()) {
           child.kill("SIGKILL");
         }
       }
       // Resolving here, not on send: `exited` only settles on the child's real `exit` event, so
-      // waiting on it is what makes `stop()` itself wait for the child to actually be gone.
-      await exited;
+      // waiting on it is what makes `stop()` itself wait for the child to actually be gone. The
+      // rejection (never started, or a listener threw) belongs to whoever awaits `exited`; `stop()`
+      // only promises that nothing is left running, which holds in both cases.
+      await exited.catch(() => undefined);
     })();
     return stopPromise;
   };

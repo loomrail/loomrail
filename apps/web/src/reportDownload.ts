@@ -13,5 +13,10 @@ export const downloadAnonymousReport = (report: AnonymousReport): void => {
   anchor.download = filename;
   anchor.href = href;
   anchor.click();
-  URL.revokeObjectURL(href);
+  // Revoking in the same task as the synthetic click races the download navigation: Firefox and
+  // WebKit resolve the `blob:` URL asynchronously and report "file not found" when it is already
+  // gone. Deferring the revoke keeps the object alive until the browser has taken the request.
+  setTimeout(() => {
+    URL.revokeObjectURL(href);
+  }, 1_000);
 };

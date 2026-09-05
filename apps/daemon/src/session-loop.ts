@@ -631,6 +631,12 @@ const acquireWorkspaceLease = (
   if (workspace.leaseHolder !== null) {
     return { type: "POSTPONED", detail: `held by ${workspace.leaseHolder}` };
   }
+  // Checked here, after the git work that preceded this call: a cancel or pause that landed during
+  // that wait must not be answered by taking a lease the revoked attempt will never release (the
+  // finally in `runStageAttempt` deliberately leaves a revoked attempt's lease to the cancellation).
+  if (deps.authoritySignal !== undefined && isAuthorityRevoked(deps.authoritySignal)) {
+    return { type: "POSTPONED", detail: "authority revoked before the lease was taken" };
+  }
   try {
     const acquired = deps.state.execute({
       schemaVersion: 1,
@@ -649,7 +655,9 @@ const acquireWorkspaceLease = (
     // an error to retry blindly.
     if (
       error instanceof StateStoreError &&
-      (error.code === "WORKSPACE_LEASE_HELD" || error.code === "WORKSPACE_VERSION_CONFLICT")
+      (error.code === "WORKSPACE_LEASE_HELD" ||
+        error.code === "WORKSPACE_VERSION_CONFLICT" ||
+        error.code === "WORKSPACE_LEASE_ATTEMPT_INACTIVE")
     ) {
       return { type: "POSTPONED", detail: error.code };
     }
@@ -1320,18 +1328,34 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         const reportedPercent = Math.round((usage.data.usedTokens / usage.data.windowTokens) * 100);
         if (live.reportedPercents.has(reportedPercent)) return;
         live.reportedPercents.add(reportedPercent);
-        const requested = deps.state.execute({
-          schemaVersion: 1,
-          commandId: `usage-${providerSession.id}-${reportedPercent.toString()}`,
-          correlationId: deps.correlationId,
-          actor,
-          type: "REQUEST_CONTEXT_HANDOFF",
-          payload: {
-            providerSessionId: providerSession.id,
-            usage: usage.data,
-            handoffThreshold: HANDOFF_THRESHOLD,
-          },
-        });
+        // Guarded like `publishCheckpoint`: this runs synchronously inside the adapter's stdout
+        // handler, so a store that refuses (the attempt was soft-paused a moment ago, the session
+        // row moved, the store is closing) must be logged here -- thrown, it would surface as an
+        // uncaught exception in the child's `data` event and take the daemon down.
+        let requested: ReturnType<typeof deps.state.execute>;
+        try {
+          requested = deps.state.execute({
+            schemaVersion: 1,
+            commandId: `usage-${providerSession.id}-${reportedPercent.toString()}`,
+            correlationId: deps.correlationId,
+            actor,
+            type: "REQUEST_CONTEXT_HANDOFF",
+            payload: {
+              providerSessionId: providerSession.id,
+              usage: usage.data,
+              handoffThreshold: HANDOFF_THRESHOLD,
+            },
+          });
+        } catch (error: unknown) {
+          deps.logger.warn(
+            {
+              providerSessionId: providerSession.id,
+              error: error instanceof Error ? error.name : "unknown",
+            },
+            "A context-window report could not be recorded; the session continues",
+          );
+          return;
+        }
         if (requested.type !== "CONTEXT_HANDOFF_REQUESTED" || !requested.requested) return;
         live.handoffRequested = true;
         deps.logger.info(
@@ -1406,14 +1430,27 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           );
           return;
         }
-        deps.state.execute({
-          schemaVersion: 1,
-          commandId: `process-${providerSession.id}`,
-          correlationId: deps.correlationId,
-          actor,
-          type: "RECORD_PROVIDER_SESSION_PROCESS",
-          payload: { providerSessionId: providerSession.id, pid: validated.data },
-        });
+        // Same guard as the context-window report above: a throw here would be an uncaught
+        // exception inside the adapter's stream handler, not a provider failure.
+        try {
+          deps.state.execute({
+            schemaVersion: 1,
+            commandId: `process-${providerSession.id}`,
+            correlationId: deps.correlationId,
+            actor,
+            type: "RECORD_PROVIDER_SESSION_PROCESS",
+            payload: { providerSessionId: providerSession.id, pid: validated.data },
+          });
+        } catch (error: unknown) {
+          deps.logger.warn(
+            {
+              providerSessionId: providerSession.id,
+              error: error instanceof Error ? error.name : "unknown",
+            },
+            "The process id of this session could not be recorded; recovery will not know its pid",
+          );
+          return;
+        }
         deps.logger.info(
           { providerSessionId: providerSession.id, pid: validated.data },
           "Recorded the process this session is driving",

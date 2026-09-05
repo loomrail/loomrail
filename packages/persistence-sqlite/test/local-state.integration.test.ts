@@ -4918,6 +4918,29 @@ describe("SQLite local state", () => {
     verify.close();
   });
 
+  it("refuses to open a database a newer Loomrail has already migrated further", async () => {
+    const localState = await open();
+    localState.close();
+    state = undefined;
+    const raw = new DatabaseSync(databasePath);
+    raw
+      .prepare("INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)")
+      .run(999, "0999_from_the_future", "f".repeat(64), "2030-01-01T00:00:00.000Z");
+    raw.close();
+
+    // Never reset, never repaired: an older build must not write into a schema it does not know.
+    await expect(open()).rejects.toMatchObject({ code: "MIGRATION_INCOMPATIBLE" });
+    const untouched = new DatabaseSync(databasePath, { readOnly: true });
+    expect(
+      (
+        untouched.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 999").get() as {
+          count: number;
+        }
+      ).count,
+    ).toBe(1);
+    untouched.close();
+  });
+
   it("backfills the BudgetPolicy in M4 PIPELINE_STARTED events", async () => {
     const localState = await open();
     localState.execute(registerProject());
@@ -8816,6 +8839,49 @@ describe("SQLite local state", () => {
       } finally {
         raw.close();
       }
+    });
+
+    it("refuses the writer lease to a stage attempt that is no longer executable", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { workItemId, stageAttemptId, projectId } = startWorkflow(
+        localState,
+        "start-lease-inactive",
+        "create-work-item-lease-inactive",
+      );
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-lease-inactive", workItemId, projectId),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+      const snapshot = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+      if (snapshot.type !== "WORKFLOW_SNAPSHOT" || snapshot.snapshot.run === null) {
+        throw new Error("Expected a running workflow");
+      }
+      // The cancel lands while the session loop is still awaiting git for this attempt; the lease
+      // claim that follows must be refused, or the cancelled attempt would hold the workspace
+      // until the next daemon start.
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "cancel-before-lease",
+        correlationId: "correlation-cancel-before-lease",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "CANCEL_PIPELINE",
+        payload: { pipelineRunId: snapshot.snapshot.run.id, expectedVersion: snapshot.snapshot.run.version },
+      });
+
+      expect(() =>
+        localState.execute(
+          acquireLeaseCommand(
+            "acquire-after-cancel",
+            created.workspace.id,
+            stageAttemptId,
+            created.workspace.version,
+          ),
+        ),
+      ).toThrow(expect.objectContaining({ code: "WORKSPACE_LEASE_ATTEMPT_INACTIVE" }));
+      expect(localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId })).toMatchObject({
+        workspace: { leaseHolder: null, version: created.workspace.version },
+      });
     });
 
     it("does not hand a second stage attempt the workspace a first one is writing in", async () => {

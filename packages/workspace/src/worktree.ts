@@ -1,5 +1,6 @@
 import { access } from "node:fs/promises";
 import { normalize } from "node:path";
+import process from "node:process";
 
 import { runGit } from "./git.js";
 
@@ -153,7 +154,14 @@ export const addWorktree = async (context: {
     return { type: "REFUSED", refusal: { type: "PATH_EXISTS", path } };
   }
 
-  const added = await runGit(["worktree", "add", "-b", branch, path, startPoint], { cwd: topLevel });
+  // Repository text is untrusted input: a tracked `post-checkout` hook (husky and friends point
+  // `core.hooksPath` into the repository) must not run inside the daemon just because a workspace
+  // was provisioned. Sending hooks to the null device is the same guard the readiness scanner uses.
+  const hooksPath = process.platform === "win32" ? "NUL" : "/dev/null";
+  const added = await runGit(
+    ["-c", `core.hooksPath=${hooksPath}`, "worktree", "add", "-b", branch, path, startPoint],
+    { cwd: topLevel },
+  );
   if (added.exitCode !== 0) {
     return {
       type: "REFUSED",

@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 const spawn = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", () => ({ spawn }));
 
-const { runProcess } = await import("../src/process-runner.js");
+const { ProcessListenerError, runProcess } = await import("../src/process-runner.js");
 
 // Node's own contract, the part this module now depends on: `exit` fires when the child is reaped,
 // `close` only once its stdio has closed too, and the first may precede the second.
@@ -103,10 +103,14 @@ describe("runProcess exit ordering", () => {
     child.emit("exit", 0, null);
     await tick();
 
-    // The throw is not swallowed -- it still leaves the handler the way it always did, which is
-    // what this test observes by catching it at the emit.
-    expect(() => child.emit("close", 0, null)).toThrow("the adapter's own listener failed");
-    await expect(raceAgainstHang(run.exited, 1_000)).resolves.toEqual({ code: 0, signal: null });
+    // The throw no longer escapes the stream handler (where it was an uncaught exception that took
+    // the daemon down); it is carried by `exited` instead, typed, so the adapter reports a failed
+    // session rather than a result read off a stream it stopped listening to.
+    expect(() => child.emit("close", 0, null)).not.toThrow();
+    await expect(run.exited).rejects.toBeInstanceOf(ProcessListenerError);
+    await expect(run.exited).rejects.toMatchObject({
+      cause: { message: "the adapter's own listener failed" },
+    });
   });
 
   // The other half of the same change, and the reason `exited` is not simply chained to stdout's

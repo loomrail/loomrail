@@ -178,6 +178,7 @@ import {
   decideResumePipeline,
   decideSessionEnded,
   decideStageAttemptHardPause,
+  decideParkQueuedStageAttemptForBudget,
   decideStartMockPipeline,
   decideWorkItemCommand,
   isProviderOutcomeRejectionError,
@@ -3026,8 +3027,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         completed_json, remaining_json, dead_ends_json, open_questions_json, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    // "Latest" is decided by the session ordinal and then the checkpoint ordinal within it, never
+    // by timestamp: two checkpoints published in the same millisecond (or across a clock step)
+    // would otherwise be tie-broken by a random UUID and hand the next session stale progress.
     const selectLatestCheckpointForAttempt = database.prepare(
-      `SELECT * FROM checkpoints WHERE stage_attempt_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+      `SELECT checkpoints.* FROM checkpoints
+       INNER JOIN provider_sessions ON provider_sessions.id = checkpoints.provider_session_id
+       WHERE checkpoints.stage_attempt_id = ?
+       ORDER BY provider_sessions.ordinal DESC, checkpoints.ordinal DESC LIMIT 1`,
     );
     const selectDecisionsForWorkItem = database.prepare(
       "SELECT * FROM decisions WHERE work_item_id = ? ORDER BY created_at, id",
@@ -6348,6 +6355,45 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           });
         } catch (error: unknown) {
           if (error instanceof AgentDomainError && error.code === "AGENT_RUN_BUDGET_EXHAUSTED") {
+            // A queued attempt of a running pipeline whose budget is already spent is parked, in
+            // this same transaction, rather than refused: a refusal changes nothing durable, so the
+            // worker would retry it every pass while the owner sees a stage that never starts and
+            // has no pause to override. Any other shape keeps the typed refusal.
+            if (
+              stageAttempt.status === "QUEUED" &&
+              workflowRun.status === "RUNNING" &&
+              workflowRun.currentStageAttemptId === stageAttempt.id &&
+              dispatch.status === "PENDING"
+            ) {
+              const parked = decideParkQueuedStageAttemptForBudget({
+                now: occurredAt,
+                workItem,
+                run: workflowRun,
+                stageAttempt,
+                dispatch,
+              });
+              updateWorkflowDispatch(parked.dispatch);
+              updateStageAttempt(parked.stageAttempt);
+              updatePipelineRun(parked.run);
+              updateWorkflowWorkItem(parked.workItem);
+              const parkedEvents = appendWorkflowEvents(parked.events, {
+                workItemId: workItem.id,
+                projectId: workItem.projectId,
+                actor: command.actor,
+                occurredAt,
+                correlationId: command.correlationId,
+              });
+              return stateCommandResultSchema.parse({
+                schemaVersion: 1,
+                type: "AGENT_RUN_BUDGET_PARKED",
+                replayed: false,
+                workItemId: workItem.id,
+                run: parked.run,
+                stageAttempt: parked.stageAttempt,
+                dispatch: parked.dispatch,
+                events: parkedEvents,
+              });
+            }
             throw new StateStoreError("AGENT_RUN_BUDGET_EXHAUSTED", error.message);
           }
           throw error;
@@ -6791,7 +6837,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             },
             metadata,
           );
-          finishActiveAgentRun(stageAttempt.id, "SUCCEEDED", metadata);
+          // Derived from the attempt the correction decision actually produced, like every sibling
+          // branch: an exhausted correction loop leaves the attempt WAITING_HUMAN, and recording its
+          // Browser QA run as SUCCEEDED would make the AgentRun history and Insights disagree with it.
+          const correctionAgentStatus = terminalAgentRunStatus(
+            correctionDecision.completedStageAttempt.status,
+          );
+          if (correctionAgentStatus) finishActiveAgentRun(stageAttempt.id, correctionAgentStatus, metadata);
           appendWorkflowEvents(correctionDecision.events, metadata);
           return stateCommandResultSchema.parse({
             schemaVersion: 1,
@@ -8265,7 +8317,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (decision.usageRecord !== null) insertUsageRecord(decision.usageRecord);
         persistProviderUsageReport(decision.report);
         if (decision.hardPaused) {
-          updateWorkflowDispatch(decision.dispatch);
+          // After a Soft Pause the dispatch is already FAILED and the domain hands it back
+          // unchanged; completing it "again" would match 0 PENDING rows, throw, and roll back the
+          // very report that crossed the hard ceiling -- on every retry.
+          if (decision.dispatch.status !== dispatch.status) updateWorkflowDispatch(decision.dispatch);
           updateStageAttempt(decision.stageAttempt);
           updatePipelineRun(decision.run);
           updateWorkflowWorkItem(decision.workItem);
@@ -8783,8 +8838,24 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (!readWorkItemWorkspace(command.payload.workspaceId)) {
           throw new StateStoreError("WORKSPACE_NOT_FOUND", "The workspace does not exist");
         }
-        if (!readStageAttempt(command.payload.stageAttemptId)) {
+        const leaseAttempt = readStageAttempt(command.payload.stageAttemptId);
+        if (!leaseAttempt) {
           throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The StageAttempt does not exist");
+        }
+        // Only an attempt that can still run may take the writer lease. The session loop acquires
+        // it after an `await` on git; a cancel or pause that lands during that wait used to let the
+        // claim through anyway, and a lease held by a finished attempt is released by nothing but
+        // the next daemon start.
+        if (
+          leaseAttempt.status !== "QUEUED" &&
+          leaseAttempt.status !== "RUNNING" &&
+          leaseAttempt.status !== "RECOVERING"
+        ) {
+          throw new StateStoreError(
+            "WORKSPACE_LEASE_ATTEMPT_INACTIVE",
+            "A StageAttempt that is no longer executable cannot take a workspace lease",
+            { status: leaseAttempt.status },
+          );
         }
         // The lease is taken by this single UPDATE's WHERE clause -- `lease_holder IS NULL` is the
         // check, and the same statement is the claim, so there is no read-then-write window for a
@@ -8954,6 +9025,21 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         throw new WorkItemDomainError(
           "ACTIVE_WORKFLOW_CONTROLS_STATE",
           "The active workflow controls this WorkItem state until it stops",
+        );
+      }
+      // The acceptance criteria are bound into the AcceptancePackage and checked again when the
+      // release summary is rendered; rewriting them under a running pipeline makes that gate
+      // unpassable ("claims must cover every criterion exactly once") with no way back but a
+      // cancel. Title, description, priority and risk stay editable.
+      if (
+        command.type === "UPDATE_WORK_ITEM" &&
+        command.payload.patch.acceptanceCriteria !== undefined &&
+        current &&
+        selectActivePipelineRun.get(current.id) !== undefined
+      ) {
+        throw new WorkItemDomainError(
+          "ACTIVE_WORKFLOW_CONTROLS_STATE",
+          "The acceptance criteria are bound by the active workflow until it stops",
         );
       }
       const hasChildren =

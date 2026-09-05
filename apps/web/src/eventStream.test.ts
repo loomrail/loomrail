@@ -19,7 +19,8 @@ describe("scopesForSignal", () => {
     expect(scopesForSignal(workItemSignal)).toEqual([
       ["attention"],
       ["agent-fleet"],
-      ["projects", "p1"],
+      ["projects", "p1", "work-items"],
+      ["projects", "p1", "human-requests"],
       ["work-items", "w1"],
       ["stage-attempts"],
     ]);
@@ -71,7 +72,8 @@ describe("createSignalCoalescer", () => {
     expect(flush.mock.calls[0]?.[0]).toEqual([
       ["attention"],
       ["agent-fleet"],
-      ["projects", "p1"],
+      ["projects", "p1", "work-items"],
+      ["projects", "p1", "human-requests"],
       ["work-items", "w1"],
       ["stage-attempts"],
       ["work-items", "w2"],
@@ -158,7 +160,8 @@ describe("connectEventStream", () => {
     expect(invalidateScopes).toHaveBeenCalledWith([
       ["attention"],
       ["agent-fleet"],
-      ["projects", "p1"],
+      ["projects", "p1", "work-items"],
+      ["projects", "p1", "human-requests"],
       ["work-items", "w1"],
       ["stage-attempts"],
     ]);
@@ -200,6 +203,20 @@ describe("connectEventStream", () => {
     source.onerror?.({});
 
     expect(invalidateScopes).toHaveBeenCalledWith([["local-daemon", "connection"]]);
+  });
+
+  it("reports a permanently closed source so its owner can build a new one", () => {
+    const onClosed = vi.fn();
+    const source = fakeSource();
+    connectEventStream({ source, invalidateAll: vi.fn(), invalidateScopes: vi.fn(), onClosed });
+
+    source.readyState = 0; // CONNECTING: the browser is still retrying on its own
+    source.onerror?.({});
+    expect(onClosed).not.toHaveBeenCalled();
+
+    source.readyState = 2; // CLOSED: a non-200 response, which EventSource never retries
+    source.onerror?.({});
+    expect(onClosed).toHaveBeenCalledTimes(1);
   });
 
   it("does not invalidate the connection scope while merely reconnecting", () => {

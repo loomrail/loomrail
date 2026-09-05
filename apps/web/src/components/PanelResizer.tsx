@@ -40,10 +40,16 @@ export const PanelResizer = ({ edge, panel }: PanelResizerProps): React.JSX.Elem
     document.body.classList.add("is-resizing");
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
+    // A cancelled pointer (touch scroll takeover, pen lift, window blur) never fires `pointerup`;
+    // without this the body keeps `is-resizing` and the panel keeps following the next pointer.
+    window.addEventListener("pointercancel", stop);
+    window.addEventListener("blur", stop);
     return () => {
       document.body.classList.remove("is-resizing");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      window.removeEventListener("blur", stop);
     };
   }, [dragging, edge, panel]);
 
