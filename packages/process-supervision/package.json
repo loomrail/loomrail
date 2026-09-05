@@ -1,5 +1,5 @@
 {
-  "name": "@loomrail/project-readiness",
+  "name": "@loomrail/process-supervision",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -13,11 +13,6 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:integration": "vitest run"
-  },
-  "dependencies": {
-    "@loomrail/contracts": "workspace:*",
-    "@loomrail/process-supervision": "workspace:*",
-    "@loomrail/workspace": "workspace:*"
+    "test:unit": "vitest run"
   }
 }

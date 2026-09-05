@@ -1,11 +1,21 @@
 import type {
+  Actor,
   AdoptVerificationPlanCommand,
   CompleteVerificationPlanPublicationCommand,
   FailVerificationPlanPublicationCommand,
+  PipelineRun,
   Project,
+  RetryVerificationRunCommand,
   RetryVerificationPlanPublicationCommand,
+  StartVerificationRunCommand,
   VerificationPlan,
   VerificationPlanPublication,
+  VerificationCheck,
+  VerificationCheckObservation,
+  VerificationRun,
+  VerificationRunStaleReason,
+  WorkItem,
+  WorkItemWorkspace,
 } from "@loomrail/contracts";
 
 export type VerificationDomainErrorCode =
@@ -23,7 +33,21 @@ export type VerificationDomainErrorCode =
   | "PUBLICATION_VERSION_CONFLICT"
   | "PUBLICATION_PLAN_MISMATCH"
   | "PUBLICATION_STATUS_INVALID"
-  | "LATEST_PLAN_REQUIRED";
+  | "LATEST_PLAN_REQUIRED"
+  | "RUN_VERSION_CONFLICT"
+  | "RUN_STATUS_INVALID"
+  | "CHECK_VERSION_CONFLICT"
+  | "CHECK_STATUS_INVALID"
+  | "CHECK_RUN_MISMATCH"
+  | "CHECK_SEQUENCE_INVALID"
+  | "RUN_CURRENT_CHECK_MISMATCH"
+  | "WORK_ITEM_NOT_FOUND"
+  | "WORK_ITEM_VERSION_CONFLICT"
+  | "PIPELINE_RUN_REQUIRED"
+  | "WORKSPACE_UNAVAILABLE"
+  | "PLAN_UNAVAILABLE"
+  | "PLAN_VERSION_CONFLICT"
+  | "RETRY_RUN_INVALID";
 
 export class VerificationDomainError extends Error {
   readonly code: VerificationDomainErrorCode;
@@ -329,5 +353,458 @@ export const decideVerificationPlanPublicationRetry = (
     plan: current.plan,
     publication,
     event: { type: "VERIFICATION_PLAN_PUBLICATION_RETRIED", data: { plan: current.plan, publication } },
+  };
+};
+
+const requireRunner = (actor: Actor): void => {
+  if (actor.type !== "SYSTEM") {
+    throw new VerificationDomainError(
+      "SYSTEM_REQUIRED",
+      "Only the daemon verification runner can record measured Check state",
+    );
+  }
+};
+
+export type VerificationRunReservedIntent = {
+  type: "VERIFICATION_RUN_RESERVED";
+  data: { run: VerificationRun; checks: VerificationCheck[] };
+};
+
+export type VerificationRunEventIntent =
+  | VerificationRunReservedIntent
+  | {
+      type: "VERIFICATION_CHECK_STARTED" | "VERIFICATION_CHECK_COMPLETED";
+      data: { run: VerificationRun; check: VerificationCheck };
+    }
+  | {
+      type: "VERIFICATION_RUN_INTERRUPTED";
+      data: { run: VerificationRun; interruptedCheck: VerificationCheck | null };
+    };
+
+export const decideVerificationRunReservation = (
+  command: StartVerificationRunCommand | RetryVerificationRunCommand,
+  context: {
+    now: string;
+    newRunId: string;
+    newCheckIds: readonly string[];
+    ordinal: number;
+    project: Project | undefined;
+    workItem: WorkItem | undefined;
+    pipelineRun: PipelineRun | undefined;
+    workspace: WorkItemWorkspace | undefined;
+    plan: VerificationPlan | undefined;
+    publication: VerificationPlanPublication | undefined;
+    retryOfRun?: VerificationRun;
+  },
+): { run: VerificationRun; checks: VerificationCheck[]; event: VerificationRunReservedIntent } => {
+  if (command.actor.type !== "HUMAN") {
+    throw new VerificationDomainError("OWNER_REQUIRED", "Only the owner can start verification");
+  }
+  const workItem = context.workItem;
+  if (workItem === undefined) {
+    throw new VerificationDomainError("WORK_ITEM_NOT_FOUND", "The WorkItem does not exist");
+  }
+  if (workItem.version !== command.payload.expectedWorkItemVersion) {
+    throw new VerificationDomainError(
+      "WORK_ITEM_VERSION_CONFLICT",
+      "The WorkItem changed after verification was requested",
+      { expectedVersion: command.payload.expectedWorkItemVersion, actualVersion: workItem.version },
+    );
+  }
+  const project = context.project;
+  if (project?.id !== workItem.projectId || project.status !== "ACTIVE") {
+    throw new VerificationDomainError("PROJECT_NOT_ACTIVE", "Verification needs an active Project");
+  }
+  const pipelineRun = context.pipelineRun;
+  if (
+    pipelineRun?.projectId !== project.id ||
+    pipelineRun.workItemId !== workItem.id ||
+    ["SUCCEEDED", "FAILED", "CANCELLED"].includes(pipelineRun.status)
+  ) {
+    throw new VerificationDomainError(
+      "PIPELINE_RUN_REQUIRED",
+      "Verification needs the WorkItem's active PipelineRun",
+    );
+  }
+  const workspace = context.workspace;
+  if (
+    workspace?.projectId !== project.id ||
+    workspace.workItemId !== workItem.id ||
+    workspace.status !== "READY" ||
+    workspace.leaseHolder !== null
+  ) {
+    throw new VerificationDomainError(
+      "WORKSPACE_UNAVAILABLE",
+      "Verification needs a READY workspace without a live writer",
+    );
+  }
+  const plan = context.plan;
+  const publication = context.publication;
+  if (
+    plan?.projectId !== project.id ||
+    plan.status !== "ACTIVE" ||
+    publication?.planId !== plan.id ||
+    publication.projectId !== project.id ||
+    publication.status !== "APPLIED"
+  ) {
+    throw new VerificationDomainError(
+      "PLAN_UNAVAILABLE",
+      "Verification needs the active owner-approved published Plan",
+    );
+  }
+  if (
+    plan.revision !== command.payload.expectedPlanRevision ||
+    plan.contentHash !== command.payload.expectedPlanContentHash
+  ) {
+    throw new VerificationDomainError(
+      "PLAN_VERSION_CONFLICT",
+      "The verification Plan changed after it was loaded",
+    );
+  }
+  const retryOfRun = command.type === "RETRY_VERIFICATION_RUN" ? context.retryOfRun : undefined;
+  if (
+    command.type === "RETRY_VERIFICATION_RUN" &&
+    (retryOfRun?.id !== command.payload.retryOfRunId ||
+      retryOfRun.version !== command.payload.expectedRetryOfRunVersion ||
+      retryOfRun.workItemId !== workItem.id ||
+      retryOfRun.status === "QUEUED" ||
+      retryOfRun.status === "RUNNING")
+  ) {
+    throw new VerificationDomainError("RETRY_RUN_INVALID", "Only a terminal Run can be retried");
+  }
+  if (context.newCheckIds.length !== plan.recipes.length) {
+    throw new VerificationDomainError(
+      "CHECK_RUN_MISMATCH",
+      "Every recorded recipe needs exactly one verification Check identity",
+    );
+  }
+
+  const run: VerificationRun = {
+    schemaVersion: 1,
+    id: context.newRunId,
+    projectId: project.id,
+    workItemId: workItem.id,
+    pipelineRunId: pipelineRun.id,
+    workspaceId: workspace.id,
+    planId: plan.id,
+    planRevision: plan.revision,
+    planContentHash: plan.contentHash,
+    implementationTree: command.payload.implementationTree,
+    ordinal: context.ordinal,
+    retryOfRunId: retryOfRun?.id ?? null,
+    platform: command.payload.platform,
+    status: "QUEUED",
+    currentCheckId: null,
+    terminalReason: null,
+    startedAt: null,
+    completedAt: null,
+    createdAt: context.now,
+    version: 1,
+  };
+  const checks = plan.recipes.map((recipe, index): VerificationCheck => ({
+    schemaVersion: 1,
+    id: context.newCheckIds[index] ?? "",
+    projectId: project.id,
+    workItemId: workItem.id,
+    runId: run.id,
+    recipeId: recipe.id,
+    ordinal: index + 1,
+    required: recipe.required,
+    status: "QUEUED",
+    startedAt: null,
+    completedAt: null,
+    durationMs: null,
+    exitCode: null,
+    signal: null,
+    errorCode: null,
+    output: null,
+    version: 1,
+  }));
+  return { run, checks, event: { type: "VERIFICATION_RUN_RESERVED", data: { run, checks } } };
+};
+
+const requireRunAndCheckVersions = (input: {
+  run: VerificationRun;
+  check: VerificationCheck;
+  expectedRunVersion: number;
+  expectedCheckVersion: number;
+}): void => {
+  if (input.run.version !== input.expectedRunVersion) {
+    throw new VerificationDomainError(
+      "RUN_VERSION_CONFLICT",
+      "The verification Run changed after it was loaded",
+      { expectedVersion: input.expectedRunVersion, actualVersion: input.run.version },
+    );
+  }
+  if (input.check.version !== input.expectedCheckVersion) {
+    throw new VerificationDomainError(
+      "CHECK_VERSION_CONFLICT",
+      "The verification Check changed after it was loaded",
+      { expectedVersion: input.expectedCheckVersion, actualVersion: input.check.version },
+    );
+  }
+  if (
+    input.check.runId !== input.run.id ||
+    input.check.projectId !== input.run.projectId ||
+    input.check.workItemId !== input.run.workItemId
+  ) {
+    throw new VerificationDomainError(
+      "CHECK_RUN_MISMATCH",
+      "The verification Check belongs to a different Run",
+    );
+  }
+};
+
+const orderedChecks = (run: VerificationRun, checks: readonly VerificationCheck[]): VerificationCheck[] => {
+  if (
+    checks.length === 0 ||
+    checks.some(
+      (check) =>
+        check.runId !== run.id || check.projectId !== run.projectId || check.workItemId !== run.workItemId,
+    ) ||
+    new Set(checks.map((check) => check.ordinal)).size !== checks.length
+  ) {
+    throw new VerificationDomainError(
+      "CHECK_RUN_MISMATCH",
+      "The verification Check set does not belong to one Run",
+    );
+  }
+  return [...checks].sort((left, right) => left.ordinal - right.ordinal);
+};
+
+export const decideVerificationCheckStart = (input: {
+  actor: Actor;
+  run: VerificationRun;
+  check: VerificationCheck;
+  checks: readonly VerificationCheck[];
+  expectedRunVersion: number;
+  expectedCheckVersion: number;
+  now: string;
+}): { run: VerificationRun; check: VerificationCheck } => {
+  requireRunner(input.actor);
+  requireRunAndCheckVersions(input);
+  if (input.run.status !== "QUEUED" && input.run.status !== "RUNNING") {
+    throw new VerificationDomainError(
+      "RUN_STATUS_INVALID",
+      "Only a queued or running verification Run can start its next Check",
+    );
+  }
+  if (input.run.currentCheckId !== null) {
+    throw new VerificationDomainError(
+      "RUN_CURRENT_CHECK_MISMATCH",
+      "A verification Run can have only one current Check",
+    );
+  }
+  if (input.check.status !== "QUEUED") {
+    throw new VerificationDomainError("CHECK_STATUS_INVALID", "Only a queued verification Check can start");
+  }
+  const next = orderedChecks(input.run, input.checks).find((check) => check.status === "QUEUED");
+  if (next?.id !== input.check.id) {
+    throw new VerificationDomainError(
+      "CHECK_SEQUENCE_INVALID",
+      "Verification Checks must start in their recorded order",
+    );
+  }
+
+  return {
+    run: {
+      ...input.run,
+      status: "RUNNING",
+      currentCheckId: input.check.id,
+      startedAt: input.run.startedAt ?? input.now,
+      version: input.run.version + 1,
+    },
+    check: {
+      ...input.check,
+      status: "RUNNING",
+      startedAt: input.now,
+      version: input.check.version + 1,
+    },
+  };
+};
+
+export type VerificationCheckCompletionNext = "START_NEXT_CHECK" | "TERMINAL";
+
+export const decideVerificationCheckCompletion = (input: {
+  actor: Actor;
+  run: VerificationRun;
+  check: VerificationCheck;
+  checks: readonly VerificationCheck[];
+  expectedRunVersion: number;
+  expectedCheckVersion: number;
+  observation: VerificationCheckObservation;
+}): { run: VerificationRun; check: VerificationCheck; next: VerificationCheckCompletionNext } => {
+  requireRunner(input.actor);
+  requireRunAndCheckVersions(input);
+  if (input.run.status !== "RUNNING") {
+    throw new VerificationDomainError(
+      "RUN_STATUS_INVALID",
+      "Only a running verification Run can complete a Check",
+    );
+  }
+  if (input.run.currentCheckId !== input.check.id) {
+    throw new VerificationDomainError(
+      "RUN_CURRENT_CHECK_MISMATCH",
+      "Only the current verification Check can complete",
+    );
+  }
+  if (input.check.status !== "RUNNING" || input.check.startedAt === null) {
+    throw new VerificationDomainError(
+      "CHECK_STATUS_INVALID",
+      "Only a running verification Check can complete",
+    );
+  }
+
+  const check: VerificationCheck = {
+    ...input.check,
+    status: input.observation.status,
+    completedAt: input.observation.completedAt,
+    durationMs: input.observation.durationMs,
+    exitCode: input.observation.exitCode,
+    signal: input.observation.signal,
+    errorCode: input.observation.status === "ERROR" ? input.observation.errorCode : null,
+    output: input.observation.output,
+    version: input.check.version + 1,
+  };
+  const checks = orderedChecks(
+    input.run,
+    input.checks.map((candidate) => (candidate.id === check.id ? check : candidate)),
+  );
+
+  const terminal = (
+    status: "PASSED" | "FAILED" | "ERROR" | "INTERRUPTED",
+    terminalReason: VerificationRun["terminalReason"],
+  ): { run: VerificationRun; check: VerificationCheck; next: VerificationCheckCompletionNext } => ({
+    check,
+    next: "TERMINAL",
+    run: {
+      ...input.run,
+      status,
+      currentCheckId: null,
+      terminalReason,
+      completedAt: input.observation.completedAt,
+      version: input.run.version + 1,
+    },
+  });
+
+  if (check.required && check.status === "FAILED") {
+    return terminal("FAILED", "REQUIRED_CHECK_FAILED");
+  }
+  if (check.required && check.status === "ERROR") {
+    return terminal("ERROR", "REQUIRED_CHECK_ERROR");
+  }
+  if (input.observation.status === "INTERRUPTED") {
+    return terminal("INTERRUPTED", input.observation.reason);
+  }
+  if (checks.some((candidate) => candidate.status === "QUEUED")) {
+    return {
+      check,
+      next: "START_NEXT_CHECK",
+      run: {
+        ...input.run,
+        currentCheckId: null,
+        version: input.run.version + 1,
+      },
+    };
+  }
+  if (checks.some((candidate) => candidate.required && candidate.status !== "PASSED")) {
+    throw new VerificationDomainError(
+      "RUN_STATUS_INVALID",
+      "A verification Run cannot pass with non-passing required Checks",
+    );
+  }
+  return terminal("PASSED", "ALL_REQUIRED_PASSED");
+};
+
+export const decideVerificationRunInterruption = (input: {
+  actor: Actor;
+  run: VerificationRun;
+  checks: readonly VerificationCheck[];
+  expectedRunVersion: number;
+  reason: "OWNER_CANCELLED" | "DAEMON_RESTART";
+  now: string;
+}): { run: VerificationRun; checks: VerificationCheck[] } => {
+  if (input.reason === "OWNER_CANCELLED") {
+    if (input.actor.type !== "HUMAN") {
+      throw new VerificationDomainError("OWNER_REQUIRED", "Only the owner can cancel verification");
+    }
+  } else {
+    requireRunner(input.actor);
+  }
+  if (input.run.version !== input.expectedRunVersion) {
+    throw new VerificationDomainError("RUN_VERSION_CONFLICT", "The verification Run version changed", {
+      expectedVersion: input.expectedRunVersion,
+      actualVersion: input.run.version,
+    });
+  }
+  if (input.run.status !== "QUEUED" && input.run.status !== "RUNNING") {
+    throw new VerificationDomainError(
+      "RUN_STATUS_INVALID",
+      "Only a queued or running verification Run can be interrupted",
+    );
+  }
+  const checks = orderedChecks(input.run, input.checks).map((check) => {
+    if (check.id !== input.run.currentCheckId) return check;
+    if (check.status !== "RUNNING" || check.startedAt === null) {
+      throw new VerificationDomainError(
+        "CHECK_STATUS_INVALID",
+        "The current verification Check must be running",
+      );
+    }
+    return {
+      ...check,
+      status: "INTERRUPTED" as const,
+      completedAt: input.now,
+      durationMs: Math.max(0, Date.parse(input.now) - Date.parse(check.startedAt)),
+      exitCode: null,
+      signal: null,
+      errorCode: null,
+      output: null,
+      version: check.version + 1,
+    };
+  });
+
+  return {
+    run: {
+      ...input.run,
+      status: "INTERRUPTED",
+      currentCheckId: null,
+      terminalReason: input.reason,
+      completedAt: input.now,
+      version: input.run.version + 1,
+    },
+    checks,
+  };
+};
+
+export const projectVerificationRunFreshness = (
+  run: VerificationRun,
+  context: {
+    currentPlan: VerificationPlan | undefined;
+    publication: VerificationPlanPublication | undefined;
+    currentTree: string;
+  },
+): { freshness: "CURRENT" | "STALE"; staleReasons: VerificationRunStaleReason[] } => {
+  const staleReasons: VerificationRunStaleReason[] = [];
+  if (context.currentPlan?.status !== "ACTIVE") {
+    staleReasons.push("PLAN_UNAVAILABLE");
+  } else if (
+    context.currentPlan.id !== run.planId ||
+    context.currentPlan.revision !== run.planRevision ||
+    context.currentPlan.contentHash !== run.planContentHash
+  ) {
+    staleReasons.push("PLAN_REPLACED");
+  }
+  if (
+    context.publication?.status !== "APPLIED" ||
+    context.publication.planId !== context.currentPlan?.id ||
+    context.publication.contentHash !== context.currentPlan.contentHash
+  ) {
+    staleReasons.push("PLAN_UNPUBLISHED");
+  }
+  if (context.currentTree !== run.implementationTree) staleReasons.push("TREE_CHANGED");
+  return {
+    freshness: staleReasons.length === 0 ? "CURRENT" : "STALE",
+    staleReasons,
   };
 };

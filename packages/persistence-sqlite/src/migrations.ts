@@ -184,6 +184,11 @@ const migrations: readonly Migration[] = [
     name: "project_verification_plans",
     filename: "0037_project_verification_plans.sql",
   },
+  {
+    version: 38,
+    name: "verification_runs",
+    filename: "0038_verification_runs.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

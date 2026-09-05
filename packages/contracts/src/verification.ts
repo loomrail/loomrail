@@ -406,6 +406,486 @@ export const verificationPlanSettingsResponseSchema = z
     }
   });
 
+const treeShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
+
+export const verificationPlatformSchema = z.enum(["darwin", "linux", "win32"]);
+export const verificationRunStatusSchema = z.enum([
+  "QUEUED",
+  "RUNNING",
+  "PASSED",
+  "FAILED",
+  "ERROR",
+  "INTERRUPTED",
+]);
+export const verificationCheckStatusSchema = verificationRunStatusSchema;
+export const verificationCheckErrorCodeSchema = z.enum([
+  "POLICY_UNAVAILABLE",
+  "CWD_INVALID",
+  "EXECUTABLE_NOT_FOUND",
+  "SPAWN_FAILED",
+  "OUTPUT_LIMIT_REACHED",
+  "TIMED_OUT",
+  "TREE_MUTATED",
+  "TREE_UNAVAILABLE",
+  "OUTPUT_WRITE_FAILED",
+  "PROCESS_TERMINATION_FAILED",
+  "EXIT_UNOBSERVED",
+]);
+export const verificationRunTerminalReasonSchema = z.enum([
+  "ALL_REQUIRED_PASSED",
+  "REQUIRED_CHECK_FAILED",
+  "REQUIRED_CHECK_ERROR",
+  "OWNER_CANCELLED",
+  "DAEMON_RESTART",
+]);
+export const verificationRunFreshnessSchema = z.enum(["CURRENT", "STALE"]);
+export const verificationRunStaleReasonSchema = z.enum([
+  "PLAN_UNAVAILABLE",
+  "PLAN_REPLACED",
+  "PLAN_UNPUBLISHED",
+  "TREE_CHANGED",
+]);
+
+export const verificationOutputSummarySchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    artifactId: opaqueIdSchema,
+    sha256: sha256Schema,
+    capturedBytes: z.number().int().nonnegative().max(262_144),
+    stdoutBytes: z.number().int().nonnegative(),
+    stderrBytes: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    available: z.boolean(),
+  })
+  .strict()
+  .superRefine((output, context) => {
+    const observedBytes = output.stdoutBytes + output.stderrBytes;
+    if (output.capturedBytes > observedBytes) {
+      context.addIssue({
+        code: "custom",
+        path: ["capturedBytes"],
+        message: "Captured verification output cannot exceed observed output",
+      });
+    }
+    if (output.truncated !== output.capturedBytes < observedBytes) {
+      context.addIssue({
+        code: "custom",
+        path: ["truncated"],
+        message: "Verification output truncation must match its byte counters",
+      });
+    }
+  });
+
+export const verificationCheckSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    workItemId: opaqueIdSchema,
+    runId: opaqueIdSchema,
+    recipeId: opaqueIdSchema,
+    ordinal: z.number().int().min(1).max(12),
+    required: z.boolean(),
+    status: verificationCheckStatusSchema,
+    startedAt: utcTimestampSchema.nullable(),
+    completedAt: utcTimestampSchema.nullable(),
+    durationMs: z.number().int().nonnegative().max(1_000_000).nullable(),
+    exitCode: z.number().int().min(-2_147_483_648).max(2_147_483_647).nullable(),
+    signal: z
+      .string()
+      .regex(/^SIG[A-Z0-9]+$/)
+      .max(32)
+      .nullable(),
+    errorCode: verificationCheckErrorCodeSchema.nullable(),
+    output: verificationOutputSummarySchema.nullable(),
+    version: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((check, context) => {
+    const issue = (path: string, message: string): void => {
+      context.addIssue({ code: "custom", path: [path], message });
+    };
+    if (check.status === "QUEUED") {
+      if (
+        check.startedAt !== null ||
+        check.completedAt !== null ||
+        check.durationMs !== null ||
+        check.exitCode !== null ||
+        check.signal !== null ||
+        check.errorCode !== null ||
+        check.output !== null
+      ) {
+        issue("status", "A queued verification Check cannot carry measured evidence");
+      }
+      return;
+    }
+    if (check.status === "RUNNING") {
+      if (
+        check.startedAt === null ||
+        check.completedAt !== null ||
+        check.durationMs !== null ||
+        check.exitCode !== null ||
+        check.signal !== null ||
+        check.errorCode !== null ||
+        check.output !== null
+      ) {
+        issue("status", "A running verification Check can only carry its start time");
+      }
+      return;
+    }
+    if (check.completedAt === null) issue("completedAt", "A terminal verification Check must complete");
+    if (check.startedAt === null) issue("startedAt", "A terminal verification Check must have started");
+    if (check.durationMs === null) issue("durationMs", "A terminal verification Check needs duration");
+    if (check.status === "PASSED") {
+      if (
+        check.exitCode !== 0 ||
+        check.signal !== null ||
+        check.errorCode !== null ||
+        check.output === null
+      ) {
+        issue("status", "A passing verification Check requires observed exit code zero and output evidence");
+      }
+    } else if (check.status === "FAILED") {
+      if (
+        check.exitCode === null ||
+        check.exitCode === 0 ||
+        check.signal !== null ||
+        check.errorCode !== null ||
+        check.output === null
+      ) {
+        issue("status", "A failed verification Check requires an observed non-zero exit and output evidence");
+      }
+    } else if (check.status === "ERROR") {
+      if (check.errorCode === null) issue("errorCode", "An errored verification Check needs a typed error");
+    } else if (check.errorCode !== null) {
+      issue("errorCode", "An interrupted verification Check cannot claim an infrastructure error");
+    }
+  });
+
+export const verificationRunSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    id: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    workItemId: opaqueIdSchema,
+    pipelineRunId: opaqueIdSchema,
+    workspaceId: opaqueIdSchema,
+    planId: opaqueIdSchema,
+    planRevision: z.number().int().positive(),
+    planContentHash: sha256Schema,
+    implementationTree: treeShaSchema,
+    ordinal: z.number().int().positive(),
+    retryOfRunId: opaqueIdSchema.nullable(),
+    platform: verificationPlatformSchema,
+    status: verificationRunStatusSchema,
+    currentCheckId: opaqueIdSchema.nullable(),
+    terminalReason: verificationRunTerminalReasonSchema.nullable(),
+    startedAt: utcTimestampSchema.nullable(),
+    completedAt: utcTimestampSchema.nullable(),
+    createdAt: utcTimestampSchema,
+    version: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((run, context) => {
+    const issue = (message: string): void => {
+      context.addIssue({ code: "custom", path: ["status"], message });
+    };
+    if (run.status === "QUEUED") {
+      if (
+        run.currentCheckId !== null ||
+        run.terminalReason !== null ||
+        run.startedAt !== null ||
+        run.completedAt !== null
+      ) {
+        issue("A queued verification Run cannot carry execution state");
+      }
+      return;
+    }
+    if (run.status === "RUNNING") {
+      if (run.startedAt === null || run.completedAt !== null || run.terminalReason !== null) {
+        issue("A running verification Run requires a start and no terminal state");
+      }
+      return;
+    }
+    if (
+      (run.status !== "INTERRUPTED" && run.startedAt === null) ||
+      run.completedAt === null ||
+      run.currentCheckId !== null
+    ) {
+      issue("A terminal verification Run requires valid timestamps and no current Check");
+    }
+    const validReason =
+      (run.status === "PASSED" && run.terminalReason === "ALL_REQUIRED_PASSED") ||
+      (run.status === "FAILED" && run.terminalReason === "REQUIRED_CHECK_FAILED") ||
+      (run.status === "ERROR" && run.terminalReason === "REQUIRED_CHECK_ERROR") ||
+      (run.status === "INTERRUPTED" &&
+        (run.terminalReason === "OWNER_CANCELLED" || run.terminalReason === "DAEMON_RESTART"));
+    if (!validReason) issue("A terminal verification Run has a contradictory reason");
+  });
+
+export const verificationCheckObservationSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("PASSED"),
+      completedAt: utcTimestampSchema,
+      durationMs: z.number().int().nonnegative().max(1_000_000),
+      exitCode: z.literal(0),
+      signal: z.null(),
+      output: verificationOutputSummarySchema,
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("FAILED"),
+      completedAt: utcTimestampSchema,
+      durationMs: z.number().int().nonnegative().max(1_000_000),
+      exitCode: z
+        .number()
+        .int()
+        .refine((value) => value !== 0),
+      signal: z.null(),
+      output: verificationOutputSummarySchema,
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("ERROR"),
+      completedAt: utcTimestampSchema,
+      durationMs: z.number().int().nonnegative().max(1_000_000),
+      exitCode: z.number().int().nullable(),
+      signal: z
+        .string()
+        .regex(/^SIG[A-Z0-9]+$/)
+        .max(32)
+        .nullable(),
+      errorCode: verificationCheckErrorCodeSchema,
+      output: verificationOutputSummarySchema.nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("INTERRUPTED"),
+      completedAt: utcTimestampSchema,
+      durationMs: z.number().int().nonnegative().max(1_000_000),
+      exitCode: z.number().int().nullable(),
+      signal: z
+        .string()
+        .regex(/^SIG[A-Z0-9]+$/)
+        .max(32)
+        .nullable(),
+      reason: z.literal("OWNER_CANCELLED"),
+      output: verificationOutputSummarySchema.nullable(),
+    })
+    .strict(),
+]);
+
+const verificationRunReservationPayloadSchema = z
+  .object({
+    workItemId: opaqueIdSchema,
+    expectedWorkItemVersion: z.number().int().positive(),
+    expectedPlanRevision: z.number().int().positive(),
+    expectedPlanContentHash: sha256Schema,
+    implementationTree: treeShaSchema,
+    platform: verificationPlatformSchema,
+  })
+  .strict();
+
+export const startVerificationRunCommandSchema = commandBaseSchema.extend({
+  type: z.literal("START_VERIFICATION_RUN"),
+  payload: verificationRunReservationPayloadSchema,
+});
+
+export const retryVerificationRunCommandSchema = commandBaseSchema.extend({
+  type: z.literal("RETRY_VERIFICATION_RUN"),
+  payload: verificationRunReservationPayloadSchema.extend({
+    retryOfRunId: opaqueIdSchema,
+    expectedRetryOfRunVersion: z.number().int().positive(),
+  }),
+});
+
+export const startVerificationCheckCommandSchema = commandBaseSchema.extend({
+  type: z.literal("START_VERIFICATION_CHECK"),
+  payload: z
+    .object({
+      runId: opaqueIdSchema,
+      checkId: opaqueIdSchema,
+      expectedRunVersion: z.number().int().positive(),
+      expectedCheckVersion: z.number().int().positive(),
+    })
+    .strict(),
+});
+
+export const completeVerificationCheckCommandSchema = commandBaseSchema.extend({
+  type: z.literal("COMPLETE_VERIFICATION_CHECK"),
+  payload: z
+    .object({
+      runId: opaqueIdSchema,
+      checkId: opaqueIdSchema,
+      expectedRunVersion: z.number().int().positive(),
+      expectedCheckVersion: z.number().int().positive(),
+      observation: verificationCheckObservationSchema,
+      outputStorageKey: z
+        .string()
+        .regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]*\.txt$/)
+        .max(255)
+        .nullable(),
+    })
+    .strict()
+    .superRefine((payload, context) => {
+      if ((payload.observation.output === null) !== (payload.outputStorageKey === null)) {
+        context.addIssue({
+          code: "custom",
+          path: ["outputStorageKey"],
+          message: "Output evidence and its storage key must be recorded together",
+        });
+      }
+    }),
+});
+
+export const cancelVerificationRunCommandSchema = commandBaseSchema.extend({
+  type: z.literal("CANCEL_VERIFICATION_RUN"),
+  payload: z
+    .object({
+      runId: opaqueIdSchema,
+      expectedRunVersion: z.number().int().positive(),
+    })
+    .strict(),
+});
+
+export const interruptVerificationRunCommandSchema = commandBaseSchema.extend({
+  type: z.literal("INTERRUPT_VERIFICATION_RUN"),
+  payload: z
+    .object({
+      runId: opaqueIdSchema,
+      expectedRunVersion: z.number().int().positive(),
+      reason: z.literal("DAEMON_RESTART"),
+    })
+    .strict(),
+});
+
+const verificationRunEventBaseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    sequence: z.number().int().positive(),
+    id: opaqueIdSchema,
+    aggregateType: z.literal("WORK_ITEM"),
+    aggregateId: opaqueIdSchema,
+    projectId: opaqueIdSchema,
+    actor: actorSchema,
+    occurredAt: utcTimestampSchema,
+    correlationId: correlationIdSchema,
+  })
+  .strict();
+
+export const verificationRunReservedEventSchema = verificationRunEventBaseSchema.extend({
+  type: z.literal("VERIFICATION_RUN_RESERVED"),
+  data: z
+    .object({ run: verificationRunSchema, checks: z.array(verificationCheckSchema).min(1).max(12) })
+    .strict(),
+});
+
+export const verificationCheckStartedEventSchema = verificationRunEventBaseSchema.extend({
+  type: z.literal("VERIFICATION_CHECK_STARTED"),
+  data: z.object({ run: verificationRunSchema, check: verificationCheckSchema }).strict(),
+});
+
+export const verificationCheckCompletedEventSchema = verificationRunEventBaseSchema.extend({
+  type: z.literal("VERIFICATION_CHECK_COMPLETED"),
+  data: z.object({ run: verificationRunSchema, check: verificationCheckSchema }).strict(),
+});
+
+export const verificationRunInterruptedEventSchema = verificationRunEventBaseSchema.extend({
+  type: z.literal("VERIFICATION_RUN_INTERRUPTED"),
+  data: z
+    .object({ run: verificationRunSchema, interruptedCheck: verificationCheckSchema.nullable() })
+    .strict(),
+});
+
+export const verificationRunReservedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    replayed: z.boolean(),
+    type: z.literal("VERIFICATION_RUN_RESERVED"),
+    run: verificationRunSchema,
+    checks: z.array(verificationCheckSchema).min(1).max(12),
+    event: verificationRunReservedEventSchema,
+  })
+  .strict();
+
+export const verificationCheckStartedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    replayed: z.boolean(),
+    type: z.literal("VERIFICATION_CHECK_STARTED"),
+    run: verificationRunSchema,
+    check: verificationCheckSchema,
+    event: verificationCheckStartedEventSchema,
+  })
+  .strict();
+
+export const verificationCheckCompletedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    replayed: z.boolean(),
+    type: z.literal("VERIFICATION_CHECK_COMPLETED"),
+    run: verificationRunSchema,
+    check: verificationCheckSchema,
+    next: z.enum(["START_NEXT_CHECK", "TERMINAL"]),
+    event: verificationCheckCompletedEventSchema,
+  })
+  .strict();
+
+export const verificationRunInterruptedResultSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    replayed: z.boolean(),
+    type: z.literal("VERIFICATION_RUN_INTERRUPTED"),
+    run: verificationRunSchema,
+    interruptedCheck: verificationCheckSchema.nullable(),
+    event: verificationRunInterruptedEventSchema,
+  })
+  .strict();
+
+export const verificationRunSnapshotResponseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    run: verificationRunSchema,
+    checks: z.array(verificationCheckSchema).min(1).max(12),
+    freshness: verificationRunFreshnessSchema,
+    staleReasons: z.array(verificationRunStaleReasonSchema).max(4),
+  })
+  .strict()
+  .superRefine((snapshot, context) => {
+    if (
+      snapshot.checks.some(
+        (check) =>
+          check.runId !== snapshot.run.id ||
+          check.projectId !== snapshot.run.projectId ||
+          check.workItemId !== snapshot.run.workItemId,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["checks"],
+        message: "Verification Checks cannot cross Run identities",
+      });
+    }
+    const ordinals = snapshot.checks.map((check) => check.ordinal);
+    if (new Set(ordinals).size !== ordinals.length) {
+      context.addIssue({ code: "custom", path: ["checks"], message: "Check ordinals must be unique" });
+    }
+    if (
+      (snapshot.freshness === "CURRENT" && snapshot.staleReasons.length !== 0) ||
+      (snapshot.freshness === "STALE" && snapshot.staleReasons.length === 0)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["freshness"],
+        message: "Verification freshness must match its reasons",
+      });
+    }
+  });
+
 export type VerificationRecipeKind = z.infer<typeof verificationRecipeKindSchema>;
 export type VerificationExecutable = z.infer<typeof verificationExecutableSchema>;
 export type VerificationNetworkPolicy = z.infer<typeof verificationNetworkPolicySchema>;
@@ -426,6 +906,24 @@ export type FailVerificationPlanPublicationCommand = z.infer<
 export type RetryVerificationPlanPublicationCommand = z.infer<
   typeof retryVerificationPlanPublicationCommandSchema
 >;
+export type StartVerificationRunCommand = z.infer<typeof startVerificationRunCommandSchema>;
+export type RetryVerificationRunCommand = z.infer<typeof retryVerificationRunCommandSchema>;
+export type StartVerificationCheckCommand = z.infer<typeof startVerificationCheckCommandSchema>;
+export type CompleteVerificationCheckCommand = z.infer<typeof completeVerificationCheckCommandSchema>;
+export type CancelVerificationRunCommand = z.infer<typeof cancelVerificationRunCommandSchema>;
+export type InterruptVerificationRunCommand = z.infer<typeof interruptVerificationRunCommandSchema>;
 export type VerificationPlanAdoptedEvent = z.infer<typeof verificationPlanAdoptedEventSchema>;
 export type VerificationPlanAdoptedResult = z.infer<typeof verificationPlanAdoptedResultSchema>;
 export type VerificationPlanSettingsResponse = z.infer<typeof verificationPlanSettingsResponseSchema>;
+export type VerificationPlatform = z.infer<typeof verificationPlatformSchema>;
+export type VerificationRunStatus = z.infer<typeof verificationRunStatusSchema>;
+export type VerificationCheckStatus = z.infer<typeof verificationCheckStatusSchema>;
+export type VerificationCheckErrorCode = z.infer<typeof verificationCheckErrorCodeSchema>;
+export type VerificationRunTerminalReason = z.infer<typeof verificationRunTerminalReasonSchema>;
+export type VerificationRunFreshness = z.infer<typeof verificationRunFreshnessSchema>;
+export type VerificationRunStaleReason = z.infer<typeof verificationRunStaleReasonSchema>;
+export type VerificationOutputSummary = z.infer<typeof verificationOutputSummarySchema>;
+export type VerificationCheck = z.infer<typeof verificationCheckSchema>;
+export type VerificationRun = z.infer<typeof verificationRunSchema>;
+export type VerificationCheckObservation = z.infer<typeof verificationCheckObservationSchema>;
+export type VerificationRunSnapshotResponse = z.infer<typeof verificationRunSnapshotResponseSchema>;

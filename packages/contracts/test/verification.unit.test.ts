@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { verificationPlanProposalSchema, verificationRecipeSchema } from "../src/index.js";
+import {
+  verificationCheckSchema,
+  verificationPlanProposalSchema,
+  verificationRecipeSchema,
+  verificationRunSchema,
+  verificationRunSnapshotResponseSchema,
+} from "../src/index.js";
 
 const hash = "a".repeat(64);
 
@@ -103,5 +109,156 @@ describe("project verification contract", () => {
         proposalHash: "b".repeat(64),
       }).success,
     ).toBe(false);
+  });
+});
+
+const output = {
+  schemaVersion: 1,
+  artifactId: "verification-output-1",
+  sha256: "d".repeat(64),
+  capturedBytes: 128,
+  stdoutBytes: 90,
+  stderrBytes: 38,
+  truncated: false,
+  available: true,
+} as const;
+
+const runningCheck = {
+  schemaVersion: 1,
+  id: "verification-check-1",
+  projectId: "project-1",
+  workItemId: "work-item-1",
+  runId: "verification-run-1",
+  recipeId: "package-test",
+  ordinal: 1,
+  required: true,
+  status: "RUNNING",
+  startedAt: "2026-09-05T10:00:00.000Z",
+  completedAt: null,
+  durationMs: null,
+  exitCode: null,
+  signal: null,
+  errorCode: null,
+  output: null,
+  version: 2,
+} as const;
+
+const runningRun = {
+  schemaVersion: 1,
+  id: "verification-run-1",
+  projectId: "project-1",
+  workItemId: "work-item-1",
+  pipelineRunId: "pipeline-run-1",
+  workspaceId: "workspace-1",
+  planId: "verification-plan-1",
+  planRevision: 1,
+  planContentHash: "b".repeat(64),
+  implementationTree: "c".repeat(40),
+  ordinal: 1,
+  retryOfRunId: null,
+  platform: "darwin",
+  status: "RUNNING",
+  currentCheckId: runningCheck.id,
+  terminalReason: null,
+  startedAt: runningCheck.startedAt,
+  completedAt: null,
+  createdAt: runningCheck.startedAt,
+  version: 2,
+} as const;
+
+describe("verification run evidence contract", () => {
+  it("accepts a structurally measured passing check and current snapshot", () => {
+    const check = {
+      ...runningCheck,
+      status: "PASSED",
+      completedAt: "2026-09-05T10:00:01.250Z",
+      durationMs: 1_250,
+      exitCode: 0,
+      output,
+      version: 3,
+    } as const;
+    const run = {
+      ...runningRun,
+      status: "PASSED",
+      currentCheckId: null,
+      terminalReason: "ALL_REQUIRED_PASSED",
+      completedAt: check.completedAt,
+      version: 3,
+    } as const;
+
+    expect(verificationCheckSchema.parse(check)).toEqual(check);
+    expect(verificationRunSchema.parse(run)).toEqual(run);
+    expect(
+      verificationRunSnapshotResponseSchema.parse({
+        schemaVersion: 1,
+        run,
+        checks: [check],
+        freshness: "CURRENT",
+        staleReasons: [],
+      }),
+    ).toEqual({ schemaVersion: 1, run, checks: [check], freshness: "CURRENT", staleReasons: [] });
+  });
+
+  it.each([
+    {
+      ...runningCheck,
+      status: "PASSED",
+      completedAt: runningCheck.startedAt,
+      durationMs: 0,
+      exitCode: 1,
+      output,
+    },
+    {
+      ...runningCheck,
+      status: "FAILED",
+      completedAt: runningCheck.startedAt,
+      durationMs: 0,
+      exitCode: 0,
+      output,
+    },
+    {
+      ...runningCheck,
+      status: "ERROR",
+      completedAt: runningCheck.startedAt,
+      durationMs: 0,
+      errorCode: null,
+    },
+    { ...runningCheck, status: "QUEUED", startedAt: runningCheck.startedAt },
+    { ...runningCheck, ownerPath: "/Users/owner/project" },
+  ])("rejects contradictory or privacy-expanding check evidence", (candidate) => {
+    expect(verificationCheckSchema.safeParse(candidate).success).toBe(false);
+  });
+
+  it("rejects contradictory terminal Run state and cross-run snapshot checks", () => {
+    expect(
+      verificationRunSchema.safeParse({
+        ...runningRun,
+        status: "PASSED",
+        terminalReason: "ALL_REQUIRED_PASSED",
+        completedAt: runningRun.startedAt,
+      }).success,
+    ).toBe(false);
+    expect(
+      verificationRunSnapshotResponseSchema.safeParse({
+        schemaVersion: 1,
+        run: runningRun,
+        checks: [{ ...runningCheck, runId: "verification-run-foreign" }],
+        freshness: "STALE",
+        staleReasons: ["TREE_CHANGED"],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts cancellation while a Run is still queued", () => {
+    const queuedRun = {
+      ...runningRun,
+      status: "INTERRUPTED",
+      currentCheckId: null,
+      terminalReason: "OWNER_CANCELLED",
+      startedAt: null,
+      completedAt: "2026-09-05T10:00:01.000Z",
+    } as const;
+
+    expect(verificationRunSchema.parse(queuedRun)).toEqual(queuedRun);
   });
 });

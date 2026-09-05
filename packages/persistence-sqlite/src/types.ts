@@ -43,6 +43,8 @@ import type {
   WorkItemWorkspace,
   VerificationPlan,
   VerificationPlanPublication,
+  VerificationCheck,
+  VerificationRun,
 } from "@loomrail/contracts";
 import type { WorktreeEntry } from "@loomrail/workspace";
 
@@ -79,6 +81,10 @@ export type StateStoreErrorCode =
   | "QA_STABLE_TREE_MISSING"
   | "QA_ATTACHMENT_NOT_FOUND"
   | "QA_RETENTION_ACTOR_FORBIDDEN"
+  | "VERIFICATION_RUN_ALREADY_ACTIVE"
+  | "VERIFICATION_RUN_NOT_FOUND"
+  | "VERIFICATION_CHECK_NOT_FOUND"
+  | "WORKSPACE_VERIFICATION_HELD"
   | "WORKSPACE_NOT_FOUND"
   // Storage invariant (migration 0011's UNIQUE on work_item_id, spec D1): the workspace belongs to
   // the WorkItem, and a second row for the same WorkItem would mean two writers past the lease.
@@ -121,6 +127,10 @@ export type StateQuery =
   | { type: "GET_PROJECT_BY_REPOSITORY_PATH"; repositoryPath: string }
   | { type: "GET_PROJECT_CONSTITUTION_SNAPSHOT"; projectId: string }
   | { type: "GET_PROJECT_VERIFICATION_PLAN"; projectId: string }
+  | { type: "GET_VERIFICATION_RUN"; runId: string }
+  | { type: "LIST_WORK_ITEM_VERIFICATION_RUNS"; workItemId: string; limit?: number }
+  | { type: "LIST_ACTIVE_VERIFICATION_RUNS" }
+  | { type: "GET_VERIFICATION_OUTPUT_ARTIFACT"; checkId: string }
   | { type: "GET_PROJECT_READINESS_SNAPSHOT"; projectId: string }
   | { type: "GET_PROJECT_MCP_PROFILES"; projectId: string }
   | { type: "LIST_PROVIDER_SESSION_MCP_SNAPSHOTS"; providerSessionId: string }
@@ -203,6 +213,12 @@ export type StateQueryResult =
       project: Project;
       plan: VerificationPlan | null;
       publication: VerificationPlanPublication | null;
+    }
+  | { type: "VERIFICATION_RUN"; run: VerificationRun | null; checks: VerificationCheck[] }
+  | { type: "VERIFICATION_RUNS"; runs: VerificationRun[] }
+  | {
+      type: "VERIFICATION_OUTPUT_ARTIFACT";
+      artifact: { artifactId: string; checkId: string; runId: string; storageKey: string } | null;
     }
   | { type: "PROJECT_READINESS_SNAPSHOT"; snapshot: ProjectReadinessSnapshot }
   | { type: "PROJECT_MCP_PROFILES"; project: Project; profiles: McpProfileView[] }
@@ -316,6 +332,8 @@ export type LocalStateIdKind =
   | "constitutionPublication"
   | "verificationPlan"
   | "verificationPlanPublication"
+  | "verificationRun"
+  | "verificationCheck"
   | "projectReadinessRun"
   | "readinessCheck"
   | "securityFinding"

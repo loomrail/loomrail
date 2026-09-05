@@ -41,6 +41,8 @@ import {
   projectProviderSelectionSchema,
   verificationPlanSchema,
   verificationPlanPublicationSchema,
+  verificationCheckSchema,
+  verificationRunSchema,
   qaAttachmentRefSchema,
   qaCorrectionRunSchema,
   qaDefectSchema,
@@ -101,6 +103,8 @@ import {
   type ProjectReadinessRun,
   type VerificationPlan,
   type VerificationPlanPublication,
+  type VerificationCheck,
+  type VerificationRun,
   type QAAttachmentRef,
   type QACorrectionRun,
   type QADefect,
@@ -151,6 +155,10 @@ import {
   decideVerificationPlanPublicationCompleted,
   decideVerificationPlanPublicationFailed,
   decideVerificationPlanPublicationRetry,
+  decideVerificationCheckCompletion,
+  decideVerificationCheckStart,
+  decideVerificationRunInterruption,
+  decideVerificationRunReservation,
   decideRecordProviderAllowance,
   decideRecordProviderUsage,
   decideApproveBudgetOverride,
@@ -216,6 +224,7 @@ import {
   type ProjectProviderPreferenceChangedIntent,
   type VerificationPlanAdoptedIntent,
   type VerificationPlanPublicationIntent,
+  type VerificationRunEventIntent,
   type ProviderAllowanceRecordedIntent,
   type FailedQACorrectionTransition,
   type PassedQACorrectionTransition,
@@ -350,8 +359,59 @@ const workItemWorkspaceRowSchema = z.object({
   snapshot_commit: z.string().nullable(),
   status: z.string(),
   lease_holder: z.string().nullable(),
+  verification_holder: z.string().nullable(),
   created_at: z.string(),
   version: z.number().int(),
+});
+
+const verificationRunRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  pipeline_run_id: z.string(),
+  workspace_id: z.string(),
+  plan_id: z.string(),
+  plan_revision: z.number().int(),
+  plan_content_hash: z.string(),
+  implementation_tree: z.string(),
+  ordinal: z.number().int(),
+  retry_of_run_id: z.string().nullable(),
+  platform: z.string(),
+  status: z.string(),
+  current_check_id: z.string().nullable(),
+  terminal_reason: z.string().nullable(),
+  started_at: z.string().nullable(),
+  completed_at: z.string().nullable(),
+  created_at: z.string(),
+  version: z.number().int(),
+});
+
+const verificationCheckRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  run_id: z.string(),
+  recipe_id: z.string(),
+  ordinal: z.number().int(),
+  required: z.number().int(),
+  status: z.string(),
+  started_at: z.string().nullable(),
+  completed_at: z.string().nullable(),
+  duration_ms: z.number().int().nullable(),
+  exit_code: z.number().int().nullable(),
+  signal: z.string().nullable(),
+  error_code: z.string().nullable(),
+  output_json: z.string().nullable(),
+  version: z.number().int(),
+});
+
+const verificationOutputArtifactRowSchema = z.object({
+  artifact_id: z.string(),
+  run_id: z.string(),
+  check_id: z.string(),
+  storage_key: z.string(),
 });
 
 const constitutionProposalRowSchema = z.object({
@@ -1067,6 +1127,16 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("GET_PROJECT_CONSTITUTION_SNAPSHOT"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_VERIFICATION_PLAN"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_VERIFICATION_RUN"), runId: opaqueIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal("LIST_WORK_ITEM_VERIFICATION_RUNS"),
+      workItemId: opaqueIdSchema,
+      limit: z.number().int().min(1).max(100).default(20),
+    })
+    .strict(),
+  z.object({ type: z.literal("LIST_ACTIVE_VERIFICATION_RUNS") }).strict(),
+  z.object({ type: z.literal("GET_VERIFICATION_OUTPUT_ARTIFACT"), checkId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_READINESS_SNAPSHOT"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_MCP_PROFILES"), projectId: opaqueIdSchema }).strict(),
   z
@@ -1505,6 +1575,55 @@ const workItemWorkspaceFromRow = (value: unknown): WorkItemWorkspace => {
     status: row.status,
     leaseHolder: row.lease_holder,
     createdAt: row.created_at,
+    version: row.version,
+  });
+};
+
+const verificationRunFromRow = (value: unknown): VerificationRun => {
+  const row = verificationRunRowSchema.parse(value);
+  return verificationRunSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    pipelineRunId: row.pipeline_run_id,
+    workspaceId: row.workspace_id,
+    planId: row.plan_id,
+    planRevision: row.plan_revision,
+    planContentHash: row.plan_content_hash,
+    implementationTree: row.implementation_tree,
+    ordinal: row.ordinal,
+    retryOfRunId: row.retry_of_run_id,
+    platform: row.platform,
+    status: row.status,
+    currentCheckId: row.current_check_id,
+    terminalReason: row.terminal_reason,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    createdAt: row.created_at,
+    version: row.version,
+  });
+};
+
+const verificationCheckFromRow = (value: unknown): VerificationCheck => {
+  const row = verificationCheckRowSchema.parse(value);
+  return verificationCheckSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    runId: row.run_id,
+    recipeId: row.recipe_id,
+    ordinal: row.ordinal,
+    required: row.required === 1,
+    status: row.status,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    durationMs: row.duration_ms,
+    exitCode: row.exit_code,
+    signal: row.signal,
+    errorCode: row.error_code,
+    output: row.output_json === null ? null : parseJson(row.output_json),
     version: row.version,
   });
 };
@@ -2771,7 +2890,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const acquireWorkItemWorkspaceLease = database.prepare(
       `UPDATE work_item_workspaces
        SET lease_holder = ?, version = version + 1
-       WHERE id = ? AND version = ? AND lease_holder IS NULL`,
+       WHERE id = ? AND version = ? AND lease_holder IS NULL AND verification_holder IS NULL`,
     );
     // Symmetric with the acquire above: `lease_holder = ?` in the WHERE clause is what makes a
     // release from anyone but the current holder a no-op the caller sees as a refusal, not
@@ -2788,13 +2907,76 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const markWorkItemWorkspaceOrphaned = database.prepare(
       `UPDATE work_item_workspaces
        SET status = 'ORPHANED', lease_holder = NULL, version = version + 1
-       WHERE id = ? AND version = ? AND status = 'READY'`,
+       WHERE id = ? AND version = ? AND status = 'READY' AND verification_holder IS NULL`,
     );
     // Startup reconciliation's own read (Task 10, spec §6 "Восстановление"): every workspace whose
     // worktree might have gone missing while nothing was watching it. ORPHANED and REMOVED rows are
     // already-settled facts this check has nothing left to say about.
     const selectReadyWorkItemWorkspaces = database.prepare(
       "SELECT * FROM work_item_workspaces WHERE status = 'READY' ORDER BY created_at, id",
+    );
+    const selectVerificationRunById = database.prepare("SELECT * FROM verification_runs WHERE id = ?");
+    const selectVerificationRunsByWorkItem = database.prepare(
+      "SELECT * FROM verification_runs WHERE work_item_id = ? ORDER BY ordinal DESC LIMIT ?",
+    );
+    const selectActiveVerificationRuns = database.prepare(
+      "SELECT * FROM verification_runs WHERE status IN ('QUEUED', 'RUNNING') ORDER BY created_at, id",
+    );
+    const selectActiveVerificationRunByWorkspace = database.prepare(
+      `SELECT * FROM verification_runs
+       WHERE workspace_id = ? AND status IN ('QUEUED', 'RUNNING') LIMIT 1`,
+    );
+    const selectMaxVerificationRunOrdinal = database.prepare(
+      "SELECT COALESCE(MAX(ordinal), 0) AS max_ordinal FROM verification_runs WHERE work_item_id = ?",
+    );
+    const insertVerificationRun = database.prepare(
+      `INSERT INTO verification_runs (
+        id, schema_version, project_id, work_item_id, pipeline_run_id, workspace_id, plan_id,
+        plan_revision, plan_content_hash, implementation_tree, ordinal, retry_of_run_id, platform,
+        status, current_check_id, terminal_reason, started_at, completed_at, created_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateVerificationRun = database.prepare(
+      `UPDATE verification_runs SET
+        status = ?, current_check_id = ?, terminal_reason = ?, started_at = ?, completed_at = ?,
+        version = ?
+       WHERE id = ? AND version = ?`,
+    );
+    const selectVerificationCheckById = database.prepare("SELECT * FROM verification_checks WHERE id = ?");
+    const selectVerificationChecksByRun = database.prepare(
+      "SELECT * FROM verification_checks WHERE run_id = ? ORDER BY ordinal",
+    );
+    const insertVerificationCheck = database.prepare(
+      `INSERT INTO verification_checks (
+        id, schema_version, project_id, work_item_id, run_id, recipe_id, ordinal, required, status,
+        started_at, completed_at, duration_ms, exit_code, signal, error_code, output_json, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateVerificationCheck = database.prepare(
+      `UPDATE verification_checks SET
+        status = ?, started_at = ?, completed_at = ?, duration_ms = ?, exit_code = ?, signal = ?,
+        error_code = ?, output_json = ?, version = ?
+       WHERE id = ? AND version = ?`,
+    );
+    const claimWorkspaceForVerification = database.prepare(
+      `UPDATE work_item_workspaces
+       SET verification_holder = ?, version = version + 1
+       WHERE id = ? AND version = ? AND status = 'READY'
+         AND lease_holder IS NULL AND verification_holder IS NULL`,
+    );
+    const releaseWorkspaceFromVerification = database.prepare(
+      `UPDATE work_item_workspaces
+       SET verification_holder = NULL, version = version + 1
+       WHERE id = ? AND verification_holder = ?`,
+    );
+    const insertVerificationOutputArtifact = database.prepare(
+      `INSERT INTO verification_output_artifacts (
+        artifact_id, schema_version, project_id, work_item_id, run_id, check_id, storage_key, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectVerificationOutputArtifactByCheck = database.prepare(
+      `SELECT artifact_id, run_id, check_id, storage_key
+       FROM verification_output_artifacts WHERE check_id = ?`,
     );
     const selectCriteria = database.prepare(
       `SELECT criterion FROM work_item_acceptance_criteria
@@ -3353,6 +3535,24 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       const row = selectWorkItemWorkspaceByWorkItemId.get(workItemId);
       return row === undefined ? null : workItemWorkspaceFromRow(row);
     };
+
+    const readWorkspaceVerificationHolder = (workspaceId: string): string | null => {
+      const row = selectWorkItemWorkspaceById.get(workspaceId);
+      return row === undefined ? null : workItemWorkspaceRowSchema.parse(row).verification_holder;
+    };
+
+    const readVerificationRun = (runId: string): VerificationRun | null => {
+      const row = selectVerificationRunById.get(runId);
+      return row === undefined ? null : verificationRunFromRow(row);
+    };
+
+    const readVerificationCheck = (checkId: string): VerificationCheck | null => {
+      const row = selectVerificationCheckById.get(checkId);
+      return row === undefined ? null : verificationCheckFromRow(row);
+    };
+
+    const readVerificationChecks = (runId: string): VerificationCheck[] =>
+      selectVerificationChecksByRun.all(runId).map(verificationCheckFromRow);
 
     const readWorkItem = (workItemId: string): WorkItem | null => {
       const value = selectWorkItemById.get(workItemId);
@@ -4105,6 +4305,93 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       }
     };
 
+    const persistNewVerificationRun = (run: VerificationRun, checks: readonly VerificationCheck[]): void => {
+      insertVerificationRun.run(
+        run.id,
+        run.schemaVersion,
+        run.projectId,
+        run.workItemId,
+        run.pipelineRunId,
+        run.workspaceId,
+        run.planId,
+        run.planRevision,
+        run.planContentHash,
+        run.implementationTree,
+        run.ordinal,
+        run.retryOfRunId,
+        run.platform,
+        run.status,
+        run.currentCheckId,
+        run.terminalReason,
+        run.startedAt,
+        run.completedAt,
+        run.createdAt,
+        run.version,
+      );
+      for (const check of checks) {
+        insertVerificationCheck.run(
+          check.id,
+          check.schemaVersion,
+          check.projectId,
+          check.workItemId,
+          check.runId,
+          check.recipeId,
+          check.ordinal,
+          check.required ? 1 : 0,
+          check.status,
+          check.startedAt,
+          check.completedAt,
+          check.durationMs,
+          check.exitCode,
+          check.signal,
+          check.errorCode,
+          check.output === null ? null : JSON.stringify(check.output),
+          check.version,
+        );
+      }
+    };
+
+    const persistVerificationRunUpdate = (run: VerificationRun, previousVersion: number): void => {
+      const update = updateVerificationRun.run(
+        run.status,
+        run.currentCheckId,
+        run.terminalReason,
+        run.startedAt,
+        run.completedAt,
+        run.version,
+        run.id,
+        previousVersion,
+      );
+      if (update.changes !== 1) {
+        throw new VerificationDomainError(
+          "RUN_VERSION_CONFLICT",
+          "The verification Run changed while the command was applied",
+        );
+      }
+    };
+
+    const persistVerificationCheckUpdate = (check: VerificationCheck, previousVersion: number): void => {
+      const update = updateVerificationCheck.run(
+        check.status,
+        check.startedAt,
+        check.completedAt,
+        check.durationMs,
+        check.exitCode,
+        check.signal,
+        check.errorCode,
+        check.output === null ? null : JSON.stringify(check.output),
+        check.version,
+        check.id,
+        previousVersion,
+      );
+      if (update.changes !== 1) {
+        throw new VerificationDomainError(
+          "CHECK_VERSION_CONFLICT",
+          "The verification Check changed while the command was applied",
+        );
+      }
+    };
+
     const insertScaffold = (operation: ScaffoldOperation): void => {
       insertScaffoldOperation.run(
         operation.id,
@@ -4624,6 +4911,45 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         type: intent.type,
         aggregateType: "PROJECT",
         aggregateId: metadata.projectId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
+    const appendVerificationRunEvent = (
+      intent: VerificationRunEventIntent,
+      metadata: {
+        workItemId: string;
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "WORK_ITEM",
+        metadata.workItemId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "WORK_ITEM",
+        aggregateId: metadata.workItemId,
         projectId: metadata.projectId,
         actor: metadata.actor,
         occurredAt: metadata.occurredAt,
@@ -6101,6 +6427,230 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           replayed: false,
           plan: decision.plan,
           publication: decision.publication,
+          event,
+        });
+      }
+
+      if (command.type === "START_VERIFICATION_RUN" || command.type === "RETRY_VERIFICATION_RUN") {
+        const workItem = readWorkItem(command.payload.workItemId);
+        const project = workItem === null ? null : readProject(workItem.projectId);
+        const pipelineRun = readLatestPipelineRun(command.payload.workItemId);
+        const workspace = readWorkItemWorkspaceByWorkItemId(command.payload.workItemId);
+        const plan = project === null ? null : readLatestVerificationPlan(project.id);
+        const publicationRow =
+          project === null ? undefined : selectLatestVerificationPlanPublication.get(project.id);
+        const publication =
+          publicationRow === undefined ? null : verificationPlanPublicationFromRow(publicationRow);
+        const retryOfRun =
+          command.type === "RETRY_VERIFICATION_RUN"
+            ? readVerificationRun(command.payload.retryOfRunId)
+            : null;
+        if (
+          workspace !== null &&
+          (readWorkspaceVerificationHolder(workspace.id) !== null ||
+            selectActiveVerificationRunByWorkspace.get(workspace.id) !== undefined)
+        ) {
+          throw new StateStoreError(
+            "VERIFICATION_RUN_ALREADY_ACTIVE",
+            "The workspace already has an active verification Run",
+          );
+        }
+        const ordinal =
+          workItem === null
+            ? 1
+            : maxOrdinalRowSchema.parse(selectMaxVerificationRunOrdinal.get(workItem.id)).max_ordinal + 1;
+        const decision = decideVerificationRunReservation(command, {
+          now: occurredAt,
+          newRunId: createId("verificationRun"),
+          newCheckIds: (plan?.recipes ?? []).map(() => createId("verificationCheck")),
+          ordinal,
+          project: project ?? undefined,
+          workItem: workItem ?? undefined,
+          pipelineRun: pipelineRun ?? undefined,
+          workspace: workspace ?? undefined,
+          plan: plan ?? undefined,
+          publication: publication ?? undefined,
+          ...(retryOfRun === null ? {} : { retryOfRun }),
+        });
+        persistNewVerificationRun(decision.run, decision.checks);
+        const claim = claimWorkspaceForVerification.run(
+          decision.run.id,
+          decision.run.workspaceId,
+          workspace?.version ?? 0,
+        );
+        if (claim.changes !== 1) {
+          throw new VerificationDomainError(
+            "WORKSPACE_UNAVAILABLE",
+            "The workspace changed while verification was reserved",
+          );
+        }
+        const event = appendVerificationRunEvent(decision.event, {
+          workItemId: decision.run.workItemId,
+          projectId: decision.run.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "VERIFICATION_RUN_RESERVED",
+          replayed: false,
+          run: decision.run,
+          checks: decision.checks,
+          event,
+        });
+      }
+
+      if (command.type === "START_VERIFICATION_CHECK") {
+        const run = readVerificationRun(command.payload.runId);
+        if (run === null) {
+          throw new StateStoreError("VERIFICATION_RUN_NOT_FOUND", "The verification Run does not exist");
+        }
+        const check = readVerificationCheck(command.payload.checkId);
+        if (check === null) {
+          throw new StateStoreError("VERIFICATION_CHECK_NOT_FOUND", "The verification Check does not exist");
+        }
+        const decision = decideVerificationCheckStart({
+          actor: command.actor,
+          run,
+          check,
+          checks: readVerificationChecks(run.id),
+          expectedRunVersion: command.payload.expectedRunVersion,
+          expectedCheckVersion: command.payload.expectedCheckVersion,
+          now: occurredAt,
+        });
+        persistVerificationRunUpdate(decision.run, run.version);
+        persistVerificationCheckUpdate(decision.check, check.version);
+        const event = appendVerificationRunEvent(
+          { type: "VERIFICATION_CHECK_STARTED", data: decision },
+          {
+            workItemId: run.workItemId,
+            projectId: run.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "VERIFICATION_CHECK_STARTED",
+          replayed: false,
+          ...decision,
+          event,
+        });
+      }
+
+      if (command.type === "COMPLETE_VERIFICATION_CHECK") {
+        const run = readVerificationRun(command.payload.runId);
+        if (run === null) {
+          throw new StateStoreError("VERIFICATION_RUN_NOT_FOUND", "The verification Run does not exist");
+        }
+        const check = readVerificationCheck(command.payload.checkId);
+        if (check === null) {
+          throw new StateStoreError("VERIFICATION_CHECK_NOT_FOUND", "The verification Check does not exist");
+        }
+        const decision = decideVerificationCheckCompletion({
+          actor: command.actor,
+          run,
+          check,
+          checks: readVerificationChecks(run.id),
+          expectedRunVersion: command.payload.expectedRunVersion,
+          expectedCheckVersion: command.payload.expectedCheckVersion,
+          observation: command.payload.observation,
+        });
+        persistVerificationRunUpdate(decision.run, run.version);
+        persistVerificationCheckUpdate(decision.check, check.version);
+        if (command.payload.outputStorageKey !== null && decision.check.output !== null) {
+          insertVerificationOutputArtifact.run(
+            decision.check.output.artifactId,
+            1,
+            decision.check.projectId,
+            decision.check.workItemId,
+            decision.check.runId,
+            decision.check.id,
+            command.payload.outputStorageKey,
+            command.payload.observation.completedAt,
+          );
+        }
+        if (decision.next === "TERMINAL") {
+          const release = releaseWorkspaceFromVerification.run(run.workspaceId, run.id);
+          if (release.changes !== 1) {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "The verification workspace reservation could not be released",
+            );
+          }
+        }
+        const event = appendVerificationRunEvent(
+          { type: "VERIFICATION_CHECK_COMPLETED", data: { run: decision.run, check: decision.check } },
+          {
+            workItemId: run.workItemId,
+            projectId: run.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "VERIFICATION_CHECK_COMPLETED",
+          replayed: false,
+          ...decision,
+          event,
+        });
+      }
+
+      if (command.type === "CANCEL_VERIFICATION_RUN" || command.type === "INTERRUPT_VERIFICATION_RUN") {
+        const run = readVerificationRun(command.payload.runId);
+        if (run === null) {
+          throw new StateStoreError("VERIFICATION_RUN_NOT_FOUND", "The verification Run does not exist");
+        }
+        const checks = readVerificationChecks(run.id);
+        const currentCheckId = run.currentCheckId;
+        const decision = decideVerificationRunInterruption({
+          actor: command.actor,
+          run,
+          checks,
+          expectedRunVersion: command.payload.expectedRunVersion,
+          reason: command.type === "CANCEL_VERIFICATION_RUN" ? "OWNER_CANCELLED" : command.payload.reason,
+          now: occurredAt,
+        });
+        persistVerificationRunUpdate(decision.run, run.version);
+        const interruptedCheck =
+          currentCheckId === null
+            ? null
+            : (decision.checks.find((candidate) => candidate.id === currentCheckId) ?? null);
+        const previousCheck =
+          currentCheckId === null
+            ? null
+            : (checks.find((candidate) => candidate.id === currentCheckId) ?? null);
+        if (interruptedCheck !== null && previousCheck !== null) {
+          persistVerificationCheckUpdate(interruptedCheck, previousCheck.version);
+        }
+        const release = releaseWorkspaceFromVerification.run(run.workspaceId, run.id);
+        if (release.changes !== 1) {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The interrupted verification workspace reservation could not be released",
+          );
+        }
+        const intent: VerificationRunEventIntent = {
+          type: "VERIFICATION_RUN_INTERRUPTED",
+          data: { run: decision.run, interruptedCheck },
+        };
+        const event = appendVerificationRunEvent(intent, {
+          workItemId: run.workItemId,
+          projectId: run.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "VERIFICATION_RUN_INTERRUPTED",
+          replayed: false,
+          run: decision.run,
+          interruptedCheck,
           event,
         });
       }
@@ -8136,7 +8686,58 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
       if (command.type === "RECONCILE_WORKFLOWS") {
         const interruptedSessions: ProviderSession[] = [];
+        const interruptedVerificationRuns: VerificationRun[] = [];
+        const verificationEvents: DomainEvent[] = [];
         const interruptedAgentRunLeases: { stageAttemptId: string; workItemId: string }[] = [];
+        // A queued/running verification process has no daemon loop after restart. Record the
+        // uncertainty and release read authority, but never replay the command automatically.
+        for (const runRow of selectActiveVerificationRuns.all()) {
+          const current = verificationRunFromRow(runRow);
+          const checks = readVerificationChecks(current.id);
+          const decision = decideVerificationRunInterruption({
+            actor: command.actor,
+            run: current,
+            checks,
+            expectedRunVersion: current.version,
+            reason: "DAEMON_RESTART",
+            now: occurredAt,
+          });
+          persistVerificationRunUpdate(decision.run, current.version);
+          const interruptedCheck =
+            current.currentCheckId === null
+              ? null
+              : (decision.checks.find((check) => check.id === current.currentCheckId) ?? null);
+          const previousCheck =
+            current.currentCheckId === null
+              ? null
+              : (checks.find((check) => check.id === current.currentCheckId) ?? null);
+          if (interruptedCheck !== null && previousCheck !== null) {
+            persistVerificationCheckUpdate(interruptedCheck, previousCheck.version);
+          }
+          const release = releaseWorkspaceFromVerification.run(current.workspaceId, current.id);
+          if (release.changes !== 1) {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "An interrupted verification reservation changed during startup recovery",
+            );
+          }
+          interruptedVerificationRuns.push(decision.run);
+          verificationEvents.push(
+            appendVerificationRunEvent(
+              {
+                type: "VERIFICATION_RUN_INTERRUPTED",
+                data: { run: decision.run, interruptedCheck },
+              },
+              {
+                workItemId: current.workItemId,
+                projectId: current.projectId,
+                actor: command.actor,
+                occurredAt,
+                correlationId: command.correlationId,
+              },
+            ),
+          );
+        }
         // AgentRun is the A3 concurrency authority. Every RUNNING row at startup is orphaned even
         // when no ProviderSession was created yet; ending all of them first frees capacity and
         // ensures the dispatch-level recovery below never resurrects one implicitly.
@@ -8197,7 +8798,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           .all()
           .map(workflowDispatchFromRow);
         const recoveryReports: RecoveryReport[] = [];
-        const events: DomainEvent[] = [];
+        const events: DomainEvent[] = [...verificationEvents];
 
         // A session still marked RUNNING at startup is orphaned by definition. It only ends as
         // ENDED/INTERRUPTED once recovery knows its recorded process is gone or the pid was reused.
@@ -8497,6 +9098,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           replayed: false,
           recoveryReports,
           interruptedSessions,
+          interruptedVerificationRuns,
           orphanedWorkspaces,
           events,
         });
@@ -9285,6 +9887,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               "The workspace lease is already held by another StageAttempt",
             );
           }
+          if (readWorkspaceVerificationHolder(after.id) !== null) {
+            throw new StateStoreError(
+              "WORKSPACE_VERIFICATION_HELD",
+              "The workspace is reserved by an active verification Run",
+            );
+          }
           throw new StateStoreError(
             "WORKSPACE_VERSION_CONFLICT",
             "The workspace changed while the lease was being acquired",
@@ -9371,6 +9979,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           }
           if (after.status !== "READY") {
             throw new StateStoreError("WORKSPACE_NOT_READY", "Only a READY workspace can be marked orphaned");
+          }
+          if (readWorkspaceVerificationHolder(after.id) !== null) {
+            throw new StateStoreError(
+              "WORKSPACE_VERIFICATION_HELD",
+              "An active verification Run still owns this workspace",
+            );
           }
           throw new StateStoreError(
             "WORKSPACE_VERSION_CONFLICT",
@@ -9651,6 +10265,42 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             plan,
             publication:
               publicationRow === undefined ? null : verificationPlanPublicationFromRow(publicationRow),
+          };
+        }
+        case "GET_VERIFICATION_RUN": {
+          const run = readVerificationRun(queryValue.runId);
+          return {
+            type: "VERIFICATION_RUN",
+            run,
+            checks: run === null ? [] : readVerificationChecks(run.id),
+          };
+        }
+        case "LIST_WORK_ITEM_VERIFICATION_RUNS":
+          return {
+            type: "VERIFICATION_RUNS",
+            runs: selectVerificationRunsByWorkItem
+              .all(queryValue.workItemId, queryValue.limit)
+              .map(verificationRunFromRow),
+          };
+        case "LIST_ACTIVE_VERIFICATION_RUNS":
+          return {
+            type: "VERIFICATION_RUNS",
+            runs: selectActiveVerificationRuns.all().map(verificationRunFromRow),
+          };
+        case "GET_VERIFICATION_OUTPUT_ARTIFACT": {
+          const value = selectVerificationOutputArtifactByCheck.get(queryValue.checkId);
+          const row = value === undefined ? null : verificationOutputArtifactRowSchema.parse(value);
+          return {
+            type: "VERIFICATION_OUTPUT_ARTIFACT",
+            artifact:
+              row === null
+                ? null
+                : {
+                    artifactId: row.artifact_id,
+                    checkId: row.check_id,
+                    runId: row.run_id,
+                    storageKey: row.storage_key,
+                  },
           };
         }
         case "GET_PROJECT_READINESS_SNAPSHOT": {

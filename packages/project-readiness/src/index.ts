@@ -19,3 +19,9 @@ export {
   publishVerificationPlan,
   type ProjectVerificationPublicationErrorCode,
 } from "./publisher.js";
+export {
+  executeVerificationRecipe,
+  verificationBaselineEnvironment,
+  type ExecuteVerificationRecipeInput,
+  type VerificationRecipeExecution,
+} from "./runner.js";

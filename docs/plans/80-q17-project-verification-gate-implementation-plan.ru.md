@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-05
 
-**Статус:** in progress — Q17.1 complete, Q17.2 next
+**Статус:** in progress — Q17.1 complete, Q17.2 daemon/API/UI in progress
 
 **Спецификация:**
 [79-q17-project-verification-gate-spec.ru.md](79-q17-project-verification-gate-spec.ru.md)
@@ -27,10 +27,10 @@ failing behavior test на соответствующем seam и заканчи
 
 ## Q17.2 — Manual measured run
 
-- [ ] Добавить Run/check/evidence contracts и pure terminal/freshness projection.
-- [ ] Реализовать один daemon-owned runner: argv/no-shell, canonical cwd, scrubbed environment, output/deadline bounds,
+- [x] Добавить Run/check/evidence contracts и pure terminal/freshness projection.
+- [x] Реализовать один daemon-owned runner: argv/no-shell, canonical cwd, scrubbed environment, output/deadline bounds,
       cross-platform process-tree termination и exact-tree before/after check.
-- [ ] Добавить transactional reservation/check completion/terminal Run commands и restart reconciliation без replay.
+- [x] Добавить transactional reservation/check completion/terminal Run commands и restart reconciliation без replay.
 - [ ] Добавить manual start/cancel/retry/read-output HTTP seams и Task Cockpit states.
 - [ ] Проверить output privacy, path/control-sequence redaction и artifact retention/recovery.
 

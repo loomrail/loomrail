@@ -12,6 +12,7 @@ import {
 import { mcpSessionSnapshotSchema } from "./mcp.js";
 import { workItemWorkspaceOrphanedEventSchema, workItemWorkspaceSchema } from "./workspace.js";
 import { reviewFindingSchema, reviewReportDraftSchema, reviewReportSchema } from "./review.js";
+import { verificationRunInterruptedEventSchema, verificationRunSchema } from "./verification.js";
 import {
   qaCorrectionCancelledEventSchema,
   qaCorrectionRunSchema,
@@ -1594,6 +1595,7 @@ export const workflowsReconciledResultSchema = z
     // Spec §6.4 makes a daemon restart the ordinary end of a ProviderSession, so reconciliation
     // now closes orphaned sessions as well as orphaned dispatches and reports both kinds of event.
     interruptedSessions: z.array(providerSessionSchema),
+    interruptedVerificationRuns: z.array(verificationRunSchema).default([]),
     // Task 10 (spec §6, "Восстановление"): every READY workspace whose worktree directory was
     // found gone or prunable at this startup, now moved to ORPHANED. Never a resurrection (AD-008)
     // -- nothing here recreates a workspace or touches the branch it leaves behind (D12).
@@ -1602,6 +1604,7 @@ export const workflowsReconciledResultSchema = z
       z.discriminatedUnion("type", [
         recoveryReportCreatedEventSchema,
         providerSessionEndedEventSchema,
+        verificationRunInterruptedEventSchema,
         workItemWorkspaceOrphanedEventSchema,
       ]),
     ),

@@ -241,6 +241,9 @@ importers:
       '@loomrail/domain':
         specifier: workspace:*
         version: link:../domain
+      '@loomrail/process-supervision':
+        specifier: workspace:*
+        version: link:../process-supervision
       '@modelcontextprotocol/client':
         specifier: 2.0.0
         version: 2.0.0
@@ -294,6 +297,8 @@ importers:
         specifier: 2.0.0
         version: 2.0.0
 
+  packages/process-supervision: {}
+
   packages/project-constitution:
     dependencies:
       '@loomrail/contracts':
@@ -308,6 +313,12 @@ importers:
       '@loomrail/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@loomrail/process-supervision':
+        specifier: workspace:*
+        version: link:../process-supervision
+      '@loomrail/workspace':
+        specifier: workspace:*
+        version: link:../workspace
 
   packages/project-scaffolding:
     dependencies:

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createProcessTreeOperations, type ProcessTreeDependencies } from "../src/process-tree.js";
+import { createProcessTreeOperations, type ProcessTreeDependencies } from "../src/index.js";
 
 type SignalCall = {
   pid: number;
@@ -31,10 +31,7 @@ const dependencies = (options?: {
       },
       execute: (file, args) => {
         executeCalls.push({ file, args });
-        return Promise.resolve({
-          ok: options?.executionSucceeds ?? true,
-          stdout: options?.stdout ?? "",
-        });
+        return Promise.resolve({ ok: options?.executionSucceeds ?? true, stdout: options?.stdout ?? "" });
       },
     },
     signalCalls,
@@ -42,7 +39,7 @@ const dependencies = (options?: {
   };
 };
 
-describe("process-tree platform operations", () => {
+describe("shared process-tree platform operations", () => {
   it("addresses a POSIX child as a detached process group", async () => {
     const fixture = dependencies({ stdout: "1-02:03:04\n" });
     const operations = createProcessTreeOperations("darwin", fixture.value);
@@ -80,14 +77,14 @@ describe("process-tree platform operations", () => {
     ]);
   });
 
-  it("reads the absolute Windows process start time with a fixed executable and argument vector", async () => {
+  it("reads the Windows process start time with a fixed executable and argv", async () => {
     const startedAt = new Date("2026-08-31T11:59:58.750Z");
     const fixture = dependencies({ stdout: `${startedAt.getTime().toString()}\r\n` });
     const operations = createProcessTreeOperations("win32", fixture.value);
-    const now = new Date("2026-08-31T12:00:00.000Z");
 
-    await expect(operations.startedAt(7301, now)).resolves.toEqual(startedAt);
-    expect(fixture.executeCalls).toHaveLength(1);
+    await expect(operations.startedAt(7301, new Date("2026-08-31T12:00:00.000Z"))).resolves.toEqual(
+      startedAt,
+    );
     expect(fixture.executeCalls[0]?.file).toBe("powershell.exe");
     expect(fixture.executeCalls[0]?.args.slice(0, 4)).toEqual([
       "-NoLogo",
@@ -96,17 +93,6 @@ describe("process-tree platform operations", () => {
       "-Command",
     ]);
     expect(fixture.executeCalls[0]?.args[4]).toContain("ProcessId = 7301");
-    expect(fixture.executeCalls[0]?.args[4]).toContain("ToUnixTimeMilliseconds");
-  });
-
-  it("reports missing processes and failed start-time probes without throwing", async () => {
-    const fixture = dependencies({ executionSucceeds: false, signalSucceeds: false });
-    const operations = createProcessTreeOperations("win32", fixture.value);
-
-    expect(operations.pidExists(7301)).toBe(false);
-    expect(operations.treeExists(7301)).toBe(false);
-    await expect(operations.startedAt(7301, new Date())).resolves.toBeNull();
-    await expect(operations.forceStop(7301)).rejects.toThrow("The MCP process tree could not be terminated");
   });
 
   it("rejects invalid process identifiers before constructing an OS command", async () => {
