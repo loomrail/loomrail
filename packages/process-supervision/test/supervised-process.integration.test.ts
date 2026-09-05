@@ -51,7 +51,11 @@ describe("supervised local process", () => {
         // Test cleanup only; the process may have exited between the probe and signal.
       }
     }
-    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+    await Promise.all(
+      roots
+        .splice(0)
+        .map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
+    );
   });
 
   it("passes every argument as inert argv with no shell interpretation", async () => {
@@ -203,7 +207,7 @@ describe("supervised local process", () => {
       verificationProcessIsStopped(verificationProcessRecordPath(registryDirectory, runId), runId),
     ).resolves.toBe(true);
     await removeVerificationProcessRecord(registryDirectory, runId);
-  }, 15_000);
+  }, 75_000);
 
   it("waits for a slow supervisor to publish durable stop proof", async () => {
     const root = await mkdtemp(join(tmpdir(), "loomrail slow supervisor "));
@@ -289,7 +293,7 @@ describe("supervised local process", () => {
       verificationProcessIsStopped(verificationProcessRecordPath(registryDirectory, runId), runId),
     ).resolves.toBe(true);
     await removeVerificationProcessRecord(registryDirectory, runId);
-  }, 15_000);
+  }, 75_000);
 
   it("removes control sequences and exact sensitive values from captured text", async () => {
     const root = await mkdtemp(join(tmpdir(), "loomrail redact test "));
@@ -333,7 +337,13 @@ describe("supervised local process", () => {
 
     const timedOut = await runSupervisedProcess({ ...common, deadlineMs: 500 });
     expect(timedOut.termination).toBe("TIMED_OUT");
-    expect(timedOut.signal).toBe(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+    if (process.platform === "win32") {
+      // taskkill terminates the process tree externally. Node may report either its requested
+      // SIGTERM or no signal at all; the normalized TIMED_OUT reason is the portable contract.
+      expect([null, "SIGTERM"]).toContain(timedOut.signal);
+    } else {
+      expect(timedOut.signal).toBe("SIGKILL");
+    }
 
     const authority = new AbortController();
     const cancelledPromise = runSupervisedProcess({

@@ -86,18 +86,9 @@ jobs:
       # and exact-tree seam visible on both supported platforms even when protected landing lint
       # prevents the repository-wide suite from reaching workspace tests.
       - name: Verify Project verification workflow gate
-        run: |
-          pnpm --filter "@loomrail/daemon..." build
-          pnpm --dir packages/contracts exec vitest run test/verification.unit.test.ts
-          pnpm --dir packages/domain exec vitest run test/verification-run.unit.test.ts
-          pnpm --dir packages/domain exec vitest run test/qa-correction.test.ts -t "delivery-wide|shared owner gate"
-          pnpm --dir packages/process-supervision exec vitest run test/process-tree.unit.test.ts test/supervised-process.integration.test.ts
-          pnpm --dir packages/project-readiness exec vitest run test/verification-scanner.integration.test.ts test/verification-publisher.integration.test.ts test/verification-runner.integration.test.ts
-          pnpm --dir packages/persistence-sqlite exec vitest run test/verification-run-state.integration.test.ts
-          pnpm --dir packages/persistence-sqlite exec vitest run test/local-state.integration.test.ts -t "next shared position|mixed-evaluator QA gate"
-          pnpm --dir apps/daemon exec vitest run --project unit test/project-verification-gate.unit.test.ts
-          pnpm --dir apps/daemon exec vitest run --project unit test/verification-output-retention.unit.test.ts
-          pnpm --dir apps/daemon exec vitest run --project integration test/session-worker.integration.test.ts -t "drives a CODEX-shaped"
+        # Keep the fail-fast `&&` chain inside one cross-platform package script. PowerShell would
+        # otherwise keep running later native commands and let their zero exit mask an earlier test.
+        run: pnpm test:project-verification
 
       # The named fault matrix includes the real Playwright BrowserDriver suite. A fresh runner has
       # the package but no browser binary; keep that prerequisite explicit instead of weakening the

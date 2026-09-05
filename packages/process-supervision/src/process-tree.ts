@@ -10,7 +10,7 @@ type ExecutionResult = {
 
 export type ProcessTreeDependencies = {
   signal: (pid: number, signal: ProcessSignal) => void;
-  execute: (file: string, args: readonly string[]) => Promise<ExecutionResult>;
+  execute: (file: string, args: readonly string[], timeoutMs: number) => Promise<ExecutionResult>;
 };
 
 export type ProcessTreeOperations = {
@@ -35,6 +35,9 @@ export type StopAndReapProcessTreeOptions = {
 
 const DESCENDANT_REAP_GRACE_MS = 500;
 const DESCENDANT_REAP_FORCE_MS = 2_000;
+const PROCESS_QUERY_TIMEOUT_MS = 10_000;
+const WINDOWS_TREE_STOP_TIMEOUT_MS = 10_000;
+const WINDOWS_DESCENDANT_REAP_TIMEOUT_MS = 30_000;
 
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => {
@@ -71,11 +74,16 @@ export const stopAndReapProcessTree = async ({
   return operations.reapDescendants(rootPid, rootStartedAt);
 };
 
-const executeFile = (file: string, args: readonly string[]): Promise<ExecutionResult> =>
+const executeFile = (file: string, args: readonly string[], timeoutMs: number): Promise<ExecutionResult> =>
   new Promise((resolve) => {
-    execFile(file, [...args], { encoding: "utf8", windowsHide: true }, (error, stdout) => {
-      resolve({ ok: error === null, stdout });
-    });
+    execFile(
+      file,
+      [...args],
+      { encoding: "utf8", windowsHide: true, timeout: timeoutMs, killSignal: "SIGKILL" },
+      (error, stdout) => {
+        resolve({ ok: error === null, stdout });
+      },
+    );
   });
 
 const productionDependencies: ProcessTreeDependencies = {
@@ -140,7 +148,11 @@ const createPosixOperations = (dependencies: ProcessTreeDependencies): ProcessTr
     }
   },
   startedAt: async (pid, now) => {
-    const output = await dependencies.execute("ps", ["-o", "etime=", "-p", requirePid(pid)]);
+    const output = await dependencies.execute(
+      "ps",
+      ["-o", "etime=", "-p", requirePid(pid)],
+      PROCESS_QUERY_TIMEOUT_MS,
+    );
     return output.ok ? elapsedToStartedAt(output.stdout, now) : null;
   },
 });
@@ -187,13 +199,11 @@ const reapWindowsDescendants = async (
     "Write-Output 'RUNNING';",
     "exit 1;",
   ].join(" ");
-  const result = await dependencies.execute("powershell.exe", [
-    "-NoLogo",
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    script,
-  ]);
+  const result = await dependencies.execute(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    WINDOWS_DESCENDANT_REAP_TIMEOUT_MS,
+  );
   return result.ok && result.stdout.trim() === "STOPPED";
 };
 
@@ -202,12 +212,11 @@ const stopWindowsTree = async (
   rootPid: number,
   force: boolean,
 ): Promise<void> => {
-  const result = await dependencies.execute("taskkill.exe", [
-    "/PID",
-    requirePid(rootPid),
-    "/T",
-    ...(force ? ["/F"] : []),
-  ]);
+  const result = await dependencies.execute(
+    "taskkill.exe",
+    ["/PID", requirePid(rootPid), "/T", ...(force ? ["/F"] : [])],
+    WINDOWS_TREE_STOP_TIMEOUT_MS,
+  );
   if (!result.ok) throw new Error("The local process tree could not be terminated");
 };
 
@@ -221,13 +230,17 @@ const createWindowsOperations = (dependencies: ProcessTreeDependencies): Process
   reapDescendants: (rootPid, rootStartedAt) => reapWindowsDescendants(dependencies, rootPid, rootStartedAt),
   startedAt: async (pid, _now) => {
     const pidText = requirePid(pid);
-    const output = await dependencies.execute("powershell.exe", [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      `$candidate = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = ${pidText}' -Property CreationDate; if ($null -ne $candidate) { [int64]([DateTimeOffset]$candidate.CreationDate).ToUnixTimeMilliseconds() }`,
-    ]);
+    const output = await dependencies.execute(
+      "powershell.exe",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$candidate = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = ${pidText}' -Property CreationDate; if ($null -ne $candidate) { [int64]([DateTimeOffset]$candidate.CreationDate).ToUnixTimeMilliseconds() }`,
+      ],
+      PROCESS_QUERY_TIMEOUT_MS,
+    );
     if (!output.ok) return null;
     const startedAtMilliseconds = Number(output.stdout.trim());
     if (!Number.isSafeInteger(startedAtMilliseconds) || startedAtMilliseconds < 0) return null;

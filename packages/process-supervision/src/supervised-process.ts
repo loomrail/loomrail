@@ -49,10 +49,10 @@ export type SupervisedProcessOptions = {
 
 const DEFAULT_GRACE_MS = 5_000;
 const FORCE_EXIT_WAIT_MS = 2_000;
-// The trusted supervisor may still be proving that a Windows descendant tree is gone after the
-// target's own graceful/forced stop windows elapsed. CIM startup and enumeration are materially
-// slower on a loaded runner, so do not kill the proof writer on the old 500 ms overhead budget.
-const SUPERVISOR_FINALIZATION_WAIT_MS = 10_000;
+// The trusted supervisor bounds each Windows taskkill/CIM command itself. Give those sequential
+// fail-closed operations enough time to publish STOPPED before using the supervisor kill as the
+// final backstop; CANCELLING keeps workspace authority reserved throughout this wait.
+const SUPERVISOR_FINALIZATION_WAIT_MS = 60_000;
 
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => {

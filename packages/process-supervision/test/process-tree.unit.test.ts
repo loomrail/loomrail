@@ -14,6 +14,7 @@ type SignalCall = {
 type ExecuteCall = {
   file: string;
   args: readonly string[];
+  timeoutMs: number;
 };
 
 const dependencies = (options?: {
@@ -33,8 +34,8 @@ const dependencies = (options?: {
         signalCalls.push({ pid, signal });
         if (options?.signalSucceeds === false) throw new Error("signal refused");
       },
-      execute: (file, args) => {
-        executeCalls.push({ file, args });
+      execute: (file, args, timeoutMs) => {
+        executeCalls.push({ file, args, timeoutMs });
         return Promise.resolve({ ok: options?.executionSucceeds ?? true, stdout: options?.stdout ?? "" });
       },
     },
@@ -64,7 +65,9 @@ describe("shared process-tree platform operations", () => {
       { pid: -42, signal: "SIGTERM" },
       { pid: -42, signal: "SIGKILL" },
     ]);
-    expect(fixture.executeCalls).toEqual([{ file: "ps", args: ["-o", "etime=", "-p", "42"] }]);
+    expect(fixture.executeCalls).toEqual([
+      { file: "ps", args: ["-o", "etime=", "-p", "42"], timeoutMs: 10_000 },
+    ]);
   });
 
   it("uses taskkill tree mode for graceful and forced Windows shutdown", async () => {
@@ -76,8 +79,8 @@ describe("shared process-tree platform operations", () => {
     await operations.forceStop(7301);
 
     expect(fixture.executeCalls).toEqual([
-      { file: "taskkill.exe", args: ["/PID", "7301", "/T"] },
-      { file: "taskkill.exe", args: ["/PID", "7301", "/T", "/F"] },
+      { file: "taskkill.exe", args: ["/PID", "7301", "/T"], timeoutMs: 10_000 },
+      { file: "taskkill.exe", args: ["/PID", "7301", "/T", "/F"], timeoutMs: 10_000 },
     ]);
   });
 
@@ -97,6 +100,7 @@ describe("shared process-tree platform operations", () => {
       "-Command",
     ]);
     expect(fixture.executeCalls[0]?.args[4]).toContain("ProcessId = 7301");
+    expect(fixture.executeCalls[0]?.timeoutMs).toBe(10_000);
   });
 
   it("reaps descendants after a Windows root exits through a bounded trusted query", async () => {
@@ -114,6 +118,7 @@ describe("shared process-tree platform operations", () => {
     ]);
     expect(fixture.executeCalls[0]?.args[4]).toContain("$rootProcessId = 7301");
     expect(fixture.executeCalls[0]?.args[4]).toContain(startedAt.getTime().toString());
+    expect(fixture.executeCalls[0]?.timeoutMs).toBe(30_000);
   });
 
   it("reaps Windows descendants when cancellation observes an already-exited root", async () => {
