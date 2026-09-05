@@ -52,7 +52,7 @@ const FORCE_EXIT_WAIT_MS = 2_000;
 // The trusted supervisor bounds each Windows taskkill/CIM command itself. Give those sequential
 // fail-closed operations enough time to publish STOPPED before using the supervisor kill as the
 // final backstop; CANCELLING keeps workspace authority reserved throughout this wait.
-const SUPERVISOR_FINALIZATION_WAIT_MS = 60_000;
+const SUPERVISOR_FINALIZATION_WAIT_MS = 90_000;
 
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => {

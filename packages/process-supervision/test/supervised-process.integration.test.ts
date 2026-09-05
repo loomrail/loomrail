@@ -207,7 +207,7 @@ describe("supervised local process", () => {
       verificationProcessIsStopped(verificationProcessRecordPath(registryDirectory, runId), runId),
     ).resolves.toBe(true);
     await removeVerificationProcessRecord(registryDirectory, runId);
-  }, 75_000);
+  }, 105_000);
 
   it("waits for a slow supervisor to publish durable stop proof", async () => {
     const root = await mkdtemp(join(tmpdir(), "loomrail slow supervisor "));
@@ -267,6 +267,7 @@ describe("supervised local process", () => {
       `const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}], { stdio: "ignore", windowsHide: true });`,
       `fs.writeFileSync(${JSON.stringify(pidFile)}, descendant.pid.toString());`,
       "descendant.unref();",
+      "process.exit(0);",
     ].join("");
 
     await prepareVerificationProcessIntent(registryDirectory, runId);
@@ -293,7 +294,7 @@ describe("supervised local process", () => {
       verificationProcessIsStopped(verificationProcessRecordPath(registryDirectory, runId), runId),
     ).resolves.toBe(true);
     await removeVerificationProcessRecord(registryDirectory, runId);
-  }, 75_000);
+  }, 105_000);
 
   it("removes control sequences and exact sensitive values from captured text", async () => {
     const root = await mkdtemp(join(tmpdir(), "loomrail redact test "));

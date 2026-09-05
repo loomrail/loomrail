@@ -37,7 +37,7 @@ const DESCENDANT_REAP_GRACE_MS = 500;
 const DESCENDANT_REAP_FORCE_MS = 2_000;
 const PROCESS_QUERY_TIMEOUT_MS = 10_000;
 const WINDOWS_TREE_STOP_TIMEOUT_MS = 10_000;
-const WINDOWS_DESCENDANT_REAP_TIMEOUT_MS = 30_000;
+const WINDOWS_DESCENDANT_REAP_TIMEOUT_MS = 60_000;
 
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => {

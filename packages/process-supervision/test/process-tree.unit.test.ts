@@ -118,7 +118,7 @@ describe("shared process-tree platform operations", () => {
     ]);
     expect(fixture.executeCalls[0]?.args[4]).toContain("$rootProcessId = 7301");
     expect(fixture.executeCalls[0]?.args[4]).toContain(startedAt.getTime().toString());
-    expect(fixture.executeCalls[0]?.timeoutMs).toBe(30_000);
+    expect(fixture.executeCalls[0]?.timeoutMs).toBe(60_000);
   });
 
   it("reaps Windows descendants when cancellation observes an already-exited root", async () => {
