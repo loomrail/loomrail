@@ -360,22 +360,41 @@ const ciFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingD
 };
 
 const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS/i;
-// A `_NAME` suffix denotes what a credential is called, not the credential itself. Suffixes such as
-// `_FILE` and `_PATH` are deliberately absent: a name is a weak signal, and a value that really is a
-// location is already excluded below, so honouring them would only hide literals stored under them.
+// A `_NAME` suffix denotes what a credential is called, not the credential itself.
 const REFERENCE_NAME_PATTERN = /_NAME$/i;
 // `secrets` is a workflow keyword, not a variable: it introduces a mapping, or carries the managed
 // literal `inherit`. Entries nested under it are still read as lines of their own. Matched
 // case-sensitively, because the keyword is lowercase and `SECRETS` is an ordinary variable name.
+// `inherit` is below the length bound and would pass without this rule; what needs it is the same
+// key used as an action input, such as a `hashicorp/vault-action` step listing store paths.
 const WORKFLOW_KEYWORD_NAME_PATTERN = /^secrets$/;
 // A braced reference -- `${{ … }}` or `${VAR}` -- means the value is interpolated at run time rather
 // than stored here, and may sit anywhere, so a suffix such as `/gcp.json` does not make the
-// assignment a literal. A bare `$VAR` counts only as the entire value: unlike the braced forms it
-// has no closing delimiter, so accepting it mid-value would excuse any literal beginning `$word`.
-const MANAGED_REFERENCE_PATTERN = /(?:^|[^A-Za-z0-9])\$(?:\{\{.*?\}\}|\{[^}]+\})|^\$[A-Za-z_][A-Za-z0-9_]*$/;
-// A path or a URL names a location. Only a leading match counts, and a path must show a separator
-// beyond the leading one: a secret encoded in base64 starts with `/` about one time in sixty-four.
-const LOCATION_VALUE_PATTERN = /^(?:\.{0,2}\/[^\s]*\/|https?:\/\/)/i;
+// assignment a literal. A bare `$VAR` has no closing delimiter, so it is honoured only where it
+// cannot be the head of a literal: as the entire value, or immediately before a `/`, which makes it
+// a path prefix and nothing else. The whole-value arm is knowingly open and cannot be closed: a
+// literal made only of `[A-Za-z0-9_]` after a leading `$` -- `$ecretPassword`, `$uper_Secret_1` --
+// is indistinguishable from `$DB_PASSWORD`, which has to stay clean. A literal carrying any other
+// character, such as `$tr0ngP@ssw0rd!`, is still reported.
+const MANAGED_REFERENCE_PATTERN =
+  /(?:^|[^A-Za-z0-9])\$(?:\{\{.*?\}\}|\{[^}]+\})|^\$[A-Za-z_][A-Za-z0-9_]*(?:$|\/)/;
+// A value whose own shape is a location: home-relative, explicitly relative, absolute, or an http(s)
+// URL. Only a leading match counts. `~/`, `./` and `../` need no further evidence, because base64
+// contains neither `~` nor `.`. A bare leading `/` does: it is read as a path only when a second
+// separator follows. That test is deliberately partial. It reports a base64 secret that begins with
+// `/` and holds no other `/` -- for a 40-character key about 54% of those that begin with `/` --
+// and excuses the remaining ~46% as paths. Nothing in the shape of a value separates those two
+// cases, so the class stays open rather than being closed by a guess in either direction.
+const LOCATION_VALUE_PATTERN = /^(?:~\/|\.{1,2}\/|\/[^\s]*\/|https?:\/\/)/i;
+// A name ending `_FILE`, `_PATH`, `_DIR` or `_URL` says the value is where a credential lives. Each
+// half alone is wrong: the name alone excuses any literal parked under it, and shape alone cannot
+// read a store-relative path such as `secret/data/ci/deploy` or `gs://bucket/creds.json`. Required
+// together, they are decisive. The accepted cost is that
+// `AWS_SECRET_ACCESS_KEY_FILE: wJalrXUtnFEMI/K7MDENG/b` now passes, since a base64 secret may
+// contain `/`. A location-suffixed name over a path-shaped value is overwhelmingly a location, and
+// the false positives this prevents block READY permanently while this miss does not.
+const LOCATION_NAME_PATTERN = /_(?:FILE|PATH|DIR|URL)$/i;
+const NAMED_LOCATION_VALUE_PATTERN = /\/|^[^\s/]+\.[A-Za-z0-9]{1,8}$/;
 const MIN_LITERAL_SECRET_LENGTH = 8;
 
 // Reduces a YAML scalar to the characters actually stored: the body of a quoted string, otherwise
@@ -403,7 +422,8 @@ export const inlineSecretFindings = (files: readonly CiWorkflowFile[]): readonly
       if (
         value.length < MIN_LITERAL_SECRET_LENGTH ||
         MANAGED_REFERENCE_PATTERN.test(value) ||
-        LOCATION_VALUE_PATTERN.test(value)
+        LOCATION_VALUE_PATTERN.test(value) ||
+        (LOCATION_NAME_PATTERN.test(name) && NAMED_LOCATION_VALUE_PATTERN.test(value))
       ) {
         continue;
       }
