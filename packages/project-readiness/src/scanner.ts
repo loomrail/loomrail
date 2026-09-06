@@ -369,10 +369,16 @@ const REFERENCE_NAME_PATTERN = /_NAME$/i;
 // key used as an action input, such as a `hashicorp/vault-action` step listing store paths.
 const WORKFLOW_KEYWORD_NAME_PATTERN = /^secrets$/;
 // A braced reference -- `${{ … }}` or `${VAR}` -- means the value is interpolated at run time rather
-// than stored here, and may sit anywhere, so a suffix such as `/gcp.json` does not make the
-// assignment a literal. A bare `$VAR` has no closing delimiter, so it is honoured in exactly two
-// places: as the entire value, and where a `/` follows it. Both arms are knowingly open and neither
-// can be closed. On the whole-value arm a literal made only of `[A-Za-z0-9_]` after a leading `$` --
+// than stored here, so a suffix such as `/gcp.json` does not make the assignment a literal. It is
+// honoured at the start of the value or after any character outside `[A-Za-z0-9]`, which is what the
+// leading `(?:^|[^A-Za-z0-9])` requires: `pre-${{ … }}`, `pre_${{ … }}` and `.${VAULT_PATH}` are
+// clean, but a reference glued straight onto an alphanumeric prefix is not read as one, so
+// `DB_PASSWORD: prefix${{ secrets.PW }}`, `DB_PASSWORD: v2${{ secrets.PW }}` and
+// `TOKEN: ghp${{ secrets.X }}` are all reported. That error points at a false positive, so it ships
+// no credential -- but it is a permanent READY block, and a reader should not be surprised by it.
+// A bare `$VAR` has no closing delimiter, so it is honoured in exactly two places: as the entire
+// value, and where a `/` follows it. Both arms are knowingly open and neither can be closed. On the
+// whole-value arm a literal made only of `[A-Za-z0-9_]` after a leading `$` --
 // `$ecretPassword`, `$uper_Secret_1` -- is indistinguishable from `$DB_PASSWORD`, which has to stay
 // clean. The `/` arm is open in the same way and just as wide, not narrower: the `/` ends this
 // pattern's inspection, so whatever follows it is never read, and the prefix before it may be a
@@ -410,21 +416,34 @@ const LOCATION_VALUE_PATTERN = /^(?:~\/|\.{1,2}\/|\/[^\s]*\/|https?:\/\/)/i;
 // and the false positives this prevents block READY permanently while these misses do not.
 const LOCATION_NAME_PATTERN = /_(?:FILE|PATH|DIR|URL)$/i;
 const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
-// The `_URL` suffix is narrower than the other three. A URL carrying userinfo -- anything before an
-// `@` in its authority -- is not a location; it is a credential with a hostname attached, and
+// The `_URL` suffix is narrower than the other three. A URL whose authority carries a `user:password`
+// pair before an `@` is not a location; it is a credential with a hostname attached, and
 // `postgres://u:secret@db/app` is the exact value this check exists to report. Without this arm any
 // `_URL` name -- `TOKEN_URL`, `PASSWORD_URL`, `SECRET_URL`, `DB_PASSWORD_URL`,
 // `DATABASE_CREDENTIALS_URL` -- excused one. Authority is read as RFC 3986 defines it: what follows
-// `//`, ending at the first `/`, `?` or `#`. So an `@` further along the value is not userinfo and
-// `CREDENTIALS_URL: gs://my-bucket/creds@2026.json` stays clean, and a value with no `//` has no
-// authority to inspect, which is why `TOKEN_URL: auth.example.com/token` stays clean. Two limits,
-// both deliberate. The narrowing is scoped to the `_URL` suffix as ruled, so
-// `PASSWORD_FILE: postgres://u:secret@db/app` keeps the `/` arm's excuse. And it only sees values
-// that reach this rule, so an `https://` URL carrying userinfo --
-// `DB_PASSWORD_URL: https://u:secret@db.example.com/app` -- is excused above by
-// LOCATION_VALUE_PATTERN and never tested here.
+// `//`, ending at the first `/`, `?` or `#`; a value with no `//` has no authority to inspect, which
+// is why `TOKEN_URL: auth.example.com/token` stays clean. Four limits, all deliberate, and each one
+// is a way a stored credential goes unreported.
+// 1. A colon inside the userinfo is required, so a URL whose *username alone* is the credential --
+//    `TOKEN_URL: postgres://ghp_16C7e42F292c6912E77@db/app` -- is not reported by this arm. That is
+//    the price of keeping `TOKEN_URL: ssh://git@github.com/org/repo.git`, the ordinary spelling of a
+//    Git remote, and `DATABASE_CREDENTIALS_URL: mysql://root@db:3306/app` clean: a bare username
+//    before an `@` is a host's companion far more often than it is a secret, and reporting one is an
+//    unclearable READY block.
+// 2. Ending the authority at the first `/`, `?` or `#` cuts both ways. It is what keeps
+//    `CREDENTIALS_URL: gs://my-bucket/creds@2026.json` clean, an `@` further along the value being no
+//    userinfo -- and by the same mechanism an unencoded password holding any of those three
+//    characters puts the `@` outside the authority, so `postgres://app:aB3/xYz9pQ@db:5432/app` under
+//    `POSTGRES_PASSWORD_URL` is not reported. `aB3/xYz9pQ` is the shape `openssl rand -base64`
+//    produces, so what escapes here is an ordinary password, not an exotic one. The same password
+//    percent-encoded (`aB3%2FxYz9pQ`) is reported.
+// 3. The narrowing is scoped to the `_URL` suffix as ruled, so
+//    `PASSWORD_FILE: postgres://u:secret@db/app` keeps the `/` arm's excuse.
+// 4. It only sees values that reach this rule, so an `https://` URL carrying userinfo --
+//    `DB_PASSWORD_URL: https://u:secret@db.example.com/app` -- is excused above by
+//    LOCATION_VALUE_PATTERN and never tested here.
 const URL_NAME_PATTERN = /_URL$/i;
-const USERINFO_AUTHORITY_PATTERN = /^(?:[A-Za-z][A-Za-z0-9+.-]*:)?\/\/[^/?#]*@/;
+const USERINFO_PASSWORD_AUTHORITY_PATTERN = /^(?:[A-Za-z][A-Za-z0-9+.-]*:)?\/\/[^/?#@]*:[^/?#@]*@/;
 const MIN_LITERAL_SECRET_LENGTH = 8;
 
 // Reduces a YAML scalar to the characters actually stored: the body of a quoted string, otherwise
@@ -455,7 +474,7 @@ export const inlineSecretFindings = (files: readonly CiWorkflowFile[]): readonly
         LOCATION_VALUE_PATTERN.test(value) ||
         (LOCATION_NAME_PATTERN.test(name) &&
           NAMED_LOCATION_VALUE_PATTERN.test(value) &&
-          !(URL_NAME_PATTERN.test(name) && USERINFO_AUTHORITY_PATTERN.test(value)))
+          !(URL_NAME_PATTERN.test(name) && USERINFO_PASSWORD_AUTHORITY_PATTERN.test(value)))
       ) {
         continue;
       }

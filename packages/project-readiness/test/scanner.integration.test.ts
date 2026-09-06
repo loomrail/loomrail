@@ -217,6 +217,11 @@ describe("production environment separation", () => {
     ],
     ["a root-level file under a location name", "PASSWORD_FILE: /gcp-key.json"],
     ["a non-http bucket URL under a location name", "CREDENTIALS_URL: gs://my-bucket/creds.json"],
+    [
+      "a bucket URL whose path, not its authority, carries an at-sign",
+      "CREDENTIALS_URL: gs://my-bucket/creds@2026.json",
+    ],
+    ["a Git remote whose userinfo is a bare username", "TOKEN_URL: ssh://git@github.com/org/repo.git"],
     ["a bare filename under a location name", "CREDENTIALS_FILE: credentials.json"],
     ["a schemeless URL under a location name", "TOKEN_URL: auth.example.com/token"],
     ["a Windows-style path under a location name", "SSH_PRIVATE_KEY_PATH: C:\\Users\\runneradmin\\id_rsa"],
