@@ -446,13 +446,15 @@ describe("production environment separation", () => {
   // port supplies the colon and the digest supplies the at-sign. A `uses:` value holds an action or
   // image reference and never a credential, so that report carried nothing and was an unclearable
   // READY block for any project pinning a Docker action on a self-hosted registry.
-  // WORKFLOW_KEYWORD_NAME_PATTERN now covers `uses`, and it is tested before the userinfo trigger --
+  // USES_KEYWORD_NAME_PATTERN exists for exactly this, and it is tested before the userinfo trigger --
   // which consults no name and would otherwise report the line whatever the keyword rule said. The
   // `uses-token` row pins that the pattern is still anchored, so only the keyword itself is excused.
-  // The last two rows are the cost: the exemption does not look at the value, so a userinfo-bearing
-  // value under either keyword is excused now, and the `secrets` one was reported before this change.
-  // Neither is a shape its key can legally take -- a `uses:` value has no userinfo field and a
-  // `secrets:` value is `inherit` or a mapping -- but the cost is pinned rather than assumed away.
+  // The accepted-cost row is what that buys: the exemption does not look at the value, so a
+  // userinfo-bearing value under `uses` is excused too, and that is not a shape a `uses:` value can
+  // legally take. `secrets` gets no such exemption here -- it is tested only inside the name-gated
+  // branch, after this trigger has already run -- so the last row is a guard, not a cost:
+  // `secrets: postgres://u:secret@db/app` is reported, exactly as before `uses` needed an exemption
+  // of its own, and it is pinned so the two keywords cannot be widened back together silently.
   it.each([
     ["an unported registry", "- uses: docker://ghcr.io/org/image@sha256:0123456789abcdef", []],
     [
@@ -473,9 +475,9 @@ describe("production environment separation", () => {
       [],
     ],
     [
-      "the accepted cost: a credential parked in a secrets value, reported before this change",
+      "a credential parked in a secrets value, which gets no such exemption",
       "secrets: postgres://u:secret@db/app",
-      [],
+      ["INLINE_SECRET_IN_CI"],
     ],
   ])("exempts the uses keyword from the userinfo trigger: %s", (_description, line, codes) => {
     const files = [{ path: ".github/workflows/ci.yml", content: `    steps:\n      ${line}\n` }];

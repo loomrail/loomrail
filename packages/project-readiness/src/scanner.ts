@@ -409,32 +409,44 @@ const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API[_-]KEY|ACCESS[_-]KEY|PRIV
 // separators are accepted so the two spellings behave alike: `SECRET_NAME: my-app-prod-secret` and
 // `secret-name: my-app-prod-secret` are both clean, and nothing else in the chain excuses either.
 const REFERENCE_NAME_PATTERN = /[_-]NAME$/i;
-// `secrets` and `uses` are workflow keywords, not variables. `secrets` introduces a mapping or
-// carries the managed literal `inherit`; `uses` holds an action or image reference. Entries nested
-// under `secrets` are still read as lines of their own. Matched case-sensitively and anchored,
-// because both keywords are lowercase and `SECRETS`, `USES`, `uses-token` and `secrets-file` are
-// ordinary variable names that keep their reports. `inherit` is below the length bound and would
-// pass without this rule; what needs it is the same key used as an action input, such as a
-// `hashicorp/vault-action` step listing store paths.
+// `secrets` is a workflow keyword, not a variable: it introduces a mapping, or carries the managed
+// literal `inherit`. Entries nested under it are still read as lines of their own. Matched
+// case-sensitively, because the keyword is lowercase and `SECRETS` is an ordinary variable name that
+// keeps its report. `inherit` is below the length bound and would pass without this rule; what needs
+// it is the same key used as an action input, such as a `hashicorp/vault-action` step listing store
+// paths.
 //
-// This test is applied before USERINFO_PASSWORD_AUTHORITY_PATTERN, not inside the name-gated branch
-// where it used to sit, because that trigger does not consult the name at all. `uses` reached it
-// and `- uses: docker://registry.example.com:5000/image@sha256:0123456789abcdef` was reported: the
-// registry port supplies the colon and the digest supplies the at-sign. A `uses:` value holds an
-// action or image reference by definition, so that report carried no credential -- a pure false
+// This test sits inside the name-gated branch, after USERINFO_PASSWORD_AUTHORITY_PATTERN has already
+// run -- not before it, the way USES_KEYWORD_NAME_PATTERN below sits for `uses`. A `secrets:` value
+// is `inherit` or a mapping by schema, never a scalar URL, but this scanner is line-based and does
+// not check that a key sits where the schema puts it, so that argument would excuse an action input
+// merely named `secrets` on the same terms it excuses the keyword. Moving this test ahead of the
+// trigger, the way `uses` needs, would also excuse `secrets: postgres://u:secret@db/app` -- an
+// ordinary stored credential, not a hypothetical one -- so it stays here instead: that line reaches
+// USERINFO_PASSWORD_AUTHORITY_PATTERN first and is reported.
+const WORKFLOW_KEYWORD_NAME_PATTERN = /^secrets$/;
+// `uses` is a workflow keyword too, holding an action or image reference rather than a variable.
+// Matched case-sensitively and anchored, because the keyword is lowercase and `USES` and
+// `uses-token` are ordinary variable names that keep their reports.
+//
+// Unlike `secrets` above, this test runs before USERINFO_PASSWORD_AUTHORITY_PATTERN, because that
+// trigger does not consult the name at all and would otherwise report a digest-pinned Docker action
+// on a ported registry: `- uses: docker://registry.example.com:5000/image@sha256:0123456789abcdef`
+// -- the registry port supplies the colon and the digest supplies the at-sign. A `uses:` value holds
+// an action or image reference by definition, so that report carried no credential -- a pure false
 // positive, and an unclearable READY block for any project pinning a Docker action on a self-hosted
 // registry.
 //
-// The exemption does not look at the value, and that is its cost, stated plainly: it now excuses a
-// userinfo-bearing value under either keyword.
-// `- uses: docker://user:hunter2@registry.example.com/image@sha256:0123456789abcdef` is clean, and
-// so is `secrets: postgres://u:secret@db/app`, which this trigger reported before this change. Both
-// are accepted because neither is a shape its key can legally take: a `uses:` value is
-// `{owner}/{repo}@{ref}`, `./path` or `docker://{host}/{image}`, none of which has a userinfo
-// field, and a `secrets:` value is `inherit` or a mapping, not a scalar URL. The scanner is
-// line-based and does not check that a `uses:` key sits in a step, so an action input that happened
-// to be named `uses` would be excused on the same terms.
-const WORKFLOW_KEYWORD_NAME_PATTERN = /^(?:secrets|uses)$/;
+// The exemption does not look at the value, and that is its cost, stated plainly: it excuses a
+// userinfo-bearing value under this keyword too --
+// `- uses: docker://user:hunter2@registry.example.com/image@sha256:0123456789abcdef` is clean. The
+// scanner does not check that a `uses:` key sits in a step, so an action input that happened to be
+// named `uses` would be excused on the same terms -- the same structural gap `secrets` above is not
+// given. The two are treated differently because a `uses:` value is `{owner}/{repo}@{ref}`,
+// `./path` or `docker://{host}/{image}`, none of which has a userinfo field, while
+// `secrets: postgres://u:secret@db/app` is the ordinary shape of a stored credential and earns no
+// exemption from this pattern.
+const USES_KEYWORD_NAME_PATTERN = /^uses$/;
 // A braced reference -- `${{ … }}` or `${VAR}` -- means the value is interpolated at run time rather
 // than stored here, so a suffix such as `/gcp.json` does not make the assignment a literal. It is
 // honoured at the start of the value or after any character outside `[A-Za-z0-9]`, which is what the
@@ -542,7 +554,7 @@ const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
 // new instance reachable in an ordinary workflow was a ported registry pinned by digest:
 // `- uses: docker://registry.example.com:5000/image@sha256:0123456789abcdef`, where the port
 // supplies the colon and the digest supplies the at-sign. That one is excused, and only that one:
-// WORKFLOW_KEYWORD_NAME_PATTERN is tested before this trigger and exempts the `uses` keyword
+// USES_KEYWORD_NAME_PATTERN is tested before this trigger and exempts the `uses` keyword
 // outright, with the cost recorded there. Every other name reaches this trigger, so
 // `uses-token: docker://registry.example.com:5000/image@sha256:0123456789abcdef` is still reported.
 // Both halves are still needed, in that order, uninterrupted, so `gs://my-bucket:8080/creds.json`,
@@ -600,15 +612,15 @@ export const inlineSecretFindings = (files: readonly CiWorkflowFile[]): readonly
       if (!name || !rawValue) continue;
       const value = storedScalar(rawValue);
       if (value.length < MIN_LITERAL_SECRET_LENGTH || MANAGED_REFERENCE_PATTERN.test(value)) continue;
-      // A workflow keyword is excused before any trigger runs, because the userinfo trigger below
+      // The `uses` keyword is excused before any trigger runs, because the userinfo trigger below
       // does not consult the name and would otherwise report a `uses:` image reference.
-      if (WORKFLOW_KEYWORD_NAME_PATTERN.test(name)) continue;
+      if (USES_KEYWORD_NAME_PATTERN.test(name)) continue;
       // A `user:password` authority is a stored credential under any name, so it skips the name gate
       // and the value-shape rules below. Every other report still has to earn a secret-shaped name.
       const embedsPasswordInAuthority = USERINFO_PASSWORD_AUTHORITY_PATTERN.test(value);
       if (!embedsPasswordInAuthority) {
         if (!SECRET_NAME_PATTERN.test(name)) continue;
-        if (REFERENCE_NAME_PATTERN.test(name)) continue;
+        if (REFERENCE_NAME_PATTERN.test(name) || WORKFLOW_KEYWORD_NAME_PATTERN.test(name)) continue;
         if (LOCATION_VALUE_PATTERN.test(value)) continue;
         if (LOCATION_NAME_PATTERN.test(name) && NAMED_LOCATION_VALUE_PATTERN.test(value)) continue;
       }
