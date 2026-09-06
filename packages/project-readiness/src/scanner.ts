@@ -623,7 +623,7 @@ export const assessProjectReadiness = async (
     automatedCheck(
       "ENV_PROD_SEPARATION",
       "ENVIRONMENT",
-      "Production values are referenced, not stored in the repository.",
+      "No unignored production env file or literal CI secret was found in the bounded scan.",
       "Keep production values out of the repository and out of CI literals.",
       [
         ...prodEnvFindings([

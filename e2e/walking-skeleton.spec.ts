@@ -3411,7 +3411,7 @@ test.describe("authenticated walking skeleton", () => {
     await expect(readiness.getByText("Action required", { exact: true })).toBeVisible();
     await expect(readiness.locator(".readiness-check")).toHaveCount(14);
     await expect(readiness.getByText("Reproducible dependency lockfile")).toBeVisible();
-    await expect(readiness.getByText("Production values kept out of the repository")).toBeVisible();
+    await expect(readiness.getByText("Production env files and CI literals")).toBeVisible();
     await expect(readiness.getByText("Rollback plan")).toBeVisible();
     await expect(readiness.getByText("Data backup")).toBeVisible();
     await expect(readiness.getByText("Dependencies", { exact: true })).toBeVisible();
