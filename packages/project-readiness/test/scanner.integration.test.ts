@@ -256,14 +256,17 @@ describe("production environment separation", () => {
     ["a base64 literal that happens to start with a slash", "AWS_SECRET_ACCESS_KEY: /JalrXUtnFEMIK7MDENGb"],
     ["a literal that happens to start with a dollar", "DB_PASSWORD: $tr0ngP@ssw0rd!"],
     ["a literal under a name that merely sounds like a location", "API_TOKEN_FILE: ghp_16C7e42F292c6912E77"],
-    ["a connection string carrying userinfo under a location name", "TOKEN_URL: postgres://u:secret@db/app"],
+    [
+      "a connection string carrying userinfo under a location name",
+      "TOKEN_URL: postgres://u:secret@db.example.com/app",
+    ],
     [
       "a connection string whose password carries a slash",
-      "POSTGRES_PASSWORD_URL: postgres://app:aB3/xYz9pQ@db:5432/app",
+      "POSTGRES_PASSWORD_URL: postgres://app:aB3/xYz9pQ@db.example.com:5432/app",
     ],
     [
       "a connection string with an empty username and a slash in the password",
-      "PASSWORD_URL: redis://:hun/ter2@cache:6379/0",
+      "PASSWORD_URL: redis://:hun/ter2@cache.example.com:6379/0",
     ],
     ["a literal under a variable named like the workflow keyword", "SECRETS: kx7Qm2ZpLr9TvWs4"],
     [
@@ -285,7 +288,7 @@ describe("production environment separation", () => {
   // along with every other credential-bearing connection string.
   it.each([
     ["a literal that carries a slash part-way through", "AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/b"],
-    ["a connection string that embeds its password", "DB_PASSWORD: postgres://u:secret@db/app"],
+    ["a connection string that embeds its password", "DB_PASSWORD: postgres://u:secret@db.example.com/app"],
   ])("reports %s", (_description, line) => {
     const files = [{ path: ".github/workflows/deploy.yml", content: `env:\n  ${line}\n` }];
     expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(["INLINE_SECRET_IN_CI"]);
@@ -380,63 +383,221 @@ describe("production environment separation", () => {
     expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
   });
 
+  // Admitting the hyphen made a documented class of `secret-*` action inputs visible for the first
+  // time. Each names a store entry or lists a mapping, none holds a secret value, and none was
+  // reachable in the underscore spelling -- so each was a new false positive rather than an inherited
+  // one, and each is an unclearable READY block. No value rule reaches them: `MY_SECRET=MY_ENV_VAR`
+  // carries no separator and no extension, and `prod/db/credentials` sits under a name the location
+  // rule does not end-match. The reported rows are the boundary of the two arms: a singular location
+  // name still needs the value half, an access key id is a credential half rather than a handle to
+  // one, and a name ending in neither an identifier nor a location word is not excused at all.
+  it.each([
+    ["a secret store id list", "secret-ids: prod/db/credentials", []],
+    ["a single secret store id", "secret-id: mysecret", []],
+    ["a build secret file mapping", "secret-files: MY_SECRET=./secret.txt", []],
+    ["a build secret env mapping", "secret-envs: MY_SECRET=MY_ENV_VAR", []],
+    ["a plural of the reference form", "secret-names: db-password,api-token", []],
+    ["an OAuth record id, which the identifier arm covers", "client-secret-id: kx7Qm2ZpLr9TvWs4", []],
+    ["the singular, clean by the location rule it already used", "secret-file: kx7Qm2ZpLr9TvWs4.pem", []],
+    ["the accepted cost of the plural arm", "SECRET_FILES: kx7Qm2ZpLr9TvWs4", []],
+    [
+      "the singular, which still needs the value half",
+      "SECRET_FILE: kx7Qm2ZpLr9TvWs4",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "another singular location name, unchanged",
+      "CREDENTIALS_PATH: kx7Qm2ZpLr9TvWs4",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "an access key id, which the identifier arm must not cover",
+      "aws-access-key-id: AKIAIOSFODNN7EXAMPLE",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a name outside both arms, which stays reported",
+      "secret-manager-project: my-gcp-project",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+  ])("excuses a name that locates a secret rather than holding one: %s", (_description, line, codes) => {
+    const files = [{ path: ".github/workflows/ci.yml", content: `    with:\n      ${line}\n` }];
+    expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
+  });
+
   // A `user:password` authority is a stored credential whatever the variable is called, so this
   // trigger skips the name gate and the value-shape rules. It is the only way `DATABASE_URL` and
   // `REDIS_URL` are seen at all, and the alternative -- a growing list of driver names in
-  // SECRET_NAME_PATTERN -- is wrong again with the next driver. The two clean rows pin its placement:
+  // SECRET_NAME_PATTERN -- is wrong again with the next driver. The clean rows pin its placement --
   // after MANAGED_REFERENCE_PATTERN (a reference in the password position stores nothing) and after
-  // the length bound.
+  // the length bound -- and its two limits: a password position must hold a password, and a pair
+  // written under a nested `jdbc:` scheme is the same pair.
+  //
+  // Every host here is dotted, deliberately. The host rule below excuses a loopback or single-label
+  // host, so a bare host would make each of these rows pass for a reason it was not written to test.
   it.each([
     [
       "a Postgres URL under a name with no secret token",
-      "DATABASE_URL: postgres://u:secret@db/app",
+      "DATABASE_URL: postgres://u:secret@db.example.com/app",
       ["INLINE_SECRET_IN_CI"],
     ],
     [
       "a Redis URL whose username is empty",
-      "REDIS_URL: redis://:hunter2@cache:6379/0",
+      "REDIS_URL: redis://:hunter2@cache.internal.example.com:6379/0",
       ["INLINE_SECRET_IN_CI"],
     ],
-    ["a datasource URL", "SPRING_DATASOURCE_URL: mysql://root:hunter2@db:3306/app", ["INLINE_SECRET_IN_CI"]],
+    [
+      "a datasource URL in the spelling Spring actually accepts",
+      "SPRING_DATASOURCE_URL: jdbc:mysql://root:hunter2@db.example.com:3306/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the JDBC spelling under the name Heroku sets",
+      "JDBC_DATABASE_URL: jdbc:postgresql://u:hunter2@db.example.com:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the JDBC spelling under the name Quarkus sets",
+      "QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://u:hunter2@db.example.com:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
     [
       "an https endpoint, which LOCATION_VALUE_PATTERN would otherwise excuse",
-      "MY_SERVICE_ENDPOINT: https://u:secret@host/app",
+      "MY_SERVICE_ENDPOINT: https://u:secret@host.example.com/app",
       ["INLINE_SECRET_IN_CI"],
     ],
     [
       "a schemeless authority, which LOCATION_VALUE_PATTERN would otherwise excuse",
-      "MY_SERVICE_ENDPOINT: //u:secret@host/app",
+      "MY_SERVICE_ENDPOINT: //u:secret@host.example.com/app",
       ["INLINE_SECRET_IN_CI"],
     ],
     [
       "a location name, which no longer keeps its excuse",
-      "PASSWORD_FILE: postgres://u:secret@db/app",
+      "PASSWORD_FILE: postgres://u:secret@db.example.com/app",
       ["INLINE_SECRET_IN_CI"],
     ],
     [
       "a bare shell reference in the password position, still open",
-      "DATABASE_URL: postgres://u:$PASSWORD@db/app",
+      "DATABASE_URL: postgres://u:$PASSWORD@db.example.com/app",
       ["INLINE_SECRET_IN_CI"],
     ],
-    ["the first userinfo value over the length bound", "DATABASE_URL: //a:b@cd", ["INLINE_SECRET_IN_CI"]],
+    ["the first userinfo value over the length bound", "DATABASE_URL: //:b@c.d", ["INLINE_SECRET_IN_CI"]],
+    [
+      "a single password character, which is still a password",
+      "POSTGRES_URL: postgres://user:x@db.example.com/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "an empty password, which declares that there is none",
+      "POSTGRES_URL: postgres://user:@db.example.com/app",
+      [],
+    ],
+    ["an empty password on a loopback service", "REDIS_URL: redis://:@localhost:6379", []],
+    ["an empty password on a loopback address", "MYSQL_URL: mysql://root:@127.0.0.1:3306/test", []],
+    ["an empty password on a container alias", "POSTGRES_URL: postgres://user:@db/app", []],
     [
       "a bare username, which is a host's companion far more often than a secret",
-      "DATABASE_URL: postgres://u@db/app",
+      "DATABASE_URL: postgres://u@db.example.com/app",
       [],
     ],
     ["a managed reference, which stores nothing", "DATABASE_URL: ${{ secrets.DATABASE_URL }}", []],
     [
       "a managed reference in the password position",
-      "DATABASE_URL: postgres://u:${{ secrets.PW }}@db/app",
+      "DATABASE_URL: postgres://u:${{ secrets.PW }}@db.example.com/app",
       [],
     ],
     [
       "a braced shell reference in the password position",
-      "DATABASE_URL: postgres://u:${DB_PASSWORD}@db/app",
+      "DATABASE_URL: postgres://u:${DB_PASSWORD}@db.example.com/app",
       [],
     ],
-    ["a userinfo value one character under the length bound", "DATABASE_URL: //a:b@c", []],
+    ["a userinfo value one character under the length bound", "DATABASE_URL: //:b@c.", []],
   ])("reads userinfo without consulting the name: %s", (_description, line, codes) => {
+    const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
+    expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
+  });
+
+  // The most common userinfo-bearing line in real CI is a service-container DSN: a password for a
+  // container the workflow started a few lines above and destroys when the job ends. The companion
+  // `POSTGRES_PASSWORD: test` is below the length bound, so in a typical file the DSN is the only
+  // line this function would report at all -- the check would block READY permanently on a credential
+  // it watched the workflow invent, for a project that was clean before the trigger existed. Two
+  // signals excuse it, both bounded by the CI runtime rather than by the ecosystem: a loopback host,
+  // and a host with no dot in it. The reported rows are the boundary -- one dot is enough to keep the
+  // report whatever the host resolves to -- and the `vault-prod` row is the accepted cost written as
+  // a test: a real credential for an internal host named without a dot is not reported.
+  it.each([
+    ["a Postgres service container", "DATABASE_URL: postgres://postgres:postgres@localhost:5432/test", []],
+    ["the same under the postgresql scheme", "DATABASE_URL: postgresql://test:test@localhost:5432/test", []],
+    ["a RabbitMQ service container", "AMQP_URL: amqp://guest:guest@localhost:5672", []],
+    ["a Mongo service container", "MONGO_URL: mongodb://root:example@localhost:27017", []],
+    [
+      "a container addressed by its Compose alias",
+      "DATABASE_URL: postgres://postgres:postgres@db:5432/test",
+      [],
+    ],
+    ["a single-label cache alias", "REDIS_URL: redis://:hunter2@cache:6379/0", []],
+    ["a loopback address", "DATABASE_URL: postgres://u:hunter2@127.0.0.1:5432/app", []],
+    ["the all-interfaces address", "DATABASE_URL: postgres://u:hunter2@0.0.0.0:5432/app", []],
+    ["a bracketed IPv6 loopback", "REDIS_URL: redis://:hunter2@[::1]:6379/0", []],
+    ["an authority with no host at all", "DATABASE_URL: postgres://u:secret@:5432/app", []],
+    [
+      "the accepted cost: an internal host named without a dot",
+      "DATABASE_URL: postgres://svc:hunter2@vault-prod/app",
+      [],
+    ],
+    [
+      "a dotted host, which keeps its report",
+      "DATABASE_URL: postgres://u:hunter2@db.example.com:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "an internal FQDN, dotted and therefore reported",
+      "REDIS_URL: redis://:hunter2@cache.internal.example.com:6379/0",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a private address written out, dotted and therefore reported",
+      "DATABASE_URL: postgres://u:hunter2@10.0.0.5:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a bracketed public IPv6 literal, which the single-label arm must not excuse",
+      "POSTGRES_URL: postgres://u:hunter2@[2001:db8::1]:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a host that merely begins with the loopback name",
+      "DATABASE_URL: postgres://u:hunter2@localhost.example.com:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    ["an underscore in the host, still one label", "DATABASE_URL: postgres://u:hunter2@my_db:5432/app", []],
+    [
+      "a scheme carrying a plus, over a hosted cluster",
+      "MONGO_URL: mongodb+srv://u:hunter2@cluster0.abcd.mongodb.net/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "an unencoded at-sign in the password, which the host span reads through",
+      "DATABASE_URL: postgres://u:p@ss@db.example.com/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the cost of reading through it: the same password over a loopback address",
+      "DATABASE_URL: postgres://u:p@ss@127.0.0.1:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the cost of the closed loopback list: an IPv6 spelling that is not ::1",
+      "DATABASE_URL: postgres://u:hunter2@[::ffff:127.0.0.1]:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a secret-shaped name, which reaches the name gate on its own terms",
+      "DB_PASSWORD: postgres://postgres:postgres@localhost:5432/test",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+  ])("declines a userinfo credential whose host cannot be public: %s", (_description, line, codes) => {
     const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
     expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
   });
@@ -448,13 +609,16 @@ describe("production environment separation", () => {
   // READY block for any project pinning a Docker action on a self-hosted registry.
   // USES_KEYWORD_NAME_PATTERN exists for exactly this, and it is tested before the userinfo trigger --
   // which consults no name and would otherwise report the line whatever the keyword rule said. The
-  // `uses-token` row pins that the pattern is still anchored, so only the keyword itself is excused.
-  // The accepted-cost row is what that buys: the exemption does not look at the value, so a
-  // userinfo-bearing value under `uses` is excused too, and that is not a shape a `uses:` value can
-  // legally take. `secrets` gets no such exemption here -- it is tested only inside the name-gated
-  // branch, after this trigger has already run -- so the last row is a guard, not a cost:
-  // `secrets: postgres://u:secret@db/app` is reported, exactly as before `uses` needed an exemption
-  // of its own, and it is pinned so the two keywords cannot be widened back together silently.
+  // host rule now reaches that same line by a second route, because a digest algorithm (`sha256`) is
+  // a single-label host, but the exemption is what the accepted-cost row rests on: it holds a
+  // userinfo-bearing value under `uses` whose host is dotted, and that is not a shape a `uses:` value
+  // can legally take. The `uses-token` row pins that the pattern is still anchored, so only the
+  // keyword itself is excused -- that line reaches the trigger, the host rule declines it on
+  // `sha256`, and the name gate reports it on `token`. `secrets` gets no exemption here at all: it is
+  // tested only inside the name-gated branch, after this trigger has already run, so the last row is
+  // a guard rather than a cost -- `secrets: postgres://u:secret@db.example.com/app` is reported,
+  // exactly as before `uses` needed an exemption of its own, and it is pinned so the two keywords
+  // cannot be widened back together silently.
   it.each([
     ["an unported registry", "- uses: docker://ghcr.io/org/image@sha256:0123456789abcdef", []],
     [
@@ -476,7 +640,7 @@ describe("production environment separation", () => {
     ],
     [
       "a credential parked in a secrets value, which gets no such exemption",
-      "secrets: postgres://u:secret@db/app",
+      "secrets: postgres://u:secret@db.example.com/app",
       ["INLINE_SECRET_IN_CI"],
     ],
   ])("exempts the uses keyword from the userinfo trigger: %s", (_description, line, codes) => {
@@ -488,7 +652,7 @@ describe("production environment separation", () => {
     const files = [
       {
         path: ".github/workflows/deploy.yml",
-        content: "env:\n  DATABASE_URL: postgres://u:hunter2@db/app\n",
+        content: "env:\n  DATABASE_URL: postgres://u:hunter2@db.example.com/app\n",
       },
     ];
     const message = inlineSecretFindings(files)[0]?.message ?? "";
