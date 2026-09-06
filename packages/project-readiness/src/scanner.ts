@@ -389,12 +389,17 @@ const LOCATION_VALUE_PATTERN = /^(?:~\/|\.{1,2}\/|\/[^\s]*\/|https?:\/\/)/i;
 // A name ending `_FILE`, `_PATH`, `_DIR` or `_URL` says the value is where a credential lives. Each
 // half alone is wrong: the name alone excuses any literal parked under it, and shape alone cannot
 // read a store-relative path such as `secret/data/ci/deploy` or `gs://bucket/creds.json`. Required
-// together, they are decisive. The accepted cost is that
-// `AWS_SECRET_ACCESS_KEY_FILE: wJalrXUtnFEMI/K7MDENG/b` now passes, since a base64 secret may
-// contain `/`. A location-suffixed name over a path-shaped value is overwhelmingly a location, and
-// the false positives this prevents block READY permanently while this miss does not.
+// together, they are decisive. The value half reads: contains a `/` or a `\`, or is a bare filename
+// with a dotted extension. `\` is accepted as a separator alongside `/` so a Windows path such as
+// `C:\Users\runneradmin\id_rsa` is recognised the same way a POSIX one already is. That costs
+// nothing: the base64 alphabet is `A-Za-z0-9+/=` and contains no backslash, so a value carrying one
+// cannot be base64-encoded credential material, and accepting it as a separator adds no way for a
+// real secret to pass. The accepted cost stays where it already was, on the `/` arm alone: base64
+// does contain `/`, so `AWS_SECRET_ACCESS_KEY_FILE: wJalrXUtnFEMI/K7MDENG/b` still passes. A
+// location-suffixed name over a path-shaped value is overwhelmingly a location, and the false
+// positives this prevents block READY permanently while this miss does not.
 const LOCATION_NAME_PATTERN = /_(?:FILE|PATH|DIR|URL)$/i;
-const NAMED_LOCATION_VALUE_PATTERN = /\/|^[^\s/]+\.[A-Za-z0-9]{1,8}$/;
+const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
 const MIN_LITERAL_SECRET_LENGTH = 8;
 
 // Reduces a YAML scalar to the characters actually stored: the body of a quoted string, otherwise
