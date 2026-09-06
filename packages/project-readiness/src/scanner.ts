@@ -366,10 +366,32 @@ const ciFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingD
 // `[A-Za-z_]`, so the leading `-?` that eats a YAML list dash cannot be followed by a second one:
 // `- --token=x`, `--token: x` and `-  -token: x` match nothing.
 //
-// This pattern's own inner separators stay underscore-only. `API_KEY`, `ACCESS_KEY` and `PRIVATE_KEY`
-// therefore do not match `api-key`, `access-key` or `private-key`; those spellings reach this test as
-// names and are excused by it. `aws-secret-access-key` is caught by the `SECRET` alternative, not by
-// `ACCESS_KEY`. Widening the inner separators is a separate decision and is not taken here.
+// This pattern's own inner separators accept either, so the two spellings of a multi-word name
+// behave alike. `private-key` is the documented input of `actions/create-github-app-token`,
+// `ssh-private-key` of `webfactory/ssh-agent` and `aws-access-key-id` of
+// `aws-actions/configure-aws-credentials`; under the underscore-only shape a literal parked in any
+// of them was reported in the `_` spelling and clean in the `-` one. `aws-secret-access-key` is
+// still caught by the `SECRET` alternative, not by `ACCESS[_-]KEY`.
+//
+// What the widening admits is exactly a name containing `api-key`, `access-key` or `private-key`,
+// and nothing else. On this repository it admits no name at all: 0 of the 37 distinct names its
+// workflows assign a value to, and 0 of the 385 across every `.yml`/`.yaml` file in the checkout
+// outside `node_modules`. 207 of those 385 are hyphenated, 190 of them package names in
+// `pnpm-lock.yaml`, the largest hyphenated-name corpus available here. `cache-key`, `path-key`,
+// `deploy-key`, `signing-key` and `public-key` stay out, because the qualifying word is still
+// required. So do `apiKey`, `accessKey` and `privateKey`: a camel-case name carries no separator
+// for `[_-]` to match, and that gap is unchanged and not addressed here.
+//
+// The cost is the modifier forms, which name a setting about a credential rather than the
+// credential -- `api-key-header: X-Custom-Api-Key`, `api-key-location: querystring` and
+// `private-key-algorithm: rsa-sha256` are all reported. That is not a new class: the underscore
+// spellings `API_KEY_HEADER`, `API_KEY_LOCATION` and `PRIVATE_KEY_ALGORITHM` are reported by the
+// pattern as it stood, so widening the separators makes the two spellings agree rather than
+// accepting a cost this file had not already accepted. The modifier forms that cost nothing are
+// held by rules already in the chain: `api-key-required: false` and `private-key-format: PKCS8` by
+// MIN_LITERAL_SECRET_LENGTH, `api-key-name: my-app-prod-key` by REFERENCE_NAME_PATTERN, and
+// `private-key-path: ~/.ssh/id_rsa`, `private-key-file: /run/secrets/app.pem` and
+// `api-keys-url: https://vault.example.com/keys` by LOCATION_VALUE_PATTERN.
 //
 // Admitting the hyphen brings GitHub's own hyphenated keys to this test. Across this repository's
 // YAML that is exactly three names -- `id-token` (a `permissions` scope), `persist-credentials` (an
@@ -382,17 +404,37 @@ const ciFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingD
 // that ever names an input `*-token` or `*-credentials`. Where the bound sits is exact and it is the
 // class's cost -- `id-token: write` and `persist-credentials: false` are clean, `id-token: write-all`
 // is nine characters and is reported.
-const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS/i;
+const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API[_-]KEY|ACCESS[_-]KEY|PRIVATE[_-]KEY|CREDENTIALS/i;
 // A `_NAME` or `-NAME` suffix denotes what a credential is called, not the credential itself. Both
 // separators are accepted so the two spellings behave alike: `SECRET_NAME: my-app-prod-secret` and
 // `secret-name: my-app-prod-secret` are both clean, and nothing else in the chain excuses either.
 const REFERENCE_NAME_PATTERN = /[_-]NAME$/i;
-// `secrets` is a workflow keyword, not a variable: it introduces a mapping, or carries the managed
-// literal `inherit`. Entries nested under it are still read as lines of their own. Matched
-// case-sensitively, because the keyword is lowercase and `SECRETS` is an ordinary variable name.
-// `inherit` is below the length bound and would pass without this rule; what needs it is the same
-// key used as an action input, such as a `hashicorp/vault-action` step listing store paths.
-const WORKFLOW_KEYWORD_NAME_PATTERN = /^secrets$/;
+// `secrets` and `uses` are workflow keywords, not variables. `secrets` introduces a mapping or
+// carries the managed literal `inherit`; `uses` holds an action or image reference. Entries nested
+// under `secrets` are still read as lines of their own. Matched case-sensitively and anchored,
+// because both keywords are lowercase and `SECRETS`, `USES`, `uses-token` and `secrets-file` are
+// ordinary variable names that keep their reports. `inherit` is below the length bound and would
+// pass without this rule; what needs it is the same key used as an action input, such as a
+// `hashicorp/vault-action` step listing store paths.
+//
+// This test is applied before USERINFO_PASSWORD_AUTHORITY_PATTERN, not inside the name-gated branch
+// where it used to sit, because that trigger does not consult the name at all. `uses` reached it
+// and `- uses: docker://registry.example.com:5000/image@sha256:0123456789abcdef` was reported: the
+// registry port supplies the colon and the digest supplies the at-sign. A `uses:` value holds an
+// action or image reference by definition, so that report carried no credential -- a pure false
+// positive, and an unclearable READY block for any project pinning a Docker action on a self-hosted
+// registry.
+//
+// The exemption does not look at the value, and that is its cost, stated plainly: it now excuses a
+// userinfo-bearing value under either keyword.
+// `- uses: docker://user:hunter2@registry.example.com/image@sha256:0123456789abcdef` is clean, and
+// so is `secrets: postgres://u:secret@db/app`, which this trigger reported before this change. Both
+// are accepted because neither is a shape its key can legally take: a `uses:` value is
+// `{owner}/{repo}@{ref}`, `./path` or `docker://{host}/{image}`, none of which has a userinfo
+// field, and a `secrets:` value is `inherit` or a mapping, not a scalar URL. The scanner is
+// line-based and does not check that a `uses:` key sits in a step, so an action input that happened
+// to be named `uses` would be excused on the same terms.
+const WORKFLOW_KEYWORD_NAME_PATTERN = /^(?:secrets|uses)$/;
 // A braced reference -- `${{ … }}` or `${VAR}` -- means the value is interpolated at run time rather
 // than stored here, so a suffix such as `/gcp.json` does not make the assignment a literal. It is
 // honoured at the start of the value or after any character outside `[A-Za-z0-9]`, which is what the
@@ -496,14 +538,18 @@ const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
 // `CREDENTIALS_URL: gs://my-bucket/2026:07/creds@2026.json` and
 // `CREDENTIALS_URL: s3://bucket/2026-01-01T00:00:00Z/creds@v1.json`; and a Windows drive letter,
 // `CREDENTIALS_URL: file:///c:/keys/creds@2026.json`. All five are reported and none is a secret.
-// Dropping the name gate widens that class from `_URL`-suffixed names to every name, and the one new
-// instance reachable in an ordinary workflow is a ported registry pinned by digest:
-// `uses: docker://registry.example.com:5000/image@sha256:0123456789abcdef` is reported. Both halves
-// are still needed, in that order, uninterrupted, so `gs://my-bucket:8080/creds.json`,
+// Dropping the name gate widened that class from `_URL`-suffixed names to every name, and the one
+// new instance reachable in an ordinary workflow was a ported registry pinned by digest:
+// `- uses: docker://registry.example.com:5000/image@sha256:0123456789abcdef`, where the port
+// supplies the colon and the digest supplies the at-sign. That one is excused, and only that one:
+// WORKFLOW_KEYWORD_NAME_PATTERN is tested before this trigger and exempts the `uses` keyword
+// outright, with the cost recorded there. Every other name reaches this trigger, so
+// `uses-token: docker://registry.example.com:5000/image@sha256:0123456789abcdef` is still reported.
+// Both halves are still needed, in that order, uninterrupted, so `gs://my-bucket:8080/creds.json`,
 // `gs://my-bucket/2026:07/creds.json`, `gs://my-bucket/creds@2026.json`,
 // `gs://my-bucket/creds@2026/v:1.json` (colon after the at-sign),
 // `gs://my-bucket@zone/2026:07/creds@v1.json` (an earlier `@` the span cannot cross) and the
-// unported `uses: docker://ghcr.io/org/image@sha256:0123456789abcdef` all stay clean. Across this
+// unported `- uses: docker://ghcr.io/org/image@sha256:0123456789abcdef` all stay clean. Across this
 // repository's own YAML no line matches this shape, so the trigger reports nothing that stood before
 // it.
 //
@@ -554,12 +600,15 @@ export const inlineSecretFindings = (files: readonly CiWorkflowFile[]): readonly
       if (!name || !rawValue) continue;
       const value = storedScalar(rawValue);
       if (value.length < MIN_LITERAL_SECRET_LENGTH || MANAGED_REFERENCE_PATTERN.test(value)) continue;
+      // A workflow keyword is excused before any trigger runs, because the userinfo trigger below
+      // does not consult the name and would otherwise report a `uses:` image reference.
+      if (WORKFLOW_KEYWORD_NAME_PATTERN.test(name)) continue;
       // A `user:password` authority is a stored credential under any name, so it skips the name gate
       // and the value-shape rules below. Every other report still has to earn a secret-shaped name.
       const embedsPasswordInAuthority = USERINFO_PASSWORD_AUTHORITY_PATTERN.test(value);
       if (!embedsPasswordInAuthority) {
         if (!SECRET_NAME_PATTERN.test(name)) continue;
-        if (REFERENCE_NAME_PATTERN.test(name) || WORKFLOW_KEYWORD_NAME_PATTERN.test(name)) continue;
+        if (REFERENCE_NAME_PATTERN.test(name)) continue;
         if (LOCATION_VALUE_PATTERN.test(value)) continue;
         if (LOCATION_NAME_PATTERN.test(name) && NAMED_LOCATION_VALUE_PATTERN.test(value)) continue;
       }

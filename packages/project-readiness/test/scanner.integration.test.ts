@@ -341,6 +341,45 @@ describe("production environment separation", () => {
     expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
   });
 
+  // The name pattern's own inner separators accept either, so the two spellings of a multi-word name
+  // behave alike. `private-key` is the documented input of `actions/create-github-app-token` and
+  // `ssh-private-key` of `webfactory/ssh-agent`; under the underscore-only shape a literal parked in
+  // either was reported as `PRIVATE_KEY` and clean as `private-key`, which is the more common half of
+  // the gap. The widening admits exactly a name containing `api-key`, `access-key` or `private-key`
+  // and nothing else, so the near-miss rows stay clean -- and `deploy-key` is a genuine credential
+  // this heuristic still misses, pinned so the widening is not read as having closed that. The last
+  // two rows are the cost, pinned in both spellings: the hyphen spelling inherits a false positive
+  // the underscore spelling already paid, rather than opening a new class.
+  it.each([
+    ["api-key", "api-key: kx7Qm2ZpLr9TvWs4", ["INLINE_SECRET_IN_CI"]],
+    ["private-key", "private-key: kx7Qm2ZpLr9TvWs4", ["INLINE_SECRET_IN_CI"]],
+    ["ssh-private-key", "ssh-private-key: kx7Qm2ZpLr9TvWs4", ["INLINE_SECRET_IN_CI"]],
+    ["aws-access-key-id", "aws-access-key-id: AKIAIOSFODNN7EXAMPLE", ["INLINE_SECRET_IN_CI"]],
+    ["api-key over a managed reference", "api-key: ${{ secrets.API_KEY }}", []],
+    ["private-key over a managed reference", "private-key: ${{ secrets.APP_PRIVATE_KEY }}", []],
+    ["ssh-private-key over a managed reference", "ssh-private-key: ${{ secrets.SSH_KEY }}", []],
+    ["aws-access-key-id over a managed reference", "aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}", []],
+    ["a near-miss the qualifying word keeps out", "cache-key: node-modules-v2-abc123", []],
+    ["a near-miss that is a real miss, unchanged here", "deploy-key: kx7Qm2ZpLr9TvWs4", []],
+    ["a camel-case name, which offers no separator to match", "apiKey: kx7Qm2ZpLr9TvWs4", []],
+    ["a modifier form held by the length bound", "api-key-required: false", []],
+    ["a modifier form held by the reference-name rule", "api-key-name: my-app-prod-key", []],
+    ["a modifier form held by the location-value rule", "private-key-path: ~/.ssh/id_rsa", []],
+    [
+      "the accepted false positive the underscore spelling already paid",
+      "API_KEY_HEADER: X-Custom-Api-Key",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the accepted false positive the hyphen spelling now inherits",
+      "api-key-header: X-Custom-Api-Key",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+  ])("reads either separator inside a multi-word name: %s", (_description, line, codes) => {
+    const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
+    expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
+  });
+
   // A `user:password` authority is a stored credential whatever the variable is called, so this
   // trigger skips the name gate and the value-shape rules. It is the only way `DATABASE_URL` and
   // `REDIS_URL` are seen at all, and the alternative -- a growing list of driver names in
@@ -402,18 +441,43 @@ describe("production environment separation", () => {
     expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
   });
 
-  // Dropping the name gate widens the rule's accepted false positive from `_URL`-suffixed names to
-  // every name. The reachable new instance is a digest-pinned action on a ported registry: the port
-  // supplies the colon and the digest supplies the at-sign. The unported spelling, which is what
-  // `docker://` steps normally look like, stays clean.
+  // Dropping the name gate widened the rule's accepted false positive from `_URL`-suffixed names to
+  // every name, and the reachable new instance was a digest-pinned action on a ported registry: the
+  // port supplies the colon and the digest supplies the at-sign. A `uses:` value holds an action or
+  // image reference and never a credential, so that report carried nothing and was an unclearable
+  // READY block for any project pinning a Docker action on a self-hosted registry.
+  // WORKFLOW_KEYWORD_NAME_PATTERN now covers `uses`, and it is tested before the userinfo trigger --
+  // which consults no name and would otherwise report the line whatever the keyword rule said. The
+  // `uses-token` row pins that the pattern is still anchored, so only the keyword itself is excused.
+  // The last two rows are the cost: the exemption does not look at the value, so a userinfo-bearing
+  // value under either keyword is excused now, and the `secrets` one was reported before this change.
+  // Neither is a shape its key can legally take -- a `uses:` value has no userinfo field and a
+  // `secrets:` value is `inherit` or a mapping -- but the cost is pinned rather than assumed away.
   it.each([
     ["an unported registry", "- uses: docker://ghcr.io/org/image@sha256:0123456789abcdef", []],
     [
-      "the accepted false positive: a ported registry",
+      "a ported registry, the false positive this exemption removes",
       "- uses: docker://registry.example.com:5000/image@sha256:0123456789abcdef",
+      [],
+    ],
+    ["a plain action reference", "- uses: actions/checkout@v4", []],
+    ["a tagged Docker image", "- uses: docker://alpine:3.18", []],
+    [
+      "a name that merely begins with the keyword, which is not exempt",
+      "uses-token: docker://registry.example.com:5000/image@sha256:0123456789abcdef",
       ["INLINE_SECRET_IN_CI"],
     ],
-  ])("reads a digest-pinned action step: %s", (_description, line, codes) => {
+    [
+      "the accepted cost: a credential parked in a uses value",
+      "- uses: docker://user:hunter2@registry.example.com/image@sha256:0123456789abcdef",
+      [],
+    ],
+    [
+      "the accepted cost: a credential parked in a secrets value, reported before this change",
+      "secrets: postgres://u:secret@db/app",
+      [],
+    ],
+  ])("exempts the uses keyword from the userinfo trigger: %s", (_description, line, codes) => {
     const files = [{ path: ".github/workflows/ci.yml", content: `    steps:\n      ${line}\n` }];
     expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
   });
