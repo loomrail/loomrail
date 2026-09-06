@@ -702,6 +702,11 @@ const readinessCategoryKeys = {
   OPERATIONS: "settings.readiness.category.operations",
 } as const satisfies Record<ReadinessCheck["category"], TranslationKey>;
 
+// Derived from the label map rather than written out again: that map `satisfies` the full category
+// record, so a category added to the catalog is a compile error there and cannot go missing from
+// the render -- where the empty-section guard would otherwise drop it without a trace.
+const readinessCategoryOrder = Object.keys(readinessCategoryKeys) as readonly ReadinessCheck["category"][];
+
 const readinessCheckKeys = {
   SECURITY_ACTIVE_CONSTITUTION: "settings.readiness.check.activeConstitution",
   SECURITY_SECRET_PATHS: "settings.readiness.check.secretPaths",
@@ -808,17 +813,7 @@ const ProjectReadinessPanel = ({ project }: { project: ListedProject }): React.J
         <p className="settings__note">{t("settings.readiness.empty")}</p>
       ) : (
         <div className="readiness-checklist">
-          {(
-            [
-              "SECURITY",
-              "LEGAL",
-              "PAYMENTS",
-              "ANALYTICS",
-              "DEPENDENCIES",
-              "ENVIRONMENT",
-              "OPERATIONS",
-            ] as const
-          ).map((category) => {
+          {readinessCategoryOrder.map((category) => {
             const categoryChecks = snapshot.checks.filter((check) => check.category === category);
             if (categoryChecks.length === 0) {
               return null;
