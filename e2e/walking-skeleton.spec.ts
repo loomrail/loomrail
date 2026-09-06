@@ -3409,8 +3409,20 @@ test.describe("authenticated walking skeleton", () => {
     await readiness.getByRole("button", { name: "Run readiness check" }).click();
 
     await expect(readiness.getByText("Action required", { exact: true })).toBeVisible();
-    await expect(readiness.locator(".readiness-check")).toHaveCount(8);
-    await expect(readiness.getByText("Passed automatically", { exact: true })).toHaveCount(2);
+    await expect(readiness.locator(".readiness-check")).toHaveCount(14);
+    await expect(readiness.getByText("Reproducible dependency lockfile")).toBeVisible();
+    await expect(readiness.getByText("Production env files and CI literals")).toBeVisible();
+    await expect(readiness.getByText("Rollback plan")).toBeVisible();
+    await expect(readiness.getByText("Data backup")).toBeVisible();
+    await expect(readiness.getByText("Dependencies", { exact: true })).toBeVisible();
+    await expect(readiness.getByText("Environment", { exact: true })).toBeVisible();
+    await expect(readiness.getByText("Operations", { exact: true })).toBeVisible();
+    // The fixture repository has a package.json with no lockfile, no LICENSE/COPYING marker, no
+    // approved Constitution, and no .gitignore file (so .env/.env.local/.npmrc are not ignored).
+    // These four automated checks stay ACTION_REQUIRED; it has no secret-like tracked paths, no
+    // .github/workflows (so CI hardening has nothing to flag), and no .env.production files (so
+    // production separation has nothing to flag), which brings PASSED to 3 of the 7 automated checks.
+    await expect(readiness.getByText("Passed automatically", { exact: true })).toHaveCount(3);
 
     const legalOwnerCheck = readiness.locator(".readiness-check").filter({
       hasText: "Legal and privacy review",
@@ -3422,6 +3434,13 @@ test.describe("authenticated walking skeleton", () => {
     await expect(legalOwnerCheck.getByText("Not applicable", { exact: true })).toBeVisible();
     await expect(legalOwnerCheck.getByText("The fixture processes no personal data.")).toBeVisible();
 
+    const rollbackCheck = readiness.locator(".readiness-check").filter({ hasText: "Rollback plan" });
+    await rollbackCheck
+      .getByRole("textbox", { name: "Decision note" })
+      .fill("Redeploy the previous build from the hosting dashboard.");
+    await rollbackCheck.getByRole("button", { name: "Confirm" }).click();
+    await expect(rollbackCheck.getByText("Confirmed by owner", { exact: true })).toBeVisible();
+
     await settings.getByRole("button", { name: "Close dialog" }).click();
     await page.getByRole("button", { name: "Open settings" }).click();
     const reopenedReadiness = page.getByRole("dialog", { name: "Settings" }).locator(".readiness-settings");
@@ -3430,6 +3449,14 @@ test.describe("authenticated walking skeleton", () => {
     });
     await expect(persistedLegalDecision.getByText("Not applicable", { exact: true })).toBeVisible();
     await expect(persistedLegalDecision.getByText("The fixture processes no personal data.")).toBeVisible();
+
+    const persistedRollbackDecision = reopenedReadiness.locator(".readiness-check").filter({
+      hasText: "Rollback plan",
+    });
+    await expect(persistedRollbackDecision.getByText("Confirmed by owner", { exact: true })).toBeVisible();
+    await expect(
+      persistedRollbackDecision.getByText("Redeploy the previous build from the hosting dashboard."),
+    ).toBeVisible();
   });
 
   test("keeps a resized panel across a reload without the loading shell jumping", async ({ page }) => {

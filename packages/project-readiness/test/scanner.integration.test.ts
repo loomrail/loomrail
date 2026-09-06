@@ -7,6 +7,12 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { assessProjectReadiness } from "../src/index.js";
+import {
+  inlineSecretFindings,
+  launchOwnerChecks,
+  lockfileFindings,
+  prodEnvFindings,
+} from "../src/scanner.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -54,7 +60,7 @@ describe("project readiness scanner", () => {
 
     expect(assessment.repositoryHead).toMatch(/^[0-9a-f]{40}$/);
     expect(assessment.workingTreeDirty).toBe(false);
-    expect(assessment.checks).toHaveLength(8);
+    expect(assessment.checks).toHaveLength(14);
     expect(assessment.checks.filter((check) => check.mode === "AUTOMATED")).toEqual(
       expect.arrayContaining([expect.objectContaining({ status: "PASSED" })]),
     );
@@ -66,11 +72,18 @@ describe("project readiness scanner", () => {
     const canary = "super-secret-canary-must-never-escape";
     await mkdir(join(repositoryPath, ".github", "workflows"), { recursive: true });
     await writeFile(join(repositoryPath, ".env.production"), canary);
+    await writeFile(join(repositoryPath, "package.json"), JSON.stringify({ name: "unsafe-fixture" }));
     await writeFile(
       join(repositoryPath, ".github", "workflows", "danger.yml"),
       "on:\n  pull_request_target:\npermissions: write-all\njobs:\n  x:\n    steps:\n      - uses: actions/checkout@v4\n",
     );
-    await git(repositoryPath, ["add", "-f", ".env.production", ".github/workflows/danger.yml"]);
+    await git(repositoryPath, [
+      "add",
+      "-f",
+      ".env.production",
+      "package.json",
+      ".github/workflows/danger.yml",
+    ]);
     await git(repositoryPath, ["commit", "--quiet", "-m", "unsafe fixture"]);
 
     const assessment = await assessProjectReadiness(repositoryPath, { activeConstitution: false });
@@ -98,5 +111,157 @@ describe("project readiness scanner", () => {
     await expect(
       assessProjectReadiness(join(repositoryPath, "nested"), { activeConstitution: true }),
     ).rejects.toMatchObject({ code: "REPOSITORY_UNAVAILABLE" });
+  });
+
+  it("marks ENV_PROD_SEPARATION action-required when CI workflows are unverifiable", async () => {
+    const repositoryPath = await createRepository("env-ci-unverifiable");
+    const outside = join(repositoryPath, "outside.yml");
+    await writeFile(outside, "on: push\n");
+    await mkdir(join(repositoryPath, ".github", "workflows"), { recursive: true });
+    await symlink(outside, join(repositoryPath, ".github", "workflows", "linked.yml"));
+    await commitAll(repositoryPath);
+
+    const assessment = await assessProjectReadiness(repositoryPath, { activeConstitution: true });
+
+    const envProdSeparation = assessment.checks.find((check) => check.key === "ENV_PROD_SEPARATION");
+    expect(envProdSeparation?.status).toBe("ACTION_REQUIRED");
+    expect(envProdSeparation?.findings).toEqual([expect.objectContaining({ code: "CI_INPUT_UNVERIFIABLE" })]);
+  });
+});
+
+describe("production environment separation", () => {
+  it("passes when no production env file exists", () => {
+    expect(prodEnvFindings([{ path: ".env.production", exists: false, ignored: false }])).toEqual([]);
+  });
+
+  it("reports an existing production env file that is not ignored", () => {
+    const findings = prodEnvFindings([{ path: ".env.production", exists: true, ignored: false }]);
+    expect(findings).toEqual([
+      expect.objectContaining({ code: "PROD_ENV_NOT_IGNORED", severity: "HIGH", path: ".env.production" }),
+    ]);
+  });
+
+  it("reports an existing production env file whose ignore state is unknown", () => {
+    const findings = prodEnvFindings([{ path: ".env.production", exists: true, ignored: null }]);
+    expect(findings.map((entry) => entry.code)).toEqual(["PROD_ENV_NOT_IGNORED"]);
+  });
+
+  it("passes an existing production env file that is ignored", () => {
+    expect(prodEnvFindings([{ path: ".env.production", exists: true, ignored: true }])).toEqual([]);
+  });
+
+  it("passes a workflow that references managed secrets", () => {
+    const files = [
+      {
+        path: ".github/workflows/ci.yml",
+        content: "env:\n  API_TOKEN: ${{ secrets.API_TOKEN }}\n  DB_PASSWORD: $DB_PASSWORD\n",
+      },
+    ];
+    expect(inlineSecretFindings(files)).toEqual([]);
+  });
+
+  it("reports one finding per workflow that assigns a literal secret value", () => {
+    const files = [
+      {
+        path: ".github/workflows/deploy.yml",
+        content: 'env:\n  DEPLOY_TOKEN: "kx7Qm2ZpLr9TvWs4"\n  OTHER_SECRET: aVeryLongLiteralValue\n',
+      },
+    ];
+    const findings = inlineSecretFindings(files);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      code: "INLINE_SECRET_IN_CI",
+      severity: "CRITICAL",
+      path: ".github/workflows/deploy.yml",
+    });
+  });
+
+  it("never repeats the observed value in the message", () => {
+    const files = [
+      { path: ".github/workflows/deploy.yml", content: 'env:\n  DEPLOY_TOKEN: "kx7Qm2ZpLr9TvWs4"\n' },
+    ];
+    expect(inlineSecretFindings(files)[0]?.message).not.toContain("kx7Qm2ZpLr9TvWs4");
+  });
+
+  it("ignores a short placeholder and a variable without a secret-shaped name", () => {
+    const files = [
+      { path: ".github/workflows/ci.yml", content: "env:\n  API_TOKEN: todo\n  NODE_VERSION: 24.19.0\n" },
+    ];
+    expect(inlineSecretFindings(files)).toEqual([]);
+  });
+
+  // ENV_PROD_SEPARATION is AUTOMATED, and the domain refuses to attest a non-OWNER check. A false
+  // positive here is therefore a permanent block on READY that the owner cannot clear, so every
+  // correct line that once tripped the heuristic stays pinned as its own case.
+  it.each([
+    ["a managed reference followed by a comment", "API_TOKEN: ${{ secrets.API_TOKEN }} # rotated 2026-01"],
+    ["a managed reference with a path suffix", "GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/gcp.json"],
+    ["an absolute path to a credentials file", "GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json"],
+    ["a name that denotes a reference", "SECRET_NAME: my-app-prod-secret"],
+    ["a URL", "TOKEN_URL: https://auth.example.com/token"],
+    ["the reusable-workflow keyword", "secrets: inherit"],
+  ])("passes %s", (_description, line) => {
+    const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
+    expect(inlineSecretFindings(files)).toEqual([]);
+  });
+
+  it("still reports a literal credential that carries a slash part-way through", () => {
+    const files = [
+      {
+        path: ".github/workflows/deploy.yml",
+        content: "env:\n  AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n",
+      },
+    ];
+    expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(["INLINE_SECRET_IN_CI"]);
+  });
+});
+
+describe("lockfile findings", () => {
+  it("passes a repository without a tracked manifest", () => {
+    expect(lockfileFindings(["README.md", "src/index.ts"])).toEqual([]);
+  });
+
+  it("passes a manifest with exactly one lockfile", () => {
+    expect(lockfileFindings(["package.json", "pnpm-lock.yaml"])).toEqual([]);
+  });
+
+  it("reports a manifest without any lockfile", () => {
+    const findings = lockfileFindings(["package.json"]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ code: "LOCKFILE_MISSING", severity: "HIGH", path: "package.json" });
+  });
+
+  it("reports every lockfile when more than one package manager is tracked", () => {
+    const findings = lockfileFindings(["package.json", "pnpm-lock.yaml", "package-lock.json"]);
+    expect(findings.map((entry) => entry.code)).toEqual(["LOCKFILE_AMBIGUOUS", "LOCKFILE_AMBIGUOUS"]);
+  });
+
+  it("ignores a lockfile that is not at the repository root", () => {
+    const findings = lockfileFindings(["package.json", "packages/api/pnpm-lock.yaml"]);
+    expect(findings.map((entry) => entry.code)).toEqual(["LOCKFILE_MISSING"]);
+  });
+
+  it("reports unverifiable inputs instead of guessing", () => {
+    const findings = lockfileFindings(null);
+    expect(findings).toEqual([
+      expect.objectContaining({ code: "DEPENDENCY_INPUT_UNVERIFIABLE", severity: "HIGH", path: null }),
+    ]);
+  });
+});
+
+describe("launch owner checks", () => {
+  it("starts every launch owner check unresolved and without findings", () => {
+    for (const draft of launchOwnerChecks()) {
+      expect(draft.mode).toBe("OWNER");
+      expect(draft.status).toBe("ACTION_REQUIRED");
+      expect(draft.findings).toEqual([]);
+      expect(draft.summary.length).toBeGreaterThan(0);
+    }
+    expect(launchOwnerChecks().map((draft) => draft.key)).toEqual([
+      "SECURITY_HEADERS_OWNER_REVIEW",
+      "OPS_HEALTH_ENDPOINT_DECLARED",
+      "OPS_ROLLBACK_PLAN",
+      "OPS_BACKUP",
+    ]);
   });
 });

@@ -1644,6 +1644,28 @@ process-supervision прошёл 21/21 в
 без определённой методики. Первый коммерческий smoke test после Q15 — необязательный `Guided Launch` CTA после
 успешного бесплатного Acceptance Package.
 
+### 21.2. Трек L — доказуемый запуск в продакшн
+
+[L — Трек доказуемого запуска в продакшн](../plans/82-l-production-launch-track-spec.ru.md) описывает путь от
+репозитория до подтверждённого владельцем продакшн-деплоя через пять вех (L1–L5), не превращая Loomrail в
+CD-систему: automatic deployment остаётся запрещённым, а L4 (Guided Deploy) не начинается до отдельного PD.
+Полная декомпозиция, ubiquitous language и принятые решения — в самой спеке; здесь фиксируется только checkpoint.
+
+**Implementation checkpoint 2026-09-06:** L1 (Readiness v2) реализован. Закрытый каталог Project Readiness расширен
+с 8 до 14 пунктов в 7 категориях (было 4): добавлены `DEPS_LOCKFILE_PRESENT`, `ENV_PROD_SEPARATION`,
+`SECURITY_HEADERS_OWNER_REVIEW`, `OPS_HEALTH_ENDPOINT_DECLARED`, `OPS_ROLLBACK_PLAN`, `OPS_BACKUP`; коды findings
+8 → 13. Миграция `0052` перестроила обе readiness-таблицы под более широкий словарь без потери существующих
+строк — подтверждено построчной сверкой БД, домигрированной с pre-v2 данными. Локально на macOS прошли
+`pnpm typecheck`, `pnpm lint`, `pnpm test:public-readiness`, `pnpm audit --prod --audit-level high` (без известных
+уязвимостей) и полный `pnpm test` — 33/33 node:test плюс 1545/1545 vitest тестов в 161 файле по 23 пакетам,
+включая 7/7 + 19/19 + 4/4 + 1/1 readiness-специфичных наборов, полный `apps/web` (100/100) и целевой Playwright
+e2e-сценарий (1/1). `pnpm format:check` красен только на двух файлах, унаследованных в main до появления этой
+ветки (`b3f059c`) и не относящихся к этому треку. Windows не проверялся в этой сессии за отсутствием хоста; CI
+репозитория покрывает обе блокирующие платформы, и это остаётся открытым пунктом до отдельного прогона на
+Windows. Точные числа, команды и их вывод — в
+[`83-l1-readiness-v2-implementation-plan.ru.md`](../plans/83-l1-readiness-v2-implementation-plan.ru.md), раздел
+«Результат реализации». L2–L5 не начаты.
+
 ## 22. Dogfood Alpha acceptance contract
 
 Milestone не закрывается, пока один private dogfood Epic не докажет всё одновременно:

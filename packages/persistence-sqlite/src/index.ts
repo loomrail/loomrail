@@ -8056,7 +8056,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const decision = decideProjectReadinessAssessment(command, {
           now: occurredAt,
           newRunId: createId("projectReadinessRun"),
-          newCheckIds: Array.from({ length: 8 }, () => createId("readinessCheck")),
+          newCheckIds: command.payload.checks.map(() => createId("readinessCheck")),
           newFindingIds: Array.from({ length: findingCount }, () => createId("securityFinding")),
           ...(project === null ? {} : { project }),
         });

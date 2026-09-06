@@ -697,7 +697,15 @@ const readinessCategoryKeys = {
   LEGAL: "settings.readiness.category.legal",
   PAYMENTS: "settings.readiness.category.payments",
   ANALYTICS: "settings.readiness.category.analytics",
+  DEPENDENCIES: "settings.readiness.category.dependencies",
+  ENVIRONMENT: "settings.readiness.category.environment",
+  OPERATIONS: "settings.readiness.category.operations",
 } as const satisfies Record<ReadinessCheck["category"], TranslationKey>;
+
+// Derived from the label map rather than written out again: that map `satisfies` the full category
+// record, so a category added to the catalog is a compile error there and cannot go missing from
+// the render -- where the empty-section guard would otherwise drop it without a trace.
+const readinessCategoryOrder = Object.keys(readinessCategoryKeys) as readonly ReadinessCheck["category"][];
 
 const readinessCheckKeys = {
   SECURITY_ACTIVE_CONSTITUTION: "settings.readiness.check.activeConstitution",
@@ -708,6 +716,12 @@ const readinessCheckKeys = {
   LEGAL_OWNER_REVIEW: "settings.readiness.check.legalOwner",
   PAYMENTS_OWNER_REVIEW: "settings.readiness.check.paymentsOwner",
   ANALYTICS_OWNER_REVIEW: "settings.readiness.check.analyticsOwner",
+  DEPS_LOCKFILE_PRESENT: "settings.readiness.check.lockfile",
+  ENV_PROD_SEPARATION: "settings.readiness.check.envProdSeparation",
+  SECURITY_HEADERS_OWNER_REVIEW: "settings.readiness.check.securityHeadersOwner",
+  OPS_HEALTH_ENDPOINT_DECLARED: "settings.readiness.check.healthEndpoint",
+  OPS_ROLLBACK_PLAN: "settings.readiness.check.rollbackPlan",
+  OPS_BACKUP: "settings.readiness.check.backup",
 } as const satisfies Record<ReadinessCheck["key"], TranslationKey>;
 
 const readinessStatusKeys = {
@@ -726,6 +740,11 @@ const readinessFindingKeys = {
   CI_ACTION_NOT_PINNED: "settings.readiness.finding.actionPinned",
   CI_INPUT_UNVERIFIABLE: "settings.readiness.finding.ciUnverifiable",
   LICENSE_MISSING: "settings.readiness.finding.license",
+  LOCKFILE_MISSING: "settings.readiness.finding.lockfileMissing",
+  LOCKFILE_AMBIGUOUS: "settings.readiness.finding.lockfileAmbiguous",
+  DEPENDENCY_INPUT_UNVERIFIABLE: "settings.readiness.finding.dependencyUnverifiable",
+  PROD_ENV_NOT_IGNORED: "settings.readiness.finding.prodEnvNotIgnored",
+  INLINE_SECRET_IN_CI: "settings.readiness.finding.inlineSecretInCi",
 } as const satisfies Record<SecurityFinding["code"], TranslationKey>;
 
 const ProjectReadinessPanel = ({ project }: { project: ListedProject }): React.JSX.Element => {
@@ -794,8 +813,11 @@ const ProjectReadinessPanel = ({ project }: { project: ListedProject }): React.J
         <p className="settings__note">{t("settings.readiness.empty")}</p>
       ) : (
         <div className="readiness-checklist">
-          {(["SECURITY", "LEGAL", "PAYMENTS", "ANALYTICS"] as const).map((category) => {
+          {readinessCategoryOrder.map((category) => {
             const categoryChecks = snapshot.checks.filter((check) => check.category === category);
+            if (categoryChecks.length === 0) {
+              return null;
+            }
             return (
               <section className="readiness-group" key={category}>
                 <h5>{t(readinessCategoryKeys[category])}</h5>

@@ -344,6 +344,9 @@ const en = {
   "settings.readiness.category.legal": "Legal",
   "settings.readiness.category.payments": "Payments",
   "settings.readiness.category.analytics": "Analytics",
+  "settings.readiness.category.dependencies": "Dependencies",
+  "settings.readiness.category.environment": "Environment",
+  "settings.readiness.category.operations": "Operations",
   "settings.readiness.check.activeConstitution": "Owner-approved Constitution",
   "settings.readiness.check.secretPaths": "Tracked secret-like paths",
   "settings.readiness.check.envIgnored": "Local secret files ignored",
@@ -352,6 +355,12 @@ const en = {
   "settings.readiness.check.legalOwner": "Legal and privacy review",
   "settings.readiness.check.paymentsOwner": "Payments, tax, and refunds",
   "settings.readiness.check.analyticsOwner": "Analytics consent and retention",
+  "settings.readiness.check.lockfile": "Reproducible dependency lockfile",
+  "settings.readiness.check.envProdSeparation": "Production env files and CI literals",
+  "settings.readiness.check.securityHeadersOwner": "Security headers decision",
+  "settings.readiness.check.healthEndpoint": "Health endpoint",
+  "settings.readiness.check.rollbackPlan": "Rollback plan",
+  "settings.readiness.check.backup": "Data backup",
   "settings.readiness.status.passed": "Passed automatically",
   "settings.readiness.status.action": "Needs action",
   "settings.readiness.status.confirmed": "Confirmed by owner",
@@ -369,6 +378,15 @@ const en = {
   "settings.readiness.finding.actionPinned": "A GitHub Action is not pinned to a full commit SHA.",
   "settings.readiness.finding.ciUnverifiable": "A CI input could not be inspected within safe bounds.",
   "settings.readiness.finding.license": "No regular root LICENSE or COPYING file was found.",
+  "settings.readiness.finding.lockfileMissing":
+    "A tracked manifest has no lockfile, so installs are not reproducible.",
+  "settings.readiness.finding.lockfileAmbiguous": "More than one package manager lockfile is tracked.",
+  "settings.readiness.finding.dependencyUnverifiable":
+    "Dependency inputs could not be inspected within safe bounds.",
+  "settings.readiness.finding.prodEnvNotIgnored":
+    "A production environment file exists and is not covered by ignore rules.",
+  "settings.readiness.finding.inlineSecretInCi":
+    "CI assigns a secret-named variable a literal value instead of a managed reference.",
   "language.change": "Change language",
   "language.english": "English",
   "language.russian": "Русский",
@@ -1432,6 +1450,9 @@ const ru = {
   "settings.readiness.category.legal": "Legal",
   "settings.readiness.category.payments": "Платежи",
   "settings.readiness.category.analytics": "Аналитика",
+  "settings.readiness.category.dependencies": "Зависимости",
+  "settings.readiness.category.environment": "Окружение",
+  "settings.readiness.category.operations": "Эксплуатация",
   "settings.readiness.check.activeConstitution": "Конституция подтверждена владельцем",
   "settings.readiness.check.secretPaths": "Отслеживаемые файлы с секретами",
   "settings.readiness.check.envIgnored": "Локальные секретные файлы игнорируются",
@@ -1440,6 +1461,12 @@ const ru = {
   "settings.readiness.check.legalOwner": "Legal и privacy review",
   "settings.readiness.check.paymentsOwner": "Платежи, налоги и возвраты",
   "settings.readiness.check.analyticsOwner": "Согласие и хранение данных аналитики",
+  "settings.readiness.check.lockfile": "Воспроизводимый lockfile зависимостей",
+  "settings.readiness.check.envProdSeparation": "env-файлы продакшена и литералы в CI",
+  "settings.readiness.check.securityHeadersOwner": "Решение по security headers",
+  "settings.readiness.check.healthEndpoint": "Health-эндпоинт",
+  "settings.readiness.check.rollbackPlan": "План отката",
+  "settings.readiness.check.backup": "Резервное копирование данных",
   "settings.readiness.status.passed": "Проверено автоматически",
   "settings.readiness.status.action": "Требует действия",
   "settings.readiness.status.confirmed": "Подтверждено владельцем",
@@ -1458,6 +1485,16 @@ const ru = {
   "settings.readiness.finding.actionPinned": "GitHub Action не закреплён полным commit SHA.",
   "settings.readiness.finding.ciUnverifiable": "CI-файл нельзя проверить в безопасных пределах.",
   "settings.readiness.finding.license": "В корне не найден обычный LICENSE или COPYING.",
+  "settings.readiness.finding.lockfileMissing":
+    "У отслеживаемого manifest нет lockfile, установка не воспроизводится.",
+  "settings.readiness.finding.lockfileAmbiguous":
+    "Отслеживается больше одного lockfile разных пакетных менеджеров.",
+  "settings.readiness.finding.dependencyUnverifiable":
+    "Данные о зависимостях не удалось проверить в безопасных пределах.",
+  "settings.readiness.finding.prodEnvNotIgnored":
+    "Файл продакшн-окружения существует и не покрыт правилами ignore.",
+  "settings.readiness.finding.inlineSecretInCi":
+    "CI присваивает переменной с секретным именем литеральное значение вместо ссылки на управляемый секрет.",
   "language.change": "Сменить язык",
   "language.english": "English",
   "language.russian": "Русский",

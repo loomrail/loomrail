@@ -112,6 +112,50 @@ const isSecretLikePath = (path: string): boolean => {
   ].includes(name);
 };
 
+const ROOT_LOCKFILES = [
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lockb",
+  "bun.lock",
+] as const;
+
+export const lockfileFindings = (trackedPaths: readonly string[] | null): readonly SecurityFindingDraft[] => {
+  if (trackedPaths === null) {
+    return [
+      finding(
+        "DEPENDENCY_INPUT_UNVERIFIABLE",
+        "HIGH",
+        null,
+        "Tracked paths exceeded the safe inspection bound, so lockfile coverage was not checked.",
+      ),
+    ];
+  }
+  const rootPaths = new Set(trackedPaths.filter((path) => !path.includes("/")));
+  if (!rootPaths.has("package.json")) return [];
+  const present = ROOT_LOCKFILES.filter((name) => rootPaths.has(name));
+  if (present.length === 0) {
+    return [
+      finding(
+        "LOCKFILE_MISSING",
+        "HIGH",
+        "package.json",
+        "A tracked manifest has no tracked lockfile, so installed versions are not reproducible.",
+      ),
+    ];
+  }
+  if (present.length === 1) return [];
+  return present.map((name) =>
+    finding(
+      "LOCKFILE_AMBIGUOUS",
+      "MEDIUM",
+      name,
+      "More than one package manager lockfile is tracked, so the installed tree is ambiguous.",
+    ),
+  );
+};
+
 const finding = (
   code: SecurityFindingDraft["code"],
   severity: SecurityFindingDraft["severity"],
@@ -157,6 +201,15 @@ const ignoredByGit = async (repositoryPath: string, path: string): Promise<boole
   return null;
 };
 
+const pathExists = async (repositoryPath: string, path: string): Promise<boolean> => {
+  try {
+    await lstat(join(repositoryPath, path));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const licensePresent = async (repositoryPath: string): Promise<boolean> => {
   const accepted = new Set(["license", "license.md", "license.txt", "copying", "copying.md", "copying.txt"]);
   try {
@@ -171,32 +224,40 @@ const licensePresent = async (repositoryPath: string): Promise<boolean> => {
   return false;
 };
 
-const ciFindings = async (repositoryPath: string): Promise<readonly SecurityFindingDraft[]> => {
+type CiWorkflowFile = { path: string; content: string };
+
+const readBoundedCiWorkflows = async (
+  repositoryPath: string,
+): Promise<{ files: readonly CiWorkflowFile[]; unverifiable: readonly SecurityFindingDraft[] }> => {
   const directory = join(repositoryPath, ".github", "workflows");
   let entries: readonly import("node:fs").Dirent[];
   try {
     const metadata = await lstat(directory);
     if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-      return [
-        finding(
-          "CI_INPUT_UNVERIFIABLE",
-          "HIGH",
-          ".github/workflows",
-          "The CI workflow directory is not a regular directory and was not inspected.",
-        ),
-      ];
+      return {
+        files: [],
+        unverifiable: [
+          finding(
+            "CI_INPUT_UNVERIFIABLE",
+            "HIGH",
+            ".github/workflows",
+            "The CI workflow directory is not a regular directory and was not inspected.",
+          ),
+        ],
+      };
     }
     entries = await readdir(directory, { withFileTypes: true });
   } catch {
-    return [];
+    return { files: [], unverifiable: [] };
   }
 
   const candidates = entries
     .filter((entry) => /\.ya?ml$/i.test(entry.name))
     .sort((left, right) => left.name.localeCompare(right.name));
-  const findings: SecurityFindingDraft[] = [];
+  const files: CiWorkflowFile[] = [];
+  const unverifiable: SecurityFindingDraft[] = [];
   if (candidates.length > MAX_CI_FILES) {
-    findings.push(
+    unverifiable.push(
       finding(
         "CI_INPUT_UNVERIFIABLE",
         "HIGH",
@@ -214,13 +275,13 @@ const ciFindings = async (repositoryPath: string): Promise<readonly SecurityFind
     try {
       metadata = await lstat(absolutePath);
     } catch {
-      findings.push(
+      unverifiable.push(
         finding("CI_INPUT_UNVERIFIABLE", "HIGH", relativePath, "The CI workflow could not be inspected."),
       );
       continue;
     }
     if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.size > MAX_CI_FILE_BYTES) {
-      findings.push(
+      unverifiable.push(
         finding(
           "CI_INPUT_UNVERIFIABLE",
           "HIGH",
@@ -232,7 +293,7 @@ const ciFindings = async (repositoryPath: string): Promise<readonly SecurityFind
     }
     totalBytes += metadata.size;
     if (totalBytes > MAX_CI_TOTAL_BYTES) {
-      findings.push(
+      unverifiable.push(
         finding(
           "CI_INPUT_UNVERIFIABLE",
           "HIGH",
@@ -246,33 +307,36 @@ const ciFindings = async (repositoryPath: string): Promise<readonly SecurityFind
     try {
       content = (await readFile(absolutePath)).toString("utf8");
     } catch {
-      findings.push(
+      unverifiable.push(
         finding("CI_INPUT_UNVERIFIABLE", "HIGH", relativePath, "The CI workflow could not be read safely."),
       );
       continue;
     }
-    if (/^\s*pull_request_target\s*:/m.test(content)) {
+    files.push({ path: relativePath, content });
+  }
+  return { files, unverifiable };
+};
+
+const ciFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingDraft[] => {
+  const findings: SecurityFindingDraft[] = [];
+  for (const file of files) {
+    if (/^\s*pull_request_target\s*:/m.test(file.content)) {
       findings.push(
         finding(
           "CI_PULL_REQUEST_TARGET",
           "HIGH",
-          relativePath,
+          file.path,
           "The workflow uses pull_request_target and requires an explicit trust-boundary review.",
         ),
       );
     }
-    if (/^\s*permissions\s*:\s*write-all\s*(?:#.*)?$/im.test(content)) {
+    if (/^\s*permissions\s*:\s*write-all\s*(?:#.*)?$/im.test(file.content)) {
       findings.push(
-        finding(
-          "CI_WRITE_ALL_PERMISSIONS",
-          "HIGH",
-          relativePath,
-          "The workflow grants write-all permissions.",
-        ),
+        finding("CI_WRITE_ALL_PERMISSIONS", "HIGH", file.path, "The workflow grants write-all permissions."),
       );
     }
     const actionPattern = /^\s*-?\s*uses\s*:\s*["']?([^\s"'#]+)@([^\s"'#]+)["']?/gim;
-    for (const match of content.matchAll(actionPattern)) {
+    for (const match of file.content.matchAll(actionPattern)) {
       const target = match[1];
       const reference = match[2];
       if (
@@ -286,7 +350,7 @@ const ciFindings = async (repositoryPath: string): Promise<readonly SecurityFind
         finding(
           "CI_ACTION_NOT_PINNED",
           "MEDIUM",
-          relativePath,
+          file.path,
           `The action ${target ?? "unknown"} is not pinned to a full commit SHA.`,
         ),
       );
@@ -294,6 +358,104 @@ const ciFindings = async (repositoryPath: string): Promise<readonly SecurityFind
   }
   return findings;
 };
+
+const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS/i;
+// A name with one of these suffixes denotes where a credential lives, not the credential itself.
+const REFERENCE_NAME_PATTERN = /_(?:NAME|URL|FILE|PATH)$/i;
+// `secrets` is a workflow keyword, not a variable: it introduces a mapping, or carries the managed
+// literal `inherit`. Entries nested under it are still read as lines of their own.
+const WORKFLOW_KEYWORD_NAME_PATTERN = /^secrets$/i;
+// A managed reference anywhere in the value -- `${{ … }}`, `${VAR}` or `$VAR` -- means the value is
+// interpolated at run time rather than stored here, so a suffix such as `/gcp.json` does not make
+// the assignment a literal. The reference has to start the value or follow a non-word character, so
+// a `$` in the middle of a literal credential is not mistaken for one.
+const MANAGED_REFERENCE_PATTERN = /(?:^|[^A-Za-z0-9])\$(?:\{\{.*?\}\}|\{[^}]+\}|[A-Za-z_][A-Za-z0-9_]*)/;
+// A path or a URL names a location. Only a leading match counts: a credential may well contain a
+// slash part-way through.
+const LOCATION_VALUE_PATTERN = /^(?:\.{0,2}\/|https?:\/\/)/i;
+const MIN_LITERAL_SECRET_LENGTH = 8;
+
+// Reduces a YAML scalar to the characters actually stored: the body of a quoted string, otherwise
+// the value with its trailing `#` comment removed.
+const storedScalar = (rawValue: string): string => {
+  const quoted = /^(["'])([\s\S]*?)\1\s*(?:#.*)?$/.exec(rawValue);
+  if (quoted?.[2] !== undefined) return quoted[2];
+  return rawValue
+    .replace(/(?:^|\s)#.*$/, "")
+    .trim()
+    .replace(/^["']/, "")
+    .replace(/["']$/, "");
+};
+
+export const inlineSecretFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingDraft[] => {
+  const findings: SecurityFindingDraft[] = [];
+  for (const file of files) {
+    for (const line of file.content.split(/\r?\n/)) {
+      const match = /^\s*-?\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?)\s*$/.exec(line);
+      const name = match?.[1];
+      const rawValue = match?.[2];
+      if (!name || !rawValue || !SECRET_NAME_PATTERN.test(name)) continue;
+      if (REFERENCE_NAME_PATTERN.test(name) || WORKFLOW_KEYWORD_NAME_PATTERN.test(name)) continue;
+      const value = storedScalar(rawValue);
+      if (
+        value.length < MIN_LITERAL_SECRET_LENGTH ||
+        MANAGED_REFERENCE_PATTERN.test(value) ||
+        LOCATION_VALUE_PATTERN.test(value)
+      ) {
+        continue;
+      }
+      findings.push(
+        finding(
+          "INLINE_SECRET_IN_CI",
+          "CRITICAL",
+          file.path,
+          `The workflow assigns ${name} a literal value instead of referencing a managed secret.`,
+        ),
+      );
+      break;
+    }
+  }
+  return findings;
+};
+
+export const prodEnvFindings = (
+  entries: readonly { path: string; exists: boolean; ignored: boolean | null }[],
+): readonly SecurityFindingDraft[] =>
+  entries
+    .filter((entry) => entry.exists && entry.ignored !== true)
+    .map((entry) =>
+      finding(
+        "PROD_ENV_NOT_IGNORED",
+        "HIGH",
+        entry.path,
+        entry.ignored === null
+          ? "Ignore coverage could not be verified for an existing production environment file."
+          : "An existing production environment file is not covered by Git ignore rules.",
+      ),
+    );
+
+export const launchOwnerChecks = (): readonly ReadinessCheckDraft[] => [
+  ownerCheck(
+    "SECURITY_HEADERS_OWNER_REVIEW",
+    "SECURITY",
+    "Confirm the security header decision for this project, or mark it not applicable.",
+  ),
+  ownerCheck(
+    "OPS_HEALTH_ENDPOINT_DECLARED",
+    "OPERATIONS",
+    "Confirm a health or readiness path exists, or mark it not applicable.",
+  ),
+  ownerCheck(
+    "OPS_ROLLBACK_PLAN",
+    "OPERATIONS",
+    "Confirm what happens when a release fails and how the previous state is restored.",
+  ),
+  ownerCheck(
+    "OPS_BACKUP",
+    "OPERATIONS",
+    "Confirm how project data is backed up and restored, or mark it not applicable.",
+  ),
+];
 
 export const assessProjectReadiness = async (
   repositoryPath: string,
@@ -311,17 +473,33 @@ export const assessProjectReadiness = async (
     );
   }
 
-  const [headResult, statusResult, trackedResult, envIgnored, envLocalIgnored, npmrcIgnored, hasLicense, ci] =
-    await Promise.all([
-      runBoundedGit(["rev-parse", "HEAD"], canonicalRoot),
-      runBoundedGit(["status", "--porcelain=v1", "-z", "--untracked-files=normal"], canonicalRoot),
-      runBoundedGit(["ls-files", "-z"], canonicalRoot),
-      ignoredByGit(canonicalRoot, ".env"),
-      ignoredByGit(canonicalRoot, ".env.local"),
-      ignoredByGit(canonicalRoot, ".npmrc"),
-      licensePresent(canonicalRoot),
-      ciFindings(canonicalRoot),
-    ]);
+  const [
+    headResult,
+    statusResult,
+    trackedResult,
+    envIgnored,
+    envLocalIgnored,
+    npmrcIgnored,
+    hasLicense,
+    workflows,
+    prodEnvExists,
+    prodEnvLocalExists,
+    prodEnvIgnored,
+    prodEnvLocalIgnored,
+  ] = await Promise.all([
+    runBoundedGit(["rev-parse", "HEAD"], canonicalRoot),
+    runBoundedGit(["status", "--porcelain=v1", "-z", "--untracked-files=normal"], canonicalRoot),
+    runBoundedGit(["ls-files", "-z"], canonicalRoot),
+    ignoredByGit(canonicalRoot, ".env"),
+    ignoredByGit(canonicalRoot, ".env.local"),
+    ignoredByGit(canonicalRoot, ".npmrc"),
+    licensePresent(canonicalRoot),
+    readBoundedCiWorkflows(canonicalRoot),
+    pathExists(canonicalRoot, ".env.production"),
+    pathExists(canonicalRoot, ".env.production.local"),
+    ignoredByGit(canonicalRoot, ".env.production"),
+    ignoredByGit(canonicalRoot, ".env.production.local"),
+  ]);
 
   const repositoryHead =
     headResult.exitCode === 0 && !headResult.overflowed && /^[0-9a-f]{40,64}$/.test(outputText(headResult))
@@ -368,6 +546,8 @@ export const assessProjectReadiness = async (
       );
     }
   }
+
+  const ci = [...workflows.unverifiable, ...ciFindings(workflows.files)];
 
   const checks: readonly ReadinessCheckDraft[] = [
     automatedCheck(
@@ -431,6 +611,30 @@ export const assessProjectReadiness = async (
       "ANALYTICS",
       "Confirm consent, retention, disclosure, and analytics data handling, or mark them not applicable.",
     ),
+    automatedCheck(
+      "DEPS_LOCKFILE_PRESENT",
+      "DEPENDENCIES",
+      "No missing or ambiguous lockfiles were found for tracked dependency manifests.",
+      "Track a single lockfile so installs are reproducible.",
+      lockfileFindings(
+        trackedResult.exitCode !== 0 || trackedResult.overflowed ? null : splitNullPaths(trackedResult),
+      ),
+    ),
+    automatedCheck(
+      "ENV_PROD_SEPARATION",
+      "ENVIRONMENT",
+      "No unignored production env file or literal CI secret was found in the bounded scan.",
+      "Keep production values out of the repository and out of CI literals.",
+      [
+        ...prodEnvFindings([
+          { path: ".env.production", exists: prodEnvExists, ignored: prodEnvIgnored },
+          { path: ".env.production.local", exists: prodEnvLocalExists, ignored: prodEnvLocalIgnored },
+        ]),
+        ...inlineSecretFindings(workflows.files),
+        ...workflows.unverifiable,
+      ],
+    ),
+    ...launchOwnerChecks(),
   ];
   const sourceDigest = createHash("sha256")
     .update(

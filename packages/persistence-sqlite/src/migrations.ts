@@ -256,6 +256,12 @@ const migrations: readonly Migration[] = [
     filename: "0051_verification_cancellation_intent.sql",
     rebuildsAReferencedTable: true,
   },
+  {
+    version: 52,
+    name: "readiness_catalog_v2",
+    filename: "0052_readiness_catalog_v2.sql",
+    rebuildsAReferencedTable: true,
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.
