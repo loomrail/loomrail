@@ -360,19 +360,22 @@ const ciFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingD
 };
 
 const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS/i;
-// A name with one of these suffixes denotes where a credential lives, not the credential itself.
-const REFERENCE_NAME_PATTERN = /_(?:NAME|URL|FILE|PATH)$/i;
+// A `_NAME` suffix denotes what a credential is called, not the credential itself. Suffixes such as
+// `_FILE` and `_PATH` are deliberately absent: a name is a weak signal, and a value that really is a
+// location is already excluded below, so honouring them would only hide literals stored under them.
+const REFERENCE_NAME_PATTERN = /_NAME$/i;
 // `secrets` is a workflow keyword, not a variable: it introduces a mapping, or carries the managed
-// literal `inherit`. Entries nested under it are still read as lines of their own.
-const WORKFLOW_KEYWORD_NAME_PATTERN = /^secrets$/i;
-// A managed reference anywhere in the value -- `${{ … }}`, `${VAR}` or `$VAR` -- means the value is
-// interpolated at run time rather than stored here, so a suffix such as `/gcp.json` does not make
-// the assignment a literal. The reference has to start the value or follow a non-word character, so
-// a `$` in the middle of a literal credential is not mistaken for one.
-const MANAGED_REFERENCE_PATTERN = /(?:^|[^A-Za-z0-9])\$(?:\{\{.*?\}\}|\{[^}]+\}|[A-Za-z_][A-Za-z0-9_]*)/;
-// A path or a URL names a location. Only a leading match counts: a credential may well contain a
-// slash part-way through.
-const LOCATION_VALUE_PATTERN = /^(?:\.{0,2}\/|https?:\/\/)/i;
+// literal `inherit`. Entries nested under it are still read as lines of their own. Matched
+// case-sensitively, because the keyword is lowercase and `SECRETS` is an ordinary variable name.
+const WORKFLOW_KEYWORD_NAME_PATTERN = /^secrets$/;
+// A braced reference -- `${{ … }}` or `${VAR}` -- means the value is interpolated at run time rather
+// than stored here, and may sit anywhere, so a suffix such as `/gcp.json` does not make the
+// assignment a literal. A bare `$VAR` counts only as the entire value: unlike the braced forms it
+// has no closing delimiter, so accepting it mid-value would excuse any literal beginning `$word`.
+const MANAGED_REFERENCE_PATTERN = /(?:^|[^A-Za-z0-9])\$(?:\{\{.*?\}\}|\{[^}]+\})|^\$[A-Za-z_][A-Za-z0-9_]*$/;
+// A path or a URL names a location. Only a leading match counts, and a path must show a separator
+// beyond the leading one: a secret encoded in base64 starts with `/` about one time in sixty-four.
+const LOCATION_VALUE_PATTERN = /^(?:\.{0,2}\/[^\s]*\/|https?:\/\/)/i;
 const MIN_LITERAL_SECRET_LENGTH = 8;
 
 // Reduces a YAML scalar to the characters actually stored: the body of a quoted string, otherwise

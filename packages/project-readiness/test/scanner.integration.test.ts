@@ -200,18 +200,24 @@ describe("production environment separation", () => {
     ["a name that denotes a reference", "SECRET_NAME: my-app-prod-secret"],
     ["a URL", "TOKEN_URL: https://auth.example.com/token"],
     ["the reusable-workflow keyword", "secrets: inherit"],
+    ["a whole-value shell reference", "DB_PASSWORD: $DB_PASSWORD"],
+    ["a path to a mounted secret file", "PASSWORD_FILE: /run/secrets/db_password"],
   ])("passes %s", (_description, line) => {
     const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
     expect(inlineSecretFindings(files)).toEqual([]);
   });
 
-  it("still reports a literal credential that carries a slash part-way through", () => {
-    const files = [
-      {
-        path: ".github/workflows/deploy.yml",
-        content: "env:\n  AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n",
-      },
-    ];
+  // The rules that keep the cases above clean each have a narrower form that costs no false
+  // positive. Without these counter-examples pinned, the broader form reads as equally correct and
+  // the check silently stops reporting credentials it should catch.
+  it.each([
+    ["a literal that carries a slash part-way through", "AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/b"],
+    ["a base64 literal that happens to start with a slash", "AWS_SECRET_ACCESS_KEY: /JalrXUtnFEMIK7MDENGb"],
+    ["a literal that happens to start with a dollar", "DB_PASSWORD: $tr0ngP@ssw0rd!"],
+    ["a literal under a name that merely sounds like a location", "API_TOKEN_FILE: ghp_16C7e42F292c6912E77"],
+    ["a literal under a variable named like the workflow keyword", "SECRETS: kx7Qm2ZpLr9TvWs4"],
+  ])("reports %s", (_description, line) => {
+    const files = [{ path: ".github/workflows/deploy.yml", content: `env:\n  ${line}\n` }];
     expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(["INLINE_SECRET_IN_CI"]);
   });
 });
