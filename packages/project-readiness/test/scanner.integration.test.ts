@@ -247,39 +247,101 @@ describe("production environment separation", () => {
 
   // The rules that keep the cases above clean each have a narrower form that costs no false
   // positive. Without these counter-examples pinned, the broader form reads as equally correct and
-  // the check silently stops reporting credentials it should catch. The last two rows are the set's
-  // one exception, and they are false positives: the `_URL` userinfo rule searches for
-  // `user:password` past any `/`, because `openssl rand -base64` puts a `/` in roughly every other
-  // password it generates, and the price is that a `_URL` value carrying a `:` and a later `@` is
-  // reported too. They are pinned so that cost stays visible and priced, not so it stays unexamined.
+  // the check silently stops reporting credentials it should catch. The connection-string rows prove
+  // one property in particular: a location-suffixed secret name does not excuse a userinfo
+  // credential. LOCATION_NAME_PATTERN over a value carrying a `/` would excuse every one of them,
+  // and the userinfo trigger runs before it and reports them anyway -- including when the `/` is
+  // inside the password, which is where `openssl rand -base64` puts one in roughly every second
+  // password it generates. The `_URL`-scoped form of that trigger is gone; it consults no name now.
+  //
+  // Every host in a connection-string row here is dotted, deliberately, except the one row that pins
+  // the narrowing itself. The host rule excuses a loopback or single-label host, so the property
+  // above survives only over a dotted host, and `DATABASE_CREDENTIALS_URL` is pinned in both
+  // spellings so that boundary is visible rather than inferred. The last three rows are the set's one
+  // exception and are false positives: a value carrying a `:` and a later `@` over a dotted host is
+  // reported whatever it holds. They are pinned so that cost stays visible and priced, not so it
+  // stays unexamined.
   it.each([
-    ["a base64 literal that happens to start with a slash", "AWS_SECRET_ACCESS_KEY: /JalrXUtnFEMIK7MDENGb"],
-    ["a literal that happens to start with a dollar", "DB_PASSWORD: $tr0ngP@ssw0rd!"],
-    ["a literal under a name that merely sounds like a location", "API_TOKEN_FILE: ghp_16C7e42F292c6912E77"],
+    [
+      "a base64 literal that happens to start with a slash",
+      "AWS_SECRET_ACCESS_KEY: /JalrXUtnFEMIK7MDENGb",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a literal that happens to start with a dollar",
+      "DB_PASSWORD: $tr0ngP@ssw0rd!",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a literal under a name that merely sounds like a location",
+      "API_TOKEN_FILE: ghp_16C7e42F292c6912E77",
+      ["INLINE_SECRET_IN_CI"],
+    ],
     [
       "a connection string carrying userinfo under a location name",
       "TOKEN_URL: postgres://u:secret@db.example.com/app",
+      ["INLINE_SECRET_IN_CI"],
     ],
     [
       "a connection string whose password carries a slash",
       "POSTGRES_PASSWORD_URL: postgres://app:aB3/xYz9pQ@db.example.com:5432/app",
+      ["INLINE_SECRET_IN_CI"],
     ],
     [
       "a connection string with an empty username and a slash in the password",
       "PASSWORD_URL: redis://:hun/ter2@cache.example.com:6379/0",
+      ["INLINE_SECRET_IN_CI"],
     ],
-    ["a literal under a variable named like the workflow keyword", "SECRETS: kx7Qm2ZpLr9TvWs4"],
+    [
+      "the same property over a third location name, which the trigger overrides",
+      "DATABASE_CREDENTIALS_URL: mysql://root:pa/ss@db.example.com:3306/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the narrowing itself: the same line over a single-label host, which the host rule excuses",
+      "DATABASE_CREDENTIALS_URL: mysql://root:pa/ss@db:3306/app",
+      [],
+    ],
+    [
+      "a literal under a variable named like the workflow keyword",
+      "SECRETS: kx7Qm2ZpLr9TvWs4",
+      ["INLINE_SECRET_IN_CI"],
+    ],
     [
       "the accepted false positive: a bucket URL whose port supplies a colon before a path at-sign",
       "CREDENTIALS_URL: gs://my-bucket:8080/creds@2026.json",
+      ["INLINE_SECRET_IN_CI"],
     ],
     [
       "the accepted false positive: a bucket URL whose path carries both a colon and a later at-sign",
       "CREDENTIALS_URL: gs://my-bucket/2026:07/creds@2026.json",
+      ["INLINE_SECRET_IN_CI"],
     ],
-  ])("reports %s", (_description, line) => {
+    [
+      "the accepted false positive reading the last at-sign adds: an earlier at-sign is no barrier",
+      "CREDENTIALS_URL: gs://my-bucket@zone/2026:07/creds@v1.json",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+  ])("reports %s", (_description, line, codes) => {
     const files = [{ path: ".github/workflows/deploy.yml", content: `env:\n  ${line}\n` }];
-    expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(["INLINE_SECRET_IN_CI"]);
+    expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
+  });
+
+  // The two bucket spellings that stay clean, pinned beside the three reported ones above so the
+  // boundary is a pair rather than an assertion: a path at-sign with no colon before it is not an
+  // authority, and a colon that sits after the last at-sign is in the host, not the userinfo.
+  it.each([
+    [
+      "a bucket URL whose path at-sign has no colon before it",
+      "CREDENTIALS_URL: gs://my-bucket/creds@2026.json",
+    ],
+    [
+      "a bucket URL whose only colon sits after the last at-sign",
+      "CREDENTIALS_URL: gs://my-bucket/creds@2026/v:1.json",
+    ],
+  ])("passes %s", (_description, line) => {
+    const files = [{ path: ".github/workflows/deploy.yml", content: `env:\n  ${line}\n` }];
+    expect(inlineSecretFindings(files)).toEqual([]);
   });
 
   // No exclusion comes close to these two: both are reported by every version of the heuristic so
@@ -388,9 +450,19 @@ describe("production environment separation", () => {
   // reachable in the underscore spelling -- so each was a new false positive rather than an inherited
   // one, and each is an unclearable READY block. No value rule reaches them: `MY_SECRET=MY_ENV_VAR`
   // carries no separator and no extension, and `prod/db/credentials` sits under a name the location
-  // rule does not end-match. The reported rows are the boundary of the two arms: a singular location
+  // rule does not end-match. The reported rows are the boundary of the arms: a singular location
   // name still needs the value half, an access key id is a credential half rather than a handle to
   // one, and a name ending in neither an identifier nor a location word is not excused at all.
+  //
+  // Every arm but one is anchored on the credential word, and the four `TOKEN_FILES`/`PASSWORD_FILES`
+  // /`API_KEY_ENVS`/`PRIVATE_KEY_FILES` rows are why. A generic `[_-](?:FILES|ENVS)$` covered the two
+  // documented inputs at the price of excusing a literal under every credential word there is; those
+  // four rows were reported before this arm existed, were clean under the generic form, and are
+  // pinned here so the anchoring cannot be relaxed back without a test turning red. What anchoring
+  // costs is the mapping spelling under some other credential word, pinned as `TOKEN_FILES:
+  // MY_TOKEN=./token.txt`. `[_-]NAMES?$` is the one arm that stays generic, because `[_-]NAME$` was
+  // generic before any of this and `NAMES` is its plural: `TOKEN_NAMES` is clean and so is
+  // `TOKEN_NAME`, pinned as a pair so the inherited cost is not read as new.
   it.each([
     ["a secret store id list", "secret-ids: prod/db/credentials", []],
     ["a single secret store id", "secret-id: mysecret", []],
@@ -399,7 +471,34 @@ describe("production environment separation", () => {
     ["a plural of the reference form", "secret-names: db-password,api-token", []],
     ["an OAuth record id, which the identifier arm covers", "client-secret-id: kx7Qm2ZpLr9TvWs4", []],
     ["the singular, clean by the location rule it already used", "secret-file: kx7Qm2ZpLr9TvWs4.pem", []],
-    ["the accepted cost of the plural arm", "SECRET_FILES: kx7Qm2ZpLr9TvWs4", []],
+    ["the accepted cost of the anchored plural arm", "SECRET_FILES: kx7Qm2ZpLr9TvWs4", []],
+    ["the generic plural the credential word does not anchor", "TOKEN_NAMES: kx7Qm2ZpLr9TvWs4", []],
+    ["its singular, generic before this rule grew", "TOKEN_NAME: kx7Qm2ZpLr9TvWs4", []],
+    [
+      "a token literal the generic plural arm excused",
+      "TOKEN_FILES: ghp_16C7e42F292c6912E77",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a password literal the generic plural arm excused",
+      "PASSWORD_FILES: kx7Qm2ZpLr9TvWs4",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "an api-key literal the generic plural arm excused",
+      "API_KEY_ENVS: kx7Qm2ZpLr9TvWs4",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a private-key literal the generic plural arm excused",
+      "PRIVATE_KEY_FILES: kx7Qm2ZpLr9TvWs4",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "what anchoring costs: a real mapping under another credential word",
+      "TOKEN_FILES: MY_TOKEN=./token.txt",
+      ["INLINE_SECRET_IN_CI"],
+    ],
     [
       "the singular, which still needs the value half",
       "SECRET_FILE: kx7Qm2ZpLr9TvWs4",
@@ -431,7 +530,13 @@ describe("production environment separation", () => {
   // SECRET_NAME_PATTERN -- is wrong again with the next driver. The clean rows pin its placement --
   // after MANAGED_REFERENCE_PATTERN (a reference in the password position stores nothing) and after
   // the length bound -- and its two limits: a password position must hold a password, and a pair
-  // written under a nested `jdbc:` scheme is the same pair.
+  // written under a nested driver scheme is the same pair.
+  //
+  // The scheme prefix admits three levels: one for the URL grammar, one for `jdbc:`, and one for the
+  // pooled and gateway forms that nest a driver inside that -- `r2dbc:pool:postgresql://` is what
+  // `spring.r2dbc.url` takes and `jdbc:jtds:sqlserver://` is the jTDS spelling. Three is a choice
+  // about how deep to look and not a claim about how deep a URL can nest, so the fourth-level row is
+  // pinned clean: it is what the bound costs, and it is stated rather than assumed.
   //
   // Every host here is dotted, deliberately. The host rule below excuses a loopback or single-label
   // host, so a bare host would make each of these rows pass for a reason it was not written to test.
@@ -460,6 +565,21 @@ describe("production environment separation", () => {
       "the JDBC spelling under the name Quarkus sets",
       "QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://u:hunter2@db.example.com:5432/app",
       ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the pooled spelling Spring's r2dbc URL takes, three levels deep",
+      "SPRING_R2DBC_URL: r2dbc:pool:postgresql://u:hunter2@db.example.com:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the jTDS driver spelling, also three levels deep",
+      "MY_URL: jdbc:jtds:sqlserver://u:hunter2@db.example.com:1433/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "what the scheme bound costs: a fourth level, which escapes",
+      "MY_URL: a:b:c:d://u:hunter2@db.example.com/app",
+      [],
     ],
     [
       "an https endpoint, which LOCATION_VALUE_PATTERN would otherwise excuse",
@@ -512,6 +632,13 @@ describe("production environment separation", () => {
       [],
     ],
     ["a userinfo value one character under the length bound", "DATABASE_URL: //:b@c.", []],
+    ["the shortest shape the bound excuses, at six characters", "DATABASE_URL: //:b@.", []],
+    ["the same shape with a label after the dot, at seven", "DATABASE_URL: //:b@.d", []],
+    [
+      "that shape reaching the bound, which shows it is a real exclusion and not a vacuous one",
+      "DATABASE_URL: //:bbb@.",
+      ["INLINE_SECRET_IN_CI"],
+    ],
   ])("reads userinfo without consulting the name: %s", (_description, line, codes) => {
     const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
     expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
@@ -526,6 +653,26 @@ describe("production environment separation", () => {
   // and a host with no dot in it. The reported rows are the boundary -- one dot is enough to keep the
   // report whatever the host resolves to -- and the `vault-prod` row is the accepted cost written as
   // a test: a real credential for an internal host named without a dot is not reported.
+  //
+  // The other cost is wider and is pinned in bulk below, because a sentence about it reads smaller
+  // than it is. The loopback list is closed at four exact spellings, so every other dotted name for
+  // the same machine or the same job is reported: the runner's own host, a Kubernetes service DNS
+  // name, an mDNS name, the fully-qualified spellings of two names that are on the list, the rest of
+  // the loopback /8, and two IPv6 spellings of loopback and any-address. Each of those reports is an
+  // unclearable READY block on a job-local credential, and each is pinned so the claim "a dotted
+  // host is reported whatever it resolves to" is read as the cost it is rather than as a virtue.
+  //
+  // Which host the rule judges is decided by the parse, so the at-sign rows sit here too. The
+  // userinfo runs to the span's *last* at-sign; under the first-at-sign read that preceded it, a
+  // password containing an at-sign put a dotless fragment in the host position and the single-label
+  // arm excused three public hosts. Those three are pinned reported, the loopback counterpart is
+  // pinned clean because the last-at-sign read gets it right, and the path-at-sign pair is what the
+  // parse costs in the other direction.
+  //
+  // The last two rows pin what "the carve-out sits on this trigger and nowhere else" does and does
+  // not mean. An excused line falls through to the name gate, and what happens there depends on the
+  // name: a secret-shaped name is reported, but a secret-shaped name carrying a location suffix is
+  // excused a second time by the gate's own location arm -- which is most connection-string names.
   it.each([
     ["a Postgres service container", "DATABASE_URL: postgres://postgres:postgres@localhost:5432/test", []],
     ["the same under the postgresql scheme", "DATABASE_URL: postgresql://test:test@localhost:5432/test", []],
@@ -567,6 +714,56 @@ describe("production environment separation", () => {
       ["INLINE_SECRET_IN_CI"],
     ],
     [
+      "the closed list's cost: the runner's own host, as job-local as a Compose alias",
+      "DATABASE_URL: postgres://u:hunter2@host.docker.internal:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the closed list's cost: a Kubernetes service DNS name",
+      "DATABASE_URL: postgres://u:hunter2@postgres.default.svc.cluster.local:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the closed list's cost: an mDNS name",
+      "DATABASE_URL: postgres://u:hunter2@db.local:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the closed list's cost: the qualified spelling of a name on the list",
+      "DATABASE_URL: postgres://u:hunter2@localhost.localdomain:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the closed list's cost: the same name with a root dot",
+      "DATABASE_URL: postgres://u:hunter2@localhost./app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the closed list's cost: the loopback address with a root dot",
+      "DATABASE_URL: postgres://u:hunter2@127.0.0.1./app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the closed list's cost: the rest of the loopback /8",
+      "DATABASE_URL: postgres://u:hunter2@127.0.0.2:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the closed list's cost: the address Debian gives the host name",
+      "DATABASE_URL: postgres://u:hunter2@127.0.1.1:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the closed list's cost: the IPv6 any-address",
+      "REDIS_URL: redis://:hunter2@[::]:6379/0",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the closed list's cost: the expanded IPv6 spelling of ::1",
+      "REDIS_URL: redis://:hunter2@[0:0:0:0:0:0:0:1]:6379/0",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
       "a host that merely begins with the loopback name",
       "DATABASE_URL: postgres://u:hunter2@localhost.example.com:5432/app",
       ["INLINE_SECRET_IN_CI"],
@@ -578,13 +775,38 @@ describe("production environment separation", () => {
       ["INLINE_SECRET_IN_CI"],
     ],
     [
-      "an unencoded at-sign in the password, which the host span reads through",
+      "an unencoded at-sign in the password, whose host is what follows the last one",
       "DATABASE_URL: postgres://u:p@ss@db.example.com/app",
       ["INLINE_SECRET_IN_CI"],
     ],
     [
-      "the cost of reading through it: the same password over a loopback address",
-      "DATABASE_URL: postgres://u:p@ss@127.0.0.1:5432/app",
+      "the same password with a slash after the at-sign, which a first-at-sign read excused",
+      "DATABASE_URL: postgres://u:p@ss/word@db.example.com/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the same password with a colon after the at-sign, which a first-at-sign read excused",
+      "DATABASE_URL: postgres://u:p@ss:word@db.example.com:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the same shape over a dotted public host a first-at-sign read called single-label",
+      "DATABASE_URL: postgres://u:P@w0rd/x@prod-db.example.com:5432/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the same password over a loopback address, which the last at-sign reads correctly",
+      "DATABASE_URL: postgres://u:p@ss@127.0.0.1/app",
+      [],
+    ],
+    [
+      "what reading the last at-sign costs: a path at-sign moves the host past the real one",
+      "DATABASE_URL: postgres://u:hunter2@db.example.com/app@2026",
+      [],
+    ],
+    [
+      "the same URL without the path at-sign, so the miss above is the at-sign and not the host",
+      "DATABASE_URL: postgres://u:hunter2@db.example.com/app",
       ["INLINE_SECRET_IN_CI"],
     ],
     [
@@ -593,9 +815,19 @@ describe("production environment separation", () => {
       ["INLINE_SECRET_IN_CI"],
     ],
     [
-      "a secret-shaped name, which reaches the name gate on its own terms",
+      "a secret-shaped name with no location suffix, which reaches the name gate on its own terms",
       "DB_PASSWORD: postgres://postgres:postgres@localhost:5432/test",
       ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the same value under a location-suffixed name, which the gate's location arm excuses",
+      "DB_PASSWORD_URL: postgres://postgres:postgres@localhost:5432/test",
+      [],
+    ],
+    [
+      "and under the other location suffix, so the excuse is the arm rather than the spelling",
+      "PASSWORD_FILE: postgres://postgres:postgres@localhost:5432/test",
+      [],
     ],
   ])("declines a userinfo credential whose host cannot be public: %s", (_description, line, codes) => {
     const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
@@ -609,12 +841,15 @@ describe("production environment separation", () => {
   // READY block for any project pinning a Docker action on a self-hosted registry.
   // USES_KEYWORD_NAME_PATTERN exists for exactly this, and it is tested before the userinfo trigger --
   // which consults no name and would otherwise report the line whatever the keyword rule said. The
-  // host rule now reaches that same line by a second route, because a digest algorithm (`sha256`) is
-  // a single-label host, but the exemption is what the accepted-cost row rests on: it holds a
-  // userinfo-bearing value under `uses` whose host is dotted, and that is not a shape a `uses:` value
-  // can legally take. The `uses-token` row pins that the pattern is still anchored, so only the
-  // keyword itself is excused -- that line reaches the trigger, the host rule declines it on
-  // `sha256`, and the name gate reports it on `token`. `secrets` gets no exemption here at all: it is
+  // host rule now reaches every digest-pinned spelling by a second route, because the digest supplies
+  // the value's last at-sign and the algorithm before its colon (`sha256`) is a single-label host.
+  // The exemption is still what the accepted-cost row rests on, but the row that shows it is the
+  // tag-pinned one: there the last at-sign is the authority's, the host is dotted, and the trigger
+  // reports the identical value under a name the exemption does not cover. The `uses-token` row pins
+  // that the pattern is still anchored, so only the keyword itself is excused -- that line reaches
+  // the trigger, the host rule declines it on `sha256`, and the name gate reports it on `token`, and
+  // the tag-pinned `uses-token` row shows the trigger reporting it on the authority instead.
+  // `secrets` gets no exemption here at all: it is
   // tested only inside the name-gated branch, after this trigger has already run, so the last row is
   // a guard rather than a cost -- `secrets: postgres://u:secret@db.example.com/app` is reported,
   // exactly as before `uses` needed an exemption of its own, and it is pinned so the two keywords
@@ -634,9 +869,19 @@ describe("production environment separation", () => {
       ["INLINE_SECRET_IN_CI"],
     ],
     [
-      "the accepted cost: a credential parked in a uses value",
+      "a credential parked in a digest-pinned uses value, now clean by the host rule as well",
       "- uses: docker://user:hunter2@registry.example.com/image@sha256:0123456789abcdef",
       [],
+    ],
+    [
+      "the accepted cost, in the spelling only this exemption holds: a tag-pinned credential",
+      "- uses: docker://user:hunter2@registry.example.com/image:3.18",
+      [],
+    ],
+    [
+      "the same tag-pinned value under a name the exemption does not cover",
+      "uses-token: docker://user:hunter2@registry.example.com/image:3.18",
+      ["INLINE_SECRET_IN_CI"],
     ],
     [
       "a credential parked in a secrets value, which gets no such exemption",

@@ -423,13 +423,26 @@ const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API[_-]KEY|ACCESS[_-]KEY|PRIV
 // `\` and no dotted extension, so NAMED_LOCATION_VALUE_PATTERN sees no location, and
 // `prod/db/credentials` sits under a name LOCATION_NAME_PATTERN does not end-match.
 //
-// The two added arms are shaped differently on purpose.
-//  * The plural-location arm (`-FILES`, `-ENVS`, and `-NAMES` beside `-NAME`) is generic, the way
-//    `NAME` already is. A plural takes a list of `NAME=where` entries by construction, and a single
-//    literal has nowhere to sit in one. Its cost is that a literal parked under a plural anyway is
-//    excused: `SECRET_FILES: kx7Qm2ZpLr9TvWs4` is clean. The singular is untouched and still needs
-//    the value half -- `SECRET_FILE: kx7Qm2ZpLr9TvWs4` is reported, and
-//    `secret-file: kx7Qm2ZpLr9TvWs4.pem` is clean by LOCATION_NAME_PATTERN, not by this rule.
+// The added arms are anchored on the credential word, and the one arm that is not is the one that
+// was already generic before this rule grew.
+//  * The plural-location arm is `SECRET[_-](?:FILES|ENVS)$`, not `[_-](?:FILES|ENVS)$`. Both cover
+//    the two documented inputs the finding named -- `secret-files: MY_SECRET=./secret.txt` and
+//    `secret-envs: MY_SECRET=MY_ENV_VAR`, both of `docker/build-push-action` -- but the generic form
+//    excused a literal under every credential word there is, and did so silently:
+//    `TOKEN_FILES: ghp_16C7e42F292c6912E77`, `PASSWORD_FILES: kx7Qm2ZpLr9TvWs4`,
+//    `API_KEY_ENVS: kx7Qm2ZpLr9TvWs4` and `PRIVATE_KEY_FILES: kx7Qm2ZpLr9TvWs4` are all reported
+//    under the anchored form and were all clean under the generic one. What anchoring costs is a
+//    plural mapping under some other credential word: `TOKEN_FILES: MY_TOKEN=./token.txt` is
+//    reported and holds no secret. That is a report on a spelling no documented action input uses,
+//    against four kinds of line that do hold a credential. The arm's own remaining cost is a literal
+//    parked under the anchored plural anyway -- `SECRET_FILES: kx7Qm2ZpLr9TvWs4` is clean. The
+//    singular is untouched and still needs the value half -- `SECRET_FILE: kx7Qm2ZpLr9TvWs4` is
+//    reported, and `secret-file: kx7Qm2ZpLr9TvWs4.pem` is clean by LOCATION_NAME_PATTERN, not by
+//    this rule.
+//  * `[_-]NAMES?$` stays generic across every credential word, because `[_-]NAME$` was generic
+//    before any of this and `NAMES` is its plural, carrying the same cost one plural further:
+//    `TOKEN_NAMES: kx7Qm2ZpLr9TvWs4` is clean, exactly as `TOKEN_NAME: kx7Qm2ZpLr9TvWs4` is and was.
+//    That is inherited, not new, so narrowing it belongs to a change that narrows the singular too.
 //  * The identifier arm is anchored on the credential word (`SECRET[_-]IDS?$`) instead of excusing
 //    `_ID` after any of them, because an id is reliably not the credential only when the thing it
 //    identifies is a secret held in a store. `aws-access-key-id: AKIAIOSFODNN7EXAMPLE` is the
@@ -439,7 +452,7 @@ const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API[_-]KEY|ACCESS[_-]KEY|PRIV
 //    `secret-manager-project` is not covered and stays reported: it ends in neither an identifier
 //    nor a location word, and admitting `-PROJECT` would open the ecosystem-shaped name list this
 //    file refuses everywhere else, wrong again with the next provider's spelling.
-const REFERENCE_NAME_PATTERN = /[_-](?:NAMES?|FILES|ENVS)$|SECRET[_-]IDS?$/i;
+const REFERENCE_NAME_PATTERN = /[_-]NAMES?$|SECRET[_-](?:FILES|ENVS|IDS?)$/i;
 // `secrets` is a workflow keyword, not a variable: it introduces a mapping, or carries the managed
 // literal `inherit`. Entries nested under it are still read as lines of their own. Matched
 // case-sensitively, because the keyword is lowercase and `SECRETS` is an ordinary variable name that
@@ -447,34 +460,39 @@ const REFERENCE_NAME_PATTERN = /[_-](?:NAMES?|FILES|ENVS)$|SECRET[_-]IDS?$/i;
 // it is the same key used as an action input, such as a `hashicorp/vault-action` step listing store
 // paths.
 //
-// This test sits inside the name-gated branch, after USERINFO_PASSWORD_AUTHORITY_PATTERN has already
+// This test sits inside the name-gated branch, after USERINFO_AUTHORITY_PATTERN has already
 // run -- not before it, the way USES_KEYWORD_NAME_PATTERN below sits for `uses`. A `secrets:` value
 // is `inherit` or a mapping by schema, never a scalar URL, but this scanner is line-based and does
 // not check that a key sits where the schema puts it, so that argument would excuse an action input
 // merely named `secrets` on the same terms it excuses the keyword. Moving this test ahead of the
 // trigger, the way `uses` needs, would also excuse `secrets: postgres://u:secret@db.example.com/app`
 // -- an ordinary stored credential, not a hypothetical one -- so it stays here instead: that line
-// reaches USERINFO_PASSWORD_AUTHORITY_PATTERN first and is reported.
+// reaches USERINFO_AUTHORITY_PATTERN first and is reported.
 const WORKFLOW_KEYWORD_NAME_PATTERN = /^secrets$/;
 // `uses` is a workflow keyword too, holding an action or image reference rather than a variable.
 // Matched case-sensitively and anchored, because the keyword is lowercase and `USES` and
 // `uses-token` are ordinary variable names that keep their reports.
 //
-// Unlike `secrets` above, this test runs before USERINFO_PASSWORD_AUTHORITY_PATTERN, because that
+// Unlike `secrets` above, this test runs before USERINFO_AUTHORITY_PATTERN, because that
 // trigger does not consult the name at all and would otherwise report a digest-pinned Docker action
 // on a ported registry: `- uses: docker://registry.example.com:5000/image@sha256:0123456789abcdef`
 // -- the registry port supplies the colon and the digest supplies the at-sign. A `uses:` value holds
 // an action or image reference by definition, so that report carried no credential -- a pure false
 // positive, and an unclearable READY block for any project pinning a Docker action on a self-hosted
-// registry. The trigger's host rule now reaches that particular line as well, because `sha256` is a
-// single label, but this exemption is not redundant: it is the only thing holding
-// `- uses: docker://user:hunter2@registry.example.com/image@sha256:0123456789abcdef`, whose host is
-// dotted, and it is what keeps the keyword out of the trigger's reach whatever a future digest
-// algorithm or registry spelling looks like.
+// registry. The trigger's host rule now reaches every digest-pinned spelling as well, because the
+// digest supplies the value's last at-sign and the algorithm before its colon (`sha256`) is a single
+// label: `MY_IMAGE: docker://registry.example.com:5000/image@sha256:0123456789abcdef` and
+// `MY_IMAGE: docker://user:hunter2@registry.example.com/image@sha256:0123456789abcdef` are both
+// clean under a name this exemption does not cover. What the exemption still holds alone is the
+// tag-pinned spelling, where the last at-sign is the authority's:
+// `MY_IMAGE: docker://user:hunter2@registry.example.com/image:3.18` is reported and
+// `- uses: docker://user:hunter2@registry.example.com/image:3.18` is clean. It is also what keeps
+// the keyword out of the trigger's reach whatever a future digest algorithm or registry spelling
+// looks like, rather than relying on `sha256` staying dotless.
 //
 // The exemption does not look at the value, and that is its cost, stated plainly: it excuses a
 // userinfo-bearing value under this keyword too --
-// `- uses: docker://user:hunter2@registry.example.com/image@sha256:0123456789abcdef` is clean. The
+// `- uses: docker://user:hunter2@registry.example.com/image:3.18` is clean. The
 // scanner does not check that a `uses:` key sits in a step, so an action input that happened to be
 // named `uses` would be excused on the same terms -- the same structural gap `secrets` above is not
 // given. The two are treated differently because a `uses:` value is `{owner}/{repo}@{ref}`,
@@ -544,29 +562,37 @@ const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
 // pattern -- is an unbounded list that is wrong again with the next driver, so the value's own shape
 // carries this instead.
 //
-// The password side is `+`, so a pair needs a password to be one. An empty password position declares
-// that there is none and stores nothing, so `REDIS_URL: redis://:@localhost:6379`,
-// `MYSQL_URL: mysql://root:@127.0.0.1:3306/test` and `POSTGRES_URL: postgres://user:@db/app` are
-// clean. Those three wear hosts the rule below would also excuse, so the probe that isolates this
-// arm is a dotted, public one: `POSTGRES_URL: postgres://user:@db.example.com/app` is clean and
+// The password test requires a character after the colon, so a pair needs a password to be one. An
+// empty password position declares that there is none and stores nothing, so
+// `REDIS_URL: redis://:@localhost:6379`, `MYSQL_URL: mysql://root:@127.0.0.1:3306/test` and
+// `POSTGRES_URL: postgres://user:@db/app` are clean. Those three wear hosts the rule below would also
+// excuse, so the probe that isolates this arm is a dotted, public one:
+// `POSTGRES_URL: postgres://user:@db.example.com/app` is clean and
 // `POSTGRES_URL: postgres://user:x@db.example.com/app` is reported, one password character apart.
-// The username side stays `*`, because an empty username is the ordinary spelling of a Redis or AMQP
-// DSN and the password after it is the whole credential:
+// The username side has no such requirement, because an empty username is the ordinary spelling of a
+// Redis or AMQP DSN and the password after it is the whole credential:
 // `REDIS_URL: redis://:hunter2@cache.internal.example.com:6379/0` is reported.
 //
-// The scheme prefix admits two levels, not one. A JDBC URL nests a driver scheme inside `jdbc:`, and
-// that nesting is the spelling the frameworks require, not a variant of it:
-// `spring.datasource.url` takes `jdbc:mysql://root:hunter2@db.example.com:3306/app`, and
-// `JDBC_DATABASE_URL` and `QUARKUS_DATASOURCE_JDBC_URL` take
-// `jdbc:postgresql://u:hunter2@db.example.com:5432/app`. Under a one-level grammar the whole JDBC
-// family escaped, and it escaped under names carrying no token from SECRET_NAME_PATTERN -- exactly
-// the class this trigger exists to cover, so the escape was total rather than partial. Two is the
-// bound because one level is the URL grammar and the second is JDBC's wrapper around it; nothing a
-// workflow writes nests deeper, and an unbounded run would let this pattern read any number of
-// leading `word:` segments as scheme, a grammar with no instance behind it and nothing to probe
-// against. The second level costs what the first costs, one nesting further in: a `word:word://`
-// value carrying a colon and then an at-sign before its first `?` or `#` is now read as an authority
-// too.
+// The scheme prefix admits three levels. A JDBC URL nests a driver scheme inside `jdbc:`, and that
+// nesting is the spelling the frameworks require, not a variant of it: `spring.datasource.url` takes
+// `jdbc:mysql://root:hunter2@db.example.com:3306/app`, and `JDBC_DATABASE_URL` and
+// `QUARKUS_DATASOURCE_JDBC_URL` take `jdbc:postgresql://u:hunter2@db.example.com:5432/app`. Under a
+// one-level grammar the whole JDBC family escaped, and it escaped under names carrying no token from
+// SECRET_NAME_PATTERN -- exactly the class this trigger exists to cover, so the escape was total
+// rather than partial. Two levels still left the pooled and gateway forms out, and those are
+// ordinary rather than exotic: `spring.r2dbc.url` takes
+// `r2dbc:pool:postgresql://u:hunter2@db.example.com:5432/app`, and the jTDS driver spells its URL
+// `jdbc:jtds:sqlserver://u:hunter2@db.example.com:1433/app`. Both are reported at three.
+//
+// Three is a choice about how deep to look, not a claim about how deep a URL can nest. The grammar
+// has no depth limit and neither does any registry of driver spellings, so a fourth level escapes and
+// nothing here would notice it: `MY_URL: a:b:c:d://u:hunter2@db.example.com/app` is clean, and so is
+// any real spelling that ever wraps a nested driver URL one more time. The bound exists because an
+// unbounded run would read any number of leading `word:` segments as scheme -- turning every
+// colon-separated prefix in front of a `//` into a scheme, a much wider claim than the two nestings
+// anyone can name -- so the number is set where the known spellings stop and is honest about being
+// arbitrary one step past them. Each level costs what the first costs, one nesting further in: a
+// `word:word:word://` value carrying a userinfo colon before an at-sign is read as an authority too.
 //
 // It sits after the length bound and MANAGED_REFERENCE_PATTERN and before everything else. Both
 // halves of that placement are load-bearing.
@@ -591,19 +617,30 @@ const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
 // `DB_PASSWORD_URL: https://u:secret@db.example.com/app` -- all three clean before this change -- are
 // now reported.
 //
-// The span searched for the pair begins after `//` and is deliberately wider than RFC 3986's
-// authority: it runs straight through `/` and ends at the first `?`, `#` or `@`, and it is a match
-// only when that terminator is an `@` with a `:` somewhere before it. A value with no `//` has no span
-// to inspect, which is why `TOKEN_URL: auth.example.com/token` stays clean.
+// The span searched for the pair begins after `//` and ends at the first `?` or `#`. Inside that
+// span the split follows the URL grammar: the userinfo is everything before the *last* `@`, and the
+// host begins right after it. A value with no `//` has no span to inspect, which is why
+// `TOKEN_URL: auth.example.com/token` stays clean, and a span holding no `@` is no match, which is
+// why `TOKEN_URL: https://auth.example.com/token` stays clean.
 //
-// Running through `/` is the whole point. An unencoded password containing one would otherwise put
-// the `@` past the authority and go unreported, and `/` is in the base64 alphabet
-// (`A-Za-z0-9+/=`), so `openssl rand -base64` puts one in roughly every other password it generates.
-// `POSTGRES_PASSWORD_URL: postgres://app:aB3/xYz9pQ@db.example.com:5432/app`,
+// The span is wider than RFC 3986's authority in exactly one way: RFC 3986 ends the authority at the
+// first `/`, and this one runs through `/` to the `?` or `#`. That is deliberate. An unencoded
+// password containing a `/` would otherwise put the `@` past the authority and go unreported, and `/`
+// is in the base64 alphabet (`A-Za-z0-9+/=`), so `openssl rand -base64` puts one in roughly every
+// second password it generates. `POSTGRES_PASSWORD_URL: postgres://app:aB3/xYz9pQ@db.example.com:5432/app`,
 // `PASSWORD_URL: redis://:hun/ter2@cache.example.com:6379/0` and
 // `DATABASE_CREDENTIALS_URL: mysql://root:pa/ss@db.example.com:3306/app` are all reported, as is the
 // same password percent-encoded (`aB3%2FxYz9pQ`) and one holding several slashes
 // (`postgres://u:a/b/c/d@db.example.com:5432/app`).
+//
+// Taking the *last* `@` rather than the first is what makes the widened span safe. An `@` is an
+// ordinary character in a human-chosen password, and under a first-`@` split the fragment after it
+// was read as the host: `postgres://u:p@ss/word@db.example.com/app` gave `ss`,
+// `postgres://u:p@ss:word@db.example.com:5432/app` gave `ss`, and
+// `postgres://u:P@w0rd/x@prod-db.example.com:5432/app` gave `w0rd` -- three dotless fragments, each
+// excused by the single-label arm below while the real host was public and the password real. All
+// three are reported now, and so is `postgres://u:p@ss@db.example.com/app`, whose host reads
+// `db.example.com` rather than `ss@db.example.com`.
 //
 // A match is reported only when its host could be a public endpoint, and that carve-out is the widest
 // thing in this block. What it excuses is the service-container DSN, which is the most common
@@ -630,21 +667,49 @@ const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
 // and is clean, and so is every password for a private-network host named without a dot. Nothing in
 // the shape of the line separates that from the service container above it, and the trade is this
 // file's standing one: a miss costs a report, a false positive costs READY permanently with no way
-// for the owner to clear it. A dotted host is reported whatever it resolves to, so a private address
-// written out (`postgres://u:hunter2@10.0.0.5:5432/app`) and an internal FQDN
-// (`redis://:hunter2@cache.internal.example.com:6379/0`) both keep their reports -- a dotted name is
-// one the workflow did not invent, and the credential under it outlives the job.
+// for the owner to clear it.
 //
-// Where the host ends is established by shape, not assumed. It begins after the `@` that terminated
-// the userinfo -- always the value's first `@` after `//`, because neither side of the pair may cross
-// one -- and runs to the first `:`, `/`, `?` or `#`, so a port is not part of the host:
+// The other side of that trade is stated as plainly, because it is the wider one. A dotted host is
+// reported whatever it resolves to. That is what keeps a private address written out
+// (`postgres://u:hunter2@10.0.0.5:5432/app`) and an internal FQDN
+// (`redis://:hunter2@cache.internal.example.com:6379/0`) reported, and it is also what reports a
+// whole class of hosts that are as job-local as `db` is. The loopback list is closed at four exact
+// spellings, so every dotted name for the same machine or the same job is outside it:
+// `postgres://u:hunter2@host.docker.internal:5432/app` (the runner's own host),
+// `postgres://u:hunter2@postgres.default.svc.cluster.local:5432/app` (a Kubernetes service DNS
+// name), `postgres://u:hunter2@db.local:5432/app` (mDNS),
+// `postgres://u:hunter2@localhost.localdomain:5432/app`, `postgres://u:hunter2@localhost./app` and
+// `postgres://u:hunter2@127.0.0.1./app` (the fully-qualified spellings of two names on the list),
+// `postgres://u:hunter2@127.0.0.2:5432/app` and `postgres://u:hunter2@127.0.1.1:5432/app` (the rest
+// of the loopback /8), and the bracketed `redis://:hunter2@[::]:6379/0` and
+// `redis://:hunter2@[0:0:0:0:0:0:0:1]:6379/0` are all reported. That class -- not the single
+// `[::ffff:127.0.0.1]` spelling -- is what the closed list costs, and each of those reports is an
+// unclearable READY block. The list stays closed anyway: the alternative is a shape rule over
+// resolvable names, which would have to decide that `127.0.0.0/8`, `.local`, `.internal` and
+// `*.svc.cluster.local` are never public, and each of those is a claim about someone else's DNS
+// rather than about the CI runtime. Erring toward the report is the direction this rule should fail
+// in, and the report names a real stored credential in every case above.
+//
+// Where the host ends is established by shape, not assumed. It begins after the span's last `@` and
+// runs to the first `:`, `/`, `?` or `#`, so a port is not part of the host:
 // `db.example.com:5432/app` gives `db.example.com`, `sha256:0123456789abcdef` gives `sha256`, and
-// `2026.json` (a path at-sign, not an authority one) gives `2026.json`. It is not stopped by a second
-// `@`, deliberately: an unencoded `@` inside the password puts the real host after it, and
-// `postgres://u:p@ss@db.example.com/app` gives `ss@db.example.com`, which carries the real host's dot
-// and is reported. That span costs one shape: the same password over a loopback host --
-// `postgres://u:p@ss@127.0.0.1:5432/app` -- reads as `ss@127.0.0.1`, dotted, and is reported. It is a
-// real stored password rather than a report of nothing, and it errs toward the credential being seen.
+// `2026.json` (a path at-sign, not an authority one) gives `2026.json`.
+//
+// Reading the *last* `@` costs two shapes, both of which come from the span running through `/`
+// rather than stopping at it the way RFC 3986 does. Neither is a report of nothing.
+//  * A path at-sign after a genuine authority moves the host past the real one, so a credential can
+//    go unreported: `DATABASE_URL: postgres://u:hunter2@db.example.com/app@2026` reads its host as
+//    `2026`, a single label, and is clean. It is the miss direction, and it needs a URL whose *path*
+//    carries an at-sign, which a DSN's database-name path does not. The same URL without the path
+//    at-sign -- `postgres://u:hunter2@db.example.com/app` -- is reported.
+//  * A path at-sign with any colon before it is read as an authority, so a bucket URL can be
+//    reported with nothing in it: `CREDENTIALS_URL: gs://my-bucket@zone/2026:07/creds@v1.json` reads
+//    `v1.json` as its host and is reported. That is the same false-positive class as the bucket and
+//    timestamp spellings listed below, one at-sign further along, and it is priced with them.
+// Where the first `@` is the only `@`, the two readings agree, which is every ordinary URL in this
+// file. Where they differ the last-`@` reading is the correct one: `postgres://u:p@ss@127.0.0.1/app`
+// reads its host as `127.0.0.1` and is clean, where the first-`@` reading gave `ss@127.0.0.1`, called
+// it dotted, and reported a loopback service container as a public credential.
 //
 // An IPv6 literal is bracketed and read whole, `[::1]:6379/0` giving `::1`. A bracketed host is
 // judged against the loopback list only, never the single-label arm: an IPv6 address carries no dot,
@@ -654,16 +719,24 @@ const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
 // `postgres://u:hunter2@[::ffff:127.0.0.1]:5432/app` -- which is the closed list's cost and the
 // direction it should fail in.
 //
-// The carve-out sits on this trigger and nowhere else. A secret-shaped name still reaches the gate
-// below on its own terms, so `DB_PASSWORD: postgres://postgres:postgres@localhost:5432/test` is
-// reported while `DATABASE_URL:` with the same value is clean. That is not an inconsistency to
-// resolve here: the name-gated report predates this trigger, and the class this carve-out was written
+// The carve-out sits on this trigger and nowhere else, but that only means an excused line falls
+// through to the gate below rather than being cleared outright -- and what happens there depends on
+// the name, not on the value. A secret-shaped name with no location suffix is reported:
+// `DB_PASSWORD: postgres://postgres:postgres@localhost:5432/test` is, while `DATABASE_URL:` with the
+// same value is clean. A secret-shaped name *with* a location suffix is not, because
+// LOCATION_NAME_PATTERN plus a `/` in the value excuses it a second time:
+// `DB_PASSWORD_URL: postgres://postgres:postgres@localhost:5432/test` and
+// `PASSWORD_FILE: postgres://postgres:postgres@localhost:5432/test` are both clean. That is the
+// larger half of the class, since a connection string is usually stored under a `_URL` name, so the
+// carve-out excusing a loopback DSN is in practice the last word for most of the lines it reaches
+// rather than a first opinion the name gate revisits. The remaining name-gated report is not an
+// inconsistency to resolve here: it predates this trigger, and the class the carve-out was written
 // for -- a project that was clean until the trigger began reading every line -- is exactly the one
-// whose DSN sits under a name carrying no token from SECRET_NAME_PATTERN.
+// whose DSN sits under a name carrying no token from SECRET_NAME_PATTERN at all.
 //
 // The false positives are what that buys, and each is a permanent READY block on a correct line. The
-// shape is exact: a `:` and, after it, an `@`, both before the value's first `?` or `#`, with no `@`
-// in between. The colon has three ordinary sources -- a port,
+// shape is exact: within the span, a `:` with the span's last `@` somewhere after it and at least one
+// character between the two. The colon has three ordinary sources -- a port,
 // `CREDENTIALS_URL: gs://my-bucket:8080/creds@2026.json` and
 // `TOKEN_URL: ssh://github.com:22/org/repo@v1.git`; a path segment,
 // `CREDENTIALS_URL: gs://my-bucket/2026:07/creds@2026.json` and
@@ -676,26 +749,32 @@ const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
 //  * An image reference pinned by digest, where a registry port supplies the colon and the digest
 //    supplies the at-sign: `- uses: docker://registry.example.com:5000/image@sha256:0123456789abcdef`.
 //    USES_KEYWORD_NAME_PATTERN is tested before this trigger and exempts the keyword outright, with
-//    the cost recorded there. The host rule above reaches this line too, since `sha256` is a single
-//    label, but the exemption is what is relied on: it also covers
-//    `- uses: docker://user:hunter2@registry.example.com/image@sha256:0123456789abcdef`, whose host is
-//    dotted. That exemption is anchored, so `uses-token` is not covered by it -- that line reaches
-//    this trigger, the host rule declines it on `sha256`, and SECRET_NAME_PATTERN reports it on the
-//    name instead.
-//  * An authority declaring an empty password: `redis://:@localhost:6379`. Held by the `+` on the
-//    password side, above.
+//    the cost recorded there. The host rule above reaches every digest-pinned spelling of this line
+//    too, since the digest supplies the last at-sign and `sha256` is a single label, but the
+//    exemption is what is relied on: it also covers the tag-pinned
+//    `- uses: docker://user:hunter2@registry.example.com/image:3.18`, whose last at-sign is the
+//    authority's and whose host is therefore dotted. That exemption is anchored, so `uses-token` is
+//    not covered by it -- that line reaches this trigger, and either the host rule declines it on
+//    `sha256` and SECRET_NAME_PATTERN reports it on the name, or, in the tag-pinned spelling, the
+//    trigger reports it on the authority.
+//  * An authority declaring an empty password: `redis://:@localhost:6379`. Held by the password test,
+//    above.
 //  * A service-container DSN: `postgres://postgres:postgres@localhost:5432/test`. Held by the host
 //    rule, above.
 // What stays open is the shape itself under any name: a `scheme://` value carrying a colon and then
 // an at-sign before its first `?` or `#`, over a dotted host. The bucket, timestamp and drive-letter
 // spellings listed above are that shape; they were already reported under an `_URL` name, and the
-// widening gave them every other name too. Both halves are still needed, in that order,
-// uninterrupted, so `gs://my-bucket:8080/creds.json`, `gs://my-bucket/2026:07/creds.json`,
-// `gs://my-bucket/creds@2026.json`, `gs://my-bucket/creds@2026/v:1.json` (colon after the at-sign),
-// `gs://my-bucket@zone/2026:07/creds@v1.json` (an earlier `@` the span cannot cross) and the unported
-// `- uses: docker://ghcr.io/org/image@sha256:0123456789abcdef` all stay clean. Across this
-// repository's own YAML no line matches this shape, which says the widening costs nothing here and
-// nothing at all about what it costs in a user's project.
+// widening gave them every other name too. Both halves are still needed, in that order, so
+// `gs://my-bucket:8080/creds.json` and `gs://my-bucket/2026:07/creds.json` (no at-sign),
+// `gs://my-bucket/creds@2026.json` and `gs://my-bucket/creds@2026/v:1.json` (no colon before the
+// last at-sign -- in the second the colon sits after it, in the host) and the unported
+// `- uses: docker://ghcr.io/org/image@sha256:0123456789abcdef` all stay clean. Reading the last `@`
+// rather than the first adds one member to this class rather than a new kind: an earlier at-sign is
+// no longer a barrier the colon cannot be found across, so
+// `gs://my-bucket@zone/2026:07/creds@v1.json` is now reported where it was clean. It is the same
+// bucket-path shape as the two above it, and it is priced with them. Across this repository's own
+// YAML no line matches this shape, which says the widening costs nothing here and nothing at all
+// about what it costs in a user's project.
 //
 // Three more limits, all deliberate, and each one is a way a stored credential goes unreported. The
 // host rule above is a fourth, with its cost stated there.
@@ -718,17 +797,27 @@ const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
 //    than the one above it, so `?` and `#` keep terminating and this limit stays open.
 // 3. MIN_LITERAL_SECRET_LENGTH is checked first, so a userinfo value under eight characters is
 //    excused: `//:b@c.` is clean where `//:b@c.d` is reported. Both wear a dotted host, so the bound
-//    is the only thing between them and it is pinned where it sits: eight is the shortest value that
-//    can carry a `//`, a password, an `@` and a host with a dot in it. Nothing shorter carries both a
-//    host and a password, so the bound costs this trigger nothing, and it keeps the trigger off every
-//    short scalar in the file -- which matters now that it reads every line, not only secret-named
-//    ones.
+//    is the only thing between them and it is pinned where it sits. The bound is not free, though.
+//    Six characters already carry a `//`, a password, an `@` and a host with a dot in it: `//:b@.`
+//    parses as password `b` over the host `.`, which is dotted and public by these rules, and
+//    `//:b@.d` at seven is the same shape with a label after the dot. Both are excused by length
+//    alone, and `//:bbb@.` -- eight characters, the same host `.` -- is reported, so the shapes below
+//    the bound are reachable rather than hypothetical. What they are not is credentials: a
+//    one-character password over a hostname that is a bare dot is a line no workflow writes, so the
+//    bound is priced against short scalars generally rather than against this trigger, and keeping
+//    the trigger off every short scalar in the file is what it is for -- which matters now that it
+//    reads every line, not only secret-named ones.
 //
-// The host is captured rather than merely matched, so the rule above can read it. The capture is the
-// bracketed form or the run of characters up to the first `:`, `/`, `?` or `#`; it may be empty, and
-// an empty host (`postgres://u:secret@:5432/app`) carries no dot and is excused with the rest.
-const USERINFO_PASSWORD_AUTHORITY_PATTERN =
-  /^(?:[A-Za-z][A-Za-z0-9+.-]*:){0,2}\/\/[^?#@]*:[^?#@]+@(\[[^\]]*\]|[^:/?#]*)/;
+// The split is two captures rather than one, so the rule above reads the same host the grammar does.
+// Group 1 is the userinfo -- everything between `//` and the span's last `@` -- and it is a match
+// only when USERINFO_PASSWORD_PATTERN finds a colon in it with at least one character after it.
+// Group 2 is the host: the bracketed form, or the run of characters up to the first `:`, `/`, `?` or
+// `#`. The host may be empty, and an empty host (`postgres://u:secret@:5432/app`) carries no dot and
+// is excused with the rest. Splitting the password test out of the pattern also makes the match
+// linear: the userinfo run is scanned once and backtracked once to find the last `@`, where the
+// single combined form re-scanned for an `@` from every colon in the value.
+const USERINFO_AUTHORITY_PATTERN = /^(?:[A-Za-z][A-Za-z0-9+.-]*:){0,3}\/\/([^?#]*)@(\[[^\]]*\]|[^:/?#]*)/;
+const USERINFO_PASSWORD_PATTERN = /:./;
 const LOOPBACK_HOST_PATTERN = /^(?:localhost|127\.0\.0\.1|::1|0\.0\.0\.0)$/i;
 const SINGLE_LABEL_HOST_PATTERN = /^[^.]*$/;
 const BRACKETED_HOST_PATTERN = /^\[(.*)\]$/;
@@ -748,8 +837,9 @@ const storedScalar = (rawValue: string): string => {
 
 // True when the value embeds a password in its authority for a host that could be a public endpoint.
 const embedsPasswordForPublicHost = (value: string): boolean => {
-  const host = USERINFO_PASSWORD_AUTHORITY_PATTERN.exec(value)?.[1];
-  if (host === undefined) return false;
+  const authority = USERINFO_AUTHORITY_PATTERN.exec(value);
+  if (authority === null || !USERINFO_PASSWORD_PATTERN.test(authority[1] ?? "")) return false;
+  const host = authority[2] ?? "";
   const bracketed = BRACKETED_HOST_PATTERN.exec(host);
   if (bracketed !== null) return !LOOPBACK_HOST_PATTERN.test(bracketed[1] ?? "");
   return !LOOPBACK_HOST_PATTERN.test(host) && !SINGLE_LABEL_HOST_PATTERN.test(host);
