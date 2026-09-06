@@ -370,12 +370,17 @@ const REFERENCE_NAME_PATTERN = /_NAME$/i;
 const WORKFLOW_KEYWORD_NAME_PATTERN = /^secrets$/;
 // A braced reference -- `${{ … }}` or `${VAR}` -- means the value is interpolated at run time rather
 // than stored here, and may sit anywhere, so a suffix such as `/gcp.json` does not make the
-// assignment a literal. A bare `$VAR` has no closing delimiter, so it is honoured only where it
-// cannot be the head of a literal: as the entire value, or immediately before a `/`, which makes it
-// a path prefix and nothing else. The whole-value arm is knowingly open and cannot be closed: a
-// literal made only of `[A-Za-z0-9_]` after a leading `$` -- `$ecretPassword`, `$uper_Secret_1` --
-// is indistinguishable from `$DB_PASSWORD`, which has to stay clean. A literal carrying any other
-// character, such as `$tr0ngP@ssw0rd!`, is still reported.
+// assignment a literal. A bare `$VAR` has no closing delimiter, so it is honoured in exactly two
+// places: as the entire value, and where a `/` follows it. Both arms are knowingly open and neither
+// can be closed. On the whole-value arm a literal made only of `[A-Za-z0-9_]` after a leading `$` --
+// `$ecretPassword`, `$uper_Secret_1` -- is indistinguishable from `$DB_PASSWORD`, which has to stay
+// clean. The `/` arm is open in the same way and just as wide, not narrower: the `/` ends this
+// pattern's inspection, so whatever follows it is never read, and the prefix before it may be a
+// single letter. `$a/hunter2hunter2`, `$ecret/Password1`, `$Kx7Qm/2ZpLr9TvWs4` and
+// `$x/ghp_16C7e42F292c6912E77` are all excused here, and nothing in their shape separates them from
+// `$RUNNER_TEMP/gcp.json`, which has to stay clean. What this pattern does not excuse is a `$`-led
+// value holding no `/` and no braced reference that carries any character outside `[A-Za-z0-9_]`
+// after that `$`; `$tr0ngP@ssw0rd!` under `DB_PASSWORD` is reported.
 const MANAGED_REFERENCE_PATTERN =
   /(?:^|[^A-Za-z0-9])\$(?:\{\{.*?\}\}|\{[^}]+\})|^\$[A-Za-z_][A-Za-z0-9_]*(?:$|\/)/;
 // A value whose own shape is a location: home-relative, explicitly relative, absolute, or an http(s)
@@ -389,17 +394,37 @@ const LOCATION_VALUE_PATTERN = /^(?:~\/|\.{1,2}\/|\/[^\s]*\/|https?:\/\/)/i;
 // A name ending `_FILE`, `_PATH`, `_DIR` or `_URL` says the value is where a credential lives. Each
 // half alone is wrong: the name alone excuses any literal parked under it, and shape alone cannot
 // read a store-relative path such as `secret/data/ci/deploy` or `gs://bucket/creds.json`. Required
-// together, they are decisive. The value half reads: contains a `/` or a `\`, or is a bare filename
-// with a dotted extension. `\` is accepted as a separator alongside `/` so a Windows path such as
-// `C:\Users\runneradmin\id_rsa` is recognised the same way a POSIX one already is. That costs
-// nothing: the base64 alphabet is `A-Za-z0-9+/=` and contains no backslash, so a value carrying one
-// cannot be base64-encoded credential material, and accepting it as a separator adds no way for a
-// real secret to pass. The accepted cost stays where it already was, on the `/` arm alone: base64
-// does contain `/`, so `AWS_SECRET_ACCESS_KEY_FILE: wJalrXUtnFEMI/K7MDENG/b` still passes. A
-// location-suffixed name over a path-shaped value is overwhelmingly a location, and the false
-// positives this prevents block READY permanently while this miss does not.
+// together, they are decisive. The value half reads: contains a `/` or a `\` anywhere, or is a bare
+// filename with a dotted extension. `\` is accepted alongside `/` so a Windows path such as
+// `C:\Users\runneradmin\id_rsa` is recognised the same way a POSIX one already is, and it carries
+// the same accepted cost as `/`, not a smaller one. Neither character has to sit where a separator
+// would -- one anywhere in the value is enough -- so `API_TOKEN_PATH: \ghp_16C7e42F292c6912E77` and
+// `PRIVATE_KEY_DIR: kx7Qm2ZpLr9TvWs4\` both pass, exactly as the already-excused
+// `API_TOKEN_PATH: /ghp_16C7e42F292c6912E77` does. The base64 alphabet (`A-Za-z0-9+/=`) has no
+// backslash, so no raw base64 secret carries one, but that does not close the arm: `storedScalar`
+// leaves YAML escapes uninterpreted, so a double-quoted scalar arrives with its `\n` escapes intact,
+// and a PEM key flattened onto one line passes on the `\` arm even when its base64 body holds no
+// `/`. The `/` arm's own cost is unchanged: base64 does contain `/`, so
+// `AWS_SECRET_ACCESS_KEY_FILE: wJalrXUtnFEMI/K7MDENG/b` passes. Both are accepted for the same
+// reason -- a location-suffixed name over a separator-bearing value is overwhelmingly a location,
+// and the false positives this prevents block READY permanently while these misses do not.
 const LOCATION_NAME_PATTERN = /_(?:FILE|PATH|DIR|URL)$/i;
 const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
+// The `_URL` suffix is narrower than the other three. A URL carrying userinfo -- anything before an
+// `@` in its authority -- is not a location; it is a credential with a hostname attached, and
+// `postgres://u:secret@db/app` is the exact value this check exists to report. Without this arm any
+// `_URL` name -- `TOKEN_URL`, `PASSWORD_URL`, `SECRET_URL`, `DB_PASSWORD_URL`,
+// `DATABASE_CREDENTIALS_URL` -- excused one. Authority is read as RFC 3986 defines it: what follows
+// `//`, ending at the first `/`, `?` or `#`. So an `@` further along the value is not userinfo and
+// `CREDENTIALS_URL: gs://my-bucket/creds@2026.json` stays clean, and a value with no `//` has no
+// authority to inspect, which is why `TOKEN_URL: auth.example.com/token` stays clean. Two limits,
+// both deliberate. The narrowing is scoped to the `_URL` suffix as ruled, so
+// `PASSWORD_FILE: postgres://u:secret@db/app` keeps the `/` arm's excuse. And it only sees values
+// that reach this rule, so an `https://` URL carrying userinfo --
+// `DB_PASSWORD_URL: https://u:secret@db.example.com/app` -- is excused above by
+// LOCATION_VALUE_PATTERN and never tested here.
+const URL_NAME_PATTERN = /_URL$/i;
+const USERINFO_AUTHORITY_PATTERN = /^(?:[A-Za-z][A-Za-z0-9+.-]*:)?\/\/[^/?#]*@/;
 const MIN_LITERAL_SECRET_LENGTH = 8;
 
 // Reduces a YAML scalar to the characters actually stored: the body of a quoted string, otherwise
@@ -428,7 +453,9 @@ export const inlineSecretFindings = (files: readonly CiWorkflowFile[]): readonly
         value.length < MIN_LITERAL_SECRET_LENGTH ||
         MANAGED_REFERENCE_PATTERN.test(value) ||
         LOCATION_VALUE_PATTERN.test(value) ||
-        (LOCATION_NAME_PATTERN.test(name) && NAMED_LOCATION_VALUE_PATTERN.test(value))
+        (LOCATION_NAME_PATTERN.test(name) &&
+          NAMED_LOCATION_VALUE_PATTERN.test(value) &&
+          !(URL_NAME_PATTERN.test(name) && USERINFO_AUTHORITY_PATTERN.test(value)))
       ) {
         continue;
       }

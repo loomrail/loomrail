@@ -246,6 +246,7 @@ describe("production environment separation", () => {
     ["a base64 literal that happens to start with a slash", "AWS_SECRET_ACCESS_KEY: /JalrXUtnFEMIK7MDENGb"],
     ["a literal that happens to start with a dollar", "DB_PASSWORD: $tr0ngP@ssw0rd!"],
     ["a literal under a name that merely sounds like a location", "API_TOKEN_FILE: ghp_16C7e42F292c6912E77"],
+    ["a connection string carrying userinfo under a location name", "TOKEN_URL: postgres://u:secret@db/app"],
     ["a literal under a variable named like the workflow keyword", "SECRETS: kx7Qm2ZpLr9TvWs4"],
   ])("reports %s", (_description, line) => {
     const files = [{ path: ".github/workflows/deploy.yml", content: `env:\n  ${line}\n` }];
