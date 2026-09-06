@@ -195,10 +195,7 @@ describe("production environment separation", () => {
   // correct line that once tripped the heuristic stays pinned as its own case.
   it.each([
     ["a managed reference followed by a comment", "API_TOKEN: ${{ secrets.API_TOKEN }} # rotated 2026-01"],
-    [
-      "a managed reference with a path suffix",
-      "GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/gcp.json",
-    ],
+    ["a managed reference with a path suffix", "GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/gcp.json"],
     ["an absolute path to a credentials file", "GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json"],
     ["a name that denotes a reference", "SECRET_NAME: my-app-prod-secret"],
     ["a URL", "TOKEN_URL: https://auth.example.com/token"],
