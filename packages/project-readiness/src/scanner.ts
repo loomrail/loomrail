@@ -360,19 +360,122 @@ const ciFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingD
 };
 
 const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS/i;
-// A name with one of these suffixes denotes where a credential lives, not the credential itself.
-const REFERENCE_NAME_PATTERN = /_(?:NAME|URL|FILE|PATH)$/i;
+// A `_NAME` suffix denotes what a credential is called, not the credential itself.
+const REFERENCE_NAME_PATTERN = /_NAME$/i;
 // `secrets` is a workflow keyword, not a variable: it introduces a mapping, or carries the managed
-// literal `inherit`. Entries nested under it are still read as lines of their own.
-const WORKFLOW_KEYWORD_NAME_PATTERN = /^secrets$/i;
-// A managed reference anywhere in the value -- `${{ … }}`, `${VAR}` or `$VAR` -- means the value is
-// interpolated at run time rather than stored here, so a suffix such as `/gcp.json` does not make
-// the assignment a literal. The reference has to start the value or follow a non-word character, so
-// a `$` in the middle of a literal credential is not mistaken for one.
-const MANAGED_REFERENCE_PATTERN = /(?:^|[^A-Za-z0-9])\$(?:\{\{.*?\}\}|\{[^}]+\}|[A-Za-z_][A-Za-z0-9_]*)/;
-// A path or a URL names a location. Only a leading match counts: a credential may well contain a
-// slash part-way through.
-const LOCATION_VALUE_PATTERN = /^(?:\.{0,2}\/|https?:\/\/)/i;
+// literal `inherit`. Entries nested under it are still read as lines of their own. Matched
+// case-sensitively, because the keyword is lowercase and `SECRETS` is an ordinary variable name.
+// `inherit` is below the length bound and would pass without this rule; what needs it is the same
+// key used as an action input, such as a `hashicorp/vault-action` step listing store paths.
+const WORKFLOW_KEYWORD_NAME_PATTERN = /^secrets$/;
+// A braced reference -- `${{ … }}` or `${VAR}` -- means the value is interpolated at run time rather
+// than stored here, so a suffix such as `/gcp.json` does not make the assignment a literal. It is
+// honoured at the start of the value or after any character outside `[A-Za-z0-9]`, which is what the
+// leading `(?:^|[^A-Za-z0-9])` requires: `pre-${{ … }}`, `pre_${{ … }}` and `.${VAULT_PATH}` are
+// clean, but a reference glued straight onto an alphanumeric prefix is not read as one, so
+// `DB_PASSWORD: prefix${{ secrets.PW }}`, `DB_PASSWORD: v2${{ secrets.PW }}` and
+// `TOKEN: ghp${{ secrets.X }}` are all reported. That error points at a false positive, so it ships
+// no credential -- but it is a permanent READY block, and a reader should not be surprised by it.
+// A bare `$VAR` has no closing delimiter, so it is honoured in exactly two places: as the entire
+// value, and where a `/` follows it. Both arms are knowingly open and neither can be closed. On the
+// whole-value arm a literal made only of `[A-Za-z0-9_]` after a leading `$` --
+// `$ecretPassword`, `$uper_Secret_1` -- is indistinguishable from `$DB_PASSWORD`, which has to stay
+// clean. The `/` arm is open in the same way and just as wide, not narrower: the `/` ends this
+// pattern's inspection, so whatever follows it is never read, and the prefix before it may be a
+// single letter. `$a/hunter2hunter2`, `$ecret/Password1`, `$Kx7Qm/2ZpLr9TvWs4` and
+// `$x/ghp_16C7e42F292c6912E77` are all excused here, and nothing in their shape separates them from
+// `$RUNNER_TEMP/gcp.json`, which has to stay clean. What this pattern does not excuse is a `$`-led
+// value holding no `/` and no braced reference that carries any character outside `[A-Za-z0-9_]`
+// after that `$`; `$tr0ngP@ssw0rd!` under `DB_PASSWORD` is reported.
+const MANAGED_REFERENCE_PATTERN =
+  /(?:^|[^A-Za-z0-9])\$(?:\{\{.*?\}\}|\{[^}]+\})|^\$[A-Za-z_][A-Za-z0-9_]*(?:$|\/)/;
+// A value whose own shape is a location: home-relative, explicitly relative, absolute, or an http(s)
+// URL. Only a leading match counts. `~/`, `./` and `../` need no further evidence, because base64
+// contains neither `~` nor `.`. A bare leading `/` does: it is read as a path only when a second
+// separator follows. That test is deliberately partial. It reports a base64 secret that begins with
+// `/` and holds no other `/` -- for a 40-character key about 54% of those that begin with `/` --
+// and excuses the remaining ~46% as paths. Nothing in the shape of a value separates those two
+// cases, so the class stays open rather than being closed by a guess in either direction.
+const LOCATION_VALUE_PATTERN = /^(?:~\/|\.{1,2}\/|\/[^\s]*\/|https?:\/\/)/i;
+// A name ending `_FILE`, `_PATH`, `_DIR` or `_URL` says the value is where a credential lives. Each
+// half alone is wrong: the name alone excuses any literal parked under it, and shape alone cannot
+// read a store-relative path such as `secret/data/ci/deploy` or `gs://bucket/creds.json`. Required
+// together, they are decisive. The value half reads: contains a `/` or a `\` anywhere, or is a bare
+// filename with a dotted extension. `\` is accepted alongside `/` so a Windows path such as
+// `C:\Users\runneradmin\id_rsa` is recognised the same way a POSIX one already is, and it carries
+// the same accepted cost as `/`, not a smaller one. Neither character has to sit where a separator
+// would -- one anywhere in the value is enough -- so `API_TOKEN_PATH: \ghp_16C7e42F292c6912E77` and
+// `PRIVATE_KEY_DIR: kx7Qm2ZpLr9TvWs4\` both pass, exactly as the already-excused
+// `API_TOKEN_PATH: /ghp_16C7e42F292c6912E77` does. The base64 alphabet (`A-Za-z0-9+/=`) has no
+// backslash, so no raw base64 secret carries one, but that does not close the arm: `storedScalar`
+// leaves YAML escapes uninterpreted, so a double-quoted scalar arrives with its `\n` escapes intact,
+// and a PEM key flattened onto one line passes on the `\` arm even when its base64 body holds no
+// `/`. The `/` arm's own cost is unchanged: base64 does contain `/`, so
+// `AWS_SECRET_ACCESS_KEY_FILE: wJalrXUtnFEMI/K7MDENG/b` passes. Both are accepted for the same
+// reason -- a location-suffixed name over a separator-bearing value is overwhelmingly a location,
+// and the false positives this prevents block READY permanently while these misses do not.
+const LOCATION_NAME_PATTERN = /_(?:FILE|PATH|DIR|URL)$/i;
+const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
+// The `_URL` suffix is narrower than the other three. A URL whose authority carries a `user:password`
+// pair before an `@` is not a location; it is a credential with a hostname attached, and
+// `postgres://u:secret@db/app` is the exact value this check exists to report. Without this arm any
+// `_URL` name -- `TOKEN_URL`, `PASSWORD_URL`, `SECRET_URL`, `DB_PASSWORD_URL`,
+// `DATABASE_CREDENTIALS_URL` -- excused one. The span searched for that pair begins after `//` and is
+// deliberately wider than RFC 3986's authority: it runs straight through `/` and ends at the first
+// `?`, `#` or `@`, and it is a match only when that terminator is an `@` with a `:` somewhere before
+// it. A value with no `//` has no span to inspect, which is why
+// `TOKEN_URL: auth.example.com/token` stays clean.
+//
+// Running through `/` is the whole point. An unencoded password containing one would otherwise put
+// the `@` past the authority and go unreported, and `/` is in the base64 alphabet
+// (`A-Za-z0-9+/=`), so `openssl rand -base64` puts one in roughly every other password it generates.
+// `POSTGRES_PASSWORD_URL: postgres://app:aB3/xYz9pQ@db:5432/app`,
+// `PASSWORD_URL: redis://:hun/ter2@cache:6379/0` and
+// `DATABASE_CREDENTIALS_URL: mysql://root:pa/ss@db:3306/app` are all reported, as is the same
+// password percent-encoded (`aB3%2FxYz9pQ`) and one holding several slashes
+// (`postgres://u:a/b/c/d@db:5432/app`).
+//
+// The one false positive in this rule is what that buys, and it is a permanent READY block on a
+// correct line. The shape is exact: a `:` and, after it, an `@`, both before the value's first `?` or
+// `#`, with no `@` in between, under a scheme that is not `http`/`https` (LOCATION_VALUE_PATTERN
+// excuses those above before this rule is reached, as it does a value starting with a bare `//`).
+// The colon has three ordinary sources -- a port, `CREDENTIALS_URL: gs://my-bucket:8080/creds@2026.json`
+// and `TOKEN_URL: ssh://github.com:22/org/repo@v1.git`; a path segment,
+// `CREDENTIALS_URL: gs://my-bucket/2026:07/creds@2026.json` and
+// `CREDENTIALS_URL: s3://bucket/2026-01-01T00:00:00Z/creds@v1.json`; and a Windows drive letter,
+// `CREDENTIALS_URL: file:///c:/keys/creds@2026.json`. All five are reported and none is a secret.
+// Both halves are needed, in that order, uninterrupted: `gs://my-bucket:8080/creds.json`,
+// `gs://my-bucket/2026:07/creds.json`, `gs://my-bucket/creds@2026.json`,
+// `gs://my-bucket/creds@2026/v:1.json` (colon after the at-sign) and
+// `gs://my-bucket@zone/2026:07/creds@v1.json` (an earlier `@` the span cannot cross) all stay clean.
+// The shape is scoped to `_URL` as well: that same ported bucket URL under `CREDENTIALS_FILE`,
+// `CREDENTIALS_PATH` or `CREDENTIALS_DIR` is clean.
+//
+// Four limits, all deliberate, and each one is a way a stored credential goes unreported.
+// 1. A colon inside the userinfo is required, so a URL whose *username alone* is the credential --
+//    `TOKEN_URL: postgres://ghp_16C7e42F292c6912E77@db/app` -- is not reported by this arm. That is
+//    the price of keeping `TOKEN_URL: ssh://git@github.com/org/repo.git`, the ordinary spelling of a
+//    Git remote, and `DATABASE_CREDENTIALS_URL: mysql://root@db:3306/app` clean: a bare username
+//    before an `@` is a host's companion far more often than it is a secret, and reporting one is an
+//    unclearable READY block.
+// 2. The span still stops at `?` and `#`, so a password holding either is not reported:
+//    `TOKEN_URL: postgres://u:sec?ret@db/app` and `TOKEN_URL: postgres://u:sec#ret@db/app` are clean.
+//    Unlike `/`, neither character is in the base64 alphabet, so a generated password does not carry
+//    one -- while a query string is an ordinary part of a storage URL and hands the pattern both
+//    halves for free. Running the span on would report
+//    `TOKEN_URL: gs://my-bucket/creds.json?url=https://cdn.example.com/x@1`,
+//    `CREDENTIALS_URL: gs://my-bucket/creds.json?ts=2026-01-01T00:00:00Z&owner=a@b.example`,
+//    `CREDENTIALS_URL: gs://my-bucket/2026:07/creds.json?owner=a@b.example` and
+//    `SECRET_URL: s3://bucket/key.json#frag:1@rev`, all of which are clean today. That trade is worse
+//    than the one above it, so `?` and `#` keep terminating and this limit stays open.
+// 3. The narrowing is scoped to the `_URL` suffix as ruled, so
+//    `PASSWORD_FILE: postgres://u:secret@db/app` and
+//    `PASSWORD_FILE: postgres://app:aB3/xYz9pQ@db:5432/app` keep the `/` arm's excuse.
+// 4. It only sees values that reach this rule, so an `https://` URL carrying userinfo --
+//    `DB_PASSWORD_URL: https://u:secret@db.example.com/app` -- is excused above by
+//    LOCATION_VALUE_PATTERN and never tested here.
+const URL_NAME_PATTERN = /_URL$/i;
+const USERINFO_PASSWORD_AUTHORITY_PATTERN = /^(?:[A-Za-z][A-Za-z0-9+.-]*:)?\/\/[^?#@]*:[^?#@]*@/;
 const MIN_LITERAL_SECRET_LENGTH = 8;
 
 // Reduces a YAML scalar to the characters actually stored: the body of a quoted string, otherwise
@@ -400,7 +503,10 @@ export const inlineSecretFindings = (files: readonly CiWorkflowFile[]): readonly
       if (
         value.length < MIN_LITERAL_SECRET_LENGTH ||
         MANAGED_REFERENCE_PATTERN.test(value) ||
-        LOCATION_VALUE_PATTERN.test(value)
+        LOCATION_VALUE_PATTERN.test(value) ||
+        (LOCATION_NAME_PATTERN.test(name) &&
+          NAMED_LOCATION_VALUE_PATTERN.test(value) &&
+          !(URL_NAME_PATTERN.test(name) && USERINFO_PASSWORD_AUTHORITY_PATTERN.test(value)))
       ) {
         continue;
       }

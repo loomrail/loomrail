@@ -199,19 +199,94 @@ describe("production environment separation", () => {
     ["an absolute path to a credentials file", "GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json"],
     ["a name that denotes a reference", "SECRET_NAME: my-app-prod-secret"],
     ["a URL", "TOKEN_URL: https://auth.example.com/token"],
-    ["the reusable-workflow keyword", "secrets: inherit"],
+    ["a whole-value shell reference", "DB_PASSWORD: $DB_PASSWORD"],
+    ["a path to a mounted secret file", "PASSWORD_FILE: /run/secrets/db_password"],
+    ["a shell reference used as a path prefix", "GOOGLE_APPLICATION_CREDENTIALS: $RUNNER_TEMP/gcp.json"],
+    ["a shell reference prefixing a home-relative path", "SSH_PRIVATE_KEY_PATH: $HOME/.ssh/id_rsa"],
+    [
+      "a shell reference prefixing a workspace-relative path",
+      "GOOGLE_APPLICATION_CREDENTIALS: $GITHUB_WORKSPACE/creds.json",
+    ],
+    ["a home-relative path", "SSH_PRIVATE_KEY_PATH: ~/.ssh/deploy_key"],
+    ["a home-relative config file", "DOCKER_PASSWORD_FILE: ~/.docker/config.json"],
+    ["an explicitly relative path", "GOOGLE_APPLICATION_CREDENTIALS: ./gcp-key.json"],
+    ["a secret-store path under a location name", "VAULT_SECRET_PATH: secret/data/ci/deploy"],
+    [
+      "a secret-manager resource name under a location name",
+      "SECRET_PATH: projects/1234/secrets/db/versions/latest",
+    ],
+    ["a root-level file under a location name", "PASSWORD_FILE: /gcp-key.json"],
+    ["a non-http bucket URL under a location name", "CREDENTIALS_URL: gs://my-bucket/creds.json"],
+    [
+      "a bucket URL whose path, not its authority, carries an at-sign",
+      "CREDENTIALS_URL: gs://my-bucket/creds@2026.json",
+    ],
+    ["a Git remote whose userinfo is a bare username", "TOKEN_URL: ssh://git@github.com/org/repo.git"],
+    ["a bare filename under a location name", "CREDENTIALS_FILE: credentials.json"],
+    ["a schemeless URL under a location name", "TOKEN_URL: auth.example.com/token"],
+    ["a Windows-style path under a location name", "SSH_PRIVATE_KEY_PATH: C:\\Users\\runneradmin\\id_rsa"],
   ])("passes %s", (_description, line) => {
     const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
     expect(inlineSecretFindings(files)).toEqual([]);
   });
 
-  it("still reports a literal credential that carries a slash part-way through", () => {
-    const files = [
-      {
-        path: ".github/workflows/deploy.yml",
-        content: "env:\n  AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n",
-      },
-    ];
+  // `secrets: inherit` is seven characters and the length bound alone would pass it, so it pins
+  // nothing about the workflow-keyword rule. The rule's reachable case is the same key read as an
+  // action input, where the value is a list of store paths well over the bound.
+  it.each([
+    ["the reusable-workflow keyword, which the length bound alone would also pass", "secrets: inherit"],
+    [
+      "the same keyword carrying an action input, which only the keyword rule passes",
+      "secrets: secret/data/ci/aws accessKey | AWS_ACCESS_KEY_ID",
+    ],
+  ])("passes %s", (_description, line) => {
+    const files = [{ path: ".github/workflows/ci.yml", content: `    with:\n      ${line}\n` }];
+    expect(inlineSecretFindings(files)).toEqual([]);
+  });
+
+  // The rules that keep the cases above clean each have a narrower form that costs no false
+  // positive. Without these counter-examples pinned, the broader form reads as equally correct and
+  // the check silently stops reporting credentials it should catch. The last two rows are the set's
+  // one exception, and they are false positives: the `_URL` userinfo rule searches for
+  // `user:password` past any `/`, because `openssl rand -base64` puts a `/` in roughly every other
+  // password it generates, and the price is that a `_URL` value carrying a `:` and a later `@` is
+  // reported too. They are pinned so that cost stays visible and priced, not so it stays unexamined.
+  it.each([
+    ["a base64 literal that happens to start with a slash", "AWS_SECRET_ACCESS_KEY: /JalrXUtnFEMIK7MDENGb"],
+    ["a literal that happens to start with a dollar", "DB_PASSWORD: $tr0ngP@ssw0rd!"],
+    ["a literal under a name that merely sounds like a location", "API_TOKEN_FILE: ghp_16C7e42F292c6912E77"],
+    ["a connection string carrying userinfo under a location name", "TOKEN_URL: postgres://u:secret@db/app"],
+    [
+      "a connection string whose password carries a slash",
+      "POSTGRES_PASSWORD_URL: postgres://app:aB3/xYz9pQ@db:5432/app",
+    ],
+    [
+      "a connection string with an empty username and a slash in the password",
+      "PASSWORD_URL: redis://:hun/ter2@cache:6379/0",
+    ],
+    ["a literal under a variable named like the workflow keyword", "SECRETS: kx7Qm2ZpLr9TvWs4"],
+    [
+      "the accepted false positive: a bucket URL whose port supplies a colon before a path at-sign",
+      "CREDENTIALS_URL: gs://my-bucket:8080/creds@2026.json",
+    ],
+    [
+      "the accepted false positive: a bucket URL whose path carries both a colon and a later at-sign",
+      "CREDENTIALS_URL: gs://my-bucket/2026:07/creds@2026.json",
+    ],
+  ])("reports %s", (_description, line) => {
+    const files = [{ path: ".github/workflows/deploy.yml", content: `env:\n  ${line}\n` }];
+    expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(["INLINE_SECRET_IN_CI"]);
+  });
+
+  // No exclusion comes close to these two: both are reported by every version of the heuristic so
+  // far. They are here as standing guards against a future broadening -- un-anchoring the location
+  // pattern would excuse the first, and a generic `scheme://` exclusion would excuse the second
+  // along with every other credential-bearing connection string.
+  it.each([
+    ["a literal that carries a slash part-way through", "AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/b"],
+    ["a connection string that embeds its password", "DB_PASSWORD: postgres://u:secret@db/app"],
+  ])("reports %s", (_description, line) => {
+    const files = [{ path: ".github/workflows/deploy.yml", content: `env:\n  ${line}\n` }];
     expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(["INLINE_SECRET_IN_CI"]);
   });
 });
