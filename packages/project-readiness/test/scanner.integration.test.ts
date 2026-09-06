@@ -225,6 +225,7 @@ describe("production environment separation", () => {
     ["a bare filename under a location name", "CREDENTIALS_FILE: credentials.json"],
     ["a schemeless URL under a location name", "TOKEN_URL: auth.example.com/token"],
     ["a Windows-style path under a location name", "SSH_PRIVATE_KEY_PATH: C:\\Users\\runneradmin\\id_rsa"],
+    ["a schemeless authority with no userinfo under a location name", "TOKEN_URL: //auth.example.com/token"],
   ])("passes %s", (_description, line) => {
     const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
     expect(inlineSecretFindings(files)).toEqual([]);
@@ -288,6 +289,147 @@ describe("production environment separation", () => {
   ])("reports %s", (_description, line) => {
     const files = [{ path: ".github/workflows/deploy.yml", content: `env:\n  ${line}\n` }];
     expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(["INLINE_SECRET_IN_CI"]);
+  });
+
+  // A hyphen is the ordinary separator in an action input, so the name reader admits one. Every
+  // suffix rule has to admit it too, or the two spellings of the same name disagree: the underscore
+  // spelling keeps its excuse while the hyphen spelling is reported, on identical values. Each rule
+  // is pinned in both spellings over a value that only that rule excuses.
+  it.each([
+    ["_NAME", "SECRET_NAME: my-app-prod-secret"],
+    ["-NAME", "secret-name: my-app-prod-secret"],
+    ["_FILE", "CREDENTIALS_FILE: kx7Qm2ZpLr9TvWs4.pem"],
+    ["-file", "credentials-file: kx7Qm2ZpLr9TvWs4.pem"],
+    ["_PATH", "CREDENTIALS_PATH: kx7Qm2ZpLr9TvWs4.pem"],
+    ["-path", "credentials-path: kx7Qm2ZpLr9TvWs4.pem"],
+    ["_DIR", "CREDENTIALS_DIR: kx7Qm2ZpLr9TvWs4.pem"],
+    ["-dir", "credentials-dir: kx7Qm2ZpLr9TvWs4.pem"],
+    ["_URL", "CREDENTIALS_URL: kx7Qm2ZpLr9TvWs4.pem"],
+    ["-url", "credentials-url: kx7Qm2ZpLr9TvWs4.pem"],
+  ])("passes a suffix rule spelled %s", (_separator, line) => {
+    const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
+    expect(inlineSecretFindings(files)).toEqual([]);
+  });
+
+  // Admitting the hyphen brings GitHub's own hyphenated keys to the secret-name test for the first
+  // time. `id-token` and `persist-credentials` appear in this repository's own workflows, so a report
+  // on either would block READY here permanently. MIN_LITERAL_SECRET_LENGTH is the only rule holding
+  // them, and the last row pins exactly where that bound sits.
+  it.each([
+    ["a permissions scope", "id-token: write", []],
+    ["a checkout input", "persist-credentials: false", []],
+    ["a quoted checkout input", "persist-credentials: 'false'", []],
+    ["a workflow key only the hyphen admits", "runs-on: ubuntu-latest", []],
+    [
+      "a hyphenated location name over a mounted secret file",
+      "credentials-file: /run/secrets/db_password",
+      [],
+    ],
+    ["a hyphenated URL name over an http URL", "token-url: https://auth.example.com/token", []],
+    [
+      "the input this heuristic could never see before",
+      "aws-secret-access-key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "the first value over the length bound under a permissions scope",
+      "id-token: write-all",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+  ])("reads a hyphenated name: %s", (_description, line, codes) => {
+    const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
+    expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
+  });
+
+  // A `user:password` authority is a stored credential whatever the variable is called, so this
+  // trigger skips the name gate and the value-shape rules. It is the only way `DATABASE_URL` and
+  // `REDIS_URL` are seen at all, and the alternative -- a growing list of driver names in
+  // SECRET_NAME_PATTERN -- is wrong again with the next driver. The two clean rows pin its placement:
+  // after MANAGED_REFERENCE_PATTERN (a reference in the password position stores nothing) and after
+  // the length bound.
+  it.each([
+    [
+      "a Postgres URL under a name with no secret token",
+      "DATABASE_URL: postgres://u:secret@db/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a Redis URL whose username is empty",
+      "REDIS_URL: redis://:hunter2@cache:6379/0",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    ["a datasource URL", "SPRING_DATASOURCE_URL: mysql://root:hunter2@db:3306/app", ["INLINE_SECRET_IN_CI"]],
+    [
+      "an https endpoint, which LOCATION_VALUE_PATTERN would otherwise excuse",
+      "MY_SERVICE_ENDPOINT: https://u:secret@host/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a schemeless authority, which LOCATION_VALUE_PATTERN would otherwise excuse",
+      "MY_SERVICE_ENDPOINT: //u:secret@host/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a location name, which no longer keeps its excuse",
+      "PASSWORD_FILE: postgres://u:secret@db/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    [
+      "a bare shell reference in the password position, still open",
+      "DATABASE_URL: postgres://u:$PASSWORD@db/app",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+    ["the first userinfo value over the length bound", "DATABASE_URL: //a:b@cd", ["INLINE_SECRET_IN_CI"]],
+    [
+      "a bare username, which is a host's companion far more often than a secret",
+      "DATABASE_URL: postgres://u@db/app",
+      [],
+    ],
+    ["a managed reference, which stores nothing", "DATABASE_URL: ${{ secrets.DATABASE_URL }}", []],
+    [
+      "a managed reference in the password position",
+      "DATABASE_URL: postgres://u:${{ secrets.PW }}@db/app",
+      [],
+    ],
+    [
+      "a braced shell reference in the password position",
+      "DATABASE_URL: postgres://u:${DB_PASSWORD}@db/app",
+      [],
+    ],
+    ["a userinfo value one character under the length bound", "DATABASE_URL: //a:b@c", []],
+  ])("reads userinfo without consulting the name: %s", (_description, line, codes) => {
+    const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
+    expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
+  });
+
+  // Dropping the name gate widens the rule's accepted false positive from `_URL`-suffixed names to
+  // every name. The reachable new instance is a digest-pinned action on a ported registry: the port
+  // supplies the colon and the digest supplies the at-sign. The unported spelling, which is what
+  // `docker://` steps normally look like, stays clean.
+  it.each([
+    ["an unported registry", "- uses: docker://ghcr.io/org/image@sha256:0123456789abcdef", []],
+    [
+      "the accepted false positive: a ported registry",
+      "- uses: docker://registry.example.com:5000/image@sha256:0123456789abcdef",
+      ["INLINE_SECRET_IN_CI"],
+    ],
+  ])("reads a digest-pinned action step: %s", (_description, line, codes) => {
+    const files = [{ path: ".github/workflows/ci.yml", content: `    steps:\n      ${line}\n` }];
+    expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(codes);
+  });
+
+  it("names the embedded password without repeating the connection string", () => {
+    const files = [
+      {
+        path: ".github/workflows/deploy.yml",
+        content: "env:\n  DATABASE_URL: postgres://u:hunter2@db/app\n",
+      },
+    ];
+    const message = inlineSecretFindings(files)[0]?.message ?? "";
+    expect(message).toContain("DATABASE_URL");
+    expect(message).toContain("embeds a password");
+    expect(message).not.toContain("hunter2");
+    expect(message).not.toContain("postgres://");
   });
 });
 
