@@ -420,30 +420,62 @@ const NAMED_LOCATION_VALUE_PATTERN = /[/\\]|^[^\s/\\]+\.[A-Za-z0-9]{1,8}$/;
 // pair before an `@` is not a location; it is a credential with a hostname attached, and
 // `postgres://u:secret@db/app` is the exact value this check exists to report. Without this arm any
 // `_URL` name -- `TOKEN_URL`, `PASSWORD_URL`, `SECRET_URL`, `DB_PASSWORD_URL`,
-// `DATABASE_CREDENTIALS_URL` -- excused one. Authority is read as RFC 3986 defines it: what follows
-// `//`, ending at the first `/`, `?` or `#`; a value with no `//` has no authority to inspect, which
-// is why `TOKEN_URL: auth.example.com/token` stays clean. Four limits, all deliberate, and each one
-// is a way a stored credential goes unreported.
+// `DATABASE_CREDENTIALS_URL` -- excused one. The span searched for that pair begins after `//` and is
+// deliberately wider than RFC 3986's authority: it runs straight through `/` and ends at the first
+// `?`, `#` or `@`, and it is a match only when that terminator is an `@` with a `:` somewhere before
+// it. A value with no `//` has no span to inspect, which is why
+// `TOKEN_URL: auth.example.com/token` stays clean.
+//
+// Running through `/` is the whole point. An unencoded password containing one would otherwise put
+// the `@` past the authority and go unreported, and `/` is in the base64 alphabet
+// (`A-Za-z0-9+/=`), so `openssl rand -base64` puts one in roughly every other password it generates.
+// `POSTGRES_PASSWORD_URL: postgres://app:aB3/xYz9pQ@db:5432/app`,
+// `PASSWORD_URL: redis://:hun/ter2@cache:6379/0` and
+// `DATABASE_CREDENTIALS_URL: mysql://root:pa/ss@db:3306/app` are all reported, as is the same
+// password percent-encoded (`aB3%2FxYz9pQ`) and one holding several slashes
+// (`postgres://u:a/b/c/d@db:5432/app`).
+//
+// The one false positive in this rule is what that buys, and it is a permanent READY block on a
+// correct line. The shape is exact: a `:` and, after it, an `@`, both before the value's first `?` or
+// `#`, with no `@` in between, under a scheme that is not `http`/`https` (LOCATION_VALUE_PATTERN
+// excuses those above before this rule is reached, as it does a value starting with a bare `//`).
+// The colon has three ordinary sources -- a port, `CREDENTIALS_URL: gs://my-bucket:8080/creds@2026.json`
+// and `TOKEN_URL: ssh://github.com:22/org/repo@v1.git`; a path segment,
+// `CREDENTIALS_URL: gs://my-bucket/2026:07/creds@2026.json` and
+// `CREDENTIALS_URL: s3://bucket/2026-01-01T00:00:00Z/creds@v1.json`; and a Windows drive letter,
+// `CREDENTIALS_URL: file:///c:/keys/creds@2026.json`. All five are reported and none is a secret.
+// Both halves are needed, in that order, uninterrupted: `gs://my-bucket:8080/creds.json`,
+// `gs://my-bucket/2026:07/creds.json`, `gs://my-bucket/creds@2026.json`,
+// `gs://my-bucket/creds@2026/v:1.json` (colon after the at-sign) and
+// `gs://my-bucket@zone/2026:07/creds@v1.json` (an earlier `@` the span cannot cross) all stay clean.
+// The shape is scoped to `_URL` as well: that same ported bucket URL under `CREDENTIALS_FILE`,
+// `CREDENTIALS_PATH` or `CREDENTIALS_DIR` is clean.
+//
+// Four limits, all deliberate, and each one is a way a stored credential goes unreported.
 // 1. A colon inside the userinfo is required, so a URL whose *username alone* is the credential --
 //    `TOKEN_URL: postgres://ghp_16C7e42F292c6912E77@db/app` -- is not reported by this arm. That is
 //    the price of keeping `TOKEN_URL: ssh://git@github.com/org/repo.git`, the ordinary spelling of a
 //    Git remote, and `DATABASE_CREDENTIALS_URL: mysql://root@db:3306/app` clean: a bare username
 //    before an `@` is a host's companion far more often than it is a secret, and reporting one is an
 //    unclearable READY block.
-// 2. Ending the authority at the first `/`, `?` or `#` cuts both ways. It is what keeps
-//    `CREDENTIALS_URL: gs://my-bucket/creds@2026.json` clean, an `@` further along the value being no
-//    userinfo -- and by the same mechanism an unencoded password holding any of those three
-//    characters puts the `@` outside the authority, so `postgres://app:aB3/xYz9pQ@db:5432/app` under
-//    `POSTGRES_PASSWORD_URL` is not reported. `aB3/xYz9pQ` is the shape `openssl rand -base64`
-//    produces, so what escapes here is an ordinary password, not an exotic one. The same password
-//    percent-encoded (`aB3%2FxYz9pQ`) is reported.
+// 2. The span still stops at `?` and `#`, so a password holding either is not reported:
+//    `TOKEN_URL: postgres://u:sec?ret@db/app` and `TOKEN_URL: postgres://u:sec#ret@db/app` are clean.
+//    Unlike `/`, neither character is in the base64 alphabet, so a generated password does not carry
+//    one -- while a query string is an ordinary part of a storage URL and hands the pattern both
+//    halves for free. Running the span on would report
+//    `TOKEN_URL: gs://my-bucket/creds.json?url=https://cdn.example.com/x@1`,
+//    `CREDENTIALS_URL: gs://my-bucket/creds.json?ts=2026-01-01T00:00:00Z&owner=a@b.example`,
+//    `CREDENTIALS_URL: gs://my-bucket/2026:07/creds.json?owner=a@b.example` and
+//    `SECRET_URL: s3://bucket/key.json#frag:1@rev`, all of which are clean today. That trade is worse
+//    than the one above it, so `?` and `#` keep terminating and this limit stays open.
 // 3. The narrowing is scoped to the `_URL` suffix as ruled, so
-//    `PASSWORD_FILE: postgres://u:secret@db/app` keeps the `/` arm's excuse.
+//    `PASSWORD_FILE: postgres://u:secret@db/app` and
+//    `PASSWORD_FILE: postgres://app:aB3/xYz9pQ@db:5432/app` keep the `/` arm's excuse.
 // 4. It only sees values that reach this rule, so an `https://` URL carrying userinfo --
 //    `DB_PASSWORD_URL: https://u:secret@db.example.com/app` -- is excused above by
 //    LOCATION_VALUE_PATTERN and never tested here.
 const URL_NAME_PATTERN = /_URL$/i;
-const USERINFO_PASSWORD_AUTHORITY_PATTERN = /^(?:[A-Za-z][A-Za-z0-9+.-]*:)?\/\/[^/?#@]*:[^/?#@]*@/;
+const USERINFO_PASSWORD_AUTHORITY_PATTERN = /^(?:[A-Za-z][A-Za-z0-9+.-]*:)?\/\/[^?#@]*:[^?#@]*@/;
 const MIN_LITERAL_SECRET_LENGTH = 8;
 
 // Reduces a YAML scalar to the characters actually stored: the body of a quoted string, otherwise

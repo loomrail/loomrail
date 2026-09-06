@@ -246,13 +246,33 @@ describe("production environment separation", () => {
 
   // The rules that keep the cases above clean each have a narrower form that costs no false
   // positive. Without these counter-examples pinned, the broader form reads as equally correct and
-  // the check silently stops reporting credentials it should catch.
+  // the check silently stops reporting credentials it should catch. The last two rows are the set's
+  // one exception, and they are false positives: the `_URL` userinfo rule searches for
+  // `user:password` past any `/`, because `openssl rand -base64` puts a `/` in roughly every other
+  // password it generates, and the price is that a `_URL` value carrying a `:` and a later `@` is
+  // reported too. They are pinned so that cost stays visible and priced, not so it stays unexamined.
   it.each([
     ["a base64 literal that happens to start with a slash", "AWS_SECRET_ACCESS_KEY: /JalrXUtnFEMIK7MDENGb"],
     ["a literal that happens to start with a dollar", "DB_PASSWORD: $tr0ngP@ssw0rd!"],
     ["a literal under a name that merely sounds like a location", "API_TOKEN_FILE: ghp_16C7e42F292c6912E77"],
     ["a connection string carrying userinfo under a location name", "TOKEN_URL: postgres://u:secret@db/app"],
+    [
+      "a connection string whose password carries a slash",
+      "POSTGRES_PASSWORD_URL: postgres://app:aB3/xYz9pQ@db:5432/app",
+    ],
+    [
+      "a connection string with an empty username and a slash in the password",
+      "PASSWORD_URL: redis://:hun/ter2@cache:6379/0",
+    ],
     ["a literal under a variable named like the workflow keyword", "SECRETS: kx7Qm2ZpLr9TvWs4"],
+    [
+      "the accepted false positive: a bucket URL whose port supplies a colon before a path at-sign",
+      "CREDENTIALS_URL: gs://my-bucket:8080/creds@2026.json",
+    ],
+    [
+      "the accepted false positive: a bucket URL whose path carries both a colon and a later at-sign",
+      "CREDENTIALS_URL: gs://my-bucket/2026:07/creds@2026.json",
+    ],
   ])("reports %s", (_description, line) => {
     const files = [{ path: ".github/workflows/deploy.yml", content: `env:\n  ${line}\n` }];
     expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(["INLINE_SECRET_IN_CI"]);
