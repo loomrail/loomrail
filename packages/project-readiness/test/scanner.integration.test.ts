@@ -224,7 +224,7 @@ describe("production environment separation", () => {
     ["a Git remote whose userinfo is a bare username", "TOKEN_URL: ssh://git@github.com/org/repo.git"],
     ["a bare filename under a location name", "CREDENTIALS_FILE: credentials.json"],
     ["a schemeless URL under a location name", "TOKEN_URL: auth.example.com/token"],
-    ["a Windows-style path under a location name", "SSH_PRIVATE_KEY_PATH: C:\\Users\\runneradmin\\id_rsa"],
+    ["a Windows-style path under a location name", "SSH_PRIVATE_KEY_PATH: X:\\synthetic-home\\id_rsa"],
     ["a schemeless authority with no userinfo under a location name", "TOKEN_URL: //auth.example.com/token"],
   ])("passes %s", (_description, line) => {
     const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
