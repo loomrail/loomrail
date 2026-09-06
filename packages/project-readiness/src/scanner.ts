@@ -360,8 +360,32 @@ const ciFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingD
 };
 
 const SECRET_NAME_PATTERN = /TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS/i;
-const MANAGED_REFERENCE_PATTERN = /^\$\{\{.+\}\}$|^\$[A-Za-z_][A-Za-z0-9_]*$|^\$\{[^}]+\}$/;
+// A name with one of these suffixes denotes where a credential lives, not the credential itself.
+const REFERENCE_NAME_PATTERN = /_(?:NAME|URL|FILE|PATH)$/i;
+// `secrets` is a workflow keyword, not a variable: it introduces a mapping, or carries the managed
+// literal `inherit`. Entries nested under it are still read as lines of their own.
+const WORKFLOW_KEYWORD_NAME_PATTERN = /^secrets$/i;
+// A managed reference anywhere in the value -- `${{ … }}`, `${VAR}` or `$VAR` -- means the value is
+// interpolated at run time rather than stored here, so a suffix such as `/gcp.json` does not make
+// the assignment a literal. The reference has to start the value or follow a non-word character, so
+// a `$` in the middle of a literal credential is not mistaken for one.
+const MANAGED_REFERENCE_PATTERN = /(?:^|[^A-Za-z0-9])\$(?:\{\{.*?\}\}|\{[^}]+\}|[A-Za-z_][A-Za-z0-9_]*)/;
+// A path or a URL names a location. Only a leading match counts: a credential may well contain a
+// slash part-way through.
+const LOCATION_VALUE_PATTERN = /^(?:\.{0,2}\/|https?:\/\/)/i;
 const MIN_LITERAL_SECRET_LENGTH = 8;
+
+// Reduces a YAML scalar to the characters actually stored: the body of a quoted string, otherwise
+// the value with its trailing `#` comment removed.
+const storedScalar = (rawValue: string): string => {
+  const quoted = /^(["'])([\s\S]*?)\1\s*(?:#.*)?$/.exec(rawValue);
+  if (quoted?.[2] !== undefined) return quoted[2];
+  return rawValue
+    .replace(/(?:^|\s)#.*$/, "")
+    .trim()
+    .replace(/^["']/, "")
+    .replace(/["']$/, "");
+};
 
 export const inlineSecretFindings = (files: readonly CiWorkflowFile[]): readonly SecurityFindingDraft[] => {
   const findings: SecurityFindingDraft[] = [];
@@ -371,8 +395,15 @@ export const inlineSecretFindings = (files: readonly CiWorkflowFile[]): readonly
       const name = match?.[1];
       const rawValue = match?.[2];
       if (!name || !rawValue || !SECRET_NAME_PATTERN.test(name)) continue;
-      const value = rawValue.replace(/^["']/, "").replace(/["']$/, "");
-      if (value.length < MIN_LITERAL_SECRET_LENGTH || MANAGED_REFERENCE_PATTERN.test(value)) continue;
+      if (REFERENCE_NAME_PATTERN.test(name) || WORKFLOW_KEYWORD_NAME_PATTERN.test(name)) continue;
+      const value = storedScalar(rawValue);
+      if (
+        value.length < MIN_LITERAL_SECRET_LENGTH ||
+        MANAGED_REFERENCE_PATTERN.test(value) ||
+        LOCATION_VALUE_PATTERN.test(value)
+      ) {
+        continue;
+      }
       findings.push(
         finding(
           "INLINE_SECRET_IN_CI",

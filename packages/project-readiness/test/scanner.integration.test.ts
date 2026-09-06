@@ -189,6 +189,34 @@ describe("production environment separation", () => {
     ];
     expect(inlineSecretFindings(files)).toEqual([]);
   });
+
+  // ENV_PROD_SEPARATION is AUTOMATED, and the domain refuses to attest a non-OWNER check. A false
+  // positive here is therefore a permanent block on READY that the owner cannot clear, so every
+  // correct line that once tripped the heuristic stays pinned as its own case.
+  it.each([
+    ["a managed reference followed by a comment", "API_TOKEN: ${{ secrets.API_TOKEN }} # rotated 2026-01"],
+    [
+      "a managed reference with a path suffix",
+      "GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/gcp.json",
+    ],
+    ["an absolute path to a credentials file", "GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json"],
+    ["a name that denotes a reference", "SECRET_NAME: my-app-prod-secret"],
+    ["a URL", "TOKEN_URL: https://auth.example.com/token"],
+    ["the reusable-workflow keyword", "secrets: inherit"],
+  ])("passes %s", (_description, line) => {
+    const files = [{ path: ".github/workflows/ci.yml", content: `env:\n  ${line}\n` }];
+    expect(inlineSecretFindings(files)).toEqual([]);
+  });
+
+  it("still reports a literal credential that carries a slash part-way through", () => {
+    const files = [
+      {
+        path: ".github/workflows/deploy.yml",
+        content: "env:\n  AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n",
+      },
+    ];
+    expect(inlineSecretFindings(files).map((entry) => entry.code)).toEqual(["INLINE_SECRET_IN_CI"]);
+  });
 });
 
 describe("lockfile findings", () => {
