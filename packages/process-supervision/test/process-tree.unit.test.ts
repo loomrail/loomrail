@@ -119,6 +119,10 @@ describe("shared process-tree platform operations", () => {
     ]);
     expect(fixture.executeCalls[0]?.args[4]).toContain("$rootProcessId = 7301");
     expect(fixture.executeCalls[0]?.args[4]).toContain(startedAt.getTime().toString());
+    expect(fixture.executeCalls[0]?.args[4]).toContain("$observationFailures -ge 3");
+    expect(fixture.executeCalls[0]?.args[4]).toContain(
+      "$candidate.CreationDate.ToUniversalTime() -lt $minimumCreation) { continue; }",
+    );
     expect(fixture.executeCalls[0]?.timeoutMs).toBe(60_000);
   });
 

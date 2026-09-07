@@ -1590,7 +1590,11 @@ release gate is a real green Windows CI run for the `taskkill /T` branch. A plat
 suite as a dedicated step. The Windows identity probe returns the process creation time as an absolute Unix timestamp;
 it does not combine a JavaScript clock with an elapsed duration measured after PowerShell startup. Root identity uses
 bounded `Get-Process.StartTime` with a ten-second execution timeout that includes cold PowerShell startup, while the
-slower CIM query is reserved for descendant relationships. Process-record
+slower CIM query is reserved for descendant relationships. Live cleanup tolerates at most two consecutive transient
+CIM observation failures and resets its quiet proof across every failed observation; two successful quiet scans are
+still required, and a third failure remains fail-closed. A candidate created before the supervised root is ignored
+as a stale Windows parent-PID collision and is never signalled; a missing creation time remains an identity failure.
+Process-record
 v2 captures a maximum-ten-second interval directly around the synchronous spawn call, then recovery accepts only an
 OS creation time inside that interval plus the fixed two-second precision tolerance. One unavailable observation may
 be retried while the PID remains live; a second absence, an over-wide interval or an actual mismatch never signals
