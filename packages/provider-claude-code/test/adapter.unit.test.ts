@@ -163,7 +163,10 @@ describe("local Claude Code provider", () => {
     expect(record.args.join("\0")).not.toContain(input.workspace?.path ?? "unreachable");
     expect(record.environmentKeys).not.toContain("ANTHROPIC_API_KEY");
     expect(record.environmentKeys).not.toContain("PROJECT_SECRET");
-    expect(record.mcpConfigMode).toBe(0o600);
+    // Node's mode bits are meaningful on POSIX. Windows reports inherited ACL-backed permissions
+    // as 0666 even when writeFile receives mode 0600, so asserting that synthetic mask there would
+    // test a representation the platform explicitly ignores rather than the adapter boundary.
+    if (process.platform !== "win32") expect(record.mcpConfigMode).toBe(0o600);
     expect(Object.keys(record.mcpConfig.mcpServers)).toEqual(["loomrail_workspace"]);
   });
 });
