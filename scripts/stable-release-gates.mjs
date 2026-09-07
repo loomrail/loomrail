@@ -19,7 +19,7 @@ export const requiredStableReleaseGates = Object.freeze([
   "q13FinalSecurityReliabilityReview",
   "q15CanonicalActivationNonLanding",
   "q17MeasuredProjectVerification",
-  "liveProviderHardTokenBudgetEnforcement",
+  "q20LocalSubscriptionWorkspaceExecution",
   "managedPublicDogfoodRehearsal",
   "codexMacosCompatibility",
   "claudeMacosCompatibility",
@@ -33,10 +33,11 @@ export const stableReleaseEvidencePaths = Object.freeze({
   q13FinalSecurityReliabilityReview: "docs/evidence/phase-8/Q13-FINAL-SECURITY-RELIABILITY-EVIDENCE.md",
   q15CanonicalActivationNonLanding: "docs/evidence/phase-8/Q15-GUIDED-ACTIVATION-EVIDENCE.md",
   q17MeasuredProjectVerification: "docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md",
-  liveProviderHardTokenBudgetEnforcement: "docs/evidence/phase-8/Q18-HARD-TOKEN-BUDGET-EVIDENCE.md",
-  managedPublicDogfoodRehearsal: "docs/evidence/phase-8/Q14-MACOS-LIVE-PROVIDERS-EVIDENCE.md",
-  codexMacosCompatibility: "docs/evidence/phase-8/Q14-MACOS-LIVE-PROVIDERS-EVIDENCE.md",
-  claudeMacosCompatibility: "docs/evidence/phase-8/Q14-MACOS-LIVE-PROVIDERS-EVIDENCE.md",
+  q20LocalSubscriptionWorkspaceExecution:
+    "docs/evidence/phase-8/Q20-LOCAL-SUBSCRIPTION-WORKSPACE-EXECUTION-EVIDENCE.md",
+  managedPublicDogfoodRehearsal: "docs/evidence/phase-8/Q20-MANAGED-PUBLIC-DOGFOOD-EVIDENCE.md",
+  codexMacosCompatibility: "docs/evidence/phase-8/Q20-LOCAL-SUBSCRIPTION-WORKSPACE-EXECUTION-EVIDENCE.md",
+  claudeMacosCompatibility: "docs/evidence/phase-8/Q20-LOCAL-SUBSCRIPTION-WORKSPACE-EXECUTION-EVIDENCE.md",
   privateDogfood: "docs/evidence/phase-8/STABLE-PRIVATE-DOGFOOD-EVIDENCE.md",
   protectedLandingCanonicalActivation: "docs/evidence/phase-8/STABLE-PROTECTED-LANDING-EVIDENCE.md",
   codexWindowsCompatibility: "docs/evidence/phase-8/STABLE-WINDOWS-LIVE-PROVIDERS-EVIDENCE.md",
@@ -87,7 +88,7 @@ export const parseStableReleaseGateManifest = (text) => {
   }
 
   assertExactKeys(manifest, ["schemaVersion", "releaseVersion", "gates"], "stable gate manifest");
-  assert(manifest.schemaVersion === 2, "stable gate manifest schemaVersion must be 2");
+  assert(manifest.schemaVersion === 3, "stable gate manifest schemaVersion must be 3");
   assert(
     manifest.releaseVersion === null ||
       (typeof manifest.releaseVersion === "string" && stableVersionPattern.test(manifest.releaseVersion)),

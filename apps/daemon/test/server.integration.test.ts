@@ -26,7 +26,7 @@ import {
   type WorkflowTemplate,
 } from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
-import { createOpenAIResponsesProvider } from "@loomrail/provider-codex";
+import { createCodexProvider } from "@loomrail/provider-codex";
 import { providerCapabilitiesSchema, type ProviderAdapter } from "@loomrail/provider-core";
 import { deliveryTemplate } from "@loomrail/workflow-engine";
 import { addWorktree, createCarryInSnapshot, inspectRepository, listWorktrees } from "@loomrail/workspace";
@@ -3815,8 +3815,8 @@ describe("stage capability gate", () => {
     }
   });
 
-  it("refuses to dispatch to the real OpenAI adapter when its API key is missing", async () => {
-    const adapter = createOpenAIResponsesProvider();
+  it("refuses to dispatch to the local Codex adapter when its executable is missing", async () => {
+    const adapter = createCodexProvider({ command: "/loomrail-test/missing/codex" });
     const daemon = await startDaemon({
       bootstrapToken: token,
       stateDatabasePath: databasePath,

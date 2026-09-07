@@ -24,6 +24,7 @@ import type { ProviderAcceptanceInput, ProviderStageResultPolicy } from "./stage
 
 export type { ProcessExitOutcome, ProcessRun, RunProcessOptions } from "./process-runner.js";
 export { ProcessListenerError, ProcessSpawnError, runProcess } from "./process-runner.js";
+export { localProviderRuntimeEnvironment } from "./local-runtime.js";
 export type { UnproductiveSessionReason, UnproductiveSessionReport } from "./session-diagnosis.js";
 export { describeUnproductiveSession } from "./session-diagnosis.js";
 export type {
@@ -46,8 +47,20 @@ export {
   projectProviderAllowanceAdvisory,
   projectProviderAllowanceFreshness,
 } from "./allowance.js";
-export type { ProviderJsonRequest, ProviderJsonResponse, ProviderJsonTransport } from "./json-transport.js";
-export { fetchProviderJson, ProviderProtocolError } from "./json-transport.js";
+export {
+  WORKSPACE_TOOL_MAX_CALLS,
+  WORKSPACE_TOOL_MAX_DIRECTORY_ENTRIES,
+  WORKSPACE_TOOL_MAX_READ_BYTES,
+  WORKSPACE_TOOL_MAX_TURNS,
+  WORKSPACE_TOOL_MAX_WRITE_BYTES,
+  workspaceToolRequestSchema,
+  type WorkspaceToolExecutor,
+  type WorkspaceToolFailure,
+  type WorkspaceToolPolicyDescription,
+  type WorkspaceToolRequest,
+  type WorkspaceToolResult,
+  type WorkspaceToolSuccess,
+} from "./workspace-tools.js";
 
 // ProviderId remains legacy-inclusive because append-only audit rows can name the retired provider.
 // Active selection is the narrower LiveProviderId contract in @loomrail/contracts.
@@ -69,12 +82,10 @@ export const providerCapabilitiesSchema = z
     contextWindowReporting: z.boolean(),
     checkpointOnRequest: z.boolean(),
     contextWindowTokens: z.number().int().positive(),
-    // Before E1 a live adapter runs its CLI in an empty temporary directory: it has no
-    // filesystem access and therefore nothing to change, so it cannot serve IMPLEMENT. Without
-    // this declaration the dispatcher would send it that stage anyway, it would return prose,
-    // and the stage would look done with no work behind it. `.min(1)` is deliberate: an adapter
-    // that serves no stage at all can never be dispatched to, so declaring at least one is not
-    // optional the way an empty list would otherwise imply.
+    // The stage list is authoritative. IMPLEMENT and QA may be declared only when the adapter
+    // routes repository effects through the bounded workspace-tool connector; a prose-only
+    // completion must never make either stage appear successful. `.min(1)` is deliberate: an
+    // adapter that serves no stage at all can never be dispatched to.
     stages: z.array(workflowStageSchema).min(1),
     // Whether the adapter can report what a session cost. Distinct from `usageReporting`, which
     // is about context-window consumption, not spend -- an adapter can know how full its window
@@ -210,30 +221,21 @@ export type ProviderInvocation = {
    * calls `abortSession` when cancellation revokes an already-spawned session.
    */
   authoritySignal: AbortSignal;
-  // The Git worktree this session may write in (spec E1 D8), or absent when there is none.
-  //
-  // Absent means the read-only path every session took before this milestone: the adapter runs its
-  // CLI in an empty temporary directory with nothing to change. It is a real instruction, but it is
-  // not a SAFE default, and an adapter must not read it as one. A stage in `stagesRequiringWorkspace`
-  // (`@loomrail/domain`) that arrives here with this field absent is a caller bug, and treating it as
-  // "this session was never meant to change anything" is how a stage closes COMPLETED carrying an
-  // agent's plausible answer about work it had nowhere to do -- which is exactly what happened
-  // between the Codex adapter declaring IMPLEMENT and the daemon being taught to pass this field.
-  //
-  // The daemon is what keeps that from recurring: it builds the only production invocation in this
-  // repository, and `decideSessionWorkspace` (`@loomrail/domain`) refuses the dispatch -- as a
-  // blocking question to the owner, before any session opens -- when a writing stage's invocation
-  // would carry no workspace. What an adapter is entitled to assume is therefore exactly what that
-  // gate guarantees, and no more.
+  // Daemon-owned identity and policy for the selected workspace, or absent when the stage has no
+  // repository. This path is never placed in provider argv, cwd, prompt metadata or config; active
+  // local adapters expose repository effects only through `mcpConnections`.
   workspace?: ProviderWorkspace;
+  /**
+   * Provider-neutral execution seam composed by the daemon. Production local CLI adapters use the
+   * session MCP connector; an injected in-process adapter may use this same contract without
+   * learning persistence, recipe or filesystem implementation details.
+   */
+  workspaceTools?: import("./workspace-tools.js").WorkspaceToolExecutor;
 };
 
-// `path` is the only field an adapter needs to launch: it is the directory the CLI is pointed at
-// and the only place the session may write. `branch` and `baseCommit` are carried alongside it
-// because they identify WHICH work this worktree holds -- the base a later step diffs against to
-// find what the session actually changed, and the branch that change lives on. They are recorded on
-// the workspace entity too; passing them structurally is what keeps a consumer from re-deriving
-// them by shelling out to git against a directory that may since have moved on.
+// The workspace facts identify which durable repository state the daemon bound to the session.
+// Local CLI adapters must not turn `path` into ambient provider authority; the daemon and executor
+// alone use it to enforce and audit workspace operations.
 export type ProviderWorkspace = {
   path: string;
   branch: string;
@@ -251,8 +253,8 @@ export type ProviderWorkspace = {
    * fallback. The caller states it; `stageWritesInWorkspace` (`@loomrail/domain`) is what the
    * daemon reads to answer it, so no adapter carries a list of stages of its own.
    *
-   * An adapter maps this and `networkAccess` onto whatever its CLI understands. READ_ONLY still means the real
-   * worktree at `path`: the session reads the work item's own branch, it just may not write to it.
+   * The daemon maps this and `networkAccess` into the executor policy. The provider receives the
+   * resulting closed tools, never the worktree itself.
    */
   access: "READ_ONLY" | "READ_WRITE";
   /** Whether the immutable AgentRun policy permits provider network access. */
@@ -279,9 +281,8 @@ export type ProviderSessionListener = {
   // Spec §8: the pid of the child process this session is actually driving, so a daemon that dies
   // without killing it can still find and kill that process on the next start
   // (@loomrail/persistence-sqlite's `provider_sessions.process_pid`). Optional, unlike the three
-  // listeners above: API sessions have no local child process and simply never call this. That
-  // silence is exactly what the column's nullability represents. An adapter that does spawn one calls it at most once, right
-  // after its process runner returns a pid, not on every turn the way occupancy and usage stream.
+  // listeners above because historical sessions may have no local process. Every active local CLI
+  // adapter calls it at most once, immediately after spawn, not on every streamed event.
   onProcessStarted?: (pid: number) => void;
 };
 

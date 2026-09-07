@@ -110,6 +110,34 @@ export type ContextSources = {
       suggestedFix: string | null;
     }[];
   } | null;
+  qaMeasurement?: {
+    qaRun: {
+      id: string;
+      version: number;
+      testedTree: string;
+      targetOrigin: string;
+      scope: "FULL" | "RETEST";
+    };
+    evidence: {
+      id: string;
+      version: number;
+      verdict: "PASSED" | "FAILED";
+      environment: {
+        osFamily: string;
+        runtimeName: string;
+        runtimeVersion: string;
+        browserName: string;
+        browserVersion: string;
+      };
+      executions: readonly {
+        targetId: string;
+        scenarioId: string;
+        steps: readonly { status: string }[];
+        assertions: readonly { status: string }[];
+      }[];
+      observations: readonly { kind: string; blocking: boolean; summary: string }[];
+    };
+  } | null;
   evidence: readonly {
     id: string;
     version: number;
@@ -474,19 +502,47 @@ const renderLatestCheckpoint = (sources: ContextSources): RenderedBody => {
 };
 
 const renderEvidence = (sources: ContextSources): RenderedBody => {
-  const body =
-    sources.evidence.length === 0
-      ? null
-      : sources.evidence
-          .flatMap((item) => [
-            `- [${item.id} v${String(item.version)}] ${item.kind}: ${item.title}`,
-            `  ${item.summary}`,
-            ...item.checks.map((check) => `  - Check: ${check}`),
-          ])
-          .join("\n");
+  const recordedEvidence = sources.evidence.flatMap((item) => [
+    `- [${item.id} v${String(item.version)}] ${item.kind}: ${item.title}`,
+    `  ${item.summary}`,
+    ...item.checks.map((check) => `  - Check: ${check}`),
+  ]);
+  const measured = sources.qaMeasurement;
+  const measuredEvidence =
+    measured === undefined || measured === null
+      ? []
+      : [
+          `- Measured Browser QA [${measured.qaRun.id} v${String(measured.qaRun.version)}]`,
+          `  Verdict: ${measured.evidence.verdict}`,
+          `  Tested tree: ${measured.qaRun.testedTree}`,
+          `  Scope: ${measured.qaRun.scope}`,
+          `  Target origin: ${measured.qaRun.targetOrigin}`,
+          `  Environment: ${measured.evidence.environment.osFamily}; ${measured.evidence.environment.runtimeName} ${measured.evidence.environment.runtimeVersion}; ${measured.evidence.environment.browserName} ${measured.evidence.environment.browserVersion}`,
+          ...measured.evidence.executions.map(
+            (execution) =>
+              `  - ${execution.targetId}/${execution.scenarioId}: ${String(execution.steps.filter(({ status }) => status === "PASSED").length)}/${String(execution.steps.length)} steps, ${String(execution.assertions.filter(({ status }) => status === "PASSED").length)}/${String(execution.assertions.length)} assertions passed`,
+          ),
+          ...measured.evidence.observations.map(
+            (observation) =>
+              `  - Observation ${observation.kind}${observation.blocking ? " (blocking)" : ""}: ${observation.summary}`,
+          ),
+        ];
+  const body = [...recordedEvidence, ...measuredEvidence].join("\n");
   return {
-    text: block("Evidence", body === null ? ["(no evidence recorded yet)"] : [untrusted(body)]),
-    sources: sources.evidence.map((item) => ({ kind: "EVIDENCE", id: item.id, version: item.version })),
+    text: block("Evidence", body.length === 0 ? ["(no evidence recorded yet)"] : [untrusted(body)]),
+    sources: [
+      ...sources.evidence.map((item) => ({ kind: "EVIDENCE" as const, id: item.id, version: item.version })),
+      ...(measured === undefined || measured === null
+        ? []
+        : [
+            { kind: "QA_RUN" as const, id: measured.qaRun.id, version: measured.qaRun.version },
+            {
+              kind: "QA_EVIDENCE_BUNDLE" as const,
+              id: measured.evidence.id,
+              version: measured.evidence.version,
+            },
+          ]),
+    ],
   };
 };
 

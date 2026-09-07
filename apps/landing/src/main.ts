@@ -64,7 +64,7 @@ const messages = {
 
     howTitle: "How a task moves through Loomrail",
     howIntro:
-      "Four steps, the same every time. New sessions go only to OpenAI Responses or Anthropic Messages, with a hard output-token ceiling set before dispatch.",
+      "Four steps, the same every time. New sessions run through your signed-in local Codex or Claude Code CLI; no API key is passed to Loomrail.",
     stepOneTitle: "Write the task, not the prompt",
     stepOneBody:
       "A task states its outcome, its acceptance criteria, which actions the agent may take and how much it may spend. That contract is fixed before any work starts, and it is what the result is judged against later.",
@@ -88,7 +88,7 @@ const messages = {
     uiAllowed: "Allowed actions",
     uiAllowedValue: "Read, edit, run tests",
     uiBudget: "Budget",
-    uiBudgetValue: "Hard before dispatch",
+    uiBudgetValue: "Bounded and reconciled",
     flowBacklog: "Backlog",
     flowReady: "Ready",
     flowRunning: "Running",
@@ -96,9 +96,9 @@ const messages = {
     flowDone: "Accepted",
     uiWorkflowState: "Workflow state",
     uiSpend: "Budget guard",
-    uiSpendValue: "Hard cap before dispatch",
+    uiSpendValue: "Session limits + ledger",
     uiProvider: "Provider",
-    uiProviderValue: "OpenAI or Anthropic API",
+    uiProviderValue: "Local Codex or Claude",
     uiSession: "Session",
     uiSessionValue: "Restarted once, state kept",
     uiRequestLabel: "Human Request",
@@ -117,7 +117,7 @@ const messages = {
 
     installTitle: "Try Loomrail without giving it a repository.",
     installIntro:
-      "The copy block makes the package and Chromium downloads explicit, then runs a real-provider preflight on loopback. Set OPENAI_API_KEY or ANTHROPIC_API_KEY first and start in a new empty directory.",
+      "The copy block makes the package and Chromium downloads explicit, then checks your local Codex or Claude Code CLI on loopback. Sign in through that CLI first and start in a new empty directory.",
     installCommandLabel: "Install and launch Loomrail safely",
     copyInstallCommand: "Copy the safe install and launch commands",
     copy: "Copy",
@@ -129,17 +129,17 @@ const messages = {
     runStepTwo:
       "The read-only preflight runs first. When it is ready, /try opens and names local state and log creation.",
     runStepThree:
-      "Prepare the demo workspace, choose OpenAI Responses or Anthropic Messages, create the seeded task, move it to Ready and start the workflow.",
+      "Prepare the demo workspace, choose Codex CLI or Claude Code CLI, create the seeded task, move it to Ready and start the workflow.",
     runStepFour:
       "Answer the Human Request, approve a bounded real-provider budget if asked, inspect the available evidence, then decide yourself.",
     installLive:
-      "Provider requests use the OpenAI Responses API or Anthropic Messages API. Without a credential or an enforceable remaining token budget, Loomrail refuses dispatch.",
+      "Loomrail uses the local CLI's existing subscription login. A missing, incompatible or signed-out CLI blocks dispatch; Loomrail never asks for a provider API key.",
     runtimeLabel: "Runtime",
     runtimeValue: "Node.js 24.19–24.x",
     networkLabel: "Network",
     networkValue: "127.0.0.1 only",
     firstRunLabel: "First run",
-    firstRunValue: "Real API preflight",
+    firstRunValue: "Local CLI preflight",
     platformLabel: "Platforms",
     platformValue: "macOS, Windows, Linux",
 
@@ -148,7 +148,7 @@ const messages = {
     todayTitle: "Available today",
     todayLocal: "Same-machine browser UI, loopback daemon, and local SQLite state.",
     todayProviders:
-      "OpenAI Responses and Anthropic Messages adapters with a provider-side token ceiling and fail-closed credential checks.",
+      "Codex CLI and Claude Code CLI adapters with fail-closed version/login checks and bounded workspace tools.",
     todayRecovery: "Restart recovery, Human Requests, budgets, evidence, and Decisions.",
     todayRepo: "Repository registration, per-task worktrees, and change inspection.",
     notYetTitle: "Not claimed yet",
@@ -159,7 +159,7 @@ const messages = {
 
     docsTitle: "Documentation",
     docsIntro:
-      "Configure a provider credential, run the preflight, then register a repository after reading the threat model.",
+      "Sign in through an official local CLI, run the preflight, then register a repository after reading the threat model.",
     docsNavigation: "Loomrail documentation",
     quickStartTitle: "Quick start",
     quickStartBody: "From an empty directory to a bounded real-provider task.",
@@ -230,7 +230,7 @@ const messages = {
 
     howTitle: "Как задача проходит через Loomrail",
     howIntro:
-      "Четыре шага, каждый раз одинаковых. Новые сессии идут только в OpenAI Responses или Anthropic Messages с жёстким лимитом output tokens до dispatch.",
+      "Четыре шага, каждый раз одинаковых. Новые сессии идут через ваш авторизованный локальный Codex или Claude Code CLI; API-ключ Loomrail не передаётся.",
     stepOneTitle: "Пишете задачу, а не промпт",
     stepOneBody:
       "Задача описывает результат, критерии приёмки, разрешённые действия и лимит трат. Этот контракт фиксируется до начала работы, и именно по нему потом оценивается результат.",
@@ -254,7 +254,7 @@ const messages = {
     uiAllowed: "Разрешено",
     uiAllowedValue: "Чтение, правки, тесты",
     uiBudget: "Бюджет",
-    uiBudgetValue: "Жёсткий до запуска",
+    uiBudgetValue: "Ограничен и сверяется",
     flowBacklog: "Backlog",
     flowReady: "Ready",
     flowRunning: "Running",
@@ -262,9 +262,9 @@ const messages = {
     flowDone: "Accepted",
     uiWorkflowState: "Состояние workflow",
     uiSpend: "Бюджетный guard",
-    uiSpendValue: "Hard cap до dispatch",
+    uiSpendValue: "Лимиты сессии + ledger",
     uiProvider: "Провайдер",
-    uiProviderValue: "OpenAI или Anthropic API",
+    uiProviderValue: "Локальный Codex или Claude",
     uiSession: "Сессия",
     uiSessionValue: "Перезапущена, состояние сохранено",
     uiRequestLabel: "Human Request",
@@ -283,7 +283,7 @@ const messages = {
 
     installTitle: "Попробуйте Loomrail без доступа к репозиторию.",
     installIntro:
-      "Copy-блок явно показывает загрузку пакета и Chromium, затем запускает preflight реального провайдера на loopback. Сначала задайте OPENAI_API_KEY или ANTHROPIC_API_KEY и начните в новом пустом каталоге.",
+      "Copy-блок явно показывает загрузку пакета и Chromium, затем проверяет локальный Codex или Claude Code CLI на loopback. Сначала войдите через этот CLI и начните в новом пустом каталоге.",
     installCommandLabel: "Безопасная установка и запуск Loomrail",
     copyInstallCommand: "Скопировать безопасные команды установки и запуска",
     copy: "Копировать",
@@ -295,17 +295,17 @@ const messages = {
     runStepTwo:
       "Сначала выполнится read-only preflight. Если он готов, откроется /try с явным описанием создания local state и logs.",
     runStepThree:
-      "Подготовьте demo workspace, выберите OpenAI Responses или Anthropic Messages, создайте задачу, переведите её в Ready и запустите workflow.",
+      "Подготовьте demo workspace, выберите Codex CLI или Claude Code CLI, создайте задачу, переведите её в Ready и запустите workflow.",
     runStepFour:
       "Ответьте на Human Request, при необходимости подтвердите ограниченный бюджет реального провайдера, проверьте доступные свидетельства и решите сами.",
     installLive:
-      "Запросы идут через OpenAI Responses API или Anthropic Messages API. Без credential или enforceable остатка token budget Loomrail откажет в dispatch.",
+      "Loomrail использует существующий подписочный login локального CLI. Отсутствующий, несовместимый или неавторизованный CLI блокирует dispatch; provider API key не нужен.",
     runtimeLabel: "Runtime",
     runtimeValue: "Node.js 24.19–24.x",
     networkLabel: "Сеть",
     networkValue: "Только 127.0.0.1",
     firstRunLabel: "Первый запуск",
-    firstRunValue: "Preflight реального API",
+    firstRunValue: "Preflight локального CLI",
     platformLabel: "Платформы",
     platformValue: "macOS, Windows, Linux",
 
@@ -314,7 +314,7 @@ const messages = {
     todayTitle: "Доступно сейчас",
     todayLocal: "Браузер на той же машине, loopback daemon и локальное состояние SQLite.",
     todayProviders:
-      "Адаптеры OpenAI Responses и Anthropic Messages с provider-side token ceiling и fail-closed проверкой credentials.",
+      "Адаптеры Codex CLI и Claude Code CLI с fail-closed проверкой версии/login и ограниченными workspace tools.",
     todayRecovery: "Восстановление после перезапуска, Human Requests, бюджеты, доказательства и Decisions.",
     todayRepo: "Регистрация репозитория, worktree на задачу и просмотр изменений.",
     notYetTitle: "Пока не обещаем",
@@ -325,7 +325,7 @@ const messages = {
 
     docsTitle: "Документация",
     docsIntro:
-      "Настройте credential провайдера, пройдите preflight и только потом регистрируйте репозиторий после чтения threat model.",
+      "Войдите через официальный локальный CLI, пройдите preflight и только потом регистрируйте репозиторий после чтения threat model.",
     docsNavigation: "Документация Loomrail",
     quickStartTitle: "Быстрый старт",
     quickStartBody: "От пустого каталога до ограниченной задачи реального провайдера.",

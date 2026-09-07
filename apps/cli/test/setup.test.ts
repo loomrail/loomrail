@@ -25,14 +25,14 @@ const providers = (
       provider: "CODEX",
       installed: true,
       authentication: liveReady ? "AUTHENTICATED" : "REQUIRED",
-      version: null,
-      compatibility: "BUILT_IN",
+      version: "0.153.4",
+      compatibility: "VERIFIED",
       ready: liveReady,
       stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: false,
-      tokenBudgetEnforcement: "HARD",
+      tokenBudgetEnforcement: "POST_SESSION",
       canReportRateLimits: liveReady,
       models: { FAST: "gpt-fast", STANDARD: "gpt-standard", DEEP: "gpt-deep" },
     },
@@ -110,7 +110,7 @@ describe("Loomrail guided setup", () => {
     );
   });
 
-  it("keeps a new installation blocked until a real API credential is ready", async () => {
+  it("keeps a new installation blocked until a compatible local CLI is signed in", async () => {
     const parent = await mkdtemp(join(tmpdir(), "loomrail setup "));
     directories.push(parent);
     const missing = join(parent, "not-created");

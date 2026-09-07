@@ -30,9 +30,26 @@ test.describe("protected landing canonical activation", () => {
     const copy = page.getByRole("button", { name: "Copy the safe install and launch commands" });
     await copy.focus();
     await expect(copy).toBeFocused();
-    await copy.press("Enter");
-    await expect(copy).toHaveAttribute("data-state", "success");
-    await expect(copy).toContainText("Copied");
+    const [copyFeedback] = await Promise.all([
+      page.evaluate(
+        () =>
+          new Promise<{ label: string; state: string }>((resolve) => {
+            const button = document.querySelector<HTMLButtonElement>("[data-copy]");
+            if (button === null) throw new Error("Copy button is missing");
+            const observer = new MutationObserver(() => {
+              if (button.dataset["state"] !== "success") return;
+              observer.disconnect();
+              resolve({
+                label: button.querySelector<HTMLElement>("[data-copy-label]")?.textContent ?? "",
+                state: button.dataset["state"],
+              });
+            });
+            observer.observe(button, { attributes: true, childList: true, subtree: true });
+          }),
+      ),
+      copy.press("Enter"),
+    ]);
+    expect(copyFeedback).toEqual({ label: "Copied", state: "success" });
     expect(await page.evaluate(() => localStorage.getItem("loomrail-landing-e2e-clipboard"))).toBe(
       installCommand,
     );
@@ -40,7 +57,7 @@ test.describe("protected landing canonical activation", () => {
 
   test("keeps the real-provider boundary explicit in both themes and both locales", async ({ page }) => {
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-    await expect(page.getByText(/OpenAI Responses API or Anthropic Messages API/)).toBeVisible();
+    await expect(page.getByText(/local CLI's existing subscription login/)).toBeVisible();
     await expect(page.locator("body")).not.toContainText(/\bMock\b/i);
     const lightBackground = await page
       .locator("body")
@@ -55,7 +72,7 @@ test.describe("protected landing canonical activation", () => {
 
     await page.getByRole("button", { name: "Switch to Russian" }).click();
     await expect(page.locator("html")).toHaveAttribute("lang", "ru");
-    await expect(page.getByText(/OpenAI Responses API или Anthropic Messages API/)).toBeVisible();
+    await expect(page.getByText(/подписочный login локального CLI/)).toBeVisible();
     expect(await page.locator("[data-install-commands] .line").allTextContents()).toEqual(
       guidedActivationSource.install.commands,
     );

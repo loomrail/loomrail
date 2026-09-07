@@ -55,6 +55,7 @@ import type {
   VerificationRun,
   WorkflowStage,
   WorkItem,
+  WorkspaceToolCallRecord,
   WorkflowDispatch,
 } from "@loomrail/contracts";
 import { MAX_TOTAL_REVIEW_ROUNDS } from "@loomrail/contracts";
@@ -89,6 +90,7 @@ export type WorkflowDomainErrorCode =
   | "REVIEW_REPORT_REQUIRED"
   | "REVIEW_RUN_MISMATCH"
   | "REVIEW_TREE_STALE"
+  | "IMPLEMENT_EFFECT_NOT_OBSERVED"
   | "QA_MEASUREMENT_REQUIRED"
   | "PROJECT_VERIFICATION_REQUIRED"
   | "SESSION_END_REASON_NOT_HANDLED";
@@ -120,6 +122,7 @@ export const providerOutcomeRejectionCodes = [
   "REVIEW_REPORT_REQUIRED",
   "REVIEW_RUN_MISMATCH",
   "REVIEW_TREE_STALE",
+  "IMPLEMENT_EFFECT_NOT_OBSERVED",
   "QA_MEASUREMENT_REQUIRED",
   "PROJECT_VERIFICATION_REQUIRED",
 ] as const satisfies readonly WorkflowDomainErrorCode[];
@@ -469,20 +472,7 @@ export const decideDispatchStage = (context: {
     };
   }
   if (context.declaredStages.includes(context.stage)) {
-    if (context.tokenBudgetEnforcement === "HARD") return { type: "DISPATCH" };
-    return {
-      type: "TOKEN_BUDGET_NOT_ENFORCED",
-      request: {
-        kind: "FREE_TEXT",
-        blocking: true,
-        title: `${context.provider} cannot enforce the hard token budget`,
-        context: `The ${context.provider} adapter reports token usage only after a ${context.stage} session ends. That session could exceed the owner-approved limit before Loomrail can stop it, so Loomrail refused to start provider work.`,
-        recommendation:
-          "Use an adapter that declares HARD token-budget enforcement, or wait for a provider runtime with an enforceable per-session limit. Raising the budget does not make an unbounded session safe.",
-        options: [],
-        allowOther: true,
-      },
-    };
+    return { type: "DISPATCH" };
   }
   const declaredStages = context.declaredStages.join(", ");
   return {
@@ -1029,6 +1019,7 @@ export type ApplyProviderOutcomeContext = {
     | undefined;
   qaRunRequired?: boolean | undefined;
   qaRunCompletion?: QARun | undefined;
+  workspaceToolCalls?: readonly WorkspaceToolCallRecord[] | undefined;
   humanRequestId?: string;
   acceptancePackageId?: string;
   nextStageAttemptId?: string;
@@ -1077,6 +1068,27 @@ export const decideApplyProviderOutcome = (
 
   if (command.payload.outcome.type === "BUDGET_LIMIT_REACHED") {
     return budgetOutcome(command, context);
+  }
+
+  if (
+    command.payload.outcome.type === "COMPLETED" &&
+    context.stageAttempt.stage === "IMPLEMENT" &&
+    command.payload.sessionCompletion !== undefined
+  ) {
+    const observedMutation = (context.workspaceToolCalls ?? []).some(
+      (call) =>
+        call.projectId === context.workItem.projectId &&
+        call.workItemId === context.workItem.id &&
+        call.stageAttemptId === context.stageAttempt.id &&
+        call.status === "SUCCEEDED" &&
+        (call.operation === "WRITE_FILE" || call.operation === "DELETE_FILE"),
+    );
+    if (!observedMutation) {
+      throw new WorkflowDomainError(
+        "IMPLEMENT_EFFECT_NOT_OBSERVED",
+        "A live Implement stage can complete only after an audited mutation succeeds in the same stage attempt",
+      );
+    }
   }
 
   const dispatch = completeDispatch(context.dispatch, context.now);
@@ -2492,6 +2504,7 @@ export const decideApproveBudgetOverride = (
     currentBudgetPolicy: BudgetPolicy;
     cumulativeUsage: number;
     currentAgentRunMaxEstimatedTokens: number | null;
+    qaMeasurementCompleted?: boolean;
     ids: { budgetPolicyId: string; stageAttemptId: string; dispatchId: string };
   },
 ): BudgetOverrideDecision => {
@@ -2559,10 +2572,13 @@ export const decideApproveBudgetOverride = (
   };
   // A cap crossed by the previous stage's terminal report parks the *next* attempt before it ever
   // starts. Resuming that row is not a retry: no provider saw it and no work can be attributed to
-  // it yet. A pause on an attempt that did start still creates a fresh attempt, preserving the
-  // existing history and measurement boundary.
-  const parkedBeforeStart = context.stageAttempt.startedAt === null;
-  const stageAttempt: StageAttempt = parkedBeforeStart
+  // it yet. QA also keeps its attempt identity once daemon-measured passing evidence exists: that
+  // evidence is scoped to the attempt, and only provider synthesis needs a fresh AgentRun. Every
+  // other pause on an attempt that did start creates a fresh attempt.
+  const preserveStageAttempt =
+    context.stageAttempt.startedAt === null ||
+    (context.stageAttempt.stage === "QA" && context.qaMeasurementCompleted === true);
+  const stageAttempt: StageAttempt = preserveStageAttempt
     ? {
         ...context.stageAttempt,
         status: "QUEUED",

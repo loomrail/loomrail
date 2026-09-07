@@ -386,7 +386,7 @@ describe("stage attempt session loop", () => {
     expect(sessions[0]?.pid).toBeNull();
   });
 
-  it("refuses before opening a session when the adapter cannot enforce the hard token budget", async () => {
+  it("runs a bounded POST_SESSION adapter and records its terminal usage through the normal session path", async () => {
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
     let starts = 0;
@@ -415,18 +415,13 @@ describe("stage attempt session loop", () => {
 
     await runStageAttempt(depsFor(localState, seeded, postSessionOnly));
 
-    expect(starts).toBe(0);
-    expect(sessionRows(localState, seeded.stageAttemptId).sessions).toEqual([]);
-    expect(snapshotOf(localState, seeded.workItemId)).toMatchObject({
-      run: { status: "WAITING_HUMAN" },
-      stageAttempts: [{ status: "WAITING_HUMAN" }],
-      humanRequests: [
-        {
-          status: "OPEN",
-          title: "CODEX cannot enforce the hard token budget",
-        },
-      ],
-    });
+    expect(starts).toBe(1);
+    expect(sessionRows(localState, seeded.stageAttemptId).sessions).toHaveLength(1);
+    const snapshot = snapshotOf(localState, seeded.workItemId);
+    if (snapshot.run === null) throw new Error("Expected the active PipelineRun");
+    expect(snapshot.run.status).toBe("RUNNING");
+    expect(snapshot.stageAttempts.find(({ id }) => id === seeded.stageAttemptId)?.status).toBe("SUCCEEDED");
+    expect(snapshot.humanRequests).toEqual([]);
   });
 
   it("passes the immutable AgentRun token remainder into a hard-enforcing adapter", async () => {

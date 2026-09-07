@@ -150,13 +150,15 @@ mutation and remains pending until the other stable gates are ready.
 The repository gate requires stable semver, an exact main SHA, matching typed confirmation, an unused registry
 version, npm `11.15.0+`, and a successful push-triggered CI run for that SHA with all six macOS/Windows Verify,
 Browser smoke and Clean install jobs. It also reads the versioned
-[`STABLE-RELEASE-GATES.json`](evidence/phase-8/STABLE-RELEASE-GATES.json) index and refuses staging unless all ten
+[`STABLE-RELEASE-GATES.json`](evidence/phase-8/STABLE-RELEASE-GATES.json) index and refuses staging unless all eleven
 required gates are `PASSED`, the selected stable version matches, every evidence file is a bounded regular file with
 the recorded SHA-256, and the identical bytes exist at a recorded ancestor commit. Run `pnpm release:status` to inspect
-the current index without changing external state. The index currently proves six historical gates and deliberately
-keeps private dogfood, protected landing integration and both Windows live-provider rows `PENDING`; no stable version
-is selected. Both ordinary source-CI platforms run the same status check from full Git history, so a changed or
-unreachable recorded evidence object fails the candidate before the longer verification matrix.
+the current index without changing external state. Schema v3 replaces the retired hard-token/API gate with
+`q20LocalSubscriptionWorkspaceExecution`. The index currently proves two historical gates and deliberately keeps Q20
+committed evidence, the current managed rehearsal, private dogfood, protected landing integration and both Windows
+local-CLI rows `PENDING`; no stable version is selected. Both ordinary source-CI platforms run the same status check
+from full Git history, so a changed or unreachable recorded evidence object fails the candidate before the longer
+verification matrix.
 
 The passed `q13FinalSecurityReliabilityReview` row names the historical Q13 review precisely; it does not claim that
 Q13 reviewed later Q14-Q17 or release-workflow changes. The protected-environment reviewer must still inspect the
@@ -185,9 +187,9 @@ For every authorized candidate:
 Any release that claims a live provider version also requires one exact row in the
 [provider compatibility matrix](guides/PROVIDER-COMPATIBILITY.md). Add no semver range or `latest` promise: promotion
 must include sanitized real-CLI recordings, negative parser coverage and matching macOS/Windows evidence for that
-exact version and invocation contract. The current alpha.5 candidate has exact macOS arm64 rows for Codex and Claude
-Code, but no matching Windows evidence. It therefore cannot claim the cross-platform live-provider release gate;
-Mock remains the only provider mode with complete macOS/Windows evidence.
+exact version and invocation contract. The current working tree has focused macOS arm64 execution evidence for Codex
+CLI and Claude Code CLI, but those bytes are not yet committed and there is no matching Windows evidence. It
+therefore cannot claim either macOS row or the cross-platform live-provider release gate.
 
 ### Pre-alpha channel
 

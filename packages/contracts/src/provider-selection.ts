@@ -10,7 +10,7 @@ import {
 import { providerTokenBudgetEnforcementSchema, workflowStageSchema } from "./workflow.js";
 
 // MOCK remains a readable historical ProviderId in append-only audit records, but it is no longer
-// an active Project preference. New selection can target only the two real API adapters.
+// an active Project preference. New selection can target only the two official local CLI adapters.
 export const liveProviderIdSchema = z.enum(["CODEX", "CLAUDE_CODE"]);
 export const providerPreferenceSchema = z.enum(["AUTO", ...liveProviderIdSchema.options]);
 
@@ -82,7 +82,7 @@ export const providerAvailabilitySchema = z
       ) {
         context.addIssue({
           code: "custom",
-          message: "A built-in API adapter is ready exactly when its credential is configured",
+          message: "A built-in adapter is ready exactly when its credential is configured",
         });
       }
       return;

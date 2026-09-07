@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runStageAttempt, type RunStageAttemptDeps, type SessionLoopLogger } from "../src/session-loop.js";
 
 import { makeRepoMidRebase, makeThrowawayRepo } from "./repo-fixtures.js";
+import { recordImplementationEffectInState } from "./provider-double.js";
 import { snapshotOf } from "./state-fixtures.js";
 
 const timestamp = "2026-08-26T09:00:00.000Z";
@@ -62,6 +63,7 @@ type SeededAttempt = { workItemId: string; stageAttemptId: string; dispatch: Wor
 // what the adapter is GIVEN, not only what it can see on disk from inside its own call.
 const completingAdapter = (
   onStart: (invocationCount: number, invocation: ProviderInvocation) => Promise<void> | void,
+  options: { implementationEffectState?: LocalState } = {},
 ): ProviderAdapter => {
   let started = 0;
   return {
@@ -81,6 +83,9 @@ const completingAdapter = (
       }),
     start: async (invocation: ProviderInvocation): Promise<ProviderOutcome> => {
       started += 1;
+      if (options.implementationEffectState !== undefined && invocation.session.stage === "IMPLEMENT") {
+        recordImplementationEffectInState(options.implementationEffectState, invocation);
+      }
       await onStart(started, invocation);
       if (invocation.session.stage === "ACCEPTANCE") {
         return {
@@ -602,9 +607,12 @@ describe("session loop workspace provisioning", () => {
       const seeded = seedAttempt(localState);
 
       let received: ProviderInvocation | undefined;
-      const adapter = completingAdapter((_count, invocation) => {
-        received = invocation;
-      });
+      const adapter = completingAdapter(
+        (_count, invocation) => {
+          received = invocation;
+        },
+        { implementationEffectState: localState },
+      );
 
       await runStageAttempt(depsFor(localState, seeded, adapter));
 
@@ -713,7 +721,7 @@ describe("session loop workspace provisioning", () => {
       });
       await runStageAttempt({
         ...depsFor(localState, seeded, adapter),
-        openMcpConnections: (snapshots) => {
+        openMcpConnections: ({ snapshots }) => {
           openedSnapshots = snapshots;
           return Promise.resolve({
             connections: [
@@ -851,11 +859,14 @@ describe("session loop workspace provisioning", () => {
         startAgentRun: true,
       });
       const fileBody = "export const reviewedValue = 42;\n";
-      const implementationAdapter = completingAdapter(async (_count, invocation) => {
-        const path = invocation.workspace?.path;
-        if (path === undefined) throw new Error("IMPLEMENT did not receive its worktree");
-        await writeFile(join(path, "review-target.ts"), fileBody);
-      });
+      const implementationAdapter = completingAdapter(
+        async (_count, invocation) => {
+          const path = invocation.workspace?.path;
+          if (path === undefined) throw new Error("IMPLEMENT did not receive its worktree");
+          await writeFile(join(path, "review-target.ts"), fileBody);
+        },
+        { implementationEffectState: localState },
+      );
 
       await runStageAttempt({
         ...depsFor(localState, seeded, implementationAdapter),
@@ -966,9 +977,12 @@ describe("session loop workspace provisioning", () => {
       const localState = openState();
       const seeded = seedAttempt(localState);
       let sessionStarted = false;
-      const adapter = completingAdapter(() => {
-        sessionStarted = true;
-      });
+      const adapter = completingAdapter(
+        () => {
+          sessionStarted = true;
+        },
+        { implementationEffectState: localState },
+      );
 
       await runStageAttempt(depsFor(localState, seeded, adapter));
 
@@ -1310,10 +1324,13 @@ describe("session loop workspace provisioning", () => {
       const recorded = recordWorkspace(localState, seeded, worktreePath, branch);
 
       let observedBranch = "";
-      const adapter = completingAdapter(async () => {
-        const head = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], { cwd: worktreePath });
-        observedBranch = head.stdout.trim();
-      });
+      const adapter = completingAdapter(
+        async () => {
+          const head = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], { cwd: worktreePath });
+          observedBranch = head.stdout.trim();
+        },
+        { implementationEffectState: localState },
+      );
 
       await runStageAttempt(depsFor(localState, seeded, adapter));
 
@@ -1344,9 +1361,12 @@ describe("session loop workspace provisioning", () => {
       await rm(worktreePath, { recursive: true, force: true });
 
       let sessionStarted = false;
-      const adapter = completingAdapter(() => {
-        sessionStarted = true;
-      });
+      const adapter = completingAdapter(
+        () => {
+          sessionStarted = true;
+        },
+        { implementationEffectState: localState },
+      );
 
       await runStageAttempt(depsFor(localState, seeded, adapter));
 
@@ -1435,9 +1455,12 @@ describe("session loop workspace provisioning", () => {
       });
 
       let sessionStarted = false;
-      const adapter = completingAdapter(() => {
-        sessionStarted = true;
-      });
+      const adapter = completingAdapter(
+        () => {
+          sessionStarted = true;
+        },
+        { implementationEffectState: localState },
+      );
 
       await runStageAttempt(depsFor(localState, seeded, adapter));
 
@@ -1533,9 +1556,12 @@ describe("session loop workspace provisioning", () => {
       });
 
       let sessionStarted = false;
-      const adapter = completingAdapter(() => {
-        sessionStarted = true;
-      });
+      const adapter = completingAdapter(
+        () => {
+          sessionStarted = true;
+        },
+        { implementationEffectState: localState },
+      );
 
       await runStageAttempt(depsFor(localState, seeded, adapter));
 
@@ -1637,9 +1663,12 @@ describe("session loop workspace provisioning", () => {
       const localState = openState();
       const seeded = seedAttempt(localState);
       const worktreePath = join(workspacesRoot, PROJECT_ID, seeded.workItemId);
-      const adapter = completingAdapter(async () => {
-        await writeFile(join(worktreePath, "added by the agent.txt"), "the agent's work\n");
-      });
+      const adapter = completingAdapter(
+        async () => {
+          await writeFile(join(worktreePath, "added by the agent.txt"), "the agent's work\n");
+        },
+        { implementationEffectState: localState },
+      );
 
       await runStageAttempt(depsFor(localState, seeded, adapter));
 
@@ -1673,7 +1702,7 @@ describe("session loop workspace provisioning", () => {
       const localState = openState();
       const seeded = seedAttempt(localState);
       const worktreePath = join(workspacesRoot, PROJECT_ID, seeded.workItemId);
-      const adapter = completingAdapter(() => undefined);
+      const adapter = completingAdapter(() => undefined, { implementationEffectState: localState });
 
       await runStageAttempt(depsFor(localState, seeded, adapter));
 
@@ -1697,9 +1726,12 @@ describe("session loop workspace provisioning", () => {
       const seeded = seedAttempt(localState);
       const worktreePath = join(workspacesRoot, PROJECT_ID, seeded.workItemId);
       const warnings: string[] = [];
-      const adapter = completingAdapter(async () => {
-        await rm(worktreePath, { recursive: true, force: true });
-      });
+      const adapter = completingAdapter(
+        async () => {
+          await rm(worktreePath, { recursive: true, force: true });
+        },
+        { implementationEffectState: localState },
+      );
 
       // Asserted as a resolution rather than merely awaited, the same way the refusal test below
       // is: what this guards against is a label that could not be taken escaping as an exception

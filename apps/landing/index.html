@@ -130,8 +130,8 @@
           <header class="section-head" data-reveal>
             <h2 id="how-title" data-i18n="howTitle">How a task moves through Loomrail</h2>
             <p class="section-lede" data-i18n="howIntro">
-              Four steps, the same every time. New sessions go only to OpenAI Responses or Anthropic Messages,
-              with a hard output-token ceiling set before dispatch.
+              Four steps, the same every time. New sessions run through your signed-in local Codex or Claude
+              Code CLI; no API key is passed to Loomrail.
             </p>
           </header>
 
@@ -168,7 +168,7 @@
                     </div>
                     <div>
                       <dt data-i18n="uiBudget">Budget</dt>
-                      <dd data-i18n="uiBudgetValue">Hard before dispatch</dd>
+                      <dd data-i18n="uiBudgetValue">Bounded and reconciled</dd>
                     </div>
                   </dl>
                 </div>
@@ -197,12 +197,12 @@
                   </ol>
                   <p class="meter-legend">
                     <span data-i18n="uiSpend">Budget guard</span>
-                    <span class="ui-num" data-i18n="uiSpendValue">Hard cap before dispatch</span>
+                    <span class="ui-num" data-i18n="uiSpendValue">Session limits + ledger</span>
                   </p>
                   <dl class="ui-meta">
                     <div>
                       <dt data-i18n="uiProvider">Provider</dt>
-                      <dd data-i18n="uiProviderValue">OpenAI or Anthropic API</dd>
+                      <dd data-i18n="uiProviderValue">Local Codex or Claude</dd>
                     </div>
                     <div>
                       <dt data-i18n="uiSession">Session</dt>
@@ -283,9 +283,8 @@
           <div class="install-copy" data-reveal>
             <h2 id="install-title" data-i18n="installTitle">Try Loomrail without giving it a repository.</h2>
             <p class="section-lede" data-i18n="installIntro">
-              The copy block makes the package and Chromium downloads explicit, then runs a real-provider
-              preflight on loopback. Set OPENAI_API_KEY or ANTHROPIC_API_KEY first and use a new empty
-              directory.
+              The copy block makes the package and Chromium downloads explicit, then checks your local Codex
+              or Claude Code CLI on loopback. Sign in through that CLI first and use a new empty directory.
             </p>
             <ol class="run-steps">
               <li data-i18n="runStepOne">
@@ -296,8 +295,8 @@
                 creation.
               </li>
               <li data-i18n="runStepThree">
-                Prepare the demo workspace, choose OpenAI Responses or Anthropic Messages, create the seeded
-                task, move it to Ready and start the workflow.
+                Prepare the demo workspace, choose Codex CLI or Claude Code CLI, create the seeded task, move
+                it to Ready and start the workflow.
               </li>
               <li data-i18n="runStepFour">
                 Answer the Human Request, approve a bounded provider budget if asked, inspect the available
@@ -305,8 +304,8 @@
               </li>
             </ol>
             <p class="install-note" data-i18n="installLive">
-              Requests use the OpenAI Responses API or Anthropic Messages API. Without a credential or an
-              enforceable remaining token budget, Loomrail refuses dispatch.
+              Loomrail uses the local CLI's existing subscription login. A missing, incompatible or signed-out
+              CLI blocks dispatch; Loomrail never asks for a provider API key.
             </p>
           </div>
 
@@ -332,7 +331,7 @@
               </div>
               <div class="fact">
                 <dt data-i18n="firstRunLabel">First run</dt>
-                <dd data-i18n="firstRunValue">Real API preflight</dd>
+                <dd data-i18n="firstRunValue">Local CLI preflight</dd>
               </div>
               <div class="fact">
                 <dt data-i18n="platformLabel">Platforms</dt>
@@ -364,8 +363,8 @@
                   Same-machine browser UI, loopback daemon, and local SQLite state.
                 </li>
                 <li data-i18n="todayProviders">
-                  OpenAI Responses and Anthropic Messages adapters with a provider-side token ceiling and
-                  fail-closed credential checks.
+                  Codex CLI and Claude Code CLI adapters with fail-closed version/login checks and bounded
+                  workspace tools.
                 </li>
                 <li data-i18n="todayRecovery">
                   Restart recovery, Human Requests, budgets, evidence, and Decisions.
@@ -396,8 +395,8 @@
           <header class="section-head" data-reveal>
             <h2 id="docs-title" data-i18n="docsTitle">Documentation</h2>
             <p class="section-lede" data-i18n="docsIntro">
-              Configure a provider credential, run the preflight, then register a repository after reading the
-              threat model.
+              Sign in through an official local CLI, run the preflight, then register a repository after
+              reading the threat model.
             </p>
           </header>
 

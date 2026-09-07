@@ -6,6 +6,8 @@ import type {
   QAPlanSnapshot,
   QARetestCell,
   QARunScope,
+  QARun,
+  StageAttempt,
   WorkflowDispatch,
 } from "@loomrail/contracts";
 import { BrowserDriverError, type BrowserDriver, type BrowserDriverExecution } from "@loomrail/browser-qa";
@@ -19,7 +21,11 @@ import {
 } from "./browser-qa-config.js";
 
 export type BrowserQAStageRunner = {
-  run: (input: { dispatch: WorkflowDispatch; agentRunId: string; testedTree: string }) => Promise<void>;
+  run: (input: {
+    dispatch: WorkflowDispatch;
+    agentRunId: string;
+    testedTree: string;
+  }) => Promise<"TERMINAL" | "MEASUREMENT_RECORDED">;
 };
 
 export type BrowserQAStageRunnerDeps = {
@@ -29,6 +35,8 @@ export type BrowserQAStageRunnerDeps = {
   createCommandId: () => string;
   createAttachmentId: () => string;
   logger: FastifyBaseLogger;
+  /** Production lets the provider synthesize the passing measured bundle into a QA artifact. */
+  deferPassingWorkflow?: boolean;
 };
 
 const readProject = (state: LocalState, projectId: string): Project => {
@@ -38,6 +46,22 @@ const readProject = (state: LocalState, projectId: string): Project => {
   }
   return result.project;
 };
+
+const sameVerificationLineage = (qaRun: QARun, stageAttempt: StageAttempt): boolean =>
+  (qaRun.verificationCorrectionRunId ?? null) === (stageAttempt.verificationCorrectionRunId ?? null);
+
+const hasPassingEvidence = (
+  qaRun: QARun,
+  evidence: readonly {
+    qaRunId: string;
+    testedTree: string;
+    verdict: "PASSED" | "FAILED";
+  }[],
+): boolean =>
+  evidence.some(
+    (bundle) =>
+      bundle.qaRunId === qaRun.id && bundle.testedTree === qaRun.testedTree && bundle.verdict === "PASSED",
+  );
 
 export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): BrowserQAStageRunner => ({
   run: async ({ dispatch, agentRunId, testedTree }) => {
@@ -71,19 +95,44 @@ export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): Brow
       plan = config.plan;
       scope = { type: "FULL" };
       if (config.status === "ERROR") configError = config.error;
+      if (config.status === "READY") {
+        const qaState = deps.state.query({
+          type: "GET_QA_STATE",
+          pipelineRunId: dispatch.pipelineRunId,
+        });
+        if (qaState.type !== "QA_STATE") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The prior Browser QA state could not be loaded");
+        }
+        const reusable = qaState.runs.find(
+          (qaRun) =>
+            qaRun.status === "PASSED" &&
+            qaRun.stageAttemptId === stageAttempt.id &&
+            qaRun.testedTree === testedTree &&
+            qaRun.targetOrigin === targetOrigin &&
+            qaRun.plan.revision === plan.revision &&
+            qaRun.plan.contentHash === plan.contentHash &&
+            qaRun.scope.type === "FULL" &&
+            sameVerificationLineage(qaRun, stageAttempt) &&
+            hasPassingEvidence(qaRun, qaState.evidence),
+        );
+        if (reusable !== undefined) return "MEASUREMENT_RECORDED";
+      }
     } else {
       const qaState = deps.state.query({ type: "GET_QA_STATE", pipelineRunId: dispatch.pipelineRunId });
       if (qaState.type !== "QA_STATE") {
         throw new StateStoreError("PERSISTENCE_FAILURE", "The QA correction state could not be loaded");
       }
-      const correction = qaState.correctionRuns.find(
-        ({ id, status }) => id === stageAttempt.correctionRunId && status === "ACTIVE",
-      );
+      const correction = qaState.correctionRuns.find(({ id }) => id === stageAttempt.correctionRunId);
       const retestPlan = qaState.retestPlans.find(
         ({ correctionRunId }) => correctionRunId === stageAttempt.correctionRunId,
       );
       const baseline = qaState.runs.find(({ id }) => id === correction?.baselineQARunId);
-      if (correction === undefined || retestPlan === undefined || baseline?.status !== "FAILED") {
+      if (
+        correction === undefined ||
+        retestPlan === undefined ||
+        baseline?.status !== "FAILED" ||
+        (correction.status !== "ACTIVE" && correction.status !== "PASSED")
+      ) {
         throw new StateStoreError(
           "PERSISTENCE_FAILURE",
           "The active QA correction is missing its failed baseline or immutable retest plan",
@@ -97,6 +146,24 @@ export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): Brow
         retestPlanId: retestPlan.id,
       };
       retestCells = retestPlan.cells;
+      const reusable = qaState.runs.find(
+        (qaRun) =>
+          qaRun.status === "PASSED" &&
+          qaRun.stageAttemptId === stageAttempt.id &&
+          qaRun.testedTree === testedTree &&
+          qaRun.scope.type === "RETEST" &&
+          qaRun.scope.correctionRunId === correction.id &&
+          qaRun.scope.retestPlanId === retestPlan.id &&
+          sameVerificationLineage(qaRun, stageAttempt) &&
+          hasPassingEvidence(qaRun, qaState.evidence),
+      );
+      if (reusable !== undefined) return "MEASUREMENT_RECORDED";
+      if (correction.status !== "ACTIVE") {
+        throw new StateStoreError(
+          "PERSISTENCE_FAILURE",
+          "The completed QA correction has no reusable passing measurement",
+        );
+      }
     }
 
     const reserved = deps.state.execute({
@@ -174,6 +241,7 @@ export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): Brow
         currentTree: testedTree,
         result,
         finalizedAttachments,
+        completionMode: deps.deferPassingWorkflow === true ? "RECORD_MEASUREMENT" : "FINALIZE_WORKFLOW",
       },
     };
     const completed = deps.state.execute(completionCommand);
@@ -190,5 +258,8 @@ export const createBrowserQAStageRunner = (deps: BrowserQAStageRunnerDeps): Brow
         "The committed Browser QA attachment marker remains pending for startup recovery",
       );
     });
+    return deps.deferPassingWorkflow === true && completed.qaRun.status === "PASSED"
+      ? "MEASUREMENT_RECORDED"
+      : "TERMINAL";
   },
 });

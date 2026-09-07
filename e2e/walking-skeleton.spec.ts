@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
 import { gatedAdapter } from "../apps/daemon/test/gated-adapter.js";
+import { createProviderTestDouble } from "../apps/daemon/test/provider-double.js";
 import {
   alwaysFailingBrowserQADriver,
   failThenPassBrowserQADriver,
@@ -952,6 +953,45 @@ const chooseInSettings = async (page: Page, control: string, option: string): Pr
   await expect(settings).toHaveCount(0);
 };
 
+const workspaceExercisingProvider = () => {
+  const base = createProviderTestDouble();
+  return {
+    ...base,
+    start: async (...args: Parameters<typeof base.start>) => {
+      const [invocation] = args;
+      if (invocation.session.stage === "IMPLEMENT" && invocation.session.attempt > 1) {
+        if (invocation.workspaceTools === undefined) throw new Error("IMPLEMENT has no workspace tools");
+        const changed = await invocation.workspaceTools.execute(
+          {
+            callId: `${invocation.session.id}-write`,
+            operation: "WRITE_FILE",
+            path: "loomrail-e2e-ёж.txt",
+            expectedSha256: null,
+            content: "implemented through the audited workspace executor\n",
+          },
+          invocation.authoritySignal,
+        );
+        if (changed.status !== "SUCCEEDED") throw new Error(`IMPLEMENT tool failed: ${changed.code}`);
+      }
+      if (invocation.session.stage === "QA") {
+        if (invocation.workspaceTools === undefined) throw new Error("QA has no workspace tools");
+        const observed = await invocation.workspaceTools.execute(
+          {
+            callId: `${invocation.session.id}-read`,
+            operation: "READ_FILE",
+            path: "loomrail-e2e-ёж.txt",
+            offsetBytes: 0,
+            limitBytes: 1024,
+          },
+          invocation.authoritySignal,
+        );
+        if (observed.status !== "SUCCEEDED") throw new Error(`QA tool failed: ${observed.code}`);
+      }
+      return base.start(...args);
+    },
+  };
+};
+
 test.describe("authenticated walking skeleton", () => {
   let daemon: RunningDaemon | undefined;
 
@@ -1694,6 +1734,7 @@ test.describe("authenticated walking skeleton", () => {
       logger: false,
       webRoot: resolve("apps/web/dist"),
       browserQADriver: passingBrowserQADriver(),
+      providerAdapter: workspaceExercisingProvider(),
     });
 
     await page.goto(daemon.bootstrapUrl);
@@ -1757,7 +1798,9 @@ test.describe("authenticated walking skeleton", () => {
     await expect(workflowSection.getByRole("button", { name: "Approve cost policy" })).toBeEnabled();
     await workflowSection.getByRole("button", { name: "Approve cost policy" }).click();
     await expect(workflowSection.getByText("100 of 200", { exact: true })).toBeVisible();
-    await expect(workflowSection.getByRole("heading", { name: "Acceptance package" })).toBeVisible();
+    await expect(workflowSection.getByRole("heading", { name: "Acceptance package" })).toBeVisible({
+      timeout: BUDGET_WALL_MS,
+    });
     await expect(workflowSection.getByText("Review report", { exact: true })).toBeVisible();
     await expect(workflowSection.getByText("QA report", { exact: true })).toBeVisible();
     const browserQA = workflowSection.getByRole("region", { name: "Browser QA" });
@@ -1782,10 +1825,22 @@ test.describe("authenticated walking skeleton", () => {
     expect(acceptanceUrl.searchParams.get("project")).toBe(approvalItem.project.id);
     expect(acceptanceUrl.searchParams.get("task")).toBe(approvalItem.workItem.id);
     await expect(page.getByRole("complementary", { name: "Human decision workflow" })).toBeVisible();
-    // Each stage attempt records its ProviderSession as well (spec §6), so a full test delivery
-    // fills more than one page of activity and the discovery decision has moved off the newest one.
-    await restoredInspector.getByRole("button", { name: "Show more" }).click();
-    await expect(restoredInspector.getByText("Decision recorded", { exact: true })).toBeVisible();
+    // The live first page has accumulated newer events while the workflow ran, so load as many
+    // older pages as are needed instead of coupling the assertion to today's event count.
+    const discoveryDecision = restoredInspector.getByText("Decision recorded", { exact: true });
+    const showMoreActivity = restoredInspector.getByRole("button", { name: "Show more" });
+    for (let pageIndex = 0; pageIndex < 4 && (await discoveryDecision.count()) === 0; pageIndex += 1) {
+      await expect(showMoreActivity).toBeVisible({ timeout: BUDGET_WALL_MS });
+      const activityResponse = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return response.request().method() === "GET" && url.pathname === "/api/v1/events";
+      });
+      await showMoreActivity.click();
+      await activityResponse;
+      await expect(discoveryDecision.or(showMoreActivity)).toBeVisible({ timeout: BUDGET_WALL_MS });
+    }
+    await expect(discoveryDecision).toBeVisible();
+    await expect(restoredInspector.getByText("Workspace operation", { exact: true }).first()).toBeVisible();
     const acceptanceResponsePromise = page.waitForResponse(
       (response) => response.url().includes("/acceptance/") && response.url().endsWith("/resolve"),
     );
@@ -3135,6 +3190,12 @@ test.describe("authenticated walking skeleton", () => {
       },
       probeAuthentication: (provider) =>
         Promise.resolve(provider === "CODEX" ? openAIAuthentication : "REQUIRED"),
+      probeRuntime: (provider) =>
+        Promise.resolve({
+          installed: true,
+          compatibility: "VERIFIED",
+          version: provider === "CODEX" ? "0.153.4" : "2.1.260",
+        }),
     });
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
@@ -3148,32 +3209,30 @@ test.describe("authenticated walking skeleton", () => {
     await page.getByRole("button", { name: "Open settings" }).click();
     const settings = page.getByRole("dialog", { name: "Settings" });
     const provider = settings.locator(".provider-settings");
-    await expect(provider.getByText("New sessions use OpenAI Responses.", { exact: true })).toBeVisible();
+    await expect(provider.getByText("New sessions use Codex CLI.", { exact: true })).toBeVisible();
     await expect(
       provider.locator(".provider-settings__heading").getByText("Ready", { exact: true }),
     ).toBeVisible();
-    const compatibility = provider.getByRole("list", { name: "Real provider readiness" });
-    await expect(compatibility.getByRole("listitem").filter({ hasText: "OpenAI Responses" })).toContainText(
-      "Ready",
-    );
-    await expect(compatibility.getByRole("listitem").filter({ hasText: "Anthropic Messages" })).toContainText(
-      "API key required",
+    const compatibility = provider.getByRole("list", { name: "Local agent readiness" });
+    await expect(compatibility.getByRole("listitem").filter({ hasText: "Codex CLI" })).toContainText("Ready");
+    await expect(compatibility.getByRole("listitem").filter({ hasText: "Claude Code CLI" })).toContainText(
+      "Sign in through this CLI",
     );
 
     const selector = provider.getByRole("combobox", { name: "Provider for new sessions" });
     await selector.focus();
     await page.keyboard.press("Enter");
-    const openAIOption = page.getByRole("option", { name: "OpenAI Responses", exact: true });
-    await expect(openAIOption).toBeVisible();
+    const codexOption = page.getByRole("option", { name: "Codex CLI", exact: true });
+    await expect(codexOption).toBeVisible();
     await page.keyboard.press("ArrowDown");
-    await expect(openAIOption).toHaveAttribute("data-highlighted");
+    await expect(codexOption).toHaveAttribute("data-highlighted");
     await page.keyboard.press("Enter");
-    await expect(selector).toContainText("OpenAI Responses");
+    await expect(selector).toContainText("Codex CLI");
 
     openAIAuthentication = "REQUIRED";
     await provider.getByRole("button", { name: "Check again" }).click();
-    await expect(provider.getByText("New sessions use OpenAI Responses.", { exact: true })).toBeVisible();
-    await expect(provider.getByText("API key required", { exact: true }).first()).toBeVisible();
+    await expect(provider.getByText("New sessions use Codex CLI.", { exact: true })).toBeVisible();
+    await expect(provider.getByText("Sign in through this CLI", { exact: true }).first()).toBeVisible();
 
     await settings
       .getByRole("group", { name: "Change color theme" })
@@ -3184,7 +3243,7 @@ test.describe("authenticated walking skeleton", () => {
     await page.getByRole("button", { name: "Open settings" }).click();
     const reopened = page.getByRole("dialog", { name: "Settings" }).locator(".provider-settings");
     await expect(reopened.getByRole("combobox", { name: "Provider for new sessions" })).toContainText(
-      "OpenAI Responses",
+      "Codex CLI",
     );
 
     await page
@@ -3196,24 +3255,24 @@ test.describe("authenticated walking skeleton", () => {
       page.locator(".provider-settings").getByRole("heading", { name: "ИИ-провайдер" }),
     ).toBeVisible();
     await expect(
-      page.locator(".provider-settings").getByRole("list", { name: "Готовность реальных провайдеров" }),
+      page.locator(".provider-settings").getByRole("list", { name: "Готовность локальных агентов" }),
     ).toBeVisible();
     const russianCompatibility = page
       .locator(".provider-settings")
-      .getByRole("list", { name: "Готовность реальных провайдеров" });
+      .getByRole("list", { name: "Готовность локальных агентов" });
+    await expect(russianCompatibility.getByRole("listitem").filter({ hasText: "Codex CLI" })).toContainText(
+      "Войдите через этот CLI",
+    );
     await expect(
-      russianCompatibility.getByRole("listitem").filter({ hasText: "OpenAI Responses" }),
-    ).toContainText("Нужен API key");
-    await expect(
-      russianCompatibility.getByRole("listitem").filter({ hasText: "Anthropic Messages" }),
-    ).toContainText("Нужен API key");
+      russianCompatibility.getByRole("listitem").filter({ hasText: "Claude Code CLI" }),
+    ).toContainText("Войдите через этот CLI");
 
     await page.setViewportSize({ width: 320, height: 720 });
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     expect(await page.locator("body").evaluate((body) => body.scrollWidth <= body.clientWidth)).toBe(true);
   });
 
-  test("offers only real providers and blocks Auto when neither credential is ready", async ({ page }) => {
+  test("offers only local providers and blocks Auto when neither CLI is ready", async ({ page }) => {
     const providerRegistry = createProviderRegistry({ env: {} });
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
@@ -3230,30 +3289,30 @@ test.describe("authenticated walking skeleton", () => {
     const selector = provider.getByRole("combobox", { name: "Provider for new sessions" });
 
     await expect(selector).toContainText("Auto");
-    await expect(provider.getByText("New sessions use OpenAI Responses.", { exact: true })).toBeVisible();
+    await expect(provider.getByText("New sessions use Codex CLI.", { exact: true })).toBeVisible();
     await expect(
       provider.getByText(
-        "No real provider credential is configured. No agent session will start until OPENAI_API_KEY or ANTHROPIC_API_KEY is available.",
+        "No compatible signed-in local agent is ready. Install or update Codex CLI or Claude Code CLI, then sign in through that CLI.",
         { exact: true },
       ),
     ).toBeVisible();
-    await expect(provider.getByRole("listitem").filter({ hasText: "OpenAI Responses" })).toContainText(
-      "API key required",
+    await expect(provider.getByRole("listitem").filter({ hasText: "Codex CLI" })).toContainText(
+      "Not installed",
     );
 
     await selector.focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("option", { name: "OpenAI Responses", exact: true })).toBeVisible();
-    await expect(page.getByRole("option", { name: "Anthropic Messages", exact: true })).toBeVisible();
+    await expect(page.getByRole("option", { name: "Codex CLI", exact: true })).toBeVisible();
+    await expect(page.getByRole("option", { name: "Claude Code CLI", exact: true })).toBeVisible();
     await expect(page.getByRole("option")).toHaveCount(3);
     await page.keyboard.press("Home");
     await page.keyboard.press("ArrowDown");
-    await expect(page.getByRole("option", { name: "OpenAI Responses", exact: true })).toHaveAttribute(
+    await expect(page.getByRole("option", { name: "Codex CLI", exact: true })).toHaveAttribute(
       "data-highlighted",
     );
     await page.keyboard.press("Enter");
-    await expect(selector).toContainText("OpenAI Responses");
-    await expect(provider.getByText("New sessions use OpenAI Responses.", { exact: true })).toBeVisible();
+    await expect(selector).toContainText("Codex CLI");
+    await expect(provider.getByText("New sessions use Codex CLI.", { exact: true })).toBeVisible();
     await expect(
       provider.getByText("This provider is not ready for the requested stage. No session will start.", {
         exact: true,
@@ -3265,7 +3324,7 @@ test.describe("authenticated walking skeleton", () => {
     await page.getByRole("button", { name: "Open settings" }).click();
     const reopened = page.getByRole("dialog", { name: "Settings" }).locator(".provider-settings");
     await expect(reopened.getByRole("combobox", { name: "Provider for new sessions" })).toContainText(
-      "OpenAI Responses",
+      "Codex CLI",
     );
     await expect(
       reopened.getByText("This provider is not ready for the requested stage. No session will start.", {

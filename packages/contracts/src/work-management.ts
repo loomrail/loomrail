@@ -112,6 +112,12 @@ import {
   workspaceLeaseReleasedResultSchema,
 } from "./workspace.js";
 import {
+  finishWorkspaceToolCallCommandSchema,
+  startWorkspaceToolCallCommandSchema,
+  workspaceToolCallChangedEventSchema,
+  workspaceToolCallChangedResultSchema,
+} from "./workspace-tool.js";
+import {
   completeProjectConstitutionPublicationCommandSchema,
   failProjectConstitutionPublicationCommandSchema,
   projectConstitutionActivatedEventSchema,
@@ -469,6 +475,7 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   contextFloorExceededEventSchema,
   workItemWorkspaceCreatedEventSchema,
   workItemWorkspaceOrphanedEventSchema,
+  workspaceToolCallChangedEventSchema,
 ]);
 
 const commandBaseSchema = z
@@ -684,6 +691,8 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   acquireWorkspaceLeaseCommandSchema,
   releaseWorkspaceLeaseCommandSchema,
   markWorkspaceOrphanedCommandSchema,
+  startWorkspaceToolCallCommandSchema,
+  finishWorkspaceToolCallCommandSchema,
 ]);
 
 const commandResultBaseSchema = z
@@ -816,6 +825,7 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   workspaceLeaseAcquiredResultSchema,
   workspaceLeaseReleasedResultSchema,
   workItemWorkspaceOrphanedResultSchema,
+  workspaceToolCallChangedResultSchema,
 ]);
 
 export const registerFixtureProjectRequestSchema = z

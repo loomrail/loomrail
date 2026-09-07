@@ -2,7 +2,11 @@
 
 **Date:** 2026-09-06
 
-**Status:** pending; preventive runtime capability unavailable
+**Status:** superseded by PD-019, ADR-0015 and ADR-0016
+
+This report remains historical evidence of why terminal CLI usage cannot be called an in-flight hard token cap.
+Schema-v3 stable release gates no longer require this impossible API-era contract; they require bounded local
+subscription CLI workspace execution with explicit `POST_SESSION` accounting instead.
 
 ## Measured result
 

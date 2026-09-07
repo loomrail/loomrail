@@ -108,9 +108,7 @@ const routeCheck = (
   if (report.checks.providers.environmentOverride !== "NONE") {
     return { status: "FAIL", code: "PROVIDER_OVERRIDE_ACTIVE" };
   }
-  const liveReady = report.checks.providers.items.some(
-    ({ ready, tokenBudgetEnforcement }) => ready && tokenBudgetEnforcement === "HARD",
-  );
+  const liveReady = report.checks.providers.items.some(({ ready }) => ready);
   return liveReady
     ? { status: "PASS", code: "LIVE_ROUTE_READY" }
     : { status: "FAIL", code: "LIVE_PROVIDER_NOT_READY" };
@@ -128,11 +126,11 @@ const remediationActions = (
   if (checks.browser.status === "FAIL") actions.push("INSTALL_CHROMIUM");
   if (checks.route.code === "PROVIDER_OVERRIDE_ACTIVE") actions.push("CLEAR_PROVIDER_OVERRIDE");
   if (checks.route.code === "LIVE_PROVIDER_NOT_READY") {
-    const apiProviderNeedsAuthentication = report?.checks.providers.items.some(
-      ({ compatibility, authentication }) =>
-        compatibility === "BUILT_IN" && authentication !== "AUTHENTICATED",
+    const localProviderNeedsAuthentication = report?.checks.providers.items.some(
+      ({ installed, compatibility, authentication }) =>
+        installed && compatibility === "VERIFIED" && authentication !== "AUTHENTICATED",
     );
-    actions.push(apiProviderNeedsAuthentication ? "SIGN_IN_PROVIDER" : "REVIEW_PROVIDER_COMPATIBILITY");
+    actions.push(localProviderNeedsAuthentication ? "SIGN_IN_PROVIDER" : "REVIEW_PROVIDER_COMPATIBILITY");
   }
   return actions;
 };
@@ -172,11 +170,12 @@ const setupActionText: Readonly<Record<SetupReadinessReport["nextActions"][numbe
   CLEAR_PROVIDER_OVERRIDE: "Unset LOOMRAIL_PROVIDER before using the guided setup route.",
   REVIEW_PROVIDER_COMPATIBILITY:
     "Review the exact provider version in the Loomrail compatibility matrix, then run setup again.",
-  SIGN_IN_PROVIDER: "Set OPENAI_API_KEY or ANTHROPIC_API_KEY for this process, then run setup again.",
+  SIGN_IN_PROVIDER:
+    "Sign in with the official local CLI (`codex login` or `claude auth login`), then run setup again.",
   RUN_START: "Run `loomrail start`.",
   INITIALIZE_DEMO_WORKSPACE: "In the Workbench, initialize the bundled demo workspace.",
   SELECT_LIVE_PROVIDER:
-    "In Settings, explicitly select OpenAI Responses or Anthropic Messages before starting the workflow.",
+    "In Settings, explicitly select local Codex or Claude Code before starting the workflow.",
 };
 
 export const formatSetupReadiness = (report: SetupReadinessReport): readonly string[] => [

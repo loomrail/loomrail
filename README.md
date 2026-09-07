@@ -27,21 +27,24 @@ the source of truth.
 </picture>
 
 > [!IMPORTANT]
-> Loomrail is public pre-alpha software. New projects use **Auto**, which selects only a configured OpenAI Responses
-> or Anthropic Messages API adapter. Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` yourself before the guided route;
-> missing credentials block startup instead of falling back. Loomrail never creates provider credentials,
+> Loomrail is public pre-alpha software. New projects use **Auto**, which selects only a compatible, signed-in local
+> Codex CLI or Claude Code CLI. Loomrail does not ask for provider API keys or use separate API billing; a missing,
+> incompatible, or signed-out CLI blocks startup instead of falling back. Loomrail never creates provider credentials,
 > enables permission-bypass flags, commits, pushes, merges, or deploys for you. A task worktree is not an
 > operating-system sandbox.
 
 ## Install and run safely
 
-Requirements: Node.js `>=24.19 <25`, macOS or Windows, a browser on the same machine, and the isolated Chromium build
-managed by the installed Playwright package. Linux is best effort.
+Requirements: Node.js `>=24.19 <25`, macOS or Windows, a browser on the same machine, the isolated Chromium build
+managed by the installed Playwright package, and at least one official local agent CLI already signed in:
+
+- Codex: install the official CLI and run `codex login` once; or
+- Claude Code: install the official CLI and run `claude auth login` once.
+
+That login remains owned by the provider CLI. Loomrail detects it read-only and never asks you to copy an API key.
+Linux is best effort.
 
 Start in a new empty directory, not inside a repository you care about:
-
-First export either `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in that terminal. Provider requests can consume your API
-quota. Keys remain process-only and are not written to Loomrail's database.
 
 <!-- loomrail-guided-activation-v1:start -->
 
@@ -56,9 +59,10 @@ npx loomrail try
 <!-- loomrail-guided-activation-v1:end -->
 
 The Chromium download is an explicit one-time installation for deterministic Browser QA. Loomrail never reuses your
-signed-in browser profile. `loomrail try` first runs a read-only real-provider preflight. If a required check fails it
-writes nothing; when ready, it states the local state/log side effects, starts the loopback daemon, and opens the
-guided route. Each later mutation remains a visible owner action.
+signed-in browser profile. `loomrail try` first checks the local CLI version and login read-only. If a required check
+fails it writes nothing and tells you whether to install, update, or sign in to that CLI. When ready, it states the
+local state/log side effects, starts the loopback daemon, and opens the guided route. Each later mutation remains a
+visible owner action.
 
 The launcher binds to `127.0.0.1`, opens a one-time authenticated URL, and stores state in local SQLite. Keep the
 terminal open and stop Loomrail with `Ctrl+C`.
@@ -78,7 +82,7 @@ The project-local route above is recommended for evaluation because it keeps the
 ## First run
 
 1. Choose **Prepare demo workspace**.
-2. Choose **OpenAI Responses** or **Anthropic Messages** for this project.
+2. Choose **Codex CLI** or **Claude Code CLI** for this project.
 3. Create the exact guided task and move it to **Ready**.
 4. Start the guided workflow with the displayed Loomrail budget and model tier.
 5. Open **Attention**, answer any blocking Human Request, and review every explicit budget change.
@@ -105,10 +109,11 @@ change inspection, backup, recovery, diagnostics, upgrade, and uninstall:
 - [Reproducible full-route example](docs/examples/full-route/README.md)
 - [Security and trust boundaries](docs/security/THREAT-MODEL.md)
 
-Configure a provider API key yourself, then start Loomrail normally. In **Settings → AI provider**, use **Check
-again** to refresh readiness. Auto considers only ready real adapters. An explicit unavailable provider remains
-visible and fails closed. `LOOMRAIL_PROVIDER` remains an optional process-wide override for automation and
-troubleshooting, but it does not bypass credentials, stage support, or token ceilings.
+Install and sign in to an official provider CLI, then start Loomrail normally. In **Settings → AI provider**, use
+**Check again** to refresh readiness. Auto considers only compatible and authenticated local runtimes. An explicit
+unavailable provider remains visible and fails closed. `LOOMRAIL_PROVIDER` remains an optional process-wide override
+for automation and troubleshooting, but it does not bypass version checks, login, stage support, permissions, or
+budgets.
 
 Context7 is different from an AI provider: its exact-pinned MCP server ships with Loomrail. In **Settings → MCP
 connections**, choose **Review bundled Context7**; no global install or `npx` command is needed. Loomrail still requires
@@ -118,10 +123,13 @@ machine, so never include secrets, personal data, or proprietary code.
 ## Current boundary
 
 - Local browser UI, loopback daemon, and local SQLite state.
-- Explicit selection between OpenAI Responses and Anthropic Messages APIs, with no synthetic runtime fallback.
-- `DISCOVERY`, `PLAN`, `REVIEW`, and `ACCEPTANCE` use real provider calls. `IMPLEMENT` and `QA` remain blocked until
-  the local workspace tool executor is implemented and security-reviewed; provider text is not treated as file or
-  test evidence.
+- Explicit selection between the locally installed Codex CLI and Claude Code CLI, with no API-key route or synthetic
+  runtime fallback.
+- All six stages, including `IMPLEMENT` and `QA`, use the real selected local agent. Repository access goes only
+  through Loomrail's bounded workspace tools, and provider text alone is never treated as file or test evidence.
+- Local CLI token usage is reconciled after a session. Loomrail enforces time, turn, tool and output limits during
+  execution and can block later work from the durable ledger, but cannot promise an exact stop at a token boundary
+  inside the current provider session.
 - Up to three agent runs in parallel by default, with durable global, Project, provider, and workspace gates plus an
   Agent Fleet view of active roles and exact queue reasons.
 - Project-scoped local MCP connections and a bundled, owner-approved Context7 preset.

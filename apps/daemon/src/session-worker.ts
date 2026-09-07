@@ -13,6 +13,7 @@ import { readAgentSchedulingSnapshot } from "./agent-scheduling.js";
 import type { BrowserQAStageRunner } from "./browser-qa-runner.js";
 import type { ProjectVerificationWorkflowGate } from "./project-verification-gate.js";
 import { runStageAttempt, type OpenMcpConnections } from "./session-loop.js";
+import type { CreateSessionWorkspaceTools } from "./workspace-tools.js";
 
 /**
  * The bound on how many pending dispatches one pass through the queue may hand to `runStageAttempt`
@@ -52,7 +53,8 @@ export type SessionWorkerDeps = {
   createCommandId: () => string;
   logger: FastifyBaseLogger;
   openMcpConnections?: OpenMcpConnections;
-  /** Daemon-owned deterministic baseline. When present, QA never opens a provider session. */
+  createWorkspaceTools?: CreateSessionWorkspaceTools;
+  /** Daemon-owned measurement gate; only a passing bundle may continue to provider QA synthesis. */
   browserQA?: BrowserQAStageRunner;
   /** Runs an adopted Project verification Plan before Browser QA receives execution authority. */
   projectVerification?: ProjectVerificationWorkflowGate;
@@ -218,8 +220,8 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
             "Browser QA is not permitted by the active AgentRun policy snapshot",
           );
         }
-        await deps.browserQA.run({ dispatch, agentRunId, testedTree });
-        return { dispatchId: dispatch.id, moved: true };
+        const qaResult = await deps.browserQA.run({ dispatch, agentRunId, testedTree });
+        if (qaResult !== "MEASUREMENT_RECORDED") return { dispatchId: dispatch.id, moved: true };
       }
 
       await runStageAttempt({
@@ -233,6 +235,9 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         logger: deps.logger,
         authoritySignal: authority.signal,
         ...(deps.openMcpConnections === undefined ? {} : { openMcpConnections: deps.openMcpConnections }),
+        ...(deps.createWorkspaceTools === undefined
+          ? {}
+          : { createWorkspaceTools: deps.createWorkspaceTools }),
         onSessionLive: (providerSessionId) => {
           execution.providerSessionId = providerSessionId;
         },

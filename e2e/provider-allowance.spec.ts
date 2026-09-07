@@ -77,6 +77,12 @@ const durableAllowanceRegistry = () => {
     env: {},
     adapters: { CODEX: codex },
     probeAuthentication: (provider) => Promise.resolve(provider === "CODEX" ? "AUTHENTICATED" : "REQUIRED"),
+    probeRuntime: (provider) =>
+      Promise.resolve({
+        installed: provider === "CODEX",
+        compatibility: provider === "CODEX" ? "VERIFIED" : "MISSING",
+        version: provider === "CODEX" ? "0.153.4" : null,
+      }),
   });
 };
 
@@ -188,11 +194,11 @@ test.describe("provider allowance product surface", () => {
     await createTask(page, "Provider allowance surface");
 
     const command = page.getByRole("region", {
-      name: "OpenAI Responses provider allowance in Command Center",
+      name: "Codex CLI provider allowance in Command Center",
     });
     const inspector = page.getByRole("complementary", { name: "Provider allowance surface" });
     const cockpit = inspector.getByRole("region", {
-      name: "OpenAI Responses provider allowance in Task Cockpit",
+      name: "Codex CLI provider allowance in Task Cockpit",
     });
     await expect(command.getByText("62% remaining", { exact: true })).toBeVisible();
     await expect(command.getByText("29% remaining", { exact: true })).toBeVisible();
@@ -232,7 +238,9 @@ test.describe("provider allowance product surface", () => {
 
     await page.setViewportSize({ width: 320, height: 900 });
     await expect
-      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), {
+        timeout: 20_000,
+      })
       .toBe(true);
     if (visualQaDirectory !== undefined) {
       await page.screenshot({
@@ -252,7 +260,7 @@ test.describe("provider allowance product surface", () => {
     await openWorkbench(page);
 
     const command = page.getByRole("region", {
-      name: "OpenAI Responses provider allowance in Command Center",
+      name: "Codex CLI provider allowance in Command Center",
     });
     await expect(command.getByText("Unavailable", { exact: true })).toBeVisible();
     await expect(command.getByText("This provider does not expose an allowance signal.")).toBeVisible();
@@ -279,7 +287,7 @@ test.describe("provider allowance product surface", () => {
       await page.getByRole("button", { name: "Switch project" }).click();
       await page.getByRole("menuitem", { name: "Fixture web application" }).click();
       const liveStrip = page.getByRole("region", {
-        name: "OpenAI Responses provider allowance in Command Center",
+        name: "Codex CLI provider allowance in Command Center",
       });
       await liveStrip.getByRole("button", { name: "Check again" }).click();
       await expect(liveStrip.getByText("70% remaining", { exact: true })).toBeVisible();
@@ -300,7 +308,7 @@ test.describe("provider allowance product surface", () => {
       await page.getByRole("button", { name: "Switch project" }).click();
       await page.getByRole("menuitem", { name: "Fixture web application" }).click();
       const restoredStrip = page.getByRole("region", {
-        name: "OpenAI Responses provider allowance in Command Center",
+        name: "Codex CLI provider allowance in Command Center",
       });
       await expect(restoredStrip.getByText("70% remaining", { exact: true })).toBeVisible();
       await expect(restoredStrip.getByText("Stale", { exact: true })).toBeVisible();

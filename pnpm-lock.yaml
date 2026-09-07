@@ -124,6 +124,9 @@ importers:
       '@loomrail/workspace':
         specifier: workspace:*
         version: link:../../packages/workspace
+      '@loomrail/workspace-executor':
+        specifier: workspace:*
+        version: link:../../packages/workspace-executor
       '@upstash/context7-mcp':
         specifier: 3.2.5
         version: 3.2.5(supports-color@7.2.0)
@@ -392,6 +395,18 @@ importers:
       '@loomrail/contracts':
         specifier: workspace:*
         version: link:../contracts
+
+  packages/workspace-executor:
+    dependencies:
+      '@loomrail/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@loomrail/project-readiness':
+        specifier: workspace:*
+        version: link:../project-readiness
+      '@loomrail/provider-core':
+        specifier: workspace:*
+        version: link:../provider-core
 
 packages:
 

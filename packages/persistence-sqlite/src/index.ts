@@ -33,6 +33,7 @@ import {
   mcpProfileRevisionSchema,
   mcpSessionSnapshotSchema,
   mcpToolCallRecordSchema,
+  workspaceToolCallRecordSchema,
   opaqueIdSchema,
   pipelineRunSchema,
   projectSchema,
@@ -102,6 +103,7 @@ import {
   type McpProfileView,
   type McpSessionSnapshot,
   type McpToolCallRecord,
+  type WorkspaceToolCallRecord,
   type PipelineRun,
   type Project,
   type ProjectConstitutionVersion,
@@ -212,6 +214,9 @@ import {
   decideMcpSessionSnapshots,
   decideMcpToolCallFinished,
   decideMcpToolCallStart,
+  decideWorkspaceToolCallFinish,
+  decideWorkspaceToolCallStart,
+  interruptWorkspaceToolCall,
   decidePausePipeline,
   decideRecoverInterruptedWorkflow,
   decideResolveAcceptance,
@@ -226,6 +231,7 @@ import {
   WorkflowDomainError,
   ReadinessDomainError,
   McpDomainError,
+  WorkspaceToolDomainError,
   ProviderSelectionDomainError,
   WorkspaceStrategyDomainError,
   VerificationDomainError,
@@ -665,6 +671,28 @@ const mcpToolCallRowSchema = z.object({
   input_digest: z.string(),
   status: z.string(),
   failure_code: z.string().nullable(),
+  started_at: z.string(),
+  finished_at: z.string().nullable(),
+});
+
+const workspaceToolCallRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  work_item_id: z.string(),
+  stage_attempt_id: z.string(),
+  agent_run_id: z.string(),
+  provider_session_id: z.string(),
+  provider_call_key: z.string(),
+  operation: z.string(),
+  target: z.string(),
+  policy_digest: z.string(),
+  input_digest: z.string(),
+  status: z.string(),
+  failure_code: z.string().nullable(),
+  output_digest: z.string().nullable(),
+  output_bytes: z.number().int().nullable(),
+  exit_code: z.number().int().nullable(),
   started_at: z.string(),
   finished_at: z.string().nullable(),
 });
@@ -1263,6 +1291,8 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("LIST_MCP_TOOL_CALLS"), providerSessionId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("LIST_WORKSPACE_TOOL_CALLS"), providerSessionId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("LIST_STARTED_WORKSPACE_TOOL_CALLS") }).strict(),
   z.object({ type: z.literal("LIST_PENDING_CONSTITUTION_PUBLICATIONS") }).strict(),
   z.object({ type: z.literal("LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS") }).strict(),
   z.object({ type: z.literal("GET_SCAFFOLD_OPERATION"), operationId: opaqueIdSchema }).strict(),
@@ -1611,6 +1641,31 @@ const mcpToolCallFromRow = (value: unknown): McpToolCallRecord => {
     inputDigest: row.input_digest,
     status: row.status,
     failureCode: row.failure_code,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+  });
+};
+
+const workspaceToolCallFromRow = (value: unknown): WorkspaceToolCallRecord => {
+  const row = workspaceToolCallRowSchema.parse(value);
+  return workspaceToolCallRecordSchema.parse({
+    schemaVersion: row.schema_version,
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    stageAttemptId: row.stage_attempt_id,
+    agentRunId: row.agent_run_id,
+    providerSessionId: row.provider_session_id,
+    providerCallKey: row.provider_call_key,
+    operation: row.operation,
+    target: row.target,
+    policyDigest: row.policy_digest,
+    inputDigest: row.input_digest,
+    status: row.status,
+    failureCode: row.failure_code,
+    outputDigest: row.output_digest,
+    outputBytes: row.output_bytes,
+    exitCode: row.exit_code,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
   });
@@ -3061,6 +3116,31 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       `UPDATE mcp_tool_calls SET status = ?, failure_code = ?, finished_at = ?
        WHERE id = ? AND status = 'STARTED'`,
     );
+    const insertWorkspaceToolCall = database.prepare(
+      `INSERT INTO workspace_tool_calls (
+        id, schema_version, project_id, work_item_id, stage_attempt_id, agent_run_id,
+        provider_session_id, provider_call_key, operation, target, policy_digest, input_digest,
+        status, failure_code, output_digest, output_bytes, exit_code, started_at, finished_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectWorkspaceToolCallById = database.prepare("SELECT * FROM workspace_tool_calls WHERE id = ?");
+    const selectWorkspaceToolCallByProviderKey = database.prepare(
+      "SELECT * FROM workspace_tool_calls WHERE provider_session_id = ? AND provider_call_key = ?",
+    );
+    const selectWorkspaceToolCallsForSession = database.prepare(
+      "SELECT * FROM workspace_tool_calls WHERE provider_session_id = ? ORDER BY started_at, id",
+    );
+    const selectWorkspaceToolCallsForStageAttempt = database.prepare(
+      "SELECT * FROM workspace_tool_calls WHERE stage_attempt_id = ? ORDER BY started_at, id",
+    );
+    const selectStartedWorkspaceToolCalls = database.prepare(
+      "SELECT * FROM workspace_tool_calls WHERE status = 'STARTED' ORDER BY started_at, id",
+    );
+    const updateWorkspaceToolCall = database.prepare(
+      `UPDATE workspace_tool_calls SET
+        status = ?, failure_code = ?, output_digest = ?, output_bytes = ?, exit_code = ?, finished_at = ?
+       WHERE id = ? AND status = 'STARTED'`,
+    );
     const selectWorkItemById = database.prepare("SELECT * FROM work_items WHERE id = ?");
     // Migration 0011. Named `WorkItemWorkspace`, not `Workspace`, throughout this file to keep it
     // apart from the pre-existing `workspaces` table (DEFAULT_WORKSPACE_ID above) -- an unrelated,
@@ -3487,6 +3567,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectFailedQARunByStageAttempt = database.prepare(
       `SELECT * FROM qa_runs
        WHERE stage_attempt_id = ? AND status = 'FAILED'
+       ORDER BY completed_at DESC, rowid DESC LIMIT 1`,
+    );
+    const selectPassedQARunByStageAttempt = database.prepare(
+      `SELECT * FROM qa_runs
+       WHERE stage_attempt_id = ? AND status = 'PASSED'
        ORDER BY completed_at DESC, rowid DESC LIMIT 1`,
     );
     const selectQARunByAgentRun = database.prepare("SELECT * FROM qa_runs WHERE agent_run_id = ?");
@@ -4522,6 +4607,36 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           summary: artifact.summary,
           checks: artifact.checks,
         }));
+        const qaMeasurement =
+          stageAttempt.stage !== "QA" || runningAgentRunValue === undefined
+            ? null
+            : (() => {
+                const qaRunValue =
+                  selectQARunByAgentRun.get(agentRunFromRow(runningAgentRunValue).id) ??
+                  selectPassedQARunByStageAttempt.get(stageAttempt.id);
+                if (qaRunValue === undefined) return null;
+                const qaRun = qaRunFromRow(qaRunValue);
+                const evidenceValue = selectQAEvidenceBundleByQARun.get(qaRun.id);
+                if (qaRun.status !== "PASSED" || evidenceValue === undefined) return null;
+                const bundle = qaEvidenceBundleFromRow(evidenceValue);
+                return {
+                  qaRun: {
+                    id: qaRun.id,
+                    version: qaRun.version,
+                    testedTree: qaRun.testedTree,
+                    targetOrigin: qaRun.targetOrigin,
+                    scope: qaRun.scope.type,
+                  },
+                  evidence: {
+                    id: bundle.id,
+                    version: 1,
+                    verdict: bundle.verdict,
+                    environment: bundle.environment,
+                    executions: bundle.executions,
+                    observations: bundle.observations,
+                  },
+                };
+              })();
 
         // Reads id/type/occurred_at straight off the row -- NOT through eventFromRow, which runs
         // domainEventSchema.parse over the full row including data_json. The events CHECK
@@ -4563,6 +4678,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           decisions,
           latestCheckpoint,
           reviewInput,
+          qaMeasurement,
           evidence,
           activity,
         };
@@ -5092,6 +5208,48 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       const updated = updateMcpToolCall.run(call.status, call.failureCode, call.finishedAt, call.id);
       if (updated.changes !== 1) {
         throw new McpDomainError("TOOL_CALL_NOT_STARTED", "The MCP tool call is no longer started");
+      }
+    };
+
+    const persistWorkspaceToolCall = (call: WorkspaceToolCallRecord): void => {
+      insertWorkspaceToolCall.run(
+        call.id,
+        call.schemaVersion,
+        call.projectId,
+        call.workItemId,
+        call.stageAttemptId,
+        call.agentRunId,
+        call.providerSessionId,
+        call.providerCallKey,
+        call.operation,
+        call.target,
+        call.policyDigest,
+        call.inputDigest,
+        call.status,
+        call.failureCode,
+        call.outputDigest,
+        call.outputBytes,
+        call.exitCode,
+        call.startedAt,
+        call.finishedAt,
+      );
+    };
+
+    const persistFinishedWorkspaceToolCall = (call: WorkspaceToolCallRecord): void => {
+      const updated = updateWorkspaceToolCall.run(
+        call.status,
+        call.failureCode,
+        call.outputDigest,
+        call.outputBytes,
+        call.exitCode,
+        call.finishedAt,
+        call.id,
+      );
+      if (updated.changes !== 1) {
+        throw new WorkspaceToolDomainError(
+          "TOOL_CALL_NOT_STARTED",
+          "The workspace tool call is no longer started",
+        );
       }
     };
 
@@ -5761,6 +5919,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       | {
           type: "WORK_ITEM_WORKSPACE_ORPHANED";
           data: { workspace: WorkItemWorkspace; previousStatus: WorkItemWorkspace["status"] };
+        }
+      | {
+          type: "WORKSPACE_TOOL_CALL_CHANGED";
+          data: { call: WorkspaceToolCallRecord };
         };
 
     const appendWorkspaceEvent = (
@@ -8049,6 +8211,120 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "START_WORKSPACE_TOOL_CALL") {
+        if (command.actor.type !== "SYSTEM") {
+          throw new WorkspaceToolDomainError(
+            "PROVIDER_SESSION_NOT_RUNNING",
+            "Only the workspace executor can start an audited tool call",
+          );
+        }
+        const sessionValue = selectProviderSessionById.get(command.payload.providerSessionId);
+        if (sessionValue === undefined) {
+          throw new WorkspaceToolDomainError(
+            "PROVIDER_SESSION_NOT_RUNNING",
+            "The ProviderSession does not exist",
+          );
+        }
+        const providerSession = providerSessionFromRow(sessionValue);
+        const agentRunValue = selectAgentRunById.get(providerSession.agentRunId);
+        const stageAttempt = readStageAttempt(providerSession.stageAttemptId);
+        if (agentRunValue === undefined || stageAttempt === null) {
+          throw new WorkspaceToolDomainError(
+            "AGENT_RUN_NOT_RUNNING",
+            "The ProviderSession does not have a complete execution lineage",
+          );
+        }
+        const existingValue = selectWorkspaceToolCallByProviderKey.get(
+          providerSession.id,
+          command.payload.providerCallKey,
+        );
+        const decision = decideWorkspaceToolCallStart({
+          now: occurredAt,
+          newCallId: createId("workspaceToolCall"),
+          providerCallKey: command.payload.providerCallKey,
+          operation: command.payload.operation,
+          target: command.payload.target,
+          policyDigest: command.payload.policyDigest,
+          inputDigest: command.payload.inputDigest,
+          providerSession,
+          agentRun: agentRunFromRow(agentRunValue),
+          stageAttempt,
+          ...(existingValue === undefined ? {} : { existing: workspaceToolCallFromRow(existingValue) }),
+        });
+        if (existingValue !== undefined) {
+          return stateCommandResultSchema.parse({
+            schemaVersion: 1,
+            type: "WORKSPACE_TOOL_CALL_CHANGED",
+            replayed: true,
+            call: decision,
+            events: [],
+          });
+        }
+        persistWorkspaceToolCall(decision);
+        const event = appendWorkspaceEvent(
+          { type: "WORKSPACE_TOOL_CALL_CHANGED", data: { call: decision } },
+          {
+            workItemId: decision.workItemId,
+            projectId: decision.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "WORKSPACE_TOOL_CALL_CHANGED",
+          replayed: false,
+          call: decision,
+          events: [event],
+        });
+      }
+
+      if (command.type === "FINISH_WORKSPACE_TOOL_CALL") {
+        if (command.actor.type !== "SYSTEM") {
+          throw new WorkspaceToolDomainError(
+            "TOOL_CALL_NOT_STARTED",
+            "Only the workspace executor can finish an audited tool call",
+          );
+        }
+        const currentValue = selectWorkspaceToolCallById.get(command.payload.callId);
+        if (currentValue === undefined) {
+          throw new WorkspaceToolDomainError(
+            "TOOL_CALL_NOT_STARTED",
+            "The workspace tool call does not exist",
+          );
+        }
+        const current = workspaceToolCallFromRow(currentValue);
+        const decision = decideWorkspaceToolCallFinish(current, command.payload.outcome, occurredAt);
+        if (current.status !== "STARTED") {
+          return stateCommandResultSchema.parse({
+            schemaVersion: 1,
+            type: "WORKSPACE_TOOL_CALL_CHANGED",
+            replayed: true,
+            call: decision,
+            events: [],
+          });
+        }
+        persistFinishedWorkspaceToolCall(decision);
+        const event = appendWorkspaceEvent(
+          { type: "WORKSPACE_TOOL_CALL_CHANGED", data: { call: decision } },
+          {
+            workItemId: decision.workItemId,
+            projectId: decision.projectId,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "WORKSPACE_TOOL_CALL_CHANGED",
+          replayed: false,
+          call: decision,
+          events: [event],
+        });
+      }
+
       if (command.type === "PROPOSE_PROJECT_CONSTITUTION") {
         const project = readProject(command.payload.projectId);
         const decision = decideProjectConstitutionProposal(command, {
@@ -9115,6 +9391,37 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           persistUpdatedQACorrectionRun(passedCorrection.correctionRun);
           passedCorrection.resolvedDefects.forEach(updateQADefect);
         }
+        if (decision.status === "PASSED" && command.payload.completionMode === "RECORD_MEASUREMENT") {
+          if (evidence === null) {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "A passing QA measurement must persist its evidence bundle",
+            );
+          }
+          const event = appendAgentEvent(
+            {
+              type: "QA_RUN_COMPLETED",
+              data: {
+                qaRun: decision.qaRun,
+                evidenceBundleId: evidence.id,
+                defectIds: defects.map(({ id }) => id),
+              },
+            },
+            metadata,
+          );
+          if (passedCorrection !== null) appendWorkflowEvents(passedCorrection.events, metadata);
+          return stateCommandResultSchema.parse({
+            schemaVersion: 1,
+            type: "QA_RUN_COMPLETED",
+            replayed: false,
+            workItemId: decision.qaRun.workItemId,
+            qaRun: decision.qaRun,
+            evidence,
+            attachments,
+            defects,
+            event,
+          });
+        }
         const template = readWorkflowTemplate(pipelineRun);
         const workflowOutcome = qaWorkflowOutcome(decision);
         const measuredQA =
@@ -9327,16 +9634,35 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             : undefined;
         const existingArtifacts = readEvidenceArtifacts(run.id);
         const measuredQA =
-          command.payload.outcome.type === "READY_FOR_ACCEPTANCE"
+          stageAttempt.stage === "QA" && command.payload.outcome.type === "COMPLETED"
             ? (() => {
-                const qaArtifact = acceptanceEvidenceArtifacts(run, stageAttempt, existingArtifacts).find(
-                  ({ kind }) => kind === "QA_REPORT",
-                );
-                if (qaArtifact?.testedTree === undefined) return undefined;
-                const currentTree = qaArtifact.testedTree;
-                return readMeasuredQAForArtifact(qaArtifact, currentTree);
+                if (runningAgentRunValue === undefined) return undefined;
+                const qaRunValue =
+                  selectQARunByAgentRun.get(agentRunFromRow(runningAgentRunValue).id) ??
+                  selectPassedQARunByStageAttempt.get(stageAttempt.id);
+                if (qaRunValue === undefined) return undefined;
+                const qaRun = qaRunFromRow(qaRunValue);
+                const evidenceValue = selectQAEvidenceBundleByQARun.get(qaRun.id);
+                if (qaRun.status !== "PASSED" || evidenceValue === undefined) return undefined;
+                const evidence = qaEvidenceBundleFromRow(evidenceValue);
+                const treeValue = selectLatestSucceededImplementTree.get(run.id);
+                if (treeValue === undefined) return undefined;
+                return {
+                  qaRun,
+                  evidence,
+                  currentTree: resultTreeRowSchema.parse(treeValue).result_tree,
+                };
               })()
-            : undefined;
+            : command.payload.outcome.type === "READY_FOR_ACCEPTANCE"
+              ? (() => {
+                  const qaArtifact = acceptanceEvidenceArtifacts(run, stageAttempt, existingArtifacts).find(
+                    ({ kind }) => kind === "QA_REPORT",
+                  );
+                  if (qaArtifact?.testedTree === undefined) return undefined;
+                  const currentTree = qaArtifact.testedTree;
+                  return readMeasuredQAForArtifact(qaArtifact, currentTree);
+                })()
+              : undefined;
         const qaCorrectionHistory =
           measuredQA?.qaRun.scope.type === "RETEST" ? readQACorrectionHistory(run.id) : undefined;
         const projectVerification =
@@ -9385,6 +9711,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           projectVerification,
           qaCorrectionHistory,
           qaRunRequired,
+          qaRunCompletion: stageAttempt.stage === "QA" ? measuredQA?.qaRun : undefined,
           // Pre-R1 fixture workflows completed Review without AgentRun reservation. Keep those
           // historical migration paths readable, while every scheduled live reviewer is held to
           // the structured independent-review contract.
@@ -9425,6 +9752,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               "The terminal provider outcome does not match the active AgentRun",
             );
           }
+          const sessionDecisionContext = {
+            ...decisionContext,
+            workspaceToolCalls: selectWorkspaceToolCallsForStageAttempt
+              .all(stageAttempt.id)
+              .map(workspaceToolCallFromRow),
+          };
           completedSession = providerSessionSchema.parse({
             ...providerSession,
             status: "ENDED",
@@ -9454,7 +9787,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                     .digest("hex")}`;
                   const totalTokens = terminalUsage.inputTokens + terminalUsage.outputTokens;
                   return {
-                    ...decisionContext,
+                    ...sessionDecisionContext,
                     providerSession,
                     agentRun,
                     existingAgentUsageTotal: readProviderUsageReportsForAgentRun(agentRun.id).reduce(
@@ -9470,7 +9803,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           let usageDecision: RecordProviderUsageDecision | null = null;
           try {
             if (usageContext === null) {
-              decision = decideApplyProviderOutcome(normalizedCommand, decisionContext);
+              decision = decideApplyProviderOutcome(normalizedCommand, sessionDecisionContext);
             } else {
               const withUsage = decideApplyProviderOutcomeWithUsage(normalizedCommand, usageContext);
               decision = withUsage;
@@ -10159,6 +10492,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         }
         const latestAgentRunValue = selectLatestAgentRunForStageAttempt.get(stageAttempt.id);
         const latestAgentRun = latestAgentRunValue ? agentRunFromRow(latestAgentRunValue) : null;
+        const passingQARunValue =
+          stageAttempt.stage === "QA" ? selectPassedQARunByStageAttempt.get(stageAttempt.id) : undefined;
+        const qaMeasurementCompleted =
+          passingQARunValue !== undefined &&
+          selectQAEvidenceBundleByQARun.get(qaRunFromRow(passingQARunValue).id) !== undefined;
         const decision = decideApproveBudgetOverride(command, {
           now: occurredAt,
           workItem,
@@ -10168,6 +10506,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           cumulativeUsage: readUsageRecords(run.id).reduce((total, record) => total + record.amount, 0),
           currentAgentRunMaxEstimatedTokens:
             latestAgentRun?.policySnapshot?.budget.maxEstimatedTokens ?? null,
+          qaMeasurementCompleted,
           ids: {
             budgetPolicyId: createId("budgetPolicy"),
             stageAttemptId: createId("stageAttempt"),
@@ -10207,10 +10546,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       if (command.type === "RECONCILE_WORKFLOWS") {
         const interruptedSessions: ProviderSession[] = [];
         const interruptedVerificationRuns: VerificationRun[] = [];
+        const interruptedWorkspaceToolCalls: WorkspaceToolCallRecord[] = [];
         const verificationEvents: DomainEvent[] = [];
+        const workspaceToolEvents: DomainEvent[] = [];
         const interruptedAgentRunLeases: { stageAttemptId: string; workItemId: string }[] = [];
         const verificationProcessAuthorityReleasedRunIds = new Set(
           command.payload.verificationProcessAuthorityReleasedRunIds ?? [],
+        );
+        const workspaceToolProcessAuthorityReleasedCallIds = new Set(
+          command.payload.workspaceToolProcessAuthorityReleasedCallIds ?? [],
         );
         // An active verification process has no daemon loop after restart. A durable owner
         // cancellation keeps its reason; otherwise record restart uncertainty. Never replay work.
@@ -10333,6 +10677,33 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           );
           persistFinishedMcpToolCall(uncertain);
         }
+        // File operations have no surviving child process. RUN_RECIPE is reconciled only after
+        // startup recovery has proved its supervised tree no longer owns execution authority.
+        // Every interrupted call is terminal and never automatically replayed.
+        for (const callRow of selectStartedWorkspaceToolCalls.all()) {
+          const current = workspaceToolCallFromRow(callRow);
+          if (
+            current.operation === "RUN_RECIPE" &&
+            !workspaceToolProcessAuthorityReleasedCallIds.has(current.id)
+          ) {
+            continue;
+          }
+          const interrupted = interruptWorkspaceToolCall(current, occurredAt);
+          persistFinishedWorkspaceToolCall(interrupted);
+          interruptedWorkspaceToolCalls.push(interrupted);
+          workspaceToolEvents.push(
+            appendWorkspaceEvent(
+              { type: "WORKSPACE_TOOL_CALL_CHANGED", data: { call: interrupted } },
+              {
+                workItemId: interrupted.workItemId,
+                projectId: interrupted.projectId,
+                actor: command.actor,
+                occurredAt,
+                correlationId: command.correlationId,
+              },
+            ),
+          );
+        }
         const orphanedDispatches = database
           .prepare(
             `SELECT workflow_dispatches.* FROM workflow_dispatches
@@ -10346,7 +10717,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           .all()
           .map(workflowDispatchFromRow);
         const recoveryReports: RecoveryReport[] = [];
-        const events: DomainEvent[] = [...verificationEvents];
+        const events: DomainEvent[] = [...verificationEvents, ...workspaceToolEvents];
 
         // A session still marked RUNNING at startup is orphaned by definition. It only ends as
         // ENDED/INTERRUPTED once recovery knows its recorded process is gone or the pid was reused.
@@ -10647,6 +11018,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           recoveryReports,
           interruptedSessions,
           interruptedVerificationRuns,
+          interruptedWorkspaceToolCalls,
           orphanedWorkspaces,
           events,
         });
@@ -11746,6 +12118,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (
           error instanceof ConstitutionDomainError ||
           error instanceof McpDomainError ||
+          error instanceof WorkspaceToolDomainError ||
           error instanceof ReadinessDomainError ||
           error instanceof ProviderAllowanceDomainError ||
           error instanceof ProviderSelectionDomainError ||
@@ -12003,6 +12376,18 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           return {
             type: "MCP_TOOL_CALLS",
             calls: selectMcpToolCallsForSession.all(queryValue.providerSessionId).map(mcpToolCallFromRow),
+          };
+        case "LIST_WORKSPACE_TOOL_CALLS":
+          return {
+            type: "WORKSPACE_TOOL_CALLS",
+            calls: selectWorkspaceToolCallsForSession
+              .all(queryValue.providerSessionId)
+              .map(workspaceToolCallFromRow),
+          };
+        case "LIST_STARTED_WORKSPACE_TOOL_CALLS":
+          return {
+            type: "WORKSPACE_TOOL_CALLS",
+            calls: selectStartedWorkspaceToolCalls.all().map(workspaceToolCallFromRow),
           };
         case "LIST_PENDING_CONSTITUTION_PUBLICATIONS":
           return {

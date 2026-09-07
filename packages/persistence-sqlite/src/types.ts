@@ -42,6 +42,7 @@ import type {
   WorkflowDispatch,
   WorkflowSnapshot,
   WorkItemWorkspace,
+  WorkspaceToolCallRecord,
   VerificationPlan,
   VerificationPlanPublication,
   VerificationCheck,
@@ -155,6 +156,8 @@ export type StateQuery =
   | { type: "GET_PROJECT_MCP_PROFILES"; projectId: string }
   | { type: "LIST_PROVIDER_SESSION_MCP_SNAPSHOTS"; providerSessionId: string }
   | { type: "LIST_MCP_TOOL_CALLS"; providerSessionId: string }
+  | { type: "LIST_WORKSPACE_TOOL_CALLS"; providerSessionId: string }
+  | { type: "LIST_STARTED_WORKSPACE_TOOL_CALLS" }
   | { type: "LIST_PENDING_CONSTITUTION_PUBLICATIONS" }
   | { type: "LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS" }
   | { type: "GET_SCAFFOLD_OPERATION"; operationId: string }
@@ -259,6 +262,7 @@ export type StateQueryResult =
   | { type: "PROJECT_MCP_PROFILES"; project: Project; profiles: McpProfileView[] }
   | { type: "MCP_SESSION_SNAPSHOTS"; snapshots: McpSessionSnapshot[] }
   | { type: "MCP_TOOL_CALLS"; calls: McpToolCallRecord[] }
+  | { type: "WORKSPACE_TOOL_CALLS"; calls: WorkspaceToolCallRecord[] }
   | { type: "SCAFFOLD_OPERATION"; operation: ScaffoldOperation | null }
   | { type: "SCAFFOLD_OPERATIONS"; operations: ScaffoldOperation[] }
   | {
@@ -382,7 +386,8 @@ export type LocalStateIdKind =
   | "mcpCapabilitySnapshot"
   | "mcpGrant"
   | "mcpSessionSnapshot"
-  | "mcpToolCall";
+  | "mcpToolCall"
+  | "workspaceToolCall";
 
 /**
  * What startup reconciliation did about the process an orphaned ProviderSession left behind.

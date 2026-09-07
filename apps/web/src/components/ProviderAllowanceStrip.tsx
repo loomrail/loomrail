@@ -28,8 +28,8 @@ type ProviderAllowanceStripProps = {
 };
 
 const providerLabels: Record<ProviderId, string> = {
-  CODEX: "OpenAI Responses",
-  CLAUDE_CODE: "Anthropic Messages",
+  CODEX: "Codex CLI",
+  CLAUDE_CODE: "Claude Code CLI",
   MOCK: "Historical provider",
 };
 

@@ -1373,6 +1373,7 @@ describe("SQLite local state", () => {
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
       29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54,
+      55,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -3208,6 +3209,149 @@ describe("SQLite local state", () => {
       expect(
         events.type === "EVENTS" ? events.events.filter(({ type }) => type === "AGENT_RUN_FINISHED") : [],
       ).toHaveLength(1);
+    });
+
+    it("persists idempotent workspace tool audit and interrupts unfinished calls on restart", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const { workItemId, dispatch } = startReadyWorkflow(localState, "workspace-tool-audit");
+      const agent = localState.execute(startAgentRun("workspace-tool-audit", dispatch.id));
+      if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun start");
+      const session = localState.execute({
+        schemaVersion: 1,
+        commandId: "workspace-tool-session",
+        correlationId: "workspace-tool-correlation",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "START_PROVIDER_SESSION",
+        payload: {
+          stageAttemptId: dispatch.stageAttemptId,
+          recipe: {
+            schemaVersion: 1,
+            templateId: mockTemplate.id,
+            templateVersion: mockTemplate.version,
+            specSource: "WORKFLOW_TEMPLATE",
+            roleProfile: null,
+            sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
+            omitted: [],
+            contentHash: `sha256:${"0".repeat(64)}`,
+            estimatedTokens: 10,
+            budgetTokens: 100,
+            estimateQuality: "LOOMRAIL_ESTIMATE",
+          },
+        },
+      });
+      if (session.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected ProviderSession start");
+      const startCommand = {
+        schemaVersion: 1,
+        commandId: "workspace-tool-start-1",
+        correlationId: "workspace-tool-correlation",
+        actor: { type: "SYSTEM", id: "workspace-executor" },
+        type: "START_WORKSPACE_TOOL_CALL",
+        payload: {
+          providerSessionId: session.session.id,
+          providerCallKey: "a".repeat(64),
+          operation: "WRITE_FILE",
+          target: "src/файл с пробелом.ts",
+          policyDigest: "b".repeat(64),
+          inputDigest: "c".repeat(64),
+        },
+      } as const;
+      const started = localState.execute(startCommand);
+      if (started.type !== "WORKSPACE_TOOL_CALL_CHANGED") throw new Error("Expected tool reservation");
+      expect(started).toMatchObject({
+        replayed: false,
+        call: { status: "STARTED" },
+        events: [{ type: "WORKSPACE_TOOL_CALL_CHANGED" }],
+      });
+      expect(
+        localState.execute({ ...startCommand, commandId: "workspace-tool-start-duplicate" }),
+      ).toMatchObject({
+        type: "WORKSPACE_TOOL_CALL_CHANGED",
+        replayed: true,
+        call: { id: started.call.id },
+        events: [],
+      });
+      expect(() =>
+        localState.execute({
+          ...startCommand,
+          commandId: "workspace-tool-start-mismatch",
+          payload: { ...startCommand.payload, inputDigest: "f".repeat(64) },
+        }),
+      ).toThrow(
+        expect.objectContaining({
+          name: "WorkspaceToolDomainError",
+          code: "TOOL_CALL_ID_REUSED",
+        }),
+      );
+      const finishCommand = {
+        schemaVersion: 1,
+        commandId: "workspace-tool-finish-1",
+        correlationId: "workspace-tool-correlation",
+        actor: { type: "SYSTEM", id: "workspace-executor" },
+        type: "FINISH_WORKSPACE_TOOL_CALL",
+        payload: {
+          callId: started.call.id,
+          outcome: {
+            status: "DENIED",
+            failureCode: "WORKSPACE_ACCESS_DENIED",
+            outputDigest: null,
+            outputBytes: null,
+            exitCode: null,
+          },
+        },
+      } as const;
+      expect(localState.execute(finishCommand)).toMatchObject({
+        type: "WORKSPACE_TOOL_CALL_CHANGED",
+        replayed: false,
+        events: [{ type: "WORKSPACE_TOOL_CALL_CHANGED" }],
+      });
+      expect(
+        localState.execute({ ...finishCommand, commandId: "workspace-tool-finish-duplicate" }),
+      ).toMatchObject({
+        type: "WORKSPACE_TOOL_CALL_CHANGED",
+        replayed: true,
+        events: [],
+      });
+      const second = localState.execute({
+        ...startCommand,
+        commandId: "workspace-tool-start-2",
+        payload: {
+          ...startCommand.payload,
+          providerCallKey: "d".repeat(64),
+          operation: "READ_FILE",
+          inputDigest: "e".repeat(64),
+        },
+      });
+      if (second.type !== "WORKSPACE_TOOL_CALL_CHANGED") throw new Error("Expected second tool reservation");
+      const reconciled = localState.execute({
+        schemaVersion: 1,
+        commandId: "workspace-tool-reconcile",
+        correlationId: "workspace-tool-correlation",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "RECONCILE_WORKFLOWS",
+        payload: {},
+      });
+      expect(reconciled).toMatchObject({
+        type: "WORKFLOWS_RECONCILED",
+        interruptedWorkspaceToolCalls: [
+          { id: second.call.id, status: "UNKNOWN_OUTCOME", failureCode: "DAEMON_RESTART" },
+        ],
+      });
+      expect(
+        localState.query({ type: "LIST_WORKSPACE_TOOL_CALLS", providerSessionId: session.session.id }),
+      ).toMatchObject({
+        type: "WORKSPACE_TOOL_CALLS",
+        calls: [
+          { id: started.call.id, status: "DENIED", target: "src/файл с пробелом.ts" },
+          { id: second.call.id, status: "UNKNOWN_OUTCOME" },
+        ],
+      });
+      const events = localState.query({ type: "LIST_EVENTS", aggregateId: workItemId });
+      expect(
+        events.type === "EVENTS"
+          ? events.events.filter(({ type }) => type === "WORKSPACE_TOOL_CALL_CHANGED")
+          : [],
+      ).toHaveLength(4);
     });
 
     it("persists a FAST run policy and binds it to the next immutable AgentRun", async () => {

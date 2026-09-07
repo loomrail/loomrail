@@ -60,8 +60,8 @@ Exit code 0 и `READY` означают, что выбранный full fixture 
 closed codes и ordered next actions, без paths, provider output, account, credentials или exception text.
 
 Setup не создаёт data directory/БД, не применяет migration/recovery и не запускает daemon, browser, agent session,
-provider login, installer или download. Он проверяет Git, локальные prerequisites и наличие API key, но не отправляет
-provider request.
+provider login, installer или download. Он проверяет Git, локальные prerequisites, версии установленных CLI и их
+login status, но не отправляет model request.
 Любой `LOOMRAIL_PROVIDER` override блокирует guided setup, чтобы route не расходился с фактическим startup. Pending
 migration тоже блокирует путь до остановки Loomrail и сохранения всего data directory. Выполняйте показанные действия
 самостоятельно: setup их не запускает и не сохраняет.
@@ -81,7 +81,7 @@ npx loomrail doctor --json
 ```
 
 Report проверяет объявленный диапазон Node, запуск Git, доступ к data directory, SQLite integrity/migration
-compatibility и готовность credentials поддерживаемых provider API. Он не запускает daemon или browser,
+compatibility и готовность поддерживаемых локальных provider CLI. Он не запускает daemon или browser,
 не создаёт data directory, не применяет migrations, не восстанавливает workflows и не меняет provider
 authentication.
 
@@ -93,9 +93,11 @@ JSON построен по allowlist. В нём нет cwd, home/data/repository
 command output, credential или exception message. Всё равно проверьте файл перед отправкой: наличие provider и
 authentication state — metadata локальной машины.
 
-Provider inspection сообщает о наличии `OPENAI_API_KEY` или `ANTHROPIC_API_KEY`, не возвращая значение. Оба адаптера
-встроены в Loomrail; CLI installation/version probe и успешного fallback нет. Loomrail не создаёт, не меняет и не
-сохраняет provider credentials. См. [совместимость API провайдеров](PROVIDER-COMPATIBILITY.ru.md).
+Provider inspection запускает только ограниченные `--version` и login-status probes официальных Codex и Claude Code
+CLI. Он сообщает нормализованные compatibility и authentication states без command output, account details или
+сохранённых session credentials. Loomrail не принимает provider API keys, не выполняет login, не устанавливает и не
+обновляет CLI и не использует успешный fallback. См.
+[совместимость локальных провайдеров](PROVIDER-COMPATIBILITY.ru.md).
 
 Точный путь локального хранилища раскрывается отдельной командой:
 

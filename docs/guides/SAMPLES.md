@@ -39,7 +39,7 @@ Every recipe uses the same domain-owned revision-4 workflow:
 Discovery → Plan → Implement → Review → QA → Acceptance
 ```
 
-OpenAI Responses and Anthropic Messages feed the same deterministic state machine. The current pre-alpha does not
+Local Codex CLI and Claude Code CLI sessions feed the same deterministic state machine. The current pre-alpha does not
 offer workflow selection or custom templates.
 
 ## Built-in role catalog
@@ -64,10 +64,10 @@ Those remain Loomrail state and owner decisions rather than instructions hidden 
 
 ## Choose the right route
 
-- Use either sample with a configured API provider to inspect durable requests, budgets, evidence, restart recovery,
-  and acceptance. Provider work consumes quota.
-- The [full-route example](../examples/full-route/README.md) describes the intended end-to-end route. Current API
-  adapters stop before Implementation until the local workspace executor is available.
+- Use either sample with a compatible local Codex CLI or Claude Code CLI to inspect durable requests, budgets,
+  evidence, restart recovery, and acceptance. Local sessions consume your subscription quota.
+- The [full-route example](../examples/full-route/README.md) describes the end-to-end route. IMPLEMENT and QA run only
+  through Loomrail's bounded, audited workspace tools; no direct shell or permission bypass is granted.
 - A green sample baseline is release evidence for the bundled templates. It is not private dogfood evidence and does
   not make an unverified provider compatible.
 

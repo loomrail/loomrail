@@ -24,7 +24,7 @@ const passedGate = (name) => ({
 });
 
 const completeManifest = () => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   releaseVersion: "0.1.0",
   gates: Object.fromEntries(requiredStableReleaseGates.map((name) => [name, passedGate(name)])),
 });
@@ -35,7 +35,7 @@ test("records the current honest stable readiness without promoting pending gate
   assert.equal(summary.releaseVersion, null);
   assert.deepEqual(summary.pending, [
     "q15CanonicalActivationNonLanding",
-    "liveProviderHardTokenBudgetEnforcement",
+    "q20LocalSubscriptionWorkspaceExecution",
     "managedPublicDogfoodRehearsal",
     "codexMacosCompatibility",
     "claudeMacosCompatibility",
@@ -47,17 +47,20 @@ test("records the current honest stable readiness without promoting pending gate
   assert.equal(summary.passed.length, 2);
 });
 
-test("rejects the superseded ten-gate schema", () => {
+test("rejects the superseded schema-v2 local API gate contract", () => {
   const manifest = completeManifest();
-  manifest.schemaVersion = 1;
-  delete manifest.gates.liveProviderHardTokenBudgetEnforcement;
+  manifest.schemaVersion = 2;
+  delete manifest.gates.q20LocalSubscriptionWorkspaceExecution;
+  manifest.gates.liveProviderHardTokenBudgetEnforcement = passedGate(
+    "q20LocalSubscriptionWorkspaceExecution",
+  );
 
-  assert.throws(() => parseStableReleaseGateManifest(JSON.stringify(manifest)), /schemaVersion must be 2/);
+  assert.throws(() => parseStableReleaseGateManifest(JSON.stringify(manifest)), /schemaVersion must be 3/);
 });
 
-test("rejects a version-two manifest that omits the hard-token-budget gate", () => {
+test("rejects a version-three manifest that omits the local CLI workspace-execution gate", () => {
   const manifest = completeManifest();
-  delete manifest.gates.liveProviderHardTokenBudgetEnforcement;
+  delete manifest.gates.q20LocalSubscriptionWorkspaceExecution;
 
   assert.throws(
     () => parseStableReleaseGateManifest(JSON.stringify(manifest)),

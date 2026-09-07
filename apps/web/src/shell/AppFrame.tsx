@@ -409,8 +409,8 @@ const RegisterRepositoryField = (): React.JSX.Element => {
 
 const providerNames: Record<ProviderId, string> = {
   MOCK: "Historical test provider",
-  CODEX: "OpenAI Responses",
-  CLAUDE_CODE: "Anthropic Messages",
+  CODEX: "Codex CLI",
+  CLAUDE_CODE: "Claude Code CLI",
 };
 
 const providerStatusKey = (provider: ProviderAvailability | undefined): TranslationKey => {
@@ -423,10 +423,10 @@ const providerStatusKey = (provider: ProviderAvailability | undefined): Translat
     return "settings.provider.status.versionUnreadable";
   }
   if (provider?.authentication === "REQUIRED") return "settings.provider.status.authRequired";
+  if (provider?.ready === true) return "settings.provider.status.ready";
   if (provider?.tokenBudgetEnforcement === "POST_SESSION") {
     return "settings.provider.status.noHardTokenBudget";
   }
-  if (provider?.ready === true) return "settings.provider.status.ready";
   return "settings.provider.status.unknown";
 };
 
@@ -473,8 +473,8 @@ const ProjectProviderPanel = ({ project }: { project: ListedProject }): React.JS
               description: t("settings.provider.option.auto.description"),
               value: "AUTO",
             },
-            { label: "OpenAI Responses", value: "CODEX" },
-            { label: "Anthropic Messages", value: "CLAUDE_CODE" },
+            { label: "Codex CLI", value: "CODEX" },
+            { label: "Claude Code CLI", value: "CLAUDE_CODE" },
           ]}
           value={selection?.selection.preference ?? project.providerPreference}
         />

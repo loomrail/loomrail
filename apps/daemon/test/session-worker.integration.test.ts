@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { WorkflowTemplate } from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter, ProviderInvocation } from "@loomrail/provider-core";
-import { createProviderTestDouble } from "./provider-double.js";
+import { createProviderTestDouble, recordImplementationEffectInState } from "./provider-double.js";
 import { deliveryTemplate } from "@loomrail/workflow-engine";
 import { summariseChanges } from "@loomrail/workspace";
 import type { FastifyBaseLogger } from "fastify";
@@ -534,6 +534,7 @@ describe("session worker", () => {
         }
         if (stage === "IMPLEMENT") {
           if (!invocation.workspace) throw new Error("IMPLEMENT must receive its worktree");
+          recordImplementationEffectInState(localState, invocation);
           await writeFile(
             join(invocation.workspace.path, "d2-live-result.txt"),
             "A live-shaped implementation changed this real Git worktree.\n",
@@ -1099,7 +1100,8 @@ describe("session worker", () => {
         costReporting: false,
         tokenBudgetEnforcement: "HARD",
       }),
-      start: (_invocation, listener) => {
+      start: (invocation, listener) => {
+        recordImplementationEffectInState(localState, invocation);
         listener.onUsage({ inputTokens: 110_000, outputTokens: 10_000, quality: "ACTUAL" });
         return Promise.resolve({
           type: "COMPLETED",
@@ -1155,6 +1157,102 @@ describe("session worker", () => {
     });
   }, 20_000);
 
+  it("accepts a durable mutation from an earlier session in the same IMPLEMENT attempt", async () => {
+    const localState = state();
+    await makeThrowawayRepo(join(temporaryDirectory, "project-web"));
+    let sessionCount = 0;
+    const adapter: ProviderAdapter = {
+      capabilities: () => ({
+        provider: "CODEX",
+        start: true,
+        interrupt: true,
+        eventStream: false,
+        usageReporting: false,
+        contextWindowReporting: false,
+        checkpointOnRequest: false,
+        contextWindowTokens: 200_000,
+        stages: ["IMPLEMENT"],
+        costReporting: false,
+        tokenBudgetEnforcement: "HARD",
+      }),
+      start: (invocation) => {
+        sessionCount += 1;
+        if (sessionCount === 1) {
+          recordImplementationEffectInState(localState, invocation);
+          return Promise.resolve({
+            type: "NEEDS_HUMAN",
+            request: {
+              kind: "FREE_TEXT",
+              blocking: true,
+              title: "Confirm the portable workspace root",
+              context: "The implementation is already written and needs one bounded clarification.",
+              recommendation: 'Use "." for the workspace root.',
+              options: [],
+              allowOther: true,
+            },
+          });
+        }
+        return Promise.resolve({
+          type: "COMPLETED",
+          summary: "The resumed provider session verified the existing same-attempt mutation.",
+        });
+      },
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
+    };
+    const worker = createSessionWorker({
+      state: localState,
+      adapter,
+      template: implementOnlyTemplate,
+      workspacesRoot: join(temporaryDirectory, "workspaces"),
+      createCommandId,
+      logger: createRecordingLogger(),
+    });
+    const seeded = seedQueuedAttemptFixture(
+      localState,
+      createCommandId,
+      temporaryDirectory,
+      "project-web",
+      implementOnlyTemplate,
+    );
+
+    worker.wake();
+    await awaitIdle(worker);
+    const waiting = snapshotOf(localState, seeded.workItemId);
+    const request = waiting.humanRequests.find(({ status }) => status === "OPEN");
+    if (request === undefined) throw new Error("Expected the bounded IMPLEMENT clarification");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-answer-implement-clarification",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "ANSWER_HUMAN_REQUEST",
+      payload: {
+        humanRequestId: request.id,
+        expectedVersion: request.version,
+        answer: { type: "OTHER", text: "." },
+      },
+    });
+
+    worker.wake();
+    await awaitIdle(worker);
+
+    expect(sessionCount).toBe(2);
+    expect(snapshotOf(localState, seeded.workItemId)).toMatchObject({
+      run: { status: "SUCCEEDED" },
+      stageAttempts: [{ id: seeded.stageAttemptId, status: "SUCCEEDED" }],
+    });
+    expect(
+      localState.query({ type: "LIST_PROVIDER_SESSIONS", stageAttemptId: seeded.stageAttemptId }),
+    ).toMatchObject({
+      type: "PROVIDER_SESSIONS",
+      sessions: [
+        { ordinal: 1, status: "ENDED" },
+        { ordinal: 2, status: "ENDED", endReason: "COMPLETED" },
+      ],
+    });
+  }, 20_000);
+
   it("removes an atomically completed terminal session from cancellation authority", async () => {
     const localState = state();
     await makeThrowawayRepo(join(temporaryDirectory, "project-web"));
@@ -1173,7 +1271,8 @@ describe("session worker", () => {
         costReporting: false,
         tokenBudgetEnforcement: "HARD",
       }),
-      start: (_invocation, listener) => {
+      start: (invocation, listener) => {
+        recordImplementationEffectInState(localState, invocation);
         listener.onUsage({ inputTokens: 110_000, outputTokens: 10_000, quality: "ACTUAL" });
         return Promise.resolve({ type: "COMPLETED", summary: "The over-budget turn settled." });
       },

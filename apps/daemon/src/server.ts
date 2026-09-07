@@ -183,6 +183,11 @@ import { reconcileBrowserQAArtifacts } from "./browser-qa-recovery.js";
 import { cleanupExpiredBrowserQAArtifacts } from "./browser-qa-retention.js";
 import { cleanupExpiredVerificationOutputs } from "./verification-output-retention.js";
 import { reconcileVerificationProcessProofs } from "./verification-recovery.js";
+import {
+  cleanupWorkspaceToolArtifacts,
+  reconcileWorkspaceToolProcessProofs,
+} from "./workspace-tool-recovery.js";
+import { createSessionWorkspaceToolFactory } from "./workspace-tools.js";
 import { createBrowserQAStageRunner } from "./browser-qa-runner.js";
 import { buildAgentFleet } from "./agent-fleet.js";
 import {
@@ -913,6 +918,11 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     (databasePath === ":memory:"
       ? join(tmpdir(), "loomrail-verification-output", randomUUID())
       : join(dirname(resolve(databasePath)), "verification-output"));
+  const workspaceToolArtifactsDirectory = join(verificationArtifactsDirectory, "workspace-tools");
+  const workspaceToolProcessRegistryDirectory = join(
+    verificationArtifactsDirectory,
+    ".workspace-tool-processes",
+  );
 
   // The single seam every writer -- request handlers and `runStageAttempt` alike -- publishes
   // through, because there is exactly one `localState` and it is already wrapped by the time any
@@ -1314,6 +1324,44 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     done();
   });
 
+  const startedWorkspaceToolCalls = localState.query({ type: "LIST_STARTED_WORKSPACE_TOOL_CALLS" });
+  if (startedWorkspaceToolCalls.type !== "WORKSPACE_TOOL_CALLS") {
+    throw new StateStoreError(
+      "PERSISTENCE_FAILURE",
+      "Started workspace tool calls could not be read before recovery",
+    );
+  }
+  const startedRecipeCalls = startedWorkspaceToolCalls.calls.filter(
+    ({ operation }) => operation === "RUN_RECIPE",
+  );
+  const workspaceToolProcessRecovery = await recoverVerificationRunProcesses({
+    registryDirectory: workspaceToolProcessRegistryDirectory,
+    runIds: startedRecipeCalls.map(({ id }) => id),
+    now,
+  });
+  for (const report of workspaceToolProcessRecovery) {
+    app.log.warn(
+      { action: report.action, reason: report.reason, workspaceToolCallId: report.runId },
+      "Workspace tool process authority reconciliation completed",
+    );
+  }
+  const unsafeWorkspaceToolRecovery = workspaceToolProcessRecovery.find(({ action }) => action === "BLOCKED");
+  if (unsafeWorkspaceToolRecovery !== undefined) {
+    throw new StateStoreError(
+      "PERSISTENCE_FAILURE",
+      "Workspace tool process authority could not be released safely",
+      { callId: unsafeWorkspaceToolRecovery.runId, reason: unsafeWorkspaceToolRecovery.reason },
+    );
+  }
+  await cleanupWorkspaceToolArtifacts(workspaceToolArtifactsDirectory);
+  await reconcileWorkspaceToolProcessProofs({
+    callIds: startedRecipeCalls.map(({ id }) => id),
+    registryDirectory: workspaceToolProcessRegistryDirectory,
+    execute: (command) => {
+      localState.execute(command);
+    },
+  });
+
   const activeVerificationRuns = localState.query({ type: "LIST_ACTIVE_VERIFICATION_RUNS" });
   if (activeVerificationRuns.type !== "VERIFICATION_RUNS") {
     throw new StateStoreError(
@@ -1403,6 +1451,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       createCommandId: () => `browser-qa-command-${randomUUID()}`,
       createAttachmentId: () => `browser-qa-attachment-${randomUUID()}`,
       logger: app.log,
+      deferPassingWorkflow: true,
     }),
     projectVerification: createProjectVerificationWorkflowGate({
       state: localState,
@@ -1414,6 +1463,11 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       state: localState,
       gateway: mcpGateway,
       createCommandId: (kind) => `mcp-call-${kind.toLowerCase()}-${randomUUID()}`,
+    }),
+    createWorkspaceTools: createSessionWorkspaceToolFactory({
+      state: localState,
+      artifactsDirectory: workspaceToolArtifactsDirectory,
+      processRegistryDirectory: workspaceToolProcessRegistryDirectory,
     }),
   });
   wakeWorkflowAfterVerification = worker.wake;

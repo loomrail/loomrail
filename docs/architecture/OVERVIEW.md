@@ -1,7 +1,7 @@
 # Loomrail architecture overview
 
-**Status:** public pre-alpha; real-provider API transition in progress
-**Updated:** 2026-09-06
+**Status:** public pre-alpha; local provider CLI executor slice in progress
+**Updated:** 2026-09-07
 
 Loomrail separates deterministic product authority from non-deterministic agent work. The daemon owns state,
 permissions, budgets, transitions and recovery. Providers produce proposals, tool activity and artifacts; they do not
@@ -19,8 +19,11 @@ flowchart LR
     APP --> DOMAIN[Domain state machines]
     APP --> WF[Workflow engine]
     WF --> PC[Provider contract]
-    PC --> OPENAI[OpenAI Responses API]
-    PC --> ANTHROPIC[Anthropic Messages API]
+    PC --> CODEX[Local Codex CLI]
+    PC --> CLAUDE[Local Claude Code CLI]
+    CODEX --> MCP[One-use Loomrail workspace MCP]
+    CLAUDE --> MCP
+    MCP --> EXEC[Provider-neutral workspace executor]
 
     APP --> PORT[Persistence ports]
     PORT --> DB[(SQLite current state)]
@@ -52,15 +55,18 @@ packaging remain outside the stable scope.
 
 ## Provider compatibility boundary
 
-Each provider adapter owns a fixed HTTPS endpoint, closed model-tier mapping, strict request/response parser and hard
-output-token cap. The daemon registry contains only OpenAI Responses and Anthropic Messages adapters. An adapter is
-startable only when its environment-owned API credential is present; missing credentials, an unknown override and
-remote failures all fail closed without switching providers.
+Each provider adapter owns its official local CLI arguments, closed model-tier mapping, and strict event/result
+parser. The daemon registry contains only Codex CLI and Claude Code CLI adapters. An adapter is startable only when
+the executable is installed, the exact runtime target is compatible, and the CLI is already signed in. Missing
+runtimes, incompatible versions, signed-out sessions, and unknown overrides all fail closed without switching an
+explicitly selected provider.
 
 Readiness is a transient observation for a new ProviderSession, not workflow authority or durable Project state. A
 refresh cannot change Project preference or reinterpret a running session. Provider payloads stay inside the adapter,
 credentials stay out of SQLite/logs/outcomes, and only a validated stage result may cross into the deterministic
-workflow.
+workflow. The CLI runs in a fresh empty scratch directory; repository access crosses only the one-use loopback MCP
+connection backed by Loomrail's bounded executor. Provider tokens are reconciled after a session, while time, turn,
+tool and output limits are enforced during it.
 
 ## Dependency rules
 

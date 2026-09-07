@@ -10,6 +10,7 @@ import type { WorkflowTemplate } from "@loomrail/contracts";
 import { canonicalMcpProfileSource } from "@loomrail/domain";
 import { createMcpGateway, mcpProbeEnvironment } from "@loomrail/mcp-gateway";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
+import type { WorkspaceToolExecutor, WorkspaceToolRequest } from "@loomrail/provider-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createMcpConnectionOpener } from "../src/mcp-sessions.js";
@@ -223,7 +224,11 @@ describe("daemon MCP session orchestration", () => {
       gateway,
       createCommandId: (kind) => `tool-call-${kind.toLowerCase()}-${(nextCommandId += 1).toString()}`,
     });
-    const lease = await opener(session.mcpSnapshots);
+    const lease = await opener({
+      snapshots: session.mcpSnapshots,
+      providerSessionId: session.session.id,
+      authoritySignal: new AbortController().signal,
+    });
     const connection = lease.connections[0];
     if (connection === undefined) throw new Error("The MCP connector was not opened");
     const client = new Client({ name: "daemon-mcp-test", version: "1.0.0" });
@@ -268,4 +273,82 @@ describe("daemon MCP session orchestration", () => {
     const databaseBytes = await readFile(databasePath);
     expect(databaseBytes.includes(Buffer.from(secretArgument, "utf8"))).toBe(false);
   });
+
+  it("publishes exact owner-approved recipe ids in the provider-neutral workspace schema", async () => {
+    const localState = openState();
+    const requests: WorkspaceToolRequest[] = [];
+    const executor: WorkspaceToolExecutor = {
+      describePolicy: () => ({
+        access: "READ_ONLY",
+        recipes: [
+          { id: "npm-test", label: "Run the project test suite" },
+          { id: "unicode-check", label: "Проверить Unicode fixture" },
+        ],
+        limits: {
+          maxCalls: 64,
+          maxReadBytes: 65_536,
+          maxWriteBytes: 131_072,
+          maxDirectoryEntries: 1_000,
+        },
+      }),
+      execute: (request) => {
+        requests.push(request);
+        return Promise.resolve({
+          status: "SUCCEEDED",
+          operation: "RUN_RECIPE",
+          output: {
+            type: "RECIPE",
+            recipeId: request.operation === "RUN_RECIPE" ? request.recipeId : "unexpected",
+            outcome: "PASSED",
+            exitCode: 0,
+            output: "bounded test output",
+            truncated: false,
+            durationMs: 10,
+          },
+        });
+      },
+    };
+    const gateway = createMcpGateway({ proxyEntrypoint, supervisorEntrypoint });
+    const opener = createMcpConnectionOpener({
+      state: localState,
+      gateway,
+      createCommandId: (kind) => `direct-${kind.toLowerCase()}-${(nextCommandId += 1).toString()}`,
+    });
+    const lease = await opener({
+      snapshots: [],
+      providerSessionId: "provider-session-workspace-schema",
+      workspaceTools: executor,
+      authoritySignal: new AbortController().signal,
+    });
+    const connection = lease.connections[0];
+    if (connection === undefined) throw new Error("The workspace MCP connector was not opened");
+    const client = new Client({ name: "daemon-workspace-schema-test", version: "1.0.0" });
+    try {
+      await client.connect(
+        new StdioClientTransport({
+          command: connection.proxyCommand,
+          args: connection.proxyArgs,
+          env: mcpProbeEnvironment(),
+          stderr: "pipe",
+        }),
+        { timeout: 5_000, maxTotalTimeout: 5_000 },
+      );
+      const listed = await client.listTools();
+      const recipeTool = listed.tools.find(({ name }) => name === "loomrail_run_recipe");
+      expect(recipeTool?.inputSchema).toMatchObject({
+        properties: {
+          recipeId: { type: "string", enum: ["npm-test", "unicode-check"] },
+        },
+      });
+      expect(JSON.stringify(recipeTool)).not.toContain("Run the project test suite");
+      await expect(
+        client.callTool({ name: "loomrail_run_recipe", arguments: { recipeId: "npm-test" } }),
+      ).resolves.toMatchObject({ structuredContent: { result: { status: "SUCCEEDED" } } });
+      expect(requests).toMatchObject([{ operation: "RUN_RECIPE", recipeId: "npm-test" }]);
+    } finally {
+      await client.close().catch(() => undefined);
+      await lease.close();
+      await gateway.shutdown();
+    }
+  }, 20_000);
 });

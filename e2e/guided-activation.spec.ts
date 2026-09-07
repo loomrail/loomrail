@@ -31,6 +31,12 @@ const providerContractRegistry = () => {
       },
     },
     probeAuthentication: (provider) => Promise.resolve(provider === "CODEX" ? "AUTHENTICATED" : "REQUIRED"),
+    probeRuntime: (provider) =>
+      Promise.resolve({
+        installed: provider === "CODEX",
+        compatibility: provider === "CODEX" ? "VERIFIED" : "MISSING",
+        version: provider === "CODEX" ? "0.153.4" : null,
+      }),
   });
 };
 
@@ -71,7 +77,7 @@ test.describe("canonical guided activation", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Guided demo" })).toBeVisible();
     await expect(
       page.getByText(
-        "Real provider only — every request is capped before dispatch and consumes provider quota.",
+        "Local agent only — no API key or separate API billing. Subscription usage is reported after each CLI session.",
       ),
     ).toBeVisible();
     const progress = page.getByRole("navigation", { name: "Guided demo progress" });

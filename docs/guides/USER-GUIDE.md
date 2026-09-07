@@ -14,7 +14,8 @@ workflow state; it does not commit, push, or merge the agent's result.
 Use Node.js `>=24.19 <25`. For the first run, install the explicit public pre-alpha channel in a separate empty
 directory rather than inside a repository you care about:
 
-Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in this terminal first. Provider calls can consume your API quota.
+Install the official Codex or Claude Code CLI and sign in with `codex login` or `claude auth login` first. If that
+CLI already works locally, Loomrail needs no API key or additional provider credential.
 
 ```bash
 mkdir loomrail-evaluation
@@ -26,7 +27,7 @@ npx loomrail start
 ```
 
 The explicit Chromium download is a one-time prerequisite for isolated Browser QA; Loomrail does not reuse a signed-in
-browser profile. Setup runs a real-provider preflight, verifies the local route without changing state, and
+browser profile. Setup checks local CLI compatibility and login, verifies the route without changing state, and
 prints the exact owner actions that remain. The `next` tag keeps the pre-alpha channel explicit. To put the launcher
 on your `PATH` instead:
 
@@ -59,15 +60,16 @@ a graceful shutdown and wait for the command to exit.
 
 Provider choice belongs to a Project. Open **Settings → AI provider** after selecting the project:
 
-| Choice             | What happens                                                                                        |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| Auto               | Selects a ready real API adapter that supports the stage and enforces a hard request token ceiling. |
-| OpenAI Responses   | Calls the OpenAI Responses API using `OPENAI_API_KEY`.                                              |
-| Anthropic Messages | Calls the Anthropic Messages API using `ANTHROPIC_API_KEY`.                                         |
+| Choice          | What happens                                                                     |
+| --------------- | -------------------------------------------------------------------------------- |
+| Auto            | Selects a compatible, signed-in local CLI that supports the requested stage.     |
+| Codex CLI       | Starts the official local Codex CLI using its existing subscription login.       |
+| Claude Code CLI | Starts the official local Claude Code CLI using its existing subscription login. |
 
-Set the credential yourself and choose **Check again**. Loomrail reports only readiness; it does not return or
-persist the key. A change applies to new provider sessions, while a running session keeps the adapter it started
-with. If no eligible adapter is ready, Auto blocks instead of returning a synthetic result.
+Sign in through the provider CLI and choose **Check again**. Loomrail reports installation, exact-version
+compatibility, and login readiness without reading or persisting the CLI's session credential. A change applies to
+new provider sessions, while a running session keeps the adapter it started with. If no eligible adapter is ready,
+Auto blocks instead of returning a synthetic result.
 
 `LOOMRAIL_PROVIDER=CODEX|CLAUDE_CODE` is an optional, case-sensitive process-wide override for automation or
 troubleshooting. It locks the Project selector until restart. An unknown value is reported and blocks new provider
@@ -86,9 +88,9 @@ work. Ordinary use does not require this variable.
    are observable results rather than implementation instructions.
 5. Select **Move to Ready**, then **Start workflow**.
 
-The button starts the bounded Discovery → Plan → Implementation → Review → QA → Acceptance template. The current API
-adapters serve Discovery, Plan, Review, and Acceptance. Implementation and QA stop explicitly until a reviewed local
-workspace executor exists. Provider prose cannot pass either stage or stand in for measured file/test evidence.
+The button starts the bounded Discovery → Plan → Implementation → Review → QA → Acceptance template. Both local CLI
+adapters serve all six stages. Repository reads, edits, and approved verification recipes go only through Loomrail's
+audited workspace executor. Provider prose cannot pass either stage or stand in for measured file/test evidence.
 
 ### Watch parallel work in Agent Fleet
 
@@ -105,7 +107,7 @@ existing owner gates.
 ### Read an independent review
 
 After Implementation, Loomrail starts a fresh **Code reviewer** AgentRun over the recorded Git tree. With **Auto** and
-both APIs ready, Review prefers the provider the latest Developer run did not use. An explicit Project provider
+both local CLIs ready, Review prefers the provider the latest Developer run did not use. An explicit Project provider
 selection remains a lock, so the cockpit labels the result **Same provider** while still using a separate reviewer run.
 
 The Task Cockpit shows the round, verdict, provider relation, reviewed tree, and bounded findings with severity,
@@ -217,11 +219,10 @@ the earlier decision in the audit history.
 
 ## 5. Run and inspect live work
 
-Set the provider API credential before starting Loomrail, open **Settings → AI provider**, choose **Auto** or the
-provider explicitly, and use **Check again**. Start work only when the panel shows **Ready**. The brief and acceptance
-criteria are the durable instructions each session receives. Repository-writing stages remain unavailable until the
-local workspace executor passes its security and evidence gates; the inspection UI below describes that retained
-domain contract, not a claim that the current API adapters can already edit files.
+Sign in through the provider's local CLI before starting Loomrail, open **Settings → AI provider**, choose **Auto** or
+the provider explicitly, and use **Check again**. Start work only when the panel shows **Ready**. The brief and
+acceptance criteria are the durable instructions each session receives. Repository-writing stages use only the
+bounded workspace executor and owner-approved verification recipes; the CLI itself receives no repository path.
 
 For a bounded repository and exact brief you can safely discard afterwards, use the
 [reproducible target route](../examples/full-route/README.md).
@@ -334,9 +335,9 @@ records, Browser QA evidence, repositories, workspaces, or unknown neighboring f
 **The page says the local session ended.** The daemon stopped or the one-time session is no longer valid. Restart
 Loomrail and use the new authenticated tab. Refreshing an old tab cannot mint a new session.
 
-**The selected provider API is not ready.** Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in the process environment,
-restart Loomrail, and choose **Settings → AI provider → Check again**. An explicit unavailable provider is refused;
-Auto does not hide the failure by selecting a synthetic result.
+**The selected local provider is not ready.** Install or update its official CLI, sign in with `codex login` or
+`claude auth login`, restart Loomrail, and choose **Settings → AI provider → Check again**. An explicit unavailable
+provider is refused; Auto does not hide the failure with a synthetic result or API fallback.
 
 **The provider override is invalid.** Use the exact case-sensitive value `CODEX` or `CLAUDE_CODE`, or remove
 `LOOMRAIL_PROVIDER` to restore Auto selection.

@@ -1228,6 +1228,36 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.workspaceOrphaned"),
         tone: "warning",
       };
+    case "WORKSPACE_TOOL_CALL_CHANGED": {
+      const workspaceToolNeedsApproval =
+        event.data.call.status === "DENIED" &&
+        (event.data.call.failureCode === "WORKSPACE_ACCESS_DENIED" ||
+          event.data.call.failureCode === "RECIPE_NOT_APPROVED" ||
+          event.data.call.failureCode === "RECIPE_AUTHORITY_CHANGED" ||
+          event.data.call.failureCode === "NETWORK_POLICY_UNAVAILABLE");
+      return {
+        detail: t("event.workspaceToolCallDetail", {
+          operation: t(`workspaceTool.operation.${event.data.call.operation}`),
+          target: event.data.call.target,
+          status: workspaceToolNeedsApproval
+            ? t("workspaceTool.status.APPROVAL_REQUIRED")
+            : t(`workspaceTool.status.${event.data.call.status}`),
+        }),
+        icon:
+          event.data.call.status === "SUCCEEDED"
+            ? "check"
+            : event.data.call.status === "STARTED"
+              ? "clock"
+              : "warning",
+        label: t("event.workspaceToolCall"),
+        tone:
+          event.data.call.status === "SUCCEEDED"
+            ? "success"
+            : event.data.call.status === "STARTED"
+              ? "accent"
+              : "warning",
+      };
+    }
   }
 };
 

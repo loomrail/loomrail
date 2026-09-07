@@ -60,6 +60,8 @@ export type RunProcessOptions = {
   onStderr: (line: string) => void;
   deadlineMs: number;
   graceMs?: number;
+  /** Explicit child environment. Provider adapters use a credential-name-denying allowlist. */
+  environment?: NodeJS.ProcessEnv;
 };
 
 // Promise executors run synchronously, so `resolve`/`reject` are always assigned before
@@ -171,6 +173,7 @@ export const runProcess = (options: RunProcessOptions): ProcessRun => {
   try {
     child = spawn(options.command, options.args, {
       cwd: options.cwd,
+      ...(options.environment === undefined ? {} : { env: options.environment }),
       stdio: ["pipe", "pipe", "pipe"] as const,
     });
   } catch (error: unknown) {

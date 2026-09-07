@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { Client, SdkError } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { CallToolResultSchema } from "@modelcontextprotocol/core";
 import type { Tool } from "@modelcontextprotocol/server";
 import type { McpProfileRevision, McpSessionSnapshot, McpToolCallFailureCode } from "@loomrail/contracts";
 
@@ -38,13 +39,35 @@ export type McpGatewaySessionBinding = {
   finishToolCall: (callId: string, outcome: McpToolCallTerminalOutcome) => void | Promise<void>;
 };
 
+/**
+ * An in-process capability exposed through the same one-use provider connector as an external MCP
+ * server. The daemon owns the implementation; the provider sees only the bounded tool schemas.
+ */
+export type McpDirectSessionBinding = {
+  providerSessionId: string;
+  connectionId: string;
+  tools: readonly ProxyTool[];
+  callTool: (input: {
+    callId: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+  }) => Promise<unknown>;
+};
+
 export type McpGatewayLease = {
   connections: McpProxyConnector[];
   close: () => Promise<void>;
 };
 
-type ActiveBinding = McpGatewaySessionBinding & {
-  client: Client;
+type ActiveBinding = {
+  kind: "EXTERNAL" | "DIRECT";
+  providerSessionId: string;
+  connectionId: string | null;
+  grantId: string | null;
+  client: Client | null;
+  directCall: McpDirectSessionBinding["callTool"] | null;
+  startToolCall: McpGatewaySessionBinding["startToolCall"] | null;
+  finishToolCall: McpGatewaySessionBinding["finishToolCall"] | null;
   tools: Map<string, ProxyTool>;
   token: string;
   socket: Socket | null;
@@ -100,7 +123,7 @@ const proxyTool = (tool: Tool): ProxyTool => ({
 const closeClient = async (binding: ActiveBinding): Promise<void> => {
   binding.socket?.destroy();
   binding.socket = null;
-  await binding.client.close().catch(() => undefined);
+  await binding.client?.close().catch(() => undefined);
 };
 
 const callFailure = (error: unknown): McpToolCallTerminalOutcome => {
@@ -121,7 +144,7 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
     binding: ActiveBinding,
     request: { id: string; name: string; arguments: Record<string, unknown> },
   ): Promise<void> => {
-    if (revokedGrants.has(binding.snapshot.grantId)) {
+    if (binding.grantId !== null && revokedGrants.has(binding.grantId)) {
       writeResponse(socket, {
         type: "ERROR",
         id: request.id,
@@ -153,30 +176,58 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
       return;
     }
 
-    let callId: string;
-    try {
-      callId = await binding.startToolCall({
-        toolName: request.name,
-        inputDigest: createHash("sha256").update(inputJson).digest("hex"),
-      });
-    } catch {
-      writeResponse(socket, {
-        type: "ERROR",
-        id: request.id,
-        code: "GRANT_REVOKED",
-        message: "The MCP tool call is no longer allowed",
-      });
-      return;
+    let externalCallId: string | null = null;
+    if (binding.kind === "EXTERNAL") {
+      const startToolCall = binding.startToolCall;
+      if (startToolCall === null) {
+        writeResponse(socket, {
+          type: "ERROR",
+          id: request.id,
+          code: "CONNECTION_LOST",
+          message: "The MCP audit binding is unavailable",
+        });
+        return;
+      }
+      try {
+        externalCallId = await startToolCall({
+          toolName: request.name,
+          inputDigest: createHash("sha256").update(inputJson).digest("hex"),
+        });
+      } catch {
+        writeResponse(socket, {
+          type: "ERROR",
+          id: request.id,
+          code: "GRANT_REVOKED",
+          message: "The MCP tool call is no longer allowed",
+        });
+        return;
+      }
     }
 
-    let result: Awaited<ReturnType<typeof binding.client.callTool>>;
+    let result: unknown;
     try {
-      result = await binding.client.callTool(
-        { name: request.name, arguments: request.arguments },
-        { timeout: TOOL_DEADLINE_MS, maxTotalTimeout: TOOL_DEADLINE_MS },
-      );
+      if (binding.kind === "DIRECT") {
+        const directCall = binding.directCall;
+        if (directCall === null) throw new Error("The direct MCP binding is unavailable");
+        result = await directCall({
+          callId: createHash("sha256").update(`${binding.providerSessionId}\0${request.id}`).digest("hex"),
+          toolName: request.name,
+          arguments: request.arguments,
+        });
+      } else {
+        const client = binding.client;
+        if (client === null) throw new Error("The MCP client binding is unavailable");
+        result = await client.callTool(
+          { name: request.name, arguments: request.arguments },
+          { timeout: TOOL_DEADLINE_MS, maxTotalTimeout: TOOL_DEADLINE_MS },
+        );
+      }
     } catch (error: unknown) {
-      await Promise.resolve(binding.finishToolCall(callId, callFailure(error))).catch(() => undefined);
+      if (externalCallId !== null && binding.finishToolCall !== null) {
+        await Promise.resolve(binding.finishToolCall(externalCallId, callFailure(error))).catch(
+          () => undefined,
+        );
+      }
       writeResponse(socket, {
         type: "ERROR",
         id: request.id,
@@ -189,11 +240,35 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
     // as a lost connection: the natural response to "your call did not happen" is to call again,
     // which for a side-effecting tool is exactly the duplicate this accounting exists to prevent.
     // The outcome goes back as observed; the accounting failure stays in the daemon's diagnostics.
+    const parsedResult = CallToolResultSchema.safeParse(result);
+    if (!parsedResult.success) {
+      if (externalCallId !== null && binding.finishToolCall !== null) {
+        await Promise.resolve(
+          binding.finishToolCall(externalCallId, {
+            status: "FAILED",
+            failureCode: "PROTOCOL_ERROR",
+          }),
+        ).catch(() => undefined);
+      }
+      writeResponse(socket, {
+        type: "ERROR",
+        id: request.id,
+        code: "CONNECTION_LOST",
+        message: "The MCP tool result did not satisfy the bounded protocol",
+      });
+      return;
+    }
+    result = parsedResult.data;
     const encodedResult = JSON.stringify(result);
     if (Buffer.byteLength(encodedResult, "utf8") > TOOL_RESULT_LIMIT_BYTES) {
-      await Promise.resolve(
-        binding.finishToolCall(callId, { status: "FAILED", failureCode: "OUTPUT_LIMIT_REACHED" }),
-      ).catch(() => undefined);
+      if (externalCallId !== null && binding.finishToolCall !== null) {
+        await Promise.resolve(
+          binding.finishToolCall(externalCallId, {
+            status: "FAILED",
+            failureCode: "OUTPUT_LIMIT_REACHED",
+          }),
+        ).catch(() => undefined);
+      }
       writeResponse(socket, {
         type: "ERROR",
         id: request.id,
@@ -202,12 +277,16 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
       });
       return;
     }
-    await Promise.resolve(
-      binding.finishToolCall(
-        callId,
-        result.isError === true ? { status: "FAILED", failureCode: "SERVER_ERROR" } : { status: "SUCCEEDED" },
-      ),
-    ).catch(() => undefined);
+    if (externalCallId !== null && binding.finishToolCall !== null) {
+      await Promise.resolve(
+        binding.finishToolCall(
+          externalCallId,
+          parsedResult.data.isError === true
+            ? { status: "FAILED", failureCode: "SERVER_ERROR" }
+            : { status: "SUCCEEDED" },
+        ),
+      ).catch(() => undefined);
+    }
     writeResponse(socket, { type: "RESULT", id: request.id, result });
   };
 
@@ -312,16 +391,24 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
     return brokerPort;
   };
 
-  const open = async (bindings: readonly McpGatewaySessionBinding[]): Promise<McpGatewayLease> => {
-    if (bindings.length === 0) return { connections: [], close: () => Promise.resolve() };
-    const sessionIds = new Set(bindings.map(({ snapshot }) => snapshot.providerSessionId));
+  const open = async (
+    bindings: readonly McpGatewaySessionBinding[],
+    directBindings: readonly McpDirectSessionBinding[] = [],
+  ): Promise<McpGatewayLease> => {
+    if (bindings.length === 0 && directBindings.length === 0) {
+      return { connections: [], close: () => Promise.resolve() };
+    }
+    const sessionIds = new Set([
+      ...bindings.map(({ snapshot }) => snapshot.providerSessionId),
+      ...directBindings.map(({ providerSessionId }) => providerSessionId),
+    ]);
     if (sessionIds.size !== 1) {
       throw new McpGatewayError(
         "SESSION_BINDING_INVALID",
         "One MCP gateway lease must belong to one ProviderSession",
       );
     }
-    const sessionId = bindings[0]?.snapshot.providerSessionId;
+    const sessionId = bindings[0]?.snapshot.providerSessionId ?? directBindings[0]?.providerSessionId;
     if (sessionId === undefined) {
       throw new McpGatewayError("SESSION_BINDING_INVALID", "The MCP gateway lease has no ProviderSession");
     }
@@ -382,7 +469,19 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
             .map((tool) => [tool.name, proxyTool(tool)] as const),
         );
         const token = randomBytes(32).toString("base64url");
-        const entry: ActiveBinding = { ...binding, client, tools, token, socket: null };
+        const entry: ActiveBinding = {
+          kind: "EXTERNAL",
+          providerSessionId: binding.snapshot.providerSessionId,
+          connectionId: null,
+          grantId: binding.snapshot.grantId,
+          client,
+          directCall: null,
+          startToolCall: binding.startToolCall,
+          finishToolCall: binding.finishToolCall,
+          tools,
+          token,
+          socket: null,
+        };
         active.push(entry);
         pendingTokens.set(token, entry);
         revokedGrants.delete(binding.snapshot.grantId);
@@ -390,9 +489,43 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
           throw new McpGatewayError("CONSENT_MISMATCH", "No granted MCP tools are available from the server");
         }
       }
+      for (const binding of directBindings) {
+        if (!/^[a-z0-9_]{1,64}$/.test(binding.connectionId)) {
+          throw new McpGatewayError("SESSION_BINDING_INVALID", "The direct MCP connector id is invalid");
+        }
+        const tools = new Map(binding.tools.map((tool) => [tool.name, tool] as const));
+        if (tools.size === 0 || tools.size !== binding.tools.length) {
+          throw new McpGatewayError(
+            "SESSION_BINDING_INVALID",
+            "The direct MCP connector needs unique bounded tools",
+          );
+        }
+        const token = randomBytes(32).toString("base64url");
+        const entry: ActiveBinding = {
+          kind: "DIRECT",
+          providerSessionId: binding.providerSessionId,
+          connectionId: binding.connectionId,
+          grantId: null,
+          client: null,
+          directCall: binding.callTool,
+          startToolCall: null,
+          finishToolCall: null,
+          tools,
+          token,
+          socket: null,
+        };
+        active.push(entry);
+        pendingTokens.set(token, entry);
+      }
+      const connectionIds = active.map(
+        (binding, index) => binding.connectionId ?? `loomrail_${String(index + 1).padStart(2, "0")}`,
+      );
+      if (new Set(connectionIds).size !== connectionIds.length) {
+        throw new McpGatewayError("SESSION_BINDING_INVALID", "The MCP connector ids must be unique");
+      }
       sessionBindings.set(sessionId, active);
       const connections = active.map((binding, index): McpProxyConnector => ({
-        id: `loomrail_${String(index + 1).padStart(2, "0")}`,
+        id: connectionIds[index] ?? `loomrail_${String(index + 1).padStart(2, "0")}`,
         proxyCommand: process.execPath,
         proxyArgs: [proxyEntrypoint, "--port", String(port), "--token", binding.token],
         enabledTools: [...binding.tools.keys()],

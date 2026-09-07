@@ -272,6 +272,11 @@ const migrations: readonly Migration[] = [
     name: "remove_active_mock_provider",
     filename: "0054_remove_active_mock_provider.sql",
   },
+  {
+    version: 55,
+    name: "workspace_tool_calls",
+    filename: "0055_workspace_tool_calls.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

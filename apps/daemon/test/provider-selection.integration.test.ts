@@ -83,7 +83,7 @@ describe("provider selection at daemon startup", () => {
     return { daemon, log: () => written };
   };
 
-  it("says at startup which API adapter it will dispatch to and whether its key is present", async () => {
+  it("says at startup which local adapter it will dispatch to and whether it is ready", async () => {
     const { daemon, log } = await bootCapturingLog("CODEX");
     try {
       expect(log()).toContain("The provider adapter this daemon will dispatch to");
@@ -115,7 +115,7 @@ describe("provider selection at daemon startup", () => {
     }
   });
 
-  it("boots with the fail-closed OpenAI API adapter when the variable is unset", async () => {
+  it("boots with the fail-closed local Codex adapter when the variable is unset", async () => {
     const { daemon, token } = await bootWithEnv(undefined);
     try {
       expect(await readReportedProvider(daemon, token)).toBe("CODEX");
@@ -135,20 +135,19 @@ describe("provider selection at daemon startup", () => {
 
   // Milestone A2 added `start`, `stages` and `costReporting` to `ProviderCapabilities` and nothing
   // propagated them to this endpoint -- the one thing the cockpit reads. Without them the owner
-  // cannot see which stages the selected adapter serves, or that its CLI is missing from this
-  // machine, until a dispatch is refused mid-run.
+  // cannot see which stages the selected adapter serves, or that its local runtime is unavailable,
+  // until a dispatch is refused mid-run.
   it("reports the stages the selected adapter serves, and whether it can start at all", async () => {
     const { daemon, token } = await bootWithEnv("CODEX");
     try {
       const capabilities = await readCapabilities(daemon, token);
-      // As of E1 the Codex adapter runs its CLI in the work item's own worktree, so it serves every
-      // stage -- IMPLEMENT included, which is the one the cockpit could never dispatch before.
-      expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "REVIEW", "ACCEPTANCE"]);
-      // Whether `codex` happens to be installed on the machine running this test is not the point;
-      // that the endpoint carries the claim at all is.
+      // Q20 gives the local CLI only the daemon-owned bounded executor, so IMPLEMENT and QA can
+      // be declared without handing provider output arbitrary local authority.
+      expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
+      // Whether a local login is ready on the machine running this test is not the point; that the
+      // endpoint carries the claim at all is.
       expect(typeof capabilities.start).toBe("boolean");
-      // Codex reports no cost figure anywhere in its stream; Claude Code does. The cockpit cannot
-      // explain a missing spend figure without being told which it is talking to.
+      // Codex does not expose a normalized monetary cost report to the cockpit.
       expect(capabilities.costReporting).toBe(false);
       // The same stage list the launcher prints. `formatStartupReport` is tested on hand-built
       // input, so this is the half that proves what a real boot actually hands it: the adapter's
@@ -160,7 +159,7 @@ describe("provider selection at daemon startup", () => {
   });
 
   // The third accepted value, and the one this file used to leave entirely unpinned: booting
-  // `CLAUDE_CODE` spends the owner's money through a different CLI than `CODEX` does, so "the
+  // `CLAUDE_CODE` selects a different local runtime than `CODEX`, so "the
   // daemon reads this spelling and hands the whole run to the Claude adapter" is not a claim to
   // leave to the unit test of the resolver -- which is injected everywhere else and so proves
   // nothing about what a real launch does.
@@ -169,17 +168,10 @@ describe("provider selection at daemon startup", () => {
     try {
       const capabilities = await readCapabilities(daemon, token);
       expect(capabilities.provider).toBe("CLAUDE_CODE");
-      // Unchanged by E1, and deliberately not made symmetric with Codex above: this adapter still
-      // runs in an empty temporary directory, because its write path has never been run against the
-      // real CLI here (that CLI is unauthenticated on this machine). Asserting symmetry between two
-      // adapters on evidence gathered from only one of them is what produced two Criticals in the
-      // previous milestone.
-      expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "REVIEW", "ACCEPTANCE"]);
-      expect(capabilities.stages).not.toContain("IMPLEMENT");
-      // The one capability that genuinely differs between the two live adapters, and the reason
-      // the cockpit can explain a missing spend figure for one and not the other: Claude Code
-      // reports cost in its own result event; Codex reports none anywhere.
-      expect(capabilities.costReporting).toBe(false);
+      // The Claude CLI receives the same bounded Loomrail tool connector;
+      // this integration test asserts the public capability surface without making a paid call.
+      expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
+      expect(capabilities.costReporting).toBe(true);
       expect(typeof capabilities.start).toBe("boolean");
     } finally {
       await daemon.close();
@@ -189,7 +181,7 @@ describe("provider selection at daemon startup", () => {
   // The property that matters most: a typo must not stop the daemon from starting at all. Booting
   // successfully and reporting the blocked OpenAI adapter, rather than throwing during
   // `startDaemon`, is the assertion.
-  it("boots fail-closed on OpenAI, not synthetic work, for an unrecognised value", async () => {
+  it("boots fail-closed on local Codex, not synthetic work, for an unrecognised value", async () => {
     const { daemon, token } = await bootWithEnv("codex-typo");
     try {
       expect(await readReportedProvider(daemon, token)).toBe("CODEX");

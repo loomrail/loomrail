@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { WorkflowStage } from "@loomrail/contracts";
 import type { ProviderAdapter, ProviderId } from "@loomrail/provider-core";
 
@@ -85,6 +87,22 @@ export const gatedAdapter = (
       // also needs the structured independent-review report. A caller that drains the real workflow
       // needs those fixtures or it would stall for a reason unrelated to the test's actual subject.
       const { stage } = invocation.session;
+      if (stage === "IMPLEMENT" && invocation.workspaceTools !== undefined) {
+        const sessionSuffix = createHash("sha256").update(invocation.session.id).digest("hex").slice(0, 12);
+        const changed = await invocation.workspaceTools.execute(
+          {
+            callId: `${invocation.session.id}-gated-write`,
+            operation: "WRITE_FILE",
+            path: `gated-implementation-${sessionSuffix}.txt`,
+            expectedSha256: null,
+            content: "Implemented by the test-only gated provider through Loomrail workspace tools.\n",
+          },
+          invocation.authoritySignal,
+        );
+        if (changed.status !== "SUCCEEDED") {
+          throw new Error(`The gated IMPLEMENT write failed: ${changed.code}`);
+        }
+      }
       if (stage === "ACCEPTANCE") {
         const acceptanceInput = invocation.acceptanceInput;
         const reviewCheck = acceptanceInput?.evidence.filter(({ kind }) => kind === "REVIEW_REPORT").at(-1)

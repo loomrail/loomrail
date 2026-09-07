@@ -52,6 +52,7 @@ import {
   type ProviderStageResultPolicy,
   type ProviderWorkspace,
 } from "@loomrail/provider-core";
+import { WorkspaceExecutorError } from "@loomrail/workspace-executor";
 import {
   addWorktree,
   createCarryInSnapshot,
@@ -65,6 +66,7 @@ import {
 } from "@loomrail/workspace";
 
 import { prepareReviewContext, type ReviewContextPreparation } from "./review-context.js";
+import type { CreateSessionWorkspaceTools } from "./workspace-tools.js";
 
 /**
  * The share of the provider's context window handed to the assembled pack. The rest is the agent's
@@ -119,7 +121,12 @@ export type McpConnectionLease = {
   close: () => Promise<void>;
 };
 
-export type OpenMcpConnections = (snapshots: readonly McpSessionSnapshot[]) => Promise<McpConnectionLease>;
+export type OpenMcpConnections = (input: {
+  snapshots: readonly McpSessionSnapshot[];
+  providerSessionId: string;
+  workspaceTools?: import("@loomrail/provider-core").WorkspaceToolExecutor;
+  authoritySignal: AbortSignal;
+}) => Promise<McpConnectionLease>;
 
 export type RunStageAttemptDeps = {
   state: LocalState;
@@ -144,6 +151,8 @@ export type RunStageAttemptDeps = {
   scheduleHandoffDeadline?: ScheduleHandoffDeadline;
   /** Opens daemon-owned MCP servers for the immutable snapshots captured at session start. */
   openMcpConnections?: OpenMcpConnections;
+  /** Builds the audited, session-bound local capability after the ProviderSession is durable. */
+  createWorkspaceTools?: CreateSessionWorkspaceTools;
   /** Revoked synchronously when owner cancellation removes this AgentRun's authority. */
   authoritySignal?: AbortSignal;
   /**
@@ -1589,14 +1598,28 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     const startSession = async (): Promise<SessionOutcome> => {
       let mcpLease: McpConnectionLease | null = null;
       try {
-        if (started.mcpSnapshots.length === 0) {
+        const workspaceTools =
+          invocationWorkspace.workspace === undefined || deps.createWorkspaceTools === undefined
+            ? undefined
+            : await deps.createWorkspaceTools({
+                providerSession,
+                projectId: deps.dispatch.projectId,
+                workspace: invocationWorkspace.workspace,
+                policy: executionPolicy.snapshot,
+              });
+        if (started.mcpSnapshots.length === 0 && workspaceTools === undefined) {
           mcpLease = { connections: [], close: () => Promise.resolve() };
         } else {
           const openMcpConnections = deps.openMcpConnections;
           if (openMcpConnections === undefined) {
             throw new Error("The MCP gateway connector opener is missing");
           }
-          mcpLease = await openMcpConnections(started.mcpSnapshots);
+          mcpLease = await openMcpConnections({
+            snapshots: started.mcpSnapshots,
+            providerSessionId: providerSession.id,
+            ...(workspaceTools === undefined ? {} : { workspaceTools }),
+            authoritySignal,
+          });
         }
         const mcpConnections = mcpLease.connections;
         authoritySignal.throwIfAborted();
@@ -1623,6 +1646,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             humanRequests,
             mcpConnections,
             authoritySignal,
+            ...(workspaceTools === undefined ? {} : { workspaceTools }),
             ...invocationWorkspace,
           },
           listener,
@@ -1657,6 +1681,33 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       if (isAuthorityRevoked(authoritySignal)) return;
 
       if (result.type === "FAILED") {
+        if (
+          result.error instanceof WorkspaceExecutorError &&
+          result.error.code === "PROCESS_AUTHORITY_UNCERTAIN"
+        ) {
+          // The durable tool call and ProviderSession deliberately stay STARTED/RUNNING. Releasing
+          // either authority would let another writer overlap a child process that may still be
+          // touching the worktree. Startup recovery owns the next safe transition.
+          lease.releaseOnExit = false;
+          if (live.terminalUsage !== null) {
+            const recorded = deps.state.execute({
+              schemaVersion: 1,
+              commandId: `provider-usage-${providerSession.id}`,
+              correlationId: deps.correlationId,
+              actor,
+              type: "RECORD_PROVIDER_USAGE",
+              payload: { providerSessionId: providerSession.id, usage: live.terminalUsage },
+            });
+            if (recorded.type !== "PROVIDER_USAGE_RECORDED") {
+              throw new Error("The ProviderUsage report was not recorded");
+            }
+          }
+          deps.logger.warn(
+            { providerSessionId: providerSession.id, stageAttemptId },
+            "A workspace command could not be proven stopped; execution authority remains fenced",
+          );
+          return;
+        }
         if (live.terminalUsage !== null) {
           const recorded = deps.state.execute({
             schemaVersion: 1,

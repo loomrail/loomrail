@@ -40,6 +40,68 @@ const snapshot: McpSessionSnapshot = {
 };
 
 describe("MCP session gateway runtime", () => {
+  it("exposes an in-process bounded capability through the same one-use proxy", async () => {
+    const calls: { callId: string; toolName: string; arguments: Record<string, unknown> }[] = [];
+    const gateway = createMcpGateway({ proxyEntrypoint, supervisorEntrypoint });
+    const lease = await gateway.open(
+      [],
+      [
+        {
+          providerSessionId: "provider-session-direct",
+          connectionId: "loomrail_workspace",
+          tools: [
+            {
+              name: "loomrail_read_file",
+              description: "Read one bounded file",
+              inputSchema: {
+                type: "object",
+                properties: { path: { type: "string" } },
+                required: ["path"],
+                additionalProperties: false,
+              },
+            },
+          ],
+          callTool: (input) => {
+            calls.push(input);
+            return Promise.resolve({
+              content: [{ type: "text", text: '{"status":"SUCCEEDED"}' }],
+              structuredContent: { status: "SUCCEEDED" },
+            });
+          },
+        },
+      ],
+    );
+    const connection = lease.connections[0];
+    if (connection === undefined) throw new Error("Expected one direct MCP proxy connection");
+    expect(connection.id).toBe("loomrail_workspace");
+    expect(connection.enabledTools).toEqual(["loomrail_read_file"]);
+    const client = new Client({ name: "gateway-direct-client", version: "1.0.0" });
+    try {
+      await client.connect(
+        new StdioClientTransport({
+          command: connection.proxyCommand,
+          args: connection.proxyArgs,
+          env: mcpProbeEnvironment(),
+          stderr: "pipe",
+        }),
+        { timeout: 5_000, maxTotalTimeout: 5_000 },
+      );
+      await expect(
+        client.callTool({ name: "loomrail_read_file", arguments: { path: "src/данные file.ts" } }),
+      ).resolves.toMatchObject({ structuredContent: { status: "SUCCEEDED" } });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        toolName: "loomrail_read_file",
+        arguments: { path: "src/данные file.ts" },
+      });
+      expect(calls[0]?.callId).toMatch(/^[a-f0-9]{64}$/u);
+    } finally {
+      await client.close().catch(() => undefined);
+      await lease.close();
+      await gateway.shutdown();
+    }
+  }, 20_000);
+
   it("exposes only granted tools through a one-time Loomrail proxy and audits calls", async () => {
     const starts: { toolName: string; inputDigest: string }[] = [];
     const finishes: { callId: string; outcome: McpToolCallTerminalOutcome }[] = [];

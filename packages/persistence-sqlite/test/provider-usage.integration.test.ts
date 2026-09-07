@@ -26,6 +26,14 @@ const providerUsageTemplate = (includePlan = false): WorkflowTemplate => ({
   ],
 });
 
+const implementationTemplate: WorkflowTemplate = {
+  schemaVersion: 1,
+  id: "implementation-effect-template",
+  version: 1,
+  name: "Implementation effect",
+  stages: [{ stage: "IMPLEMENT", ordinal: 0, contextPack }],
+};
+
 describe("durable provider usage", () => {
   let temporaryDirectory = "";
   let databasePath = "";
@@ -57,6 +65,7 @@ describe("durable provider usage", () => {
     maxEstimatedTokens: number,
     agentRunMaxEstimatedTokensOverride?: number,
     includePlan = false,
+    templateOverride?: WorkflowTemplate,
   ) => {
     localState.execute({
       schemaVersion: 1,
@@ -97,7 +106,7 @@ describe("durable provider usage", () => {
       type: "MOVE_WORK_ITEM",
       payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
     });
-    const template = providerUsageTemplate(includePlan);
+    const template = templateOverride ?? providerUsageTemplate(includePlan);
     const pipeline = localState.execute({
       schemaVersion: 1,
       commandId: "start-pipeline",
@@ -139,8 +148,8 @@ describe("durable provider usage", () => {
         stageAttemptId: pipeline.stageAttempt.id,
         recipe: {
           schemaVersion: 1,
-          templateId: "provider-usage-template",
-          templateVersion: 1,
+          templateId: template.id,
+          templateVersion: template.version,
           specSource: "ROLE_PLAYBOOK",
           roleProfile: { id: agent.run.profile.id, revision: agent.run.profile.revision },
           sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
@@ -155,6 +164,99 @@ describe("durable provider usage", () => {
     if (session.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected ProviderSession start");
     return { created, pipeline, agent, session, template };
   };
+
+  it("rejects a live IMPLEMENT completion without an audited workspace mutation", async () => {
+    const localState = await open();
+    const execution = startExecution(localState, 200_000, undefined, false, implementationTemplate);
+
+    expect(
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-implement-without-effect",
+        correlationId: "correlation-implement-without-effect",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: execution.pipeline.dispatch.id,
+          provider: "CODEX",
+          outcome: { type: "COMPLETED", summary: "Provider claimed completion without a write." },
+          template: execution.template,
+          resultTree: "a".repeat(40),
+          sessionCompletion: { providerSessionId: execution.session.session.id, usage: null },
+        },
+      }),
+    ).toMatchObject({
+      type: "PROVIDER_OUTCOME_APPLIED",
+      outcomeRejectionCode: "IMPLEMENT_EFFECT_NOT_OBSERVED",
+      run: { status: "HARD_PAUSED" },
+      stageAttempt: { status: "HARD_PAUSED", failureCode: "PROVIDER_OUTCOME_REJECTED" },
+    });
+    expect(
+      localState.query({
+        type: "LIST_PROVIDER_SESSIONS",
+        stageAttemptId: execution.pipeline.stageAttempt.id,
+      }),
+    ).toMatchObject({ sessions: [{ status: "ENDED", endReason: "INTERRUPTED" }] });
+  });
+
+  it("accepts a live IMPLEMENT completion after the same session records a successful write", async () => {
+    const localState = await open();
+    const execution = startExecution(localState, 200_000, undefined, false, implementationTemplate);
+    const started = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-implement-write",
+      correlationId: "correlation-implement-with-effect",
+      actor: { type: "SYSTEM", id: "workspace-executor" },
+      type: "START_WORKSPACE_TOOL_CALL",
+      payload: {
+        providerSessionId: execution.session.session.id,
+        providerCallKey: "5".repeat(64),
+        operation: "WRITE_FILE",
+        target: "src/файл с пробелом.ts",
+        policyDigest: "6".repeat(64),
+        inputDigest: "7".repeat(64),
+      },
+    });
+    if (started.type !== "WORKSPACE_TOOL_CALL_CHANGED") throw new Error("Expected tool reservation");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "finish-implement-write",
+      correlationId: "correlation-implement-with-effect",
+      actor: { type: "SYSTEM", id: "workspace-executor" },
+      type: "FINISH_WORKSPACE_TOOL_CALL",
+      payload: {
+        callId: started.call.id,
+        outcome: {
+          status: "SUCCEEDED",
+          outputDigest: "8".repeat(64),
+          outputBytes: 12,
+          exitCode: null,
+        },
+      },
+    });
+
+    expect(
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "apply-implement-with-effect",
+        correlationId: "correlation-implement-with-effect",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: execution.pipeline.dispatch.id,
+          provider: "CODEX",
+          outcome: { type: "COMPLETED", summary: "Implementation changed the workspace." },
+          template: execution.template,
+          resultTree: "b".repeat(40),
+          sessionCompletion: { providerSessionId: execution.session.session.id, usage: null },
+        },
+      }),
+    ).toMatchObject({
+      type: "PROVIDER_OUTCOME_APPLIED",
+      outcomeRejectionCode: null,
+      stageAttempt: { status: "SUCCEEDED", resultTree: "b".repeat(40) },
+    });
+  });
 
   it("records one cumulative report, projects it into the ledger, and survives restart", async () => {
     const localState = await open();

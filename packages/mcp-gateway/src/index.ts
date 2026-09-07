@@ -5,6 +5,7 @@ import { McpGatewayError, resolveMcpProfileCandidate } from "./preflight.js";
 import { probeMcpRevision, type McpProbeObservation } from "./probe.js";
 import {
   createMcpRuntime,
+  type McpDirectSessionBinding,
   type McpGatewayLease,
   type McpGatewayRuntimeOptions,
   type McpGatewaySessionBinding,
@@ -18,7 +19,10 @@ export type McpGateway = {
   /** Kill identity-matched process trees whose durable supervisor record survived a crash. */
   recoverOrphans: () => Promise<McpOrphanRecoveryReport[]>;
   /** Open daemon-owned servers and expose only session-scoped local proxy connectors. */
-  open: (bindings: readonly McpGatewaySessionBinding[]) => Promise<McpGatewayLease>;
+  open: (
+    bindings: readonly McpGatewaySessionBinding[],
+    directBindings?: readonly McpDirectSessionBinding[],
+  ) => Promise<McpGatewayLease>;
   /** Reject new calls through every live connector backed by this durable grant. */
   revoke: (grantId: string) => void;
   close: (providerSessionId: string) => Promise<void>;
@@ -58,6 +62,7 @@ export type { McpGatewayErrorCode } from "./preflight.js";
 export type { McpProbeObservation } from "./probe.js";
 export type { McpOrphanRecoveryReport } from "./process-registry.js";
 export type {
+  McpDirectSessionBinding,
   McpGatewayLease,
   McpGatewayRuntimeOptions,
   McpGatewaySessionBinding,

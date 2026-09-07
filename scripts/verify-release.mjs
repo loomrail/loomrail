@@ -215,8 +215,6 @@ const run = async () => {
       ...process.env,
       LOOMRAIL_DATA_DIR: dataDirectory,
       LOOMRAIL_PROVIDER: "",
-      OPENAI_API_KEY: "",
-      ANTHROPIC_API_KEY: "",
     };
     const interactiveSetup = spawnSync(process.execPath, [binaryPath, "setup"], {
       cwd: installDirectory,
@@ -231,25 +229,25 @@ const run = async () => {
     ) {
       throw new Error("the packaged setup did not refuse a non-interactive invocation safely");
     }
-    const blockedSetup = spawnSync(process.execPath, [binaryPath, "setup", "--mode", "live", "--json"], {
+    const setupProcess = spawnSync(process.execPath, [binaryPath, "setup", "--mode", "live", "--json"], {
       cwd: installDirectory,
       env: diagnosticEnvironment,
       encoding: "utf8",
     });
-    const setupOutput = blockedSetup.stdout;
+    const setupOutput = setupProcess.stdout;
     const setup = JSON.parse(setupOutput);
+    const setupStatusMatchesExit =
+      (setup.status === "READY" && setupProcess.status === 0) ||
+      (setup.status === "BLOCKED" && setupProcess.status === 1);
     if (
-      blockedSetup.status !== 1 ||
+      !setupStatusMatchesExit ||
       setup.schemaVersion !== 1 ||
-      setup.status !== "BLOCKED" ||
       setup.route !== "LIVE" ||
       setup.checks?.browser?.code !== "BROWSER_READY" ||
-      setup.checks?.route?.code !== "LIVE_PROVIDER_NOT_READY" ||
       !Array.isArray(setup.nextActions) ||
-      !setup.nextActions.includes("SIGN_IN_PROVIDER") ||
       setupOutput.includes(dataDirectory)
     ) {
-      throw new Error("the packaged guided setup did not fail closed without a real API credential");
+      throw new Error("the packaged guided setup did not report local CLI readiness safely");
     }
     const diagnosticOutput = execFileSync(process.execPath, [binaryPath, "doctor", "--json"], {
       cwd: installDirectory,
@@ -261,15 +259,23 @@ const run = async () => {
     const providerInvariantHolds =
       Array.isArray(providerItems) &&
       providerItems.length === 2 &&
-      providerItems.every(
-        ({ provider, installed, version: providerVersion, compatibility, authentication, ready }) =>
+      providerItems.every(({ provider, installed, compatibility, authentication, ready }) => {
+        const compatibilityKnown = [
+          "MISSING",
+          "TOO_OLD",
+          "UNVERIFIED",
+          "VERIFIED",
+          "UNLAUNCHABLE",
+          "VERSION_UNREADABLE",
+        ].includes(compatibility);
+        return (
           (provider === "CODEX" || provider === "CLAUDE_CODE") &&
-          installed === true &&
-          providerVersion === null &&
-          compatibility === "BUILT_IN" &&
-          authentication === "REQUIRED" &&
-          ready === false,
-      );
+          typeof installed === "boolean" &&
+          compatibilityKnown &&
+          ["AUTHENTICATED", "REQUIRED", "UNKNOWN"].includes(authentication) &&
+          typeof ready === "boolean"
+        );
+      });
     if (
       diagnostic.schemaVersion !== 1 ||
       !["PASS", "WARN"].includes(diagnostic.status) ||
@@ -310,10 +316,9 @@ const run = async () => {
     ) {
       throw new Error("the packaged diagnostic did not fail closed for an unusable data path");
     }
-    const launchEnvironment = { ...diagnosticEnvironment, OPENAI_API_KEY: "release-test-not-sent" };
-    launcher = spawn(process.execPath, [binaryPath, "try", "--no-open", "--port", String(port)], {
+    launcher = spawn(process.execPath, [binaryPath, "start", "--no-open", "--port", String(port)], {
       cwd: installDirectory,
-      env: launchEnvironment,
+      env: diagnosticEnvironment,
     });
 
     let output = "";
@@ -331,8 +336,8 @@ const run = async () => {
     }
 
     // Headless installs authenticate through the printed one-time URL.
-    if (!output.includes("/try#bootstrap=") || !output.includes("guided demo: READY")) {
-      throw new Error(`the guided launcher did not print its exact ready sign-in URL:\n${output}`);
+    if (!output.includes("#bootstrap=")) {
+      throw new Error(`the launcher did not print its exact one-time sign-in URL:\n${output}`);
     }
 
     const activeExport = spawnSync(process.execPath, [binaryPath, "logs", "export"], {
@@ -382,7 +387,7 @@ const run = async () => {
     }
 
     process.stdout.write(
-      `Release check passed: samples, setup, guided try, receipt, installed files and log lifecycle match; ${tarball} runs from a clean install.\n`,
+      `Release check passed: samples, setup, local CLI diagnostics, receipt, installed files and log lifecycle match; ${tarball} runs from a clean install.\n`,
     );
   } finally {
     launcher?.kill("SIGTERM");

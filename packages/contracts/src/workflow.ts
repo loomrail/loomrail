@@ -10,6 +10,7 @@ import {
   utcTimestampSchema,
 } from "./shared.js";
 import { mcpSessionSnapshotSchema } from "./mcp.js";
+import { workspaceToolCallChangedEventSchema, workspaceToolCallRecordSchema } from "./workspace-tool.js";
 import { workItemWorkspaceOrphanedEventSchema, workItemWorkspaceSchema } from "./workspace.js";
 import { reviewFindingSchema, reviewReportDraftSchema, reviewReportSchema } from "./review.js";
 import {
@@ -1324,6 +1325,7 @@ export const reconcileWorkflowsCommandSchema = commandBaseSchema.extend({
   payload: z
     .object({
       verificationProcessAuthorityReleasedRunIds: z.array(opaqueIdSchema).max(1_000).optional(),
+      workspaceToolProcessAuthorityReleasedCallIds: z.array(opaqueIdSchema).max(1_000).optional(),
     })
     .strict(),
 });
@@ -1746,6 +1748,7 @@ export const workflowsReconciledResultSchema = z
     // now closes orphaned sessions as well as orphaned dispatches and reports both kinds of event.
     interruptedSessions: z.array(providerSessionSchema),
     interruptedVerificationRuns: z.array(verificationRunSchema).default([]),
+    interruptedWorkspaceToolCalls: z.array(workspaceToolCallRecordSchema).default([]),
     // Task 10 (spec §6, "Восстановление"): every READY workspace whose worktree directory was
     // found gone or prunable at this startup, now moved to ORPHANED. Never a resurrection (AD-008)
     // -- nothing here recreates a workspace or touches the branch it leaves behind (D12).
@@ -1761,6 +1764,7 @@ export const workflowsReconciledResultSchema = z
         verificationCorrectionSupersededEventSchema,
         humanRequestOpenedEventSchema,
         workItemWorkspaceOrphanedEventSchema,
+        workspaceToolCallChangedEventSchema,
       ]),
     ),
   })

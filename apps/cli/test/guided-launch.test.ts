@@ -26,10 +26,11 @@ describe("guided launch", () => {
     );
   });
 
-  it("states launch side effects and the real-provider budget boundary before startup", () => {
+  it("states launch side effects and the local-provider budget boundary before startup", () => {
     const output = formatGuidedLaunchReadiness(report("READY")).join("\n");
     expect(output).toContain("state and operational log files");
-    expect(output).toContain("selected real provider");
+    expect(output).toContain("selected local CLI");
+    expect(output).toContain("reconciled after the session");
   });
 
   it("states that a blocked preflight wrote and launched nothing", () => {

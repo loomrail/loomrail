@@ -251,4 +251,5 @@ export * from "./workflow.js";
 export * from "./session-pause.js";
 export * from "./session.js";
 export * from "./workspace.js";
+export * from "./workspace-tool.js";
 export * from "./workspace-strategy.js";

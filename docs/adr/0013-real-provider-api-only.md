@@ -1,6 +1,6 @@
 # ADR-0013: Real-provider-only API execution
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0015
 
 **Date:** 2026-09-06
 

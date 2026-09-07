@@ -1,7 +1,7 @@
 # Loomrail — зафиксированные продуктовые и архитектурные решения
 
 **Дата фиксации:** 2026-08-22
-**Последнее дополнение:** 2026-09-06 — real-provider-only API pivot
+**Последнее дополнение:** 2026-09-07 — local subscription CLI runtime pivot
 **Статус:** approved baseline
 **Основание:** последовательный product/architecture grilling с владельцем проекта
 
@@ -257,7 +257,7 @@ map, commands и rules, затем задаёт grill-вопросы. Запис
 
 ## 8. Бюджеты и защита от циклов
 
-### BD-001 — Иерархические hard budgets
+### BD-001 — Иерархические budgets с честной enforcement capability
 
 Лимиты задаются на run, WorkItem, Project и rolling day: tokens/cost estimate, time, attempts, turns, concurrency и
 browser/runtime minutes. Alerts: 50%, 80%, 95%; при 100% stage hard-paused до ручного подтверждения.
@@ -266,6 +266,12 @@ browser/runtime minutes. Alerts: 50%, 80%, 95%; при 100% stage hard-paused д
 сессии. Terminal usage, пришедший после завершения работы, годится для ledger и остановки следующей сессии, но не
 является hard enforcement. Adapter обязан объявить `HARD` либо `POST_SESSION`; второй не допускается к managed run
 с token hard budget. Повышение лимита не превращает неограниченную сессию в ограниченную и не служит bypass.
+
+**Решение владельца 2026-09-07.** Для локальных subscription-authenticated Codex/Claude runtime принят честный
+`POST_SESSION`: token ledger блокирует следующую сессию, но не обещает остановить уже выполняемый provider request
+ровно на token boundary. Preventive hard controls остаются для времени, числа tool calls/turns, размера output,
+attempts и concurrency. UI обязан называть это различие; API-only путь ради token cap удалён. Полное изменение —
+ADR-0015.
 
 ### BD-002 — Честные usage данные
 
@@ -408,11 +414,10 @@ repository и provider credentials. Import сначала валидируетс
 но не скрывают install scripts, provider login, Chromium download, запись repository или иной authority-bearing шаг.
 Landing, README, RU/EN guides и CLI help получают install sequence из одного versioned contract.
 
-Первый zero-quota маршрут использует Mock и готовую Q10 Task recipe, проходит Human Request, budget, Review,
-измеряемый QA и owner Acceptance, затем показывает Acceptance Package. Progress на marketing page хранится только
-локально; внутри приложения он всегда выводится из durable domain state и после restart продолжается с той же точки.
-Дальше владелец явно выбирает: продолжить бесплатно, подключить свой repository/provider или запросить paid guided
-onboarding.
+Первый маршрут использует уже авторизованный локальный Codex либо Claude Code и готовую Task recipe, проходит Human
+Request, budget, Review, измеряемый QA и owner Acceptance, затем показывает Acceptance Package. Если совместимого
+runtime нет, activation остаётся blocked с инструкцией установить/обновить CLI и выполнить его официальный login;
+Mock и скрытого API fallback нет.
 
 ## 12. Утверждённая граница Phase 0
 
@@ -468,8 +473,8 @@ Handoff — это **не перенос истории диалога**. Это
 ### PD-009 — Provider выбирается в Project, AUTO является обычным путём
 
 `LOOMRAIL_PROVIDER` не является обязательным шагом установки. Новый Project получает `AUTO`: daemon безопасно
-проверяет наличие и авторизацию официальных Codex/Claude Code CLI и выбирает готовый адаптер для новой
-ProviderSession. В Project Settings владелец может закрепить Codex, Claude Code либо явный Mock demo mode.
+проверяет наличие, совместимость и авторизацию официальных Codex/Claude Code CLI и выбирает готовый адаптер для новой
+ProviderSession. В Project Settings владелец может закрепить Codex либо Claude Code; активного Mock demo mode нет.
 
 Выбор versioned и durable, но не меняет provider уже запущенной ProviderSession. Environment variable остаётся
 только видимым startup override для automation/debugging. Loomrail не хранит provider credentials, не читает вывод
@@ -600,7 +605,7 @@ collaboration, RBAC, shared policies/audit, hosted or remote workers, enterprise
 обещает lifetime updates за один платёж, экономию «в X раз», число клиентов или provider compatibility без
 проверяемой методики и evidence.
 
-### PD-017 — Активный продукт работает только с реальными API-провайдерами
+### PD-017 — Историческое API-only решение (superseded by PD-019)
 
 Решением владельца от 2026-09-06 синтетический Mock удалён из активного продукта, onboarding, provider selection и
 release artifact. Новые ProviderSession направляются только в OpenAI Responses API или Anthropic Messages API.
@@ -612,13 +617,74 @@ logs или Git. Каждый API request получает provider-native ве�
 или `max_tokens` у Anthropic. Transport заменяется только в тестах, где проверяются exact request, untrusted response,
 usage и превышение лимита; production transport всегда выполняет реальный HTTPS request.
 
-Сейчас API adapters честно объявляют только `DISCOVERY | PLAN | REVIEW | ACCEPTANCE`. `IMPLEMENT` и `QA` остаются
-fail-closed, пока не появится отдельно спроектированный и проверенный local workspace tool executor: прямой shell из
-ответа модели не получает authority автоматически. Это незакрытая часть реальной работы, а не повод возвращать Mock.
+ADR-0013 зафиксировал промежуточную границу: API adapters объявляли только
+`DISCOVERY | PLAN | REVIEW | ACCEPTANCE`, а `IMPLEMENT` и provider-authored QA оставались fail-closed до принятия
+безопасного local workspace tool executor. Эту границу расширяет только PD-018/ADR-0014; прямой shell из ответа
+модели по-прежнему не получает authority автоматически.
 
 Append-only команды, Events, миграции и старые EvidenceArtifact с идентификатором `MOCK` остаются читаемыми как
 исторические факты. Миграция переводит только активную Project preference `MOCK -> AUTO`; переписывать аудит задним
 числом запрещено. Полный механизм — ADR-0013 и планы 87–88.
+
+### PD-018 — Workspace tools являются daemon-owned capability, а не provider authority
+
+Для IMPLEMENT и QA принят один provider-neutral session-scoped executor. Адаптеры локальных Codex/Claude Code
+владеют только native CLI/MCP protocol и переводят его в закрытые
+`LIST_DIRECTORY | READ_FILE | WRITE_FILE | DELETE_FILE | RUN_RECIPE`.
+Пути — portable relative NFC, каждый existing component проверяется canonical/no-symlink; `.git`, `.loomrail`,
+`.env*` и credential/key paths не видны tools. Write/delete используют expected SHA-256; QA остаётся `READ_ONLY`,
+IMPLEMENT получает `READ_WRITE` только из immutable AgentRun snapshot.
+
+Произвольной command строки нет. `RUN_RECIPE` принимает только ID exact active owner-approved Verification Plan;
+executable/argv/cwd/environment/network/deadline/output принадлежат Plan и trusted Q17 runner. Disabled/drifted Plan,
+неразрешённая network policy, неизвестный recipe и любая попытка подать argv/env из provider output fail closed.
+Shell, recursive cleanup, Git mutation, commit/push/merge/deploy и secret injection не входят в authority.
+
+Каждый tool side effect резервируется durable `WorkspaceToolCall` и append-only Event до I/O, затем получает
+terminal typed outcome во второй transaction. В state нет raw provider payload, file content, command output или
+credentials. Provider call ID хранится только как session-bound digest; повтор с другим input запрещён, завершённый
+side effect не выполняется повторно. После restart process tree сначала останавливается/доказывается, затем STARTED
+call становится `UNKNOWN_OUTCOME`; automatic replay отсутствует.
+
+Оба provider adapters передают tools только через session-scoped Loomrail MCP proxy. Runtime не получает путь
+repository и встроенные shell/file tools. Finite tool/turn guard переводит отсутствие прогресса в typed failure/
+attention, а terminal usage один раз попадает в immutable AgentRun ledger.
+
+QA сохраняет две независимые authority: daemon-owned BrowserDriver сначала создаёт exact measured evidence. Только
+его `PASSED` оставляет StageAttempt открытым для read-only provider synthesis; domain связывает provider `QA_REPORT`
+с exact QARun/evidence/tree. Failed/error measurement идёт в существующий correction/HumanRequest flow без provider
+переоценки. Полный механизм — ADR-0014 и планы 89–90.
+
+Schema-valid `COMPLETED` от provider не является доказательством реализации. Для live IMPLEMENT domain требует
+успешный audited `WRITE_FILE` или `DELETE_FILE` той же ProviderSession/StageAttempt; чтение, recipe, отказ/ошибка или
+чужая сессия не проходят gate. Отсутствие эффекта даёт typed `IMPLEMENT_EFFECT_NOT_OBSERVED` и hard pause, а не
+synthetic success.
+
+### PD-019 — Production использует только локальные авторизованные Codex/Claude CLI
+
+**Дата:** 2026-09-07. Отменяет PD-017 и API-часть ADR-0013; расширяет AD-004 и PD-018.
+
+Loomrail запускает официальный локально установленный `codex` или `claude` как supervised child process и использует
+авторизацию, которую сам CLI сохранил после `codex login`/`claude auth login`. Loomrail не читает provider token и не
+принимает `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` как provider configuration. Прямых OpenAI Responses/Anthropic Messages
+requests, отдельного API billing и автоматического API fallback в production нет.
+
+CLI работает в пустом temporary directory без доступа к repository path. Ambient settings/rules/hooks/plugins/MCP,
+built-in shell/file/browser tools и session persistence отключаются fail-closed. Единственная workspace authority —
+одноразовый session-scoped loopback MCP proxy к executor из PD-018. Codex делает прямыми только закрытые
+`mcp__<session>` namespaces и автоматически подтверждает только их заранее allowlisted tools; Claude сочетает
+`--restricted`, strict MCP, пустой built-in tool set и exact Loomrail allowlist, но не `--safe-mode`, который
+отключает и явный custom MCP. Несовместимая версия, отсутствующий login либо невозможность доказать эту границу
+означает `blocked`, а не ослабление sandbox.
+
+Локальные adapters честно объявляют token enforcement `POST_SESSION`: фактический usage попадает в authoritative
+ledger и останавливает следующую работу, но активный provider request может превысить оценочный token remainder.
+Внутри сессии жёстко действуют timeout, cancel/process-tree kill, bounded output, tool/turn/attempt limits. Эта
+осознанная продуктовая замена API token cap зафиксирована ADR-0015; UI не имеет права называть её hard token cap.
+
+Stable-release index следует этой же границе по ADR-0016: schema v3 заменяет отменённый
+`liveProviderHardTokenBudgetEnforcement` на `q20LocalSubscriptionWorkspaceExecution`. Compatibility evidence означает
+только exact local CLI/runtime/executor contract; незакоммиченный результат остаётся `PENDING`.
 
 ## 14. Отложенные решения
 

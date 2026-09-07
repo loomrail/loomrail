@@ -174,6 +174,17 @@ describe("daemon Browser QA runner", () => {
             },
           };
         }
+        if (query.type === "GET_QA_STATE") {
+          return {
+            type: "QA_STATE",
+            runs: [],
+            evidence: [],
+            attachments: [],
+            defects: [],
+            correctionRuns: [],
+            retestPlans: [],
+          };
+        }
         throw new Error(`Unexpected query ${query.type}`);
       },
       close: () => undefined,
@@ -215,6 +226,7 @@ describe("daemon Browser QA runner", () => {
     expect(completions[0]?.payload).toEqual({
       qaRunId: qaRun.id,
       expectedVersion: 1,
+      completionMode: "FINALIZE_WORKFLOW",
       currentTree: qaRun.testedTree,
       result: {
         outcome: "ERROR",
@@ -527,6 +539,207 @@ describe("daemon Browser QA runner", () => {
     });
     expect(receivedCells).toEqual(retestPlan.cells);
     expect(completion?.payload).toMatchObject({ qaRunId: reservedRun.id, currentTree: testedTree });
+    await app.close();
+  });
+
+  it("reuses the exact passing retest measurement after a budget pause", async () => {
+    const config = await readyBrowserQAConfig(project);
+    if (config.status !== "READY") throw new Error("Expected the ready Browser QA fixture config");
+    const testedTree = "d".repeat(40);
+    const baselineRun: QARun = {
+      schemaVersion: 1,
+      id: "qa-run-budget-baseline",
+      projectId: project.id,
+      workItemId: "work-item-qa-budget-resume",
+      pipelineRunId: "pipeline-run-qa-budget-resume",
+      stageAttemptId: "stage-attempt-qa-budget-baseline",
+      agentRunId: "agent-run-qa-budget-baseline",
+      driverId: "PLAYWRIGHT",
+      testedTree: "a".repeat(40),
+      targetOrigin: config.targetOrigin,
+      plan: config.plan,
+      scope: { type: "FULL" },
+      status: "FAILED",
+      error: null,
+      startedAt: "2026-09-02T09:00:00.000Z",
+      completedAt: "2026-09-02T09:01:00.000Z",
+      version: 2,
+    };
+    const correction: QACorrectionRun = {
+      schemaVersion: 1,
+      id: "qa-correction-budget-resume",
+      projectId: project.id,
+      workItemId: baselineRun.workItemId,
+      pipelineRunId: baselineRun.pipelineRunId,
+      ordinal: 1,
+      sourceQARunId: baselineRun.id,
+      baselineQARunId: baselineRun.id,
+      sourceEvidenceBundleId: "qa-evidence-budget-baseline",
+      sourceTestedTree: baselineRun.testedTree,
+      defectIds: ["qa-defect-budget-baseline"],
+      status: "PASSED",
+      createdAt: "2026-09-02T09:01:00.000Z",
+      completedAt: "2026-09-02T10:01:00.000Z",
+      version: 2,
+    };
+    const retestPlan: QARetestPlan = {
+      schemaVersion: 1,
+      id: "qa-retest-plan-budget-resume",
+      projectId: project.id,
+      workItemId: baselineRun.workItemId,
+      pipelineRunId: baselineRun.pipelineRunId,
+      correctionRunId: correction.id,
+      baselineQARunId: baselineRun.id,
+      sourceQARunId: baselineRun.id,
+      sourceEvidenceBundleId: correction.sourceEvidenceBundleId,
+      baselinePlanRevision: baselineRun.plan.revision,
+      baselinePlanContentHash: baselineRun.plan.contentHash,
+      cells: [],
+      createdAt: correction.createdAt,
+    };
+    const verificationCorrectionRunId = "verification-correction-budget-resume";
+    const passingRun: QARun = {
+      ...baselineRun,
+      id: "qa-run-budget-passing-retest",
+      stageAttemptId: "stage-attempt-qa-after-budget-pause",
+      agentRunId: "agent-run-qa-before-budget-pause",
+      testedTree,
+      scope: {
+        type: "RETEST",
+        correctionRunId: correction.id,
+        retestPlanId: retestPlan.id,
+      },
+      status: "PASSED",
+      verificationCorrectionRunId,
+      startedAt: "2026-09-02T10:00:00.000Z",
+      completedAt: "2026-09-02T10:01:00.000Z",
+    };
+    const evidence: QAEvidenceBundle = {
+      schemaVersion: 1,
+      id: "qa-evidence-budget-passing-retest",
+      qaRunId: passingRun.id,
+      projectId: project.id,
+      workItemId: passingRun.workItemId,
+      pipelineRunId: passingRun.pipelineRunId,
+      stageAttemptId: passingRun.stageAttemptId,
+      testedTree,
+      verdict: "PASSED",
+      environment: {
+        osFamily: "MACOS",
+        runtimeName: "NODE",
+        runtimeVersion: "24.7.0",
+        browserName: "CHROMIUM",
+        browserVersion: "140.0",
+      },
+      executions: [],
+      observations: [],
+      attachmentIds: [],
+      defectIds: [],
+      createdAt: passingRun.completedAt ?? "2026-09-02T10:01:00.000Z",
+    };
+    const stageAttempt: StageAttempt = {
+      schemaVersion: 1,
+      id: "stage-attempt-qa-after-budget-pause",
+      projectId: project.id,
+      workItemId: baselineRun.workItemId,
+      pipelineRunId: baselineRun.pipelineRunId,
+      correctionRunId: correction.id,
+      verificationCorrectionRunId,
+      stage: "QA",
+      attempt: 2,
+      status: "RUNNING",
+      version: 1,
+      startedAt: "2026-09-02T10:02:00.000Z",
+      finishedAt: null,
+      failureCode: null,
+      unproductiveSessions: 0,
+      packShareBackoffs: 0,
+      resultTree: null,
+    };
+    const pipelineRun: PipelineRun = {
+      schemaVersion: 1,
+      id: baselineRun.pipelineRunId,
+      projectId: project.id,
+      workItemId: baselineRun.workItemId,
+      workflowTemplateId: "delivery-v1",
+      workflowVersion: 1,
+      status: "RUNNING",
+      currentStageAttemptId: stageAttempt.id,
+      version: 5,
+      createdAt: baselineRun.startedAt,
+      updatedAt: stageAttempt.startedAt ?? baselineRun.startedAt,
+      finishedAt: null,
+    };
+    const state: LocalState = {
+      startup: { appliedMigrations: [] },
+      execute: (command) => {
+        throw new Error(`Unexpected command ${command.type}`);
+      },
+      query: (query: StateQuery): StateQueryResult => {
+        if (query.type === "GET_WORKFLOW_SNAPSHOT") {
+          return {
+            type: "WORKFLOW_SNAPSHOT",
+            snapshot: {
+              schemaVersion: 1,
+              run: pipelineRun,
+              stageAttempts: [stageAttempt],
+              humanRequests: [],
+              decisions: [],
+              budgetPolicies: [],
+              usageRecords: [],
+              recoveryReports: [],
+              artifacts: [],
+              acceptancePackage: null,
+            },
+          };
+        }
+        if (query.type === "GET_QA_STATE") {
+          return {
+            type: "QA_STATE",
+            runs: [baselineRun, passingRun],
+            evidence: [evidence],
+            attachments: [],
+            defects: [],
+            correctionRuns: [correction],
+            retestPlans: [retestPlan],
+          };
+        }
+        throw new Error(`Unexpected query ${query.type}`);
+      },
+      close: () => undefined,
+    };
+    const app = Fastify({ logger: false });
+    const runner = createBrowserQAStageRunner({
+      state,
+      driver: {
+        id: "PLAYWRIGHT",
+        run: () => Promise.reject(new Error("Passing Browser QA must not run twice")),
+      },
+      resolveConfig: () => Promise.reject(new Error("A retest uses its immutable baseline")),
+      createCommandId: () => "command-unexpected",
+      createAttachmentId: () => "attachment-unexpected",
+      logger: app.log,
+      deferPassingWorkflow: true,
+    });
+
+    await expect(
+      runner.run({
+        dispatch: {
+          schemaVersion: 1,
+          id: "dispatch-qa-after-budget-pause",
+          projectId: project.id,
+          workItemId: baselineRun.workItemId,
+          pipelineRunId: baselineRun.pipelineRunId,
+          stageAttemptId: stageAttempt.id,
+          mode: "RESUME",
+          status: "PENDING",
+          createdAt: stageAttempt.startedAt ?? baselineRun.startedAt,
+          completedAt: null,
+        },
+        agentRunId: "agent-run-qa-after-budget-pause",
+        testedTree,
+      }),
+    ).resolves.toBe("MEASUREMENT_RECORDED");
     await app.close();
   });
 });

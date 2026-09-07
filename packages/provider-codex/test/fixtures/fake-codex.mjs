@@ -39,16 +39,21 @@
 // test's assertion, not the whole suite via a runner timeout.
 import { readFileSync, writeFileSync } from "node:fs";
 
-const hangMarkerPath = process.env.FAKE_CODEX_HANG_MARKER_PATH;
+const optionValue = (name) => {
+  const index = process.argv.indexOf(name);
+  return index === -1 ? undefined : process.argv[index + 1];
+};
+
+const hangMarkerPath = optionValue("--fixture-hang") ?? process.env.FAKE_CODEX_HANG_MARKER_PATH;
 
 if (hangMarkerPath !== undefined) {
   writeFileSync(hangMarkerPath, JSON.stringify({ pid: process.pid }));
   setInterval(() => {}, 1_000);
 } else {
-  const recordPath = process.env.FAKE_CODEX_RECORD_PATH;
-  const outputFile = process.env.FAKE_CODEX_OUTPUT_FILE;
-  const exitCode = Number(process.env.FAKE_CODEX_EXIT_CODE ?? "0");
-  const killSelf = process.env.FAKE_CODEX_KILL_SELF !== undefined;
+  const recordPath = optionValue("--fixture-record") ?? process.env.FAKE_CODEX_RECORD_PATH;
+  const outputFile = optionValue("--fixture-output") ?? process.env.FAKE_CODEX_OUTPUT_FILE;
+  const exitCode = Number(optionValue("--fixture-exit") ?? process.env.FAKE_CODEX_EXIT_CODE ?? "0");
+  const killSelf = process.argv.includes("--fixture-kill") || process.env.FAKE_CODEX_KILL_SELF !== undefined;
 
   let finished = false;
   let stdinClosed = false;
@@ -73,7 +78,16 @@ if (hangMarkerPath !== undefined) {
           outputSchema = null;
         }
       }
-      writeFileSync(recordPath, JSON.stringify({ args, stdinClosed, outputSchema }));
+      writeFileSync(
+        recordPath,
+        JSON.stringify({
+          args,
+          cwd: process.cwd(),
+          stdinClosed,
+          outputSchema,
+          environmentKeys: Object.keys(process.env).sort(),
+        }),
+      );
     }
     if (killSelf) {
       // Held open so the only way out of this process is the signal below, never a natural exit

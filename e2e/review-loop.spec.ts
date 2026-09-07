@@ -62,6 +62,18 @@ const reviewRouteAdapter = (
       seenStages.push(`${stage}:${attempt.toString()}`);
       if (stage === "IMPLEMENT") {
         if (!invocation.workspace) throw new Error("IMPLEMENT must receive its worktree");
+        if (invocation.workspaceTools === undefined) throw new Error("IMPLEMENT has no workspace tools");
+        const effect = await invocation.workspaceTools.execute(
+          {
+            callId: `${invocation.session.id}-review-loop-write`,
+            operation: "WRITE_FILE",
+            path: `review-loop-effect-${attempt.toString()}.txt`,
+            expectedSha256: null,
+            content: `Audited implementation effect for review round ${attempt.toString()}.\n`,
+          },
+          invocation.authoritySignal,
+        );
+        if (effect.status !== "SUCCEEDED") throw new Error(`IMPLEMENT tool failed: ${effect.code}`);
         await writeFile(
           resolve(invocation.workspace.path, "review-loop-browser.txt"),
           passReviewRound === attempt
@@ -392,7 +404,7 @@ test.describe("independent review cockpit", () => {
     await expect(review.getByText("Resolved", { exact: true })).toBeVisible();
     const browserQA = inspector.getByRole("region", { name: "Browser QA" });
     await expect(browserQA.getByText("Passed", { exact: true }).first()).toBeVisible();
-    await expect(inspector.getByText("R1 browser-route QA", { exact: true })).toHaveCount(0);
+    await expect(inspector.getByText("R1 browser-route QA", { exact: true })).toBeVisible();
     expect(seenStages).toEqual([
       "DISCOVERY:1",
       "PLAN:1",
@@ -400,6 +412,7 @@ test.describe("independent review cockpit", () => {
       "REVIEW:1",
       "IMPLEMENT:2",
       "REVIEW:2",
+      "QA:1",
       "ACCEPTANCE:1",
     ]);
   });

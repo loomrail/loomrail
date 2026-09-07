@@ -88,8 +88,9 @@ The repository gate requires stable semver, an exact main SHA, matching typed co
 version, npm `11.15.0+`, and a successful push-triggered CI run for that SHA with all six macOS/Windows Verify,
 Browser smoke and Clean install jobs. A strict versioned stable-gate index additionally requires all eleven named gates,
 the exact selected stable version, bounded non-symlink evidence files, matching SHA-256 for both current and committed
-bytes, and an evidence commit that is an ancestor of the release source. Its current honest state is 6/11 with no
-stable version selected. This index prevents accidental omission; it is repository-authored evidence, not a signature
+bytes, and an evidence commit that is an ancestor of the release source. Schema v3 replaces the retired hard-token/API
+gate with the bounded local-subscription CLI workspace-execution gate. Its current honest state is 2/11 with no stable
+version selected. This index prevents accidental omission; it is repository-authored evidence, not a signature
 or a substitute for protected-environment owner review. Both source-CI platforms verify every current `PASSED` row
 against full Git history before their long matrix. A staged package is still not public. A package owner must
 separately inspect it and approve it with interactive 2FA before npm makes the immutable name/version public.
@@ -112,7 +113,7 @@ It requires a registry install; a local pre-publication tarball has no registry 
 ## Update, rollback, and incident response
 
 Loomrail never self-updates. Owners select an exact target or explicitly follow the pre-alpha `next` channel, stop
-the daemon, preserve the whole data directory, install, run `doctor`, and complete the Mock walkthrough. Database
+the daemon, preserve the whole data directory, install, run `doctor`, and complete the local-CLI guided walkthrough. Database
 rollback is restore-based: reinstall the version matching a pre-upgrade whole-directory backup. There is no
 down-migration or silent dist-tag rollback contract.
 

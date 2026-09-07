@@ -89,7 +89,8 @@ Repository gate требует stable semver, exact main SHA, совпадающ
 npm `11.15.0+` и успешный push-triggered CI для этого SHA со всеми шестью macOS/Windows Verify, Browser smoke и Clean
 install jobs. Строгий versioned stable-gate index дополнительно требует все одиннадцать named gates, exact выбранную
 stable version, bounded non-symlink evidence files, совпадающий SHA-256 текущих и committed bytes и evidence commit,
-который является ancestor release source. Его текущее честное состояние — 6/11 без выбранной stable version. Index
+который является ancestor release source. Schema v3 заменяет отменённый hard-token/API gate на gate ограниченного
+workspace execution через local subscription CLI. Его текущее честное состояние — 2/11 без выбранной stable version. Index
 предотвращает случайный пропуск, но остаётся repository-authored evidence, а не подписью или заменой owner review в
 protected environment. Обе source-CI платформы проверяют каждую текущую `PASSED` строку по полной Git history до
 длинной matrix. Staged package ещё не является публичной версией. Package owner отдельно проверяет его и подтверждает
@@ -113,7 +114,7 @@ pre-publication tarball registry attestation ещё не существует.
 ## Update, rollback и incident response
 
 Loomrail не обновляется сам. Владелец выбирает exact target или явно следует pre-alpha channel `next`, останавливает
-daemon, сохраняет whole data directory, устанавливает version, запускает `doctor` и Mock walkthrough. Database
+daemon, сохраняет whole data directory, устанавливает version, запускает `doctor` и local-CLI guided walkthrough. Database
 rollback основан на restore: нужно установить version, соответствующую pre-upgrade whole-directory backup. Контракта
 down-migration или silent dist-tag rollback нет.
 

@@ -24,14 +24,19 @@
 // the whole suite via a runner timeout.
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 
-const hangMarkerPath = process.env.FAKE_CLAUDE_HANG_MARKER_PATH;
+const optionValue = (name) => {
+  const index = process.argv.indexOf(name);
+  return index === -1 ? undefined : process.argv[index + 1];
+};
+
+const hangMarkerPath = optionValue("--fixture-hang") ?? process.env.FAKE_CLAUDE_HANG_MARKER_PATH;
 
 if (hangMarkerPath !== undefined) {
   writeFileSync(hangMarkerPath, JSON.stringify({ pid: process.pid }));
   setInterval(() => {}, 1_000);
 } else {
-  const recordPath = process.env.FAKE_CLAUDE_RECORD_PATH;
-  const outputFile = process.env.FAKE_CLAUDE_OUTPUT_FILE;
+  const recordPath = optionValue("--fixture-record") ?? process.env.FAKE_CLAUDE_RECORD_PATH;
+  const outputFile = optionValue("--fixture-output") ?? process.env.FAKE_CLAUDE_OUTPUT_FILE;
   const args = process.argv.slice(2);
   const settingsIndex = args.indexOf("--settings");
   const settingsPath = settingsIndex === -1 ? undefined : args[settingsIndex + 1];
@@ -55,6 +60,7 @@ if (hangMarkerPath !== undefined) {
         mcpConfigMode,
         settings,
         settingsMode,
+        environmentKeys: Object.keys(process.env).sort(),
       }),
     );
   }

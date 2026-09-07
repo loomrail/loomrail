@@ -24,14 +24,14 @@ const providerSnapshot = (
       provider: "CODEX",
       installed: true,
       authentication: liveReady ? "AUTHENTICATED" : "UNKNOWN",
-      version: null,
-      compatibility: "BUILT_IN",
+      version: "0.153.4",
+      compatibility: "VERIFIED",
       ready: liveReady,
       stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "ACCEPTANCE"],
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: false,
-      tokenBudgetEnforcement: "HARD",
+      tokenBudgetEnforcement: "POST_SESSION",
       canReportRateLimits: liveReady,
       models: { FAST: "gpt-fast", STANDARD: "gpt-standard", DEEP: "gpt-deep" },
     },
@@ -39,14 +39,14 @@ const providerSnapshot = (
       provider: "CLAUDE_CODE",
       installed: true,
       authentication: "UNKNOWN",
-      version: null,
-      compatibility: "BUILT_IN",
+      version: "2.1.260",
+      compatibility: "VERIFIED",
       ready: false,
-      stages: ["DISCOVERY", "PLAN", "REVIEW"],
+      stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: true,
-      tokenBudgetEnforcement: "HARD",
+      tokenBudgetEnforcement: "POST_SESSION",
       canReportRateLimits: false,
       models: { FAST: "claude-fast", STANDARD: "claude-standard", DEEP: "claude-deep" },
     },
@@ -74,10 +74,10 @@ describe("Loomrail doctor", () => {
 
     expect(report.status).toBe("PASS");
     expect(report.checks.providers.code).toBe("LIVE_PROVIDER_READY");
-    expect(formatDoctorReport(report).join("\n")).toContain("version=none, compatibility=BUILT_IN");
+    expect(formatDoctorReport(report).join("\n")).toContain("version=0.153.4, compatibility=VERIFIED");
   });
 
-  it("treats an uncreated installation and missing API credentials as safe warnings", async () => {
+  it("treats an uncreated installation and signed-out local CLIs as safe warnings", async () => {
     const secretPath = "/Users/local owner/private loomrail";
     const report = await collectDoctorReport({
       nodeVersion: "24.19.0",

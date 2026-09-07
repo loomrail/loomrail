@@ -31,7 +31,7 @@ export type StartupReport = {
 };
 
 // Provider readiness and stage reach are stated at startup so an owner does not discover a missing
-// API key or unsupported writing stage only after starting a paid workflow.
+// local CLI login or unsupported stage only after starting a managed workflow.
 const providerLines = ({
   provider,
   providerReady,
@@ -40,11 +40,13 @@ const providerLines = ({
   stages,
   worksInRepository,
 }: StartupProvider): readonly string[] => {
-  const providerLabel = provider === "CLAUDE_CODE" ? "Anthropic Messages" : "OpenAI Responses";
+  const providerLabel = provider === "CLAUDE_CODE" ? "Claude Code CLI" : "Codex CLI";
   const lines = [
-    `Provider: ${providerLabel}${providerReady ? "" : " -- API credential missing; managed dispatches are refused"}.`,
+    `Provider: ${providerLabel}${providerReady ? "" : " -- local CLI is not ready; managed dispatches are refused"}.`,
     ...(tokenBudgetEnforcement === "POST_SESSION"
-      ? ["It cannot enforce Loomrail's hard token budget, so no provider request will start."]
+      ? [
+          "Token usage is reconciled after each local CLI session. The current session can exceed its estimate; elapsed-time, turn, tool and output limits still apply, and the ledger can block later work.",
+        ]
       : []),
     `It serves ${stages.join(", ")}; any other stage is refused before provider dispatch.`,
     worksInRepository
@@ -53,7 +55,7 @@ const providerLines = ({
   ];
   if (!recognised) {
     lines.push(
-      "LOOMRAIL_PROVIDER named an unknown provider; Loomrail selected OpenAI Responses but left it blocked without OPENAI_API_KEY. Accepted values: CODEX, CLAUDE_CODE.",
+      "LOOMRAIL_PROVIDER named an unknown provider; Loomrail selected local Codex but left dispatch blocked. Accepted values: CODEX, CLAUDE_CODE.",
     );
   }
   return lines;

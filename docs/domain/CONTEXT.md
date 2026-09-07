@@ -69,7 +69,8 @@ _Не означает_: прямая shell-интеграция из брауз
 
 **Token Budget Enforcement**:
 Capability одного adapter: `HARD` предотвращает пересечение переданного остатка внутри текущей provider session;
-`POST_SESSION` только сообщает уже состоявшийся расход и поэтому не допускается к managed run с hard token budget.
+`POST_SESSION` сообщает фактический расход после локальной CLI-сессии и допускается для local-subscription runtime
+только вместе с явным UI disclosure и hard time/turn/tool/output limits.
 _Не означает_: context-window occupancy, provider allowance, terminal usage ledger или разрешение повысить budget.
 
 **Provider Token Budget**:
@@ -78,7 +79,7 @@ _Не означает_: context-window occupancy, provider allowance, terminal 
 _Не означает_: общий provider account limit, цену в USD или новую изменяемую policy.
 
 **Provider Preference**:
-Versioned выбор Project: `AUTO`, `CODEX` (OpenAI Responses) либо `CLAUDE_CODE` (Anthropic Messages).
+Versioned выбор Project: `AUTO`, `CODEX` (локальный Codex CLI) либо `CLAUDE_CODE` (локальный Claude Code CLI).
 _Не означает_: provider уже запущенной ProviderSession или разрешение ослабить permission policy.
 
 **Workspace Strategy**:
@@ -104,17 +105,16 @@ untracked файлов до первого repository-reading run. Настоя�
 _Не означает_: user commit, stash, backup, публикацию локальных файлов или разрешение перезаписать исходные правки.
 
 **Provider Availability**:
-Короткоживущая closed-проекция наличия environment-owned API credential и capability реального adapter.
+Короткоживущая closed-проекция наличия, exact-target compatibility, CLI login и capability локального adapter.
 _Не означает_: provider credential, account profile или durable domain state.
 
 **Provider Compatibility Observation**:
-Историческая диагностическая запись CLI-эпохи; активный API selector её не читает.
-_Не означает_: готовность текущего API adapter или разрешение на dispatch.
+Read-only диагностическое наблюдение executable/version/platform/architecture локального CLI.
+_Не означает_: login, готовность adapter или разрешение на dispatch.
 
 **Provider Compatibility Matrix Row**:
-Историческая allowlist entry одной CLI version. Сохранена для чтения старых диагностических данных, но не участвует
-в выборе OpenAI Responses или Anthropic Messages.
-_Не означает_: поддержку API model ID или готовность provider.
+Allowlist entry точной CLI version/platform/architecture с owner-approved evidence.
+_Не означает_: совместимость соседней версии/OS, login, поддержку model ID или готовность provider.
 
 **Doctor Report**:
 Короткоживущая closed-проекция совместимости runtime, Git, data directory, SQLite migration/integrity и Provider
@@ -123,7 +123,7 @@ Availability для локальной установки. Общий status в�
 _Не означает_: durable workflow state, startup/recovery, migration, support upload или источник product truth.
 
 **Setup Route**:
-Короткоживущий `LIVE`-маршрут, проверяющий Browser prerequisite и готовность одного реального API provider.
+Короткоживущий `LIVE`-маршрут, проверяющий Browser prerequisite и готовность одного локального provider CLI.
 _Не означает_: Project Provider Preference, environment override, durable настройку или право запустить provider.
 
 **Setup Readiness Report**:

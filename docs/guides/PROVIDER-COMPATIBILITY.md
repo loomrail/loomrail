@@ -1,48 +1,59 @@
-# Provider API compatibility
+# Local provider compatibility
 
 > Public pre-alpha · [Русская версия](PROVIDER-COMPATIBILITY.ru.md)
 
-Loomrail has two runtime provider adapters: OpenAI Responses and Anthropic Messages. There is no selectable
-synthetic provider and no successful fallback. If neither API credential is configured, new provider work is blocked.
+Loomrail runs one of two official local agents: Codex CLI or Claude Code CLI. There is no selectable synthetic
+provider, direct provider API route, API-key configuration, or successful fallback.
 
 ## Current matrix
 
-| UI choice          | Internal ID   | Credential          | API             | Current stages                      |
-| ------------------ | ------------- | ------------------- | --------------- | ----------------------------------- |
-| OpenAI Responses   | `CODEX`       | `OPENAI_API_KEY`    | `/v1/responses` | Discovery, Plan, Review, Acceptance |
-| Anthropic Messages | `CLAUDE_CODE` | `ANTHROPIC_API_KEY` | `/v1/messages`  | Discovery, Plan, Review, Acceptance |
+| UI choice       | Internal ID   | Login owned by | Required safety surface                          | Stages         |
+| --------------- | ------------- | -------------- | ------------------------------------------------ | -------------- |
+| Codex CLI       | `CODEX`       | Codex CLI      | ephemeral exec, read-only scratch, Loomrail MCP  | All six stages |
+| Claude Code CLI | `CLAUDE_CODE` | Claude Code    | restricted mode, strict allowlisted Loomrail MCP | All six stages |
 
-The internal IDs remain stable because they already exist in durable workflow history. They do not mean Loomrail
-launches a provider CLI. Both active adapters use HTTPS APIs and a provider-native output-token cap.
+The internal IDs remain stable because they already exist in durable workflow history. Provider-specific command
+arguments and stream payloads stay inside their adapters. The domain model—not the CLI—owns workflow state,
+permissions, gates, budgets, and acceptance.
 
-`IMPLEMENT` and `QA` are intentionally unavailable. Those stages need a security-reviewed local workspace executor
-that can produce measured file and command evidence. Loomrail does not accept provider prose as proof that a file was
-changed or a test ran.
+## Install, sign in, and inspect
 
-## Configure and inspect
-
-Set one key in the same process environment that starts Loomrail:
+Install an official CLI by following its provider documentation, then sign in through that CLI:
 
 ```bash
-export OPENAI_API_KEY="..."
+codex login
 # or
-export ANTHROPIC_API_KEY="..."
+claude auth login
 npx loomrail doctor
 ```
 
-On PowerShell, set `$env:OPENAI_API_KEY` or `$env:ANTHROPIC_API_KEY`. Loomrail reports credential readiness but never
-prints or persists the key. In **Settings → AI provider**, select one provider explicitly or leave **Auto** enabled.
-Auto picks only a ready adapter that supports the requested stage and has hard token-budget enforcement.
+An existing working login is enough. Loomrail does not ask for `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, does not read
+the stored OAuth/session credential, and does not create separate API charges. Doctor reports only installation,
+normalized version, compatibility, and authenticated/not-authenticated state.
 
-`LOOMRAIL_PROVIDER=CODEX` or `LOOMRAIL_PROVIDER=CLAUDE_CODE` locks the process-wide selection. An invalid value or a
-missing credential blocks work; it never redirects to a different provider.
+In **Settings → AI provider**, select a provider or leave **Auto** enabled. Auto selects only a locally installed,
+exact-version-compatible, authenticated CLI that serves the requested stage. `LOOMRAIL_PROVIDER=CODEX` or
+`LOOMRAIL_PROVIDER=CLAUDE_CODE` locks the process-wide selection but cannot bypass compatibility, login, workspace
+permissions, or budgets.
+
+## Workspace and budget boundary
+
+The CLI runs in a fresh empty scratch directory and receives no repository path, provider API key, `.env` value, or
+arbitrary project environment. It can touch the selected workspace only through one-use loopback MCP tools backed by
+Loomrail's provider-neutral executor. Every operation is path-confined, permission-checked, bounded, audited, and
+idempotent.
+
+The official CLIs expose usage after a session rather than an exact token interrupt. Both adapters therefore declare
+`POST_SESSION`: Loomrail has hard elapsed-time, turn, tool, command-output, and provider-output limits, reconciles
+actual usage to its durable ledger, and blocks later work when needed. The current CLI turn may exceed its token
+estimate; the UI states this instead of presenting a false hard token cap.
 
 ## Evidence status
 
-Protocol parsing, token-cap construction, abort behavior, response validation, selection, persistence, and restart
-paths are covered with injected network transports and local integration tests. Those tests make no paid calls.
-Credentialed fixed-commit runs and Windows/macOS provider evidence remain release gates and are recorded as pending
-until an owner authorizes quota-bearing verification.
+Adapter streams, safe arguments, environment filtering, aborts, schema validation, workspace allow/deny paths,
+idempotency, restart recovery, selection, and persistence are covered by test-only CLI fixtures and local integration
+tests. Test automation does not invoke a paid API. Compatibility remains fail-closed for an unverified OS/version
+target; exact macOS and Windows evidence is recorded separately.
 
-The superseded CLI compatibility tables remain in historical plans and evidence as an audit record. They do not
-describe the current runtime.
+Historical API and older CLI matrices remain in dated plans and evidence as an audit record. They do not describe the
+active runtime boundary.

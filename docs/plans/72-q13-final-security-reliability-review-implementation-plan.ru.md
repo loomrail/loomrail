@@ -41,9 +41,10 @@
 - [x] Выполнить финальный Standards/Spec review и закрыть все P0/P1.
 - [x] Прогнать full non-landing source gates, fault injection, audit, clean package и browser matrix.
 - [x] Запушить Q13, дождаться macOS/Windows CI и записать evidence.
-- [x] Связать manual stage workflow со строгим stable-gate index: Q13 создал exact десять gate, а Q18 version 2
-      расширил текущий exact set до одиннадцати отдельным hard token-budget gate; stable version, evidence
-      SHA-256/commit ancestry и fail-closed `PENDING` обязательны. Текущее состояние намеренно остаётся 6/11 без
+- [x] Связать manual stage workflow со строгим stable-gate index: Q13 создал exact десять gates, Q18 schema v2
+      временно добавил hard-token gate, а ADR-0016 schema v3 сохранил одиннадцать gates и заменил его на
+      `q20LocalSubscriptionWorkspaceExecution`; stable version, evidence SHA-256/commit ancestry и fail-closed
+      `PENDING` обязательны. Текущее состояние намеренно остаётся 2/11 без
       выбранной stable version. Обе source-CI платформы перепроверяют текущие `PASSED` evidence по полной Git history. Stage job также
       read-only проверяет, что `npm-release` действительно содержит required reviewer и ровно один custom branch
       pattern `main`; ссылка на отсутствующий auto-created environment не считается защитой.

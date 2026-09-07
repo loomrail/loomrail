@@ -69,7 +69,7 @@ describe("decideDispatchStage", () => {
   });
 
   // A test-only adapter may declare all stages. This gate must dispatch every declared stage,
-  // independently of which production API adapter is under test elsewhere.
+  // independently of which production local CLI adapter is under test elsewhere.
   it("is a no-op for an adapter that declares every stage", () => {
     const allStages = ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"] as const;
     for (const stage of allStages) {
@@ -127,7 +127,7 @@ describe("decideDispatchStage", () => {
     expect(decision.request.context).not.toContain("declares only");
   });
 
-  it("refuses before provider work when usage is reported only after the session", () => {
+  it("admits a local runtime whose token ledger is enforced after the session", () => {
     const decision = decideDispatchStage({
       stage: "PLAN",
       provider: "CODEX",
@@ -135,10 +135,6 @@ describe("decideDispatchStage", () => {
       canStart: true,
       tokenBudgetEnforcement: "POST_SESSION",
     });
-    expect(decision.type).toBe("TOKEN_BUDGET_NOT_ENFORCED");
-    if (decision.type !== "TOKEN_BUDGET_NOT_ENFORCED") throw new Error("unreachable: asserted above");
-    expect(decision.request.title).toContain("hard token budget");
-    expect(decision.request.context).toContain("before Loomrail can stop it");
-    expect(decision.request.recommendation).toContain("Raising the budget does not");
+    expect(decision.type).toBe("DISPATCH");
   });
 });

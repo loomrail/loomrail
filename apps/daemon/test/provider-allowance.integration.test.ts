@@ -77,6 +77,12 @@ describe("provider allowance API", () => {
       env: {},
       adapters: { CODEX: codexAdapter(readAllowance) },
       probeAuthentication: (provider) => Promise.resolve(provider === "CODEX" ? "AUTHENTICATED" : "REQUIRED"),
+      probeRuntime: (provider) =>
+        Promise.resolve(
+          provider === "CODEX"
+            ? { installed: true, compatibility: "VERIFIED", version: "1.0.0" }
+            : { installed: false, compatibility: "MISSING", version: null },
+        ),
     });
     const token = bootstrapToken();
     const running = await startDaemon({

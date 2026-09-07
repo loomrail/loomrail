@@ -60,8 +60,8 @@ runtime/Git/data/SQLite/provider observations as `doctor` with a stat-only Chrom
 codes and ordered next actions, never paths, provider output, accounts, credentials, or exception text.
 
 Setup creates no data directory or database, applies no migration/recovery, and launches no daemon, browser, agent
-session, provider login, installer, or download. It checks only Git, local prerequisites, and whether an API key is
-present; it never sends a provider request.
+session, provider login, installer, or download. It checks Git, local prerequisites, installed CLI versions, and CLI
+login status; it never sends a model request.
 Any `LOOMRAIL_PROVIDER` override blocks guided setup so its route cannot disagree with startup. A pending migration
 also blocks until you stop Loomrail and preserve the whole data directory. Follow the displayed actions yourself;
 setup neither executes nor persists them.
@@ -81,7 +81,7 @@ npx loomrail doctor --json
 ```
 
 The report checks the declared Node range, Git launch, data-directory access, SQLite integrity and migration
-compatibility, and supported provider API credential readiness. It does not start the daemon or
+compatibility, and supported local provider CLI readiness. It does not start the daemon or
 browser, create the data directory, apply migrations, recover workflows, or change provider authentication.
 
 `PASS` and `WARN` exit with code 0. A new installation with no database or no configured provider is a warning, not
@@ -92,10 +92,10 @@ The JSON is deliberately allowlisted. It contains no current directory, home dir
 raw environment value, provider account, command output, credential, or exception message. Review it before sharing
 it anyway: provider presence and authentication state are still local machine metadata.
 
-Provider inspection reports whether `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` is present without returning its value.
-Both adapters are built into Loomrail; there is no CLI installation/version probe and no successful fallback.
-Loomrail does not create, rotate, or persist provider credentials. See the
-[provider API compatibility guide](PROVIDER-COMPATIBILITY.md).
+Provider inspection launches only bounded `--version` and login-status probes for the official Codex and Claude Code
+CLIs. It reports normalized compatibility and authentication states without command output, account details, or
+stored session credentials. Loomrail does not accept provider API keys, perform login, install/update a CLI, or use a
+successful fallback. See the [local provider compatibility guide](PROVIDER-COMPATIBILITY.md).
 
 To reveal the exact local storage path explicitly:
 

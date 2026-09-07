@@ -1,48 +1,58 @@
-# Совместимость API провайдеров
+# Совместимость локальных провайдеров
 
 > Публичная pre-alpha · [English version](PROVIDER-COMPATIBILITY.md)
 
-В Loomrail есть два runtime-адаптера: OpenAI Responses и Anthropic Messages. Выбираемого синтетического провайдера и
-успешного fallback нет. Если не задан ни один API credential, новая работа провайдера блокируется.
+Loomrail запускает один из двух официальных локальных агентов: Codex CLI или Claude Code CLI. Выбираемого
+синтетического провайдера, прямого provider API, настройки API-ключа и успешного fallback нет.
 
 ## Текущая матрица
 
-| Выбор в UI         | Внутренний ID | Credential          | API             | Доступные стадии                    |
-| ------------------ | ------------- | ------------------- | --------------- | ----------------------------------- |
-| OpenAI Responses   | `CODEX`       | `OPENAI_API_KEY`    | `/v1/responses` | Discovery, Plan, Review, Acceptance |
-| Anthropic Messages | `CLAUDE_CODE` | `ANTHROPIC_API_KEY` | `/v1/messages`  | Discovery, Plan, Review, Acceptance |
+| Выбор в UI      | Внутренний ID | Чей login   | Обязательная безопасная поверхность              | Стадии    |
+| --------------- | ------------- | ----------- | ------------------------------------------------ | --------- |
+| Codex CLI       | `CODEX`       | Codex CLI   | ephemeral exec, read-only scratch, Loomrail MCP  | Все шесть |
+| Claude Code CLI | `CLAUDE_CODE` | Claude Code | restricted mode, strict allowlisted Loomrail MCP | Все шесть |
 
-Внутренние ID сохранены ради совместимости с durable workflow history. Они не означают, что Loomrail запускает CLI.
-Оба активных адаптера обращаются к HTTPS API и передают provider-native ограничение output tokens.
+Внутренние ID сохранены ради durable workflow history. Provider-specific аргументы команд и stream payload остаются
+внутри адаптеров. Workflow state, permissions, gates, budgets и acceptance принадлежат доменной модели, а не CLI.
 
-`IMPLEMENT` и `QA` намеренно недоступны. Для них нужен прошедший security review локальный workspace executor,
-который создаёт измеримое evidence изменений файлов и запуска команд. Текст провайдера не считается доказательством
-того, что файл изменён или тест выполнен.
+## Установка, вход и проверка
 
-## Настройка и проверка
-
-Задайте один ключ в окружении того же процесса, из которого запускается Loomrail:
+Установите официальный CLI по документации провайдера, затем войдите через этот CLI:
 
 ```bash
-export OPENAI_API_KEY="..."
+codex login
 # или
-export ANTHROPIC_API_KEY="..."
+claude auth login
 npx loomrail doctor
 ```
 
-В PowerShell задайте `$env:OPENAI_API_KEY` или `$env:ANTHROPIC_API_KEY`. Loomrail показывает только готовность
-credential и никогда не печатает и не сохраняет ключ. В **Настройки → ИИ-провайдер** выберите провайдера явно или
-оставьте **Авто**. Авто выбирает только готовый адаптер, который поддерживает нужную стадию и жёсткий token budget.
+Уже работающего локального входа достаточно. Loomrail не просит `OPENAI_API_KEY` или `ANTHROPIC_API_KEY`, не читает
+сохранённый OAuth/session credential и не создаёт отдельные API-списания. Doctor сообщает только факт установки,
+нормализованную версию, совместимость и состояние authenticated/not-authenticated.
 
-`LOOMRAIL_PROVIDER=CODEX` или `LOOMRAIL_PROVIDER=CLAUDE_CODE` фиксирует выбор на уровне процесса. Некорректное значение
-или отсутствующий credential блокирует работу и не перенаправляет её к другому провайдеру.
+В **Настройки → ИИ-провайдер** выберите провайдера или оставьте **Авто**. Авто выбирает только локально
+установленный, совместимый по точной версии и авторизованный CLI для нужной стадии. `LOOMRAIL_PROVIDER=CODEX` или
+`LOOMRAIL_PROVIDER=CLAUDE_CODE` фиксирует выбор процесса, но не обходит проверку версии, входа, workspace permissions
+или budgets.
+
+## Граница workspace и бюджета
+
+CLI запускается в новом пустом scratch-каталоге и не получает путь репозитория, provider API key, `.env` или
+произвольное окружение проекта. Выбранный workspace доступен только через одноразовые loopback MCP tools поверх
+provider-neutral executor Loomrail. Каждая операция ограничена workspace, проверена по permissions, bounded,
+аудируема и идемпотентна.
+
+Официальные CLI сообщают usage после сессии, а не предоставляют точное token-прерывание. Поэтому оба адаптера
+объявляют `POST_SESSION`: Loomrail жёстко ограничивает время, число ходов, tools, command output и provider output,
+после завершения сверяет реальный usage с durable ledger и при необходимости блокирует следующую работу. Текущий
+CLI-ход может превысить token estimate; UI говорит об этом прямо и не изображает несуществующий hard token cap.
 
 ## Статус evidence
 
-Protocol parsing, построение token cap, abort, response validation, selection, persistence и restart-пути покрыты
-тестами с инъекцией сетевого транспорта и локальными integration tests. Платные вызовы они не делают. Credentialed
-fixed-commit проверки на macOS и Windows остаются release gates со статусом pending до отдельного разрешения владельца
-на расход quota.
+Потоки адаптеров, безопасные аргументы, фильтрация окружения, abort, schema validation, разрешённые и запрещённые
+workspace-операции, idempotency, restart recovery, selection и persistence покрыты test-only CLI fixtures и
+локальными integration tests. Автоматические тесты не вызывают платный API. Для непроверенной комбинации
+OS/версии совместимость остаётся fail-closed; точные evidence для macOS и Windows фиксируются отдельно.
 
-Устаревшие таблицы CLI-совместимости сохранены в исторических планах и evidence как audit record. Они не описывают
-текущий runtime.
+Исторические API- и старые CLI-матрицы сохранены в датированных планах и evidence как audit record. Они не описывают
+активную runtime-границу.

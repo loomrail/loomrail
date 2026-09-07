@@ -257,9 +257,7 @@ const providerCheck = (
       items: snapshot.providers,
     };
   }
-  const liveReady = snapshot.providers.some(
-    ({ ready, tokenBudgetEnforcement }) => ready && tokenBudgetEnforcement === "HARD",
-  );
+  const liveReady = snapshot.providers.some(({ ready }) => ready);
   return {
     status: liveReady ? "PASS" : "WARN",
     code: liveReady ? "LIVE_PROVIDER_READY" : "REAL_PROVIDER_REQUIRED",
@@ -340,7 +338,7 @@ export const formatCliHelp = (): readonly string[] => [
   "",
   "Commands:",
   "  start [--no-open] [--port N]  Start the local daemon and Workbench (default).",
-  "  try [--no-open] [--port N]    Check real-provider readiness, then open the guided route.",
+  "  try [--no-open] [--port N]    Check local-agent readiness, then open the guided route.",
   "  setup [--mode live] [--json]  Check and guide the first full local walkthrough.",
   "  doctor [--json]               Inspect runtime, Git, local state, and providers read-only.",
   "  logs export                   Write a redacted NDJSON log export to stdout.",

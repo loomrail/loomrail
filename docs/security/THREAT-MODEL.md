@@ -1,22 +1,22 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-09-06
+**Updated:** 2026-09-07
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
 
-The current local product includes a loopback daemon, browser UI, SQLite state, local artifacts and two real HTTPS
-provider adapters: OpenAI Responses and Anthropic Messages. The former Phase 0 synthetic provider is historical/test
-only and is not an active runtime capability.
+The current local product includes a loopback daemon, browser UI, SQLite state, local artifacts and two official
+local provider runtimes: Codex CLI and Claude Code CLI. Direct OpenAI/Anthropic API adapters and the former Phase 0
+synthetic provider are historical only and are not active runtime capabilities.
 
 The sentence "it does not execute Git/provider/browser actions" stood here through Phase 0 and is **no longer true
-of those surfaces**. Git workspace preparation and bounded BrowserDriver checks exist, while provider execution now
-uses OpenAI Responses or Anthropic Messages over HTTPS. The current API adapters intentionally do not expose a local
-workspace tool executor, so `IMPLEMENT` and `QA` fail closed before remote dispatch. Loomrail still has no
-general-purpose product shell. New Projects default to `AUTO`: the daemon may select only a configured API adapter
-with hard token enforcement. Missing credentials and unknown overrides fail closed; there is no successful synthetic
-fallback. The API-provider controls are specified in T55 and ADR-0013.
+of those surfaces**. Git workspace preparation and bounded BrowserDriver checks exist. Provider execution launches a
+locally installed, already-authenticated CLI in an empty scratch directory and exposes repository operations only
+through the session-scoped Loomrail MCP proxy and ADR-0014 executor. Loomrail still has no general-purpose product
+shell. New Projects default to `AUTO`: the daemon may select only an installed, authenticated and compatible local
+runtime. Missing login, unsafe version and unknown overrides fail closed; there is no API-key or synthetic fallback.
+The active provider controls are specified in T61/T62 and ADR-0015.
 
 ## 2. Security objectives
 
@@ -90,9 +90,9 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T13 | Private data committed publicly                                              | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                                                                                                                          | automated public-tree scan; full history scan in M7                               |
 | T14 | Theme/UI hides critical state                                                | Medium   | text/icon semantics, contrast, no color-only gates                                                                                                                                           | M1–M3 light/dark, keyboard and state browser checks                               |
 | T15 | Checkpoint steers the next provider session across a swap                    | High     | schema-validated checkpoint, explicit untrusted-data delimiters in the pack, full text visible to owner (see A1 delta below)                                                                 | see A1 delta below                                                                |
-| T16 | Live adapter spawns an owner-privileged child process                        | High     | argv array to `child_process.spawn`, no shell interpolation; never enable a provider's permission-bypass flag automatically (SD-001)                                                         | see A2 delta below                                                                |
+| T16 | Live adapter spawns an owner-privileged child process                        | High     | argv array to `child_process.spawn`, scratch cwd/minimal env; no bypass flag; built-ins/ambient config disabled; one scoped proxy                                                            | see Q20.1 local-runtime delta below                                               |
 | T17 | Child process orphaned by a dead daemon outlives it                          | Medium   | pid recorded on the `ProviderSession`; startup recovery ends authority only after kill/confirmed absence and otherwise retains session plus writer lease                                     | see A2 and Q5 recovery deltas below                                               |
-| T18 | Untrusted provider stream carries the owner's own hook output                | High     | only typed fields cross the adapter boundary; no raw wire line is retained anywhere a caller can observe                                                                                     | see A2 delta below                                                                |
+| T18 | Untrusted provider stream carries the owner's own hook output                | High     | hooks/settings disabled; only typed fields cross the adapter boundary; no raw wire line retained                                                                                             | see Q20.1 local-runtime delta below                                               |
 | T21 | Client path expands a diff read or exhausts the daemon                       | Medium   | authenticated route; canonical worktree boundary; literal Git pathspec plus exact name match; file-count and byte limits; summary debounce                                                   | see E1.5 change-visibility delta below                                            |
 | T22 | Live provider bypasses typed evidence or owner acceptance                    | High     | stage-specific strict result schema; daemon-owned provider attribution; Review/QA typed artifacts; domain rejects ordinary Acceptance completion                                             | see D2 live-route delta below                                                     |
 | T23 | Public landing leaks private data or executes third-party code               | High     | static build from reviewed assets; no forms, analytics or external runtime resources; self-only CSP; pinned Pages actions; build and deploy permissions separated                            | landing public-contract test, public-tree scan and Pages CI                       |
@@ -107,7 +107,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T40 | Diagnostics leak local metadata or mutate state during inspection            | High     | closed allowlisted report; no raw paths/output/errors/env; argv/no-shell bounded probes; read-only SQLite; explicit path disclosure; no cleanup                                              | see Q4 local-diagnostics delta below                                              |
 | T41 | Release artifact is substituted or an unsigned checksum is called provenance | High     | closed receipt; tarball/file digests; clean CI source; trusted OIDC publish; registry signature verification                                                                                 | see Q6 release-integrity and supply-chain delta below                             |
 | T42 | Guided setup performs hidden actions or reports a false-safe route           | High     | zero-write setup report; exact route input; reuse read-only probes; stat-only browser check; no login/install/start; closed output                                                           | see Q8 guided-setup delta below                                                   |
-| T43 | Poisoned or drifted provider CLI is falsely admitted as compatible           | High     | version-before-auth; fixed argv/no shell/minimal env; stdout/deadline bounds; exact parser/allowlist; closed readiness invariant                                                             | see Q9 provider-compatibility delta below                                         |
+| T43 | Poisoned or drifted provider CLI is falsely admitted as compatible           | High     | version-before-auth; verified security-control floor; fixed argv/no shell/minimal env; bounded parser; closed readiness                                                                      | see Q9 and Q20.1 local-runtime deltas                                             |
 | T44 | Bundled sample executes hidden code or carries unreviewed repository input   | High     | exact file catalog; regular bounded files; no dependencies/lifecycle scripts/links; no implicit execution                                                                                    | see Q10 bundled-sample delta below                                                |
 | T45 | Public issue intake exposes private data or routes a vulnerability publicly  | High     | closed forms; explicit public-data acknowledgement; enabled private reporting; no uploads/log requests; no runtime ingestion                                                                 | see Q11 public-intake delta below                                                 |
 | T46 | Insights/report export leaks sensitive local workflow or machine metadata    | High     | numeric/enum facts; strict nested schemas; exact preview/download object; authenticated loopback; no network sender                                                                          | see Q12 private-reporting delta below                                             |
@@ -115,8 +115,15 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T48 | Repository-proposed verification recipe executes attacker-controlled code    | Critical | inert proposal; exact owner revision; argv/no-shell supervisor; scoped cwd/env/network; bounded output/time; durable process identity; stop-before-release; no install/Git/deploy authority  | see Q17 Project-verification delta below                                          |
 | T49 | Guided activation hides authority or publishes an unsafe install sequence    | High     | exact closed install contract; real-provider preflight; explicit quota/side effects and owner actions; fragment-only bootstrap; durable idempotent Task; no parallel progress truth          | see Q15 canonical-activation delta below                                          |
 | T50 | Shared current directory exposes local files or admits concurrent writers    | High     | explicit Project opt-in; immutable workspace fact and carry-in baseline; project-wide writer/verifier authority; named-branch/preflight refusal; no hidden branch/worktree mutation          | see Shared current-directory delta below                                          |
-| T54 | Terminal-only usage is presented as a hard provider budget                   | High     | explicit HARD/POST_SESSION capability; immutable remainder in invocation; AUTO excludes POST_SESSION; daemon refuses before ProviderSession/process spawn; UI names the missing guarantee    | see Hard token-budget enforcement delta below                                     |
-| T55 | API credential leaks or provider request crosses the owner's token authority | High     | environment-only key; header-only transport; conservative input reserve; provider-native output cap; strict response/usage validation; no synthetic fallback; writing stages disabled        | see Real-provider API delta below                                                 |
+| T54 | Terminal-only usage is presented as a hard provider budget                   | High     | explicit POST_SESSION capability; pre-session ledger gate; hard time/turn/tool/output limits; UI names possible current-turn overshoot                                                       | see Hard token-budget and Q20.1 deltas                                            |
+| T55 | Historical API credential or request crosses token authority                 | High     | direct API adapters removed; API-key environment ignored by provider registry; no API or synthetic fallback                                                                                  | ADR-0015 and production-source scan                                               |
+| T56 | Provider tool path escapes the selected workspace or reaches secret metadata | Critical | portable relative paths; canonical root/component checks; no symlinks; secret/meta namespace denylist; CAS writes; no recursive delete                                                       | see Q20 workspace-tool delta below                                                |
+| T57 | Provider turns a tool call into arbitrary command, network or Git authority  | Critical | recipe-ID-only tool; exact active owner Plan; no shell/argv/env input; Q17 runner; network fail-closed; no Git/deploy tools                                                                  | see Q20 workspace-tool delta below                                                |
+| T58 | Crash or duplicate tool call repeats an uncertain local side effect          | High     | durable STARTED/terminal audit; session-bound call digest; input mismatch refusal; process proof before recovery; UNKNOWN_OUTCOME; no automatic replay                                       | see Q20 workspace-tool delta below                                                |
+| T59 | Tool/file/process/provider output leaks secrets or becomes active UI content | High     | secret files invisible; scrubbed env; pre-return redaction; strict bounded schemas; no raw output/payload persistence; React text rendering                                                  | see Q20 workspace-tool delta below                                                |
+| T60 | Multi-turn tool loop crosses token authority or fabricates passing QA        | High     | cumulative usage/cap each request; single-call and finite-loop guards; daemon-measured QA first; exact QARun/evidence/tree binding                                                           | see Q20 workspace-tool delta below                                                |
+| T61 | Local CLI bypasses Loomrail tools through built-ins or ambient configuration | Critical | empty scratch root; repository path withheld; settings/rules/hooks/plugins/browser/built-ins disabled; one-use Loomrail MCP proxy; version gate                                              | see Q20.1 local-runtime delta below                                               |
+| T62 | Local auth/session data leaks through argv, output, persistence or recovery  | High     | provider-owned cached login; no token reads; minimal env; ephemeral sessions; redacted typed events; capability token one-use/non-durable                                                    | see Q20.1 local-runtime delta below                                               |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -989,7 +996,14 @@ transcripts and credentials remain absent. Persistence and daemon tests cover re
 duplicate/actor refusal, append-only triggers, atomic outcome-plus-usage completion, parking before the next
 dispatch and the no-retry override path.
 
-### E1 workspace-execution delta (T19, T20, and two registration decisions)
+### Historical E1 workspace-execution delta (T19, T20, and two registration decisions)
+
+E1 documents the former Codex-only boundary in which the provider process received a managed Git worktree and its
+native shell. ADR-0014/ADR-0015 and the Q20/Q20.1 deltas below supersede that provider authority: neither active CLI
+receives the repository as cwd or `add-dir`, neither may use a built-in filesystem/shell/Git tool, and all repository
+effects cross the five-tool Loomrail MCP/executor contract. The worktree lifecycle and registration controls remain
+applicable to daemon-owned workspace preparation, but the child-process access and network statements in this E1
+section are historical evidence rather than current runtime claims.
 
 E1 (`docs/plans/13-e1-workspace-execution-spec.ru.md`) is where a Project stops being one of two bundled
 fixtures and becomes any local Git repository the owner names by path, and where the stages an agent runs
@@ -1195,7 +1209,14 @@ Verification lives in provider-core contract tests, domain dispatch tests, live-
 selection tests and daemon session integration tests that assert adapter `start` was never called and no session row
 was created. Windows uses the same code path; live Windows evidence remains deferred.
 
-### Real-provider API delta (T55)
+**ADR-0015 amendment.** The owner subsequently rejected the separate API-key/API-billing route and selected local
+subscription-authenticated CLIs. Those adapters are deliberately `POST_SESSION`. AUTO may select them when their
+runtime and login are ready; the UI must say that the current response can overshoot an estimated token remainder.
+The immutable ledger still refuses a session with no positive remainder and blocks later work at exhaustion. Hard
+preventive enforcement moves to wall-clock deadline, process cancellation, provider turn count, workspace tool-call
+count and bounded process/output sizes. Tests must reject any claim that these controls create an exact token cap.
+
+### Historical real-provider API delta (T55)
 
 Removing the selectable synthetic provider makes remote API traffic the only successful provider path. A leaked key,
 an accidentally unbounded request or permissive response parsing would therefore spend the owner's quota or allow
@@ -1215,6 +1236,11 @@ untrusted provider output to cross the deterministic workflow boundary. Rated **
 Verification lives in adapter unit tests, provider selection and settings integration tests, and the production-source
 scan recorded by Q19. Credentialed live and cross-platform evidence remains pending; it must not be inferred from an
 injected transport test.
+
+ADR-0015 removes this route from production. `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` do not configure an active
+adapter, and no production provider module issues these HTTPS requests. Historical migrations/audit remain readable;
+tests may retain protocol fixtures only when they cannot be selected as production execution. A production-source
+scan verifies that provider selection has no API credential, endpoint or transport fallback.
 
 ### Shared current-directory workspace delta (T50)
 
@@ -1630,9 +1656,9 @@ idempotent publish and Project registration; HTTP Origin/session/CSRF bounds; re
 light/dark browser coverage on macOS and Windows.
 
 **T35 — an incomplete or stale checklist authorizes stable staging. High.** A manual confirmation and green CI prove
-intent and automated source health, but neither proves private dogfood, protected landing integration or exact live
-provider rows or an enforceable live-provider token ceiling. The stage workflow therefore consumes one strict
-versioned index with an exact eleven-gate key set and
+intent and automated source health, but neither proves private dogfood, protected landing integration, exact local
+provider rows or bounded local-CLI workspace execution with honest `POST_SESSION` accounting. The stage workflow
+therefore consumes one strict schema-v3 index with an exact eleven-gate key set and
 matching stable version. `PASSED` entries name only bounded repository evidence under `docs/evidence`, bind its
 SHA-256, require the same bytes at the recorded commit, and require that commit to be an ancestor of the release
 source; pending entries cannot carry evidence or pass the workflow. Evidence paths reject traversal and symlinks, and
@@ -1643,9 +1669,145 @@ signature, so protected-environment owner review must inspect the reports and ex
 The passed Q13 row is named as the historical Q13 security/reliability review rather than an exact-source review of
 later slices. Separate npm 2FA approval remains terminal.
 
+Schema v3 rejects the retired `liveProviderHardTokenBudgetEnforcement` key and requires
+`q20LocalSubscriptionWorkspaceExecution`. This prevents a stale release checklist from restoring API transports or
+misrepresenting a subscription CLI's terminal usage report as an in-flight hard token ceiling.
+
 Verification required by C1: proposal replay/digest/expiry; CSRF/Origin; shell/download denial; ambient-config canary;
 ungranted call never reaches fake server; revoke race; flood/invalid JSON; process orphan cleanup; unknown outcome/no
 retry; redaction canaries; RU/EN, keyboard, light/dark E2E.
+
+### Q20 provider workspace-tool delta (T56–T60)
+
+Q20 is the first provider route that can change repository files. A model-controlled tool payload is untrusted
+input, not permission. Its authority is the intersection of the live ProviderSession, immutable AgentRun policy,
+leased WorkItem workspace and exact owner-approved Verification Plan captured by the daemon.
+
+**T56 — a provider path escapes the workspace or reads a secret. Critical.** A traversal, Windows drive/UNC form,
+Unicode ambiguity or symlink inside an otherwise valid repository could point a read/write/delete outside the
+selected WorkItem workspace. A legitimate workspace may also contain an unignored `.env` or key file carried in from
+the owner's checkout. The executor accepts only bounded NFC portable relative paths with `/`, rejects empty,
+dot/traversal, control, reserved and trailing-dot/space segments, and canonicalizes the workspace plus every existing
+component. Any symlink or non-regular target is refused and the final canonical path is compared below the root with
+Windows case folding where applicable. `.git`, `.loomrail`, `.env*`, common credential files and credential
+directories are outside the visible namespace. Writes/deletes require the expected current SHA-256; writes publish
+through a same-directory create-new temporary regular file and atomic rename. There is no recursive deletion.
+
+Required verification: allowed nested paths, spaces and NFC Unicode; POSIX absolute, traversal, drive, UNC,
+case-variant Windows secret names, malformed Unicode/control/reserved names; symlinked parent/target and race-safe
+recheck; stale/missing CAS; read-only write/delete; max file/range/list limits; secret values absent from results,
+events and logs.
+
+**T57 — a provider obtains arbitrary command, network or Git authority. Critical.** The tool schema has no command,
+argv, cwd, env or executable field. It accepts only a recipe ID from the exact active owner-approved Verification
+Plan. Before execution Loomrail rechecks Plan status/revision/hash and Q17 package-script provenance. The existing
+runner uses `shell: false`, canonical cwd, isolated home/cache/temp, a scrubbed allowlisted environment, deadline,
+output cap, process-tree supervisor and before/after tree check. A `DENIED_UNAVAILABLE` network recipe stays refused;
+Q20 does not claim an OS network sandbox. There are no install, Git, commit, push, merge or deploy tools.
+
+Required verification: unknown/disabled/drifted recipes, forged argv/env/native extra fields, cwd symlink/traversal,
+unavailable network, hostile package-script drift, output/deadline/process-tree limits, cancellation before spawn and
+in flight, and unchanged tree for read-only QA command runs.
+
+**T58 — retry or restart duplicates an uncertain side effect. High.** SQLite reserves each call and appends a
+`WORKSPACE_TOOL_CALL_CHANGED` Event before I/O; terminal state and the second Event commit together. The unique key is
+`(ProviderSession, SHA-256(native call ID))`, and the input/policy digests must match on reuse. A terminal duplicate is
+not re-executed and returns no stored raw output. For commands, startup first proves/kills the exact durable supervisor
+process identity. Only then can reconciliation mark the call `UNKNOWN_OUTCOME`, interrupt its ProviderSession/
+AgentRun and retain the audit. File calls also become unknown because an atomic rename may already have crossed the
+crash boundary. No unknown call is automatically replayed.
+
+The provider-visible `RUN_RECIPE` schema enumerates only the recipe IDs captured by the same executor policy; it does
+not expose labels, argv or environment. The executor rechecks the plan on every call, so a stale schema cannot grant
+authority after owner revocation.
+
+Required verification: command receipt replay, same call/different input refusal, duplicate terminal call no refire,
+crash before/after reservation and process intent, confirmed/killed/blocked process recovery, file unknown outcome,
+no automatic dispatch retry and append-only event/table guards.
+
+**T59 — tool output leaks secrets or becomes active content. High.** Provider-native payloads are parsed with strict
+bounded schemas inside adapters and are never persisted. Secret paths are inaccessible; command processes receive no
+provider keys or ambient secret variables. File/process text is bounded, control/ANSI-cleaned and redacted before it
+returns to the local provider runtime. Durable calls/events keep only safe relative targets, digests, sizes, exit state and typed error
+codes, never file contents or command output. Command output is held only in a bounded private runtime artifact;
+after startup has released every recovered process authority, daemon removes matching regular artifacts without
+following symlinks or touching unrelated files. UI renders durable safe fields as text and identifies status with
+text/icon, not color alone.
+
+Required verification: API-key/env/path canaries in tool arguments, file content, stdout/stderr and errors; malformed
+native content/JSON; output truncation; HTML/Markdown-like targets; persistence/log snapshot scans; light/dark and
+keyboard inspection of running, approval-required/blocked, failed, unknown and succeeded states.
+
+**T60 — a multi-turn tool loop overspends or replaces measured QA with prose. High.** Each adapter exposes only the
+finite session-scoped MCP tool set and records provider-reported input plus output usage once for the whole
+ProviderSession. Exhaustion blocks the next session; exact current-turn token enforcement is not claimed. Hard
+deadline, process cancellation, output bounds and executor call ceilings stop other unbounded loops. QA still begins
+with daemon-owned Project Verification and BrowserDriver. Only a PASSED measured run is
+available to read-only provider synthesis, and domain completion binds the resulting QA artifact to the exact
+QARun/evidence/current tree. A budget or restart retry after measurement reuses that bundle only for the same tested
+tree, full-run target/plan or retest plan, QA correction and nested verification correction; it neither repeats
+BrowserDriver nor reopens a completed correction. Failed/error measurements take the existing correction/HumanRequest
+path.
+
+Required verification: both providers' CLI/MCP call/result shapes, more than one parallel tool call,
+missing/malformed/over-budget terminal usage, max turns/repeated failure, cancellation during a turn, provider QA
+without a passing bundle, stale tree/evidence, exact recipe-ID schema discovery, and successful exact
+measured-evidence binding/reuse after budget pause.
+
+### Q20.1 local subscription-runtime delta (T16, T18, T43, T54, T61, T62)
+
+ADR-0015 makes an official local CLI the active model transport. This avoids handling API keys but creates a more
+powerful same-user child: a normal Codex/Claude session may load user rules, hooks, plugins, MCP servers and built-in
+filesystem/shell/browser tools before Loomrail sees any model output. Rated **Critical** when that bypass reaches a
+repository or host secrets.
+
+**T61 — a local CLI recovers ambient authority or silently loses the bounded MCP surface. Critical.** Provider flags
+interact rather than compose mechanically. Current Codex models require code-mode metadata for MCP discovery, while
+the general code host must remain unavailable; current Claude `--safe-mode` disables even an explicitly supplied MCP
+server. The admitted profiles are therefore exact and version-gated, not a collection of assumed-safe flags.
+
+- Each CLI runs in a new empty temporary directory. The selected workspace path is never supplied as cwd, add-dir,
+  prompt metadata or provider config. The runtime receives repository data only through bounded MCP tool results.
+- Codex uses ephemeral execution, ignores user configuration and rules, disables shell, general code-mode host and
+  web capabilities, and runs under a read-only scratch sandbox. Code mode is enabled only to project the explicitly
+  supplied `mcp__<session>` namespaces as direct tools. Non-interactive approval is automatic only for each server's
+  closed `enabled_tools`; executor policy still decides every operation. Claude uses empty setting sources,
+  `--restricted`, strict explicit MCP config, an empty built-in tool set plus exact Loomrail MCP allowlist, no
+  Chrome/slash commands/session persistence, and deliberately omits `--safe-mode` because it disables custom MCP.
+  Permission-bypass modes are prohibited. An exact compatible runtime target/floor is checked before auth and dispatch.
+- The sole explicit MCP connection is a daemon-owned, one-use loopback proxy. Its random capability is passed only to
+  the child proxy, never persisted/logged, and deleted with the lease. The broker maps only the five ADR-0014 tools;
+  unknown tools/fields are refused before executor I/O.
+- Authentication remains provider-owned. Loomrail runs only bounded `login status`/`auth status` probes, observes a
+  closed exit outcome and never reads provider credential stores or returns account identity. `--bare` is not used
+  for Claude because it disables subscription OAuth/keychain login and would reintroduce API-key auth.
+- Provider JSONL, MCP arguments/results and stderr are untrusted. Parsers retain only normalized stage result, usage,
+  context occupancy and typed failure facts; raw lines, hook output, capability values and provider payloads do not
+  reach SQLite, events, logs or UI.
+- Provider PID is recorded immediately; cancellation and startup reconciliation revoke the proxy and prove/kill the
+  process tree before releasing workspace authority. Uncertain workspace calls use the Q20 UNKNOWN_OUTCOME path and
+  are never replayed.
+
+**T62 — a provider claims IMPLEMENT completion without changing the workspace. High.** A structured final result is
+untrusted even when it matches the stage JSON Schema. The domain accepts a live IMPLEMENT completion only when a
+successful durable `WRITE_FILE` or `DELETE_FILE` belongs to the current Project, WorkItem and StageAttempt. A
+provider-session handoff or answered HumanRequest may reuse that proof because it continues the same domain-owned
+attempt; another WorkItem, attempt or correction lineage cannot. Read-only, recipe, denied, failed and unfinished
+calls do not count. Missing evidence produces typed `IMPLEMENT_EFFECT_NOT_OBSERVED`, interrupts the session and
+hard-pauses with an owner-visible `PROVIDER_OUTCOME_REJECTED` request; it never advances the pipeline.
+
+Required verification: same-attempt cross-session mutation proof plus cross-attempt/work-item refusal; exact
+argv/config allowlists for both CLIs; repository/secret canary absent from child cwd and
+arguments; built-in-tool denial; ambient config/hook/plugin/MCP canaries; executable/version/auth states; one-use proxy
+authentication and revocation; real proxy-to-executor allowed/denied calls; malformed/oversized streams; token and
+auth canaries absent from state/log snapshots; interrupt, orphan recovery and macOS/Windows path fixtures. Live
+subscription dogfood is separate evidence and may run only after owner approval on a compatible installed target.
+The approved macOS arm64 run on 2026-09-07 proved real bounded IMPLEMENT/QA MCP calls with Codex CLI `0.153.4` and
+Claude Code `2.1.260`; the complete private workflow and a real Windows host remain separate release gates.
+The 2026-09-08 managed public rehearsal then exercised the full production route to a deliberately pending owner
+Acceptance package. It exposed and closed exact-recipe schema discovery, root-path guidance, measured-QA resume and
+cross-session same-StageAttempt mutation-proof defects. The sanitized evidence is
+`docs/evidence/phase-8/Q20-MANAGED-PUBLIC-DOGFOOD-EVIDENCE.md`; it does not promote Windows or private-dogfood claims.
 
 ### Filesystem, shell and Git
 

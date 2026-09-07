@@ -647,6 +647,7 @@ export const completeQARunCommandSchema = qaCommandBaseSchema.extend({
       currentTree: treeShaSchema,
       result: qaDriverResultSchema,
       finalizedAttachments: z.array(qaFinalizedAttachmentSchema).max(MAX_QA_ATTACHMENTS),
+      completionMode: z.enum(["FINALIZE_WORKFLOW", "RECORD_MEASUREMENT"]).optional(),
     })
     .strict(),
 });

@@ -2,11 +2,12 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-06 — real-provider-only API pivot
+**Последнее дополнение:** 2026-09-08 — bounded local-subscription public dogfood
 
-**Статус:** approved product direction; active Mock удалён; OpenAI Responses и Anthropic Messages read/reason stages
-реализованы с provider-side token ceilings; local tool execution для IMPLEMENT/QA, credentialed dogfood, Windows API
-evidence и stable publish gates pending
+**Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
+локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood
+и одна полная public-fixture Task прошли до `PENDING` owner Acceptance, а private Epic, Windows evidence и stable
+publish gates остаются pending
 
 **Продукт:** Loomrail
 
@@ -20,7 +21,7 @@ evidence и stable publish gates pending
 
 **Режим:** local-first, browser-first, single-owner first
 
-**Провайдеры первого релиза:** OpenAI Responses API и Anthropic Messages API
+**Провайдеры первого релиза:** локальные Codex CLI и Claude Code CLI с существующей подписочной авторизацией
 
 **Первый dogfood project:** private full-stack product repository
 
@@ -112,13 +113,13 @@ permissions, budget, retry и recovery. Агенты исследуют, пре�
 3. «Не повторять архитектуру, code style и Definition of Done в каждой сессии».
 4. «Получить независимую проверку, а не самооценку агента, написавшего код».
 5. «Разблокировать работу одним ответом и продолжить с безопасного checkpoint».
-6. «Контролировать расход моделей и не получить внезапный миллион токенов».
+6. «Видеть расход моделей, ограничивать длительность/циклы и останавливать следующую работу по token ledger».
 7. «Принять результат по evidence, а не по сообщению “готово”».
 
 ### North-star outcome
 
-Одна реальная dogfood-фича проходит из короткого описания в accepted implementation через Codex + Claude,
-переживает restart control plane, укладывается в hard budget и оставляет полную доказательную цепочку.
+Одна реальная dogfood-фича проходит из короткого описания в accepted implementation через локальные Codex + Claude,
+переживает restart control plane, соблюдает preventive runtime limits и оставляет полную доказательную цепочку.
 
 ## 4. Неподвижные продуктовые принципы
 
@@ -1369,9 +1370,10 @@ tests/typecheck/build и clean-package lifecycle smoke зелёные. В
 receipt/audit/lifecycle и browser smoke прошли на macOS/Windows; оба Verify прошли fault gate и остановились только на
 трёх protected landing lint diagnostics. Q7 cross-platform gate закрыт без изменения landing.
 
-Q8 guided local setup локально реализован по планам 61–62. `loomrail setup` выбирает transient Mock/Live route,
-переиспользует closed Doctor Report, stat-only проверяет Playwright Chromium и возвращает три typed checks с ordered
-owner actions. Interactive default ведёт в zero-quota Mock walkthrough; non-TTY/JSON требуют explicit mode. Команда
+Исторический Q8 guided local setup был реализован по планам 61–62 с transient Mock/Live route. Этот route и Mock
+удалены PD-017/PD-019; текущий `loomrail setup` допускает только compatible signed-in local CLI. Сохранившаяся
+граница переиспользует closed Doctor Report, stat-only проверяет Playwright Chromium и возвращает typed checks с ordered
+owner actions. Non-TTY/JSON требуют explicit mode. Команда
 не создаёт data/state, не применяет migrations/recovery и не запускает daemon, browser, agent session, provider login
 или installer; любой environment provider override блокирует false-safe recommendation. CLI 33/33 и clean-package
 setup/doctor/start/log lifecycle зелёные локально и в
@@ -1783,17 +1785,21 @@ human waiver с documented risk.
 
 ## 26. Immediate next actions
 
-1. Сохранить real-provider-only boundary: AUTO выбирает только готовый OpenAI/Anthropic API adapter с `HARD`, а
-   отсутствие credentials или неизвестный override блокирует dispatch без синтетического fallback.
-2. Спроектировать sandboxed local workspace tool executor для API tool calls, обновить threat model и только после
-   Critical/High verification добавить `IMPLEMENT` и `QA` в capabilities обоих providers.
-3. Провести credentialed private dogfood Epic из 2–3 зависимых Task через оба API provider, restart, review, Browser
-   QA и owner Acceptance. Test transports и исторический CLI evidence не считаются live доказательством.
-4. Закрыть macOS/Windows API compatibility rows и protected landing fixed-commit gate; неизвестные результаты
+1. Сохранить local-provider-only boundary: AUTO выбирает только совместимый авторизованный Codex/Claude Code CLI, а
+   отсутствие CLI/login или неизвестный override блокирует dispatch без API либо синтетического fallback.
+2. ADR-0014/Q20.1 production slice реализован: provider-neutral rooted executor, durable tool-call audit/recovery,
+   `POST_SESSION` accounting, measured-QA binding и domain gate на фактическую IMPLEMENT mutation. Focused macOS
+   dogfood доказал реальные IMPLEMENT/QA через Codex CLI `0.153.4` и Claude Code `2.1.260`; финальные `pnpm verify`,
+   60/60 product E2E, 7/7 landing E2E и clean-install release-package gate прошли. Не переносить это доказательство
+   на Windows.
+3. Провести owner-approved subscription-backed private dogfood Epic из 2–3 зависимых Task через оба local provider,
+   restart, review, Browser QA и owner Acceptance. Test doubles не считаются live доказательством.
+4. Закрыть macOS/Windows local CLI compatibility rows и protected landing fixed-commit gate; неизвестные результаты
    оставить `PENDING`, не возвращая Mock.
 5. Repository-side stage-only workflow уже подготовлен с exact-intent, six-job CI и strict eleven-gate evidence
-   index. Index сейчас честно показывает 6/11 и не содержит выбранной stable version; `PENDING` hard token-budget
-   executor, private dogfood, Q15 landing integration и platform API rows машинно запрещают staging. После их
+   index. Schema v3 сейчас честно показывает 2/11 и не содержит выбранной stable version; `PENDING` Q20.1 executor/live
+   local-CLI evidence, private dogfood, Q15 landing integration и cross-platform compatibility rows машинно
+   запрещают staging. После их
    закрытия владелец отдельно настраивает
    protected main-only `npm-release` environment и npm OIDC trust только для `npm stage publish`. Trusted job
    read-only проверяет непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или
@@ -1806,6 +1812,9 @@ human waiver с documented risk.
 
 - [OpenAI Codex overview and local/browser capabilities](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
 - [OpenAI Codex App Server rate-limit contract](https://learn.chatgpt.com/docs/app-server#rate-limits-chatgpt)
+- [OpenAI Codex CLI reference](https://developers.openai.com/codex/cli/reference)
+- [OpenAI Codex non-interactive mode](https://developers.openai.com/codex/noninteractive)
+- [OpenAI Codex App Server](https://developers.openai.com/codex/app-server)
 - [Claude Code CLI reference](https://docs.anthropic.com/en/docs/claude-code/cli-usage)
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks)
 - [Claude Code structured status-line data](https://code.claude.com/docs/en/statusline#available-data)

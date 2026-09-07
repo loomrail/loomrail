@@ -33,7 +33,7 @@ const inertAdapter = (provider: Exclude<ProviderId, "MOCK">, supportedStages = s
       contextWindowTokens: 128_000,
       stages: supportedStages,
       costReporting: provider === "CLAUDE_CODE",
-      tokenBudgetEnforcement: "HARD",
+      tokenBudgetEnforcement: "POST_SESSION",
       canReportRateLimits: false,
     }),
   start: () => Promise.reject(new Error("This provider-selection test never dispatches")),
@@ -68,7 +68,7 @@ describe("real provider settings API", () => {
     updatedAt: "2026-09-06T00:00:00.000Z",
   });
 
-  it("lists only OpenAI and Anthropic and selects a ready API adapter", async () => {
+  it("lists only local Codex and Claude and selects a ready CLI adapter", async () => {
     const registry = createProviderRegistry({
       env: {},
       adapters: {
@@ -77,6 +77,7 @@ describe("real provider settings API", () => {
       },
       probeAuthentication: (provider) =>
         Promise.resolve(provider === "CLAUDE_CODE" ? "AUTHENTICATED" : "REQUIRED"),
+      probeRuntime: () => Promise.resolve({ installed: true, compatibility: "VERIFIED", version: "1.0.0" }),
     });
     await registry.refresh();
 
@@ -88,7 +89,7 @@ describe("real provider settings API", () => {
     });
   });
 
-  it("fails closed when neither real API credential is configured", async () => {
+  it("fails closed when neither local provider runtime is ready", async () => {
     const registry = createProviderRegistry({ env: {} });
     await registry.refresh();
     const resolution = registry.resolve(project());
@@ -104,6 +105,7 @@ describe("real provider settings API", () => {
       env: {},
       adapters: { CODEX: inertAdapter("CODEX"), CLAUDE_CODE: inertAdapter("CLAUDE_CODE") },
       probeAuthentication: () => Promise.resolve("AUTHENTICATED"),
+      probeRuntime: () => Promise.resolve({ installed: true, compatibility: "VERIFIED", version: "1.0.0" }),
     });
     const token = bootstrapToken();
     daemon = await startDaemon({

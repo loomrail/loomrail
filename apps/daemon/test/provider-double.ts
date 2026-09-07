@@ -1,4 +1,10 @@
+import { createHash } from "node:crypto";
+
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { providerOutcomeSchema, type CheckpointDraft, type ProviderOutcome } from "@loomrail/contracts";
+import { mcpProbeEnvironment } from "@loomrail/mcp-gateway";
+import type { LocalState } from "@loomrail/persistence-sqlite";
 import {
   providerCapabilitiesSchema,
   ProviderPackTooLargeError,
@@ -7,7 +13,7 @@ import {
   type ProviderSessionListener,
 } from "@loomrail/provider-core";
 
-/** Test-only provider behavior. Production code must use the OpenAI or Anthropic API adapter. */
+/** Test-only provider behavior. Production code must use a supported local Codex or Claude Code adapter. */
 export type ProviderTestDoubleOptions = {
   contextWindowTokens?: number;
   tokensPerTurn?: number;
@@ -46,6 +52,88 @@ const invalidCheckpoint = (): CheckpointDraft => ({
   deadEnds: [],
   openQuestions: [],
 });
+
+/**
+ * Test-only equivalent of one provider tool turn. It traverses the real one-use MCP proxy and
+ * production executor, then creates one session-unique fixture file. Production adapters reach
+ * the same boundary through their native MCP clients.
+ */
+export const recordImplementationEffectThroughMcp = async (invocation: ProviderInvocation): Promise<void> => {
+  if (invocation.session.stage !== "IMPLEMENT") return;
+  const connection = invocation.mcpConnections.find(({ enabledTools }) =>
+    enabledTools.includes("loomrail_write_file"),
+  );
+  if (connection === undefined) throw new Error("IMPLEMENT test double did not receive workspace tools");
+  const client = new Client({ name: "loomrail-provider-test-double", version: "1.0.0" });
+  try {
+    await client.connect(
+      new StdioClientTransport({
+        command: connection.proxyCommand,
+        args: connection.proxyArgs,
+        env: mcpProbeEnvironment(),
+        stderr: "pipe",
+      }),
+      { timeout: 5_000, maxTotalTimeout: 5_000 },
+    );
+    const suffix = createHash("sha256").update(invocation.session.id).digest("hex").slice(0, 16);
+    const write = await client.callTool({
+      name: "loomrail_write_file",
+      arguments: {
+        path: `test-provider-effect-${suffix}.txt`,
+        expectedSha256: null,
+        content: "Test-only provider effect through the bounded Loomrail executor.\n",
+      },
+    });
+    if (write.isError === true) throw new Error("IMPLEMENT test double write was refused");
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+};
+
+/**
+ * Test-only audit seam for tests that deliberately omit the production executor/MCP composition
+ * so they can isolate workspace provisioning and tree bookkeeping. It records a successful
+ * same-session no-op write; tests of the real proxy/executor path use the helper above.
+ */
+export const recordImplementationEffectInState = (
+  state: LocalState,
+  invocation: ProviderInvocation,
+): void => {
+  if (invocation.session.stage !== "IMPLEMENT") return;
+  const digest = (label: string): string => createHash("sha256").update(label).digest("hex");
+  const started = state.execute({
+    schemaVersion: 1,
+    commandId: `test-tool-start-${invocation.session.id}`,
+    correlationId: `test-tool-${invocation.session.id}`,
+    actor: { type: "SYSTEM", id: "workspace-executor" },
+    type: "START_WORKSPACE_TOOL_CALL",
+    payload: {
+      providerSessionId: invocation.session.id,
+      providerCallKey: digest(`call:${invocation.session.id}`),
+      operation: "WRITE_FILE",
+      target: "committed.txt",
+      policyDigest: digest(`policy:${invocation.session.id}`),
+      inputDigest: digest(`input:${invocation.session.id}`),
+    },
+  });
+  if (started.type !== "WORKSPACE_TOOL_CALL_CHANGED") throw new Error("Expected tool-call audit start");
+  state.execute({
+    schemaVersion: 1,
+    commandId: `test-tool-finish-${invocation.session.id}`,
+    correlationId: `test-tool-${invocation.session.id}`,
+    actor: { type: "SYSTEM", id: "workspace-executor" },
+    type: "FINISH_WORKSPACE_TOOL_CALL",
+    payload: {
+      callId: started.call.id,
+      outcome: {
+        status: "SUCCEEDED",
+        outputDigest: digest(`output:${invocation.session.id}`),
+        outputBytes: 0,
+        exitCode: null,
+      },
+    },
+  });
+};
 
 const scriptedOutcome = (invocation: ProviderInvocation): ProviderOutcome => {
   const { stage, attempt } = invocation.session;
@@ -213,10 +301,14 @@ export const createProviderTestDouble = (options?: ProviderTestDoubleOptions): P
         costReporting: false,
         tokenBudgetEnforcement: "HARD",
       }),
-    start: (invocation, listener) =>
-      sessionBehavior
-        ? runSession(invocation, listener, resolved, sessions)
-        : Promise.resolve(scriptedOutcome(invocation)),
+    start: async (invocation, listener) => {
+      if (sessionBehavior) return runSession(invocation, listener, resolved, sessions);
+      const outcome = scriptedOutcome(invocation);
+      if (invocation.session.stage === "IMPLEMENT" && outcome.type === "COMPLETED") {
+        await recordImplementationEffectThroughMcp(invocation);
+      }
+      return outcome;
+    },
     requestHandoff: (sessionId) => {
       const runtime = sessions.get(sessionId);
       if (runtime) runtime.handoffRequested = true;

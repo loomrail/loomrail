@@ -39,7 +39,7 @@ Web sample можно явно запустить командой `npm start` �
 Discovery → Plan → Implement → Review → QA → Acceptance
 ```
 
-OpenAI Responses и Anthropic Messages передают результат в один deterministic state machine. Текущая pre-alpha не
+Локальные сессии Codex CLI и Claude Code CLI передают результат в один deterministic state machine. Текущая pre-alpha не
 предлагает выбор workflow или custom templates.
 
 ## Каталог встроенных ролей
@@ -64,10 +64,10 @@ Recipe не может изменить capabilities роли, budget, выбо�
 
 ## Выберите подходящий маршрут
 
-- Используйте любой sample с настроенным API provider, чтобы изучить durable requests, budgets, evidence, recovery
-  после restart и acceptance. Работа провайдера расходует quota.
-- [Пример полного маршрута](../examples/full-route/README.md) описывает целевой end-to-end route. Текущие API adapters
-  останавливаются до Implementation, пока не готов локальный workspace executor.
+- Используйте любой sample с совместимым локальным Codex CLI или Claude Code CLI, чтобы изучить durable requests,
+  budgets, evidence, recovery после restart и acceptance. Локальная сессия расходует quota вашей подписки.
+- [Пример полного маршрута](../examples/full-route/README.md) описывает end-to-end route. IMPLEMENT и QA выполняются
+  только через ограниченные и аудируемые workspace tools Loomrail; прямой shell или permission bypass не выдаётся.
 - Зелёный baseline sample — release evidence встроенного шаблона. Это не private dogfood evidence и не подтверждение
   совместимости unverified provider.
 

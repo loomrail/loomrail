@@ -9,8 +9,8 @@ import {
   type WorkflowStage,
 } from "@loomrail/contracts";
 import type { ProviderAdapter } from "@loomrail/provider-core";
-import { createAnthropicMessagesProvider } from "@loomrail/provider-claude-code";
-import { createOpenAIResponsesProvider } from "@loomrail/provider-codex";
+import { claudeCodeProviderDiagnostics, createClaudeCodeProvider } from "@loomrail/provider-claude-code";
+import { codexProviderDiagnostics, createCodexProvider } from "@loomrail/provider-codex";
 
 export const LOOMRAIL_PROVIDER_ENV_VAR = "LOOMRAIL_PROVIDER";
 export const LOOMRAIL_PROVIDER_VALUES = ["CODEX", "CLAUDE_CODE"] as const;
@@ -20,6 +20,11 @@ type LiveProviderId = (typeof LIVE_PROVIDER_IDS)[number];
 type ProviderAdapters = Readonly<Record<LiveProviderId, ProviderAdapter>>;
 
 export type ProviderAuthProbe = (provider: LiveProviderId) => Promise<ProviderAuthentication>;
+export type ProviderRuntimeProbe = (provider: LiveProviderId) => Promise<{
+  installed: boolean;
+  compatibility: ProviderAvailability["compatibility"];
+  version: string | null;
+}>;
 
 export type ProviderResolution = {
   provider: LiveProviderId;
@@ -80,15 +85,20 @@ const availabilityFor = (
   provider: LiveProviderId,
   adapter: ProviderAdapter,
   authentication: ProviderAuthentication,
+  runtime: Awaited<ReturnType<ProviderRuntimeProbe>>,
 ): ProviderAvailability => {
   const capabilities = adapter.capabilities();
   return {
     provider,
-    installed: true,
+    installed: runtime.installed,
     authentication,
-    version: null,
-    compatibility: "BUILT_IN",
-    ready: capabilities.start && authentication === "AUTHENTICATED",
+    version: runtime.version,
+    compatibility: runtime.compatibility,
+    ready:
+      capabilities.start &&
+      runtime.installed &&
+      runtime.compatibility === "VERIFIED" &&
+      authentication === "AUTHENTICATED",
     stages: capabilities.stages,
     checkpointOnRequest: capabilities.checkpointOnRequest,
     contextWindowReporting: capabilities.contextWindowReporting,
@@ -115,31 +125,53 @@ export const createProviderRegistry = (
     env?: Readonly<Record<string, string | undefined>>;
     adapters?: Partial<ProviderAdapters>;
     probeAuthentication?: ProviderAuthProbe;
+    probeRuntime?: ProviderRuntimeProbe;
   } = {},
 ): ProviderRegistry => {
   const env = options.env ?? process.env;
   const environment = requestedEnvironmentProvider(env);
   const adapters: ProviderAdapters = {
-    CODEX: options.adapters?.CODEX ?? createOpenAIResponsesProvider({ apiKey: env["OPENAI_API_KEY"] }),
-    CLAUDE_CODE:
-      options.adapters?.CLAUDE_CODE ?? createAnthropicMessagesProvider({ apiKey: env["ANTHROPIC_API_KEY"] }),
+    CODEX: options.adapters?.CODEX ?? createCodexProvider({ environment: env }),
+    CLAUDE_CODE: options.adapters?.CLAUDE_CODE ?? createClaudeCodeProvider({ environment: env }),
+  };
+  const diagnostics = {
+    CODEX: codexProviderDiagnostics,
+    CLAUDE_CODE: claudeCodeProviderDiagnostics,
+  } as const;
+  const defaultRuntimeProbe: ProviderRuntimeProbe = async (provider) => {
+    const diagnostic = diagnostics[provider];
+    if (!diagnostic.executableAvailable(env)) {
+      return { installed: false, compatibility: "MISSING", version: null };
+    }
+    const observed = await diagnostic.probeVersion({ environment: env });
+    return { installed: true, ...observed };
   };
   const defaultAuthenticationProbe: ProviderAuthProbe = (provider) =>
-    Promise.resolve(adapters[provider].capabilities().start ? "AUTHENTICATED" : "REQUIRED");
+    diagnostics[provider].probeAuthentication({ environment: env });
   const probeAuthentication = options.probeAuthentication ?? defaultAuthenticationProbe;
+  const probeRuntime = options.probeRuntime ?? defaultRuntimeProbe;
+  const unknownRuntime = { installed: false, compatibility: "MISSING", version: null } as const;
   let availability: Readonly<Record<LiveProviderId, ProviderAvailability>> = {
-    CODEX: availabilityFor("CODEX", adapters.CODEX, "UNKNOWN"),
-    CLAUDE_CODE: availabilityFor("CLAUDE_CODE", adapters.CLAUDE_CODE, "UNKNOWN"),
+    CODEX: availabilityFor("CODEX", adapters.CODEX, "UNKNOWN", unknownRuntime),
+    CLAUDE_CODE: availabilityFor("CLAUDE_CODE", adapters.CLAUDE_CODE, "UNKNOWN", unknownRuntime),
   };
 
   const refresh = async (): Promise<void> => {
-    const [openAIAuthentication, anthropicAuthentication] = await Promise.all([
-      probeAuthentication("CODEX"),
-      probeAuthentication("CLAUDE_CODE"),
+    const [codexRuntime, claudeRuntime] = await Promise.all([
+      probeRuntime("CODEX"),
+      probeRuntime("CLAUDE_CODE"),
+    ]);
+    const [codexAuthentication, claudeAuthentication] = await Promise.all([
+      codexRuntime.compatibility === "VERIFIED"
+        ? probeAuthentication("CODEX")
+        : Promise.resolve("UNKNOWN" as const),
+      claudeRuntime.compatibility === "VERIFIED"
+        ? probeAuthentication("CLAUDE_CODE")
+        : Promise.resolve("UNKNOWN" as const),
     ]);
     availability = {
-      CODEX: availabilityFor("CODEX", adapters.CODEX, openAIAuthentication),
-      CLAUDE_CODE: availabilityFor("CLAUDE_CODE", adapters.CLAUDE_CODE, anthropicAuthentication),
+      CODEX: availabilityFor("CODEX", adapters.CODEX, codexAuthentication, codexRuntime),
+      CLAUDE_CODE: availabilityFor("CLAUDE_CODE", adapters.CLAUDE_CODE, claudeAuthentication, claudeRuntime),
     };
   };
 
@@ -160,14 +192,13 @@ export const createProviderRegistry = (
       const candidate = availability[provider];
       return (
         candidate.ready &&
-        candidate.tokenBudgetEnforcement === "HARD" &&
         (resolveOptions.stage === undefined || candidate.stages.includes(resolveOptions.stage))
       );
     }).sort(
       (left, right) =>
         Number(right !== resolveOptions.avoidProvider) - Number(left !== resolveOptions.avoidProvider) ||
         availability[right].stages.length - availability[left].stages.length ||
-        left.localeCompare(right),
+        LIVE_PROVIDER_IDS.indexOf(left) - LIVE_PROVIDER_IDS.indexOf(right),
     );
     const effectiveProvider: LiveProviderId = preferred ?? eligible[0] ?? "CODEX";
     const effectiveAvailability = availability[effectiveProvider];
@@ -176,7 +207,6 @@ export const createProviderRegistry = (
         ? "NO_READY_LIVE_PROVIDER"
         : preferred !== null &&
             (!effectiveAvailability.ready ||
-              effectiveAvailability.tokenBudgetEnforcement !== "HARD" ||
               (resolveOptions.stage !== undefined &&
                 !effectiveAvailability.stages.includes(resolveOptions.stage)))
           ? "LIVE_PROVIDER_UNAVAILABLE"
@@ -235,8 +265,8 @@ export const resolveDefaultProviderAdapter = (
     provider,
     adapter:
       provider === "CODEX"
-        ? createOpenAIResponsesProvider({ apiKey: env["OPENAI_API_KEY"] })
-        : createAnthropicMessagesProvider({ apiKey: env["ANTHROPIC_API_KEY"] }),
+        ? createCodexProvider({ environment: env })
+        : createClaudeCodeProvider({ environment: env }),
     recognised: !environment.invalid,
     requested: environment.requested,
   };

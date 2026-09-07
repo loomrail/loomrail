@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "releaseVersion": null,
   "gates": {
     "q13FinalSecurityReliabilityReview": {
@@ -10,7 +10,7 @@
     },
     "q15CanonicalActivationNonLanding": {
       "status": "PENDING",
-      "reason": "The former evidence covered the retired synthetic route; the real-provider-only activation contract needs fresh fixed-commit evidence."
+      "reason": "The former evidence covered the retired synthetic route; the local-CLI-only activation contract needs fresh fixed-commit evidence."
     },
     "q17MeasuredProjectVerification": {
       "status": "PASSED",
@@ -18,21 +18,21 @@
       "evidenceSha256": "0acd2b3f52fc16dc33bae5329d39922d0413da119043eddd07b87f740046911c",
       "evidenceCommit": "33f77994b3e707d0ccaa683890e68cc7d6625a6e"
     },
-    "liveProviderHardTokenBudgetEnforcement": {
+    "q20LocalSubscriptionWorkspaceExecution": {
       "status": "PENDING",
-      "reason": "Both API adapters now send provider-native output caps, but credentialed fixed-commit evidence must confirm usage stays within the complete request allowance."
+      "reason": "The bounded local-CLI executor, focused macOS evidence and full public rehearsal are verified only in the uncommitted working tree; commit, digest and ancestry evidence remain required."
     },
     "managedPublicDogfoodRehearsal": {
       "status": "PENDING",
-      "reason": "The prior rehearsal exercised retired CLI adapters; the OpenAI Responses and Anthropic Messages paths need a new managed rehearsal."
+      "reason": "The Q20 local-CLI rehearsal reached a PENDING owner Acceptance package on the final verified tree; its sanitized evidence still needs commit, digest and ancestry binding."
     },
     "codexMacosCompatibility": {
       "status": "PENDING",
-      "reason": "The prior row covered the Codex CLI, not the OpenAI Responses API adapter."
+      "reason": "Codex CLI 0.153.4 passed focused Q20 execution on macOS arm64, but the sanitized evidence is not yet committed and ancestry-bound."
     },
     "claudeMacosCompatibility": {
       "status": "PENDING",
-      "reason": "The prior row covered the Claude Code CLI, not the Anthropic Messages API adapter."
+      "reason": "Claude Code 2.1.260 passed focused Q20 execution on macOS arm64, but the sanitized evidence is not yet committed and ancestry-bound."
     },
     "privateDogfood": {
       "status": "PENDING",
@@ -44,11 +44,11 @@
     },
     "codexWindowsCompatibility": {
       "status": "PENDING",
-      "reason": "Owner deferred the quota-bearing OpenAI Responses API capture on Windows."
+      "reason": "No owner-approved Codex CLI Q20 execution evidence exists for a Windows host."
     },
     "claudeWindowsCompatibility": {
       "status": "PENDING",
-      "reason": "Owner deferred the quota-bearing Anthropic Messages API capture on Windows."
+      "reason": "No owner-approved Claude Code CLI Q20 execution evidence exists for a Windows host."
     }
   }
 }

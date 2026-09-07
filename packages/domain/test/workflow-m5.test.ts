@@ -6,6 +6,7 @@ import type {
   ProviderSession,
   StageAttempt,
   WorkItem,
+  WorkspaceToolCallRecord,
   WorkflowDispatch,
 } from "@loomrail/contracts";
 import { describe, expect, it } from "vitest";
@@ -158,6 +159,31 @@ const providerSession: ProviderSession = {
   version: 1,
   pid: null,
 };
+
+const workspaceToolCall = (
+  operation: WorkspaceToolCallRecord["operation"],
+  status: WorkspaceToolCallRecord["status"],
+): WorkspaceToolCallRecord => ({
+  schemaVersion: 1,
+  id: `workspace-call-${operation}-${status}`,
+  projectId: workItem.projectId,
+  workItemId: workItem.id,
+  stageAttemptId: stageAttempt.id,
+  agentRunId: agentRun.id,
+  providerSessionId: providerSession.id,
+  providerCallKey: "1".repeat(64),
+  operation,
+  target: "src/feature.ts",
+  policyDigest: "2".repeat(64),
+  inputDigest: "3".repeat(64),
+  status,
+  failureCode: status === "SUCCEEDED" || status === "STARTED" ? null : "WORKSPACE_ACCESS_DENIED",
+  outputDigest: status === "SUCCEEDED" ? "4".repeat(64) : null,
+  outputBytes: status === "SUCCEEDED" ? 12 : null,
+  exitCode: null,
+  startedAt: now,
+  finishedAt: status === "STARTED" ? null : now,
+});
 
 describe("M5 workflow decisions", () => {
   it("records final provider usage and crosses each pipeline threshold once", () => {
@@ -423,6 +449,65 @@ describe("M5 workflow decisions", () => {
     );
   });
 
+  it("requires an audited workspace mutation in the same IMPLEMENT attempt before completion", () => {
+    const command: ApplyProviderOutcomeCommand = {
+      schemaVersion: 1,
+      commandId: "apply-live-implement",
+      correlationId: "correlation-live-implement",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "APPLY_PROVIDER_OUTCOME",
+      payload: {
+        resultTree: "a".repeat(40),
+        dispatchId: dispatch.id,
+        provider: "CODEX",
+        template,
+        outcome: { type: "COMPLETED", summary: "Implementation complete." },
+        sessionCompletion: { providerSessionId: providerSession.id, usage: null },
+      },
+    };
+    const baseContext = {
+      now,
+      workItem,
+      run,
+      stageAttempt,
+      dispatch,
+      budgetPolicy,
+      existingUsageRecords: [],
+      usageRecordIds: [],
+    };
+
+    for (const calls of [
+      [],
+      [workspaceToolCall("READ_FILE", "SUCCEEDED")],
+      [workspaceToolCall("WRITE_FILE", "DENIED")],
+      [workspaceToolCall("DELETE_FILE", "FAILED")],
+      [workspaceToolCall("WRITE_FILE", "STARTED")],
+      [{ ...workspaceToolCall("DELETE_FILE", "SUCCEEDED"), stageAttemptId: "other-attempt" }],
+      [{ ...workspaceToolCall("WRITE_FILE", "SUCCEEDED"), workItemId: "other-work-item" }],
+    ]) {
+      expect(() =>
+        decideApplyProviderOutcome(command, { ...baseContext, workspaceToolCalls: calls }),
+      ).toThrow(expect.objectContaining({ code: "IMPLEMENT_EFFECT_NOT_OBSERVED" }));
+    }
+
+    for (const operation of ["WRITE_FILE", "DELETE_FILE"] as const) {
+      expect(() =>
+        decideApplyProviderOutcome(command, {
+          ...baseContext,
+          workspaceToolCalls: [workspaceToolCall(operation, "SUCCEEDED")],
+        }),
+      ).not.toThrow();
+    }
+    expect(() =>
+      decideApplyProviderOutcome(command, {
+        ...baseContext,
+        workspaceToolCalls: [
+          { ...workspaceToolCall("WRITE_FILE", "SUCCEEDED"), providerSessionId: "earlier-session" },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
   it("requires an immutable budget override before a hard-paused run can continue", () => {
     const hardRun = { ...run, status: "HARD_PAUSED" as const };
     const hardAttempt = { ...stageAttempt, status: "HARD_PAUSED" as const };
@@ -475,6 +560,55 @@ describe("M5 workflow decisions", () => {
       run: { status: "RUNNING", currentStageAttemptId: "attempt-2" },
       stageAttempt: { attempt: 2, status: "QUEUED" },
       budgetPolicy: { revision: 2, maxEstimatedTokens: 200, modelTierOverride: "FAST" },
+    });
+
+    const measuredQAAttempt = {
+      ...hardAttempt,
+      id: "qa-attempt-with-measurement",
+      stage: "QA" as const,
+      attempt: 3,
+    };
+    const measuredQARun = {
+      ...hardRun,
+      currentStageAttemptId: measuredQAAttempt.id,
+    };
+    const resumedQA = decideApproveBudgetOverride(
+      {
+        schemaVersion: 1,
+        commandId: "override-measured-qa-budget",
+        correlationId: "correlation-override-measured-qa-budget",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "APPROVE_BUDGET_OVERRIDE",
+        payload: {
+          pipelineRunId: measuredQARun.id,
+          expectedVersion: measuredQARun.version,
+          maxEstimatedTokens: 300,
+        },
+      },
+      {
+        now,
+        workItem: { ...workItem, state: "BLOCKED" },
+        run: measuredQARun,
+        stageAttempt: measuredQAAttempt,
+        currentBudgetPolicy: budgetPolicy,
+        cumulativeUsage: 100,
+        currentAgentRunMaxEstimatedTokens: 80,
+        qaMeasurementCompleted: true,
+        ids: {
+          budgetPolicyId: "budget-measured-qa",
+          stageAttemptId: "qa-attempt-must-not-be-used",
+          dispatchId: "dispatch-measured-qa",
+        },
+      },
+    );
+    expect(resumedQA).toMatchObject({
+      previousStageAttempt: { id: measuredQAAttempt.id, status: "HARD_PAUSED" },
+      stageAttempt: {
+        id: measuredQAAttempt.id,
+        attempt: measuredQAAttempt.attempt,
+        status: "QUEUED",
+      },
+      run: { status: "RUNNING", currentStageAttemptId: measuredQAAttempt.id },
     });
   });
 

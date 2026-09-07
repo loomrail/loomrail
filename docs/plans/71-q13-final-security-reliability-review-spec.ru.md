@@ -65,6 +65,11 @@ ceiling 200 000, потому что единственный usage event при
 считается hard enforcement: такой adapter fail-closed останавливается до `ProviderSession`/process spawn. D4
 остаётся обязательной атомарностью ledger и результата, но не заменяет превентивный ограничитель.
 
+**ПРАВКА 2026-09-07 после PD-019/ADR-0015.** Fail-closed запрет всех `POST_SESSION` запусков был промежуточным
+API-only решением и больше не является product contract. Локальные subscription CLI допускаются с честной
+`POST_SESSION` маркировкой, превентивными time/turn/tool/output bounds и запретом следующего dispatch после ledger
+exhaustion. ADR-0016 заменяет соответствующий stable gate на доказательство bounded local-CLI workspace execution.
+
 ### D5 — Owner-visible attribution
 
 Task Cockpit показывает для каждой сессии total/input/output, quality и reported USD cost, если он существует.

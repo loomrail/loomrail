@@ -23,7 +23,7 @@ const liveAvailability = {
 } as const;
 
 describe("provider availability compatibility", () => {
-  it("accepts a built-in real API adapter", () => {
+  it("keeps a historical built-in provider row readable", () => {
     expect(
       providerAvailabilitySchema.parse({
         ...liveAvailability,
