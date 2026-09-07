@@ -43,10 +43,10 @@ Loomrail implements a daemon-owned MCP gateway.
   leaves the process untouched. Windows reads this root identity from `Get-Process.StartTime` with a ten-second
   command deadline that includes cold PowerShell startup; the slower CIM graph query remains limited to descendant
   discovery, where parent relationships are required. The live supervisor tolerates at most two consecutive
-  transient CIM failures and still requires two successful quiet scans before publishing `STOPPED`; a third failure
-  remains fail-closed. Windows can retain a dead creator PID on an older unrelated process, so descendant discovery
-  ignores candidates created before the supervised root instead of signalling them or treating that stale numeric
-  relationship as part of the current tree.
+  transient CIM query or per-process creation-time observation failures and still requires two successful quiet
+  scans before publishing `STOPPED`; a third failure remains fail-closed. Windows can retain a dead creator PID on
+  an older unrelated process, so descendant discovery ignores candidates created before the supervised root instead
+  of signalling them or treating that stale numeric relationship as part of the current tree.
 
 ## Alternatives rejected
 

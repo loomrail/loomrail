@@ -117,12 +117,12 @@ describe("shared process-tree platform operations", () => {
       "-NonInteractive",
       "-Command",
     ]);
-    expect(fixture.executeCalls[0]?.args[4]).toContain("$rootProcessId = 7301");
-    expect(fixture.executeCalls[0]?.args[4]).toContain(startedAt.getTime().toString());
-    expect(fixture.executeCalls[0]?.args[4]).toContain("$observationFailures -ge 3");
-    expect(fixture.executeCalls[0]?.args[4]).toContain(
-      "$candidate.CreationDate.ToUniversalTime() -lt $minimumCreation) { continue; }",
-    );
+    const script = fixture.executeCalls[0]?.args[4] ?? "";
+    expect(script).toContain("$rootProcessId = 7301");
+    expect(script).toContain(startedAt.getTime().toString());
+    expect(script).toContain("$observationFailures -ge 3");
+    expect(script).toContain("$candidate.CreationDate.ToUniversalTime() -lt $minimumCreation) { continue; }");
+    expect(script.indexOf("Process identity unavailable")).toBeLessThan(script.indexOf("} catch {"));
     expect(fixture.executeCalls[0]?.timeoutMs).toBe(60_000);
   });
 
