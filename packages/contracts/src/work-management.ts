@@ -154,6 +154,11 @@ import {
   setProjectProviderPreferenceCommandSchema,
 } from "./provider-selection.js";
 import {
+  projectWorkspaceStrategyChangedEventSchema,
+  projectWorkspaceStrategyChangedResultSchema,
+  setProjectWorkspaceStrategyCommandSchema,
+} from "./workspace-strategy.js";
+import {
   providerAllowanceRecordedEventSchema,
   providerAllowanceRecordedResultSchema,
   recordProviderAllowanceCommandSchema,
@@ -403,6 +408,7 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   projectReadinessAssessedEventSchema,
   projectReadinessAttestedEventSchema,
   projectProviderPreferenceChangedEventSchema,
+  projectWorkspaceStrategyChangedEventSchema,
   verificationPlanAdoptedEventSchema,
   verificationPlanDisabledEventSchema,
   verificationPlanPublicationAppliedEventSchema,
@@ -619,6 +625,7 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   recordProjectReadinessAssessmentCommandSchema,
   attestProjectReadinessCheckCommandSchema,
   setProjectProviderPreferenceCommandSchema,
+  setProjectWorkspaceStrategyCommandSchema,
   adoptVerificationPlanCommandSchema,
   disableVerificationPlanCommandSchema,
   completeVerificationPlanPublicationCommandSchema,
@@ -755,6 +762,7 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   projectReadinessAssessedResultSchema,
   projectReadinessAttestedResultSchema,
   projectProviderPreferenceChangedResultSchema,
+  projectWorkspaceStrategyChangedResultSchema,
   verificationPlanAdoptedResultSchema,
   verificationPlanDisabledResultSchema,
   verificationPlanPublicationAppliedResultSchema,

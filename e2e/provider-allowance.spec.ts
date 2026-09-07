@@ -64,6 +64,7 @@ const durableAllowanceRegistry = () => {
         contextWindowTokens: 128_000,
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
         canReportRateLimits: true,
       }),
     modelMapping: () => ({ FAST: "fast", STANDARD: "standard", DEEP: "deep" }),

@@ -2,11 +2,11 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-05 — Q17 complete; full automated macOS/Windows CI green; Windows live-provider
-capture deferred
+**Последнее дополнение:** 2026-09-06 — live-provider hard-budget enforcement fail-closed after private dogfood
 
-**Статус:** approved product direction; Q15 non-landing и Q16–Q17 complete; Q15 protected landing integration,
-private dogfood, Windows live providers и stable publish gates pending
+**Статус:** approved product direction; Q15 non-landing и Q16–Q17 complete; live Codex/Claude managed runs blocked
+until an enforceable session budget exists; Q15 protected landing integration, private dogfood, Windows live
+providers и stable publish gates pending
 
 **Продукт:** Loomrail
 
@@ -1783,17 +1783,20 @@ human waiver с documented risk.
 
 ## 26. Immediate next actions
 
-1. Сохранить Q16 provider allowance fail-closed: Claude headless/Desktop остаётся explicit unsupported, Windows
-   live-provider capture отложен владельцем; Q17 и полная автоматическая macOS/Windows matrix уже зелёные.
+1. Сохранить Q18 provider budget fail-closed: Codex и Claude Code остаются `POST_SESSION`, AUTO выбирает только
+   провайдера с `HARD`, а UI и CLI прямо объясняют, почему живая сессия не стартует. Q16 allowance не подменяет этот
+   gate; Windows live-provider capture отложен владельцем, Q17 и автоматическая macOS/Windows matrix уже зелёные.
 2. Подключить protected landing к Q15 canonical contract только в отдельной authorized landing-сессии; прежние три
    lint finding уже закрыты и repository-wide Verify проходит на обеих ОС.
-3. Провести private dogfood Epic из 2–3 зависимых Task через новые activation/verification surfaces, оба live provider,
-   restart, review, Browser QA и owner Acceptance.
+3. После появления точного runtime evidence для `HARD` провести новый private dogfood Epic из 2–3 зависимых Task
+   через activation/verification surfaces, оба live provider, restart, review, Browser QA и owner Acceptance. До
+   этого живые session starts запрещены независимо от поднятого бюджета.
 4. После отдельной owner-authorized сессии закрыть Windows live-provider compatibility rows; до неё неизвестные
    версии оставить fail-closed и использовать Mock.
-5. Repository-side stage-only workflow уже подготовлен с exact-intent, six-job CI и strict ten-gate evidence index.
-   Index сейчас честно показывает 6/10 и не содержит выбранной stable version; `PENDING` private dogfood, Q15 landing
-   integration и оба Windows live rows машинно запрещают staging. После их закрытия владелец отдельно настраивает
+5. Repository-side stage-only workflow уже подготовлен с exact-intent, six-job CI и strict eleven-gate evidence
+   index. Index сейчас честно показывает 6/11 и не содержит выбранной stable version; `PENDING` hard token-budget
+   enforcement, private dogfood, Q15 landing integration и оба Windows live rows машинно запрещают staging. После их
+   закрытия владелец отдельно настраивает
    protected main-only `npm-release` environment и npm OIDC trust только для `npm stage publish`. Trusted job
    read-only проверяет непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или
    auto-created environment не сможет stage-ить package. Staged artifact требует ещё одного owner 2FA approval.

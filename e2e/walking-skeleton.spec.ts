@@ -3135,10 +3135,17 @@ test.describe("authenticated walking skeleton", () => {
     await expect(page.locator(".lr-task-card").first()).toHaveCSS("padding", "8px");
   });
 
-  test("selects and persists the Project AI provider from Settings", async ({ page }) => {
+  test("selects and persists a HARD Project AI provider from Settings", async ({ page }) => {
     let codexVersion = "0.152.1";
+    const hardCodex = gatedAdapter(200_000, { provider: "CODEX" });
     const providerRegistry = createProviderRegistry({
       env: {},
+      adapters: {
+        CODEX: {
+          ...hardCodex,
+          modelMapping: () => ({ FAST: "test-fast", STANDARD: "test-standard", DEEP: "test-deep" }),
+        },
+      },
       executableAvailable: (provider) => provider === "CODEX",
       probeCompatibility: () =>
         Promise.resolve({
@@ -3221,6 +3228,161 @@ test.describe("authenticated walking skeleton", () => {
     await page.setViewportSize({ width: 320, height: 720 });
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     expect(await page.locator("body").evaluate((body) => body.scrollWidth <= body.clientWidth)).toBe(true);
+  });
+
+  test("keeps a POST_SESSION provider selectable for diagnosis but out of Auto", async ({ page }) => {
+    const providerRegistry = createProviderRegistry({
+      env: {},
+      executableAvailable: (provider) => provider === "CODEX",
+      probeCompatibility: () => Promise.resolve({ compatibility: "VERIFIED" as const, version: "0.152.1" }),
+      probeAuthentication: (provider) => Promise.resolve(provider === "CODEX" ? "AUTHENTICATED" : "UNKNOWN"),
+    });
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      providerRegistry,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    const provider = settings.locator(".provider-settings");
+    const selector = provider.getByRole("combobox", { name: "Provider for new sessions" });
+
+    await expect(selector).toContainText("Auto");
+    await expect(provider.getByText("New sessions use Mock.", { exact: true })).toBeVisible();
+    await expect(provider.getByRole("listitem").filter({ hasText: "Codex" })).toContainText(
+      "v0.152.1 · No hard token limit",
+    );
+
+    await selector.focus();
+    await page.keyboard.press("Enter");
+    const codexOption = page.getByRole("option", { name: "Codex", exact: true });
+    await expect(codexOption).toBeVisible();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("ArrowDown");
+    await expect(codexOption).toHaveAttribute("data-highlighted");
+    await page.keyboard.press("Enter");
+    await expect(selector).toContainText("Codex");
+    await expect(provider.getByText("New sessions use Codex.", { exact: true })).toBeVisible();
+    await expect(
+      provider.getByText(
+        "This provider cannot run under Loomrail's hard token budget. No live session will start.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+
+    await settings.getByRole("button", { name: "Close dialog" }).click();
+    await page.reload();
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const reopened = page.getByRole("dialog", { name: "Settings" }).locator(".provider-settings");
+    await expect(reopened.getByRole("combobox", { name: "Provider for new sessions" })).toContainText(
+      "Codex",
+    );
+    await expect(
+      reopened.getByText(
+        "This provider cannot run under Loomrail's hard token budget. No live session will start.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+  });
+
+  test("chooses the Project working directory accessibly and persists it", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    const workspaceStrategy = settings.locator(".workspace-strategy-settings");
+    const choices = workspaceStrategy.getByRole("group", { name: "Agent workspace" });
+    const isolated = choices.getByRole("radio", { name: /Separate worktree/ });
+    const shared = choices.getByRole("radio", { name: /This project folder/ });
+
+    await expect(isolated).toBeChecked();
+    await isolated.focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(shared).toBeFocused();
+    const focusedChoice = shared.locator("..");
+    expect(
+      await focusedChoice.evaluate((element) => {
+        const style = window.getComputedStyle(element);
+        return style.outlineStyle === "solid" && style.outlineWidth === "2px";
+      }),
+    ).toBe(true);
+
+    const confirmation = workspaceStrategy.getByRole("note").filter({
+      hasText: "Before Loomrail uses this folder",
+    });
+    await expect(confirmation).toContainText("tracked and untracked files");
+    await expect(confirmation).toContainText("editor, terminal, or other tools");
+    await expect(confirmation).toContainText("only one of its own writers or verification runs");
+
+    const confirm = confirmation.getByRole("button", { name: "Use this project folder" });
+    await expect(confirm).toBeDisabled();
+    const acknowledgement = confirmation.getByRole("checkbox", {
+      name: "I understand the shared-folder risk",
+    });
+    await acknowledgement.focus();
+    await page.keyboard.press("Space");
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
+    await expect(shared).toBeChecked();
+    await expect(confirmation).toBeHidden();
+
+    await settings
+      .getByRole("group", { name: "Change color theme" })
+      .getByRole("button", { name: "Light" })
+      .click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(shared).toBeChecked();
+    await settings
+      .getByRole("group", { name: "Change color theme" })
+      .getByRole("button", { name: "Dark" })
+      .click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(shared).toBeChecked();
+
+    for (const width of [768, 414, 375, 320]) {
+      await page.setViewportSize({ width, height: 812 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      for (const choice of [isolated, shared]) {
+        expect(
+          await choice
+            .locator("xpath=following-sibling::span")
+            .evaluate((copy) => copy.scrollWidth <= copy.clientWidth),
+        ).toBe(true);
+      }
+    }
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await settings.getByRole("button", { name: "Close dialog" }).click();
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const reopened = page.getByRole("dialog", { name: "Settings" });
+    await expect(
+      reopened.getByRole("group", { name: "Agent workspace" }).getByRole("radio", {
+        name: /This project folder/,
+      }),
+    ).toBeChecked();
+
+    await reopened
+      .getByRole("group", { name: "Change language" })
+      .getByRole("button", { name: "Русский" })
+      .click();
+    const russianStrategy = page.locator(".workspace-strategy-settings");
+    await expect(russianStrategy.getByRole("heading", { name: "Рабочая папка" })).toBeVisible();
+    await expect(
+      russianStrategy
+        .getByRole("group", { name: "Рабочая область агентов" })
+        .getByRole("radio", { name: /Эта папка проекта/ }),
+    ).toBeChecked();
   });
 
   test("approves, probes, grants, persists and revokes an MCP connection in Settings", async ({ page }) => {

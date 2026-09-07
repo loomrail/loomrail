@@ -1372,7 +1372,7 @@ describe("SQLite local state", () => {
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-      29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52,
+      29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -1380,6 +1380,61 @@ describe("SQLite local state", () => {
     const backup = new DatabaseSync(localState.startup.backupPath, { readOnly: true });
     expect(backup.prepare("SELECT value FROM legacy_marker").get()).toEqual({ value: "preserve-me" });
     backup.close();
+  });
+
+  it("migrates an existing workspace to the isolated default and preserves its Events", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const { workItemId, projectId } = (() => {
+      const created = localState.execute(createWorkItem("create-pre-0053"));
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      return { workItemId: created.workItem.id, projectId: created.workItem.projectId };
+    })();
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "workspace-pre-0053",
+      correlationId: "correlation-workspace-pre-0053",
+      actor: { type: "SYSTEM", id: "workspace-manager" },
+      type: "CREATE_WORK_ITEM_WORKSPACE",
+      payload: {
+        workItemId,
+        projectId,
+        branch: "loomrail/pre-0053",
+        worktreePath: join(temporaryDirectory, "pre-0053-worktree"),
+        baseCommit: null,
+        snapshotCommit: null,
+        carriedPaths: [],
+      },
+    });
+    const eventsBefore = localState.query({ type: "LIST_EVENTS", aggregateId: workItemId });
+    if (eventsBefore.type !== "EVENTS") throw new Error("Expected Events");
+    localState.close();
+    state = undefined;
+
+    // Restore the columns/tables a v52 database actually had. The Events table may already accept
+    // the new vocabulary in this fixture; migration 53 still rebuilds it and must preserve every
+    // historical row, while the absent workspace column proves the compatibility backfill.
+    const pre53 = new DatabaseSync(databasePath);
+    pre53.exec(`
+      DROP INDEX shared_workspace_project_authority_idx;
+      DROP TABLE project_workspace_strategies;
+      ALTER TABLE work_item_workspaces DROP COLUMN strategy;
+      DELETE FROM schema_migrations WHERE version = 53;
+    `);
+    pre53.close();
+
+    const migrated = await open();
+    expect(migrated.startup.appliedMigrations).toEqual([53]);
+    expect(migrated.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId })).toMatchObject({
+      type: "WORKSPACE",
+      workspace: { strategy: "ISOLATED_WORKTREE" },
+    });
+    expect(migrated.query({ type: "GET_PROJECT_WORKSPACE_STRATEGY", projectId })).toMatchObject({
+      type: "PROJECT_WORKSPACE_STRATEGY",
+      selection: { strategy: "ISOLATED_WORKTREE" },
+    });
+    const eventsAfter = migrated.query({ type: "LIST_EVENTS", aggregateId: workItemId });
+    expect(eventsAfter.type === "EVENTS" ? eventsAfter.events : null).toEqual(eventsBefore.events);
   });
 
   it("adds a nullable model-tier override without inventing one for an older BudgetPolicy", async () => {
@@ -3532,6 +3587,31 @@ describe("SQLite local state", () => {
       });
       const fixDispatch = nextDispatch();
       expect(fixDispatch).toMatchObject({ status: "PENDING" });
+      expect(
+        localState.query({
+          type: "READ_CONTEXT_SOURCES",
+          stageAttemptId: fixDispatch.stageAttemptId,
+          sessionOrdinal: 1,
+        }),
+      ).toMatchObject({
+        type: "CONTEXT_SOURCES",
+        sources: {
+          reviewInput: {
+            implementationAttempt: { attempt: 1, resultTree: reviewedTree },
+            authorAgentRun: { id: author.run.id, provider: "CODEX" },
+            openFindings: [
+              {
+                severity: "HIGH",
+                title: "Expected version is ignored",
+                description: "The mutation can overwrite a concurrent update.",
+                reproduction: "Submit the command with the previous aggregate version.",
+                criterion: "Concurrent updates fail closed.",
+                suggestedFix: "Include expectedVersion in the guarded update predicate.",
+              },
+            ],
+          },
+        },
+      });
 
       const snapshot = localState.query({
         type: "GET_WORKFLOW_SNAPSHOT",
@@ -9730,6 +9810,161 @@ describe("SQLite local state", () => {
       payload: {},
     });
 
+    it("allows only one shared-current-directory writer across WorkItems of one Project", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const first = startWorkflow(localState, "start-shared-first", "create-shared-first");
+      const second = startWorkflow(localState, "start-shared-second", "create-shared-second");
+      const firstWorkspace = localState.execute(
+        createWorkspaceCommand("workspace-shared-first", first.workItemId, first.projectId, {
+          strategy: "SHARED_CURRENT_DIRECTORY",
+          worktreePath: temporaryDirectory,
+        }),
+      );
+      const secondWorkspace = localState.execute(
+        createWorkspaceCommand("workspace-shared-second", second.workItemId, second.projectId, {
+          strategy: "SHARED_CURRENT_DIRECTORY",
+          worktreePath: temporaryDirectory,
+        }),
+      );
+      if (
+        firstWorkspace.type !== "WORK_ITEM_WORKSPACE_CREATED" ||
+        secondWorkspace.type !== "WORK_ITEM_WORKSPACE_CREATED"
+      ) {
+        throw new Error("Expected shared workspaces");
+      }
+
+      const firstClaim = localState.execute(
+        acquireLeaseCommand(
+          "claim-shared-first",
+          firstWorkspace.workspace.id,
+          first.stageAttemptId,
+          firstWorkspace.workspace.version,
+        ),
+      );
+      expect(firstClaim).toMatchObject({ type: "WORKSPACE_LEASE_ACQUIRED" });
+      expect(() =>
+        localState.execute(
+          acquireLeaseCommand(
+            "claim-shared-second",
+            secondWorkspace.workspace.id,
+            second.stageAttemptId,
+            secondWorkspace.workspace.version,
+          ),
+        ),
+      ).toThrow(expect.objectContaining({ code: "WORKSPACE_PROJECT_AUTHORITY_HELD" }));
+
+      if (firstClaim.type !== "WORKSPACE_LEASE_ACQUIRED") throw new Error("Expected first lease");
+      localState.execute(
+        releaseLeaseCommand(
+          "release-shared-first",
+          firstClaim.workspace.id,
+          first.stageAttemptId,
+          firstClaim.workspace.version,
+        ),
+      );
+      expect(
+        localState.execute(
+          acquireLeaseCommand(
+            "claim-shared-second-after-release",
+            secondWorkspace.workspace.id,
+            second.stageAttemptId,
+            secondWorkspace.workspace.version,
+          ),
+        ),
+      ).toMatchObject({ type: "WORKSPACE_LEASE_ACQUIRED" });
+    });
+
+    it("refuses a competing initial shared writer with the same typed Project authority error", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const first = startWorkflow(localState, "start-initial-shared-first", "create-initial-shared-first");
+      const second = startWorkflow(localState, "start-initial-shared-second", "create-initial-shared-second");
+      const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected pending dispatches");
+      const secondDispatch = pending.dispatches.find(
+        ({ stageAttemptId }) => stageAttemptId === second.stageAttemptId,
+      );
+      if (secondDispatch === undefined) throw new Error("Expected second pending dispatch");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "start-initial-shared-second-agent",
+        correlationId: "correlation-start-initial-shared-second-agent",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "START_AGENT_RUN",
+        payload: {
+          dispatchId: secondDispatch.id,
+          provider: "CODEX",
+          limits: { global: 3, project: 3, provider: 3 },
+        },
+      });
+      const firstWorkspace = localState.execute(
+        createWorkspaceCommand("workspace-initial-shared-first", first.workItemId, first.projectId, {
+          strategy: "SHARED_CURRENT_DIRECTORY",
+          worktreePath: temporaryDirectory,
+        }),
+      );
+      if (firstWorkspace.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace");
+      localState.execute(
+        acquireLeaseCommand(
+          "claim-initial-shared-first",
+          firstWorkspace.workspace.id,
+          first.stageAttemptId,
+          firstWorkspace.workspace.version,
+        ),
+      );
+
+      expect(() =>
+        localState.execute(
+          createWorkspaceCommand("workspace-initial-shared-second", second.workItemId, second.projectId, {
+            strategy: "SHARED_CURRENT_DIRECTORY",
+            worktreePath: temporaryDirectory,
+            initialLeaseHolder: second.stageAttemptId,
+          }),
+        ),
+      ).toThrow(expect.objectContaining({ code: "WORKSPACE_PROJECT_AUTHORITY_HELD" }));
+    });
+
+    it("keeps isolated workspace writers independent across WorkItems", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const first = startWorkflow(localState, "start-isolated-first", "create-isolated-first");
+      const second = startWorkflow(localState, "start-isolated-second", "create-isolated-second");
+      const firstWorkspace = localState.execute(
+        createWorkspaceCommand("workspace-isolated-first", first.workItemId, first.projectId),
+      );
+      const secondWorkspace = localState.execute(
+        createWorkspaceCommand("workspace-isolated-second", second.workItemId, second.projectId),
+      );
+      if (
+        firstWorkspace.type !== "WORK_ITEM_WORKSPACE_CREATED" ||
+        secondWorkspace.type !== "WORK_ITEM_WORKSPACE_CREATED"
+      ) {
+        throw new Error("Expected isolated workspaces");
+      }
+
+      expect(
+        localState.execute(
+          acquireLeaseCommand(
+            "claim-isolated-first",
+            firstWorkspace.workspace.id,
+            first.stageAttemptId,
+            firstWorkspace.workspace.version,
+          ),
+        ),
+      ).toMatchObject({ type: "WORKSPACE_LEASE_ACQUIRED" });
+      expect(
+        localState.execute(
+          acquireLeaseCommand(
+            "claim-isolated-second",
+            secondWorkspace.workspace.id,
+            second.stageAttemptId,
+            secondWorkspace.workspace.version,
+          ),
+        ),
+      ).toMatchObject({ type: "WORKSPACE_LEASE_ACQUIRED" });
+    });
+
     it("creates a workspace and reads it back by WorkItem id", async () => {
       const localState = await open();
       localState.execute(registerProject());
@@ -10085,6 +10320,65 @@ describe("SQLite local state", () => {
         status: "READY",
         leaseHolder: null,
       });
+    });
+
+    it("recovers a dead shared writer without orphaning the Project's current directory", async () => {
+      const localState = await open();
+      const repositoryPath = join(temporaryDirectory, "project-web");
+      await mkdir(repositoryPath, { recursive: true });
+      makeThrowawayRepo(repositoryPath);
+      localState.execute(registerProject());
+      const { workItemId, stageAttemptId, projectId } = startWorkflow(
+        localState,
+        "start-dead-shared-lease",
+        "create-work-item-dead-shared-lease",
+      );
+      const branch = execFileSync("git", ["branch", "--show-current"], {
+        cwd: repositoryPath,
+        encoding: "utf8",
+      }).trim();
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-dead-shared-lease", workItemId, projectId, {
+          strategy: "SHARED_CURRENT_DIRECTORY",
+          branch,
+          worktreePath: repositoryPath,
+        }),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+      localState.execute(
+        acquireLeaseCommand("acquire-dead-shared-lease", created.workspace.id, stageAttemptId, 1),
+      );
+      const queued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (queued.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected the dispatch queue");
+      const dispatch = queued.dispatches.find((candidate) => candidate.stageAttemptId === stageAttemptId);
+      if (dispatch === undefined) throw new Error("Expected a pending dispatch for this StageAttempt");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "mark-dead-shared-lease-dispatch-started",
+        correlationId: "correlation-mark-dead-shared-lease-dispatch-started",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: dispatch.id },
+      });
+
+      const reconciled = localState.execute(reconcileWorkflowsCommand("reconcile-dead-shared-lease"));
+      if (reconciled.type !== "WORKFLOWS_RECONCILED") throw new Error("Expected reconciliation");
+      expect(reconciled.orphanedWorkspaces).toEqual([]);
+      expect(reconciled.recoveryReports).toEqual([
+        expect.objectContaining({ stageAttemptId, recoveredStatus: "INTERRUPTED" }),
+      ]);
+      expect(localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId })).toMatchObject({
+        type: "WORKSPACE",
+        workspace: {
+          strategy: "SHARED_CURRENT_DIRECTORY",
+          status: "READY",
+          leaseHolder: null,
+          worktreePath: repositoryPath,
+        },
+      });
+      expect(execFileSync("git", ["status", "--porcelain"], { cwd: repositoryPath, encoding: "utf8" })).toBe(
+        "",
+      );
     });
 
     // The lease the test above does NOT cover, and the one the product actually loses. The session

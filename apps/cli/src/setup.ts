@@ -111,7 +111,10 @@ const routeCheck = (
     return { status: "FAIL", code: "PROVIDER_OVERRIDE_ACTIVE" };
   }
   if (route === "MOCK") return { status: "PASS", code: "MOCK_ROUTE_READY" };
-  const liveReady = report.checks.providers.items.some(({ provider, ready }) => provider !== "MOCK" && ready);
+  const liveReady = report.checks.providers.items.some(
+    ({ provider, ready, tokenBudgetEnforcement }) =>
+      provider !== "MOCK" && ready && tokenBudgetEnforcement === "HARD",
+  );
   return liveReady
     ? { status: "PASS", code: "LIVE_ROUTE_READY" }
     : { status: "FAIL", code: "LIVE_PROVIDER_NOT_READY" };

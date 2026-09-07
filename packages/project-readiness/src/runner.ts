@@ -91,6 +91,7 @@ export const verificationBaselineEnvironment = (input: {
   isolatedHome: string;
   runtimePath: readonly string[];
   source: EnvironmentSource;
+  executable?: VerificationRecipe["executable"];
 }): Readonly<Record<string, string>> => {
   const environment: Record<string, string> = {
     CI: "1",
@@ -117,6 +118,11 @@ export const verificationBaselineEnvironment = (input: {
     copyEnvironmentValue(environment, input.source, "LANG");
     copyEnvironmentValue(environment, input.source, "LC_ALL");
   }
+  // pnpm 11 defaults verifyDepsBeforeRun to `install`. In Loomrail's CI-shaped baseline that can
+  // reinterpret a read-only `pnpm run <check>` recipe as a full dependency install, mutate
+  // node_modules and spend the entire check deadline before the approved script even starts.
+  // Scope the override to pnpm so nested npm/yarn commands do not inherit an unknown config key.
+  if (input.executable === "pnpm") environment["pnpm_config_verify_deps_before_run"] = "false";
   return environment;
 };
 
@@ -543,6 +549,7 @@ export const executeVerificationRecipe = async (
         isolatedHome,
         runtimePath: invocation.runtimePath,
         source,
+        executable: input.recipe.executable,
       }),
       deadlineMs: input.recipe.timeoutSeconds * 1_000,
       outputLimitBytes: input.recipe.outputLimitBytes,

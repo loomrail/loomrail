@@ -78,12 +78,37 @@ const en = {
   "settings.provider.status.unverified": "Version not verified",
   "settings.provider.status.versionUnreadable": "Version could not be verified",
   "settings.provider.status.authRequired": "Sign in required",
+  "settings.provider.status.noHardTokenBudget": "No hard token limit",
   "settings.provider.status.unknown": "Could not verify",
+  "settings.provider.selectedUnavailable":
+    "This provider cannot run under Loomrail's hard token budget. No live session will start.",
   "settings.provider.refresh": "Check again",
   "settings.provider.override":
     "LOOMRAIL_PROVIDER currently forces {provider}. Restart without the override to change this here.",
   "settings.provider.overrideInvalid":
     "LOOMRAIL_PROVIDER contains an unknown value. Loomrail stays in Mock mode until it is fixed and restarted.",
+  "settings.workspaceStrategy.title": "Working directory",
+  "settings.workspaceStrategy.description": "Choose where agents read and change files for this project.",
+  "settings.workspaceStrategy.label": "Agent workspace",
+  "settings.workspaceStrategy.isolated": "Separate worktree — recommended",
+  "settings.workspaceStrategy.isolatedDescription":
+    "Each task gets its own checkout. Your current project folder stays untouched.",
+  "settings.workspaceStrategy.shared": "This project folder",
+  "settings.workspaceStrategy.sharedDescription": "Agents work directly in {path}.",
+  "settings.workspaceStrategy.scope":
+    "Existing task workspaces do not move. This choice applies when Loomrail creates the next workspace.",
+  "settings.workspaceStrategy.loading": "Loading working directory settings…",
+  "settings.workspaceStrategy.confirmTitle": "Before Loomrail uses this folder",
+  "settings.workspaceStrategy.confirmDescription":
+    "New agent work will happen directly in {path}, alongside your own changes.",
+  "settings.workspaceStrategy.confirmFiles":
+    "Agents can read tracked and untracked files in this repository, including local-only files.",
+  "settings.workspaceStrategy.confirmExternalTools":
+    "Loomrail cannot lock your editor, terminal, or other tools that may change the same folder.",
+  "settings.workspaceStrategy.confirmSerial":
+    "Loomrail allows only one of its own writers or verification runs in this project at a time.",
+  "settings.workspaceStrategy.acknowledge": "I understand the shared-folder risk",
+  "settings.workspaceStrategy.confirm": "Use this project folder",
   "providerAllowance.provider": "Provider",
   "providerAllowance.title": "{provider} · Provider allowance",
   "providerAllowance.surface.command-center": "{provider} provider allowance in Command Center",
@@ -746,14 +771,22 @@ const en = {
   "workspace.status.ORPHANED": "Worktree gone",
   "workspace.status.REMOVED": "Removed",
   "workspace.repository": "Repository",
+  "workspace.mode": "Mode",
+  "workspace.mode.ISOLATED_WORKTREE": "Separate worktree",
+  "workspace.mode.SHARED_CURRENT_DIRECTORY": "Project folder",
   "workspace.branch": "Branch",
   "workspace.worktree": "Worktree",
+  "workspace.workingDirectory": "Working directory",
   "workspace.baseCommit": "Base commit",
   "workspace.baseCommit.none": "No commit yet",
   "workspace.notReady":
     "The worktree for this task is no longer on disk. Loomrail does not cut a second one, and nothing returns this workspace to service — the branch still holds whatever was committed to it.",
+  "workspace.sharedNotReady":
+    "The Project's recorded working directory is no longer available. Loomrail will not choose another directory or branch on its own.",
   "workspace.uncommitted":
     "Loomrail has committed nothing. The work sits in this worktree, on this branch, until you keep it or discard it.",
+  "workspace.sharedUncommitted":
+    "Loomrail has committed nothing. Agent changes are in your project folder alongside any work that was already there.",
   "changes.title": "Changes",
   "changes.empty": "This task has changed nothing in its worktree yet.",
   "changes.truncated":
@@ -1096,7 +1129,9 @@ const en = {
   "event.contextFloorExceeded": "Required context did not fit",
   "event.contextFloorExceededDetail": "Session {ordinal} needed {requiredBytes} bytes of {budgetBytes}",
   "event.workspaceCreated": "Workspace created",
-  "event.workspaceCreatedDetail": "Branch {branch}",
+  "event.workspaceCreatedDetail": "{mode} · branch {branch} · carried files: {count}",
+  "event.workspaceStrategyChanged": "Working directory mode changed",
+  "event.workspaceStrategyChangedDetail": "New workspaces use {mode}",
   "event.workspaceOrphaned": "Workspace orphaned",
   "event.workspaceOrphanedDetail": "The worktree is gone or prunable",
   "field.title": "title",
@@ -1180,12 +1215,37 @@ const ru = {
   "settings.provider.status.unverified": "Версия не проверена",
   "settings.provider.status.versionUnreadable": "Версию не удалось проверить",
   "settings.provider.status.authRequired": "Нужно войти",
+  "settings.provider.status.noHardTokenBudget": "Нет жёсткого лимита токенов",
   "settings.provider.status.unknown": "Не удалось проверить",
+  "settings.provider.selectedUnavailable":
+    "Этот провайдер не может работать с жёстким токен-бюджетом Loomrail. Живая сессия не запустится.",
   "settings.provider.refresh": "Проверить снова",
   "settings.provider.override":
     "Сейчас LOOMRAIL_PROVIDER принудительно выбирает {provider}. Перезапустите без override, чтобы менять выбор здесь.",
   "settings.provider.overrideInvalid":
     "В LOOMRAIL_PROVIDER указано неизвестное значение. До исправления и перезапуска Loomrail остаётся в Mock-режиме.",
+  "settings.workspaceStrategy.title": "Рабочая папка",
+  "settings.workspaceStrategy.description": "Выберите, где агенты читают и изменяют файлы этого проекта.",
+  "settings.workspaceStrategy.label": "Рабочая область агентов",
+  "settings.workspaceStrategy.isolated": "Отдельный worktree — рекомендуется",
+  "settings.workspaceStrategy.isolatedDescription":
+    "Каждая задача получает отдельный checkout. Текущая папка проекта остаётся нетронутой.",
+  "settings.workspaceStrategy.shared": "Эта папка проекта",
+  "settings.workspaceStrategy.sharedDescription": "Агенты работают прямо в {path}.",
+  "settings.workspaceStrategy.scope":
+    "Существующие рабочие области задач не перемещаются. Выбор применяется, когда Loomrail создаст следующую рабочую область.",
+  "settings.workspaceStrategy.loading": "Загружаем настройку рабочей папки…",
+  "settings.workspaceStrategy.confirmTitle": "Перед работой Loomrail в этой папке",
+  "settings.workspaceStrategy.confirmDescription":
+    "Новая работа агентов будет идти прямо в {path}, рядом с вашими изменениями.",
+  "settings.workspaceStrategy.confirmFiles":
+    "Агенты смогут читать отслеживаемые и неотслеживаемые файлы репозитория, включая локальные файлы.",
+  "settings.workspaceStrategy.confirmExternalTools":
+    "Loomrail не может заблокировать ваш редактор, терминал или другие инструменты, которые меняют ту же папку.",
+  "settings.workspaceStrategy.confirmSerial":
+    "Loomrail допускает в этом проекте только одного своего автора или один verification run одновременно.",
+  "settings.workspaceStrategy.acknowledge": "Я понимаю риск общей папки",
+  "settings.workspaceStrategy.confirm": "Работать в папке проекта",
   "providerAllowance.provider": "Провайдер",
   "providerAllowance.title": "{provider} · Лимит провайдера",
   "providerAllowance.surface.command-center": "Лимит провайдера {provider} в Command Center",
@@ -1855,14 +1915,22 @@ const ru = {
   "workspace.status.ORPHANED": "Worktree исчез",
   "workspace.status.REMOVED": "Удалена",
   "workspace.repository": "Репозиторий",
+  "workspace.mode": "Режим",
+  "workspace.mode.ISOLATED_WORKTREE": "Отдельный worktree",
+  "workspace.mode.SHARED_CURRENT_DIRECTORY": "Папка проекта",
   "workspace.branch": "Ветка",
   "workspace.worktree": "Worktree",
+  "workspace.workingDirectory": "Рабочая папка",
   "workspace.baseCommit": "Базовый коммит",
   "workspace.baseCommit.none": "Коммитов ещё не было",
   "workspace.notReady":
     "Каталога worktree этой задачи больше нет на диске. Loomrail не создаёт второй, и вернуть эту рабочую область в строй нечем — ветка по-прежнему хранит всё, что в неё закоммичено.",
+  "workspace.sharedNotReady":
+    "Записанная рабочая папка проекта больше недоступна. Loomrail не будет сам выбирать другую папку или ветку.",
   "workspace.uncommitted":
     "Loomrail ничего не коммитил. Работа лежит в этом worktree, на этой ветке, пока вы её не сохраните или не удалите.",
+  "workspace.sharedUncommitted":
+    "Loomrail ничего не коммитил. Изменения агента лежат в папке проекта рядом с работой, которая уже была там.",
   "changes.title": "Изменения",
   "changes.empty": "Задача пока ничего не изменила в своей рабочей области.",
   "changes.truncated":
@@ -2204,7 +2272,9 @@ const ru = {
   "event.contextFloorExceeded": "Обязательный контекст не поместился",
   "event.contextFloorExceededDetail": "Сессии {ordinal} нужно {requiredBytes} байт из {budgetBytes}",
   "event.workspaceCreated": "Рабочая область создана",
-  "event.workspaceCreatedDetail": "Ветка {branch}",
+  "event.workspaceCreatedDetail": "{mode} · ветка {branch} · перенесено файлов: {count}",
+  "event.workspaceStrategyChanged": "Режим рабочей папки изменён",
+  "event.workspaceStrategyChangedDetail": "Новые рабочие области используют: {mode}",
   "event.workspaceOrphaned": "Рабочая область осиротела",
   "event.workspaceOrphanedDetail": "Worktree отсутствует или может быть удалён",
   "field.title": "название",

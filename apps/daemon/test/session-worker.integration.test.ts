@@ -83,6 +83,7 @@ const adapterThatDoesNothing = (): ProviderAdapter => ({
     contextWindowTokens: 200_000,
     stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
     costReporting: false,
+    tokenBudgetEnforcement: "HARD",
   }),
   start: () => Promise.reject(new Error("adapterThatDoesNothing.start should never be called")),
   requestHandoff: () => Promise.resolve(undefined),
@@ -501,6 +502,7 @@ describe("session worker", () => {
         contextWindowTokens: 128_000,
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
       start: async (invocation, listener) => {
         const stage = invocation.session.stage;
@@ -1095,6 +1097,7 @@ describe("session worker", () => {
         contextWindowTokens: 200_000,
         stages: ["IMPLEMENT"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
       start: (_invocation, listener) => {
         listener.onUsage({ inputTokens: 110_000, outputTokens: 10_000, quality: "ACTUAL" });
@@ -1168,6 +1171,7 @@ describe("session worker", () => {
         contextWindowTokens: 200_000,
         stages: ["IMPLEMENT"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
       start: (_invocation, listener) => {
         listener.onUsage({ inputTokens: 110_000, outputTokens: 10_000, quality: "ACTUAL" });
@@ -1322,6 +1326,7 @@ describe("session worker", () => {
         contextWindowTokens: 200_000,
         stages: ["DISCOVERY"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
       start: (_invocation, listener) => {
         listener.onUsage({ inputTokens: 29_167, outputTokens: 551, quality: "ACTUAL" });

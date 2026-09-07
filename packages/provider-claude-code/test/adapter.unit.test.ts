@@ -205,6 +205,7 @@ const fixtureInvocation = (
   },
   modelTier,
   ...(modelId === undefined ? {} : { modelId }),
+  tokenBudget: { maxEstimatedTokens: 100_000, recordedEstimatedTokens: 0, remainingEstimatedTokens: 100_000 },
   acceptanceInput: null,
   humanRequests,
   mcpConnections,
@@ -357,6 +358,7 @@ describe("createClaudeCodeProvider", () => {
   it("declares itself as Claude Code and reports cost, which Codex cannot", () => {
     const capabilities = createClaudeCodeProvider().capabilities();
     expect(capabilities.provider).toBe("CLAUDE_CODE");
+    expect(capabilities.tokenBudgetEnforcement).toBe("POST_SESSION");
     expect(capabilities.costReporting).toBe(true);
     expect(capabilities.canReportRateLimits).toBe(false);
   });

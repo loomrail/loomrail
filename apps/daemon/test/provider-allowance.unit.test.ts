@@ -17,6 +17,7 @@ const availability = (
   checkpointOnRequest: false,
   contextWindowReporting: true,
   costReporting: provider === "CLAUDE_CODE",
+  tokenBudgetEnforcement: "HARD",
   canReportRateLimits: true,
   models: { FAST: "fast", STANDARD: "standard", DEEP: "deep" },
   ...overrides,

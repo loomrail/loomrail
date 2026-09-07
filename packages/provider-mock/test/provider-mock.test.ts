@@ -39,6 +39,11 @@ const invocation = (
     },
     contextPack: contextPack(),
     modelTier: "STANDARD",
+    tokenBudget: {
+      maxEstimatedTokens: 100_000,
+      recordedEstimatedTokens: 0,
+      remainingEstimatedTokens: 100_000,
+    },
     acceptanceInput: {
       criteria: ["State is durable"],
       evidence: [

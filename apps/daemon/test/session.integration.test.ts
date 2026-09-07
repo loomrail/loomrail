@@ -301,6 +301,7 @@ describe("stage attempt session loop", () => {
         contextWindowTokens,
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
     start: () => Promise.resolve(completingOutcome()),
     requestHandoff: () => Promise.resolve(),
@@ -326,6 +327,7 @@ describe("stage attempt session loop", () => {
         contextWindowTokens: 128_000,
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
     start: async (_invocation, listener) => {
       const run = runProcess({
@@ -382,6 +384,70 @@ describe("stage attempt session loop", () => {
     const { sessions } = sessionRows(localState, seeded.stageAttemptId);
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.pid).toBeNull();
+  });
+
+  it("refuses before opening a session when the adapter cannot enforce the hard token budget", async () => {
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    let starts = 0;
+    const postSessionOnly: ProviderAdapter = {
+      capabilities: () =>
+        providerCapabilitiesSchema.parse({
+          provider: "MOCK",
+          start: true,
+          interrupt: true,
+          eventStream: true,
+          usageReporting: true,
+          contextWindowReporting: true,
+          checkpointOnRequest: true,
+          contextWindowTokens: 128_000,
+          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+          costReporting: false,
+          tokenBudgetEnforcement: "POST_SESSION",
+        }),
+      start: () => {
+        starts += 1;
+        return Promise.resolve(completingOutcome());
+      },
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
+    };
+
+    await runStageAttempt(depsFor(localState, seeded, postSessionOnly));
+
+    expect(starts).toBe(0);
+    expect(sessionRows(localState, seeded.stageAttemptId).sessions).toEqual([]);
+    expect(snapshotOf(localState, seeded.workItemId)).toMatchObject({
+      run: { status: "WAITING_HUMAN" },
+      stageAttempts: [{ status: "WAITING_HUMAN" }],
+      humanRequests: [
+        {
+          status: "OPEN",
+          title: "MOCK cannot enforce the hard token budget",
+        },
+      ],
+    });
+  });
+
+  it("passes the immutable AgentRun token remainder into a hard-enforcing adapter", async () => {
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    let received: ProviderInvocation["tokenBudget"] | undefined;
+    const recordingBudget: ProviderAdapter = {
+      ...finishingAdapter(),
+      start: (invocation) => {
+        received = invocation.tokenBudget;
+        return Promise.resolve(completingOutcome());
+      },
+    };
+
+    await runStageAttempt(depsFor(localState, seeded, recordingBudget));
+
+    expect(received).toEqual({
+      maxEstimatedTokens: 80_000,
+      recordedEstimatedTokens: 0,
+      remainingEstimatedTokens: 80_000,
+    });
   });
 
   it("continues the same attempt in a second session after a handoff", async () => {
@@ -483,6 +549,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 4_000,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: false,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) =>
         new Promise<ProviderOutcome>(() => {
@@ -531,6 +598,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 10_000,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: false,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) => {
         for (let usedTokens = 1_000; usedTokens <= 1_040; usedTokens += 1) {
@@ -625,6 +693,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 4_000,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: true,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) => {
         listener.onUsage({ inputTokens: 40, outputTokens: 20, quality: "ACTUAL" });
@@ -676,6 +745,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 4_000,
           stages: ["DISCOVERY", "PLAN", "REVIEW"],
           costReporting: true,
+          tokenBudgetEnforcement: "HARD",
           canReportRateLimits: true,
         }),
       modelMapping: () => ({ FAST: "fast", STANDARD: "standard", DEEP: "deep" }),
@@ -750,6 +820,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 4_000,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: false,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: (_invocation, listener) => {
         listener.onUsage({ inputTokens: 70_000, outputTokens: 10_000, quality: "ACTUAL" });
@@ -804,6 +875,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 4_000,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: true,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) => {
         listener.onUsage({ inputTokens: -1, outputTokens: 340, quality: "ACTUAL" });
@@ -872,6 +944,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 40,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: false,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: () => {
         started += 1;
@@ -1108,6 +1181,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 4_000,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: false,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: () => Promise.reject(new Error("the provider socket closed")),
       requestHandoff: () => Promise.resolve(),

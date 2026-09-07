@@ -13,6 +13,7 @@ describe("decideDispatchStage", () => {
       provider: "CODEX",
       declaredStages: ["DISCOVERY", "PLAN", "REVIEW"],
       canStart: true,
+      tokenBudgetEnforcement: "HARD",
     });
     expect(decision.type).toBe("STAGE_NOT_SERVED");
   });
@@ -23,6 +24,7 @@ describe("decideDispatchStage", () => {
       provider: "CODEX",
       declaredStages: ["DISCOVERY", "PLAN", "REVIEW"],
       canStart: true,
+      tokenBudgetEnforcement: "HARD",
     });
     expect(decision.type).toBe("DISPATCH");
   });
@@ -37,6 +39,7 @@ describe("decideDispatchStage", () => {
       provider: "CODEX",
       declaredStages: codexDeclaredStages,
       canStart: true,
+      tokenBudgetEnforcement: "HARD",
     });
     expect(decision.type).toBe("STAGE_NOT_SERVED");
     if (decision.type !== "STAGE_NOT_SERVED") throw new Error("unreachable: asserted above");
@@ -55,6 +58,7 @@ describe("decideDispatchStage", () => {
       provider: "CLAUDE_CODE",
       declaredStages: ["DISCOVERY", "PLAN"],
       canStart: true,
+      tokenBudgetEnforcement: "HARD",
     });
     expect(decision.type).toBe("STAGE_NOT_SERVED");
     if (decision.type !== "STAGE_NOT_SERVED") throw new Error("unreachable: asserted above");
@@ -71,7 +75,13 @@ describe("decideDispatchStage", () => {
     const allStages = ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"] as const;
     for (const stage of allStages) {
       expect(
-        decideDispatchStage({ stage, provider: "MOCK", declaredStages: allStages, canStart: true }),
+        decideDispatchStage({
+          stage,
+          provider: "MOCK",
+          declaredStages: allStages,
+          canStart: true,
+          tokenBudgetEnforcement: "HARD",
+        }),
       ).toEqual({
         type: "DISPATCH",
       });
@@ -91,6 +101,7 @@ describe("decideDispatchStage", () => {
       provider: "CODEX",
       declaredStages: codexDeclaredStages,
       canStart: false,
+      tokenBudgetEnforcement: "HARD",
     });
     expect(decision.type).toBe("STAGE_NOT_SERVED");
   });
@@ -106,6 +117,7 @@ describe("decideDispatchStage", () => {
       provider: "CODEX",
       declaredStages: codexDeclaredStages,
       canStart: false,
+      tokenBudgetEnforcement: "HARD",
     });
     expect(decision.type).toBe("STAGE_NOT_SERVED");
     if (decision.type !== "STAGE_NOT_SERVED") throw new Error("unreachable: asserted above");
@@ -114,5 +126,20 @@ describe("decideDispatchStage", () => {
     expect(decision.request.context).toContain("PLAN");
     expect(decision.request.context).not.toContain("cannot serve");
     expect(decision.request.context).not.toContain("declares only");
+  });
+
+  it("refuses before provider work when usage is reported only after the session", () => {
+    const decision = decideDispatchStage({
+      stage: "PLAN",
+      provider: "CODEX",
+      declaredStages: codexDeclaredStages,
+      canStart: true,
+      tokenBudgetEnforcement: "POST_SESSION",
+    });
+    expect(decision.type).toBe("TOKEN_BUDGET_NOT_ENFORCED");
+    if (decision.type !== "TOKEN_BUDGET_NOT_ENFORCED") throw new Error("unreachable: asserted above");
+    expect(decision.request.title).toContain("hard token budget");
+    expect(decision.request.context).toContain("before Loomrail can stop it");
+    expect(decision.request.recommendation).toContain("Raising the budget does not");
   });
 });

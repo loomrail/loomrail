@@ -408,6 +408,7 @@ const createDispatch = (
 export type DispatchStageDecision =
   | { type: "DISPATCH" }
   | { type: "STAGE_NOT_SERVED"; request: HumanRequestDraft }
+  | { type: "TOKEN_BUDGET_NOT_ENFORCED"; request: HumanRequestDraft }
   | { type: "WORKSPACE_NOT_PROVISIONED"; request: HumanRequestDraft };
 
 /**
@@ -446,6 +447,7 @@ export const decideDispatchStage = (context: {
   provider: string;
   declaredStages: readonly WorkflowStage[];
   canStart: boolean;
+  tokenBudgetEnforcement: "HARD" | "POST_SESSION";
 }): DispatchStageDecision => {
   if (!context.canStart) {
     return {
@@ -466,7 +468,20 @@ export const decideDispatchStage = (context: {
     };
   }
   if (context.declaredStages.includes(context.stage)) {
-    return { type: "DISPATCH" };
+    if (context.tokenBudgetEnforcement === "HARD") return { type: "DISPATCH" };
+    return {
+      type: "TOKEN_BUDGET_NOT_ENFORCED",
+      request: {
+        kind: "FREE_TEXT",
+        blocking: true,
+        title: `${context.provider} cannot enforce the hard token budget`,
+        context: `The ${context.provider} adapter reports token usage only after a ${context.stage} session ends. That session could exceed the owner-approved limit before Loomrail can stop it, so Loomrail refused to start provider work.`,
+        recommendation:
+          "Use an adapter that declares HARD token-budget enforcement, or wait for a provider runtime with an enforceable per-session limit. Raising the budget does not make an unbounded session safe.",
+        options: [],
+        allowOther: true,
+      },
+    };
   }
   const declaredStages = context.declaredStages.join(", ");
   return {

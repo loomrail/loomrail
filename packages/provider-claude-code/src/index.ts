@@ -227,6 +227,9 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
         // the terminal `result` event is a real figure from the CLI, not something Loomrail has
         // to estimate.
         costReporting: true,
+        // The CLI can cap USD, but Loomrail's current owner-authored hard boundary is estimated
+        // tokens. Terminal token usage cannot enforce that boundary retroactively.
+        tokenBudgetEnforcement: "POST_SESSION",
         // CONTROLLER RULING (task 8): the brief makes this conditional on reconnaissance
         // confirming that `--input-format stream-json` actually injects a message into an
         // already-running `claude -p` session. That reconnaissance could not be run in this

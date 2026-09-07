@@ -27,7 +27,11 @@ const testModels = {
 const inertAdapter = (
   provider: ProviderId,
   supportedStages: readonly WorkflowStage[],
-  options: { canReportRateLimits?: boolean; readAllowance?: ProviderAdapter["readAllowance"] } = {},
+  options: {
+    canReportRateLimits?: boolean;
+    readAllowance?: ProviderAdapter["readAllowance"];
+    tokenBudgetEnforcement?: "HARD" | "POST_SESSION";
+  } = {},
 ): ProviderAdapter => ({
   modelMapping: () => testModels,
   capabilities: () =>
@@ -42,6 +46,7 @@ const inertAdapter = (
       contextWindowTokens: 128_000,
       stages: supportedStages,
       costReporting: provider === "CLAUDE_CODE",
+      tokenBudgetEnforcement: options.tokenBudgetEnforcement ?? "HARD",
       canReportRateLimits: options.canReportRateLimits ?? false,
     }),
   ...(options.readAllowance === undefined ? {} : { readAllowance: options.readAllowance }),
@@ -126,6 +131,57 @@ describe("Project provider settings API", () => {
         )
         .adapter.capabilities().provider,
     ).toBe("CODEX");
+  });
+
+  it("keeps a verified CLI visible but excludes it from AUTO when it cannot enforce the hard budget", async () => {
+    const registry = createProviderRegistry({
+      env: {},
+      adapters: {
+        CODEX: inertAdapter("CODEX", stages, { tokenBudgetEnforcement: "POST_SESSION" }),
+        CLAUDE_CODE: inertAdapter("CLAUDE_CODE", ["DISCOVERY", "PLAN", "REVIEW"], {
+          tokenBudgetEnforcement: "POST_SESSION",
+        }),
+      },
+      executableAvailable: () => true,
+      probeCompatibility: (provider) =>
+        Promise.resolve({
+          compatibility: "VERIFIED",
+          version: provider === "CODEX" ? "0.152.1" : "2.1.258",
+        }),
+      probeAuthentication: () => Promise.resolve("AUTHENTICATED"),
+    });
+    await registry.refresh();
+    const project: Project = {
+      schemaVersion: 1,
+      id: "project-unbounded-live-provider",
+      workspaceId: "workspace-local",
+      fixtureId: null,
+      name: "Unbounded live provider",
+      repositoryPath: directory,
+      providerPreference: "AUTO",
+      status: "ACTIVE",
+      version: 1,
+      createdAt: "2026-09-02T00:00:00.000Z",
+      updatedAt: "2026-09-02T00:00:00.000Z",
+    };
+
+    expect(registry.availability().find(({ provider }) => provider === "CODEX")).toMatchObject({
+      ready: true,
+      tokenBudgetEnforcement: "POST_SESSION",
+    });
+    expect(registry.resolve(project).response).toMatchObject({
+      effectiveProvider: "MOCK",
+      fallbackReason: "NO_READY_LIVE_PROVIDER",
+    });
+    const explicit = registry.resolve({ ...project, providerPreference: "CODEX" });
+    expect(explicit.response).toMatchObject({
+      effectiveProvider: "CODEX",
+      fallbackReason: "LIVE_PROVIDER_UNAVAILABLE",
+    });
+    expect(explicit.adapter.capabilities()).toMatchObject({
+      start: true,
+      tokenBudgetEnforcement: "POST_SESSION",
+    });
   });
 
   it("probes auth only after exact compatibility and observes a verified version on refresh", async () => {

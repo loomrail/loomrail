@@ -11,6 +11,7 @@ import {
   projectsResponseSchema,
   projectProviderAllowanceResponseSchema,
   projectProviderSelectionResponseSchema,
+  projectWorkspaceStrategyResponseSchema,
   providerCapabilitiesResponseSchema,
   providerSessionsResponseSchema,
   qaDefectWaivedResultSchema,
@@ -48,6 +49,7 @@ import {
   type ConstitutionPublication,
   type ListedProject,
   type ProjectReadinessRun,
+  type ProjectWorkspaceStrategySelection,
   type QADefect,
   type QACorrectionGateAction,
   type QACorrectionRun,
@@ -68,6 +70,7 @@ import {
   type VerificationPlan,
   type VerificationRun,
   type VerificationRunSnapshotResponse,
+  type WorkspaceStrategy,
 } from "@loomrail/contracts";
 
 type RuntimeSchema<T> = {
@@ -493,6 +496,30 @@ export const getProjectProviderSelection = async (projectId: string) =>
   requestLocalApi(
     `/api/v1/projects/${encodeURIComponent(projectId)}/provider-selection`,
     projectProviderSelectionResponseSchema,
+  );
+
+export const getProjectWorkspaceStrategy = async (projectId: string) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/workspace-strategy`,
+    projectWorkspaceStrategyResponseSchema,
+  );
+
+export const setProjectWorkspaceStrategy = async (
+  selection: ProjectWorkspaceStrategySelection,
+  strategy: WorkspaceStrategy,
+) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(selection.projectId)}/workspace-strategy`,
+    projectWorkspaceStrategyResponseSchema,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: selection.projectVersion,
+        strategy,
+      }),
+    },
   );
 
 export const setProjectProviderPreference = async (project: ListedProject, preference: ProviderPreference) =>

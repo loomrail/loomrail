@@ -124,6 +124,7 @@ const workspace: WorkItemWorkspace = {
   id: run.workspaceId,
   projectId: project.id,
   workItemId: workItem.id,
+  strategy: "ISOLATED_WORKTREE",
   branch: "loomrail/work-item-1",
   worktreePath: "/tmp/worktree-one",
   baseCommit: null,

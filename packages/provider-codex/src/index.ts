@@ -232,6 +232,9 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
         canReportRateLimits: true,
         // No cost figure appears anywhere in the JSONL stream.
         costReporting: false,
+        // `codex exec` has no token, turn, cost or request budget flag. Its JSONL usage arrives on
+        // the terminal turn.completed event, after the process has already spent it.
+        tokenBudgetEnforcement: "POST_SESSION",
         // SD-001 note lives on `requestHandoff` below, not here: this field just states the fact
         // that follows from it -- a one-shot process cannot be asked to wind down early.
         checkpointOnRequest: false,

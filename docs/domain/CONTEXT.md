@@ -67,9 +67,41 @@ _Не означает_: отдельный источник истины, ко�
 Capability-checked граница start/resume/interrupt/events/usage для конкретного provider.
 _Не означает_: прямая shell-интеграция из браузера.
 
+**Token Budget Enforcement**:
+Capability одного adapter: `HARD` предотвращает пересечение переданного остатка внутри текущей provider session;
+`POST_SESSION` только сообщает уже состоявшийся расход и поэтому не допускается к managed run с hard token budget.
+_Не означает_: context-window occupancy, provider allowance, terminal usage ledger или разрешение повысить budget.
+
+**Provider Token Budget**:
+Переданный в ProviderInvocation immutable maximum AgentRun, уже записанный расход этого AgentRun и точный
+положительный остаток. Adapter с `HARD` обязан ограничить работу остатком.
+_Не означает_: общий provider account limit, цену в USD или новую изменяемую policy.
+
 **Provider Preference**:
 Versioned выбор Project: `AUTO`, конкретный live provider либо явный `MOCK` demo mode.
 _Не означает_: provider уже запущенной ProviderSession или разрешение ослабить permission policy.
+
+**Workspace Strategy**:
+Versioned выбор Project: безопасный default `ISOLATED_WORKTREE` либо явно подтверждённый
+`SHARED_CURRENT_DIRECTORY`. Выбор применяется только при создании следующего WorkItemWorkspace; фактическая
+strategy уже созданного workspace остаётся неизменной.
+_Не означает_: permission profile, security sandbox, автоматический перенос активной задачи или право provider
+самому выбрать рабочую папку.
+
+**WorkItemWorkspace**:
+Durable фактическая Git-база и папка одного WorkItem: strategy, canonical path, именованная branch, base commit,
+Carry-in Baseline и lifecycle state.
+_Не означает_: Project-настройка, provider session, commit результата или источник workflow truth.
+
+**Shared Writer Authority**:
+Project-scoped exclusive claim для одного writing StageAttempt либо одного VerificationRun в общей текущей папке.
+Read-only Discovery/Plan/Review/QA claim не берут; isolated worktrees сохраняют собственные независимые leases.
+_Не означает_: блокировку IDE/терминала владельца, файловую песочницу, Git lock или разрешение параллельной проверки.
+
+**Carry-in Baseline**:
+Внутренний Git commit object, построенный через временный index из исходных tracked, staged, deleted и unignored
+untracked файлов до первого repository-reading run. Настоящий index, working tree, branch и refs не меняются.
+_Не означает_: user commit, stash, backup, публикацию локальных файлов или разрешение перезаписать исходные правки.
 
 **Provider Availability**:
 Короткоживущая closed-проекция installation, Provider Compatibility Observation и provider-owned auth state.

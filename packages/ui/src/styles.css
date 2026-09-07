@@ -1798,6 +1798,8 @@
 .lr-session-timeline-panel {
   display: grid;
   gap: var(--lr-space-2-5);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .lr-session-timeline-panel__title {
@@ -1829,7 +1831,7 @@
 .lr-session-timeline__item {
   display: grid;
   gap: var(--lr-space-2);
-  grid-template-columns: auto minmax(0, 1fr);
+  min-width: 0;
 }
 
 .lr-session-timeline__ordinal {
@@ -1967,6 +1969,8 @@
   flex: 1;
   font-size: var(--lr-font-sm);
   font-weight: var(--lr-weight-medium);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .lr-checkpoint-card > summary > time {
@@ -2003,6 +2007,10 @@
   gap: 2px;
   margin: 2px 0 0;
   padding-left: var(--lr-space-4);
+}
+
+.lr-checkpoint-card__body li {
+  overflow-wrap: anywhere;
 }
 
 @keyframes lr-spin {

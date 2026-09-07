@@ -89,6 +89,7 @@ const completingAdapter = (): ProviderAdapter => ({
       contextWindowTokens: 128_000,
       stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
       costReporting: false,
+      tokenBudgetEnforcement: "HARD",
     }),
   start: () => Promise.resolve({ type: "COMPLETED", summary: "The mock session finished the stage." }),
   requestHandoff: () => Promise.resolve(),

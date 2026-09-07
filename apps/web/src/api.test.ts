@@ -1,17 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { VerificationPlanPublication, VerificationPlanSettingsResponse } from "@loomrail/contracts";
+import type {
+  ProjectWorkspaceStrategySelection,
+  VerificationPlanPublication,
+  VerificationPlanSettingsResponse,
+} from "@loomrail/contracts";
 
 import {
   LocalApiError,
   disableVerificationPlan,
   guidedActivationCreateCommandId,
   getProjectProviderAllowance,
+  getProjectWorkspaceStrategy,
   getVerificationCheckOutput,
   getVerificationPlanSettings,
   refreshProjectProviderAllowance,
   requestLocalApi,
   retryVerificationPlanPublication,
   storeCsrfToken,
+  setProjectWorkspaceStrategy,
   adoptVerificationPlan,
   waiveQADefect,
   workItemQAAttachmentUrl,
@@ -152,6 +158,42 @@ describe("local API client", () => {
     expect(url).toBe("/api/v1/projects/project%20%2F%20one/provider-allowance/refresh");
     expect(init?.method).toBe("POST");
     expect(new Headers(init?.headers).get("x-loomrail-csrf")).toBe("csrf-fixture-token");
+  });
+
+  it("reads and changes the Project workspace strategy with the selection's current version", async () => {
+    const selection: ProjectWorkspaceStrategySelection = {
+      schemaVersion: 1,
+      projectId: "project:recurkit",
+      strategy: "ISOLATED_WORKTREE",
+      projectVersion: 7,
+      updatedAt: "2026-09-06T09:00:00.000Z",
+    };
+    const response = { schemaVersion: 1 as const, selection };
+    fetchMock.mockImplementation(async () =>
+      Promise.resolve(
+        new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(getProjectWorkspaceStrategy(selection.projectId)).resolves.toEqual(response);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/projects/project%3Arecurkit/workspace-strategy");
+
+    storeCsrfToken("csrf-fixture-token");
+    await expect(setProjectWorkspaceStrategy(selection, "SHARED_CURRENT_DIRECTORY")).resolves.toEqual(
+      response,
+    );
+    const [url, init] = fetchMock.mock.calls[1] ?? [];
+    expect(url).toBe("/api/v1/projects/project%3Arecurkit/workspace-strategy");
+    expect(init?.method).toBe("PUT");
+    if (typeof init?.body !== "string") throw new Error("Expected workspace strategy JSON");
+    expect(JSON.parse(init.body)).toMatchObject({
+      schemaVersion: 1,
+      expectedProjectVersion: 7,
+      strategy: "SHARED_CURRENT_DIRECTORY",
+    });
   });
 
   it("reads, adopts and retries the exact project verification Plan through authenticated routes", async () => {

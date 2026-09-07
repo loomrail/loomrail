@@ -36,6 +36,11 @@ const implementInvocation = (): ProviderInvocation => {
       contentHash: `sha256:${createHash("sha256").update(text).digest("hex")}`,
     },
     modelTier: "STANDARD",
+    tokenBudget: {
+      maxEstimatedTokens: 100_000,
+      recordedEstimatedTokens: 0,
+      remainingEstimatedTokens: 100_000,
+    },
     acceptanceInput: null,
     humanRequests: "ALLOWED",
     mcpConnections: [],

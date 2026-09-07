@@ -64,6 +64,7 @@ export const gatedAdapter = (
       contextWindowTokens,
       stages: [...(capabilityOverrides.stages ?? ALL_STAGES)],
       costReporting: false,
+      tokenBudgetEnforcement: "HARD",
     }),
     start: async (invocation) => {
       adapter.startCallCount += 1;

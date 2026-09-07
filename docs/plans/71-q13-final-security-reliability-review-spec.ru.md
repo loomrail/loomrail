@@ -59,6 +59,12 @@ Failed abort оставляет authority fenced для startup reconciliation, 
 Budget pause не создаёт Human Request и сохраняет `failureCode = null`: продолжение возможно только через
 существующий versioned owner Budget Override.
 
+**ПРАВКА 2026-09-06 после private dogfood.** Эта граница предотвращает повторный расход, но не обеспечивает
+BD-001 для уже запущенной сессии. Живой `codex exec` израсходовал 493 700 estimated tokens при immutable AgentRun
+ceiling 200 000, потому что единственный usage event пришёл terminal. Поэтому `POST_SESSION` usage больше не
+считается hard enforcement: такой adapter fail-closed останавливается до `ProviderSession`/process spawn. D4
+остаётся обязательной атомарностью ledger и результата, но не заменяет превентивный ограничитель.
+
 ### D5 — Owner-visible attribution
 
 Task Cockpit показывает для каждой сессии total/input/output, quality и reported USD cost, если он существует.

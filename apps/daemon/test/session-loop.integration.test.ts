@@ -77,6 +77,7 @@ const completingAdapter = (
         contextWindowTokens: 128_000,
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
     start: async (invocation: ProviderInvocation): Promise<ProviderOutcome> => {
       started += 1;
@@ -137,6 +138,7 @@ const proseOnlyAdapter = (onStart: (invocation: ProviderInvocation) => void): Pr
       contextWindowTokens: 128_000,
       stages: ["DISCOVERY", "PLAN", "REVIEW"],
       costReporting: false,
+      tokenBudgetEnforcement: "HARD",
     }),
   start: (invocation: ProviderInvocation): Promise<ProviderOutcome> => {
     onStart(invocation);
@@ -459,6 +461,125 @@ describe("session loop workspace provisioning", () => {
       expect(workspace).toMatchObject({ status: "READY", worktreePath, projectId: PROJECT_ID });
       expect(workspace?.snapshotCommit).toMatch(/^[0-9a-f]{40}$/);
       expect(workspace?.baseCommit).toMatch(/^[0-9a-f]{40}$/);
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "uses the registered current directory without creating a worktree or branch when the Project opts in",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      await writeFile(join(repositoryPath, "committed.txt"), "owner edit stays in place\n");
+      await writeFile(join(repositoryPath, "owner untracked.txt"), "owner untracked stays in place\n");
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-shared-strategy",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "SET_PROJECT_WORKSPACE_STRATEGY",
+        payload: {
+          projectId: PROJECT_ID,
+          expectedProjectVersion: 1,
+          strategy: "SHARED_CURRENT_DIRECTORY",
+        },
+      });
+
+      const headBefore = (await runGit(["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
+      const canonicalRepositoryPath = await realpath(repositoryPath);
+      const branchBefore = (
+        await runGit(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: repositoryPath })
+      ).stdout.trim();
+      const worktreesBefore = await listWorktrees(repositoryPath);
+      let received: ProviderInvocation | undefined;
+      const adapter = completingAdapter(async (_count, invocation) => {
+        received = invocation;
+        await writeFile(join(repositoryPath, "shared output.txt"), "written in the current directory\n");
+      });
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      const workspace = workspaceOf(localState, seeded.workItemId);
+      expect(workspace).toMatchObject({
+        strategy: "SHARED_CURRENT_DIRECTORY",
+        worktreePath: canonicalRepositoryPath,
+        branch: branchBefore,
+        baseCommit: headBefore,
+        leaseHolder: null,
+      });
+      expect(workspace?.snapshotCommit).toMatch(/^[0-9a-f]{40}$/);
+      expect(received?.workspace).toMatchObject({
+        path: canonicalRepositoryPath,
+        branch: branchBefore,
+        baseCommit: headBefore,
+        access: "READ_WRITE",
+      });
+      expect(await listWorktrees(repositoryPath)).toEqual(worktreesBefore);
+      expect((await runGit(["branch", "--list", "loomrail/*"], { cwd: repositoryPath })).stdout).toBe("");
+      expect((await runGit(["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim()).toBe(headBefore);
+      expect(await readFile(join(repositoryPath, "committed.txt"), "utf8")).toBe(
+        "owner edit stays in place\n",
+      );
+      expect(await readFile(join(repositoryPath, "owner untracked.txt"), "utf8")).toBe(
+        "owner untracked stays in place\n",
+      );
+      expect(await readFile(join(repositoryPath, "shared output.txt"), "utf8")).toBe(
+        "written in the current directory\n",
+      );
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "refuses a detached shared current directory without starting a provider or creating a branch",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const headBefore = (await runGit(["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
+      await runGit(["checkout", "--detach", "HEAD"], { cwd: repositoryPath });
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-detached-shared-strategy",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "SET_PROJECT_WORKSPACE_STRATEGY",
+        payload: {
+          projectId: PROJECT_ID,
+          expectedProjectVersion: 1,
+          strategy: "SHARED_CURRENT_DIRECTORY",
+        },
+      });
+      const branchesBefore = (
+        await runGit(["for-each-ref", "--format=%(refname)", "refs/heads"], {
+          cwd: repositoryPath,
+        })
+      ).stdout;
+      let sessionStarted = false;
+
+      await runStageAttempt(
+        depsFor(
+          localState,
+          seeded,
+          completingAdapter(() => {
+            sessionStarted = true;
+          }),
+        ),
+      );
+
+      expect(sessionStarted).toBe(false);
+      expect(workspaceOf(localState, seeded.workItemId)).toBeNull();
+      expect((await runGit(["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim()).toBe(headBefore);
+      expect(
+        (await runGit(["for-each-ref", "--format=%(refname)", "refs/heads"], { cwd: repositoryPath })).stdout,
+      ).toBe(branchesBefore);
+      const requests = snapshotOf(localState, seeded.workItemId).humanRequests;
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        blocking: true,
+        title: "The shared working directory is not on a named branch",
+      });
     },
     GIT_TIMEOUT_MS,
   );
@@ -939,6 +1060,50 @@ describe("session loop workspace provisioning", () => {
       // And the lease is handed back, so the IMPLEMENT that follows takes the reuse path rather
       // than meeting its own DISCOVERY as another writer.
       expect(workspace?.leaseHolder).toBeNull();
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "gives a shared workspace to a read-only stage without taking writer authority",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const discoveryTemplate: WorkflowTemplate = {
+        ...mockDeliveryTemplate,
+        id: "workspace-shared-discovery-v1",
+        version: 1,
+        name: "Shared workspace discovery",
+        stages: mockDeliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
+      };
+      const seeded = seedAttempt(localState, { template: discoveryTemplate });
+      localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-shared-discovery",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "SET_PROJECT_WORKSPACE_STRATEGY",
+        payload: {
+          projectId: PROJECT_ID,
+          expectedProjectVersion: 1,
+          strategy: "SHARED_CURRENT_DIRECTORY",
+        },
+      });
+      let holderDuringSession: string | null | undefined;
+      let received: ProviderInvocation | undefined;
+      const adapter = completingAdapter((_count, invocation) => {
+        received = invocation;
+        holderDuringSession = workspaceOf(localState, seeded.workItemId)?.leaseHolder;
+      });
+
+      await runStageAttempt({ ...depsFor(localState, seeded, adapter), template: discoveryTemplate });
+
+      expect(received?.workspace).toMatchObject({ access: "READ_ONLY" });
+      expect(holderDuringSession).toBeNull();
+      expect(workspaceOf(localState, seeded.workItemId)).toMatchObject({
+        strategy: "SHARED_CURRENT_DIRECTORY",
+        leaseHolder: null,
+      });
     },
     GIT_TIMEOUT_MS,
   );

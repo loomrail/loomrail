@@ -33,6 +33,7 @@ import { PanelResizer } from "../components/PanelResizer";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { McpSettingsPanel } from "../components/McpSettingsPanel";
 import { ProjectScaffoldPanel } from "../components/ProjectScaffoldPanel";
+import { ProjectWorkspaceStrategyPanel } from "../components/ProjectWorkspaceStrategyPanel";
 import { VerificationPlanSettingsPanel } from "../components/VerificationPlanSettingsPanel";
 import { OpenAppSettingsContext } from "./appSettings";
 import { useI18n, type TranslationKey } from "../i18n";
@@ -413,7 +414,6 @@ const providerNames: Record<ProviderId, string> = {
 };
 
 const providerStatusKey = (provider: ProviderAvailability | undefined): TranslationKey => {
-  if (provider?.ready === true) return "settings.provider.status.ready";
   if (provider?.installed === false || provider?.compatibility === "MISSING") {
     return "settings.provider.status.notInstalled";
   }
@@ -423,6 +423,10 @@ const providerStatusKey = (provider: ProviderAvailability | undefined): Translat
     return "settings.provider.status.versionUnreadable";
   }
   if (provider?.authentication === "REQUIRED") return "settings.provider.status.authRequired";
+  if (provider?.tokenBudgetEnforcement === "POST_SESSION") {
+    return "settings.provider.status.noHardTokenBudget";
+  }
+  if (provider?.ready === true) return "settings.provider.status.ready";
   return "settings.provider.status.unknown";
 };
 
@@ -492,6 +496,9 @@ const ProjectProviderPanel = ({ project }: { project: ListedProject }): React.JS
           </p>
           {selection.fallbackReason === "NO_READY_LIVE_PROVIDER" ? (
             <p>{t("settings.provider.fallback")}</p>
+          ) : null}
+          {selection.fallbackReason === "LIVE_PROVIDER_UNAVAILABLE" ? (
+            <p role="alert">{t("settings.provider.selectedUnavailable")}</p>
           ) : null}
           {selection.environmentOverrideLocked ? (
             <p role="note">
@@ -1053,6 +1060,9 @@ const SettingsDialog = ({ onOpenChange, open }: SettingsDialogProps): React.JSX.
           )}
           <ProjectScaffoldPanel />
           <RegisterRepositoryField />
+          {selectedProject === null ? null : (
+            <ProjectWorkspaceStrategyPanel key={selectedProject.id} project={selectedProject} />
+          )}
           {selectedProject === null ? null : <ProjectProviderPanel project={selectedProject} />}
           {selectedProject === null ? null : <McpSettingsPanel project={selectedProject} />}
           {selectedProject === null ? null : <ProjectConstitutionPanel project={selectedProject} />}

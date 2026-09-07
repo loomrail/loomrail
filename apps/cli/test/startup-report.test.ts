@@ -7,6 +7,7 @@ const bootstrapUrl = `${baseUrl}/#bootstrap=Rk9SLVRFU1QtT05MWS1UT0tFTi1WQUxVRS1I
 const mock = {
   provider: "MOCK",
   cliAvailable: true,
+  tokenBudgetEnforcement: "HARD",
   recognised: true,
   stages: ["DISCOVERY", "PLAN", "REVIEW", "IMPLEMENT", "VERIFY", "DELIVER"],
   worksInRepository: false,
@@ -60,6 +61,7 @@ describe("startup report", () => {
       provider: {
         provider: "CODEX",
         cliAvailable: false,
+        tokenBudgetEnforcement: "POST_SESSION",
         recognised: true,
         stages: codexStages,
         worksInRepository: true,
@@ -69,6 +71,25 @@ describe("startup report", () => {
     expect(report).toContain("CODEX");
     expect(report).toContain("not ready for managed sessions");
     expect(report).toContain("Settings");
+  });
+
+  it("warns that a post-session adapter cannot start under the hard token budget", () => {
+    const report = formatStartupReport({
+      baseUrl,
+      bootstrapUrl,
+      browserOpened: true,
+      provider: {
+        provider: "CODEX",
+        cliAvailable: true,
+        tokenBudgetEnforcement: "POST_SESSION",
+        recognised: true,
+        stages: codexStages,
+        worksInRepository: true,
+      },
+    }).join("\n");
+
+    expect(report).toContain("cannot enforce Loomrail's hard token budget");
+    expect(report).toContain("no live session will start");
   });
 
   // A live provider used to get strictly less than the mock: one bare line, "Provider: CODEX.",
@@ -83,6 +104,7 @@ describe("startup report", () => {
       provider: {
         provider: "CLAUDE_CODE",
         cliAvailable: true,
+        tokenBudgetEnforcement: "POST_SESSION",
         recognised: true,
         stages: liveStages,
         worksInRepository: false,
@@ -105,6 +127,7 @@ describe("startup report", () => {
       provider: {
         provider: "CLAUDE_CODE",
         cliAvailable: true,
+        tokenBudgetEnforcement: "POST_SESSION",
         recognised: true,
         stages: liveStages,
         worksInRepository: false,
@@ -128,6 +151,7 @@ describe("startup report", () => {
       provider: {
         provider: "CODEX",
         cliAvailable: true,
+        tokenBudgetEnforcement: "POST_SESSION",
         recognised: true,
         stages: codexStages,
         worksInRepository: true,
@@ -169,6 +193,7 @@ describe("startup report", () => {
       provider: {
         provider: "MOCK",
         cliAvailable: true,
+        tokenBudgetEnforcement: "HARD",
         recognised: false,
         stages: mock.stages,
         worksInRepository: false,

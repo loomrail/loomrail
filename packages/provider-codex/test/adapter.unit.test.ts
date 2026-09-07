@@ -258,6 +258,7 @@ const fixtureInvocation = (
   },
   modelTier,
   ...(modelId === undefined ? {} : { modelId }),
+  tokenBudget: { maxEstimatedTokens: 100_000, recordedEstimatedTokens: 0, remainingEstimatedTokens: 100_000 },
   acceptanceInput: null,
   humanRequests,
   mcpConnections,
@@ -497,6 +498,7 @@ describe("createCodexProvider", () => {
     const capabilities = createCodexProvider().capabilities();
     expect(capabilities.provider).toBe("CODEX");
     expect(capabilities.canReportRateLimits).toBe(true);
+    expect(capabilities.tokenBudgetEnforcement).toBe("POST_SESSION");
     expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
     expect(capabilities.checkpointOnRequest).toBe(false);
   });

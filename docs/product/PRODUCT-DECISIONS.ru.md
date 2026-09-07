@@ -1,7 +1,7 @@
 # Loomrail — зафиксированные продуктовые и архитектурные решения
 
 **Дата фиксации:** 2026-08-22
-**Последнее дополнение:** 2026-09-04 — activation, provider allowance и project verification
+**Последнее дополнение:** 2026-09-06 — enforceable live-provider budgets
 **Статус:** approved baseline
 **Основание:** последовательный product/architecture grilling с владельцем проекта
 
@@ -95,7 +95,8 @@ Rust, Tauri и Electron не входят в Phase 0.
 ### AD-005 — Provider capabilities, а не фальшивая одинаковость
 
 Каждый adapter сообщает поддерживаемые start/resume/steer/interrupt/approval/usage/rate-limit-window/browser
-capabilities. UI не показывает неподдерживаемое действие как рабочее.
+capabilities, включая способность реально ограничить расход текущей сессии. UI не показывает неподдерживаемое
+действие как рабочее.
 
 ### AD-006 — Разделение профиля, запуска и provider session
 
@@ -260,6 +261,11 @@ map, commands и rules, затем задаёт grill-вопросы. Запис
 
 Лимиты задаются на run, WorkItem, Project и rolling day: tokens/cost estimate, time, attempts, turns, concurrency и
 browser/runtime minutes. Alerts: 50%, 80%, 95%; при 100% stage hard-paused до ручного подтверждения.
+
+**Уточнение 2026-09-06.** `hard` означает, что работа провайдера не может пересечь подтверждённый лимит текущей
+сессии. Terminal usage, пришедший после завершения работы, годится для ledger и остановки следующей сессии, но не
+является hard enforcement. Adapter обязан объявить `HARD` либо `POST_SESSION`; второй не допускается к managed run
+с token hard budget. Повышение лимита не превращает неограниченную сессию в ограниченную и не служит bypass.
 
 ### BD-002 — Честные usage данные
 

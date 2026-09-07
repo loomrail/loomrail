@@ -55,6 +55,7 @@ const reviewRouteAdapter = (
       contextWindowTokens: 128_000,
       stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
       costReporting: false,
+      tokenBudgetEnforcement: "HARD",
     }),
     start: async (invocation) => {
       const { attempt, stage } = invocation.session;

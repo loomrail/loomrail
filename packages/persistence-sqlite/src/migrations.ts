@@ -262,6 +262,11 @@ const migrations: readonly Migration[] = [
     filename: "0052_readiness_catalog_v2.sql",
     rebuildsAReferencedTable: true,
   },
+  {
+    version: 53,
+    name: "shared_workspace_strategy",
+    filename: "0053_shared_workspace_strategy.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

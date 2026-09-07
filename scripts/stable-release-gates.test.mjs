@@ -24,7 +24,7 @@ const passedGate = (name) => ({
 });
 
 const completeManifest = () => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   releaseVersion: "0.1.0",
   gates: Object.fromEntries(requiredStableReleaseGates.map((name) => [name, passedGate(name)])),
 });
@@ -34,12 +34,31 @@ test("records the current honest stable readiness without promoting pending gate
   const summary = summarizeStableReleaseGates(parseStableReleaseGateManifest(content));
   assert.equal(summary.releaseVersion, null);
   assert.deepEqual(summary.pending, [
+    "liveProviderHardTokenBudgetEnforcement",
     "privateDogfood",
     "protectedLandingCanonicalActivation",
     "codexWindowsCompatibility",
     "claudeWindowsCompatibility",
   ]);
   assert.equal(summary.passed.length, 6);
+});
+
+test("rejects the superseded ten-gate schema", () => {
+  const manifest = completeManifest();
+  manifest.schemaVersion = 1;
+  delete manifest.gates.liveProviderHardTokenBudgetEnforcement;
+
+  assert.throws(() => parseStableReleaseGateManifest(JSON.stringify(manifest)), /schemaVersion must be 2/);
+});
+
+test("rejects a version-two manifest that omits the hard-token-budget gate", () => {
+  const manifest = completeManifest();
+  delete manifest.gates.liveProviderHardTokenBudgetEnforcement;
+
+  assert.throws(
+    () => parseStableReleaseGateManifest(JSON.stringify(manifest)),
+    /stable gate manifest gates fields must be exactly/,
+  );
 });
 
 test("accepts a complete exact evidence manifest", async () => {

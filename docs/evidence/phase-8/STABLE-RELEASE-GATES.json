@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "releaseVersion": null,
   "gates": {
     "q13FinalSecurityReliabilityReview": {
@@ -19,6 +19,10 @@
       "evidencePath": "docs/evidence/phase-8/Q17-PROJECT-VERIFICATION-EVIDENCE.md",
       "evidenceSha256": "0acd2b3f52fc16dc33bae5329d39922d0413da119043eddd07b87f740046911c",
       "evidenceCommit": "33f77994b3e707d0ccaa683890e68cc7d6625a6e"
+    },
+    "liveProviderHardTokenBudgetEnforcement": {
+      "status": "PENDING",
+      "reason": "Codex and Claude Code report usage only after a session and cannot enforce Loomrail's immutable token ceiling before spend."
     },
     "managedPublicDogfoodRehearsal": {
       "status": "PASSED",

@@ -114,6 +114,8 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T47 | Forged, stale or ambiguous provider allowance misleads scheduling or spend   | High     | official structured surface only; closed adapter schema; explicit used/remaining label; observed/reset time and freshness; advisory-only scheduling; no account/credential persistence       | Q16 provider-allowance delta below                                                |
 | T48 | Repository-proposed verification recipe executes attacker-controlled code    | Critical | inert proposal; exact owner revision; argv/no-shell supervisor; scoped cwd/env/network; bounded output/time; durable process identity; stop-before-release; no install/Git/deploy authority  | see Q17 Project-verification delta below                                          |
 | T49 | Guided activation hides authority or publishes an unsafe install sequence    | High     | exact closed install contract; Mock-only preflight; explicit side effects and owner actions; fragment-only bootstrap; durable idempotent Task; no parallel progress truth                    | see Q15 canonical-activation delta below                                          |
+| T50 | Shared current directory exposes local files or admits concurrent writers    | High     | explicit Project opt-in; immutable workspace fact and carry-in baseline; project-wide writer/verifier authority; named-branch/preflight refusal; no hidden branch/worktree mutation          | see Shared current-directory delta below                                          |
+| T54 | Terminal-only usage is presented as a hard provider budget                   | High     | explicit HARD/POST_SESSION capability; immutable remainder in invocation; AUTO excludes POST_SESSION; daemon refuses before ProviderSession/process spawn; UI names the missing guarantee    | see Hard token-budget enforcement delta below                                     |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -1166,6 +1168,69 @@ repository on the next start than it did on this one. `repositoryPathSchema`
 or fixture can put one in the database, and `resolveRegisteredRepository` answers `REPOSITORY_PATH_NOT_ABSOLUTE`
 naming the path, rather than letting the owner discover it as a Project pointing somewhere they never chose.
 
+### Hard token-budget enforcement delta (T54)
+
+Private dogfood showed that a valid terminal usage report can arrive after a single live session has already crossed
+both its AgentRun ceiling and the remaining pipeline allowance. Rated **High**: the owner sees an explicit hard cap,
+yet a terminal-only adapter can consume an unbounded amount before the deterministic workflow can react. Correct
+ledger accounting and a pause before the next session do not mitigate the current spend.
+
+Mitigation:
+
+- provider capabilities distinguish `HARD` from `POST_SESSION`; the field is required and closed;
+- the daemon checks the capability before workspace preparation, ProviderSession creation, MCP opening or process
+  spawn and completes the dispatch with an actionable owner-visible refusal;
+- a `HARD` invocation carries immutable maximum, already-recorded AgentRun usage and exact positive remainder;
+- AUTO selection excludes `POST_SESSION`, while explicit selection remains visible for diagnostics and is still
+  fenced by the daemon;
+- Codex and Claude Code remain `POST_SESSION` until exact runtime evidence proves a native enforceable token limit;
+- Mock is the only current `HARD` adapter because it performs no billable provider work;
+- existing terminal report, append-only ledger and next-stage pause remain defense in depth, not the preventive
+  boundary.
+
+Verification lives in provider-core contract tests, domain dispatch tests, live-adapter capability tests, provider
+selection tests and daemon session integration tests that assert adapter `start` was never called and no session row
+was created. Windows uses the same code path; live Windows evidence remains deferred.
+
+### Shared current-directory workspace delta (T50)
+
+Some repositories deliberately forbid linked worktrees. Falling back silently to their current checkout would be
+worse than refusing: a live provider running as the owner can read untracked local files, write beside unfinished
+owner edits and collide with a verification command or another WorkItem. Rated **High**. The mode is useful for
+private dogfood, but it is neither a sandbox nor a lock over every process running as the same OS user.
+
+The implemented controls keep that residual risk explicit and bound Loomrail's own authority:
+
+- `ISOLATED_WORKTREE` remains the absence/default value. `SHARED_CURRENT_DIRECTORY` can be selected only through an
+  authenticated, Origin/CSRF-protected, optimistic-version Project command. Settings shows both choices and requires
+  a separate checked acknowledgement that tracked/untracked files are visible, external editors are not locked and
+  only new workspaces use the selection;
+- the resulting WorkItemWorkspace stores its strategy permanently. Shared provisioning resolves the registered
+  repository's canonical top level, requires a named current branch and refuses an in-progress Git operation before
+  provider start. It records that top level as the working directory and never creates/checks out/deletes a branch
+  or linked worktree;
+- the existing temporary-index Carry-in Baseline captures the exact initial tracked/staged/deleted/unignored state
+  without changing the owner's real index, working tree or refs. Its bounded carried-path count is visible in the
+  workspace-created activity; task diffs are derived from that baseline instead of pretending the dirty checkout
+  started at HEAD;
+- one SQLite-guarded project-wide authority class covers both IMPLEMENT writer leases and VerificationRuns across
+  every shared WorkItem. Writer↔writer, writer↔verification and verification↔verification races return the typed
+  `WORKSPACE_PROJECT_AUTHORITY_HELD`; a partial unique index is the storage backstop. Discovery, Plan, Review and the
+  provider part of QA receive read-only access without taking writer authority. Isolated workspaces retain their
+  independent per-workspace claims;
+- recovery treats the shared path as the registered canonical repository rather than linked-worktree metadata. It
+  releases only authority proven dead by the existing process-identity checks and never auto-resumes unknown
+  provider work. A missing/moved repository becomes ORPHANED without deleting or restoring owner files;
+- Cockpit names the fact as `Mode: Project folder` and `Working directory`, and states that Loomrail committed
+  nothing and cannot isolate concurrent owner tools. External same-user processes remain a residual risk: users must
+  stop or avoid overlapping writes while a shared IMPLEMENT or verification run is active.
+
+Verification covers strategy CAS/default/no-op/restart, migration 0053 backfill, current-directory provisioning with
+dirty tracked/untracked/non-ASCII/path-with-spaces fixtures, no new refs/worktrees/index changes, detached-HEAD and
+Git-operation refusal, all cross-WorkItem authority races, dead-holder recovery, isolated-workspace independence,
+HTTP auth/CSRF/Origin and owner-facing confirmation/Cockpit projections. Private dogfood additionally compares the
+pre-existing file set before and after the workflow and restarts the daemon mid-run.
+
 ### E1.5 change-visibility delta (T21)
 
 E1.5 (`docs/plans/15-e1-5-change-visibility-spec.ru.md`) adds two authenticated GET routes that
@@ -1541,7 +1606,8 @@ light/dark browser coverage on macOS and Windows.
 
 **T35 — an incomplete or stale checklist authorizes stable staging. High.** A manual confirmation and green CI prove
 intent and automated source health, but neither proves private dogfood, protected landing integration or exact live
-provider rows. The stage workflow therefore consumes one strict versioned index with an exact ten-gate key set and
+provider rows or an enforceable live-provider token ceiling. The stage workflow therefore consumes one strict
+versioned index with an exact eleven-gate key set and
 matching stable version. `PASSED` entries name only bounded repository evidence under `docs/evidence`, bind its
 SHA-256, require the same bytes at the recorded commit, and require that commit to be an ancestor of the release
 source; pending entries cannot carry evidence or pass the workflow. Evidence paths reject traversal and symlinks, and
@@ -1561,6 +1627,7 @@ retry; redaction canaries; RU/EN, keyboard, light/dark E2E.
 - canonical workspace allowlist;
 - task branch/worktree default;
 - one writer lease per worktree;
+- explicit shared-current-directory opt-in with one project-wide Loomrail writer/verifier authority;
 - command/working-directory/network permission tuple;
 - preflight user changes;
 - destructive commands and push/merge require human approval;

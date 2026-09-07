@@ -41,6 +41,7 @@ import {
   projectReadinessRunSchema,
   projectReadinessSnapshotSchema,
   projectProviderSelectionSchema,
+  projectWorkspaceStrategySelectionSchema,
   verificationPlanSchema,
   verificationPlanPublicationSchema,
   verificationCheckSchema,
@@ -105,6 +106,7 @@ import {
   type Project,
   type ProjectConstitutionVersion,
   type ProjectReadinessRun,
+  type ProjectWorkspaceStrategySelection,
   type VerificationPlan,
   type VerificationPlanPublication,
   type VerificationCheck,
@@ -157,6 +159,7 @@ import {
   decideQAReservation,
   qaWorkflowOutcome,
   decideProjectProviderPreference,
+  decideProjectWorkspaceStrategy,
   decideVerificationPlanAdoption,
   decideVerificationPlanDisable,
   decideVerificationPlanPublicationCompleted,
@@ -224,6 +227,7 @@ import {
   ReadinessDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
+  WorkspaceStrategyDomainError,
   VerificationDomainError,
   VerificationCorrectionError,
   ProviderAllowanceDomainError,
@@ -242,6 +246,7 @@ import {
   type ProjectReadinessAssessedIntent,
   type ProjectReadinessAttestedIntent,
   type ProjectProviderPreferenceChangedIntent,
+  type ProjectWorkspaceStrategyChangedIntent,
   type VerificationPlanAdoptedIntent,
   type VerificationPlanDisabledIntent,
   type VerificationPlanPublicationIntent,
@@ -381,6 +386,7 @@ const workItemWorkspaceRowSchema = z.object({
   schema_version: z.number().int(),
   project_id: z.string(),
   work_item_id: z.string(),
+  strategy: z.string(),
   branch: z.string(),
   worktree_path: z.string(),
   base_commit: z.string().nullable(),
@@ -1200,6 +1206,7 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LIST_PROJECTS") }).strict(),
   z.object({ type: z.literal("GET_REPORTING_FACTS") }).strict(),
   z.object({ type: z.literal("GET_PROJECT"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_PROJECT_WORKSPACE_STRATEGY"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROVIDER_ALLOWANCES"), projectId: opaqueIdSchema }).strict(),
   z
     .object({
@@ -1678,6 +1685,7 @@ const workItemWorkspaceFromRow = (value: unknown): WorkItemWorkspace => {
     id: row.id,
     projectId: row.project_id,
     workItemId: row.work_item_id,
+    strategy: row.strategy,
     branch: row.branch,
     worktreePath: row.worktree_path,
     baseCommit: row.base_commit,
@@ -2727,6 +2735,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       .run(DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACE_NAME, openedAt, openedAt);
 
     const selectProjectById = database.prepare("SELECT * FROM projects WHERE id = ?");
+    const selectProjectWorkspaceStrategy = database.prepare(
+      "SELECT * FROM project_workspace_strategies WHERE project_id = ?",
+    );
+    const upsertProjectWorkspaceStrategy = database.prepare(
+      `INSERT INTO project_workspace_strategies (project_id, schema_version, strategy, updated_at)
+       VALUES (?, 1, ?, ?)
+       ON CONFLICT(project_id) DO UPDATE SET
+         strategy = excluded.strategy,
+         updated_at = excluded.updated_at`,
+    );
     const selectProviderAllowancesByProject = database.prepare(
       "SELECT * FROM provider_allowance_snapshots WHERE project_id = ? ORDER BY provider",
     );
@@ -3054,9 +3072,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     );
     const insertWorkItemWorkspace = database.prepare(
       `INSERT INTO work_item_workspaces (
-        id, schema_version, project_id, work_item_id, branch, worktree_path, base_commit,
+        id, schema_version, project_id, work_item_id, strategy, branch, worktree_path, base_commit,
         snapshot_commit, status, lease_holder, created_at, version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     // The lease is taken by a single comparison-and-claim UPDATE, not a read followed by a write:
     // `lease_holder IS NULL` in the WHERE clause is what decides success, so the decision is one
@@ -3064,7 +3082,23 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const acquireWorkItemWorkspaceLease = database.prepare(
       `UPDATE work_item_workspaces
        SET lease_holder = ?, version = version + 1
-       WHERE id = ? AND version = ? AND lease_holder IS NULL AND verification_holder IS NULL`,
+       WHERE id = ? AND version = ? AND lease_holder IS NULL AND verification_holder IS NULL
+         AND (
+           strategy <> 'SHARED_CURRENT_DIRECTORY'
+           OR NOT EXISTS (
+             SELECT 1 FROM work_item_workspaces AS other
+             WHERE other.project_id = work_item_workspaces.project_id
+               AND other.id <> work_item_workspaces.id
+               AND other.strategy = 'SHARED_CURRENT_DIRECTORY'
+               AND (other.lease_holder IS NOT NULL OR other.verification_holder IS NOT NULL)
+           )
+         )`,
+    );
+    const selectActiveSharedWorkspaceAuthority = database.prepare(
+      `SELECT id FROM work_item_workspaces
+       WHERE project_id = ? AND id <> ? AND strategy = 'SHARED_CURRENT_DIRECTORY'
+         AND (lease_holder IS NOT NULL OR verification_holder IS NOT NULL)
+       LIMIT 1`,
     );
     // Symmetric with the acquire above: `lease_holder = ?` in the WHERE clause is what makes a
     // release from anyone but the current holder a no-op the caller sees as a refusal, not
@@ -3227,7 +3261,17 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       `UPDATE work_item_workspaces
        SET verification_holder = ?, version = version + 1
        WHERE id = ? AND version = ? AND status = 'READY'
-         AND lease_holder IS NULL AND verification_holder IS NULL`,
+         AND lease_holder IS NULL AND verification_holder IS NULL
+         AND (
+           strategy <> 'SHARED_CURRENT_DIRECTORY'
+           OR NOT EXISTS (
+             SELECT 1 FROM work_item_workspaces AS other
+             WHERE other.project_id = work_item_workspaces.project_id
+               AND other.id <> work_item_workspaces.id
+               AND other.strategy = 'SHARED_CURRENT_DIRECTORY'
+               AND (other.lease_holder IS NOT NULL OR other.verification_holder IS NOT NULL)
+           )
+         )`,
     );
     const releaseWorkspaceFromVerification = database.prepare(
       `UPDATE work_item_workspaces
@@ -3838,6 +3882,36 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       return row === undefined ? null : workItemWorkspaceFromRow(row);
     };
 
+    const readProjectWorkspaceStrategy = (projectId: string): ProjectWorkspaceStrategySelection => {
+      const project = readProject(projectId);
+      if (project === null) {
+        throw new WorkspaceStrategyDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+      }
+      const row = selectProjectWorkspaceStrategy.get(projectId);
+      const parsed = z
+        .object({
+          project_id: z.string(),
+          schema_version: z.number().int(),
+          strategy: z.string(),
+          updated_at: z.string(),
+        })
+        .parse(
+          row ?? {
+            project_id: project.id,
+            schema_version: 1,
+            strategy: "ISOLATED_WORKTREE",
+            updated_at: project.updatedAt,
+          },
+        );
+      return projectWorkspaceStrategySelectionSchema.parse({
+        schemaVersion: parsed.schema_version,
+        projectId: parsed.project_id,
+        strategy: parsed.strategy,
+        projectVersion: project.version,
+        updatedAt: parsed.updated_at,
+      });
+    };
+
     const readWorkItemWorkspaceByWorkItemId = (workItemId: string): WorkItemWorkspace | null => {
       const row = selectWorkItemWorkspaceByWorkItemId.get(workItemId);
       return row === undefined ? null : workItemWorkspaceFromRow(row);
@@ -4274,7 +4348,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               };
 
         const reviewInput =
-          stageAttempt.stage === "REVIEW"
+          stageAttempt.stage === "REVIEW" || stageAttempt.stage === "IMPLEMENT"
             ? (() => {
                 const implementationValue = selectLatestSucceededImplementAttemptForCycle.get(
                   run.id,
@@ -4324,6 +4398,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                       endLine: finding.endLine,
                       reproduction: finding.reproduction,
                       criterion: finding.criterion,
+                      suggestedFix: finding.suggestedFix,
                     })),
                 };
               })()
@@ -5222,6 +5297,44 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
     const appendProviderSelectionEvent = (
       intent: ProjectProviderPreferenceChangedIntent,
+      metadata: {
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "PROJECT",
+        metadata.projectId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "PROJECT",
+        aggregateId: metadata.projectId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
+    const appendWorkspaceStrategyEvent = (
+      intent: ProjectWorkspaceStrategyChangedIntent,
       metadata: {
         projectId: string;
         actor: Actor;
@@ -6946,6 +7059,52 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "SET_PROJECT_WORKSPACE_STRATEGY") {
+        const current = readProject(command.payload.projectId);
+        const currentSelection = readProjectWorkspaceStrategy(command.payload.projectId);
+        const decision = decideProjectWorkspaceStrategy(command, {
+          now: occurredAt,
+          currentStrategy: currentSelection.strategy,
+          ...(current === null ? {} : { project: current }),
+        });
+        const update = database
+          .prepare(
+            `UPDATE projects SET version = ?, updated_at = ?
+             WHERE id = ? AND version = ?`,
+          )
+          .run(
+            decision.project.version,
+            decision.project.updatedAt,
+            decision.project.id,
+            decision.project.version - 1,
+          );
+        if (update.changes !== 1) {
+          throw new WorkspaceStrategyDomainError(
+            "PROJECT_VERSION_CONFLICT",
+            "The Project changed while workspace settings were applied",
+          );
+        }
+        upsertProjectWorkspaceStrategy.run(
+          decision.selection.projectId,
+          decision.selection.strategy,
+          decision.selection.updatedAt,
+        );
+        const selection = projectWorkspaceStrategySelectionSchema.parse(decision.selection);
+        const event = appendWorkspaceStrategyEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "PROJECT_WORKSPACE_STRATEGY_CHANGED",
+          replayed: false,
+          selection,
+          event,
+        });
+      }
+
       if (command.type === "ADOPT_VERIFICATION_PLAN") {
         const project = readProject(command.payload.projectId);
         const currentPlan = readLatestVerificationPlan(command.payload.projectId);
@@ -7286,6 +7445,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           workspace?.version ?? 0,
         );
         if (claim.changes !== 1) {
+          const after = readWorkItemWorkspace(decision.run.workspaceId);
+          if (
+            after?.strategy === "SHARED_CURRENT_DIRECTORY" &&
+            selectActiveSharedWorkspaceAuthority.get(after.projectId, after.id) !== undefined
+          ) {
+            throw new StateStoreError(
+              "WORKSPACE_PROJECT_AUTHORITY_HELD",
+              "Another WorkItem already owns this Project's shared working directory",
+            );
+          }
           throw new VerificationDomainError(
             "WORKSPACE_UNAVAILABLE",
             "The workspace changed while verification was reserved",
@@ -11191,6 +11360,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           id: createId("workItemWorkspace"),
           projectId: workItem.projectId,
           workItemId: workItem.id,
+          strategy: command.payload.strategy ?? "ISOLATED_WORKTREE",
           branch: command.payload.branch,
           worktreePath: command.payload.worktreePath,
           baseCommit: command.payload.baseCommit,
@@ -11200,11 +11370,26 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           createdAt: occurredAt,
           version: 1,
         });
+        // Most shared workspaces are recorded without an initial lease and then claimed through
+        // ACQUIRE_WORKSPACE_LEASE. Keep the command's supported initial-lease path just as safe:
+        // surface the same typed refusal before SQLite's partial UNIQUE index becomes a generic
+        // persistence failure. The index remains the race-proof storage backstop.
+        if (
+          workspace.strategy === "SHARED_CURRENT_DIRECTORY" &&
+          initialLeaseHolder !== null &&
+          selectActiveSharedWorkspaceAuthority.get(workspace.projectId, workspace.id) !== undefined
+        ) {
+          throw new StateStoreError(
+            "WORKSPACE_PROJECT_AUTHORITY_HELD",
+            "Another WorkItem already owns this Project's shared working directory",
+          );
+        }
         insertWorkItemWorkspace.run(
           workspace.id,
           workspace.schemaVersion,
           workspace.projectId,
           workspace.workItemId,
+          workspace.strategy,
           workspace.branch,
           workspace.worktreePath,
           workspace.baseCommit,
@@ -11286,6 +11471,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             throw new StateStoreError(
               "WORKSPACE_VERIFICATION_HELD",
               "The workspace is reserved by an active verification Run",
+            );
+          }
+          if (
+            after.strategy === "SHARED_CURRENT_DIRECTORY" &&
+            selectActiveSharedWorkspaceAuthority.get(after.projectId, after.id) !== undefined
+          ) {
+            throw new StateStoreError(
+              "WORKSPACE_PROJECT_AUTHORITY_HELD",
+              "Another WorkItem already owns this Project's shared working directory",
             );
           }
           throw new StateStoreError(
@@ -11552,6 +11746,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           error instanceof ReadinessDomainError ||
           error instanceof ProviderAllowanceDomainError ||
           error instanceof ProviderSelectionDomainError ||
+          error instanceof WorkspaceStrategyDomainError ||
           error instanceof VerificationDomainError ||
           error instanceof VerificationCorrectionError ||
           error instanceof QACompletionError ||
@@ -11633,6 +11828,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         }
         case "GET_PROJECT":
           return { type: "PROJECT", project: readProject(queryValue.projectId) };
+        case "GET_PROJECT_WORKSPACE_STRATEGY":
+          return {
+            type: "PROJECT_WORKSPACE_STRATEGY",
+            selection: readProjectWorkspaceStrategy(queryValue.projectId),
+          };
         case "GET_PROVIDER_ALLOWANCES": {
           if (readProject(queryValue.projectId) === null) {
             throw new ProviderAllowanceDomainError("PROJECT_NOT_FOUND", "The Project does not exist");

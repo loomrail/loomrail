@@ -339,6 +339,11 @@ export const providerUsageSchema = z
   })
   .strict();
 
+// Whether an adapter can stop provider work before the immutable estimated-token allowance is
+// exceeded. POST_SESSION records actual usage only after the work has already happened.
+export const providerTokenBudgetEnforcementSchema = z.enum(["HARD", "POST_SESSION"]);
+export type ProviderTokenBudgetEnforcement = z.infer<typeof providerTokenBudgetEnforcementSchema>;
+
 // One immutable, final spend report for one ProviderSession. Adapters report cumulative usage at
 // their terminal provider event, never deltas: making that cardinality explicit lets persistence
 // enforce UNIQUE(provider_session_id) and prevents a retrying callback from charging the budget
@@ -2027,6 +2032,7 @@ export const providerCapabilitiesResponseSchema = z
     checkpointOnRequest: z.boolean(),
     contextWindowReporting: z.boolean(),
     costReporting: z.boolean(),
+    tokenBudgetEnforcement: providerTokenBudgetEnforcementSchema,
     canReportRateLimits: z.boolean().default(false),
   })
   .strict();

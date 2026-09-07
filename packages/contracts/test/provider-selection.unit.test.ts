@@ -13,6 +13,7 @@ const liveAvailability = {
   checkpointOnRequest: false,
   contextWindowReporting: true,
   costReporting: false,
+  tokenBudgetEnforcement: "HARD",
   canReportRateLimits: false,
   models: {
     FAST: "gpt-5.6-luna",
@@ -36,6 +37,28 @@ describe("provider availability compatibility", () => {
 
   it("accepts an authenticated exact verified live provider", () => {
     expect(providerAvailabilitySchema.parse(liveAvailability)).toEqual(liveAvailability);
+  });
+
+  it("keeps provider readiness separate from post-session-only budget reporting", () => {
+    expect(
+      providerAvailabilitySchema.parse({
+        ...liveAvailability,
+        tokenBudgetEnforcement: "POST_SESSION",
+      }),
+    ).toMatchObject({ ready: true, tokenBudgetEnforcement: "POST_SESSION" });
+  });
+
+  it("requires the built-in Mock to preserve hard-budget safety", () => {
+    expect(() =>
+      providerAvailabilitySchema.parse({
+        ...liveAvailability,
+        provider: "MOCK",
+        version: null,
+        compatibility: "BUILT_IN",
+        models: null,
+        tokenBudgetEnforcement: "POST_SESSION",
+      }),
+    ).toThrow("The Mock provider is always ready");
   });
 
   it("rejects ready=true for an unverified live version", () => {

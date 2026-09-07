@@ -163,6 +163,7 @@ const availabilityFor = (
     checkpointOnRequest: capabilities.checkpointOnRequest,
     contextWindowReporting: capabilities.contextWindowReporting,
     costReporting: capabilities.costReporting,
+    tokenBudgetEnforcement: capabilities.tokenBudgetEnforcement,
     canReportRateLimits:
       rateLimitTargetVerified &&
       (capabilities.canReportRateLimits ?? false) &&
@@ -338,6 +339,7 @@ export const createProviderRegistry = (
       .filter(
         (candidate) =>
           candidate.ready &&
+          candidate.tokenBudgetEnforcement === "HARD" &&
           (resolveOptions.stage === undefined || candidate.stages.includes(resolveOptions.stage)),
       )
       .sort(
@@ -352,7 +354,8 @@ export const createProviderRegistry = (
     const fallbackReason =
       preferred === null && effectiveProvider === "MOCK"
         ? "NO_READY_LIVE_PROVIDER"
-        : preferred !== null && !effectiveAvailability.ready
+        : preferred !== null &&
+            (!effectiveAvailability.ready || effectiveAvailability.tokenBudgetEnforcement !== "HARD")
           ? "LIVE_PROVIDER_UNAVAILABLE"
           : null;
     const response = projectProviderSelectionResponseSchema.parse({

@@ -7,7 +7,7 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
-import { providerIdSchema, workflowStageSchema } from "./workflow.js";
+import { providerIdSchema, providerTokenBudgetEnforcementSchema, workflowStageSchema } from "./workflow.js";
 
 export const providerPreferenceSchema = z.enum(["AUTO", "CODEX", "CLAUDE_CODE", "MOCK"]);
 
@@ -62,6 +62,7 @@ export const providerAvailabilitySchema = z
     checkpointOnRequest: z.boolean(),
     contextWindowReporting: z.boolean(),
     costReporting: z.boolean(),
+    tokenBudgetEnforcement: providerTokenBudgetEnforcementSchema,
     canReportRateLimits: z.boolean().default(false),
     models: providerModelMappingSchema.nullable(),
   })
@@ -74,6 +75,7 @@ export const providerAvailabilitySchema = z
         availability.version !== null ||
         availability.compatibility !== "BUILT_IN" ||
         !availability.ready ||
+        availability.tokenBudgetEnforcement !== "HARD" ||
         availability.canReportRateLimits ||
         availability.models !== null
       ) {

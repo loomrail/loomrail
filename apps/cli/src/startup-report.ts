@@ -3,6 +3,8 @@ export type StartupProvider = {
   provider: string;
   /** `capabilities().start` -- whether the adapter is admitted to start a new managed session. */
   cliAvailable: boolean;
+  /** Whether the selected adapter can stop before Loomrail's immutable token ceiling. */
+  tokenBudgetEnforcement: "HARD" | "POST_SESSION";
   /** `false` when LOOMRAIL_PROVIDER named something this daemon could not read. */
   recognised: boolean;
   /**
@@ -53,6 +55,7 @@ export type StartupReport = {
 const providerLines = ({
   provider,
   cliAvailable,
+  tokenBudgetEnforcement,
   recognised,
   stages,
   worksInRepository,
@@ -62,6 +65,11 @@ const providerLines = ({
       ? ["Provider: MOCK (the deterministic test double -- no real agent runs)."]
       : [
           `Provider: ${provider}${cliAvailable ? "" : " -- but it is not ready for managed sessions, so dispatches will be refused; review its exact status in Settings"}.`,
+          ...(tokenBudgetEnforcement === "POST_SESSION"
+            ? [
+                "It cannot enforce Loomrail's hard token budget during a session, so no live session will start.",
+              ]
+            : []),
           `It serves ${stages.join(", ")}; any other stage is refused to you as a question rather than dispatched.`,
           worksInRepository
             ? "Each stage it runs works in a Git worktree cut for that task, outside your repository and on a branch of its own -- reading your code as well as changing it. Your working copy is untouched, and Loomrail pushes nothing."

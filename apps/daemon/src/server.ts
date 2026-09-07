@@ -42,6 +42,7 @@ import {
   pipelineControlRequestSchema,
   projectConstitutionSnapshotSchema,
   projectProviderSelectionResponseSchema,
+  projectWorkspaceStrategyResponseSchema,
   projectProviderAllowanceResponseSchema,
   projectReadinessSnapshotSchema,
   proposeProjectScaffoldRequestSchema,
@@ -81,6 +82,7 @@ import {
   scaffoldOperationsResponseSchema,
   publishProjectScaffoldRequestSchema,
   setProjectProviderPreferenceRequestSchema,
+  setProjectWorkspaceStrategyRequestSchema,
   setMcpProfileGrantRequestSchema,
   sessionExchangeRequestSchema,
   sessionExchangeResponseSchema,
@@ -116,6 +118,7 @@ import {
   ConstitutionDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
+  WorkspaceStrategyDomainError,
   ProviderAllowanceDomainError,
   QADefectDispositionError,
   QACorrectionError,
@@ -339,6 +342,7 @@ export type RunningDaemon = {
   provider: {
     provider: ProviderId;
     cliAvailable: boolean;
+    tokenBudgetEnforcement: "HARD" | "POST_SESSION";
     recognised: boolean;
     stages: readonly WorkflowStage[];
     // Whether this adapter works in the owner's repository at all (`adapterWorksInWorkspace`,
@@ -442,6 +446,7 @@ const secretsEqual = (left: Buffer, right: Buffer): boolean =>
  */
 const publishedWorkspace = (workspace: WorkItemWorkspace): PublishedWorkItemWorkspace => ({
   schemaVersion: workspace.schemaVersion,
+  strategy: workspace.strategy,
   branch: workspace.branch,
   worktreePath: workspace.worktreePath,
   baseCommit: workspace.baseCommit,
@@ -601,6 +606,10 @@ const sendOperationError = (
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
   if (error instanceof ProviderSelectionDomainError) {
+    const status = error.code === "PROJECT_NOT_FOUND" ? 404 : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof WorkspaceStrategyDomainError) {
     const status = error.code === "PROJECT_NOT_FOUND" ? 404 : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
@@ -3252,6 +3261,68 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
+    app.get("/api/v1/projects/:projectId/workspace-strategy", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const result = localState.query({
+          type: "GET_PROJECT_WORKSPACE_STRATEGY",
+          projectId: params.projectId,
+        });
+        if (result.type !== "PROJECT_WORKSPACE_STRATEGY") {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The Project workspace strategy could not be read",
+          );
+        }
+        return projectWorkspaceStrategyResponseSchema.parse({
+          schemaVersion: 1,
+          selection: result.selection,
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.put("/api/v1/projects/:projectId/workspace-strategy", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = setProjectWorkspaceStrategyRequestSchema.parse(request.body);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "SET_PROJECT_WORKSPACE_STRATEGY",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            strategy: body.strategy,
+          },
+        });
+        const result = localState.query({
+          type: "GET_PROJECT_WORKSPACE_STRATEGY",
+          projectId: params.projectId,
+        });
+        if (result.type !== "PROJECT_WORKSPACE_STRATEGY") {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The Project workspace strategy could not be read",
+          );
+        }
+        worker.wake();
+        return projectWorkspaceStrategyResponseSchema.parse({
+          schemaVersion: 1,
+          selection: result.selection,
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
     app.get("/api/v1/projects/:projectId/provider-selection", (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!requireSession(request, reply, correlationId)) return;
@@ -3417,6 +3488,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           checkpointOnRequest: capabilities.checkpointOnRequest,
           contextWindowReporting: capabilities.contextWindowReporting,
           costReporting: capabilities.costReporting,
+          tokenBudgetEnforcement: capabilities.tokenBudgetEnforcement,
           canReportRateLimits: capabilities.canReportRateLimits ?? false,
         });
       } catch (error: unknown) {
@@ -4216,6 +4288,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       {
         provider: providerCapabilities.provider,
         cliAvailable: providerCapabilities.start,
+        tokenBudgetEnforcement: providerCapabilities.tokenBudgetEnforcement,
         stages: providerCapabilities.stages.join(", "),
       },
       "The provider adapter this daemon will dispatch to",
@@ -4240,6 +4313,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       provider: {
         provider: providerCapabilities.provider,
         cliAvailable: providerCapabilities.start,
+        tokenBudgetEnforcement: providerCapabilities.tokenBudgetEnforcement,
         recognised: providerResolution.recognised,
         stages: providerCapabilities.stages,
         worksInRepository: adapterWorksInWorkspace(providerCapabilities.stages),

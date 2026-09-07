@@ -15,6 +15,7 @@ import {
   providerIdSchema,
   providerModelIdSchema,
   providerModelMappingSchema,
+  providerTokenBudgetEnforcementSchema,
   workflowStageSchema,
 } from "@loomrail/contracts";
 import { z } from "zod";
@@ -78,6 +79,10 @@ export const providerCapabilitiesSchema = z
     // is about context-window consumption, not spend -- an adapter can know how full its window
     // got without knowing what that turn billed, and vice versa.
     costReporting: z.boolean(),
+    // HARD means the adapter accepts the per-session remainder on ProviderInvocation and prevents
+    // provider work from crossing it. POST_SESSION means the daemon learns usage too late to bound
+    // the session already in flight.
+    tokenBudgetEnforcement: providerTokenBudgetEnforcementSchema,
     canReportRateLimits: z.boolean().optional(),
   })
   .strict()
@@ -113,6 +118,24 @@ export type ProviderSessionRef = {
   stage: WorkflowStage;
   attempt: number;
 };
+
+export const providerTokenBudgetSchema = z
+  .object({
+    maxEstimatedTokens: z.number().int().positive(),
+    recordedEstimatedTokens: z.number().int().nonnegative(),
+    remainingEstimatedTokens: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((budget, context) => {
+    if (budget.recordedEstimatedTokens + budget.remainingEstimatedTokens !== budget.maxEstimatedTokens) {
+      context.addIssue({
+        code: "custom",
+        message: "Recorded and remaining estimated tokens must equal the immutable maximum",
+      });
+    }
+  });
+
+export type ProviderTokenBudget = z.infer<typeof providerTokenBudgetSchema>;
 
 const absolutePathPattern = /^(?:[/\\]|[A-Za-z]:[/\\])/;
 
@@ -161,6 +184,8 @@ export type ProviderInvocation = {
    * written before model binding; adapters fall back to their current tier mapping for those.
    */
   modelId?: string | null;
+  /** Immutable AgentRun token authority, reduced by usage recorded for this same run. */
+  tokenBudget: ProviderTokenBudget;
   /**
    * A structured copy of the criterion/check text rendered into this same pack, present only for
    * Acceptance. It carries no authority IDs: adapters may propose a mapping without parsing prose,

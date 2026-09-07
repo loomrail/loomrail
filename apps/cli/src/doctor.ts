@@ -254,7 +254,10 @@ const providerCheck = (
       items: snapshot.providers,
     };
   }
-  const liveReady = snapshot.providers.some(({ provider, ready }) => provider !== "MOCK" && ready);
+  const liveReady = snapshot.providers.some(
+    ({ provider, ready, tokenBudgetEnforcement }) =>
+      provider !== "MOCK" && ready && tokenBudgetEnforcement === "HARD",
+  );
   return {
     status: liveReady ? "PASS" : "WARN",
     code: liveReady ? "LIVE_PROVIDER_READY" : "MOCK_ONLY",

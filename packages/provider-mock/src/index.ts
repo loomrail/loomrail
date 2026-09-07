@@ -310,6 +310,8 @@ export const createMockProvider = (options?: MockProviderOptions): ProviderAdapt
         // those suites drive it across, not just the ones a real adapter can serve before E1.
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
+        // The mock performs no billable provider work, so it cannot cross the supplied allowance.
+        tokenBudgetEnforcement: "HARD",
       }),
     start: async (invocation, listener) => {
       invocation.authoritySignal.throwIfAborted();

@@ -88,3 +88,16 @@ export const inspectRepository = async (
 
   return { topLevel, headCommit, inProgress };
 };
+
+/**
+ * The named local branch checked out in a repository, or null for detached/unreadable HEAD.
+ *
+ * Shared-current-directory mode records the branch as an audit fact but must not manufacture one.
+ * `symbolic-ref` answers exactly that question without changing checkout, index or refs.
+ */
+export const readCurrentBranch = async (topLevel: string): Promise<string | null> => {
+  const result = await runGit(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: topLevel });
+  if (result.exitCode !== 0 || result.stdoutTruncated) return null;
+  const branch = result.stdout.trim();
+  return branch.length === 0 ? null : branch;
+};
