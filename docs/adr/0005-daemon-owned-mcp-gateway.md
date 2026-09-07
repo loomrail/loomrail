@@ -40,9 +40,9 @@ Loomrail implements a daemon-owned MCP gateway.
   interval itself may not exceed ten seconds. This avoids treating a slow Windows `CreateProcess` return as PID reuse
   without widening identity to an arbitrary timestamp. Legacy revision 1 remains readable. A temporarily unavailable
   OS start-time observation is retried once while the PID still exists; repeated absence or any actual mismatch still
-  leaves the process untouched. Windows reads this root identity from `Get-Process.StartTime` with a two-second
-  command deadline; the slower CIM graph query remains limited to descendant discovery, where parent relationships
-  are required.
+  leaves the process untouched. Windows reads this root identity from `Get-Process.StartTime` with a ten-second
+  command deadline that includes cold PowerShell startup; the slower CIM graph query remains limited to descendant
+  discovery, where parent relationships are required.
 
 ## Alternatives rejected
 

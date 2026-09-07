@@ -101,7 +101,7 @@ describe("shared process-tree platform operations", () => {
     ]);
     expect(fixture.executeCalls[0]?.args[4]).toContain("Get-Process -Id 7301");
     expect(fixture.executeCalls[0]?.args[4]).not.toContain("Get-CimInstance");
-    expect(fixture.executeCalls[0]?.timeoutMs).toBe(2_000);
+    expect(fixture.executeCalls[0]?.timeoutMs).toBe(10_000);
   });
 
   it("reaps descendants after a Windows root exits through a bounded trusted query", async () => {
