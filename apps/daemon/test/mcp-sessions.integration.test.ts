@@ -351,4 +351,58 @@ describe("daemon MCP session orchestration", () => {
       await gateway.shutdown();
     }
   }, 20_000);
+
+  it("omits the recipe tool when the active plan approves no recipe ids", async () => {
+    const localState = openState();
+    const executor: WorkspaceToolExecutor = {
+      describePolicy: () => ({
+        access: "READ_WRITE",
+        recipes: [],
+        limits: {
+          maxCalls: 64,
+          maxReadBytes: 65_536,
+          maxWriteBytes: 131_072,
+          maxDirectoryEntries: 1_000,
+        },
+      }),
+      execute: () => Promise.reject(new Error("The omitted recipe tool must not execute")),
+    };
+    const gateway = createMcpGateway({ proxyEntrypoint, supervisorEntrypoint });
+    const opener = createMcpConnectionOpener({
+      state: localState,
+      gateway,
+      createCommandId: (kind) => `empty-plan-${kind.toLowerCase()}-${(nextCommandId += 1).toString()}`,
+    });
+    const lease = await opener({
+      snapshots: [],
+      providerSessionId: "provider-session-empty-plan",
+      workspaceTools: executor,
+      authoritySignal: new AbortController().signal,
+    });
+    const connection = lease.connections[0];
+    if (connection === undefined) throw new Error("The workspace MCP connector was not opened");
+    const client = new Client({ name: "daemon-empty-plan-test", version: "1.0.0" });
+    try {
+      await client.connect(
+        new StdioClientTransport({
+          command: connection.proxyCommand,
+          args: connection.proxyArgs,
+          env: mcpProbeEnvironment(),
+          stderr: "pipe",
+        }),
+        { timeout: 5_000, maxTotalTimeout: 5_000 },
+      );
+      const listed = await client.listTools();
+      expect(listed.tools.map(({ name }) => name)).toEqual([
+        "loomrail_list_directory",
+        "loomrail_read_file",
+        "loomrail_write_file",
+        "loomrail_delete_file",
+      ]);
+    } finally {
+      await client.close().catch(() => undefined);
+      await lease.close();
+      await gateway.shutdown();
+    }
+  }, 20_000);
 });

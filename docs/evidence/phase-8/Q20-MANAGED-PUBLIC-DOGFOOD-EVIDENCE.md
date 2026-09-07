@@ -134,6 +134,23 @@ protected landing evidence or registry provenance. Those stable gates remain ind
 
 ## Repository verification
 
-Final repository-wide verification is recorded after the evidence and documentation changes are complete. The
-stable manifest must remain `PENDING` until evidence bytes are bound to an exact reviewed commit, SHA-256 digest and
-main-branch ancestry.
+The final working tree used Node `24.19.0` and pnpm `11.21.0`:
+
+- `pnpm verify` passed formatting, public-tree/toolchain/activation checks, lint, strict typecheck and every package
+  test; the largest relevant counts were domain 303, persistence 157, daemon 251, Codex adapter 47, Claude adapter
+  12, MCP gateway 27 and workspace executor 4;
+- the complete product Playwright suite passed 60/60;
+- the protected landing Playwright suite passed 7/7, including light/dark, keyboard entry and 320/375/414/768-pixel
+  overflow checks;
+- `pnpm pack:release` built `loomrail-0.1.0-alpha.5.tgz`;
+- `pnpm test:release` installed that archive into a clean temporary environment with 0 reported vulnerabilities and
+  passed samples, setup, local CLI diagnostics, receipt, installed-file and log-lifecycle checks.
+
+The six open dependency-update PRs were reproduced in this tree: Fastify `5.12.3`, Zod `4.5.4`,
+`@types/react-dom` `19.2.7`, `eslint-plugin-react-refresh` `0.5.6`, `actions/deploy-pages` `5.0.1` and
+`actions/upload-artifact` `7.0.1`. The first combined verification exposed that an empty approved-recipe set was
+published as an invalid empty JSON Schema enum under Zod `4.5.4`. Loomrail now omits `loomrail_run_recipe` when there
+is no exact approved ID, and a real-proxy empty-plan regression plus the original daemon restart scenario pass.
+
+The stable manifest must remain `PENDING` until these evidence bytes are bound to an exact reviewed commit, SHA-256
+digest and main-branch ancestry.

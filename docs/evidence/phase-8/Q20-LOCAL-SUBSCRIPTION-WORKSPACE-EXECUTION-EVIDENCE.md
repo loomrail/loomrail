@@ -62,7 +62,7 @@ On the final working tree:
 
 - repository `pnpm verify` passed formatting, public-tree/toolchain/activation checks, lint, strict typecheck and all
   package tests;
-- domain passed 303 tests, persistence passed 157, daemon passed 247, Codex adapter passed 47, Claude adapter passed
+- domain passed 303 tests, persistence passed 157, daemon passed 251, Codex adapter passed 47, Claude adapter passed
   12, MCP gateway passed 27 and CLI passed 33;
 - the complete product browser suite passed 60/60 sequentially;
 - the protected landing browser suite passed 7/7, including 320/375/414/768-pixel overflow checks;

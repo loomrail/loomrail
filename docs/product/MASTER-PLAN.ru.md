@@ -1789,9 +1789,11 @@ human waiver с documented risk.
    отсутствие CLI/login или неизвестный override блокирует dispatch без API либо синтетического fallback.
 2. ADR-0014/Q20.1 production slice реализован: provider-neutral rooted executor, durable tool-call audit/recovery,
    `POST_SESSION` accounting, measured-QA binding и domain gate на фактическую IMPLEMENT mutation. Focused macOS
-   dogfood доказал реальные IMPLEMENT/QA через Codex CLI `0.153.4` и Claude Code `2.1.260`; финальные `pnpm verify`,
-   60/60 product E2E, 7/7 landing E2E и clean-install release-package gate прошли. Не переносить это доказательство
-   на Windows.
+   dogfood доказал реальные IMPLEMENT/QA через Codex CLI `0.153.4` и Claude Code `2.1.260`. Q20.3 провёл точную
+   public fixture Task через Discovery, Plan, bounded Implement, cross-provider Review, project verification и
+   measured Browser QA до намеренно `PENDING` owner Acceptance; 9 audited writes произошли только в Implement, QA
+   оставался read-only. Финальные `pnpm verify`, 60/60 product E2E, 7/7 landing E2E и clean-install release-package
+   gate прошли после обновления зависимостей. Не переносить это доказательство на Windows или private Epic.
 3. Провести owner-approved subscription-backed private dogfood Epic из 2–3 зависимых Task через оба local provider,
    restart, review, Browser QA и owner Acceptance. Test doubles не считаются live доказательством.
 4. Закрыть macOS/Windows local CLI compatibility rows и protected landing fixed-commit gate; неизвестные результаты

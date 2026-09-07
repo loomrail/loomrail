@@ -81,16 +81,20 @@ const workspaceTools = (approvedRecipeIds: readonly string[]) =>
         additionalProperties: false,
       },
     },
-    {
-      name: "loomrail_run_recipe",
-      description: "Run one exact owner-approved Loomrail verification recipe using an enum value.",
-      inputSchema: {
-        type: "object",
-        properties: { recipeId: { type: "string", enum: approvedRecipeIds } },
-        required: ["recipeId"],
-        additionalProperties: false,
-      },
-    },
+    ...(approvedRecipeIds.length === 0
+      ? []
+      : [
+          {
+            name: "loomrail_run_recipe",
+            description: "Run one exact owner-approved Loomrail verification recipe using an enum value.",
+            inputSchema: {
+              type: "object",
+              properties: { recipeId: { type: "string", enum: approvedRecipeIds } },
+              required: ["recipeId"],
+              additionalProperties: false,
+            },
+          },
+        ]),
   ] as const;
 
 const operationFor = (toolName: string): WorkspaceToolOperation => {

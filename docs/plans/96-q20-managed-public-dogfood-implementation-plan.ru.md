@@ -14,7 +14,7 @@
    владельца. **Done: package оставлен `PENDING`.**
 7. Сохранить только sanitized evidence, исправить устаревшую public guidance и обновить Master Plan/manifest reason без
    ложного `PASSED`. **Done.**
-8. Выполнить полный `pnpm verify`, product E2E, landing E2E, release pack и clean-install verification. **Pending.**
+8. Выполнить полный `pnpm verify`, product E2E, landing E2E, release pack и clean-install verification. **Done.**
 9. Не commit/push/stage/publish без отдельной команды владельца. **Разрешение на commit/push и интеграцию в `main`
    получено 2026-09-08; npm publish по-прежнему не разрешён.**
 
@@ -29,6 +29,9 @@
   StageAttempt уже содержал успешные `WRITE_FILE`.
 - schema для `LIST_DIRECTORY` не объясняла, что portable workspace root обозначается `.`; корректный typed отказ
   породил лишний FREE_TEXT request.
+- обновление Zod до `4.5.4` сделало видимым ещё один schema defect: при пустом approved recipe Plan MCP публиковал
+  `RUN_RECIPE` с запрещённым пустым `enum` и закрывал proxy до IMPLEMENT. Tool теперь не публикуется, пока exact
+  recipe IDs отсутствуют; restart integration и отдельный empty-plan regression это фиксируют.
 
 Все дефекты входят в Q20.3 scope: exact recipe IDs публикуются только как enum из captured executor policy, а
 passing Browser QA переиспользуется только при совпадении tree/plan/retest/correction lineage. Regression tests и
