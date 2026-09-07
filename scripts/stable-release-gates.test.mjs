@@ -35,16 +35,12 @@ test("records the current honest stable readiness without promoting pending gate
   assert.equal(summary.releaseVersion, null);
   assert.deepEqual(summary.pending, [
     "q15CanonicalActivationNonLanding",
-    "q20LocalSubscriptionWorkspaceExecution",
-    "managedPublicDogfoodRehearsal",
-    "codexMacosCompatibility",
-    "claudeMacosCompatibility",
     "privateDogfood",
     "protectedLandingCanonicalActivation",
     "codexWindowsCompatibility",
     "claudeWindowsCompatibility",
   ]);
-  assert.equal(summary.passed.length, 2);
+  assert.equal(summary.passed.length, 6);
 });
 
 test("rejects the superseded schema-v2 local API gate contract", () => {

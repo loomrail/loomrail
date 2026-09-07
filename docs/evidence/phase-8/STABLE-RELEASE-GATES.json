@@ -19,20 +19,28 @@
       "evidenceCommit": "33f77994b3e707d0ccaa683890e68cc7d6625a6e"
     },
     "q20LocalSubscriptionWorkspaceExecution": {
-      "status": "PENDING",
-      "reason": "The bounded local-CLI executor, focused macOS evidence and full public rehearsal are verified only in the uncommitted working tree; commit, digest and ancestry evidence remain required."
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/Q20-LOCAL-SUBSCRIPTION-WORKSPACE-EXECUTION-EVIDENCE.md",
+      "evidenceSha256": "4de374ce948b903646df7479f100b50686e879c54be254311cbe040140e5dea9",
+      "evidenceCommit": "000997668cf5d2cee25678b9807d8e2796111bb8"
     },
     "managedPublicDogfoodRehearsal": {
-      "status": "PENDING",
-      "reason": "The Q20 local-CLI rehearsal reached a PENDING owner Acceptance package on the final verified tree; its sanitized evidence still needs commit, digest and ancestry binding."
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/Q20-MANAGED-PUBLIC-DOGFOOD-EVIDENCE.md",
+      "evidenceSha256": "4e29952087dc731d2151e2ca1749016cf309ef831341d090574ba1d847c1aee1",
+      "evidenceCommit": "000997668cf5d2cee25678b9807d8e2796111bb8"
     },
     "codexMacosCompatibility": {
-      "status": "PENDING",
-      "reason": "Codex CLI 0.153.4 passed focused Q20 execution on macOS arm64, but the sanitized evidence is not yet committed and ancestry-bound."
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/Q20-LOCAL-SUBSCRIPTION-WORKSPACE-EXECUTION-EVIDENCE.md",
+      "evidenceSha256": "4de374ce948b903646df7479f100b50686e879c54be254311cbe040140e5dea9",
+      "evidenceCommit": "000997668cf5d2cee25678b9807d8e2796111bb8"
     },
     "claudeMacosCompatibility": {
-      "status": "PENDING",
-      "reason": "Claude Code 2.1.260 passed focused Q20 execution on macOS arm64, but the sanitized evidence is not yet committed and ancestry-bound."
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/Q20-LOCAL-SUBSCRIPTION-WORKSPACE-EXECUTION-EVIDENCE.md",
+      "evidenceSha256": "4de374ce948b903646df7479f100b50686e879c54be254311cbe040140e5dea9",
+      "evidenceCommit": "000997668cf5d2cee25678b9807d8e2796111bb8"
     },
     "privateDogfood": {
       "status": "PENDING",

@@ -1799,9 +1799,8 @@ human waiver с documented risk.
 4. Закрыть macOS/Windows local CLI compatibility rows и protected landing fixed-commit gate; неизвестные результаты
    оставить `PENDING`, не возвращая Mock.
 5. Repository-side stage-only workflow уже подготовлен с exact-intent, six-job CI и strict eleven-gate evidence
-   index. Schema v3 сейчас честно показывает 2/11 и не содержит выбранной stable version; `PENDING` Q20.1 executor/live
-   local-CLI evidence, private dogfood, Q15 landing integration и cross-platform compatibility rows машинно
-   запрещают staging. После их
+   index. Schema v3 сейчас честно показывает 6/11 и не содержит выбранной stable version; `PENDING` Q15 non-landing,
+   private dogfood, protected landing и Windows local-CLI rows машинно запрещают staging. После их
    закрытия владелец отдельно настраивает
    protected main-only `npm-release` environment и npm OIDC trust только для `npm stage publish`. Trusted job
    read-only проверяет непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или
