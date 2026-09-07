@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { mcpProbeEnvironment } from "../src/probe.js";
 import { recoverMcpOrphans } from "../src/process-registry.js";
-import type { ProcessTreeOperations } from "../src/process-tree.js";
+import { createProcessTreeOperations, type ProcessTreeOperations } from "../src/process-tree.js";
 
 const fixturePath = fileURLToPath(new URL("./fixtures/modern-server.mjs", import.meta.url));
 const supervisorEntrypoint = fileURLToPath(new URL("../dist/supervisor.js", import.meta.url));
@@ -226,24 +226,30 @@ describe("MCP process-tree supervisor", () => {
     directory = await mkdtemp(join(tmpdir(), "loomrail mcp durable orphan "));
     const pidFile = join(directory, "pids.json");
     const recordFile = join(directory, `mcp-${randomBytes(32).toString("base64url")}.json`);
-    const spawnStartedAt = new Date();
     orphanRoot = spawn(process.execPath, [fixturePath, "orphan-tree", pidFile], {
       detached: process.platform !== "win32",
       stdio: "ignore",
       windowsHide: true,
     });
-    const spawnCompletedAt = new Date();
     if (orphanRoot.pid === undefined) throw new Error("The durable MCP orphan fixture did not start");
     treePids = await waitForTreePids(pidFile);
     expect(treePids.serverPid).toBe(orphanRoot.pid);
+    // This case verifies real process-tree recovery. Anchor its synthetic durable record to the
+    // same OS identity source used by recovery so a hosted runner wall-clock adjustment cannot
+    // turn the lifecycle assertion into a timing test. The bounded interval and mismatch rules
+    // are covered independently below with injected observations.
+    const observedStartedAt = await createProcessTreeOperations().startedAt(treePids.serverPid, new Date());
+    if (observedStartedAt === null) {
+      throw new Error("The durable MCP orphan fixture did not expose its process start time");
+    }
     await writeFile(
       recordFile,
       JSON.stringify({
         schemaVersion: 2,
         supervisorPid: 2_147_483_647,
         serverPid: treePids.serverPid,
-        spawnStartedAt: spawnStartedAt.toISOString(),
-        spawnCompletedAt: spawnCompletedAt.toISOString(),
+        spawnStartedAt: new Date(observedStartedAt.getTime() - 250).toISOString(),
+        spawnCompletedAt: new Date(observedStartedAt.getTime() + 250).toISOString(),
       }),
       { encoding: "utf8", mode: 0o600 },
     );
