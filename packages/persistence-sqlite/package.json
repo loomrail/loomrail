@@ -21,6 +21,6 @@
     "@loomrail/domain": "workspace:*",
     "@loomrail/project-readiness": "workspace:*",
     "@loomrail/workspace": "workspace:*",
-    "zod": "^4.0.0"
+    "zod": "^4.5.4"
   }
 }
