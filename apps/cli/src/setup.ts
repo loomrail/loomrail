@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import type { DoctorReport } from "./doctor.js";
 import { collectDoctorReport } from "./doctor.js";
 
-export type SetupRoute = "MOCK" | "LIVE";
+export type SetupRoute = "LIVE";
 
 export type SetupRouteSelectionErrorCode = "INVALID_CHOICE" | "QUESTION_FAILED";
 
@@ -13,7 +13,7 @@ export class SetupRouteSelectionError extends Error {
   constructor(code: SetupRouteSelectionErrorCode, cause?: unknown) {
     super(
       code === "INVALID_CHOICE"
-        ? "Setup choice must be 1, 2, mock, or live"
+        ? "Setup choice must be 1 or live"
         : "The setup route question could not be completed safely",
       cause === undefined ? undefined : { cause },
     );
@@ -43,7 +43,6 @@ export type SetupReadinessReport = {
     >;
     browser: SetupCheck<"BROWSER_READY" | "BROWSER_MISSING" | "BROWSER_UNAVAILABLE">;
     route: SetupCheck<
-      | "MOCK_ROUTE_READY"
       | "LIVE_ROUTE_READY"
       | "PROVIDER_OVERRIDE_ACTIVE"
       | "LIVE_PROVIDER_NOT_READY"
@@ -59,7 +58,6 @@ export type SetupReadinessReport = {
     | "SIGN_IN_PROVIDER"
     | "RUN_START"
     | "INITIALIZE_DEMO_WORKSPACE"
-    | "SELECT_MOCK"
     | "SELECT_LIVE_PROVIDER"
   )[];
 };
@@ -110,8 +108,9 @@ const routeCheck = (
   if (report.checks.providers.environmentOverride !== "NONE") {
     return { status: "FAIL", code: "PROVIDER_OVERRIDE_ACTIVE" };
   }
-  if (route === "MOCK") return { status: "PASS", code: "MOCK_ROUTE_READY" };
-  const liveReady = report.checks.providers.items.some(({ provider, ready }) => provider !== "MOCK" && ready);
+  const liveReady = report.checks.providers.items.some(
+    ({ ready, tokenBudgetEnforcement }) => ready && tokenBudgetEnforcement === "HARD",
+  );
   return liveReady
     ? { status: "PASS", code: "LIVE_ROUTE_READY" }
     : { status: "FAIL", code: "LIVE_PROVIDER_NOT_READY" };
@@ -129,11 +128,11 @@ const remediationActions = (
   if (checks.browser.status === "FAIL") actions.push("INSTALL_CHROMIUM");
   if (checks.route.code === "PROVIDER_OVERRIDE_ACTIVE") actions.push("CLEAR_PROVIDER_OVERRIDE");
   if (checks.route.code === "LIVE_PROVIDER_NOT_READY") {
-    const verifiedProviderNeedsAuthentication = report?.checks.providers.items.some(
-      ({ provider, compatibility, authentication }) =>
-        provider !== "MOCK" && compatibility === "VERIFIED" && authentication !== "AUTHENTICATED",
+    const apiProviderNeedsAuthentication = report?.checks.providers.items.some(
+      ({ compatibility, authentication }) =>
+        compatibility === "BUILT_IN" && authentication !== "AUTHENTICATED",
     );
-    actions.push(verifiedProviderNeedsAuthentication ? "SIGN_IN_PROVIDER" : "REVIEW_PROVIDER_COMPATIBILITY");
+    actions.push(apiProviderNeedsAuthentication ? "SIGN_IN_PROVIDER" : "REVIEW_PROVIDER_COMPATIBILITY");
   }
   return actions;
 };
@@ -161,13 +160,7 @@ export const collectSetupReadiness = async (
     route,
     checks,
     nextActions:
-      status === "BLOCKED"
-        ? remediation
-        : [
-            "RUN_START",
-            "INITIALIZE_DEMO_WORKSPACE",
-            route === "MOCK" ? "SELECT_MOCK" : "SELECT_LIVE_PROVIDER",
-          ],
+      status === "BLOCKED" ? remediation : ["RUN_START", "INITIALIZE_DEMO_WORKSPACE", "SELECT_LIVE_PROVIDER"],
   };
 };
 
@@ -179,12 +172,11 @@ const setupActionText: Readonly<Record<SetupReadinessReport["nextActions"][numbe
   CLEAR_PROVIDER_OVERRIDE: "Unset LOOMRAIL_PROVIDER before using the guided setup route.",
   REVIEW_PROVIDER_COMPATIBILITY:
     "Review the exact provider version in the Loomrail compatibility matrix, then run setup again.",
-  SIGN_IN_PROVIDER: "Install and sign in to a supported live provider CLI, then run setup again.",
+  SIGN_IN_PROVIDER: "Set OPENAI_API_KEY or ANTHROPIC_API_KEY for this process, then run setup again.",
   RUN_START: "Run `loomrail start`.",
   INITIALIZE_DEMO_WORKSPACE: "In the Workbench, initialize the bundled demo workspace.",
-  SELECT_MOCK: "In Settings, select Mock before starting the workflow.",
   SELECT_LIVE_PROVIDER:
-    "In Settings, explicitly select an available live provider before starting the workflow.",
+    "In Settings, explicitly select OpenAI Responses or Anthropic Messages before starting the workflow.",
 };
 
 export const formatSetupReadiness = (report: SetupReadinessReport): readonly string[] => [
@@ -203,15 +195,13 @@ export const serializeSetupReadiness = (report: SetupReadinessReport): string =>
 
 export const setupRoutePrompt = (): readonly string[] => [
   "Choose a setup route:",
-  "  1. Mock walkthrough (recommended; no provider process or quota)",
-  "  2. Live provider preflight",
+  "  1. Real provider preflight",
 ];
 
 export const parseSetupRouteChoice = (answer: string): SetupRoute => {
   if (answer.length > 16) throw new SetupRouteSelectionError("INVALID_CHOICE");
   const normalized = answer.trim().toLowerCase();
-  if (normalized === "" || normalized === "1" || normalized === "mock") return "MOCK";
-  if (normalized === "2" || normalized === "live") return "LIVE";
+  if (normalized === "" || normalized === "1" || normalized === "live") return "LIVE";
   throw new SetupRouteSelectionError("INVALID_CHOICE");
 };
 

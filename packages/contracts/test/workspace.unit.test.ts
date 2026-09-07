@@ -52,6 +52,7 @@ describe("work item workspace contracts", () => {
     id: "workspace-1",
     projectId: "project-1",
     workItemId: "workItem-1",
+    strategy: "ISOLATED_WORKTREE",
     branch: "loomrail/9a342451-fix-the-login-redirect",
     worktreePath: "/var/loomrail/worktrees/workspace-1",
     baseCommit: "a".repeat(40),
@@ -223,6 +224,7 @@ describe("work item workspace contracts", () => {
     payload: {
       workItemId: "workItem-1",
       projectId: "project-1",
+      strategy: "ISOLATED_WORKTREE",
       branch: "loomrail/9a342451-fix-the-login-redirect",
       worktreePath: "/var/loomrail/worktrees/workspace-1",
       baseCommit: "a".repeat(40),

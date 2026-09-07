@@ -17,7 +17,7 @@ import {
   type ProviderAdapter,
   type ProviderInvocation,
 } from "@loomrail/provider-core";
-import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
+import { deliveryTemplate } from "@loomrail/workflow-engine";
 import { addWorktree, listWorktrees, runGit } from "@loomrail/workspace";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -46,10 +46,10 @@ const silentLogger: SessionLoopLogger = {
 // IMPLEMENT alone, so a seeded pipeline's first dispatch is already the stage that needs a
 // repository. The context pack spec is the delivery template's own IMPLEMENT spec rather than a
 // second copy that could drift from it.
-const implementStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "IMPLEMENT");
-if (!implementStage) throw new Error("The mock delivery template no longer declares IMPLEMENT");
+const implementStage = deliveryTemplate.stages.find(({ stage }) => stage === "IMPLEMENT");
+if (!implementStage) throw new Error("The delivery template no longer declares IMPLEMENT");
 const implementOnlyTemplate: WorkflowTemplate = {
-  ...mockDeliveryTemplate,
+  ...deliveryTemplate,
   id: "workspace-implement-v1",
   version: 1,
   name: "Workspace implement",
@@ -67,7 +67,7 @@ const completingAdapter = (
   return {
     capabilities: () =>
       providerCapabilitiesSchema.parse({
-        provider: "MOCK",
+        provider: "CODEX",
         start: true,
         interrupt: true,
         eventStream: false,
@@ -77,6 +77,7 @@ const completingAdapter = (
         contextWindowTokens: 128_000,
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
     start: async (invocation: ProviderInvocation): Promise<ProviderOutcome> => {
       started += 1;
@@ -101,13 +102,13 @@ const completingAdapter = (
       // handed -- instead of dying on an unrelated stage rule.
       return {
         type: "COMPLETED",
-        summary: "The mock session finished the stage.",
+        summary: "The provider test session finished the stage.",
         ...(invocation.session.stage === "REVIEW"
           ? {
               artifacts: [
                 {
                   kind: "REVIEW_REPORT" as const,
-                  title: "Mock review",
+                  title: "Test review",
                   summary: "The synthetic reviewer found nothing blocking.",
                   checks: ["Requirements traced"],
                 },
@@ -137,6 +138,7 @@ const proseOnlyAdapter = (onStart: (invocation: ProviderInvocation) => void): Pr
       contextWindowTokens: 128_000,
       stages: ["DISCOVERY", "PLAN", "REVIEW"],
       costReporting: false,
+      tokenBudgetEnforcement: "HARD",
     }),
   start: (invocation: ProviderInvocation): Promise<ProviderOutcome> => {
     onStart(invocation);
@@ -284,7 +286,7 @@ describe("session loop workspace provisioning", () => {
       commandId: createCommandId(),
       correlationId: "correlation-seed-pipeline",
       actor: { type: "HUMAN", id: "local-owner" },
-      type: "START_MOCK_PIPELINE",
+      type: "START_PIPELINE",
       payload: {
         workItemId: created.workItem.id,
         expectedVersion: 2,
@@ -303,7 +305,7 @@ describe("session loop workspace provisioning", () => {
         type: "START_AGENT_RUN",
         payload: {
           dispatchId: startedPipeline.dispatch.id,
-          provider: "MOCK",
+          provider: "CODEX",
           limits: { global: 3, project: 3, provider: 3 },
         },
       });
@@ -463,6 +465,125 @@ describe("session loop workspace provisioning", () => {
     GIT_TIMEOUT_MS,
   );
 
+  it(
+    "uses the registered current directory without creating a worktree or branch when the Project opts in",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      await writeFile(join(repositoryPath, "committed.txt"), "owner edit stays in place\n");
+      await writeFile(join(repositoryPath, "owner untracked.txt"), "owner untracked stays in place\n");
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-shared-strategy",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "SET_PROJECT_WORKSPACE_STRATEGY",
+        payload: {
+          projectId: PROJECT_ID,
+          expectedProjectVersion: 1,
+          strategy: "SHARED_CURRENT_DIRECTORY",
+        },
+      });
+
+      const headBefore = (await runGit(["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
+      const canonicalRepositoryPath = await realpath(repositoryPath);
+      const branchBefore = (
+        await runGit(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: repositoryPath })
+      ).stdout.trim();
+      const worktreesBefore = await listWorktrees(repositoryPath);
+      let received: ProviderInvocation | undefined;
+      const adapter = completingAdapter(async (_count, invocation) => {
+        received = invocation;
+        await writeFile(join(repositoryPath, "shared output.txt"), "written in the current directory\n");
+      });
+
+      await runStageAttempt(depsFor(localState, seeded, adapter));
+
+      const workspace = workspaceOf(localState, seeded.workItemId);
+      expect(workspace).toMatchObject({
+        strategy: "SHARED_CURRENT_DIRECTORY",
+        worktreePath: canonicalRepositoryPath,
+        branch: branchBefore,
+        baseCommit: headBefore,
+        leaseHolder: null,
+      });
+      expect(workspace?.snapshotCommit).toMatch(/^[0-9a-f]{40}$/);
+      expect(received?.workspace).toMatchObject({
+        path: canonicalRepositoryPath,
+        branch: branchBefore,
+        baseCommit: headBefore,
+        access: "READ_WRITE",
+      });
+      expect(await listWorktrees(repositoryPath)).toEqual(worktreesBefore);
+      expect((await runGit(["branch", "--list", "loomrail/*"], { cwd: repositoryPath })).stdout).toBe("");
+      expect((await runGit(["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim()).toBe(headBefore);
+      expect(await readFile(join(repositoryPath, "committed.txt"), "utf8")).toBe(
+        "owner edit stays in place\n",
+      );
+      expect(await readFile(join(repositoryPath, "owner untracked.txt"), "utf8")).toBe(
+        "owner untracked stays in place\n",
+      );
+      expect(await readFile(join(repositoryPath, "shared output.txt"), "utf8")).toBe(
+        "written in the current directory\n",
+      );
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "refuses a detached shared current directory without starting a provider or creating a branch",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const headBefore = (await runGit(["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
+      await runGit(["checkout", "--detach", "HEAD"], { cwd: repositoryPath });
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-detached-shared-strategy",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "SET_PROJECT_WORKSPACE_STRATEGY",
+        payload: {
+          projectId: PROJECT_ID,
+          expectedProjectVersion: 1,
+          strategy: "SHARED_CURRENT_DIRECTORY",
+        },
+      });
+      const branchesBefore = (
+        await runGit(["for-each-ref", "--format=%(refname)", "refs/heads"], {
+          cwd: repositoryPath,
+        })
+      ).stdout;
+      let sessionStarted = false;
+
+      await runStageAttempt(
+        depsFor(
+          localState,
+          seeded,
+          completingAdapter(() => {
+            sessionStarted = true;
+          }),
+        ),
+      );
+
+      expect(sessionStarted).toBe(false);
+      expect(workspaceOf(localState, seeded.workItemId)).toBeNull();
+      expect((await runGit(["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim()).toBe(headBefore);
+      expect(
+        (await runGit(["for-each-ref", "--format=%(refname)", "refs/heads"], { cwd: repositoryPath })).stdout,
+      ).toBe(branchesBefore);
+      const requests = snapshotOf(localState, seeded.workItemId).humanRequests;
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        blocking: true,
+        title: "The shared working directory is not on a named branch",
+      });
+    },
+    GIT_TIMEOUT_MS,
+  );
+
   // The defect this test exists for shipped and was live on `main`: the daemon cut the worktree,
   // took its lease, and then built the invocation from `dispatch`/`session`/`contextPack` alone.
   // `ProviderInvocation.workspace` was set by nothing outside tests, so the Codex adapter -- which
@@ -578,7 +699,7 @@ describe("session loop workspace provisioning", () => {
         type: "START_AGENT_RUN",
         payload: {
           dispatchId: seeded.dispatch.id,
-          provider: "MOCK",
+          provider: "CODEX",
           limits: { global: 3, project: 3, provider: 3 },
         },
       });
@@ -650,8 +771,8 @@ describe("session loop workspace provisioning", () => {
     async () => {
       repositoryPath = await throwawayRepository(makeThrowawayRepo);
       const localState = openState();
-      const reviewStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "REVIEW");
-      if (!reviewStage) throw new Error("The mock delivery template no longer declares REVIEW");
+      const reviewStage = deliveryTemplate.stages.find(({ stage }) => stage === "REVIEW");
+      if (!reviewStage) throw new Error("The delivery template no longer declares REVIEW");
       const reviewOnlyTemplate: WorkflowTemplate = {
         ...implementOnlyTemplate,
         id: "workspace-review-v1",
@@ -714,10 +835,10 @@ describe("session loop workspace provisioning", () => {
     async () => {
       repositoryPath = await throwawayRepository(makeThrowawayRepo);
       const localState = openState();
-      const reviewStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "REVIEW");
-      if (!reviewStage) throw new Error("The mock delivery template no longer declares REVIEW");
+      const reviewStage = deliveryTemplate.stages.find(({ stage }) => stage === "REVIEW");
+      if (!reviewStage) throw new Error("The delivery template no longer declares REVIEW");
       const implementReviewTemplate: WorkflowTemplate = {
-        ...mockDeliveryTemplate,
+        ...deliveryTemplate,
         id: "workspace-implement-review-v1",
         name: "Workspace implement and review",
         stages: [
@@ -809,8 +930,8 @@ describe("session loop workspace provisioning", () => {
     async () => {
       repositoryPath = await throwawayRepository(makeThrowawayRepo);
       const localState = openState();
-      const acceptanceStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "ACCEPTANCE");
-      if (!acceptanceStage) throw new Error("The mock delivery template no longer declares ACCEPTANCE");
+      const acceptanceStage = deliveryTemplate.stages.find(({ stage }) => stage === "ACCEPTANCE");
+      if (!acceptanceStage) throw new Error("The delivery template no longer declares ACCEPTANCE");
       const acceptanceOnlyTemplate: WorkflowTemplate = {
         ...implementOnlyTemplate,
         id: "workspace-acceptance-v1",
@@ -917,11 +1038,11 @@ describe("session loop workspace provisioning", () => {
       const localState = openState();
       // The delivery template's own first stage, and the one a run reaches before any other.
       const discoveryTemplate: WorkflowTemplate = {
-        ...mockDeliveryTemplate,
+        ...deliveryTemplate,
         id: "workspace-discovery-v1",
         version: 1,
         name: "Workspace discovery",
-        stages: mockDeliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
+        stages: deliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
       };
       const seeded = seedAttempt(localState, { template: discoveryTemplate });
       let received: ProviderInvocation | undefined;
@@ -943,6 +1064,50 @@ describe("session loop workspace provisioning", () => {
     GIT_TIMEOUT_MS,
   );
 
+  it(
+    "gives a shared workspace to a read-only stage without taking writer authority",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const discoveryTemplate: WorkflowTemplate = {
+        ...deliveryTemplate,
+        id: "workspace-shared-discovery-v1",
+        version: 1,
+        name: "Shared workspace discovery",
+        stages: deliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
+      };
+      const seeded = seedAttempt(localState, { template: discoveryTemplate });
+      localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-shared-discovery",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "SET_PROJECT_WORKSPACE_STRATEGY",
+        payload: {
+          projectId: PROJECT_ID,
+          expectedProjectVersion: 1,
+          strategy: "SHARED_CURRENT_DIRECTORY",
+        },
+      });
+      let holderDuringSession: string | null | undefined;
+      let received: ProviderInvocation | undefined;
+      const adapter = completingAdapter((_count, invocation) => {
+        received = invocation;
+        holderDuringSession = workspaceOf(localState, seeded.workItemId)?.leaseHolder;
+      });
+
+      await runStageAttempt({ ...depsFor(localState, seeded, adapter), template: discoveryTemplate });
+
+      expect(received?.workspace).toMatchObject({ access: "READ_ONLY" });
+      expect(holderDuringSession).toBeNull();
+      expect(workspaceOf(localState, seeded.workItemId)).toMatchObject({
+        strategy: "SHARED_CURRENT_DIRECTORY",
+        leaseHolder: null,
+      });
+    },
+    GIT_TIMEOUT_MS,
+  );
+
   // The constraint that keeps the wider list from breaking projects that never had a repository: a
   // Project whose path is not one -- a fixture Project still recorded at a bundled template, a path
   // the owner moved -- ran its prose stages before E1 and must go on running them. What used to be
@@ -955,11 +1120,11 @@ describe("session loop workspace provisioning", () => {
       await mkdir(repositoryPath, { recursive: true });
       const localState = openState();
       const discoveryTemplate: WorkflowTemplate = {
-        ...mockDeliveryTemplate,
+        ...deliveryTemplate,
         id: "workspace-discovery-bare-v1",
         version: 1,
         name: "Workspace discovery without a repository",
-        stages: mockDeliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
+        stages: deliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
       };
       const seeded = seedAttempt(localState, { template: discoveryTemplate });
       let received: ProviderInvocation | undefined;
@@ -1046,11 +1211,11 @@ describe("session loop workspace provisioning", () => {
       repositoryPath = await throwawayRepository(makeRepoMidRebase);
       const localState = openState();
       const discoveryTemplate: WorkflowTemplate = {
-        ...mockDeliveryTemplate,
+        ...deliveryTemplate,
         id: "workspace-discovery-unusable-v1",
         version: 1,
         name: "Workspace discovery against an unusable repository",
-        stages: mockDeliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
+        stages: deliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
       };
       const seeded = seedAttempt(localState, { template: discoveryTemplate });
       let sessionStarted = false;
@@ -1088,11 +1253,11 @@ describe("session loop workspace provisioning", () => {
       repositoryPath = await throwawayRepository(makeThrowawayRepo);
       const localState = openState();
       const discoveryTemplate: WorkflowTemplate = {
-        ...mockDeliveryTemplate,
+        ...deliveryTemplate,
         id: "workspace-discovery-prose-adapter-v1",
         version: 1,
         name: "Workspace discovery on a prose-only adapter",
-        stages: mockDeliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
+        stages: deliveryTemplate.stages.filter(({ stage }) => stage === "DISCOVERY"),
       };
       const seeded = seedAttempt(localState, { template: discoveryTemplate });
       let received: ProviderInvocation | undefined;

@@ -17,6 +17,7 @@ const availability = (
   checkpointOnRequest: false,
   contextWindowReporting: true,
   costReporting: provider === "CLAUDE_CODE",
+  tokenBudgetEnforcement: "HARD",
   canReportRateLimits: true,
   models: { FAST: "fast", STANDARD: "standard", DEEP: "deep" },
   ...overrides,
@@ -75,7 +76,7 @@ describe("Project provider allowance response", () => {
   it("distinguishes unverified, unauthenticated and unsupported providers from zero capacity", () => {
     const response = projectProviderAllowanceResponse({
       projectId: "project-1",
-      effectiveProvider: "MOCK",
+      effectiveProvider: "CODEX",
       snapshots: [],
       availability: [
         availability("CODEX", {
@@ -93,8 +94,8 @@ describe("Project provider allowance response", () => {
       now: new Date("2026-09-04T20:00:00.000Z"),
     });
     expect(response.current).toMatchObject({
-      provider: "MOCK",
-      unavailableReason: "PROVIDER_UNSUPPORTED",
+      provider: "CODEX",
+      unavailableReason: "TARGET_UNVERIFIED",
     });
     expect(response.providers.map(({ unavailableReason }) => unavailableReason)).toEqual([
       "TARGET_UNVERIFIED",

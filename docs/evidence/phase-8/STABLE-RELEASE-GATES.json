@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "releaseVersion": null,
   "gates": {
     "q13FinalSecurityReliabilityReview": {
@@ -9,10 +9,8 @@
       "evidenceCommit": "9722e1a7f4ce1982ee99dad57bfbd13ae6fe55fe"
     },
     "q15CanonicalActivationNonLanding": {
-      "status": "PASSED",
-      "evidencePath": "docs/evidence/phase-8/Q15-GUIDED-ACTIVATION-EVIDENCE.md",
-      "evidenceSha256": "ea8d15b0a6c7c0f62bb45f2cc08d6bbcf0b091cba0ed09d85701141e7344d7be",
-      "evidenceCommit": "345b435d06318d54bb007a2b2aaa8fe202e7386d"
+      "status": "PENDING",
+      "reason": "The former evidence covered the retired synthetic route; the real-provider-only activation contract needs fresh fixed-commit evidence."
     },
     "q17MeasuredProjectVerification": {
       "status": "PASSED",
@@ -20,23 +18,21 @@
       "evidenceSha256": "0acd2b3f52fc16dc33bae5329d39922d0413da119043eddd07b87f740046911c",
       "evidenceCommit": "33f77994b3e707d0ccaa683890e68cc7d6625a6e"
     },
+    "liveProviderHardTokenBudgetEnforcement": {
+      "status": "PENDING",
+      "reason": "Both API adapters now send provider-native output caps, but credentialed fixed-commit evidence must confirm usage stays within the complete request allowance."
+    },
     "managedPublicDogfoodRehearsal": {
-      "status": "PASSED",
-      "evidencePath": "docs/evidence/phase-8/Q14-MACOS-LIVE-PROVIDERS-EVIDENCE.md",
-      "evidenceSha256": "9981c6753ff4fa24846d2836cd20057cf8c8eb53f4f45f32abb573e642d128bc",
-      "evidenceCommit": "ee0100565723941bb9c0b340979842ad925a4ebf"
+      "status": "PENDING",
+      "reason": "The prior rehearsal exercised retired CLI adapters; the OpenAI Responses and Anthropic Messages paths need a new managed rehearsal."
     },
     "codexMacosCompatibility": {
-      "status": "PASSED",
-      "evidencePath": "docs/evidence/phase-8/Q14-MACOS-LIVE-PROVIDERS-EVIDENCE.md",
-      "evidenceSha256": "9981c6753ff4fa24846d2836cd20057cf8c8eb53f4f45f32abb573e642d128bc",
-      "evidenceCommit": "ee0100565723941bb9c0b340979842ad925a4ebf"
+      "status": "PENDING",
+      "reason": "The prior row covered the Codex CLI, not the OpenAI Responses API adapter."
     },
     "claudeMacosCompatibility": {
-      "status": "PASSED",
-      "evidencePath": "docs/evidence/phase-8/Q14-MACOS-LIVE-PROVIDERS-EVIDENCE.md",
-      "evidenceSha256": "9981c6753ff4fa24846d2836cd20057cf8c8eb53f4f45f32abb573e642d128bc",
-      "evidenceCommit": "ee0100565723941bb9c0b340979842ad925a4ebf"
+      "status": "PENDING",
+      "reason": "The prior row covered the Claude Code CLI, not the Anthropic Messages API adapter."
     },
     "privateDogfood": {
       "status": "PENDING",
@@ -44,15 +40,15 @@
     },
     "protectedLandingCanonicalActivation": {
       "status": "PENDING",
-      "reason": "The separately owned landing must consume the Q15 canonical activation contract and pass its protected gate."
+      "reason": "The landing consumes the new contract locally, but fixed-commit protected browser evidence is still required."
     },
     "codexWindowsCompatibility": {
       "status": "PENDING",
-      "reason": "Owner deferred the exact quota-bearing Codex compatibility capture on Windows."
+      "reason": "Owner deferred the quota-bearing OpenAI Responses API capture on Windows."
     },
     "claudeWindowsCompatibility": {
       "status": "PENDING",
-      "reason": "Owner deferred the exact quota-bearing Claude Code compatibility capture on Windows."
+      "reason": "Owner deferred the quota-bearing Anthropic Messages API capture on Windows."
     }
   }
 }

@@ -10,12 +10,11 @@
 ## Встроенный demo-проект
 
 После однократного `npx playwright install chromium` для **Fixture web application** не нужна дополнительная команда
-запуска target. Его mock-реализация намеренно не меняет приложение,
-поэтому встроенный QA-план проверяет публичный readiness endpoint Loomrail на фактическом локальном порту. Так можно
-пройти весь маршрут доказательств и приёмки, не запуская Codex, Claude Code или второй dev server.
+запуска target. Baseline не содержит generated changes, поэтому встроенный QA-план проверяет публичный readiness
+endpoint Loomrail на фактическом локальном порту без запуска второго dev server.
 
-Тот же материализованный Project теперь содержит исполняемое [sample application и Task recipes](SAMPLES.ru.md), но
-этот Mock plan не утверждает, что проверяет приложение. Запустите sample явно и настройте его как обычный owner
+Тот же материализованный Project содержит исполняемое [sample application и Task recipes](SAMPLES.ru.md), но
+встроенный readiness plan не утверждает, что проверяет приложение. Запустите sample явно и настройте его как обычный owner
 repository, когда QA target — само приложение.
 
 ## Настройка web-репозитория

@@ -16,6 +16,7 @@ const installCommands = [
   "npx playwright install chromium",
   "npx loomrail try",
 ];
+const publicPrereleasePattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-[0-9A-Za-z.-]+$/;
 
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -50,7 +51,7 @@ export const validateActivationContract = (contract) => {
   exactKeys(contract.install, ["commands"], "contract.install");
 
   assert(contract.schemaVersion === 1, "contract.schemaVersion must be 1");
-  assert(contract.id === "guided-mock-v1", "contract.id must name the reviewed Mock mission");
+  assert(contract.id === "guided-real-v1", "contract.id must name the reviewed real-provider mission");
   assert(contract.fixtureId === "web-app-a", "contract.fixtureId must use the reviewed Q10 web fixture");
   assert(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(contract.createCommandId), "createCommandId is invalid");
   assert(
@@ -108,6 +109,59 @@ export const validateActivationContract = (contract) => {
   return contract;
 };
 
+export const validateLandingConsumer = ({
+  landingSource,
+  landingHtml,
+  cliManifest,
+  pagesWorkflow,
+  commands = installCommands,
+}) => {
+  assert(
+    cliManifest.name === "@loomrail/cli" &&
+      typeof cliManifest.version === "string" &&
+      publicPrereleasePattern.test(cliManifest.version),
+    "the landing version source must be the public CLI prerelease manifest",
+  );
+  assert(
+    landingSource.includes(
+      'import guidedActivationSource from "../../../packages/contracts/src/guided-activation.v1.json"',
+    ) && landingSource.includes("guidedActivationSource.install.commands"),
+    "the landing must consume the canonical guided activation JSON directly",
+  );
+  assert(
+    landingSource.includes('import cliPackage from "../../cli/package.json"') &&
+      landingSource.includes("const productVersion = cliPackage.version;"),
+    "the landing must consume the public CLI version directly",
+  );
+  assert(
+    commands.every((command) => !landingSource.includes(command) && !landingHtml.includes(command)),
+    "the landing must not keep an independent install-command copy",
+  );
+  assert(
+    landingHtml.includes("data-install-commands") && landingHtml.includes("data-product-version"),
+    "the landing must expose contract-owned command and version targets",
+  );
+  assert(
+    !/0\.1\.0-alpha\.\d+/.test(landingHtml),
+    "the landing HTML must not pin an independent public prerelease version",
+  );
+  for (const watchedPath of [
+    '      - "apps/cli/package.json"',
+    '      - "packages/contracts/src/guided-activation.v1.json"',
+  ]) {
+    assert(pagesWorkflow.includes(watchedPath), `Pages must watch ${watchedPath.trim()}`);
+  }
+  const activationGate = pagesWorkflow.indexOf("pnpm test:activation");
+  const landingBuild = pagesWorkflow.indexOf("pnpm --filter @loomrail/landing build");
+  const browserGate = pagesWorkflow.indexOf(
+    "pnpm exec playwright test --config apps/landing/playwright.config.ts",
+  );
+  assert(
+    activationGate >= 0 && landingBuild > activationGate && browserGate > landingBuild,
+    "Pages must validate the contract before building and run the protected browser gate afterwards",
+  );
+};
+
 const markedInstallBlock = (commands) =>
   [
     "<!-- loomrail-guided-activation-v1:start -->",
@@ -142,6 +196,18 @@ export const verifyActivationContract = async (root = repositoryRoot) => {
     "CLI help must consume the validated guided activation contract directly",
   );
 
+  const landingSource = await readFile(resolve(root, "apps/landing/src/main.ts"), "utf8");
+  const landingHtml = await readFile(resolve(root, "apps/landing/index.html"), "utf8");
+  const cliManifest = JSON.parse(await readFile(resolve(root, "apps/cli/package.json"), "utf8"));
+  const pagesWorkflow = await readFile(resolve(root, ".github/workflows/pages.yml"), "utf8");
+  validateLandingConsumer({
+    landingSource,
+    landingHtml,
+    cliManifest,
+    pagesWorkflow,
+    commands: contract.install.commands,
+  });
+
   const sample = (
     await readFile(resolve(root, "fixtures/projects/web-app-a/SAMPLE-WORKFLOWS.md"), "utf8")
   ).replace(/\s+/g, " ");
@@ -174,6 +240,6 @@ const directInvocation =
 if (directInvocation) {
   const result = await verifyActivationContract();
   process.stdout.write(
-    `Guided activation contract verified across CLI help, ${result.documentationPaths.length.toString()} documentation surfaces and the Q10 recipe.\n`,
+    `Guided activation contract verified across CLI help, protected landing, ${result.documentationPaths.length.toString()} documentation surfaces and the Q10 recipe.\n`,
   );
 }

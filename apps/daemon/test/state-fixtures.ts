@@ -2,7 +2,7 @@ import { join } from "node:path";
 
 import type { WorkflowDispatch, WorkflowSnapshot, WorkflowTemplate } from "@loomrail/contracts";
 import type { LocalState } from "@loomrail/persistence-sqlite";
-import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
+import { deliveryTemplate } from "@loomrail/workflow-engine";
 
 // Shared by `session.integration.test.ts` and `session-worker.integration.test.ts` -- both need the
 // same fixture project, a queued attempt seeded from it, and the two read helpers, and pasting a
@@ -89,7 +89,7 @@ export const seedQueuedAttempt = (
   createCommandId: () => string,
   temporaryDirectory: string,
   projectId = FIXTURE_PROJECT_ID,
-  template: WorkflowTemplate = mockDeliveryTemplate,
+  template: WorkflowTemplate = deliveryTemplate,
 ): SeededAttempt => {
   registerProject(localState, createCommandId, temporaryDirectory, projectId);
   const workItemId = seedReadyWorkItem(localState, createCommandId, projectId);
@@ -98,7 +98,7 @@ export const seedQueuedAttempt = (
     commandId: createCommandId(),
     correlationId: "correlation-seed-pipeline",
     actor: { type: "HUMAN", id: "local-owner" },
-    type: "START_MOCK_PIPELINE",
+    type: "START_PIPELINE",
     payload: {
       workItemId,
       expectedVersion: 2,

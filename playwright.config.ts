@@ -1,13 +1,9 @@
 import { defineConfig } from "@playwright/test";
 
-// End-to-end tests must never discover or launch a developer's authenticated live CLI.
-// Tests that exercise provider selection inject their own deterministic registry explicitly.
-process.env["LOOMRAIL_PROVIDER"] = "MOCK";
-
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
-  // Longer than Playwright's 30s default because a mock delivery now reaches an IMPLEMENT stage
+  // Longer than Playwright's 30s default because a provider-double delivery reaches an IMPLEMENT stage
   // that cuts a real Git worktree first -- inspection, carry-in snapshot and `worktree add`, on top
   // of a demo workspace whose two fixtures are each copied out of this checkout and given their own
   // repository. Under `fullyParallel` several workers do all of that at once. Raised rather than

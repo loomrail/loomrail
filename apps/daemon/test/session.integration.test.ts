@@ -20,8 +20,8 @@ import {
   type ProviderInvocation,
   type ProviderSessionListener,
 } from "@loomrail/provider-core";
-import { createMockProvider } from "@loomrail/provider-mock";
-import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
+import { createProviderTestDouble } from "./provider-double.js";
+import { deliveryTemplate } from "@loomrail/workflow-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { startDaemon, type RunningDaemon } from "../src/server.js";
@@ -148,7 +148,7 @@ describe("stage attempt session loop", () => {
       type: "START_AGENT_RUN",
       payload: {
         dispatchId: seeded.dispatch.id,
-        provider: "MOCK",
+        provider: "CODEX",
         limits: { global: 3, project: 3, provider: 3 },
       },
     });
@@ -193,8 +193,8 @@ describe("stage attempt session loop", () => {
       .run(
         `legacy-recipe-${suffix}`,
         sessionId,
-        mockDeliveryTemplate.id,
-        mockDeliveryTemplate.version,
+        deliveryTemplate.id,
+        deliveryTemplate.version,
         JSON.stringify([{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 1 }]),
         `sha256:${"a".repeat(64)}`,
         timestamp,
@@ -221,7 +221,7 @@ describe("stage attempt session loop", () => {
     state: localState,
     adapter,
     dispatch: seeded.dispatch,
-    template: mockDeliveryTemplate,
+    template: deliveryTemplate,
     workspacesRoot: join(temporaryDirectory, "workspaces"),
     createCommandId,
     correlationId: "correlation-session-loop",
@@ -249,10 +249,10 @@ describe("stage attempt session loop", () => {
 
   const completingOutcome = (): ProviderOutcome => ({
     type: "COMPLETED",
-    summary: "The mock session finished the stage.",
+    summary: "The provider test session finished the stage.",
   });
 
-  // A ProviderAdapter built from two genuinely separate `createMockProvider` instances, each of
+  // A ProviderAdapter built from two genuinely separate `createProviderTestDouble` instances, each of
   // which sees only the sessions routed to it. The routing key is the session ordinal, so the
   // swap test can assert which instance actually started which session -- a wrapper that simply
   // forwarded everything to one instance would make the swap unobservable and the test hollow.
@@ -291,7 +291,7 @@ describe("stage attempt session loop", () => {
   const finishingAdapter = (contextWindowTokens = 128_000): ProviderAdapter => ({
     capabilities: () =>
       providerCapabilitiesSchema.parse({
-        provider: "MOCK",
+        provider: "CODEX",
         start: true,
         interrupt: true,
         eventStream: false,
@@ -301,6 +301,7 @@ describe("stage attempt session loop", () => {
         contextWindowTokens,
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
     start: () => Promise.resolve(completingOutcome()),
     requestHandoff: () => Promise.resolve(),
@@ -326,6 +327,7 @@ describe("stage attempt session loop", () => {
         contextWindowTokens: 128_000,
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
     start: async (_invocation, listener) => {
       const run = runProcess({
@@ -370,25 +372,89 @@ describe("stage attempt session loop", () => {
   });
 
   // Task 10 / spec §8: the pid column exists so reconciliation can find and kill an orphaned
-  // process (see local-state.integration.test.ts in @loomrail/persistence-sqlite). MOCK spawns no
+  // process (see local-state.integration.test.ts in @loomrail/persistence-sqlite). This API-shaped double spawns no
   // process at all and correctly never calls `onProcessStarted`, which is what leaves the column
   // null -- recording a made-up value would be worse than recording none: reconciliation reads a
   // null pid as "no process to look for" and correctly leaves the session alone, while a wrong pid
   // could point reconciliation at a process that has nothing to do with this session.
-  it("leaves the pid null for a session MOCK drove, since MOCK spawns no process", async () => {
+  it("leaves the pid null for a session the provider test double drove, since the injected provider test double spawns no process", async () => {
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
-    await runStageAttempt(depsFor(localState, seeded, createMockProvider()));
+    await runStageAttempt(depsFor(localState, seeded, createProviderTestDouble()));
     const { sessions } = sessionRows(localState, seeded.stageAttemptId);
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.pid).toBeNull();
+  });
+
+  it("refuses before opening a session when the adapter cannot enforce the hard token budget", async () => {
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    let starts = 0;
+    const postSessionOnly: ProviderAdapter = {
+      capabilities: () =>
+        providerCapabilitiesSchema.parse({
+          provider: "CODEX",
+          start: true,
+          interrupt: true,
+          eventStream: true,
+          usageReporting: true,
+          contextWindowReporting: true,
+          checkpointOnRequest: true,
+          contextWindowTokens: 128_000,
+          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+          costReporting: false,
+          tokenBudgetEnforcement: "POST_SESSION",
+        }),
+      start: () => {
+        starts += 1;
+        return Promise.resolve(completingOutcome());
+      },
+      requestHandoff: () => Promise.resolve(),
+      abortSession: () => Promise.resolve(),
+    };
+
+    await runStageAttempt(depsFor(localState, seeded, postSessionOnly));
+
+    expect(starts).toBe(0);
+    expect(sessionRows(localState, seeded.stageAttemptId).sessions).toEqual([]);
+    expect(snapshotOf(localState, seeded.workItemId)).toMatchObject({
+      run: { status: "WAITING_HUMAN" },
+      stageAttempts: [{ status: "WAITING_HUMAN" }],
+      humanRequests: [
+        {
+          status: "OPEN",
+          title: "CODEX cannot enforce the hard token budget",
+        },
+      ],
+    });
+  });
+
+  it("passes the immutable AgentRun token remainder into a hard-enforcing adapter", async () => {
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    let received: ProviderInvocation["tokenBudget"] | undefined;
+    const recordingBudget: ProviderAdapter = {
+      ...finishingAdapter(),
+      start: (invocation) => {
+        received = invocation.tokenBudget;
+        return Promise.resolve(completingOutcome());
+      },
+    };
+
+    await runStageAttempt(depsFor(localState, seeded, recordingBudget));
+
+    expect(received).toEqual({
+      maxEstimatedTokens: 80_000,
+      recordedEstimatedTokens: 0,
+      remainingEstimatedTokens: 80_000,
+    });
   });
 
   it("continues the same attempt in a second session after a handoff", async () => {
     // The point of A1: the work survives the context window filling up.
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
-    const handingOff = createMockProvider({
+    const handingOff = createProviderTestDouble({
       contextWindowTokens: 4_000,
       tokensPerTurn: 3_500,
       checkpointEvery: 1,
@@ -407,7 +473,7 @@ describe("stage attempt session loop", () => {
   it("carries the previous checkpoint into the next pack", async () => {
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
-    const handingOff = createMockProvider({
+    const handingOff = createProviderTestDouble({
       contextWindowTokens: 4_000,
       tokensPerTurn: 3_500,
       checkpointEvery: 1,
@@ -465,15 +531,15 @@ describe("stage attempt session loop", () => {
     const seeded = seedRunningAttempt(localState);
     // A provider that reports a full window, accepts `requestHandoff`, and then never winds down
     // and never returns. Without a deadline the loop would wait on `start()` forever, so this test
-    // fails by timing out rather than by asserting the wrong end reason. Using the real mock's
-    // `ignoreHandoffRequest` here would not discriminate: that mock still ends by itself with
+    // fails by timing out rather than by asserting the wrong end reason. Using the provider test double's
+    // `ignoreHandoffRequest` here would not discriminate: the test double still ends by itself with
     // CONTEXT_EXHAUSTED once its simulated window fills, so the assertion below would pass with no
     // deadline logic at all.
     const abortedSessionIds: string[] = [];
     const stubborn: ProviderAdapter = {
       capabilities: () =>
         providerCapabilitiesSchema.parse({
-          provider: "MOCK",
+          provider: "CODEX",
           start: true,
           interrupt: true,
           eventStream: true,
@@ -483,6 +549,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 4_000,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: false,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) =>
         new Promise<ProviderOutcome>(() => {
@@ -521,7 +588,7 @@ describe("stage attempt session loop", () => {
     const crawling: ProviderAdapter = {
       capabilities: () =>
         providerCapabilitiesSchema.parse({
-          provider: "MOCK",
+          provider: "CODEX",
           start: true,
           interrupt: true,
           eventStream: true,
@@ -531,6 +598,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 10_000,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: false,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) => {
         for (let usedTokens = 1_000; usedTokens <= 1_040; usedTokens += 1) {
@@ -606,7 +674,7 @@ describe("stage attempt session loop", () => {
       type: "START_AGENT_RUN",
       payload: {
         dispatchId: seeded.dispatch.id,
-        provider: "MOCK",
+        provider: "CODEX",
         limits: { global: 3, project: 3, provider: 3 },
       },
     });
@@ -615,7 +683,7 @@ describe("stage attempt session loop", () => {
     const reporting: ProviderAdapter = {
       capabilities: () =>
         providerCapabilitiesSchema.parse({
-          provider: "MOCK",
+          provider: "CODEX",
           start: true,
           interrupt: true,
           eventStream: true,
@@ -625,6 +693,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 4_000,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: true,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) => {
         listener.onUsage({ inputTokens: 40, outputTokens: 20, quality: "ACTUAL" });
@@ -676,6 +745,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 4_000,
           stages: ["DISCOVERY", "PLAN", "REVIEW"],
           costReporting: true,
+          tokenBudgetEnforcement: "HARD",
           canReportRateLimits: true,
         }),
       modelMapping: () => ({ FAST: "fast", STANDARD: "standard", DEEP: "deep" }),
@@ -730,7 +800,7 @@ describe("stage attempt session loop", () => {
       type: "START_AGENT_RUN",
       payload: {
         dispatchId: seeded.dispatch.id,
-        provider: "MOCK",
+        provider: "CODEX",
         limits: { global: 3, project: 3, provider: 3 },
       },
     });
@@ -740,7 +810,7 @@ describe("stage attempt session loop", () => {
     const reporting: ProviderAdapter = {
       capabilities: () =>
         providerCapabilitiesSchema.parse({
-          provider: "MOCK",
+          provider: "CODEX",
           start: true,
           interrupt: true,
           eventStream: true,
@@ -750,6 +820,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 4_000,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: false,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: (_invocation, listener) => {
         listener.onUsage({ inputTokens: 70_000, outputTokens: 10_000, quality: "ACTUAL" });
@@ -794,7 +865,7 @@ describe("stage attempt session loop", () => {
     const reporting: ProviderAdapter = {
       capabilities: () =>
         providerCapabilitiesSchema.parse({
-          provider: "MOCK",
+          provider: "CODEX",
           start: true,
           interrupt: true,
           eventStream: true,
@@ -804,6 +875,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 4_000,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: true,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) => {
         listener.onUsage({ inputTokens: -1, outputTokens: 340, quality: "ACTUAL" });
@@ -829,9 +901,9 @@ describe("stage attempt session loop", () => {
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
     // Occupancy stays far below the handoff threshold, so no wind-down is ever requested and the
-    // mock never synthesises the checkpoint that a HANDED_OFF outcome always carries: the session
+    // This test double never synthesises the checkpoint that a HANDED_OFF outcome always carries: the session
     // simply runs into the wall having published nothing, which is the case §6.5 guards.
-    const unproductive = createMockProvider({
+    const unproductive = createProviderTestDouble({
       contextWindowTokens: 4_000,
       tokensPerTurn: 100,
       checkpointEvery: 1_000,
@@ -862,7 +934,7 @@ describe("stage attempt session loop", () => {
     const tinyWindow: ProviderAdapter = {
       capabilities: () =>
         providerCapabilitiesSchema.parse({
-          provider: "MOCK",
+          provider: "CODEX",
           start: true,
           interrupt: true,
           eventStream: false,
@@ -872,6 +944,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 40,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: false,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: () => {
         started += 1;
@@ -908,8 +981,8 @@ describe("stage attempt session loop", () => {
         stageAttemptId: seeded.stageAttemptId,
         recipe: {
           schemaVersion: 1,
-          templateId: mockDeliveryTemplate.id,
-          templateVersion: mockDeliveryTemplate.version,
+          templateId: deliveryTemplate.id,
+          templateVersion: deliveryTemplate.version,
           specSource: "WORKFLOW_TEMPLATE",
           roleProfile: null,
           sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
@@ -945,7 +1018,7 @@ describe("stage attempt session loop", () => {
     // `startDaemon`.
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
-    const neverFinishing = createMockProvider({
+    const neverFinishing = createProviderTestDouble({
       contextWindowTokens: 4_000,
       tokensPerTurn: 3_500,
       checkpointEvery: 1,
@@ -982,13 +1055,13 @@ describe("stage attempt session loop", () => {
       type: "START_AGENT_RUN",
       payload: {
         dispatchId: seeded.dispatch.id,
-        provider: "MOCK",
+        provider: "CODEX",
         limits: { global: 3, project: 3, provider: 3 },
       },
     });
     if (started.type !== "AGENT_RUN_STARTED") throw new Error("Expected an AgentRun");
     expect(started.run.policySnapshot?.budget.maxProviderSessions).toBe(6);
-    const neverFinishing = createMockProvider({
+    const neverFinishing = createProviderTestDouble({
       contextWindowTokens: 4_000,
       tokensPerTurn: 3_500,
       checkpointEvery: 1,
@@ -1010,7 +1083,11 @@ describe("stage attempt session loop", () => {
     const localState = await open();
     const seeded = seedLegacyRunningAttempt(localState);
 
-    seedHistoricalNullableSession(seeded.stageAttemptId, "daemon-restart", "Half of the mock work is done.");
+    seedHistoricalNullableSession(
+      seeded.stageAttemptId,
+      "daemon-restart",
+      "Half of the test double work is done.",
+    );
     localState.close();
     state = undefined;
 
@@ -1038,7 +1115,7 @@ describe("stage attempt session loop", () => {
       const localState = await open();
       const seeded = seedRunningAttempt(localState);
       // Rejects every pack it is handed, so both the retry and the give-up after it are reached.
-      const fussy = createMockProvider({ contextWindowTokens: 4_000, rejectPacksLongerThan: 10 });
+      const fussy = createProviderTestDouble({ contextWindowTokens: 4_000, rejectPacksLongerThan: 10 });
 
       await runStageAttempt(depsFor(localState, seeded, fussy));
 
@@ -1098,7 +1175,7 @@ describe("stage attempt session loop", () => {
     const broken: ProviderAdapter = {
       capabilities: () =>
         providerCapabilitiesSchema.parse({
-          provider: "MOCK",
+          provider: "CODEX",
           start: true,
           interrupt: true,
           eventStream: false,
@@ -1108,6 +1185,7 @@ describe("stage attempt session loop", () => {
           contextWindowTokens: 4_000,
           stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
           costReporting: false,
+          tokenBudgetEnforcement: "HARD",
         }),
       start: () => Promise.reject(new Error("the provider socket closed")),
       requestHandoff: () => Promise.resolve(),
@@ -1127,7 +1205,7 @@ describe("stage attempt session loop", () => {
     // Spec §7: half-accepting a checkpoint is not an option, because the next pack is built on it.
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
-    const sloppy = createMockProvider({
+    const sloppy = createProviderTestDouble({
       contextWindowTokens: 4_000,
       tokensPerTurn: 100,
       checkpointEvery: 1,
@@ -1159,7 +1237,7 @@ describe("stage attempt session loop", () => {
         return localState.execute(command);
       },
     };
-    const publishing = createMockProvider({
+    const publishing = createProviderTestDouble({
       contextWindowTokens: 4_000,
       tokensPerTurn: 100,
       checkpointEvery: 1,
@@ -1181,7 +1259,7 @@ describe("stage attempt session loop", () => {
     // question the system will never accept an answer to is a stopped pipeline, not a question.
     const localState = await open();
     const seeded = seedRunningAttempt(localState);
-    const unproductive = createMockProvider({
+    const unproductive = createProviderTestDouble({
       contextWindowTokens: 4_000,
       tokensPerTurn: 100,
       checkpointEvery: 1_000,
@@ -1240,7 +1318,7 @@ describe("stage attempt session loop", () => {
       bootstrapToken: token,
       stateDatabasePath: databasePath,
       logger: false,
-      providerAdapter: createMockProvider({
+      providerAdapter: createProviderTestDouble({
         contextWindowTokens: 4_000,
         tokensPerTurn: 100,
         checkpointEvery: 1_000,

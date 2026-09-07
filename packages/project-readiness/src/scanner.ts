@@ -402,7 +402,7 @@ const LOCATION_VALUE_PATTERN = /^(?:~\/|\.{1,2}\/|\/[^\s]*\/|https?:\/\/)/i;
 // read a store-relative path such as `secret/data/ci/deploy` or `gs://bucket/creds.json`. Required
 // together, they are decisive. The value half reads: contains a `/` or a `\` anywhere, or is a bare
 // filename with a dotted extension. `\` is accepted alongside `/` so a Windows path such as
-// `C:\Users\runneradmin\id_rsa` is recognised the same way a POSIX one already is, and it carries
+// `X:\synthetic-home\id_rsa` is recognised the same way a POSIX one already is, and it carries
 // the same accepted cost as `/`, not a smaller one. Neither character has to sit where a separator
 // would -- one anywhere in the value is enough -- so `API_TOKEN_PATH: \ghp_16C7e42F292c6912E77` and
 // `PRIVATE_KEY_DIR: kx7Qm2ZpLr9TvWs4\` both pass, exactly as the already-excused

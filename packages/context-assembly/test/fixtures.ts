@@ -85,6 +85,7 @@ export const sampleSources = (): ContextSources => ({
         endLine: 24,
         reproduction: "Submit a malformed PDF through the retry branch.",
         criterion: "Parsing is bounded to a 5s timeout",
+        suggestedFix: "Apply the configured timeout in the retry branch.",
       },
     ],
   },

@@ -18,7 +18,7 @@ mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail setup
+npx loomrail setup --mode live
 npx loomrail start
 ```
 
@@ -48,11 +48,11 @@ integrity receipt, not a registry attestation. See the [supply-chain policy](../
 
 ## Guided setup
 
-Run `npx loomrail setup` in an interactive terminal and press Enter for the recommended Mock walkthrough, or select
-the live-provider preflight. Automation must make the route explicit:
+Run `npx loomrail setup` in an interactive terminal and press Enter for the real-provider preflight. Automation must
+make the route explicit:
 
 ```bash
-npx loomrail setup --mode mock --json
+npx loomrail setup --mode live --json
 ```
 
 Exit code 0 and `READY` mean the selected full fixture route can begin. The report combines the same read-only
@@ -60,7 +60,8 @@ runtime/Git/data/SQLite/provider observations as `doctor` with a stat-only Chrom
 codes and ordered next actions, never paths, provider output, accounts, credentials, or exception text.
 
 Setup creates no data directory or database, applies no migration/recovery, and launches no daemon, browser, agent
-session, provider login, installer, or download. It does run the documented output-free Git/provider status probes.
+session, provider login, installer, or download. It checks only Git, local prerequisites, and whether an API key is
+present; it never sends a provider request.
 Any `LOOMRAIL_PROVIDER` override blocks guided setup so its route cannot disagree with startup. A pending migration
 also blocks until you stop Loomrail and preserve the whole data directory. Follow the displayed actions yourself;
 setup neither executes nor persists them.
@@ -80,30 +81,21 @@ npx loomrail doctor --json
 ```
 
 The report checks the declared Node range, Git launch, data-directory access, SQLite integrity and migration
-compatibility, and supported provider CLI version/installation/authentication. It does not start the daemon or
+compatibility, and supported provider API credential readiness. It does not start the daemon or
 browser, create the data directory, apply migrations, recover workflows, or change provider authentication.
 
-`PASS` and `WARN` exit with code 0. A new installation with no database or an installation using only Mock is a
-warning, not a failure. `FAIL` exits with code 1 and covers an unsupported runtime, missing/unlaunchable Git,
+`PASS` and `WARN` exit with code 0. A new installation with no database or no configured provider is a warning, not
+a failure. `FAIL` exits with code 1 and covers an unsupported runtime, missing/unlaunchable Git,
 unavailable storage, and corrupt, drifted, future, or unreadable state.
 
 The JSON is deliberately allowlisted. It contains no current directory, home directory, data path, repository path,
 raw environment value, provider account, command output, credential, or exception message. Review it before sharing
 it anyway: provider presence and authentication state are still local machine metadata.
 
-Supported provider observations start with a bounded read-only version call. Loomrail parses only the exact
-normalized version form; raw output is never returned. The auth call runs only for an exact `VERIFIED` version, and
-its output is ignored:
-
-| Provider    | Version observation | Auth observation after `VERIFIED` | Credential owner |
-| ----------- | ------------------- | --------------------------------- | ---------------- |
-| Mock        | none; built in      | none; always ready                | none             |
-| Codex       | `codex --version`   | `codex login status`              | Codex CLI        |
-| Claude Code | `claude --version`  | `claude auth status`              | Claude Code CLI  |
-
-Loomrail does not install, update, or downgrade these CLIs, sign in for you, or persist their credentials. The
-current alpha.5 candidate has no verified live matrix row, so live setup remains blocked and Mock remains available.
-See the [exact compatibility matrix](PROVIDER-COMPATIBILITY.md); `doctor` never promotes a version by observation.
+Provider inspection reports whether `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` is present without returning its value.
+Both adapters are built into Loomrail; there is no CLI installation/version probe and no successful fallback.
+Loomrail does not create, rotate, or persist provider credentials. See the
+[provider API compatibility guide](PROVIDER-COMPATIBILITY.md).
 
 To reveal the exact local storage path explicitly:
 
@@ -171,7 +163,7 @@ Pre-alpha schema changes are forward migrations. Before every upgrade:
 4. Install an explicit target version or intentionally update the `next` channel.
 5. Run `loomrail doctor`. `STATE_UPGRADE_REQUIRED` is expected before the first start with a newer compatible build.
 6. Start normally. Only startup applies migrations and performs recovery.
-7. Run the mock walkthrough before trusting live-provider work.
+7. Run `loomrail setup --mode live` and a bounded provider stage before trusting the upgraded provider path.
 
 An automatic database copy may be created under `backups/` immediately before a non-empty database migration. Keep
 your own pre-upgrade whole-directory backup as well; the automatic copy excludes repositories and other installation

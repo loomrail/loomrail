@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
+import { startDaemon, type RunningDaemon } from "./provider-test-daemon.js";
 import type { BrowserDriver } from "../packages/browser-qa/dist/index.js";
 import { qaPlanSnapshotSchema } from "../packages/contracts/dist/index.js";
 

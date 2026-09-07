@@ -335,6 +335,34 @@ describe("verification recipe runner", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "prevents pnpm run from implicitly installing dependencies during verification",
+    async () => {
+      const { artifacts, repositoryPath } = await makeRepo();
+      const approvedRecipe = await installRecipe(repositoryPath, "process.exit(0);", "pnpm");
+      const tools = join(artifacts, "posix-tools");
+      const launcher = join(tools, "pnpm");
+      await mkdir(tools, { recursive: true });
+      await writeFile(
+        launcher,
+        '#!/usr/bin/env node\nprocess.stdout.write(process.env.pnpm_config_verify_deps_before_run ?? "missing");\n',
+      );
+      await chmod(launcher, 0o700);
+
+      const result = await executeVerificationRecipe({
+        recipe: approvedRecipe,
+        worktreePath: repositoryPath,
+        artifactDirectory: artifacts,
+        artifactId: "verification-output-pnpm-no-install",
+        systemEnvironment: { PATH: tools },
+      });
+
+      expect(result.observation.status).toBe("PASSED");
+      if (result.artifactPath === null) throw new Error("pnpm output artifact is missing");
+      await expect(readFile(result.artifactPath, "utf8")).resolves.toContain("false");
+    },
+  );
+
   it("resolves a Windows package-manager shim to its trusted JavaScript launcher", async () => {
     const { artifacts, repositoryPath } = await makeRepo();
     const approvedRecipe = await installRecipe(repositoryPath, "process.exit(0);", "pnpm");

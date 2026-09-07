@@ -12,12 +12,12 @@ import {
   passingBrowserQADriver,
 } from "../apps/daemon/test/browser-qa-fixture.js";
 import { materialiseFixtureRepository, resolveBundledFixture } from "../apps/daemon/dist/fixtures.js";
-import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
+import { startDaemon, type RunningDaemon } from "./provider-test-daemon.js";
 import { createProviderRegistry } from "../apps/daemon/dist/provider-selection.js";
 import { attentionInboxResponseSchema, workflowSnapshotSchema } from "../packages/contracts/dist/index.js";
 import { createMcpGateway } from "../packages/mcp-gateway/dist/index.js";
 import { openLocalState, type LocalState } from "../packages/persistence-sqlite/dist/index.js";
-import { mockDeliveryTemplate } from "../packages/workflow-engine/dist/index.js";
+import { deliveryTemplate } from "../packages/workflow-engine/dist/index.js";
 import { addWorktree, inspectRepository } from "../packages/workspace/dist/index.js";
 
 /**
@@ -157,8 +157,8 @@ const sessionLoopActor = { type: "SYSTEM", id: "session-loop" } as const;
  */
 const seededRecipe = (workItemId: string) => ({
   schemaVersion: 1 as const,
-  templateId: mockDeliveryTemplate.id,
-  templateVersion: mockDeliveryTemplate.version,
+  templateId: deliveryTemplate.id,
+  templateVersion: deliveryTemplate.version,
   specSource: "WORKFLOW_TEMPLATE" as const,
   roleProfile: null,
   sections: [
@@ -176,12 +176,12 @@ const seededRecipe = (workItemId: string) => ({
 });
 
 /**
- * Registers the fixture project, creates one WorkItem, moves it to Ready, and starts its mock
+ * Registers the fixture project, creates one WorkItem, moves it to Ready, and starts its test
  * pipeline's first stage attempt -- through an authoritative AgentRun claim, one step short of its
  * first ProviderSession. Shared by both session-loop fixtures below.
  *
  * Seeded through direct commands against the same database file the daemon will later open,
- * exactly like `seedLongActivity` above -- not by driving `runStageAttempt`, whose mock adapter
+ * exactly like `seedLongActivity` above -- not by driving `runStageAttempt`, whose test adapter
  * replays the same stateless per-turn options on every session it opens and so cannot itself
  * produce "session 1 hands off with a checkpoint, session 2 hits the wall" or "two sessions in a
  * row publish nothing": both need each session to end differently, and only direct commands can
@@ -229,13 +229,13 @@ const seedRunningStageAttempt = (
     commandId: "seed-start-pipeline",
     correlationId: "correlation-seed-start-pipeline",
     actor: humanActor,
-    type: "START_MOCK_PIPELINE",
+    type: "START_PIPELINE",
     payload: {
       workItemId: moved.workItem.id,
       expectedVersion: moved.workItem.version,
-      template: mockDeliveryTemplate,
-      // Matches the daemon's own DEFAULT_MOCK_BUDGET (apps/daemon/src/server.ts): if a fixture's
-      // stage attempt ever resumes far enough to reach the mock script's IMPLEMENT budget-exhaustion
+      template: deliveryTemplate,
+      // Matches the daemon's own DEFAULT_PIPELINE_BUDGET (apps/daemon/src/server.ts): if a fixture's
+      // stage attempt ever resumes far enough to reach the test double's IMPLEMENT budget-exhaustion
       // beat, its usageIncrements (summing to 100) must actually reach this limit, or
       // decideApplyProviderOutcome rejects the outcome as "budget limit not reached".
       budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
@@ -251,7 +251,7 @@ const seedRunningStageAttempt = (
     type: "START_AGENT_RUN",
     payload: {
       dispatchId: started.dispatch.id,
-      provider: "MOCK",
+      provider: "CODEX",
       limits: { global: 3, project: 3, provider: 3 },
     },
   });
@@ -460,7 +460,7 @@ const seedHandoffAndExhaustedSessions = async (databasePath: string, title: stri
             allowOther: false,
           },
         },
-        template: mockDeliveryTemplate,
+        template: deliveryTemplate,
       },
     });
   } finally {
@@ -559,7 +559,7 @@ type SeededChanges = {
 /**
  * What the agent did inside the live worktree, written as files rather than driven through a
  * pipeline: what is under test is what the card says about a change, not how the change came to be,
- * and a mock delivery would take twenty seconds to produce a less controlled version of this.
+ * and a complete provider-double delivery would take twenty seconds to produce a less controlled version.
  *
  * One case per row spec §10 names: a created file (§10.1, the regression the whole milestone starts
  * from -- `git diff` against the worktree cannot see one), a rename that must not read as a delete
@@ -870,11 +870,11 @@ const seedAttentionProjects = async (
         commandId: `attention-start-${index.toString()}`,
         correlationId: `correlation-attention-start-${index.toString()}`,
         actor: humanActor,
-        type: "START_MOCK_PIPELINE",
+        type: "START_PIPELINE",
         payload: {
           workItemId: moved.workItem.id,
           expectedVersion: moved.workItem.version,
-          template: mockDeliveryTemplate,
+          template: deliveryTemplate,
           budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
         },
       });
@@ -895,7 +895,7 @@ const seedAttentionProjects = async (
         type: "APPLY_PROVIDER_OUTCOME",
         payload: {
           dispatchId: started.dispatch.id,
-          template: mockDeliveryTemplate,
+          template: deliveryTemplate,
           resultTree: null,
           outcome: {
             type: "NEEDS_HUMAN",
@@ -954,19 +954,6 @@ const chooseInSettings = async (page: Page, control: string, option: string): Pr
 
 test.describe("authenticated walking skeleton", () => {
   let daemon: RunningDaemon | undefined;
-  const originalProvider = process.env["LOOMRAIL_PROVIDER"];
-
-  test.beforeAll(() => {
-    // This suite exercises the deterministic workflow unless a test injects its own registry.
-    // AUTO is production's default now; letting the test runner discover a developer's signed-in
-    // CLI would spend money and make outcomes depend on the machine running Playwright.
-    process.env["LOOMRAIL_PROVIDER"] = "MOCK";
-  });
-
-  test.afterAll(() => {
-    if (originalProvider === undefined) Reflect.deleteProperty(process.env, "LOOMRAIL_PROVIDER");
-    else process.env["LOOMRAIL_PROVIDER"] = originalProvider;
-  });
 
   test.afterEach(async () => {
     await daemon?.close();
@@ -1701,7 +1688,7 @@ test.describe("authenticated walking skeleton", () => {
     expect(await page.evaluate<boolean>("Boolean(window.__loomrailXss)")).toBe(false);
   });
 
-  test("persists the full mock delivery and gates Done on owner acceptance", async ({ page }) => {
+  test("persists the full provider-double delivery and gates Done on owner acceptance", async ({ page }) => {
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
       logger: false,
@@ -1795,7 +1782,7 @@ test.describe("authenticated walking skeleton", () => {
     expect(acceptanceUrl.searchParams.get("project")).toBe(approvalItem.project.id);
     expect(acceptanceUrl.searchParams.get("task")).toBe(approvalItem.workItem.id);
     await expect(page.getByRole("complementary", { name: "Human decision workflow" })).toBeVisible();
-    // Each stage attempt now records its ProviderSession as well (spec §6), so a full mock delivery
+    // Each stage attempt records its ProviderSession as well (spec §6), so a full test delivery
     // fills more than one page of activity and the discovery decision has moved off the newest one.
     await restoredInspector.getByRole("button", { name: "Show more" }).click();
     await expect(restoredInspector.getByText("Decision recorded", { exact: true })).toBeVisible();
@@ -2055,7 +2042,7 @@ test.describe("authenticated walking skeleton", () => {
         }),
       ).toBeVisible();
 
-      // The default mock provider cannot wind down on request, so losing a session's tail is normal
+      // The default test provider cannot wind down on request, so losing a session's tail is normal
       // for it rather than a malfunction (spec §7).
       await expect(
         inspector.getByText(
@@ -2987,7 +2974,7 @@ test.describe("authenticated walking skeleton", () => {
     await initializeWorkspace(page);
 
     for (const title of ["Fleet running", "Fleet waiting"] as const) {
-      await createTask(page, title, "A bounded mock run for the Agent Fleet browser gate.");
+      await createTask(page, title, "A bounded provider-double run for the Agent Fleet browser gate.");
       const inspector = page.getByRole("complementary", { name: title });
       await inspector.getByRole("button", { name: "Move to Ready" }).click();
       await inspector.getByRole("button", { name: "Start workflow" }).click();
@@ -2999,11 +2986,11 @@ test.describe("authenticated walking skeleton", () => {
     await expect(page.getByText("1 / 1 active", { exact: true })).toBeVisible();
 
     const runningRow = page.getByRole("row", {
-      name: /Fleet running.*Product Analyst.*Discovery.*MOCK.*Running/,
+      name: /Fleet running.*Product Analyst.*Discovery.*CODEX.*Running/,
     });
     await expect(runningRow).toBeVisible();
     const waitingRow = page.getByRole("row", {
-      name: /Fleet waiting.*Product Analyst.*Discovery.*MOCK.*Waiting.*All global slots are occupied/,
+      name: /Fleet waiting.*Product Analyst.*Discovery.*CODEX.*Waiting.*All global slots are occupied/,
     });
     await expect(waitingRow).toBeVisible();
 
@@ -3135,17 +3122,19 @@ test.describe("authenticated walking skeleton", () => {
     await expect(page.locator(".lr-task-card").first()).toHaveCSS("padding", "8px");
   });
 
-  test("selects and persists the Project AI provider from Settings", async ({ page }) => {
-    let codexVersion = "0.152.1";
+  test("selects and persists a HARD Project AI provider from Settings", async ({ page }) => {
+    let openAIAuthentication: "AUTHENTICATED" | "REQUIRED" = "AUTHENTICATED";
+    const hardCodex = gatedAdapter(200_000, { provider: "CODEX" });
     const providerRegistry = createProviderRegistry({
       env: {},
-      executableAvailable: (provider) => provider === "CODEX",
-      probeCompatibility: () =>
-        Promise.resolve({
-          compatibility: codexVersion === "0.152.1" ? ("VERIFIED" as const) : ("UNVERIFIED" as const),
-          version: codexVersion,
-        }),
-      probeAuthentication: (provider) => Promise.resolve(provider === "CODEX" ? "AUTHENTICATED" : "UNKNOWN"),
+      adapters: {
+        CODEX: {
+          ...hardCodex,
+          modelMapping: () => ({ FAST: "test-fast", STANDARD: "test-standard", DEEP: "test-deep" }),
+        },
+      },
+      probeAuthentication: (provider) =>
+        Promise.resolve(provider === "CODEX" ? openAIAuthentication : "REQUIRED"),
     });
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
@@ -3159,33 +3148,32 @@ test.describe("authenticated walking skeleton", () => {
     await page.getByRole("button", { name: "Open settings" }).click();
     const settings = page.getByRole("dialog", { name: "Settings" });
     const provider = settings.locator(".provider-settings");
-    await expect(provider.getByText("New sessions use Codex.", { exact: true })).toBeVisible();
-    await expect(provider.getByText("Ready", { exact: true })).toBeVisible();
-    const compatibility = provider.getByRole("list", { name: "Detected CLI compatibility" });
-    await expect(compatibility.getByRole("listitem").filter({ hasText: "Codex" })).toContainText(
-      "v0.152.1 · Ready",
+    await expect(provider.getByText("New sessions use OpenAI Responses.", { exact: true })).toBeVisible();
+    await expect(
+      provider.locator(".provider-settings__heading").getByText("Ready", { exact: true }),
+    ).toBeVisible();
+    const compatibility = provider.getByRole("list", { name: "Real provider readiness" });
+    await expect(compatibility.getByRole("listitem").filter({ hasText: "OpenAI Responses" })).toContainText(
+      "Ready",
     );
-    await expect(compatibility.getByRole("listitem").filter({ hasText: "Claude Code" })).toContainText(
-      "Not installed",
-    );
-
-    codexVersion = "0.152.2";
-    await provider.getByRole("button", { name: "Check again" }).click();
-    await expect(provider.getByText("New sessions use Mock.", { exact: true })).toBeVisible();
-    await expect(compatibility.getByRole("listitem").filter({ hasText: "Codex" })).toContainText(
-      "v0.152.2 · Version not verified",
+    await expect(compatibility.getByRole("listitem").filter({ hasText: "Anthropic Messages" })).toContainText(
+      "API key required",
     );
 
     const selector = provider.getByRole("combobox", { name: "Provider for new sessions" });
     await selector.focus();
     await page.keyboard.press("Enter");
-    const mockOption = page.getByRole("option", { name: /^Mock/ });
-    await expect(mockOption).toBeVisible();
-    await page.keyboard.press("End");
-    await expect(mockOption).toHaveAttribute("data-highlighted");
+    const openAIOption = page.getByRole("option", { name: "OpenAI Responses", exact: true });
+    await expect(openAIOption).toBeVisible();
+    await page.keyboard.press("ArrowDown");
+    await expect(openAIOption).toHaveAttribute("data-highlighted");
     await page.keyboard.press("Enter");
-    await expect(selector).toContainText("Mock");
-    await expect(provider.getByText("New sessions use Mock.", { exact: true })).toBeVisible();
+    await expect(selector).toContainText("OpenAI Responses");
+
+    openAIAuthentication = "REQUIRED";
+    await provider.getByRole("button", { name: "Check again" }).click();
+    await expect(provider.getByText("New sessions use OpenAI Responses.", { exact: true })).toBeVisible();
+    await expect(provider.getByText("API key required", { exact: true }).first()).toBeVisible();
 
     await settings
       .getByRole("group", { name: "Change color theme" })
@@ -3195,7 +3183,9 @@ test.describe("authenticated walking skeleton", () => {
     await settings.getByRole("button", { name: "Close dialog" }).click();
     await page.getByRole("button", { name: "Open settings" }).click();
     const reopened = page.getByRole("dialog", { name: "Settings" }).locator(".provider-settings");
-    await expect(reopened.getByRole("combobox", { name: "Provider for new sessions" })).toContainText("Mock");
+    await expect(reopened.getByRole("combobox", { name: "Provider for new sessions" })).toContainText(
+      "OpenAI Responses",
+    );
 
     await page
       .getByRole("dialog", { name: "Settings" })
@@ -3206,21 +3196,178 @@ test.describe("authenticated walking skeleton", () => {
       page.locator(".provider-settings").getByRole("heading", { name: "ИИ-провайдер" }),
     ).toBeVisible();
     await expect(
-      page.locator(".provider-settings").getByRole("list", { name: "Совместимость найденных CLI" }),
+      page.locator(".provider-settings").getByRole("list", { name: "Готовность реальных провайдеров" }),
     ).toBeVisible();
     const russianCompatibility = page
       .locator(".provider-settings")
-      .getByRole("list", { name: "Совместимость найденных CLI" });
-    await expect(russianCompatibility.getByRole("listitem").filter({ hasText: "Codex" })).toContainText(
-      "v0.152.2 · Версия не проверена",
-    );
-    await expect(russianCompatibility.getByRole("listitem").filter({ hasText: "Claude Code" })).toContainText(
-      "Не установлен",
-    );
+      .getByRole("list", { name: "Готовность реальных провайдеров" });
+    await expect(
+      russianCompatibility.getByRole("listitem").filter({ hasText: "OpenAI Responses" }),
+    ).toContainText("Нужен API key");
+    await expect(
+      russianCompatibility.getByRole("listitem").filter({ hasText: "Anthropic Messages" }),
+    ).toContainText("Нужен API key");
 
     await page.setViewportSize({ width: 320, height: 720 });
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     expect(await page.locator("body").evaluate((body) => body.scrollWidth <= body.clientWidth)).toBe(true);
+  });
+
+  test("offers only real providers and blocks Auto when neither credential is ready", async ({ page }) => {
+    const providerRegistry = createProviderRegistry({ env: {} });
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      providerRegistry,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    const provider = settings.locator(".provider-settings");
+    const selector = provider.getByRole("combobox", { name: "Provider for new sessions" });
+
+    await expect(selector).toContainText("Auto");
+    await expect(provider.getByText("New sessions use OpenAI Responses.", { exact: true })).toBeVisible();
+    await expect(
+      provider.getByText(
+        "No real provider credential is configured. No agent session will start until OPENAI_API_KEY or ANTHROPIC_API_KEY is available.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(provider.getByRole("listitem").filter({ hasText: "OpenAI Responses" })).toContainText(
+      "API key required",
+    );
+
+    await selector.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("option", { name: "OpenAI Responses", exact: true })).toBeVisible();
+    await expect(page.getByRole("option", { name: "Anthropic Messages", exact: true })).toBeVisible();
+    await expect(page.getByRole("option")).toHaveCount(3);
+    await page.keyboard.press("Home");
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByRole("option", { name: "OpenAI Responses", exact: true })).toHaveAttribute(
+      "data-highlighted",
+    );
+    await page.keyboard.press("Enter");
+    await expect(selector).toContainText("OpenAI Responses");
+    await expect(provider.getByText("New sessions use OpenAI Responses.", { exact: true })).toBeVisible();
+    await expect(
+      provider.getByText("This provider is not ready for the requested stage. No session will start.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+
+    await settings.getByRole("button", { name: "Close dialog" }).click();
+    await page.reload();
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const reopened = page.getByRole("dialog", { name: "Settings" }).locator(".provider-settings");
+    await expect(reopened.getByRole("combobox", { name: "Provider for new sessions" })).toContainText(
+      "OpenAI Responses",
+    );
+    await expect(
+      reopened.getByText("This provider is not ready for the requested stage. No session will start.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+  });
+
+  test("chooses the Project working directory accessibly and persists it", async ({ page }) => {
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(daemon.bootstrapUrl);
+    await initializeWorkspace(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    const workspaceStrategy = settings.locator(".workspace-strategy-settings");
+    const choices = workspaceStrategy.getByRole("group", { name: "Agent workspace" });
+    const isolated = choices.getByRole("radio", { name: /Separate worktree/ });
+    const shared = choices.getByRole("radio", { name: /This project folder/ });
+
+    await expect(isolated).toBeChecked();
+    await isolated.focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(shared).toBeFocused();
+    const focusedChoice = shared.locator("..");
+    expect(
+      await focusedChoice.evaluate((element) => {
+        const style = window.getComputedStyle(element);
+        return style.outlineStyle === "solid" && style.outlineWidth === "2px";
+      }),
+    ).toBe(true);
+
+    const confirmation = workspaceStrategy.getByRole("note").filter({
+      hasText: "Before Loomrail uses this folder",
+    });
+    await expect(confirmation).toContainText("tracked and untracked files");
+    await expect(confirmation).toContainText("editor, terminal, or other tools");
+    await expect(confirmation).toContainText("only one of its own writers or verification runs");
+
+    const confirm = confirmation.getByRole("button", { name: "Use this project folder" });
+    await expect(confirm).toBeDisabled();
+    const acknowledgement = confirmation.getByRole("checkbox", {
+      name: "I understand the shared-folder risk",
+    });
+    await acknowledgement.focus();
+    await page.keyboard.press("Space");
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
+    await expect(shared).toBeChecked();
+    await expect(confirmation).toBeHidden();
+
+    await settings
+      .getByRole("group", { name: "Change color theme" })
+      .getByRole("button", { name: "Light" })
+      .click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(shared).toBeChecked();
+    await settings
+      .getByRole("group", { name: "Change color theme" })
+      .getByRole("button", { name: "Dark" })
+      .click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(shared).toBeChecked();
+
+    for (const width of [768, 414, 375, 320]) {
+      await page.setViewportSize({ width, height: 812 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      for (const choice of [isolated, shared]) {
+        expect(
+          await choice
+            .locator("xpath=following-sibling::span")
+            .evaluate((copy) => copy.scrollWidth <= copy.clientWidth),
+        ).toBe(true);
+      }
+    }
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await settings.getByRole("button", { name: "Close dialog" }).click();
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const reopened = page.getByRole("dialog", { name: "Settings" });
+    await expect(
+      reopened.getByRole("group", { name: "Agent workspace" }).getByRole("radio", {
+        name: /This project folder/,
+      }),
+    ).toBeChecked();
+
+    await reopened
+      .getByRole("group", { name: "Change language" })
+      .getByRole("button", { name: "Русский" })
+      .click();
+    const russianStrategy = page.locator(".workspace-strategy-settings");
+    await expect(russianStrategy.getByRole("heading", { name: "Рабочая папка" })).toBeVisible();
+    await expect(
+      russianStrategy
+        .getByRole("group", { name: "Рабочая область агентов" })
+        .getByRole("radio", { name: /Эта папка проекта/ }),
+    ).toBeChecked();
   });
 
   test("approves, probes, grants, persists and revokes an MCP connection in Settings", async ({ page }) => {

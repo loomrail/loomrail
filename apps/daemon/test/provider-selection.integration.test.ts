@@ -59,8 +59,8 @@ describe("provider selection at daemon startup", () => {
     (await readCapabilities(daemon, token)).provider;
 
   // The other half of R28: the daemon must SAY which adapter it resolved, and must not fall back
-  // silently on a value it could not read. The mock completes stages successfully, so an owner who
-  // mistyped the variable can otherwise watch a whole delivery run believing a live agent did it.
+  // silently on a value it could not read. A hidden fallback could otherwise let an owner watch a
+  // whole delivery run believing the provider they requested did it.
   // Driven through the daemon's real logger stream rather than a spy on the resolver, because the
   // defect is the absence of the log line, not the resolver's return value.
   const bootCapturingLog = async (
@@ -83,12 +83,12 @@ describe("provider selection at daemon startup", () => {
     return { daemon, log: () => written };
   };
 
-  it("says at startup which adapter it will dispatch to, and whether its CLI is here", async () => {
+  it("says at startup which API adapter it will dispatch to and whether its key is present", async () => {
     const { daemon, log } = await bootCapturingLog("CODEX");
     try {
       expect(log()).toContain("The provider adapter this daemon will dispatch to");
       expect(log()).toContain('"provider":"CODEX"');
-      expect(log()).toContain('"cliAvailable"');
+      expect(log()).toContain('"providerReady"');
     } finally {
       await daemon.close();
     }
@@ -100,7 +100,7 @@ describe("provider selection at daemon startup", () => {
       const written = log();
       expect(written).toContain("does not know");
       expect(written).toContain('"codex"');
-      expect(written).toContain("MOCK, CODEX, CLAUDE_CODE");
+      expect(written).toContain("CODEX, CLAUDE_CODE");
     } finally {
       await daemon.close();
     }
@@ -115,10 +115,10 @@ describe("provider selection at daemon startup", () => {
     }
   });
 
-  it("boots with the mock provider when the environment variable is not set", async () => {
+  it("boots with the fail-closed OpenAI API adapter when the variable is unset", async () => {
     const { daemon, token } = await bootWithEnv(undefined);
     try {
-      expect(await readReportedProvider(daemon, token)).toBe("MOCK");
+      expect(await readReportedProvider(daemon, token)).toBe("CODEX");
     } finally {
       await daemon.close();
     }
@@ -143,7 +143,7 @@ describe("provider selection at daemon startup", () => {
       const capabilities = await readCapabilities(daemon, token);
       // As of E1 the Codex adapter runs its CLI in the work item's own worktree, so it serves every
       // stage -- IMPLEMENT included, which is the one the cockpit could never dispatch before.
-      expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
+      expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "REVIEW", "ACCEPTANCE"]);
       // Whether `codex` happens to be installed on the machine running this test is not the point;
       // that the endpoint carries the claim at all is.
       expect(typeof capabilities.start).toBe("boolean");
@@ -174,12 +174,12 @@ describe("provider selection at daemon startup", () => {
       // real CLI here (that CLI is unauthenticated on this machine). Asserting symmetry between two
       // adapters on evidence gathered from only one of them is what produced two Criticals in the
       // previous milestone.
-      expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "REVIEW"]);
+      expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "REVIEW", "ACCEPTANCE"]);
       expect(capabilities.stages).not.toContain("IMPLEMENT");
       // The one capability that genuinely differs between the two live adapters, and the reason
       // the cockpit can explain a missing spend figure for one and not the other: Claude Code
       // reports cost in its own result event; Codex reports none anywhere.
-      expect(capabilities.costReporting).toBe(true);
+      expect(capabilities.costReporting).toBe(false);
       expect(typeof capabilities.start).toBe("boolean");
     } finally {
       await daemon.close();
@@ -187,11 +187,12 @@ describe("provider selection at daemon startup", () => {
   });
 
   // The property that matters most: a typo must not stop the daemon from starting at all. Booting
-  // successfully and reporting mock, rather than throwing during `startDaemon`, is the assertion.
-  it("boots with the mock provider, not a startup failure, on an unrecognised value", async () => {
+  // successfully and reporting the blocked OpenAI adapter, rather than throwing during
+  // `startDaemon`, is the assertion.
+  it("boots fail-closed on OpenAI, not synthetic work, for an unrecognised value", async () => {
     const { daemon, token } = await bootWithEnv("codex-typo");
     try {
-      expect(await readReportedProvider(daemon, token)).toBe("MOCK");
+      expect(await readReportedProvider(daemon, token)).toBe("CODEX");
     } finally {
       await daemon.close();
     }

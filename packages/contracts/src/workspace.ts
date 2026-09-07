@@ -7,6 +7,7 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
+import { workspaceStrategySchema } from "./workspace-strategy.js";
 
 // A Git object id (spec §2.9). Not a general opaqueIdSchema: an object id has a shape of its own,
 // unrelated to Loomrail's id shape, and validating it here catches a caller that passes a truncated
@@ -44,6 +45,9 @@ export const workItemWorkspaceSchema = z
     id: opaqueIdSchema,
     projectId: opaqueIdSchema,
     workItemId: opaqueIdSchema,
+    // The durable fact used for this workspace. Project settings can change later without
+    // reinterpreting an already-running WorkItem.
+    strategy: workspaceStrategySchema.default("ISOLATED_WORKTREE"),
     branch: branchSchema,
     worktreePath: worktreePathSchema,
     // Nullable, not optional: an empty repository genuinely has no HEAD (spec §2.12). Absent would
@@ -125,6 +129,9 @@ export const createWorkItemWorkspaceCommandSchema = commandBaseSchema.extend({
     .object({
       workItemId: opaqueIdSchema,
       projectId: opaqueIdSchema,
+      // Optional only for command receipts produced before strategy existed. The persisted
+      // workspace always records the resolved value.
+      strategy: workspaceStrategySchema.optional(),
       branch: branchSchema,
       worktreePath: worktreePathSchema,
       baseCommit: commitShaSchema.nullable(),

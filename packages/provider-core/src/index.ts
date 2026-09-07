@@ -15,6 +15,7 @@ import {
   providerIdSchema,
   providerModelIdSchema,
   providerModelMappingSchema,
+  providerTokenBudgetEnforcementSchema,
   workflowStageSchema,
 } from "@loomrail/contracts";
 import { z } from "zod";
@@ -45,10 +46,11 @@ export {
   projectProviderAllowanceAdvisory,
   projectProviderAllowanceFreshness,
 } from "./allowance.js";
+export type { ProviderJsonRequest, ProviderJsonResponse, ProviderJsonTransport } from "./json-transport.js";
+export { fetchProviderJson, ProviderProtocolError } from "./json-transport.js";
 
-// The set of adapters Loomrail can dispatch to. A live adapter is not a MOCK wearing a different
-// label -- it is a distinct identity the daemon and the audit trail key on, so the enum is closed
-// rather than left as a bare string an adapter could misspell.
+// ProviderId remains legacy-inclusive because append-only audit rows can name the retired provider.
+// Active selection is the narrower LiveProviderId contract in @loomrail/contracts.
 export { providerIdSchema };
 export type { ProviderId };
 export { providerModelIdSchema, providerModelMappingSchema };
@@ -78,6 +80,10 @@ export const providerCapabilitiesSchema = z
     // is about context-window consumption, not spend -- an adapter can know how full its window
     // got without knowing what that turn billed, and vice versa.
     costReporting: z.boolean(),
+    // HARD means the adapter accepts the per-session remainder on ProviderInvocation and prevents
+    // provider work from crossing it. POST_SESSION means the daemon learns usage too late to bound
+    // the session already in flight.
+    tokenBudgetEnforcement: providerTokenBudgetEnforcementSchema,
     canReportRateLimits: z.boolean().optional(),
   })
   .strict()
@@ -103,7 +109,7 @@ export type ProviderCapabilities = z.infer<typeof providerCapabilitiesSchema>;
 // legitimate adapter work and needs something to key on. `attempt` is kept for the same reason,
 // and for one more: it is the durable, persisted `StageAttempt.attempt` (spec §6.5), passed
 // through structurally instead of being re-derived by an adapter parsing prose out of the
-// rendered pack. Prose parsing coupled a mock's control flow to wording `context-assembly`'s
+// rendered pack. Prose parsing coupled a test double's control flow to wording `context-assembly`'s
 // render step owns and could change without warning; a typed field on the invocation cannot
 // drift out from under an adapter the way a regex over rendered text can.
 export type ProviderSessionRef = {
@@ -113,6 +119,24 @@ export type ProviderSessionRef = {
   stage: WorkflowStage;
   attempt: number;
 };
+
+export const providerTokenBudgetSchema = z
+  .object({
+    maxEstimatedTokens: z.number().int().positive(),
+    recordedEstimatedTokens: z.number().int().nonnegative(),
+    remainingEstimatedTokens: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((budget, context) => {
+    if (budget.recordedEstimatedTokens + budget.remainingEstimatedTokens !== budget.maxEstimatedTokens) {
+      context.addIssue({
+        code: "custom",
+        message: "Recorded and remaining estimated tokens must equal the immutable maximum",
+      });
+    }
+  });
+
+export type ProviderTokenBudget = z.infer<typeof providerTokenBudgetSchema>;
 
 const absolutePathPattern = /^(?:[/\\]|[A-Za-z]:[/\\])/;
 
@@ -161,6 +185,8 @@ export type ProviderInvocation = {
    * written before model binding; adapters fall back to their current tier mapping for those.
    */
   modelId?: string | null;
+  /** Immutable AgentRun token authority, reduced by usage recorded for this same run. */
+  tokenBudget: ProviderTokenBudget;
   /**
    * A structured copy of the criterion/check text rendered into this same pack, present only for
    * Acceptance. It carries no authority IDs: adapters may propose a mapping without parsing prose,
@@ -253,9 +279,8 @@ export type ProviderSessionListener = {
   // Spec §8: the pid of the child process this session is actually driving, so a daemon that dies
   // without killing it can still find and kill that process on the next start
   // (@loomrail/persistence-sqlite's `provider_sessions.process_pid`). Optional, unlike the three
-  // listeners above: most sessions have nothing to report here. MOCK spawns no process at all and
-  // must simply never call this -- that silence is exactly what the column's nullability exists to
-  // represent, not a gap to fill in. A live adapter that does spawn one calls it at most once, right
+  // listeners above: API sessions have no local child process and simply never call this. That
+  // silence is exactly what the column's nullability represents. An adapter that does spawn one calls it at most once, right
   // after its process runner returns a pid, not on every turn the way occupancy and usage stream.
   onProcessStarted?: (pid: number) => void;
 };
@@ -281,7 +306,7 @@ export type ProviderAdapter = {
   capabilities: () => ProviderCapabilities;
   // The owner-facing policy editor needs the same validated mapping the adapter will use. Keeping
   // it on the adapter prevents the web app from maintaining a second, drifting model catalogue.
-  // MOCK and third-party test adapters may omit it when no real provider model is selected.
+  // Test-only adapters may omit it when no real provider model is selected.
   modelMapping?: () => ProviderModelMapping;
   /** Bounded read-only provider surface. Present only when the adapter capability is implemented. */
   readAllowance?: () => Promise<ProviderAllowanceSnapshot>;

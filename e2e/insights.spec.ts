@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 import { expect, test } from "@playwright/test";
 
-import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
+import { startDaemon, type RunningDaemon } from "./provider-test-daemon.js";
 
 test.describe("private Insights and one-shot reporting", () => {
   let daemon: RunningDaemon | undefined;

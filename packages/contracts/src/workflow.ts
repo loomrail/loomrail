@@ -270,7 +270,7 @@ export const providerSessionSchema = z
     // dies without killing it can still find and kill that process on the next start. Nullable, not
     // defaulted to 0 -- "no process was ever started" and "a process whose pid is 0" are different
     // facts, and a defaulted column could not tell them apart. Starts null and is filled in later,
-    // if at all, by RECORD_PROVIDER_SESSION_PROCESS (MOCK and any adapter that spawns nothing never
+    // if at all, by RECORD_PROVIDER_SESSION_PROCESS (an adapter that spawns nothing never
     // sends one, and the session simply stays null -- see `ProviderSessionListener.onProcessStarted`).
     pid: providerSessionProcessPidSchema.nullable(),
   })
@@ -338,6 +338,11 @@ export const providerUsageSchema = z
     quality: usageQualitySchema,
   })
   .strict();
+
+// Whether an adapter can stop provider work before the immutable estimated-token allowance is
+// exceeded. POST_SESSION records actual usage only after the work has already happened.
+export const providerTokenBudgetEnforcementSchema = z.enum(["HARD", "POST_SESSION"]);
+export type ProviderTokenBudgetEnforcement = z.infer<typeof providerTokenBudgetEnforcementSchema>;
 
 // One immutable, final spend report for one ProviderSession. Adapters report cumulative usage at
 // their terminal provider event, never deltas: making that cardinality explicit lets persistence
@@ -1152,23 +1157,31 @@ const commandBaseSchema = z
   })
   .strict();
 
-export const startMockPipelineCommandSchema = commandBaseSchema.extend({
+const startPipelinePayloadSchema = z
+  .object({
+    workItemId: opaqueIdSchema,
+    expectedVersion: z.number().int().positive(),
+    template: workflowTemplateSchema,
+    budget: z
+      .object({
+        maxEstimatedTokens: z.number().int().positive(),
+        warningThresholds: z.array(budgetThresholdSchema).min(1).max(10),
+        modelTierOverride: modelTierSchema.nullable().optional(),
+        agentRunMaxEstimatedTokensOverride: z.number().int().positive().nullable().optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const startPipelineCommandSchema = commandBaseSchema.extend({
+  type: z.literal("START_PIPELINE"),
+  payload: startPipelinePayloadSchema,
+});
+
+/** Historical command schema retained only so append-only audit rows remain readable. */
+export const legacyStartPipelineCommandSchema = commandBaseSchema.extend({
   type: z.literal("START_MOCK_PIPELINE"),
-  payload: z
-    .object({
-      workItemId: opaqueIdSchema,
-      expectedVersion: z.number().int().positive(),
-      template: workflowTemplateSchema,
-      budget: z
-        .object({
-          maxEstimatedTokens: z.number().int().positive(),
-          warningThresholds: z.array(budgetThresholdSchema).min(1).max(10),
-          modelTierOverride: modelTierSchema.nullable().optional(),
-          agentRunMaxEstimatedTokensOverride: z.number().int().positive().nullable().optional(),
-        })
-        .strict(),
-    })
-    .strict(),
+  payload: startPipelinePayloadSchema,
 });
 
 export const markWorkflowDispatchStartedCommandSchema = commandBaseSchema.extend({
@@ -1237,7 +1250,7 @@ export const applyProviderOutcomeCommandSchema = commandBaseSchema.extend({
 // applyProviderOutcomeCommandSchema's type as a two-value literal) so every member of
 // stateCommandSchema keeps a single-literal discriminant and TypeScript can still narrow it away
 // completely once handled. Nothing constructs a fresh command with this type going forward.
-export const legacyApplyMockProviderOutcomeCommandSchema = commandBaseSchema.extend({
+export const legacyApplyProviderOutcomeCommandSchema = commandBaseSchema.extend({
   type: z.literal("APPLY_MOCK_PROVIDER_OUTCOME"),
   payload: applyProviderOutcomePayloadSchema,
 });
@@ -1551,10 +1564,10 @@ const providerOutcomeEventSchema = z.discriminatedUnion("type", [
   pipelineCompletedEventSchema,
 ]);
 
-export const mockProviderOutcomeAppliedResultSchema = z
+export const providerOutcomeAppliedResultSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
-    type: z.literal("MOCK_PROVIDER_OUTCOME_APPLIED"),
+    type: z.literal("PROVIDER_OUTCOME_APPLIED"),
     replayed: z.boolean(),
     workItemId: opaqueIdSchema,
     run: pipelineRunSchema,
@@ -1568,6 +1581,11 @@ export const mockProviderOutcomeAppliedResultSchema = z
     events: z.array(providerOutcomeEventSchema),
   })
   .strict();
+
+/** Historical receipt shape retained only so append-only command records remain readable. */
+export const legacyProviderOutcomeAppliedResultSchema = providerOutcomeAppliedResultSchema.extend({
+  type: z.literal("MOCK_PROVIDER_OUTCOME_APPLIED"),
+});
 
 export const humanRequestAnsweredResultSchema = z
   .object({
@@ -1904,7 +1922,7 @@ export const stageAttemptHardPausedResultSchema = z
   })
   .strict();
 
-export const startMockPipelineRequestSchema = z
+export const startPipelineRequestSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
     commandId: opaqueIdSchema,
@@ -2027,6 +2045,7 @@ export const providerCapabilitiesResponseSchema = z
     checkpointOnRequest: z.boolean(),
     contextWindowReporting: z.boolean(),
     costReporting: z.boolean(),
+    tokenBudgetEnforcement: providerTokenBudgetEnforcementSchema,
     canReportRateLimits: z.boolean().default(false),
   })
   .strict();
@@ -2072,12 +2091,11 @@ export type ReviewLoopExhaustedEvent = z.infer<typeof reviewLoopExhaustedEventSc
 export type AcceptanceRequestedEvent = z.infer<typeof acceptanceRequestedEventSchema>;
 export type AcceptanceResolvedEvent = z.infer<typeof acceptanceResolvedEventSchema>;
 export type PipelineCompletedEvent = z.infer<typeof pipelineCompletedEventSchema>;
-export type StartMockPipelineCommand = z.infer<typeof startMockPipelineCommandSchema>;
+export type StartPipelineCommand = z.infer<typeof startPipelineCommandSchema>;
+export type LegacyStartPipelineCommand = z.infer<typeof legacyStartPipelineCommandSchema>;
 export type MarkWorkflowDispatchStartedCommand = z.infer<typeof markWorkflowDispatchStartedCommandSchema>;
 export type ApplyProviderOutcomeCommand = z.infer<typeof applyProviderOutcomeCommandSchema>;
-export type LegacyApplyMockProviderOutcomeCommand = z.infer<
-  typeof legacyApplyMockProviderOutcomeCommandSchema
->;
+export type LegacyApplyProviderOutcomeCommand = z.infer<typeof legacyApplyProviderOutcomeCommandSchema>;
 export type AnswerHumanRequestCommand = z.infer<typeof answerHumanRequestCommandSchema>;
 export type ResolveQACorrectionGateCommand = z.infer<typeof resolveQACorrectionGateCommandSchema>;
 export type QACorrectionGateAction = z.infer<typeof qaCorrectionGateActionSchema>;

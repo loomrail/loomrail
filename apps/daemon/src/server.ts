@@ -42,6 +42,7 @@ import {
   pipelineControlRequestSchema,
   projectConstitutionSnapshotSchema,
   projectProviderSelectionResponseSchema,
+  projectWorkspaceStrategyResponseSchema,
   projectProviderAllowanceResponseSchema,
   projectReadinessSnapshotSchema,
   proposeProjectScaffoldRequestSchema,
@@ -81,10 +82,11 @@ import {
   scaffoldOperationsResponseSchema,
   publishProjectScaffoldRequestSchema,
   setProjectProviderPreferenceRequestSchema,
+  setProjectWorkspaceStrategyRequestSchema,
   setMcpProfileGrantRequestSchema,
   sessionExchangeRequestSchema,
   sessionExchangeResponseSchema,
-  startMockPipelineRequestSchema,
+  startPipelineRequestSchema,
   startVerificationRunRequestSchema,
   cancelVerificationRunRequestSchema,
   updateWorkItemRequestSchema,
@@ -116,6 +118,7 @@ import {
   ConstitutionDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
+  WorkspaceStrategyDomainError,
   ProviderAllowanceDomainError,
   QADefectDispositionError,
   QACorrectionError,
@@ -161,7 +164,7 @@ import {
 } from "@loomrail/project-scaffolding";
 import type { ProviderAdapter, ProviderId } from "@loomrail/provider-core";
 import { validateSchedulerLimits, type SchedulerLimits } from "@loomrail/scheduler";
-import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
+import { deliveryTemplate } from "@loomrail/workflow-engine";
 import {
   GitMissingError,
   PathNotAFileError,
@@ -221,8 +224,8 @@ const SESSION_COOKIE = "loomrail_session";
 const CSRF_HEADER = "x-loomrail-csrf";
 const BOOTSTRAP_TTL_MS = 60_000;
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
-const LEGACY_MOCK_BUDGET = 100;
-const DEFAULT_MOCK_BUDGET_THRESHOLDS = [0.5, 0.8, 0.95] as const;
+const DEFAULT_PROVIDER_TOKEN_BUDGET = 64_000;
+const DEFAULT_BUDGET_THRESHOLDS = [0.5, 0.8, 0.95] as const;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1"]);
 const PROVIDER_ALLOWANCE_READ_DEADLINE_MS = 3_000;
 
@@ -331,14 +334,15 @@ export type RunningDaemon = {
   app: FastifyInstance;
   baseUrl: string;
   bootstrapUrl: string;
-  // What the launcher prints, and the answer to "did a live agent do this run?". `cliAvailable` is
+  // What the launcher prints, and the answer to "can the selected API accept a run?". `providerReady` is
   // `capabilities().start`: an adapter can be selected and still be unable to run, and the owner
   // should learn that at startup rather than from the first refused dispatch. `stages` is here for
   // the same reason -- an A2 adapter serves three of a run's six stages, and the launcher is the
   // one moment the owner is definitely reading.
   provider: {
     provider: ProviderId;
-    cliAvailable: boolean;
+    providerReady: boolean;
+    tokenBudgetEnforcement: "HARD" | "POST_SESSION";
     recognised: boolean;
     stages: readonly WorkflowStage[];
     // Whether this adapter works in the owner's repository at all (`adapterWorksInWorkspace`,
@@ -442,6 +446,7 @@ const secretsEqual = (left: Buffer, right: Buffer): boolean =>
  */
 const publishedWorkspace = (workspace: WorkItemWorkspace): PublishedWorkItemWorkspace => ({
   schemaVersion: workspace.schemaVersion,
+  strategy: workspace.strategy,
   branch: workspace.branch,
   worktreePath: workspace.worktreePath,
   baseCommit: workspace.baseCommit,
@@ -604,6 +609,10 @@ const sendOperationError = (
     const status = error.code === "PROJECT_NOT_FOUND" ? 404 : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
+  if (error instanceof WorkspaceStrategyDomainError) {
+    const status = error.code === "PROJECT_NOT_FOUND" ? 404 : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
   if (error instanceof McpProposalError) {
     const status =
       error.code === "MCP_PROPOSAL_NOT_FOUND" ? 404 : error.code === "MCP_PROPOSAL_LIMIT_REACHED" ? 429 : 409;
@@ -748,14 +757,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   // has to be able to see, in the log and in the launcher's startup report, before watching a
   // delivery run and drawing conclusions about who did the work.
   const providerResolution = resolveDefaultProviderAdapter();
-  // Existing integration tests deliberately exercise deterministic workflows and historically
-  // relied on an unset environment meaning Mock. Keep that harness deterministic unless the test
-  // explicitly supplies a provider env/registry; production never runs with NODE_ENV=test.
-  const registryEnvironment =
-    process.env["NODE_ENV"] === "test" && process.env[LOOMRAIL_PROVIDER_ENV_VAR] === undefined
-      ? { ...process.env, [LOOMRAIL_PROVIDER_ENV_VAR]: "MOCK" }
-      : process.env;
-  const providerRegistry = options.providerRegistry ?? createProviderRegistry({ env: registryEnvironment });
+  const providerRegistry = options.providerRegistry ?? createProviderRegistry({ env: process.env });
   await providerRegistry.refresh();
   const fixedProviderAdapter = options.providerAdapter;
   const schedulingLimits = validateSchedulerLimits(options.schedulingLimits);
@@ -1385,7 +1387,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   const worker = createSessionWorker({
     state: localState,
     resolveAdapter: resolveProjectProvider,
-    template: mockDeliveryTemplate,
+    template: deliveryTemplate,
     workspacesRoot,
     createCommandId: () => `session-${randomUUID()}`,
     logger: app.log,
@@ -1549,7 +1551,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       throw new StateStoreError("PERSISTENCE_FAILURE", "Provider allowance state could not be loaded");
     }
     const registryResolution = providerRegistry.resolve(project);
-    const effectiveProvider = (fixedProviderAdapter ?? registryResolution.adapter).capabilities().provider;
+    const effectiveProvider = registryResolution.response.effectiveProvider;
     return projectProviderAllowanceResponse({
       projectId: project.id,
       effectiveProvider,
@@ -1655,7 +1657,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           foundation: {
             phase: "phase-0",
             milestone: "M6",
-            providers: "mock-only",
+            providers: "real-api-only",
             persistence: "sqlite",
           },
         });
@@ -3252,6 +3254,68 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
+    app.get("/api/v1/projects/:projectId/workspace-strategy", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const result = localState.query({
+          type: "GET_PROJECT_WORKSPACE_STRATEGY",
+          projectId: params.projectId,
+        });
+        if (result.type !== "PROJECT_WORKSPACE_STRATEGY") {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The Project workspace strategy could not be read",
+          );
+        }
+        return projectWorkspaceStrategyResponseSchema.parse({
+          schemaVersion: 1,
+          selection: result.selection,
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.put("/api/v1/projects/:projectId/workspace-strategy", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = setProjectWorkspaceStrategyRequestSchema.parse(request.body);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "SET_PROJECT_WORKSPACE_STRATEGY",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            strategy: body.strategy,
+          },
+        });
+        const result = localState.query({
+          type: "GET_PROJECT_WORKSPACE_STRATEGY",
+          projectId: params.projectId,
+        });
+        if (result.type !== "PROJECT_WORKSPACE_STRATEGY") {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The Project workspace strategy could not be read",
+          );
+        }
+        worker.wake();
+        return projectWorkspaceStrategyResponseSchema.parse({
+          schemaVersion: 1,
+          selection: result.selection,
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
     app.get("/api/v1/projects/:projectId/provider-selection", (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!requireSession(request, reply, correlationId)) return;
@@ -3359,11 +3423,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         const registryResolution = providerRegistry.resolve(result.project);
         const adapter = fixedProviderAdapter ?? registryResolution.adapter;
         const capabilities = adapter.capabilities();
-        if (
-          capabilities.provider !== "MOCK" &&
-          capabilities.canReportRateLimits === true &&
-          adapter.readAllowance !== undefined
-        ) {
+        if (capabilities.canReportRateLimits === true && adapter.readAllowance !== undefined) {
           const snapshot = await readAllowanceOnce(capabilities.provider, adapter);
           if (snapshot.provider !== capabilities.provider) {
             throw new StateStoreError(
@@ -3417,6 +3477,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           checkpointOnRequest: capabilities.checkpointOnRequest,
           contextWindowReporting: capabilities.contextWindowReporting,
           costReporting: capabilities.costReporting,
+          tokenBudgetEnforcement: capabilities.tokenBudgetEnforcement,
           canReportRateLimits: capabilities.canReportRateLimits ?? false,
         });
       } catch (error: unknown) {
@@ -3554,20 +3615,20 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       if (!authorizeMutation(request, reply, correlationId)) return;
       try {
         const params = workItemParamsSchema.parse(request.params);
-        const body = startMockPipelineRequestSchema.parse(request.body);
+        const body = startPipelineRequestSchema.parse(request.body);
         localState.execute({
           schemaVersion: 1,
           commandId: body.commandId,
           correlationId,
           actor: { type: "HUMAN", id: "local-owner" },
-          type: "START_MOCK_PIPELINE",
+          type: "START_PIPELINE",
           payload: {
             workItemId: params.workItemId,
             expectedVersion: body.expectedVersion,
-            template: mockDeliveryTemplate,
+            template: deliveryTemplate,
             budget: {
-              maxEstimatedTokens: body.maxEstimatedTokens ?? LEGACY_MOCK_BUDGET,
-              warningThresholds: [...DEFAULT_MOCK_BUDGET_THRESHOLDS],
+              maxEstimatedTokens: body.maxEstimatedTokens ?? DEFAULT_PROVIDER_TOKEN_BUDGET,
+              warningThresholds: [...DEFAULT_BUDGET_THRESHOLDS],
               modelTierOverride: body.modelTierOverride ?? null,
               agentRunMaxEstimatedTokensOverride: body.agentRunMaxEstimatedTokensOverride ?? null,
             },
@@ -4200,22 +4261,22 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     await drainConstitutionPublications();
     await drainVerificationPlanPublications();
 
-    // Said out loud at startup, both of them. An unrecognised value falls back to the mock rather
-    // than stopping the daemon (a typo must not), but the mock then completes stages successfully:
-    // without this warning the owner watches a full run and believes a live agent did it.
+    // An unknown override never turns into successful synthetic work. Selection remains fail-closed
+    // on the built-in OpenAI adapter until the environment is corrected and its key is present.
     if (!providerResolution.recognised) {
       app.log.warn(
         {
           [LOOMRAIL_PROVIDER_ENV_VAR]: providerResolution.requested,
           accepted: LOOMRAIL_PROVIDER_VALUES.join(", "),
         },
-        `${LOOMRAIL_PROVIDER_ENV_VAR} names a provider this daemon does not know; it fell back to the mock adapter`,
+        `${LOOMRAIL_PROVIDER_ENV_VAR} names a provider this daemon does not know; provider dispatch is blocked`,
       );
     }
     app.log.info(
       {
         provider: providerCapabilities.provider,
-        cliAvailable: providerCapabilities.start,
+        providerReady: providerCapabilities.start,
+        tokenBudgetEnforcement: providerCapabilities.tokenBudgetEnforcement,
         stages: providerCapabilities.stages.join(", "),
       },
       "The provider adapter this daemon will dispatch to",
@@ -4239,7 +4300,8 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       bootstrapUrl,
       provider: {
         provider: providerCapabilities.provider,
-        cliAvailable: providerCapabilities.start,
+        providerReady: providerCapabilities.start,
+        tokenBudgetEnforcement: providerCapabilities.tokenBudgetEnforcement,
         recognised: providerResolution.recognised,
         stages: providerCapabilities.stages,
         worksInRepository: adapterWorksInWorkspace(providerCapabilities.stages),

@@ -57,7 +57,7 @@ describe("provider allowance contract", () => {
     expect(providerAllowanceBucketSchema.safeParse(candidate).success).toBe(false);
   });
 
-  it("rejects duplicate buckets and live Mock allowance", () => {
+  it("rejects duplicate buckets and retired-provider allowance", () => {
     expect(
       providerAllowanceSnapshotSchema.safeParse({
         schemaVersion: 1,
@@ -80,17 +80,7 @@ describe("provider allowance contract", () => {
     ).toBe(false);
   });
 
-  it("requires Mock to use the explicit unsupported unavailable state", () => {
-    expect(
-      providerAllowanceSnapshotSchema.parse({
-        schemaVersion: 1,
-        provider: "MOCK",
-        observedAt: "2026-09-04T20:00:00.000Z",
-        freshness: "UNAVAILABLE",
-        buckets: [],
-        unavailableReason: "PROVIDER_UNSUPPORTED",
-      }),
-    ).toMatchObject({ provider: "MOCK", freshness: "UNAVAILABLE" });
+  it("rejects retired-provider unavailable snapshots", () => {
     expect(
       providerAllowanceSnapshotSchema.safeParse({
         schemaVersion: 1,
@@ -98,7 +88,7 @@ describe("provider allowance contract", () => {
         observedAt: "2026-09-04T20:00:00.000Z",
         freshness: "UNAVAILABLE",
         buckets: [],
-        unavailableReason: "DATA_NOT_PRESENT",
+        unavailableReason: "PROVIDER_UNSUPPORTED",
       }).success,
     ).toBe(false);
   });

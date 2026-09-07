@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { providerCapabilitiesSchema } from "../src/index.js";
+import { providerCapabilitiesSchema, providerTokenBudgetSchema } from "../src/index.js";
 
 const validCapabilities = {
-  provider: "MOCK" as const,
+  provider: "CODEX" as const,
   start: true,
   interrupt: true,
   eventStream: true,
@@ -13,6 +13,7 @@ const validCapabilities = {
   contextWindowTokens: 128_000,
   stages: ["DISCOVERY", "PLAN"] as const,
   costReporting: false,
+  tokenBudgetEnforcement: "HARD" as const,
 };
 
 const withoutField = (field: keyof typeof validCapabilities) =>
@@ -21,7 +22,7 @@ const withoutField = (field: keyof typeof validCapabilities) =>
 describe("provider capabilities", () => {
   it("accepts a fully declared capability set", () => {
     expect(providerCapabilitiesSchema.parse(validCapabilities)).toMatchObject({
-      provider: "MOCK",
+      provider: "CODEX",
       contextWindowTokens: 128_000,
     });
   });
@@ -30,6 +31,13 @@ describe("provider capabilities", () => {
     // Without a window size the pack budget (spec §4.3) is unknowable, and §6.1 step 2 has
     // nothing to compute a share of.
     expect(() => providerCapabilitiesSchema.parse(withoutField("contextWindowTokens"))).toThrow();
+  });
+
+  it("requires an explicit token-budget enforcement level", () => {
+    expect(() => providerCapabilitiesSchema.parse(withoutField("tokenBudgetEnforcement"))).toThrow();
+    expect(() =>
+      providerCapabilitiesSchema.parse({ ...validCapabilities, tokenBudgetEnforcement: "BEST_EFFORT" }),
+    ).toThrow();
   });
 
   it("rejects a non-positive context window size", () => {
@@ -99,5 +107,38 @@ describe("provider capabilities", () => {
 
   it("rejects an unknown stage", () => {
     expect(() => providerCapabilitiesSchema.parse({ ...validCapabilities, stages: ["DEPLOY"] })).toThrow();
+  });
+});
+
+describe("provider token budget", () => {
+  it("accepts one exact immutable remainder", () => {
+    expect(
+      providerTokenBudgetSchema.parse({
+        maxEstimatedTokens: 200_000,
+        recordedEstimatedTokens: 75_000,
+        remainingEstimatedTokens: 125_000,
+      }),
+    ).toEqual({
+      maxEstimatedTokens: 200_000,
+      recordedEstimatedTokens: 75_000,
+      remainingEstimatedTokens: 125_000,
+    });
+  });
+
+  it("rejects a contradictory or exhausted remainder", () => {
+    expect(() =>
+      providerTokenBudgetSchema.parse({
+        maxEstimatedTokens: 200_000,
+        recordedEstimatedTokens: 75_000,
+        remainingEstimatedTokens: 100_000,
+      }),
+    ).toThrow();
+    expect(() =>
+      providerTokenBudgetSchema.parse({
+        maxEstimatedTokens: 200_000,
+        recordedEstimatedTokens: 200_000,
+        remainingEstimatedTokens: 0,
+      }),
+    ).toThrow();
   });
 });

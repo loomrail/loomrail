@@ -21,44 +21,32 @@ const providerSnapshot = (
   environmentOverride,
   providers: [
     {
-      provider: "MOCK",
+      provider: "CODEX",
       installed: true,
-      authentication: "AUTHENTICATED",
+      authentication: liveReady ? "AUTHENTICATED" : "UNKNOWN",
       version: null,
       compatibility: "BUILT_IN",
-      ready: true,
-      stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
-      checkpointOnRequest: true,
-      contextWindowReporting: true,
-      costReporting: true,
-      canReportRateLimits: false,
-      models: null,
-    },
-    {
-      provider: "CODEX",
-      installed: liveReady,
-      authentication: liveReady ? "AUTHENTICATED" : "UNKNOWN",
-      version: liveReady ? "0.152.1" : null,
-      compatibility: liveReady ? "VERIFIED" : "MISSING",
       ready: liveReady,
       stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "ACCEPTANCE"],
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: false,
+      tokenBudgetEnforcement: "HARD",
       canReportRateLimits: liveReady,
       models: { FAST: "gpt-fast", STANDARD: "gpt-standard", DEEP: "gpt-deep" },
     },
     {
       provider: "CLAUDE_CODE",
-      installed: false,
+      installed: true,
       authentication: "UNKNOWN",
       version: null,
-      compatibility: "MISSING",
+      compatibility: "BUILT_IN",
       ready: false,
       stages: ["DISCOVERY", "PLAN", "REVIEW"],
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: true,
+      tokenBudgetEnforcement: "HARD",
       canReportRateLimits: false,
       models: { FAST: "claude-fast", STANDARD: "claude-standard", DEEP: "claude-deep" },
     },
@@ -86,10 +74,10 @@ describe("Loomrail doctor", () => {
 
     expect(report.status).toBe("PASS");
     expect(report.checks.providers.code).toBe("LIVE_PROVIDER_READY");
-    expect(formatDoctorReport(report).join("\n")).toContain("version=0.152.1, compatibility=VERIFIED");
+    expect(formatDoctorReport(report).join("\n")).toContain("version=none, compatibility=BUILT_IN");
   });
 
-  it("treats an uncreated installation and mock-only providers as safe warnings", async () => {
+  it("treats an uncreated installation and missing API credentials as safe warnings", async () => {
     const secretPath = "/Users/local owner/private loomrail";
     const report = await collectDoctorReport({
       nodeVersion: "24.19.0",
@@ -141,7 +129,7 @@ describe("Loomrail doctor", () => {
 
   it("keeps help bounded and points exact-path disclosure to its explicit command", () => {
     const help = formatCliHelp().join("\n");
-    expect(help).toContain("setup [--mode mock|live] [--json]");
+    expect(help).toContain("setup [--mode live] [--json]");
     expect(help).toContain("try [--no-open] [--port N]");
     expect(help).toContain("doctor [--json]");
     expect(help).toContain("logs export");

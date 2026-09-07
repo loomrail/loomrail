@@ -100,11 +100,11 @@ const contextPackWithRequiredEvidence: ContextPackSpec = {
   ],
 };
 
-export const mockDeliveryTemplate = validateWorkflowTemplate({
+export const deliveryTemplate = validateWorkflowTemplate({
   schemaVersion: 1,
-  id: "mock-delivery-v1",
+  id: "delivery-v1",
   version: 4,
-  name: "Mock delivery",
+  name: "Delivery",
   stages: [
     { stage: "DISCOVERY", ordinal: 0, contextPack: contextPackWithoutEvidence },
     { stage: "PLAN", ordinal: 1, contextPack: contextPackWithoutEvidence },

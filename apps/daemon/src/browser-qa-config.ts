@@ -183,7 +183,7 @@ export const resolveProjectBrowserQAConfig = async (
     const parsed = browserQAConfigFileSchema.parse(JSON.parse(source));
     return { status: "READY", targetOrigin: parsed.targetOrigin, plan: planFromConfig(parsed) };
   } catch (error: unknown) {
-    // The bundled web fixture exists to prove Loomrail's persisted owner workflow; its mock
+    // The bundled web fixture exists to prove Loomrail's persisted owner workflow; its test
     // implementation intentionally changes no application. On a first run it therefore measures
     // the running daemon's public readiness surface at the actual dynamic port. This exception is
     // restricted to a missing file on the exact built-in fixture. A user Project, or even an

@@ -49,7 +49,7 @@ describe("local daemon connection", () => {
             foundation: {
               phase: "phase-0",
               milestone: "M3",
-              providers: "mock-only",
+              providers: "real-api-only",
               persistence: "sqlite",
             },
           }),

@@ -10,7 +10,7 @@ import type {
 } from "../packages/contracts/dist/index.js";
 import { providerCapabilitiesSchema, type ProviderAdapter } from "../packages/provider-core/dist/index.js";
 
-import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
+import { startDaemon, type RunningDaemon } from "./provider-test-daemon.js";
 import { createProviderRegistry } from "../apps/daemon/dist/provider-selection.js";
 
 let daemon: RunningDaemon | undefined;
@@ -21,7 +21,7 @@ test.afterEach(async () => {
   daemon = undefined;
 });
 
-const unavailable = (provider: "CODEX" | "CLAUDE_CODE" | "MOCK") => ({
+const unavailable = (provider: "CODEX" | "CLAUDE_CODE") => ({
   schemaVersion: 1 as const,
   provider,
   observedAt: "2026-09-04T18:00:00.000Z",
@@ -64,6 +64,7 @@ const durableAllowanceRegistry = () => {
         contextWindowTokens: 128_000,
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
         canReportRateLimits: true,
       }),
     modelMapping: () => ({ FAST: "fast", STANDARD: "standard", DEEP: "deep" }),
@@ -75,16 +76,7 @@ const durableAllowanceRegistry = () => {
   return createProviderRegistry({
     env: {},
     adapters: { CODEX: codex },
-    executableAvailable: (provider) => provider === "CODEX",
-    probeCompatibility: (provider) =>
-      Promise.resolve(
-        provider === "CODEX"
-          ? { compatibility: "VERIFIED" as const, version: "0.153.0-alpha.5" }
-          : { compatibility: "UNVERIFIED" as const, version: "2.1.260" },
-      ),
-    probeAuthentication: () => Promise.resolve("AUTHENTICATED"),
-    rateLimitVersionTargetVerified: (provider) => provider === "CODEX",
-    probeRateLimitAuthenticationMode: () => Promise.resolve("CHATGPT"),
+    probeAuthentication: (provider) => Promise.resolve(provider === "CODEX" ? "AUTHENTICATED" : "REQUIRED"),
   });
 };
 
@@ -96,8 +88,8 @@ const allowanceResponse = (
     return {
       schemaVersion: 1,
       projectId,
-      effectiveProvider: "MOCK",
-      current: unavailable("MOCK"),
+      effectiveProvider: "CODEX",
+      current: unavailable("CODEX"),
       advisory: { status: "UNKNOWN", deferUntil: null },
       providers: [unavailable("CODEX"), unavailable("CLAUDE_CODE")],
     };
@@ -196,11 +188,11 @@ test.describe("provider allowance product surface", () => {
     await createTask(page, "Provider allowance surface");
 
     const command = page.getByRole("region", {
-      name: "Codex provider allowance in Command Center",
+      name: "OpenAI Responses provider allowance in Command Center",
     });
     const inspector = page.getByRole("complementary", { name: "Provider allowance surface" });
     const cockpit = inspector.getByRole("region", {
-      name: "Codex provider allowance in Task Cockpit",
+      name: "OpenAI Responses provider allowance in Task Cockpit",
     });
     await expect(command.getByText("62% remaining", { exact: true })).toBeVisible();
     await expect(command.getByText("29% remaining", { exact: true })).toBeVisible();
@@ -260,7 +252,7 @@ test.describe("provider allowance product surface", () => {
     await openWorkbench(page);
 
     const command = page.getByRole("region", {
-      name: "Mock provider allowance in Command Center",
+      name: "OpenAI Responses provider allowance in Command Center",
     });
     await expect(command.getByText("Unavailable", { exact: true })).toBeVisible();
     await expect(command.getByText("This provider does not expose an allowance signal.")).toBeVisible();
@@ -287,7 +279,7 @@ test.describe("provider allowance product surface", () => {
       await page.getByRole("button", { name: "Switch project" }).click();
       await page.getByRole("menuitem", { name: "Fixture web application" }).click();
       const liveStrip = page.getByRole("region", {
-        name: "Codex provider allowance in Command Center",
+        name: "OpenAI Responses provider allowance in Command Center",
       });
       await liveStrip.getByRole("button", { name: "Check again" }).click();
       await expect(liveStrip.getByText("70% remaining", { exact: true })).toBeVisible();
@@ -308,7 +300,7 @@ test.describe("provider allowance product surface", () => {
       await page.getByRole("button", { name: "Switch project" }).click();
       await page.getByRole("menuitem", { name: "Fixture web application" }).click();
       const restoredStrip = page.getByRole("region", {
-        name: "Codex provider allowance in Command Center",
+        name: "OpenAI Responses provider allowance in Command Center",
       });
       await expect(restoredStrip.getByText("70% remaining", { exact: true })).toBeVisible();
       await expect(restoredStrip.getByText("Stale", { exact: true })).toBeVisible();

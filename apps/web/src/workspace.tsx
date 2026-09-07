@@ -16,6 +16,7 @@ import type {
   McpProfileProposal,
   McpProfileRevision,
   ModelTier,
+  ProjectWorkspaceStrategySelection,
   ProjectReadinessRun,
   ProviderPreference,
   QACorrectionGateAction,
@@ -35,6 +36,7 @@ import type {
   VerificationPlanPublication,
   VerificationPlanSettingsResponse,
   VerificationRun,
+  WorkspaceStrategy,
 } from "@loomrail/contracts";
 
 import {
@@ -50,6 +52,7 @@ import {
   getProviderCapabilities,
   getProjectProviderAllowance,
   getProjectProviderSelection,
+  getProjectWorkspaceStrategy,
   getProjectMcpProfiles,
   getProjectConstitution,
   getProjectReadiness,
@@ -93,9 +96,10 @@ import {
   resolveAcceptance,
   resolveQACorrectionGate,
   resolveVerificationCorrectionGate,
-  startMockPipeline,
+  startPipeline,
   scanProjectConstitution,
   setProjectProviderPreference,
+  setProjectWorkspaceStrategy,
   adoptVerificationPlan,
   revokeMcpProfile,
   updateWorkItem,
@@ -144,6 +148,8 @@ const stageAttemptSessionsKey = (stageAttemptId: string) =>
 const providerCapabilitiesKey = ["provider", "capabilities"] as const;
 const projectProviderSelectionKey = (projectId: string) =>
   ["projects", projectId, "provider-selection"] as const;
+const projectWorkspaceStrategyKey = (projectId: string) =>
+  ["projects", projectId, "workspace-strategy"] as const;
 const projectProviderAllowanceKey = (projectId: string) =>
   ["projects", projectId, "provider-allowance"] as const;
 const projectMcpProfilesKey = (projectId: string) => ["projects", projectId, "mcp-profiles"] as const;
@@ -416,6 +422,16 @@ export const useProjectProviderSelection = (projectId: string | undefined) =>
     enabled: projectId !== undefined,
   });
 
+export const useProjectWorkspaceStrategy = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: projectId ? projectWorkspaceStrategyKey(projectId) : ["projects", "none", "workspace-strategy"],
+    queryFn: () => {
+      if (!projectId) throw new Error("A Project is required to load its workspace strategy");
+      return getProjectWorkspaceStrategy(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+
 export const useProjectProviderAllowance = (projectId: string | undefined) =>
   useQuery({
     queryKey: projectId ? projectProviderAllowanceKey(projectId) : ["projects", "none", "provider-allowance"],
@@ -447,6 +463,23 @@ export const useSetProjectProviderPreference = () => {
         queryClient.setQueryData(projectProviderSelectionKey(selection.selection.projectId), selection),
         queryClient.invalidateQueries({ queryKey: providerCapabilitiesKey }),
       ]);
+    },
+  });
+};
+
+export const useSetProjectWorkspaceStrategy = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      selection,
+      strategy,
+    }: {
+      selection: ProjectWorkspaceStrategySelection;
+      strategy: WorkspaceStrategy;
+    }) => setProjectWorkspaceStrategy(selection, strategy),
+    onSuccess: async (response) => {
+      queryClient.setQueryData(projectWorkspaceStrategyKey(response.selection.projectId), response);
+      await queryClient.invalidateQueries({ queryKey: projectsKey });
     },
   });
 };
@@ -826,11 +859,11 @@ export const useUpdateWorkItem = () => {
   });
 };
 
-export const useStartMockPipeline = () => {
+export const useStartPipeline = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ policy, workItem }: { policy: PipelineStartPolicy; workItem: WorkItem }) =>
-      startMockPipeline(workItem, policy),
+      startPipeline(workItem, policy),
     onSuccess: async (_, { workItem }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),

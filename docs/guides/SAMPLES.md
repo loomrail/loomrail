@@ -27,20 +27,20 @@ unchanged into a new Loomrail Task. The recipes are bounded product examples, no
 workflow definitions.
 
 The web sample can be started explicitly with `npm start` at `http://127.0.0.1:4173`. Loomrail never starts it. The
-built-in Mock walkthrough still measures Loomrail's own readiness endpoint so a first evaluation needs no second
-server. To measure the sample application itself, start it and add an explicit `.loomrail/browser-qa.json` as
+built-in readiness plan measures Loomrail's own endpoint, so that check needs no second server. To measure the sample
+application itself, start it and add an explicit `.loomrail/browser-qa.json` as
 described in the [Browser QA guide](BROWSER-QA.md).
 
 ## One shipped delivery workflow
 
-Every recipe uses the same domain-owned workflow, `mock-delivery-v1` revision 4:
+Every recipe uses the same domain-owned revision-4 workflow:
 
 ```text
 Discovery → Plan → Implement → Review → QA → Acceptance
 ```
 
-The historical ID does not mean live providers use a different workflow. Mock, Codex, and Claude Code adapters feed
-the same deterministic state machine. The current pre-alpha does not offer workflow selection or custom templates.
+OpenAI Responses and Anthropic Messages feed the same deterministic state machine. The current pre-alpha does not
+offer workflow selection or custom templates.
 
 ## Built-in role catalog
 
@@ -64,10 +64,10 @@ Those remain Loomrail state and owner decisions rather than instructions hidden 
 
 ## Choose the right route
 
-- Use **Mock** plus either sample to learn durable requests, budgets, evidence, restart recovery, and acceptance
-  without provider quota. Mock does not edit the sample source.
-- Use the [full-route example](../examples/full-route/README.md) only after an exact live provider version is admitted.
-  It runs a real CLI, consumes quota, and demonstrates an actual repository change.
+- Use either sample with a configured API provider to inspect durable requests, budgets, evidence, restart recovery,
+  and acceptance. Provider work consumes quota.
+- The [full-route example](../examples/full-route/README.md) describes the intended end-to-end route. Current API
+  adapters stop before Implementation until the local workspace executor is available.
 - A green sample baseline is release evidence for the bundled templates. It is not private dogfood evidence and does
   not make an unverified provider compatible.
 

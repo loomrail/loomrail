@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  mockDeliveryTemplate,
+  deliveryTemplate,
   nextWorkflowStage,
   validateWorkflowTemplate,
   WorkflowTemplateError,
@@ -13,13 +13,13 @@ const minimalContextPack = {
 };
 
 describe("workflow template validation", () => {
-  it("orders and advances the bounded mock template", () => {
-    expect(nextWorkflowStage(mockDeliveryTemplate, "DISCOVERY")).toBe("PLAN");
-    expect(nextWorkflowStage(mockDeliveryTemplate, "PLAN")).toBe("IMPLEMENT");
-    expect(nextWorkflowStage(mockDeliveryTemplate, "IMPLEMENT")).toBe("REVIEW");
-    expect(nextWorkflowStage(mockDeliveryTemplate, "REVIEW")).toBe("QA");
-    expect(nextWorkflowStage(mockDeliveryTemplate, "QA")).toBe("ACCEPTANCE");
-    expect(nextWorkflowStage(mockDeliveryTemplate, "ACCEPTANCE")).toBeNull();
+  it("orders and advances the bounded delivery template", () => {
+    expect(nextWorkflowStage(deliveryTemplate, "DISCOVERY")).toBe("PLAN");
+    expect(nextWorkflowStage(deliveryTemplate, "PLAN")).toBe("IMPLEMENT");
+    expect(nextWorkflowStage(deliveryTemplate, "IMPLEMENT")).toBe("REVIEW");
+    expect(nextWorkflowStage(deliveryTemplate, "REVIEW")).toBe("QA");
+    expect(nextWorkflowStage(deliveryTemplate, "QA")).toBe("ACCEPTANCE");
+    expect(nextWorkflowStage(deliveryTemplate, "ACCEPTANCE")).toBeNull();
   });
 
   it("rejects duplicate and non-contiguous stages", () => {

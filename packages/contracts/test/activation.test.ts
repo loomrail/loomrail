@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { guidedActivationContract, guidedActivationContractSchema } from "../src/activation.js";
 
 describe("guided activation contract", () => {
-  it("publishes one bounded Mock mission", () => {
-    expect(guidedActivationContract.id).toBe("guided-mock-v1");
+  it("publishes one bounded real-provider mission", () => {
+    expect(guidedActivationContract.id).toBe("guided-real-v1");
     expect(guidedActivationContract.fixtureId).toBe("web-app-a");
     expect(guidedActivationContract.install.commands.at(-1)).toBe("npx loomrail try");
     expect(guidedActivationContract.task.acceptanceCriteria).toHaveLength(3);

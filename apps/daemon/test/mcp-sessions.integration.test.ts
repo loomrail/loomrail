@@ -170,7 +170,7 @@ describe("daemon MCP session orchestration", () => {
       commandId: "start-pipeline",
       correlationId: "mcp-session-setup",
       actor: { type: "HUMAN", id: "local-owner" },
-      type: "START_MOCK_PIPELINE",
+      type: "START_PIPELINE",
       payload: {
         workItemId: workItem.workItem.id,
         expectedVersion: 2,

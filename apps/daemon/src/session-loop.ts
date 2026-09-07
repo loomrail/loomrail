@@ -35,6 +35,7 @@ import {
   refineContextPackForRole,
   stageRequiresWorkspace,
   stageRunsInWorkspace,
+  stageWritesInWorkspace,
   workspaceBranchName,
   type DispatchStageDecision,
   type ProvisionRefusal,
@@ -43,6 +44,7 @@ import {
 import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
 import {
   ProviderPackTooLargeError,
+  providerTokenBudgetSchema,
   type ProviderAdapter,
   type ProviderMcpConnection,
   type ProviderSessionListener,
@@ -55,6 +57,7 @@ import {
   createCarryInSnapshot,
   deleteBranchIfUnmoved,
   inspectRepository,
+  readCurrentBranch,
   removeWorktree,
   readReviewDiff,
   treeOfWorktree,
@@ -259,7 +262,12 @@ const readStageAttemptState = (
 const readAttemptSessions = (
   deps: RunStageAttemptDeps,
   agentRunId: string | null,
-): { nextOrdinal: number; running: boolean; agentRunSessionCount: number } => {
+): {
+  nextOrdinal: number;
+  running: boolean;
+  agentRunSessionCount: number;
+  agentRunUsageTotal: number;
+} => {
   const sessions = deps.state.query({
     type: "LIST_PROVIDER_SESSIONS",
     stageAttemptId: deps.dispatch.stageAttemptId,
@@ -269,6 +277,9 @@ const readAttemptSessions = (
     nextOrdinal: sessions.sessions.reduce((highest, { ordinal }) => Math.max(highest, ordinal), 0) + 1,
     running: sessions.sessions.some(({ status }) => status === "RUNNING"),
     agentRunSessionCount: sessions.sessions.filter((session) => session.agentRunId === agentRunId).length,
+    agentRunUsageTotal: sessions.usageReports
+      .filter((report) => report.agentRunId === agentRunId)
+      .reduce((total, report) => total + report.totalTokens, 0),
   };
 };
 
@@ -435,6 +446,12 @@ const provisioningFailedRefusal = (error: unknown, path: string | null): Provisi
     "Check the repository and the Loomrail data directory for whatever the message above names, then retry the stage.",
 });
 
+const detachedSharedWorkspaceRefusal = (path: string): ProvisionRefusal => ({
+  title: "The shared working directory is not on a named branch",
+  context: `The repository at ${path} has a detached HEAD. Loomrail would have no stable branch name to record for work performed directly in that directory, and it will not create or check out one in shared mode.`,
+  recommendation: "Check out the branch this work belongs on, then retry the stage.",
+});
+
 const canonicalPathOf = async (path: string): Promise<string | null> => {
   try {
     return await realpath(path);
@@ -497,11 +514,92 @@ const createWorkspace = async (
     throw new Error("A workspace was approved for a path that is not a repository");
   }
 
+  const strategyResult = deps.state.query({
+    type: "GET_PROJECT_WORKSPACE_STRATEGY",
+    projectId: project.id,
+  });
+  if (strategyResult.type !== "PROJECT_WORKSPACE_STRATEGY") {
+    throw new Error("The Project workspace strategy could not be read");
+  }
+  const strategy = strategyResult.selection.strategy;
+
   const snapshot = await createCarryInSnapshot({
     topLevel: repository.topLevel,
     headCommit: repository.headCommit,
     message: `Loomrail carry-in for ${workItem.id}`,
   });
+
+  // Both strategies freeze the same carry-in baseline. In isolated mode it becomes the branch's
+  // starting commit; in shared mode it remains an internal, unreferenced comparison object while
+  // the owner's working tree stays exactly where it is.
+  const carriedPaths = snapshot?.carriedPaths ?? [];
+  if (carriedPaths.length > maxCarriedPaths) {
+    deps.logger.warn(
+      { workItemId: workItem.id, carriedPaths: carriedPaths.length, recorded: maxCarriedPaths },
+      "More files were carried into the workspace than the event can list; the record names the first of them",
+    );
+  }
+
+  const recordWorkspace = (
+    branch: string,
+    worktreePath: string,
+    includeInitialLease: boolean,
+  ): WorkItemWorkspace => {
+    const activeRuns = deps.state.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" });
+    const activeAgentRun =
+      activeRuns.type === "AGENT_RUNS"
+        ? activeRuns.runs.find(({ stageAttemptId }) => stageAttemptId === deps.dispatch.stageAttemptId)
+        : undefined;
+    const created = deps.state.execute({
+      schemaVersion: 1,
+      commandId: deps.createCommandId(),
+      correlationId: deps.correlationId,
+      actor,
+      type: "CREATE_WORK_ITEM_WORKSPACE",
+      payload: {
+        workItemId: workItem.id,
+        projectId: workItem.projectId,
+        strategy,
+        branch,
+        worktreePath,
+        baseCommit: repository.headCommit,
+        snapshotCommit: snapshot?.commit ?? null,
+        carriedPaths: carriedPaths.slice(0, maxCarriedPaths),
+        ...(includeInitialLease && activeAgentRun !== undefined
+          ? { initialLeaseHolder: deps.dispatch.stageAttemptId }
+          : {}),
+      },
+    });
+    if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("The workspace was not recorded");
+    return created.workspace;
+  };
+
+  if (strategy === "SHARED_CURRENT_DIRECTORY") {
+    const branch = await readCurrentBranch(repository.topLevel);
+    if (branch === null) {
+      return {
+        type: "REFUSED",
+        cause: "REPOSITORY_UNUSABLE",
+        request: provisionRefusalRequest(detachedSharedWorkspaceRefusal(project.repositoryPath)),
+      };
+    }
+    try {
+      return {
+        type: "PREPARED",
+        // The exclusive Project claim is acquired by the same guarded lease command used for a
+        // reused workspace. Recording the row first avoids turning another shared WorkItem's
+        // active authority into an INSERT constraint failure with no actionable POSTPONED state.
+        workspace: recordWorkspace(branch, repository.topLevel, false),
+      };
+    } catch (error: unknown) {
+      return {
+        type: "REFUSED",
+        cause: "REPOSITORY_UNUSABLE",
+        request: provisionRefusalRequest(provisioningFailedRefusal(error, project.repositoryPath)),
+      };
+    }
+  }
+
   // The snapshot when there was something to carry, HEAD when there was not. Both null means an
   // empty repository with nothing in it -- there is no commit to branch from, and git would refuse.
   const startPoint = snapshot?.commit ?? repository.headCommit;
@@ -535,44 +633,8 @@ const createWorkspace = async (
     };
   }
 
-  // `maxCarriedPaths` is the same bound the contract enforces, read from the contract rather than
-  // restated here (contracts/workspace.ts exports it for exactly this). A carry-in of more files
-  // than the event can list is still a legitimate carry-in -- the worktree already holds all of
-  // them -- so the list is cut to what the audit record can hold and the cut is logged, rather than
-  // letting `.parse` reject a workspace that exists on disk.
-  const carriedPaths = snapshot?.carriedPaths ?? [];
-  if (carriedPaths.length > maxCarriedPaths) {
-    deps.logger.warn(
-      { workItemId: workItem.id, carriedPaths: carriedPaths.length, recorded: maxCarriedPaths },
-      "More files were carried into the workspace than the event can list; the record names the first of them",
-    );
-  }
-
   try {
-    const activeRuns = deps.state.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" });
-    const activeAgentRun =
-      activeRuns.type === "AGENT_RUNS"
-        ? activeRuns.runs.find(({ stageAttemptId }) => stageAttemptId === deps.dispatch.stageAttemptId)
-        : undefined;
-    const created = deps.state.execute({
-      schemaVersion: 1,
-      commandId: deps.createCommandId(),
-      correlationId: deps.correlationId,
-      actor,
-      type: "CREATE_WORK_ITEM_WORKSPACE",
-      payload: {
-        workItemId: workItem.id,
-        projectId: workItem.projectId,
-        branch,
-        worktreePath,
-        baseCommit: repository.headCommit,
-        snapshotCommit: snapshot?.commit ?? null,
-        carriedPaths: carriedPaths.slice(0, maxCarriedPaths),
-        ...(activeAgentRun === undefined ? {} : { initialLeaseHolder: deps.dispatch.stageAttemptId }),
-      },
-    });
-    if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("The workspace was not recorded");
-    return { type: "PREPARED", workspace: created.workspace };
+    return { type: "PREPARED", workspace: recordWorkspace(branch, worktreePath, true) };
   } catch (error: unknown) {
     // The worktree exists on disk and nothing records it. Left alone it would be a directory no row
     // names, and the next attempt would meet it as PATH_EXISTS forever. Removing it is safe
@@ -657,6 +719,7 @@ const acquireWorkspaceLease = (
     if (
       error instanceof StateStoreError &&
       (error.code === "WORKSPACE_LEASE_HELD" ||
+        error.code === "WORKSPACE_PROJECT_AUTHORITY_HELD" ||
         error.code === "WORKSPACE_VERSION_CONFLICT" ||
         error.code === "WORKSPACE_LEASE_ATTEMPT_INACTIVE")
     ) {
@@ -684,11 +747,26 @@ const worktreeStillUsable = async (worktreePath: string): Promise<boolean> => {
   return inspected !== null && inspected.topLevel === canonical;
 };
 
+/**
+ * Isolated worktrees keep their existing per-attempt lease for every repository-backed stage: the
+ * lease is what makes the recorded worktree a stable input while that attempt reads it. A shared
+ * current directory is different. Its Project-wide authority protects mutations, not reads, so a
+ * DISCOVERY/PLAN/REVIEW/QA attempt must not exclude the Project's one legitimate writer merely by
+ * inspecting the same checkout.
+ */
+const workspaceNeedsWriterLease = (stage: StageAttempt["stage"], workspace: WorkItemWorkspace): boolean =>
+  workspace.strategy === "ISOLATED_WORKTREE" || stageWritesInWorkspace(stage);
+
 const prepareWorkspace = async (deps: RunStageAttemptDeps): Promise<WorkspacePreparation> => {
+  const stage = readStageAttemptState(deps).attempt.stage;
+  const prepareRecordedWorkspace = (workspace: WorkItemWorkspace): WorkspacePreparation =>
+    workspaceNeedsWriterLease(stage, workspace)
+      ? acquireWorkspaceLease(deps, workspace)
+      : { type: "PREPARED", workspace };
   const existing = readWorkItemWorkspace(deps);
   if (existing === null) {
     const created = await createWorkspace(deps);
-    return created.type === "PREPARED" ? acquireWorkspaceLease(deps, created.workspace) : created;
+    return created.type === "PREPARED" ? prepareRecordedWorkspace(created.workspace) : created;
   }
   if (existing.status !== "READY") {
     return {
@@ -713,7 +791,7 @@ const prepareWorkspace = async (deps: RunStageAttemptDeps): Promise<WorkspacePre
       request: provisionRefusalRequest(workspaceGoneRefusal(existing)),
     };
   }
-  return acquireWorkspaceLease(deps, existing);
+  return prepareRecordedWorkspace(existing);
 };
 
 /**
@@ -915,6 +993,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       provider: capabilities.provider,
       declaredStages: capabilities.stages,
       canStart: capabilities.start,
+      tokenBudgetEnforcement: capabilities.tokenBudgetEnforcement,
     });
     // Both refusals are completed the same way -- through the same APPLY_PROVIDER_OUTCOME command a
     // provider's own NEEDS_HUMAN outcome uses -- because from the dispatcher's side they are the
@@ -958,13 +1037,19 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         },
         decision.type === "STAGE_NOT_SERVED"
           ? "The adapter refused this dispatch; the owner was asked"
-          : decision.type === "WORKSPACE_NOT_PROVISIONED"
-            ? "No workspace could be prepared for this stage; the owner was asked"
-            : "The stable review diff could not be measured; the owner was asked",
+          : decision.type === "TOKEN_BUDGET_NOT_ENFORCED"
+            ? "The adapter cannot enforce the immutable token budget; provider work was not started"
+            : decision.type === "WORKSPACE_NOT_PROVISIONED"
+              ? "No workspace could be prepared for this stage; the owner was asked"
+              : "The stable review diff could not be measured; the owner was asked",
       );
     };
 
     if (dispatchDecision.type === "STAGE_NOT_SERVED") {
+      refuseDispatch(dispatchDecision);
+      return;
+    }
+    if (dispatchDecision.type === "TOKEN_BUDGET_NOT_ENFORCED") {
       refuseDispatch(dispatchDecision);
       return;
     }
@@ -1053,6 +1138,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         return;
       } else {
         lease.workspace = prepared.workspace;
+        lease.releaseOnExit = prepared.workspace.leaseHolder === stageAttemptId;
         deps.logger.info(
           {
             stageAttemptId,
@@ -1061,7 +1147,9 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             branch: prepared.workspace.branch,
             worktreePath: prepared.workspace.worktreePath,
           },
-          "The work item's workspace is ready and leased to this stage attempt",
+          lease.releaseOnExit
+            ? "The work item's workspace is ready and leased to this stage attempt"
+            : "The shared working directory is ready for this read-only stage attempt",
         );
       }
     }
@@ -1301,7 +1389,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         }
         // Occupancy is state now, and state is written by a command, so every report costs a row
         // in the append-only `commands` table -- it already did, because the receipt is written
-        // outside the branch that decided the report changed nothing. With the mock that is a
+        // outside the branch that decided the report changed nothing. With an in-process adapter that is a
         // handful of rows; a live adapter streams occupancy continuously across up to
         // the immutable AgentProfile session cap, and most of those rows say only "not yet".
         //
@@ -1447,7 +1535,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       },
       // Spec §8 follow-up: the durable half of `ProviderSessionListener.onProcessStarted`
       // (@loomrail/provider-core) -- a live adapter calls this at most once, right after its
-      // process runner returns a pid, and MOCK (and any adapter that spawns nothing) never calls
+      // process runner returns a pid, and any adapter that spawns nothing never calls
       // it at all, which is exactly what leaves the session's `pid` null. Written through its own
       // command, like every other durable report in this loop, rather than as a direct write --
       // the commandId is keyed on the session alone (not a value like `onContextWindow`'s percent)
@@ -1519,6 +1607,12 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             contextPack: assembled.pack,
             modelTier: executionPolicy.snapshot.modelTier,
             modelId: executionPolicy.snapshot.modelId ?? null,
+            tokenBudget: providerTokenBudgetSchema.parse({
+              maxEstimatedTokens: executionPolicy.snapshot.budget.maxEstimatedTokens,
+              recordedEstimatedTokens: sessions.agentRunUsageTotal,
+              remainingEstimatedTokens:
+                executionPolicy.snapshot.budget.maxEstimatedTokens - sessions.agentRunUsageTotal,
+            }),
             acceptanceInput:
               attempt.stage === "ACCEPTANCE"
                 ? {
@@ -1740,7 +1834,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             },
           },
         });
-        if (applied.type !== "MOCK_PROVIDER_OUTCOME_APPLIED") {
+        if (applied.type !== "PROVIDER_OUTCOME_APPLIED") {
           throw new Error("The terminal provider outcome was not applied");
         }
         if (applied.outcomeRejectionCode !== null && applied.outcomeRejectionCode !== undefined) {

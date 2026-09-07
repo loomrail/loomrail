@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "guided-mock-v1",
+  "id": "guided-real-v1",
   "fixtureId": "web-app-a",
   "createCommandId": "guided-activation-v1-create-task",
   "task": {
@@ -16,8 +16,8 @@
     ]
   },
   "policy": {
-    "maxEstimatedTokens": 100,
-    "agentRunMaxEstimatedTokensOverride": 100,
+    "maxEstimatedTokens": 64000,
+    "agentRunMaxEstimatedTokensOverride": 8000,
     "modelTierOverride": "FAST"
   },
   "install": {

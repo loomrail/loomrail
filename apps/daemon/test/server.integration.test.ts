@@ -26,9 +26,9 @@ import {
   type WorkflowTemplate,
 } from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
-import { createCodexProvider } from "@loomrail/provider-codex";
+import { createOpenAIResponsesProvider } from "@loomrail/provider-codex";
 import { providerCapabilitiesSchema, type ProviderAdapter } from "@loomrail/provider-core";
-import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
+import { deliveryTemplate } from "@loomrail/workflow-engine";
 import { addWorktree, createCarryInSnapshot, inspectRepository, listWorktrees } from "@loomrail/workspace";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -45,6 +45,7 @@ import {
   type AuthenticatedSession,
 } from "./daemon-fixtures.js";
 import { gatedAdapter } from "./gated-adapter.js";
+import { createProviderTestDouble } from "./provider-double.js";
 import { makeThrowawayRepo } from "./repo-fixtures.js";
 import { seedQueuedAttempt, type SeededAttempt } from "./state-fixtures.js";
 
@@ -63,10 +64,10 @@ const legacyContextPack: ContextPackSpec = {
 
 // IMPLEMENT alone, so a seeded pipeline's first dispatch is already the stage that needs a
 // repository -- the stage the stale demo path used to make impossible.
-const implementStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "IMPLEMENT");
-if (!implementStage) throw new Error("The mock delivery template no longer declares IMPLEMENT");
+const implementStage = deliveryTemplate.stages.find(({ stage }) => stage === "IMPLEMENT");
+if (!implementStage) throw new Error("The delivery template no longer declares IMPLEMENT");
 const implementOnlyTemplate: WorkflowTemplate = {
-  ...mockDeliveryTemplate,
+  ...deliveryTemplate,
   id: "demo-repair-implement-v1",
   version: 1,
   name: "Demo repair implement",
@@ -79,7 +80,7 @@ const implementOnlyTemplate: WorkflowTemplate = {
 const completingAdapter = (): ProviderAdapter => ({
   capabilities: () =>
     providerCapabilitiesSchema.parse({
-      provider: "MOCK",
+      provider: "CODEX",
       start: true,
       interrupt: true,
       eventStream: false,
@@ -89,8 +90,10 @@ const completingAdapter = (): ProviderAdapter => ({
       contextWindowTokens: 128_000,
       stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
       costReporting: false,
+      tokenBudgetEnforcement: "HARD",
     }),
-  start: () => Promise.resolve({ type: "COMPLETED", summary: "The mock session finished the stage." }),
+  start: () =>
+    Promise.resolve({ type: "COMPLETED", summary: "The provider test session finished the stage." }),
   requestHandoff: () => Promise.resolve(),
   abortSession: () => Promise.resolve(),
 });
@@ -131,7 +134,7 @@ const seedImplementAttempt = (localState: LocalState, projectId: string): Seeded
     commandId: commandId(),
     correlationId: "correlation-seed-implement-pipeline",
     actor: { type: "HUMAN", id: "local-owner" },
-    type: "START_MOCK_PIPELINE",
+    type: "START_PIPELINE",
     payload: {
       workItemId: created.workItem.id,
       expectedVersion: 2,
@@ -148,7 +151,7 @@ const seedImplementAttempt = (localState: LocalState, projectId: string): Seeded
     type: "START_AGENT_RUN",
     payload: {
       dispatchId: started.dispatch.id,
-      provider: "MOCK",
+      provider: "CODEX",
       limits: { global: 3, project: 3, provider: 3 },
     },
   });
@@ -289,11 +292,11 @@ describe("local daemon session and state boundary", () => {
       commandId: "reporting-start-pipeline",
       correlationId: "correlation-reporting-start-pipeline",
       actor: { type: "HUMAN", id: "local-owner" },
-      type: "START_MOCK_PIPELINE",
+      type: "START_PIPELINE",
       payload: {
         workItemId: created.workItem.id,
         expectedVersion: ready.workItem.version,
-        template: mockDeliveryTemplate,
+        template: deliveryTemplate,
         budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
       },
     });
@@ -470,7 +473,7 @@ describe("local daemon session and state boundary", () => {
     expect(response.status).toBe(401);
   });
 
-  it("consumes a bootstrap token once and reports the M6 mock workflow", async () => {
+  it("consumes a bootstrap token once and reports the M6 workflow", async () => {
     const token = bootstrapToken();
     daemon = await startDaemon({ bootstrapToken: token, logger: false });
     const session = await authenticate(daemon, token);
@@ -1513,6 +1516,7 @@ describe("local daemon session and state boundary", () => {
     const firstDaemon = await startDaemon({
       bootstrapToken: firstToken,
       logger: false,
+      providerAdapter: createProviderTestDouble(),
       stateDatabasePath,
       browserQADriver: passingBrowserQADriver({ artifactsDirectory: browserQAArtifactsDirectory }),
       browserQAArtifactsDirectory,
@@ -1576,6 +1580,7 @@ describe("local daemon session and state boundary", () => {
     daemon = await startDaemon({
       bootstrapToken: secondToken,
       logger: false,
+      providerAdapter: createProviderTestDouble(),
       stateDatabasePath,
       browserQADriver: passingBrowserQADriver({ artifactsDirectory: browserQAArtifactsDirectory }),
       browserQAArtifactsDirectory,
@@ -1947,15 +1952,15 @@ describe("local daemon session and state boundary", () => {
         commandId: "start-legacy-template-task",
         correlationId: "correlation-start-legacy-template-task",
         actor: { type: "HUMAN", id: "local-owner" },
-        type: "START_MOCK_PIPELINE",
+        type: "START_PIPELINE",
         payload: {
           workItemId: created.workItem.id,
           expectedVersion: 2,
           template: {
             schemaVersion: 1,
-            id: "mock-delivery-v1",
+            id: "legacy-delivery-v1",
             version: 1,
-            name: "Mock delivery",
+            name: "Delivery",
             stages: [
               { stage: "DISCOVERY", ordinal: 0, contextPack: legacyContextPack },
               { stage: "PLAN", ordinal: 1, contextPack: legacyContextPack },
@@ -1969,7 +1974,7 @@ describe("local daemon session and state boundary", () => {
         schemaVersion: 1,
         commandId: "mark-legacy-template-task-started",
         correlationId: "correlation-mark-legacy-template-task-started",
-        actor: { type: "SYSTEM", id: "mock-provider" },
+        actor: { type: "SYSTEM", id: "provider-double" },
         type: "MARK_WORKFLOW_DISPATCH_STARTED",
         payload: { dispatchId: started.dispatch.id },
       });
@@ -1977,16 +1982,16 @@ describe("local daemon session and state boundary", () => {
         schemaVersion: 1,
         commandId: "apply-legacy-template-task",
         correlationId: "correlation-apply-legacy-template-task",
-        actor: { type: "SYSTEM", id: "mock-provider" },
+        actor: { type: "SYSTEM", id: "provider-double" },
         type: "APPLY_PROVIDER_OUTCOME",
         payload: {
           resultTree: null,
           dispatchId: started.dispatch.id,
           template: {
             schemaVersion: 1,
-            id: "mock-delivery-v1",
+            id: "legacy-delivery-v1",
             version: 1,
-            name: "Mock delivery",
+            name: "Delivery",
             stages: [
               { stage: "DISCOVERY", ordinal: 0, contextPack: legacyContextPack },
               { stage: "PLAN", ordinal: 1, contextPack: legacyContextPack },
@@ -2018,7 +2023,12 @@ describe("local daemon session and state boundary", () => {
     }
 
     const token = bootstrapToken();
-    daemon = await startDaemon({ bootstrapToken: token, logger: false, stateDatabasePath });
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      providerAdapter: createProviderTestDouble(),
+      stateDatabasePath,
+    });
     const session = await authenticate(daemon, token);
     const headers = mutationHeaders(daemon, session);
     const createResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items`, {
@@ -2062,7 +2072,7 @@ describe("local daemon session and state boundary", () => {
     await daemon.whenIdle();
     const started = await fetchWorkflowSnapshot(daemon, session.cookie, created.workItem.id);
     expect(started).toMatchObject({
-      run: { workflowVersion: mockDeliveryTemplate.version, status: "WAITING_HUMAN" },
+      run: { workflowVersion: deliveryTemplate.version, status: "WAITING_HUMAN" },
     });
   });
 
@@ -2415,11 +2425,11 @@ describe("local daemon session and state boundary", () => {
         commandId: "start-recovery-task",
         correlationId: "correlation-start-recovery",
         actor: { type: "HUMAN", id: "local-owner" },
-        type: "START_MOCK_PIPELINE",
+        type: "START_PIPELINE",
         payload: {
           workItemId: created.workItem.id,
           expectedVersion: 2,
-          template: mockDeliveryTemplate,
+          template: deliveryTemplate,
           budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
         },
       });
@@ -2428,7 +2438,7 @@ describe("local daemon session and state boundary", () => {
         schemaVersion: 1,
         commandId: "mark-recovery-task-running",
         correlationId: "correlation-mark-recovery",
-        actor: { type: "SYSTEM", id: "mock-provider" },
+        actor: { type: "SYSTEM", id: "provider-double" },
         type: "MARK_WORKFLOW_DISPATCH_STARTED",
         payload: { dispatchId: started.dispatch.id },
       });
@@ -2437,7 +2447,12 @@ describe("local daemon session and state boundary", () => {
     }
 
     const token = bootstrapToken();
-    daemon = await startDaemon({ bootstrapToken: token, logger: false, stateDatabasePath });
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      providerAdapter: createProviderTestDouble(),
+      stateDatabasePath,
+    });
     const session = await authenticate(daemon, token);
     const projects = await fetch(`${daemon.baseUrl}/api/v1/projects`, {
       headers: { cookie: session.cookie },
@@ -3297,7 +3312,12 @@ describe("background session worker wiring", { timeout: WORKER_TEST_LIFECYCLE_TI
   // database file; the two never touch it at once.
   const seedOpenHumanRequest: Prepare = async (stateDatabasePath) => {
     const prelimToken = bootstrapToken();
-    const prelim = await startDaemon({ bootstrapToken: prelimToken, logger: false, stateDatabasePath });
+    const prelim = await startDaemon({
+      bootstrapToken: prelimToken,
+      logger: false,
+      providerAdapter: createProviderTestDouble(),
+      stateDatabasePath,
+    });
     try {
       const session = await authenticate(prelim, prelimToken);
       // The prelim daemon and the one under test open the same database file and default their
@@ -3307,7 +3327,13 @@ describe("background session worker wiring", { timeout: WORKER_TEST_LIFECYCLE_TI
       await fetch(`${prelim.baseUrl}/api/v1/work-items/${workItemId}/pipeline/start`, {
         method: "POST",
         headers: mutationHeaders(prelim, session),
-        body: JSON.stringify({ schemaVersion: 1, commandId: "start-kickoff-fixture", expectedVersion: 2 }),
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "start-kickoff-fixture",
+          expectedVersion: 2,
+          maxEstimatedTokens: 100,
+          agentRunMaxEstimatedTokensOverride: 80,
+        }),
       });
       await prelim.whenIdle();
       const opened = await fetchWorkflowSnapshot(prelim, session.cookie, workItemId);
@@ -3330,7 +3356,12 @@ describe("background session worker wiring", { timeout: WORKER_TEST_LIFECYCLE_TI
       throw new Error("Expected a seeded HumanRequest");
     }
     const prelimToken = bootstrapToken();
-    const prelim = await startDaemon({ bootstrapToken: prelimToken, logger: false, stateDatabasePath });
+    const prelim = await startDaemon({
+      bootstrapToken: prelimToken,
+      logger: false,
+      providerAdapter: createProviderTestDouble(),
+      stateDatabasePath,
+    });
     try {
       const session = await authenticate(prelim, prelimToken);
       await fetch(`${prelim.baseUrl}/api/v1/human-requests/${seeded.humanRequestId}/answer`, {
@@ -3343,8 +3374,12 @@ describe("background session worker wiring", { timeout: WORKER_TEST_LIFECYCLE_TI
           answer: { type: "OPTION", optionIds: ["focused-pass"] },
         }),
       });
-      await prelim.whenIdle();
-      const paused = await fetchWorkflowSnapshot(prelim, session.cookie, seeded.workItemId);
+      let paused = await fetchWorkflowSnapshot(prelim, session.cookie, seeded.workItemId);
+      for (let attempt = 0; attempt < 100 && paused.run?.status === "RUNNING"; attempt += 1) {
+        await prelim.whenIdle();
+        await delay(10);
+        paused = await fetchWorkflowSnapshot(prelim, session.cookie, seeded.workItemId);
+      }
       if (paused.run?.status !== "HARD_PAUSED") {
         throw new Error(`Expected a budget hard pause, got ${paused.run?.status ?? "no run"}`);
       }
@@ -3367,7 +3402,7 @@ describe("background session worker wiring", { timeout: WORKER_TEST_LIFECYCLE_TI
         createCommandId,
         dirname(stateDatabasePath),
         "project-web",
-        mockDeliveryTemplate,
+        deliveryTemplate,
       );
       const snapshot = localState.query({
         type: "GET_WORKFLOW_SNAPSHOT",
@@ -3675,7 +3710,7 @@ describe("stage capability gate", () => {
       ]);
       // Proves the adapter was never asked to run the stage it does not declare -- not merely that
       // the daemon recovered after trying. Under the mutation that always dispatches, this call
-      // count climbs past 2 (IMPLEMENT, and whatever the mock-shaped COMPLETED outcome lets run
+      // count climbs past 2 (IMPLEMENT, and whatever the test double-shaped COMPLETED outcome lets run
       // after it), which is what actually catches the defect; the stageAttempts assertion above
       // would already have failed by then too.
       expect(adapter.startCallCount).toBe(2);
@@ -3700,7 +3735,7 @@ describe("stage capability gate", () => {
   // there (or wiring a different field) would make this refusal vanish silently, and nothing else in
   // this suite would notice.
   it("refuses to dispatch to an adapter that cannot start at all, and asks the owner", async () => {
-    // Deliberately left at the default `stages` (every stage, like the mock) -- unlike the sibling
+    // Deliberately left at the default `stages` (every stage, like the test double) -- unlike the sibling
     // test above, this adapter declares everything. A decision to refuse here can therefore only be
     // explained by the gate reading `start`, not by any stage being undeclared. DISCOVERY is the
     // very first stage the workflow would dispatch, so a mutation that skipped this check would let
@@ -3780,18 +3815,8 @@ describe("stage capability gate", () => {
     }
   });
 
-  // The sibling test above proves the gate reads `start`, but it proves it against `gatedAdapter`,
-  // a test double that has `start: false` hardcoded -- it never exercises the real adapter's own
-  // missing-executable check. This is the other half: `createCodexProvider` from the actual
-  // production package, pointed at a command that does not exist, so its own `isExecutableOnDisk`
-  // (packages/provider-codex/src/index.ts) is what decides `capabilities().start`, not a test
-  // fixture pretending to. This is the path an owner actually takes: set `LOOMRAIL_PROVIDER=CODEX`
-  // (see `resolveDefaultProviderAdapter`, apps/daemon/src/provider-selection.ts) without having
-  // installed the CLI, and confirm the daemon produces the same clean refusal `decideDispatchStage`
-  // always has, rather than something worse -- a hang, a crash, or a session that starts anyway and
-  // fails mid-flight.
-  it("refuses to dispatch to a real adapter whose CLI genuinely is not on this machine", async () => {
-    const adapter = createCodexProvider({ command: "/nonexistent/loomrail-test-fixture/codex" });
+  it("refuses to dispatch to the real OpenAI adapter when its API key is missing", async () => {
+    const adapter = createOpenAIResponsesProvider();
     const daemon = await startDaemon({
       bootstrapToken: token,
       stateDatabasePath: databasePath,

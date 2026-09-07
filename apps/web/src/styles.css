@@ -369,12 +369,12 @@ body.is-resizing {
 }
 
 .settings__section > h3 {
-  color: var(--lr-text-muted);
-  font-size: var(--lr-font-xs);
-  font-weight: var(--lr-weight-medium);
-  letter-spacing: 0.04em;
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-base);
+  font-weight: var(--lr-weight-semibold);
+  letter-spacing: normal;
   margin: 0;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .setting {
@@ -723,6 +723,148 @@ body.is-resizing {
   justify-items: start;
   margin-top: var(--lr-space-2);
   padding-top: var(--lr-space-4);
+}
+
+.workspace-strategy-settings {
+  border-top: 1px solid var(--lr-border-subtle);
+  display: grid;
+  gap: var(--lr-space-3);
+  margin-top: var(--lr-space-2);
+  padding-top: var(--lr-space-4);
+  width: 100%;
+}
+
+.workspace-strategy-settings h4,
+.workspace-strategy-settings p,
+.workspace-strategy-settings ul {
+  margin: 0;
+}
+
+.workspace-strategy-settings__heading {
+  display: grid;
+  gap: var(--lr-space-1);
+}
+
+.workspace-strategy-settings__heading h4 {
+  color: var(--lr-text);
+  font-size: var(--lr-font-sm);
+}
+
+.workspace-strategy-settings__heading p,
+.workspace-strategy-settings__scope,
+.workspace-strategy-settings__error {
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-sm);
+  line-height: 1.5;
+}
+
+.workspace-strategy-settings__choices {
+  border: 0;
+  display: grid;
+  gap: var(--lr-space-2);
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+  width: 100%;
+}
+
+.workspace-strategy-settings__choices legend {
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-sm);
+  font-weight: var(--lr-weight-medium);
+  margin-bottom: var(--lr-space-2);
+  padding: 0;
+}
+
+.workspace-strategy-settings__choices label {
+  align-items: start;
+  background: var(--lr-control-bg);
+  border: 1px solid var(--lr-control-border);
+  border-radius: var(--lr-control-radius);
+  cursor: pointer;
+  display: grid;
+  gap: var(--lr-space-2-5);
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: var(--lr-space-3);
+}
+
+.workspace-strategy-settings__choices label:hover {
+  background: var(--lr-control-bg-hover);
+}
+
+.workspace-strategy-settings__choices label:active {
+  background: var(--lr-surface-active);
+}
+
+.workspace-strategy-settings__choices label:has(input:checked) {
+  background: var(--lr-accent-soft);
+  border-color: var(--lr-accent);
+}
+
+.workspace-strategy-settings__choices label:has(input:focus-visible) {
+  outline: 2px solid var(--lr-focus);
+  outline-offset: 2px;
+}
+
+.workspace-strategy-settings__choices label:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.workspace-strategy-settings__choices input {
+  accent-color: var(--lr-accent);
+  margin: 2px 0 0;
+}
+
+.workspace-strategy-settings__choices label > span {
+  display: grid;
+  gap: var(--lr-space-1);
+  min-width: 0;
+}
+
+.workspace-strategy-settings__choices strong {
+  color: var(--lr-text);
+  font-size: var(--lr-font-sm);
+  font-weight: var(--lr-weight-medium);
+}
+
+.workspace-strategy-settings__choices small {
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.workspace-strategy-settings__confirmation {
+  background: var(--lr-warning-soft);
+  border: 1px solid color-mix(in srgb, var(--lr-warning) 28%, var(--lr-border));
+  border-radius: var(--lr-control-radius);
+  color: var(--lr-text-secondary);
+  display: grid;
+  font-size: var(--lr-font-sm);
+  gap: var(--lr-space-2);
+  line-height: 1.5;
+  padding: var(--lr-space-3);
+}
+
+.workspace-strategy-settings__confirmation > strong {
+  color: var(--lr-text);
+}
+
+.workspace-strategy-settings__confirmation ul {
+  display: grid;
+  gap: var(--lr-space-1);
+  padding-left: var(--lr-space-4);
+}
+
+.workspace-strategy-settings__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lr-space-2);
+}
+
+.workspace-strategy-settings__error {
+  color: var(--lr-danger);
 }
 
 .provider-settings__heading {
@@ -2847,7 +2989,10 @@ body.is-resizing {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow: auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .task-inspector.is-empty {

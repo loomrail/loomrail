@@ -8,5 +8,5 @@
     "allowImportingTsExtensions": true,
     "types": ["vite/client", "vitest/globals", "node"]
   },
-  "include": ["src/**/*.ts", "vite.config.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "e2e/**/*.ts", "playwright.config.ts", "vite.config.ts", "vitest.config.ts"]
 }

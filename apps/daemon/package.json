@@ -33,7 +33,6 @@
     "@loomrail/provider-claude-code": "workspace:*",
     "@loomrail/provider-codex": "workspace:*",
     "@loomrail/provider-core": "workspace:*",
-    "@loomrail/provider-mock": "workspace:*",
     "@loomrail/workflow-engine": "workspace:*",
     "@loomrail/workspace": "workspace:*",
     "@upstash/context7-mcp": "3.2.5",

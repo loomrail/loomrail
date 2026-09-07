@@ -27,10 +27,9 @@ the source of truth.
 </picture>
 
 > [!IMPORTANT]
-> Loomrail is public pre-alpha software. New projects use **Auto**, but a live CLI is admitted only when its exact
-> version, OS, and architecture have a reviewed compatibility row and provider-owned authentication succeeds. Exact
-> Codex and Claude Code rows are currently verified only on macOS arm64; Windows live-provider verification is still
-> pending. The guided route below always uses **Mock**. Loomrail never installs or signs into a provider,
+> Loomrail is public pre-alpha software. New projects use **Auto**, which selects only a configured OpenAI Responses
+> or Anthropic Messages API adapter. Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` yourself before the guided route;
+> missing credentials block startup instead of falling back. Loomrail never creates provider credentials,
 > enables permission-bypass flags, commits, pushes, merges, or deploys for you. A task worktree is not an
 > operating-system sandbox.
 
@@ -40,6 +39,9 @@ Requirements: Node.js `>=24.19 <25`, macOS or Windows, a browser on the same mac
 managed by the installed Playwright package. Linux is best effort.
 
 Start in a new empty directory, not inside a repository you care about:
+
+First export either `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in that terminal. Provider requests can consume your API
+quota. Keys remain process-only and are not written to Loomrail's database.
 
 <!-- loomrail-guided-activation-v1:start -->
 
@@ -54,9 +56,9 @@ npx loomrail try
 <!-- loomrail-guided-activation-v1:end -->
 
 The Chromium download is an explicit one-time installation for deterministic Browser QA. Loomrail never reuses your
-signed-in browser profile. `loomrail try` first runs the read-only Mock preflight. If a required check fails it writes
-nothing; when ready, it states the local state/log side effects, starts the loopback daemon, and opens the guided
-route. Each later mutation remains a visible owner action.
+signed-in browser profile. `loomrail try` first runs a read-only real-provider preflight. If a required check fails it
+writes nothing; when ready, it states the local state/log side effects, starts the loopback daemon, and opens the
+guided route. Each later mutation remains a visible owner action.
 
 The launcher binds to `127.0.0.1`, opens a one-time authenticated URL, and stores state in local SQLite. Keep the
 terminal open and stop Loomrail with `Ctrl+C`.
@@ -76,10 +78,10 @@ The project-local route above is recommended for evaluation because it keeps the
 ## First run
 
 1. Choose **Prepare demo workspace**.
-2. Choose **Use Mock for this project** for the zero-quota walkthrough.
+2. Choose **OpenAI Responses** or **Anthropic Messages** for this project.
 3. Create the exact guided task and move it to **Ready**.
 4. Start the guided workflow with the displayed Loomrail budget and model tier.
-5. Open **Attention**, answer the blocking Human Request, and approve the explicit mock budget increase.
+5. Open **Attention**, answer any blocking Human Request, and review every explicit budget change.
 6. When acceptance appears in **Attention**, open its exact task, inspect Review and QA evidence, then accept the
    delivery or return it to work as the owner.
 
@@ -90,9 +92,9 @@ endpoint on the selected port. Your repositories use an explicit `.loomrail/brow
 The task, request, budget, evidence, and decision survive page reloads and Loomrail restarts. The
 [quick start](docs/guides/GETTING-STARTED.md) walks through the route in detail.
 
-## Your repository and live providers
+## Your repository and providers
 
-After the mock route works, the guides explain repository registration, Project Constitution review, task worktrees,
+The guides explain repository registration, Project Constitution review, task worktrees,
 change inspection, backup, recovery, diagnostics, upgrade, and uninstall:
 
 - [Owner guide](docs/guides/USER-GUIDE.md)
@@ -103,13 +105,10 @@ change inspection, backup, recovery, diagnostics, upgrade, and uninstall:
 - [Reproducible full-route example](docs/examples/full-route/README.md)
 - [Security and trust boundaries](docs/security/THREAT-MODEL.md)
 
-Install and authenticate the provider CLI yourself, then start Loomrail normally. In **Settings → AI provider**, use
-**Check again** to read its bounded version/auth status. Auto uses only an exact `VERIFIED` and signed-in CLI; an
-unverified or too-old explicit choice remains visible but fails before spawn. The current exact Codex and Claude Code
-rows are scoped to macOS arm64; use Mock on Windows until separate real-CLI evidence promotes a Windows row.
-`LOOMRAIL_PROVIDER` remains an optional process-wide override for automation and troubleshooting, but it does not
-bypass compatibility. Read the compatibility guide, owner guide, and threat model before exposing a repository to a
-live CLI.
+Configure a provider API key yourself, then start Loomrail normally. In **Settings → AI provider**, use **Check
+again** to refresh readiness. Auto considers only ready real adapters. An explicit unavailable provider remains
+visible and fails closed. `LOOMRAIL_PROVIDER` remains an optional process-wide override for automation and
+troubleshooting, but it does not bypass credentials, stage support, or token ceilings.
 
 Context7 is different from an AI provider: its exact-pinned MCP server ships with Loomrail. In **Settings → MCP
 connections**, choose **Review bundled Context7**; no global install or `npx` command is needed. Loomrail still requires
@@ -119,8 +118,10 @@ machine, so never include secrets, personal data, or proprietary code.
 ## Current boundary
 
 - Local browser UI, loopback daemon, and local SQLite state.
-- Exact-version-gated provider discovery and explicit selection, plus a deterministic Mock route with no provider
-  quota. The current candidate admits no live CLI until a cross-platform matrix row is verified.
+- Explicit selection between OpenAI Responses and Anthropic Messages APIs, with no synthetic runtime fallback.
+- `DISCOVERY`, `PLAN`, `REVIEW`, and `ACCEPTANCE` use real provider calls. `IMPLEMENT` and `QA` remain blocked until
+  the local workspace tool executor is implemented and security-reviewed; provider text is not treated as file or
+  test evidence.
 - Up to three agent runs in parallel by default, with durable global, Project, provider, and workspace gates plus an
   Agent Fleet view of active roles and exact queue reasons.
 - Project-scoped local MCP connections and a bundled, owner-approved Context7 preset.

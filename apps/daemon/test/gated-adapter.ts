@@ -54,7 +54,7 @@ export const gatedAdapter = (
       openGate();
     },
     capabilities: () => ({
-      provider: capabilityOverrides.provider ?? "MOCK",
+      provider: capabilityOverrides.provider ?? "CODEX",
       start: capabilityOverrides.start ?? true,
       interrupt: false,
       eventStream: false,
@@ -64,6 +64,7 @@ export const gatedAdapter = (
       contextWindowTokens,
       stages: [...(capabilityOverrides.stages ?? ALL_STAGES)],
       costReporting: false,
+      tokenBudgetEnforcement: "HARD",
     }),
     start: async (invocation) => {
       adapter.startCallCount += 1;

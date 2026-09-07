@@ -66,50 +66,58 @@ export const ActionMenu = ({
   side = "bottom",
   trigger,
   triggerTooltip,
-}: ActionMenuProps): React.JSX.Element => (
-  <DropdownMenuPrimitive.Root>
-    {triggerTooltip ? (
-      <Tooltip label={triggerTooltip}>
+}: ActionMenuProps): React.JSX.Element => {
+  const visibleGroups = groups.filter((group) => group.length > 0);
+
+  // An empty menu has no interaction to expose. Returning the caller-owned trigger unchanged also
+  // keeps a disabled control from acquiring Radix's menu semantics and an empty portal surface.
+  if (visibleGroups.length === 0) return trigger;
+
+  return (
+    <DropdownMenuPrimitive.Root>
+      {triggerTooltip ? (
+        <Tooltip label={triggerTooltip}>
+          <DropdownMenuPrimitive.Trigger asChild>{trigger}</DropdownMenuPrimitive.Trigger>
+        </Tooltip>
+      ) : (
         <DropdownMenuPrimitive.Trigger asChild>{trigger}</DropdownMenuPrimitive.Trigger>
-      </Tooltip>
-    ) : (
-      <DropdownMenuPrimitive.Trigger asChild>{trigger}</DropdownMenuPrimitive.Trigger>
-    )}
-    <DropdownMenuPrimitive.Portal>
-      <DropdownMenuPrimitive.Content
-        align={align}
-        className={cn("lr-menu", contentClassName)}
-        collisionPadding={8}
-        side={side}
-        sideOffset={5}
-      >
-        {groups.map((group, groupIndex) => (
-          <div className="lr-menu__group" key={group.map((item) => item.label).join("-")}>
-            {group.map((item) => (
-              <DropdownMenuPrimitive.Item
-                className={cn("lr-menu__item", item.icon && "has-icon", item.danger && "is-danger")}
-                disabled={item.disabled === true || item.onSelect === undefined}
-                key={item.label}
-                {...(item.onSelect === undefined ? {} : { onSelect: item.onSelect })}
-              >
-                {item.icon ? (
-                  <span className="lr-menu__item-icon">
-                    <Icon name={item.icon} size={14} />
-                  </span>
-                ) : null}
-                <span>{item.label}</span>
-                {item.shortcut ? <Kbd>{item.shortcut}</Kbd> : null}
-              </DropdownMenuPrimitive.Item>
-            ))}
-            {groupIndex < groups.length - 1 ? (
-              <DropdownMenuPrimitive.Separator className="lr-menu__separator" />
-            ) : null}
-          </div>
-        ))}
-      </DropdownMenuPrimitive.Content>
-    </DropdownMenuPrimitive.Portal>
-  </DropdownMenuPrimitive.Root>
-);
+      )}
+      <DropdownMenuPrimitive.Portal>
+        <DropdownMenuPrimitive.Content
+          align={align}
+          className={cn("lr-menu", contentClassName)}
+          collisionPadding={8}
+          side={side}
+          sideOffset={5}
+        >
+          {visibleGroups.map((group, groupIndex) => (
+            <div className="lr-menu__group" key={group.map((item) => item.label).join("-")}>
+              {group.map((item) => (
+                <DropdownMenuPrimitive.Item
+                  className={cn("lr-menu__item", item.icon && "has-icon", item.danger && "is-danger")}
+                  disabled={item.disabled === true || item.onSelect === undefined}
+                  key={item.label}
+                  {...(item.onSelect === undefined ? {} : { onSelect: item.onSelect })}
+                >
+                  {item.icon ? (
+                    <span className="lr-menu__item-icon">
+                      <Icon name={item.icon} size={14} />
+                    </span>
+                  ) : null}
+                  <span>{item.label}</span>
+                  {item.shortcut ? <Kbd>{item.shortcut}</Kbd> : null}
+                </DropdownMenuPrimitive.Item>
+              ))}
+              {groupIndex < visibleGroups.length - 1 ? (
+                <DropdownMenuPrimitive.Separator className="lr-menu__separator" />
+              ) : null}
+            </div>
+          ))}
+        </DropdownMenuPrimitive.Content>
+      </DropdownMenuPrimitive.Portal>
+    </DropdownMenuPrimitive.Root>
+  );
+};
 
 export type PopoverSurfaceProps = {
   align?: ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>["align"];

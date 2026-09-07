@@ -6,12 +6,17 @@ on:
     paths:
       - ".github/workflows/pages.yml"
       - "apps/landing/**"
+      - "apps/cli/package.json"
       - "docs/assets/brand/**"
       - "docs/assets/demo/**"
       - "docs/assets/screenshots/**"
       - "package.json"
+      - "packages/contracts/src/activation.ts"
+      - "packages/contracts/src/guided-activation.v1.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
+      - "scripts/verify-activation-contract.mjs"
+      - "scripts/verify-activation-contract.test.mjs"
   workflow_dispatch:
 
 permissions:
@@ -44,11 +49,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install Chromium for the protected browser gate
+        run: pnpm exec playwright install --with-deps chromium
+
       - name: Test and build the landing
         run: |
+          pnpm test:activation
           pnpm --filter @loomrail/landing typecheck
           pnpm --filter @loomrail/landing test
           pnpm --filter @loomrail/landing build
+
+      - name: Run the protected landing browser gate
+        run: pnpm exec playwright test --config apps/landing/playwright.config.ts
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0

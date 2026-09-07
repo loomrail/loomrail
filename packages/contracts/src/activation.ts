@@ -15,7 +15,7 @@ export const guidedActivationInstallCommands = [
 export const guidedActivationContractSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
-    id: z.literal("guided-mock-v1"),
+    id: z.literal("guided-real-v1"),
     fixtureId: fixtureProjectIdSchema,
     createCommandId: opaqueIdSchema,
     task: z

@@ -41,7 +41,7 @@ export const daemonStatusResponseSchema = z
       .object({
         phase: z.literal("phase-0"),
         milestone: z.enum(["M1", "M2", "M3", "M4", "M5", "M6"]),
-        providers: z.literal("mock-only"),
+        providers: z.literal("real-api-only"),
         persistence: z.enum(["not-enabled", "sqlite"]),
       })
       .strict(),

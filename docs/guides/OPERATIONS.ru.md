@@ -18,7 +18,7 @@ mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail setup
+npx loomrail setup --mode live
 npx loomrail start
 ```
 
@@ -48,11 +48,11 @@ attestation. Подробности — в [supply-chain policy](../security/SUP
 
 ## Guided setup
 
-В interactive terminal выполните `npx loomrail setup` и нажмите Enter для рекомендуемого Mock walkthrough либо
-выберите проверку live provider. Automation обязана указать route явно:
+В interactive terminal выполните `npx loomrail setup` и нажмите Enter для preflight реального провайдера. Automation
+обязана указать route явно:
 
 ```bash
-npx loomrail setup --mode mock --json
+npx loomrail setup --mode live --json
 ```
 
 Exit code 0 и `READY` означают, что выбранный full fixture route можно начать. Report объединяет те же read-only
@@ -60,7 +60,8 @@ Exit code 0 и `READY` означают, что выбранный full fixture 
 closed codes и ordered next actions, без paths, provider output, account, credentials или exception text.
 
 Setup не создаёт data directory/БД, не применяет migration/recovery и не запускает daemon, browser, agent session,
-provider login, installer или download. Он выполняет только документированные output-free Git/provider status probes.
+provider login, installer или download. Он проверяет Git, локальные prerequisites и наличие API key, но не отправляет
+provider request.
 Любой `LOOMRAIL_PROVIDER` override блокирует guided setup, чтобы route не расходился с фактическим startup. Pending
 migration тоже блокирует путь до остановки Loomrail и сохранения всего data directory. Выполняйте показанные действия
 самостоятельно: setup их не запускает и не сохраняет.
@@ -80,11 +81,11 @@ npx loomrail doctor --json
 ```
 
 Report проверяет объявленный диапазон Node, запуск Git, доступ к data directory, SQLite integrity/migration
-compatibility и version/installation/authentication поддерживаемых provider CLI. Он не запускает daemon или browser,
+compatibility и готовность credentials поддерживаемых provider API. Он не запускает daemon или browser,
 не создаёт data directory, не применяет migrations, не восстанавливает workflows и не меняет provider
 authentication.
 
-`PASS` и `WARN` возвращают exit code 0. Новая установка без базы и установка только с Mock — warnings, а не failure.
+`PASS` и `WARN` возвращают exit code 0. Новая установка без базы или без настроенного провайдера — warning, а не failure.
 `FAIL` возвращает 1: неподдерживаемый runtime, отсутствующий/незапускаемый Git, недоступное хранилище, corrupt,
 drifted, future или unreadable state.
 
@@ -92,20 +93,9 @@ JSON построен по allowlist. В нём нет cwd, home/data/repository
 command output, credential или exception message. Всё равно проверьте файл перед отправкой: наличие provider и
 authentication state — metadata локальной машины.
 
-Provider observation начинается с bounded read-only version call. Loomrail разбирает только exact normalized version
-form и никогда не возвращает raw output. Auth call запускается только для exact `VERIFIED` version, а его output
-игнорируется:
-
-| Provider    | Наблюдение version | Auth после `VERIFIED` | Владелец credential |
-| ----------- | ------------------ | --------------------- | ------------------- |
-| Mock        | нет; встроен       | нет; всегда готов     | нет                 |
-| Codex       | `codex --version`  | `codex login status`  | Codex CLI           |
-| Claude Code | `claude --version` | `claude auth status`  | Claude Code CLI     |
-
-Loomrail не устанавливает, не обновляет и не понижает эти CLI, не авторизуется вместо пользователя и не сохраняет их
-credentials. В текущем alpha.5 candidate нет verified live matrix row, поэтому live setup остаётся blocked, а Mock
-доступен. См. [exact compatibility matrix](PROVIDER-COMPATIBILITY.ru.md); `doctor` не повышает статус version самим
-фактом наблюдения.
+Provider inspection сообщает о наличии `OPENAI_API_KEY` или `ANTHROPIC_API_KEY`, не возвращая значение. Оба адаптера
+встроены в Loomrail; CLI installation/version probe и успешного fallback нет. Loomrail не создаёт, не меняет и не
+сохраняет provider credentials. См. [совместимость API провайдеров](PROVIDER-COMPATIBILITY.ru.md).
 
 Точный путь локального хранилища раскрывается отдельной командой:
 
@@ -173,7 +163,7 @@ migration, а не регулярный полный backup или portable work
 4. Установите exact target version или осознанно обновите channel `next`.
 5. Выполните `loomrail doctor`. До первого запуска нового совместимого build ожидаем `STATE_UPGRADE_REQUIRED`.
 6. Запустите Loomrail нормально: только startup применяет migrations и recovery.
-7. Пройдите mock walkthrough до работы с live provider.
+7. Выполните `loomrail setup --mode live` и одну ограниченную provider stage до обычной работы.
 
 Перед migration непустой DB в `backups/` может появиться автоматическая копия. Всё равно сохраняйте собственный
 whole-directory pre-upgrade backup: автоматическая копия не включает repositories и остальные installation files.

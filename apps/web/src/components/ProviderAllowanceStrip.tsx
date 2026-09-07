@@ -28,9 +28,9 @@ type ProviderAllowanceStripProps = {
 };
 
 const providerLabels: Record<ProviderId, string> = {
-  CODEX: "Codex",
-  CLAUDE_CODE: "Claude Code",
-  MOCK: "Mock",
+  CODEX: "OpenAI Responses",
+  CLAUDE_CODE: "Anthropic Messages",
+  MOCK: "Historical provider",
 };
 
 const freshnessIcons: Record<ProviderAllowanceFreshness, IconName> = {

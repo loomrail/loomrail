@@ -46,6 +46,7 @@ describe("verification plan scanner", () => {
       argv: ["run", "test"],
       cwd: ".",
       required: true,
+      outputLimitBytes: 262_144,
     });
     expect(first.recipes[0]?.provenance.scriptName).toBe("test");
     expect(first.recipes[0]?.provenance.scriptBodyPreview).toBe(`touch ${marker}`);

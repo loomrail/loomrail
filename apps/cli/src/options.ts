@@ -15,7 +15,7 @@ export type TryCliCommand = {
 export type SetupCliCommand = {
   command: "SETUP";
   format: "HUMAN" | "JSON";
-  route?: "MOCK" | "LIVE";
+  route?: "LIVE";
 };
 
 export type CliCommand =
@@ -75,16 +75,16 @@ const parseSetup = (args: string[]): SetupCliCommand => {
     },
   });
   const mode = parsed.values.mode;
-  if (mode !== undefined && mode !== "mock" && mode !== "live") {
-    throw new Error("setup --mode must be mock or live");
+  if (mode !== undefined && mode !== "live") {
+    throw new Error("setup --mode must be live");
   }
   if (parsed.values.json && mode === undefined) {
-    throw new Error("setup --json requires --mode mock or live");
+    throw new Error("setup --json requires --mode live");
   }
   return {
     command: "SETUP",
     format: parsed.values.json ? "JSON" : "HUMAN",
-    ...(mode === undefined ? {} : { route: mode === "mock" ? "MOCK" : "LIVE" }),
+    ...(mode === undefined ? {} : { route: "LIVE" as const }),
   };
 };
 

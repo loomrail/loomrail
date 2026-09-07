@@ -4,7 +4,6 @@ export type ProviderAllowanceDomainErrorCode =
   | "PROJECT_NOT_FOUND"
   | "PROJECT_NOT_ACTIVE"
   | "PROVIDER_ALLOWANCE_ACTOR_FORBIDDEN"
-  | "PROVIDER_ALLOWANCE_MOCK_FORBIDDEN"
   | "PROVIDER_ALLOWANCE_STALE";
 
 export class ProviderAllowanceDomainError extends Error {
@@ -30,12 +29,6 @@ export const decideRecordProviderAllowance = (
     throw new ProviderAllowanceDomainError(
       "PROVIDER_ALLOWANCE_ACTOR_FORBIDDEN",
       "Only the daemon may record provider allowance observations",
-    );
-  }
-  if (command.payload.snapshot.provider === "MOCK") {
-    throw new ProviderAllowanceDomainError(
-      "PROVIDER_ALLOWANCE_MOCK_FORBIDDEN",
-      "Mock has no external provider allowance to record",
     );
   }
   const project = context.project;

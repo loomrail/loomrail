@@ -17,7 +17,7 @@ const writeMessage = (message) => {
 };
 
 const capabilities = {
-  provider: "MOCK",
+  provider: "CODEX",
   start: true,
   interrupt: true,
   eventStream: false,
@@ -48,7 +48,7 @@ const providerRegistry = {
   resolve: () => {
     throw new Error("The crash fixture must not route through a live provider registry");
   },
-  environment: { override: "MOCK", invalid: false, requested: "MOCK" },
+  environment: { override: "CODEX", invalid: false, requested: "CODEX" },
 };
 
 const daemon = await startDaemon({

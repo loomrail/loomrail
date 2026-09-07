@@ -78,7 +78,7 @@ describe("dispatch batch planning", () => {
       project: 1,
       provider: 3,
     });
-    expect(agentRunClaimLimits(limits, "project-other", "MOCK")).toEqual({
+    expect(agentRunClaimLimits(limits, "project-other", "CLAUDE_CODE")).toEqual({
       global: 6,
       project: 2,
       provider: 4,
@@ -109,7 +109,7 @@ describe("dispatch batch planning", () => {
       candidates: [
         candidate("same-project", { projectId: "project-1", provider: "CLAUDE_CODE" }),
         candidate("same-provider", { projectId: "project-2", provider: "CODEX" }),
-        candidate("free", { projectId: "project-3", provider: "MOCK" }),
+        candidate("free", { projectId: "project-3", provider: "CLAUDE_CODE" }),
       ],
       activeRuns: [activeRun("existing")],
       limits: {

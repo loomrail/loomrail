@@ -19,7 +19,7 @@ import {
   useProjectProviderSelection,
   useProjectWorkItems,
   useSetProjectProviderPreference,
-  useStartMockPipeline,
+  useStartPipeline,
   useWorkspace,
   useWorkItemWorkflow,
 } from "../workspace";
@@ -72,7 +72,7 @@ export const ActivationPage = (): React.JSX.Element => {
   const setProviderMutation = useSetProjectProviderPreference();
   const createMutation = useCreateGuidedActivationWorkItem();
   const moveMutation = useMoveWorkItem();
-  const startMutation = useStartMockPipeline();
+  const startMutation = useStartPipeline();
 
   useEffect(() => {
     if (project !== null && project.id !== selectedProject?.id) selectProject(project.id);
@@ -167,7 +167,7 @@ export const ActivationPage = (): React.JSX.Element => {
             icon="agents"
             loading={setProviderMutation.isPending}
             onClick={() => {
-              setProviderMutation.mutate({ preference: "MOCK", project });
+              setProviderMutation.mutate({ preference: "CODEX", project });
             }}
             variant="primary"
           >
@@ -334,7 +334,7 @@ export const ActivationPage = (): React.JSX.Element => {
             <dl>
               <div>
                 <dt>{t("activation.recipe.provider")}</dt>
-                <dd>Mock</dd>
+                <dd>{t("activation.provider.real")}</dd>
               </div>
               <div>
                 <dt>{t("activation.recipe.model")}</dt>

@@ -14,17 +14,19 @@ workflow state; it does not commit, push, or merge the agent's result.
 Use Node.js `>=24.19 <25`. For the first run, install the explicit public pre-alpha channel in a separate empty
 directory rather than inside a repository you care about:
 
+Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in this terminal first. Provider calls can consume your API quota.
+
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
 npm install --ignore-scripts loomrail@next
 npx playwright install chromium
-npx loomrail setup
+npx loomrail setup --mode live
 npx loomrail start
 ```
 
 The explicit Chromium download is a one-time prerequisite for isolated Browser QA; Loomrail does not reuse a signed-in
-browser profile. Setup defaults to a Mock walkthrough, verifies the complete local route without changing state, and
+browser profile. Setup runs a real-provider preflight, verifies the local route without changing state, and
 prints the exact owner actions that remain. The `next` tag keeps the pre-alpha channel explicit. To put the launcher
 on your `PATH` instead:
 
@@ -57,29 +59,21 @@ a graceful shutdown and wait for the command to exit.
 
 Provider choice belongs to a Project. Open **Settings → AI provider** after selecting the project:
 
-| Choice      | What happens                                                                                                   |
-| ----------- | -------------------------------------------------------------------------------------------------------------- |
-| Auto        | Uses an exact verified, installed, authenticated live CLI. Otherwise it uses the clearly marked Mock fallback. |
-| Mock        | Deterministic test double for agent work. Browser QA is still measured by the local Playwright driver.         |
-| Codex       | The real `codex` CLI runs supported agent stages in the task's Git worktree. Browser QA stays daemon-owned.    |
-| Claude Code | The real `claude` CLI serves Discovery, Plan, and Review. Unsupported agent stages stop as a Human Request.    |
+| Choice             | What happens                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| Auto               | Selects a ready real API adapter that supports the stage and enforces a hard request token ceiling. |
+| OpenAI Responses   | Calls the OpenAI Responses API using `OPENAI_API_KEY`.                                              |
+| Anthropic Messages | Calls the Anthropic Messages API using `ANTHROPIC_API_KEY`.                                         |
 
-Install and authenticate Codex or Claude Code with that provider's own CLI, then start Loomrail normally. Choose
-**Check again** after installing or signing in. Loomrail first runs a bounded `--version` probe and invokes the
-provider's output-free auth status only for an exact `VERIFIED` version. It does not capture credentials or raw
-status/version output. When both live CLIs are ready, Auto prefers the one with broader stage coverage. A change
-applies to new provider sessions; a running session keeps the adapter it started with.
+Set the credential yourself and choose **Check again**. Loomrail reports only readiness; it does not return or
+persist the key. A change applies to new provider sessions, while a running session keeps the adapter it started
+with. If no eligible adapter is ready, Auto blocks instead of returning a synthetic result.
 
-An explicit live choice that is missing, unverified, too old, unreadable, or not authenticated is refused visibly
-rather than silently replaced by Mock. The current alpha.5 candidate has no verified live row; see the
-[exact compatibility matrix](PROVIDER-COMPATIBILITY.md). Start with **Mock** even if you plan to use Codex: it confirms installation, browser authentication,
-persistence, Human Requests, budgets, and acceptance without spending provider quota.
+`LOOMRAIL_PROVIDER=CODEX|CLAUDE_CODE` is an optional, case-sensitive process-wide override for automation or
+troubleshooting. It locks the Project selector until restart. An unknown value is reported and blocks new provider
+work. Ordinary use does not require this variable.
 
-`LOOMRAIL_PROVIDER=MOCK|CODEX|CLAUDE_CODE` remains an optional, case-sensitive process-wide override for automation
-or troubleshooting. It locks the Project selector until restart. An unknown value is reported and keeps the process
-in Mock mode. Ordinary use does not require this variable.
-
-## 3. Complete the first mock delivery
+## 3. Run the first provider workflow
 
 ### Create a project and task
 
@@ -92,9 +86,9 @@ in Mock mode. Ordinary use does not require this variable.
    are observable results rather than implementation instructions.
 5. Select **Move to Ready**, then **Start workflow**.
 
-The button starts the same bounded Discovery → Plan → Implementation → Review → QA → Acceptance template for every
-provider. Mock supplies deterministic agent-stage results; with Codex, live sessions do that work. QA itself always
-uses Loomrail's isolated Playwright driver and cannot be passed by provider prose.
+The button starts the bounded Discovery → Plan → Implementation → Review → QA → Acceptance template. The current API
+adapters serve Discovery, Plan, Review, and Acceptance. Implementation and QA stop explicitly until a reviewed local
+workspace executor exists. Provider prose cannot pass either stage or stand in for measured file/test evidence.
 
 ### Watch parallel work in Agent Fleet
 
@@ -111,7 +105,7 @@ existing owner gates.
 ### Read an independent review
 
 After Implementation, Loomrail starts a fresh **Code reviewer** AgentRun over the recorded Git tree. With **Auto** and
-both live CLIs ready, Review prefers the provider the latest Developer run did not use. An explicit Project provider
+both APIs ready, Review prefers the provider the latest Developer run did not use. An explicit Project provider
 selection remains a lock, so the cockpit labels the result **Same provider** while still using a separate reviewer run.
 
 The Task Cockpit shows the round, verdict, provider relation, reviewed tree, and bounded findings with severity,
@@ -132,7 +126,7 @@ screenshots, and traces. See [Browser QA](BROWSER-QA.md) for the exact format an
 
 ### Answer the Human Request
 
-The mock Discovery stage opens a blocking question and the task becomes **Waiting for you**. Open **Attention** in the
+When Discovery opens a blocking question, the task becomes **Waiting for you**. Open **Attention** in the
 sidebar: it lists open requests from every Project, with the affected task, stage, priority, and action. Use Arrow Up,
 Arrow Down, Home, or End to move through the list, choose an option, and select **Answer & resume**. The task and its
 banner remain alternate entry points to the same answer form.
@@ -144,8 +138,8 @@ records one Decision.
 
 ### Handle the budget pause
 
-The mock Implementation stage reaches its configured estimated-token limit and becomes **Budget paused**. Review the
-usage and select the offered **Approve … token budget** action if you want the workflow to continue.
+If a provider stage reaches its configured estimated-token limit, it becomes **Budget paused**. Review the usage and
+select the offered **Approve … token budget** action only if you want the workflow to continue.
 
 A budget override creates a new policy revision; it does not rewrite previous usage. Other hard pauses, such as a
 provider rejecting its input or making no progress, do not offer a budget action that cannot solve them. Follow their
@@ -223,14 +217,14 @@ the earlier decision in the audit history.
 
 ## 5. Run and inspect live work
 
-Install and sign into the provider CLI, open **Settings → AI provider**, choose **Auto** or the provider explicitly,
-and use **Check again**. Do not start live work unless the exact version row is `VERIFIED` and the panel shows
-**Ready**. The current alpha.5 candidate has no such row, so this section describes the gated route that becomes
-available only after a reviewed matrix promotion. No Loomrail restart or extra launch command is required after such
-a promotion. The brief and acceptance criteria are the durable instructions each session receives.
+Set the provider API credential before starting Loomrail, open **Settings → AI provider**, choose **Auto** or the
+provider explicitly, and use **Check again**. Start work only when the panel shows **Ready**. The brief and acceptance
+criteria are the durable instructions each session receives. Repository-writing stages remain unavailable until the
+local workspace executor passes its security and evidence gates; the inspection UI below describes that retained
+domain contract, not a claim that the current API adapters can already edit files.
 
 For a bounded repository and exact brief you can safely discard afterwards, use the
-[reproducible Codex route](../examples/full-route/README.md).
+[reproducible target route](../examples/full-route/README.md).
 
 Open the task while it runs:
 
@@ -340,13 +334,12 @@ records, Browser QA evidence, repositories, workspaces, or unknown neighboring f
 **The page says the local session ended.** The daemon stopped or the one-time session is no longer valid. Restart
 Loomrail and use the new authenticated tab. Refreshing an old tab cannot mint a new session.
 
-**The selected provider CLI is not ready.** Install and authenticate that CLI using its own instructions, then choose
-**Settings → AI provider → Check again**. If the panel says the version is unverified, too old, or unreadable, stay on
-Mock and consult the [compatibility matrix](PROVIDER-COMPATIBILITY.md); installation or login cannot bypass that gate.
-An explicit unavailable provider is refused rather than silently replaced by Mock; Auto uses the clearly labelled
-Mock fallback.
+**The selected provider API is not ready.** Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in the process environment,
+restart Loomrail, and choose **Settings → AI provider → Check again**. An explicit unavailable provider is refused;
+Auto does not hide the failure by selecting a synthetic result.
 
-**The launcher fell back to mock.** Check the exact case-sensitive value: `MOCK`, `CODEX`, or `CLAUDE_CODE`.
+**The provider override is invalid.** Use the exact case-sensitive value `CODEX` or `CLAUDE_CODE`, or remove
+`LOOMRAIL_PROVIDER` to restore Auto selection.
 
 **Context7 reaches an anonymous limit or reports authentication.** The bundled preset deliberately carries no secret.
 Disable or revoke it if the anonymous service is unsuitable; API-key storage is not supported in this release. Do not

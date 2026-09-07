@@ -86,9 +86,9 @@ cannot create or mutate the environment.
 
 The repository gate requires stable semver, an exact main SHA, matching typed confirmation, an unused registry
 version, npm `11.15.0+`, and a successful push-triggered CI run for that SHA with all six macOS/Windows Verify,
-Browser smoke and Clean install jobs. A strict versioned stable-gate index additionally requires all ten named gates,
+Browser smoke and Clean install jobs. A strict versioned stable-gate index additionally requires all eleven named gates,
 the exact selected stable version, bounded non-symlink evidence files, matching SHA-256 for both current and committed
-bytes, and an evidence commit that is an ancestor of the release source. Its current honest state is 6/10 with no
+bytes, and an evidence commit that is an ancestor of the release source. Its current honest state is 6/11 with no
 stable version selected. This index prevents accidental omission; it is repository-authored evidence, not a signature
 or a substitute for protected-environment owner review. Both source-CI platforms verify every current `PASSED` row
 against full Git history before their long matrix. A staged package is still not public. A package owner must

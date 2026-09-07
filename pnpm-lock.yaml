@@ -115,9 +115,6 @@ importers:
       '@loomrail/provider-core':
         specifier: workspace:*
         version: link:../../packages/provider-core
-      '@loomrail/provider-mock':
-        specifier: workspace:*
-        version: link:../../packages/provider-mock
       '@loomrail/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
@@ -358,15 +355,6 @@ importers:
       zod:
         specifier: ^4.0.0
         version: 4.4.3
-
-  packages/provider-mock:
-    dependencies:
-      '@loomrail/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      '@loomrail/provider-core':
-        specifier: workspace:*
-        version: link:../provider-core
 
   packages/scheduler:
     dependencies:

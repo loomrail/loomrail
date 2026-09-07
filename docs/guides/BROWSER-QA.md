@@ -10,12 +10,11 @@ page works cannot advance the workflow to acceptance.
 ## The built-in demo
 
 After the one-time `npx playwright install chromium` prerequisite, the bundled **Fixture web application** needs no
-extra target command. Its mock implementation deliberately changes no app,
-so its built-in QA plan measures Loomrail's public readiness endpoint on the actual loopback port. This verifies the
-complete evidence and acceptance route without starting Codex, Claude Code, or a second development server.
+extra target command. Its baseline contains no generated application change, so the built-in QA plan measures
+Loomrail's public readiness endpoint on the actual loopback port without starting a second development server.
 
-The same materialized Project now includes an executable [sample application and task recipes](SAMPLES.md), but this
-Mock plan does not claim to test that application. Start the sample explicitly and configure it like any owner
+The same materialized Project includes an executable [sample application and task recipes](SAMPLES.md), but the
+built-in readiness plan does not claim to test that application. Start the sample explicitly and configure it like any owner
 repository when the application itself is the QA target.
 
 ## Configure a web repository

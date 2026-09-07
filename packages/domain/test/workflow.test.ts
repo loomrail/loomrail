@@ -3,23 +3,23 @@ import type {
   HumanRequest,
   PipelineRun,
   StageAttempt,
-  StartMockPipelineCommand,
+  StartPipelineCommand,
   WorkItem,
 } from "@loomrail/contracts";
 import { describe, expect, it } from "vitest";
 
-import { decideAnswerHumanRequest, decideStartMockPipeline, WorkflowDomainError } from "../src/index.js";
+import { decideAnswerHumanRequest, decideStartPipeline, WorkflowDomainError } from "../src/index.js";
 
 const timestamp = "2026-08-24T10:00:00.000Z";
-const contextPack: StartMockPipelineCommand["payload"]["template"]["stages"][number]["contextPack"] = {
+const contextPack: StartPipelineCommand["payload"]["template"]["stages"][number]["contextPack"] = {
   schemaVersion: 1,
   sections: [{ id: "WORK_ITEM_BRIEF", ordinal: 0, required: true }],
 };
-const template: StartMockPipelineCommand["payload"]["template"] = {
+const template: StartPipelineCommand["payload"]["template"] = {
   schemaVersion: 1,
-  id: "mock-delivery-v1",
+  id: "delivery-v1",
   version: 1,
-  name: "Mock delivery",
+  name: "Delivery",
   stages: [
     { stage: "DISCOVERY", ordinal: 0, contextPack },
     { stage: "PLAN", ordinal: 1, contextPack },
@@ -44,14 +44,14 @@ const workItem = (state: WorkItem["state"]): WorkItem => ({
   updatedAt: timestamp,
 });
 
-describe("mock workflow decisions", () => {
+describe("workflow decisions", () => {
   it("starts only a ready leaf and creates the first durable dispatch", () => {
-    const command: StartMockPipelineCommand = {
+    const command: StartPipelineCommand = {
       schemaVersion: 1,
       commandId: "start-1",
       correlationId: "correlation-start-1",
       actor: { type: "HUMAN", id: "local-owner" },
-      type: "START_MOCK_PIPELINE",
+      type: "START_PIPELINE",
       payload: {
         workItemId: "work-item-1",
         expectedVersion: 2,
@@ -63,7 +63,7 @@ describe("mock workflow decisions", () => {
         },
       },
     };
-    const started = decideStartMockPipeline(command, {
+    const started = decideStartPipeline(command, {
       now: timestamp,
       workItem: workItem("READY"),
       activeRun: null,
@@ -82,7 +82,7 @@ describe("mock workflow decisions", () => {
       dispatch: { mode: "START", status: "PENDING" },
     });
     expect(() =>
-      decideStartMockPipeline(command, {
+      decideStartPipeline(command, {
         now: timestamp,
         workItem: workItem("BACKLOG"),
         activeRun: null,

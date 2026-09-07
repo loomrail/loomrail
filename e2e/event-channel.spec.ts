@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { passingBrowserQADriver } from "../apps/daemon/test/browser-qa-fixture.js";
-import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
+import { startDaemon, type RunningDaemon } from "./provider-test-daemon.js";
 
 /**
  * Task 9 (spec §9, milestone A1.5): the browser-level proof that a stage attempt's background
@@ -23,7 +23,7 @@ import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
  * page cannot tell apart "the board updated because the channel pushed an invalidation" from "the
  * board updated because the very mutation that started the background work also invalidates its
  * own query on success (workspace.tsx), and that follow-up GET happened to land after the
- * (near-instant, mock) background cascade had already finished". The mock provider resolves across
+ * (near-instant, provider-double) background cascade had already finished". The test provider resolves across
  * a handful of microtask ticks; a browser's own follow-up request is not reliably slower than
  * that. A single-page version of "brings a finished stage to the board without the owner touching
  * anything" would therefore keep passing even with the channel hook removed entirely, which is
@@ -50,7 +50,7 @@ test.afterEach(async () => {
 const DEMO_INITIALISATION_MS = 20_000;
 
 /**
- * Discovery cuts a real worktree before the mock session starts. Give that background Git path the
+ * Discovery cuts a real worktree before the test session starts. Give that background Git path the
  * same bounded patience as the later IMPLEMENT wall without weakening what must appear.
  */
 const DISCOVERY_DECISION_MS = 20_000;
@@ -129,7 +129,7 @@ const openObserver = async (page: Page, title: string): Promise<Locator> => {
 const BUDGET_WALL_MS = 20_000;
 
 /**
- * Drives the actor through every human decision the mock delivery needs before its remaining
+ * Drives the actor through every human decision the provider-double delivery needs before its remaining
  * stages (IMPLEMENT's retry, REVIEW, QA, ACCEPTANCE) can run unattended: Ready, start, and the
  * discovery choice. Stops with the attempt sitting at "Budget paused" so a caller can open an
  * observer, or drop its channel, before triggering the budget approval under test.

@@ -67,22 +67,54 @@ _Не означает_: отдельный источник истины, ко�
 Capability-checked граница start/resume/interrupt/events/usage для конкретного provider.
 _Не означает_: прямая shell-интеграция из браузера.
 
+**Token Budget Enforcement**:
+Capability одного adapter: `HARD` предотвращает пересечение переданного остатка внутри текущей provider session;
+`POST_SESSION` только сообщает уже состоявшийся расход и поэтому не допускается к managed run с hard token budget.
+_Не означает_: context-window occupancy, provider allowance, terminal usage ledger или разрешение повысить budget.
+
+**Provider Token Budget**:
+Переданный в ProviderInvocation immutable maximum AgentRun, уже записанный расход этого AgentRun и точный
+положительный остаток. Adapter с `HARD` обязан ограничить работу остатком.
+_Не означает_: общий provider account limit, цену в USD или новую изменяемую policy.
+
 **Provider Preference**:
-Versioned выбор Project: `AUTO`, конкретный live provider либо явный `MOCK` demo mode.
+Versioned выбор Project: `AUTO`, `CODEX` (OpenAI Responses) либо `CLAUDE_CODE` (Anthropic Messages).
 _Не означает_: provider уже запущенной ProviderSession или разрешение ослабить permission policy.
 
+**Workspace Strategy**:
+Versioned выбор Project: безопасный default `ISOLATED_WORKTREE` либо явно подтверждённый
+`SHARED_CURRENT_DIRECTORY`. Выбор применяется только при создании следующего WorkItemWorkspace; фактическая
+strategy уже созданного workspace остаётся неизменной.
+_Не означает_: permission profile, security sandbox, автоматический перенос активной задачи или право provider
+самому выбрать рабочую папку.
+
+**WorkItemWorkspace**:
+Durable фактическая Git-база и папка одного WorkItem: strategy, canonical path, именованная branch, base commit,
+Carry-in Baseline и lifecycle state.
+_Не означает_: Project-настройка, provider session, commit результата или источник workflow truth.
+
+**Shared Writer Authority**:
+Project-scoped exclusive claim для одного writing StageAttempt либо одного VerificationRun в общей текущей папке.
+Read-only Discovery/Plan/Review/QA claim не берут; isolated worktrees сохраняют собственные независимые leases.
+_Не означает_: блокировку IDE/терминала владельца, файловую песочницу, Git lock или разрешение параллельной проверки.
+
+**Carry-in Baseline**:
+Внутренний Git commit object, построенный через временный index из исходных tracked, staged, deleted и unignored
+untracked файлов до первого repository-reading run. Настоящий index, working tree, branch и refs не меняются.
+_Не означает_: user commit, stash, backup, публикацию локальных файлов или разрешение перезаписать исходные правки.
+
 **Provider Availability**:
-Короткоживущая closed-проекция installation, Provider Compatibility Observation и provider-owned auth state.
+Короткоживущая closed-проекция наличия environment-owned API credential и capability реального adapter.
 _Не означает_: provider credential, account profile или durable domain state.
 
 **Provider Compatibility Observation**:
-Короткоживущий результат bounded fixed-argv `--version` probe с normalized version и closed compatibility state.
-_Не означает_: capability declaration, auth state, installation receipt или гарантию, что executable не изменился.
+Историческая диагностическая запись CLI-эпохи; активный API selector её не читает.
+_Не означает_: готовность текущего API adapter или разрешение на dispatch.
 
 **Provider Compatibility Matrix Row**:
-Reviewable allowlist entry одной exact CLI version, подтверждённая sanitized real-provider recordings, negative parser
-corpus и одинаковым macOS/Windows gate для текущего invocation contract.
-_Не означает_: semver range, upstream release note, успешный `--version` или автоматическое разрешение обновления.
+Историческая allowlist entry одной CLI version. Сохранена для чтения старых диагностических данных, но не участвует
+в выборе OpenAI Responses или Anthropic Messages.
+_Не означает_: поддержку API model ID или готовность provider.
 
 **Doctor Report**:
 Короткоживущая closed-проекция совместимости runtime, Git, data directory, SQLite migration/integrity и Provider
@@ -91,7 +123,7 @@ Availability для локальной установки. Общий status в�
 _Не означает_: durable workflow state, startup/recovery, migration, support upload или источник product truth.
 
 **Setup Route**:
-Короткоживущий выбор `MOCK | LIVE`, определяющий только проверки и инструкции одного guided setup invocation.
+Короткоживущий `LIVE`-маршрут, проверяющий Browser prerequisite и готовность одного реального API provider.
 _Не означает_: Project Provider Preference, environment override, durable настройку или право запустить provider.
 
 **Setup Readiness Report**:

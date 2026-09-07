@@ -6,17 +6,17 @@ import type { SetupReadinessReport } from "../src/setup.js";
 const report = (status: "READY" | "BLOCKED"): SetupReadinessReport => ({
   schemaVersion: 1,
   status,
-  route: "MOCK",
+  route: "LIVE",
   checks: {
     system: {
       status: status === "READY" ? "PASS" : "FAIL",
       code: status === "READY" ? "SYSTEM_READY" : "SYSTEM_BLOCKED",
     },
     browser: { status: "PASS", code: "BROWSER_READY" },
-    route: { status: "PASS", code: "MOCK_ROUTE_READY" },
+    route: { status: "PASS", code: "LIVE_ROUTE_READY" },
   },
   nextActions:
-    status === "READY" ? ["RUN_START", "INITIALIZE_DEMO_WORKSPACE", "SELECT_MOCK"] : ["RUN_DOCTOR"],
+    status === "READY" ? ["RUN_START", "INITIALIZE_DEMO_WORKSPACE", "SELECT_LIVE_PROVIDER"] : ["RUN_DOCTOR"],
 });
 
 describe("guided launch", () => {
@@ -26,10 +26,10 @@ describe("guided launch", () => {
     );
   });
 
-  it("states launch side effects and the zero-quota Mock boundary before startup", () => {
+  it("states launch side effects and the real-provider budget boundary before startup", () => {
     const output = formatGuidedLaunchReadiness(report("READY")).join("\n");
     expect(output).toContain("state and operational log files");
-    expect(output).toContain("no provider quota");
+    expect(output).toContain("selected real provider");
   });
 
   it("states that a blocked preflight wrote and launched nothing", () => {

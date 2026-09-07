@@ -29,11 +29,7 @@ describe("CLI options", () => {
 
   it("parses read-only commands without accepting mixed flags or positionals", () => {
     expect(parseCliCommand(["setup"])).toEqual({ command: "SETUP", format: "HUMAN" });
-    expect(parseCliCommand(["setup", "--mode", "mock"])).toEqual({
-      command: "SETUP",
-      format: "HUMAN",
-      route: "MOCK",
-    });
+    expect(() => parseCliCommand(["setup", "--mode", "mock"])).toThrow(/must be live/);
     expect(parseCliCommand(["setup", "--mode", "live", "--json"])).toEqual({
       command: "SETUP",
       format: "JSON",
@@ -50,7 +46,7 @@ describe("CLI options", () => {
 
     expect(() => parseCliCommand(["doctor", "--no-open"])).toThrow();
     expect(() => parseCliCommand(["setup", "--json"])).toThrow(/requires --mode/);
-    expect(() => parseCliCommand(["setup", "--mode", "unknown"])).toThrow(/mock or live/);
+    expect(() => parseCliCommand(["setup", "--mode", "unknown"])).toThrow(/must be live/);
     expect(() => parseCliCommand(["setup", "extra"])).toThrow();
     expect(() => parseCliCommand(["logs"])).toThrow(/export or delete/);
     expect(() => parseCliCommand(["logs", "export", "extra"])).toThrow();

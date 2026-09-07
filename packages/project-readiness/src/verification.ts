@@ -229,7 +229,7 @@ const recipeFor = (
   argv: ["run", definition.name],
   cwd: ".",
   timeoutSeconds: 300,
-  outputLimitBytes: 65_536,
+  outputLimitBytes: 262_144,
   environmentProfile: "VERIFICATION_BASELINE",
   networkPolicy: "INHERIT_HOST",
   provenance: {

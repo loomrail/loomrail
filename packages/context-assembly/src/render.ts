@@ -107,6 +107,7 @@ export type ContextSources = {
       endLine: number | null;
       reproduction: string;
       criterion: string | null;
+      suggestedFix: string | null;
     }[];
   } | null;
   evidence: readonly {
@@ -279,7 +280,7 @@ const renderWorkItemBrief = (sources: ContextSources): RenderedBody => {
 };
 
 const renderWorkflowPosition = (sources: ContextSources): RenderedBody => {
-  const { qaCorrection, workflowPosition } = sources;
+  const { qaCorrection, reviewInput, workflowPosition } = sources;
   const correctionLines =
     qaCorrection === null
       ? []
@@ -312,6 +313,42 @@ const renderWorkflowPosition = (sources: ContextSources): RenderedBody => {
             ].join("\n"),
           ),
         ];
+  const reviewCorrectionFindings =
+    workflowPosition.stage === "IMPLEMENT" && reviewInput !== null ? reviewInput.openFindings : [];
+  const reviewCorrectionLines =
+    reviewCorrectionFindings.length === 0 || reviewInput === null
+      ? []
+      : [
+          "",
+          "Review Correction Authority:",
+          "- Correct the durable open findings below and keep the change bounded to their reproduction and linked acceptance criteria.",
+          "- This is a fresh correction attempt. Earlier operational recovery directions were fulfilled by the sessions they resumed; they do not replace this correction authority.",
+          "- Do not waive or reclassify findings. Loomrail owns their disposition after a fresh independent review.",
+          untrusted(
+            [
+              `Source implementation attempt: ${reviewInput.implementationAttempt.id} (v${reviewInput.implementationAttempt.version.toString()}, attempt ${reviewInput.implementationAttempt.attempt.toString()})`,
+              `Source tree: ${reviewInput.implementationAttempt.resultTree}`,
+              `Author AgentRun: ${reviewInput.authorAgentRun.id} (${reviewInput.authorAgentRun.provider})`,
+              "Open review findings:",
+              ...reviewCorrectionFindings.flatMap((finding) => {
+                const location =
+                  finding.path === null
+                    ? "(no file location)"
+                    : finding.startLine === null
+                      ? finding.path
+                      : `${finding.path}:${finding.startLine.toString()}-${(finding.endLine ?? finding.startLine).toString()}`;
+                return [
+                  `- [${finding.id} v${finding.version.toString()}] ${finding.severity}: ${finding.title}`,
+                  `  Location: ${location}`,
+                  `  Description: ${finding.description}`,
+                  `  Reproduction: ${finding.reproduction}`,
+                  `  Criterion: ${finding.criterion ?? "(not linked)"}`,
+                  `  Suggested fix: ${finding.suggestedFix ?? "(none recorded)"}`,
+                ];
+              }),
+            ].join("\n"),
+          ),
+        ];
   const text = block("Workflow Position", [
     "Objective: finish the current stage and return its stage result.",
     `Template: ${workflowPosition.templateId} (v${String(workflowPosition.templateVersion)})`,
@@ -325,30 +362,31 @@ const renderWorkflowPosition = (sources: ContextSources): RenderedBody => {
         ]
       : []),
     ...correctionLines,
+    ...reviewCorrectionLines,
   ]);
-  // No per-section ref: templateId/templateVersion are recorded at the recipe's top level (spec
-  // §4.2), so a ref here would be redundant rather than missing provenance.
-  const recipeSources: readonly ContextSourceRef[] =
-    qaCorrection === null
+  // Template identity is recorded at the recipe level. Correction authority is different: every
+  // durable entity rendered into this required section is preserved as exact provenance.
+  const recipeSources: readonly ContextSourceRef[] = [
+    ...(qaCorrection === null
       ? []
       : [
           {
-            kind: "QA_CORRECTION_RUN",
+            kind: "QA_CORRECTION_RUN" as const,
             id: qaCorrection.correctionRun.id,
             version: qaCorrection.correctionRun.version,
           },
           {
-            kind: "QA_RUN",
+            kind: "QA_RUN" as const,
             id: qaCorrection.sourceQARun.id,
             version: qaCorrection.sourceQARun.version,
           },
           {
-            kind: "QA_EVIDENCE_BUNDLE",
+            kind: "QA_EVIDENCE_BUNDLE" as const,
             id: qaCorrection.sourceEvidence.id,
             version: qaCorrection.sourceEvidence.version,
           },
           {
-            kind: "QA_RETEST_PLAN",
+            kind: "QA_RETEST_PLAN" as const,
             id: qaCorrection.retestPlan.id,
             version: qaCorrection.retestPlan.version,
           },
@@ -357,7 +395,27 @@ const renderWorkflowPosition = (sources: ContextSources): RenderedBody => {
             id,
             version,
           })),
-        ];
+        ]),
+    ...(reviewCorrectionFindings.length === 0 || reviewInput === null
+      ? []
+      : [
+          {
+            kind: "STAGE_ATTEMPT" as const,
+            id: reviewInput.implementationAttempt.id,
+            version: reviewInput.implementationAttempt.version,
+          },
+          {
+            kind: "AGENT_RUN" as const,
+            id: reviewInput.authorAgentRun.id,
+            version: reviewInput.authorAgentRun.version,
+          },
+          ...reviewCorrectionFindings.map(({ id, version }): ContextSourceRef => ({
+            kind: "REVIEW_FINDING",
+            id,
+            version,
+          })),
+        ]),
+  ];
   return {
     text,
     sources: recipeSources,
@@ -456,6 +514,7 @@ const renderReviewInput = (sources: ContextSources): RenderedBody => {
             `  Description: ${finding.description}`,
             `  Reproduction: ${finding.reproduction}`,
             `  Criterion: ${finding.criterion ?? "(not linked)"}`,
+            `  Suggested fix: ${finding.suggestedFix ?? "(none recorded)"}`,
           ];
         });
   const boundedDiffFiles = input.diffSummary?.files.slice(0, reviewDiffLimits.maxFiles) ?? [];

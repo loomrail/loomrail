@@ -51,6 +51,7 @@ describe("section rendering", () => {
 
   it("renders bounded correction authority and its exact durable provenance", () => {
     const sources = sampleSources();
+    sources.reviewInput = null;
     sources.qaCorrection = {
       correctionRun: { id: "correction-2", version: 1, ordinal: 2, status: "ACTIVE" },
       sourceQARun: {
@@ -107,6 +108,28 @@ describe("section rendering", () => {
       { kind: "QA_EVIDENCE_BUNDLE", id: "qa-evidence-failed-retest", version: 1 },
       { kind: "QA_RETEST_PLAN", id: "retest-2", version: 1 },
       { kind: "QA_DEFECT", id: "defect-4", version: 1 },
+    ]);
+  });
+
+  it("renders open review findings as correction authority for a later implementation attempt", () => {
+    const sources = sampleSources();
+    sources.workflowPosition = {
+      ...sources.workflowPosition,
+      stage: "IMPLEMENT",
+      attempt: 2,
+      sessionOrdinal: 1,
+    };
+
+    const rendered = renderSection("WORKFLOW_POSITION", sources);
+
+    expect(rendered.text).toContain("Review Correction Authority:");
+    expect(rendered.text).toContain("Correct the durable open findings below");
+    expect(rendered.text).toContain("HIGH: Timeout is not applied");
+    expect(rendered.text).toContain("Suggested fix: Apply the configured timeout in the retry branch.");
+    expect(rendered.sources).toEqual([
+      { kind: "STAGE_ATTEMPT", id: "attempt_implement_01", version: 3 },
+      { kind: "AGENT_RUN", id: "agent_run_author_01", version: 2 },
+      { kind: "REVIEW_FINDING", id: "finding_01", version: 1 },
     ]);
   });
 

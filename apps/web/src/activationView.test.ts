@@ -35,7 +35,7 @@ const project = {
   name: "Web App A",
   repositoryPath: "/tmp/web-app-a",
   repositoryStatus: "READY",
-  providerPreference: "MOCK",
+  providerPreference: "CODEX",
   status: "ACTIVE",
   version: 2,
   createdAt: "2026-09-04T17:00:00.000Z",
@@ -43,8 +43,22 @@ const project = {
 } satisfies ListedProject;
 
 const selection = {
-  selection: { preference: "MOCK" },
-} as ProjectProviderSelectionResponse;
+  schemaVersion: 1,
+  selection: {
+    schemaVersion: 1,
+    projectId: "project-1",
+    preference: "CODEX",
+    projectVersion: 2,
+    updatedAt: "2026-09-04T17:00:00.000Z",
+  },
+  effectiveProvider: "CODEX",
+  source: "PROJECT_PREFERENCE",
+  fallbackReason: null,
+  environmentOverride: null,
+  environmentOverrideLocked: false,
+  environmentOverrideInvalid: false,
+  providers: [{ provider: "CODEX", ready: true }],
+} as unknown as ProjectProviderSelectionResponse;
 
 describe("guided activation projection", () => {
   it("matches only the complete canonical recipe and prefers an explicit durable task", () => {

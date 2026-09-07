@@ -369,14 +369,14 @@ describe("durable provider usage", () => {
     };
 
     expect(localState.execute(command)).toMatchObject({
-      type: "MOCK_PROVIDER_OUTCOME_APPLIED",
+      type: "PROVIDER_OUTCOME_APPLIED",
       replayed: false,
       run: { status: "HARD_PAUSED" },
       stageAttempt: { stage: "DISCOVERY", status: "SUCCEEDED" },
       usageRecords: [{ amount: 80_000 }],
     });
     expect(localState.execute(command)).toMatchObject({
-      type: "MOCK_PROVIDER_OUTCOME_APPLIED",
+      type: "PROVIDER_OUTCOME_APPLIED",
       replayed: true,
     });
     expect(

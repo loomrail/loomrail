@@ -5,8 +5,8 @@ import { join } from "node:path";
 import type { WorkflowTemplate } from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter, ProviderInvocation } from "@loomrail/provider-core";
-import { createMockProvider } from "@loomrail/provider-mock";
-import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
+import { createProviderTestDouble } from "./provider-double.js";
+import { deliveryTemplate } from "@loomrail/workflow-engine";
 import { summariseChanges } from "@loomrail/workspace";
 import type { FastifyBaseLogger } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -25,10 +25,10 @@ import {
 
 const timestamp = "2026-08-26T00:00:00.000Z";
 
-const implementStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "IMPLEMENT");
-if (!implementStage) throw new Error("The mock delivery template no longer declares IMPLEMENT");
+const implementStage = deliveryTemplate.stages.find(({ stage }) => stage === "IMPLEMENT");
+if (!implementStage) throw new Error("The delivery template no longer declares IMPLEMENT");
 const implementOnlyTemplate: WorkflowTemplate = {
-  ...mockDeliveryTemplate,
+  ...deliveryTemplate,
   id: "worker-implement-only-v1",
   version: 1,
   name: "Worker implementation lease",
@@ -73,7 +73,7 @@ const createRecordingLogger = (): RecordingLogger => {
 // throws and fails the test loudly rather than passing by accident.
 const adapterThatDoesNothing = (): ProviderAdapter => ({
   capabilities: () => ({
-    provider: "MOCK",
+    provider: "CODEX",
     start: true,
     interrupt: false,
     eventStream: false,
@@ -83,6 +83,7 @@ const adapterThatDoesNothing = (): ProviderAdapter => ({
     contextWindowTokens: 200_000,
     stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
     costReporting: false,
+    tokenBudgetEnforcement: "HARD",
   }),
   start: () => Promise.reject(new Error("adapterThatDoesNothing.start should never be called")),
   requestHandoff: () => Promise.resolve(undefined),
@@ -103,7 +104,7 @@ const adapterThatThrows = (): ProviderAdapter => ({
 });
 
 // Measured against "takes another pass", the heaviest test in this file: two work items cascading
-// through all six `mockDeliveryTemplate` stages (~24 provider sessions, each with context assembly
+// through all six `deliveryTemplate` stages (~24 provider sessions, each with context assembly
 // and synchronous SQLite writes) took well under a second on an idle machine. This machine
 // periodically runs at load average 60-90, though, where the same work can take many times that --
 // so the bound is set an order of magnitude above the idle measurement, as a backstop against a
@@ -236,7 +237,7 @@ describe("session worker", () => {
       type: "START_AGENT_RUN",
       payload: {
         dispatchId: seeded.dispatch.id,
-        provider: "MOCK",
+        provider: "CODEX",
         limits: { global: 3, project: 3, provider: 3 },
       },
     });
@@ -251,8 +252,8 @@ describe("session worker", () => {
         stageAttemptId: seeded.stageAttemptId,
         recipe: {
           schemaVersion: 1,
-          templateId: mockDeliveryTemplate.id,
-          templateVersion: mockDeliveryTemplate.version,
+          templateId: deliveryTemplate.id,
+          templateVersion: deliveryTemplate.version,
           specSource: "WORKFLOW_TEMPLATE",
           roleProfile: null,
           sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
@@ -274,7 +275,7 @@ describe("session worker", () => {
     const worker = createSessionWorker({
       state: localState,
       adapter,
-      template: mockDeliveryTemplate,
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
@@ -310,7 +311,7 @@ describe("session worker", () => {
     const worker = createSessionWorker({
       state: localState,
       adapter,
-      template: mockDeliveryTemplate,
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger,
@@ -351,7 +352,7 @@ describe("session worker", () => {
   it("applies Project and provider limits without blocking an independent scope", async () => {
     const localState = state();
     const codex = gatedAdapter(200_000, { provider: "CODEX" });
-    const mock = gatedAdapter(200_000, { provider: "MOCK" });
+    const anthropic = gatedAdapter(200_000, { provider: "CLAUDE_CODE" });
     const projectOne = "project-one";
     const projectTwo = "project-two";
     const projectThree = "project-three";
@@ -366,8 +367,8 @@ describe("session worker", () => {
     );
     const worker = createSessionWorker({
       state: localState,
-      resolveAdapter: (projectId) => (projectId === projectTwo ? mock : codex),
-      template: mockDeliveryTemplate,
+      resolveAdapter: (projectId) => (projectId === projectTwo ? anthropic : codex),
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
@@ -379,10 +380,10 @@ describe("session worker", () => {
     });
 
     worker.wake();
-    await Promise.all([codex.whenStarted(1), mock.whenStarted(1)]);
+    await Promise.all([codex.whenStarted(1), anthropic.whenStarted(1)]);
 
     expect(codex.startCallCount).toBe(1);
-    expect(mock.startCallCount).toBe(1);
+    expect(anthropic.startCallCount).toBe(1);
     const active = localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" });
     if (active.type !== "AGENT_RUNS") throw new Error("Expected active AgentRuns");
     expect(active.runs.map(({ stageAttemptId }) => stageAttemptId)).toHaveLength(2);
@@ -394,7 +395,7 @@ describe("session worker", () => {
     );
 
     codex.release();
-    mock.release();
+    anthropic.release();
     await awaitIdle(worker);
   }, 20_000);
 
@@ -416,7 +417,7 @@ describe("session worker", () => {
     const worker = createSessionWorker({
       state: workerState,
       adapter,
-      template: mockDeliveryTemplate,
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger,
@@ -451,7 +452,7 @@ describe("session worker", () => {
     const worker = createSessionWorker({
       state: localState,
       adapter,
-      template: mockDeliveryTemplate,
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
@@ -501,6 +502,7 @@ describe("session worker", () => {
         contextWindowTokens: 128_000,
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
       start: async (invocation, listener) => {
         const stage = invocation.session.stage;
@@ -624,7 +626,7 @@ describe("session worker", () => {
     const worker = createSessionWorker({
       state: localState,
       adapter,
-      template: mockDeliveryTemplate,
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger,
@@ -782,7 +784,7 @@ describe("session worker", () => {
     const worker = createSessionWorker({
       state: localState,
       adapter: adapterThatDoesNothing(),
-      template: mockDeliveryTemplate,
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger,
@@ -813,8 +815,8 @@ describe("session worker", () => {
     const logger = createRecordingLogger();
     const worker = createSessionWorker({
       state: localState,
-      adapter: createMockProvider(),
-      template: mockDeliveryTemplate,
+      adapter: createProviderTestDouble(),
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger,
@@ -858,8 +860,8 @@ describe("session worker", () => {
     const logger = createRecordingLogger();
     const worker = createSessionWorker({
       state: localState,
-      adapter: createMockProvider(),
-      template: mockDeliveryTemplate,
+      adapter: createProviderTestDouble(),
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger,
@@ -907,7 +909,7 @@ describe("session worker", () => {
     const worker = createSessionWorker({
       state: localState,
       adapter: adapterThatThrows(),
-      template: mockDeliveryTemplate,
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger,
@@ -927,13 +929,13 @@ describe("session worker", () => {
       "The background session worker could not finish a pass",
     );
 
-    // DISCOVERY's default mock script asks a question rather than completing outright (its
+    // DISCOVERY's default provider-double script asks a question rather than completing outright (its
     // `dispatch.mode === "START"` branch), which is exactly a case that leaves the run something
     // other than RUNNING without needing a second worker pass or any cascading through the template.
     const healthy = createSessionWorker({
       state: localState,
-      adapter: createMockProvider(),
-      template: mockDeliveryTemplate,
+      adapter: createProviderTestDouble(),
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
@@ -949,7 +951,7 @@ describe("session worker", () => {
     const worker = createSessionWorker({
       state: localState,
       adapter,
-      template: mockDeliveryTemplate,
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
@@ -1085,7 +1087,7 @@ describe("session worker", () => {
     let aborts = 0;
     const adapter: ProviderAdapter = {
       capabilities: () => ({
-        provider: "MOCK",
+        provider: "CODEX",
         start: true,
         interrupt: true,
         eventStream: true,
@@ -1095,6 +1097,7 @@ describe("session worker", () => {
         contextWindowTokens: 200_000,
         stages: ["IMPLEMENT"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
       start: (_invocation, listener) => {
         listener.onUsage({ inputTokens: 110_000, outputTokens: 10_000, quality: "ACTUAL" });
@@ -1158,7 +1161,7 @@ describe("session worker", () => {
     const abortedSessions: string[] = [];
     const adapter: ProviderAdapter = {
       capabilities: () => ({
-        provider: "MOCK",
+        provider: "CODEX",
         start: true,
         interrupt: true,
         eventStream: true,
@@ -1168,6 +1171,7 @@ describe("session worker", () => {
         contextWindowTokens: 200_000,
         stages: ["IMPLEMENT"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
       start: (_invocation, listener) => {
         listener.onUsage({ inputTokens: 110_000, outputTokens: 10_000, quality: "ACTUAL" });
@@ -1222,7 +1226,7 @@ describe("session worker", () => {
     const worker = createSessionWorker({
       state: localState,
       resolveAdapter: () => selected,
-      template: mockDeliveryTemplate,
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
@@ -1252,7 +1256,7 @@ describe("session worker", () => {
     const worker = createSessionWorker({
       state: localState,
       adapter,
-      template: mockDeliveryTemplate,
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
@@ -1276,7 +1280,7 @@ describe("session worker", () => {
     const worker = createSessionWorker({
       state: localState,
       adapter,
-      template: mockDeliveryTemplate,
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger: createRecordingLogger(),
@@ -1312,7 +1316,7 @@ describe("session worker", () => {
     const logger = createRecordingLogger();
     const adapter: ProviderAdapter = {
       capabilities: () => ({
-        provider: "MOCK",
+        provider: "CODEX",
         start: true,
         interrupt: true,
         eventStream: true,
@@ -1322,6 +1326,7 @@ describe("session worker", () => {
         contextWindowTokens: 200_000,
         stages: ["DISCOVERY"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
       }),
       start: (_invocation, listener) => {
         listener.onUsage({ inputTokens: 29_167, outputTokens: 551, quality: "ACTUAL" });
@@ -1349,7 +1354,7 @@ describe("session worker", () => {
     const worker = createSessionWorker({
       state: localState,
       adapter,
-      template: mockDeliveryTemplate,
+      template: deliveryTemplate,
       workspacesRoot: join(temporaryDirectory, "workspaces"),
       createCommandId,
       logger,

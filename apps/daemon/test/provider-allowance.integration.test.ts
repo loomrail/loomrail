@@ -59,6 +59,7 @@ describe("provider allowance API", () => {
         contextWindowTokens: 128_000,
         stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
         costReporting: false,
+        tokenBudgetEnforcement: "HARD",
         canReportRateLimits: true,
       }),
     modelMapping: () => ({ FAST: "fast", STANDARD: "standard", DEEP: "deep" }),
@@ -75,16 +76,7 @@ describe("provider allowance API", () => {
     const registry = createProviderRegistry({
       env: {},
       adapters: { CODEX: codexAdapter(readAllowance) },
-      executableAvailable: (provider) => provider === "CODEX",
-      probeCompatibility: (provider) =>
-        Promise.resolve(
-          provider === "CODEX"
-            ? { compatibility: "VERIFIED" as const, version: "0.153.0-alpha.5" }
-            : { compatibility: "UNVERIFIED" as const, version: "2.1.260" },
-        ),
-      probeAuthentication: () => Promise.resolve("AUTHENTICATED"),
-      rateLimitVersionTargetVerified: (provider) => provider === "CODEX",
-      probeRateLimitAuthenticationMode: () => Promise.resolve("CHATGPT"),
+      probeAuthentication: (provider) => Promise.resolve(provider === "CODEX" ? "AUTHENTICATED" : "REQUIRED"),
     });
     const token = bootstrapToken();
     const running = await startDaemon({

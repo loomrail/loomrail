@@ -62,28 +62,52 @@ const en = {
   "settings.projects.repair": "Repair demo repository",
   "settings.provider.title": "AI provider",
   "settings.provider.description":
-    "Choose who runs new agent sessions for this project. Loomrail requires an installed, verified, signed-in CLI.",
+    "Choose which real API runs new sessions. Loomrail requires an API key and enforces the token ceiling before dispatch.",
   "settings.provider.label": "Provider for new sessions",
   "settings.provider.option.auto": "Auto",
-  "settings.provider.option.auto.description": "Use an exact verified and signed-in live CLI",
-  "settings.provider.option.mock.description": "Deterministic demo; no live agent",
-  "settings.provider.loading": "Checking local providers…",
+  "settings.provider.option.auto.description": "Use a configured real API with hard token enforcement",
+  "settings.provider.loading": "Checking provider credentials…",
   "settings.provider.effective": "New sessions use {provider}.",
   "settings.provider.fallback":
-    "No verified and signed-in live CLI was found, so Auto is using the clearly marked Mock demo. Check compatibility, then refresh.",
-  "settings.provider.compatibility": "Detected CLI compatibility",
+    "No real provider credential is configured. No agent session will start until OPENAI_API_KEY or ANTHROPIC_API_KEY is available.",
+  "settings.provider.compatibility": "Real provider readiness",
   "settings.provider.status.ready": "Ready",
   "settings.provider.status.notInstalled": "Not installed",
   "settings.provider.status.tooOld": "Too old for managed runs",
   "settings.provider.status.unverified": "Version not verified",
   "settings.provider.status.versionUnreadable": "Version could not be verified",
-  "settings.provider.status.authRequired": "Sign in required",
+  "settings.provider.status.authRequired": "API key required",
+  "settings.provider.status.noHardTokenBudget": "No hard token limit",
   "settings.provider.status.unknown": "Could not verify",
+  "settings.provider.selectedUnavailable":
+    "This provider is not ready for the requested stage. No session will start.",
   "settings.provider.refresh": "Check again",
   "settings.provider.override":
     "LOOMRAIL_PROVIDER currently forces {provider}. Restart without the override to change this here.",
   "settings.provider.overrideInvalid":
-    "LOOMRAIL_PROVIDER contains an unknown value. Loomrail stays in Mock mode until it is fixed and restarted.",
+    "LOOMRAIL_PROVIDER contains an unknown value. Provider dispatch stays blocked until it is fixed and restarted.",
+  "settings.workspaceStrategy.title": "Working directory",
+  "settings.workspaceStrategy.description": "Choose where agents read and change files for this project.",
+  "settings.workspaceStrategy.label": "Agent workspace",
+  "settings.workspaceStrategy.isolated": "Separate worktree — recommended",
+  "settings.workspaceStrategy.isolatedDescription":
+    "Each task gets its own checkout. Your current project folder stays untouched.",
+  "settings.workspaceStrategy.shared": "This project folder",
+  "settings.workspaceStrategy.sharedDescription": "Agents work directly in {path}.",
+  "settings.workspaceStrategy.scope":
+    "Existing task workspaces do not move. This choice applies when Loomrail creates the next workspace.",
+  "settings.workspaceStrategy.loading": "Loading working directory settings…",
+  "settings.workspaceStrategy.confirmTitle": "Before Loomrail uses this folder",
+  "settings.workspaceStrategy.confirmDescription":
+    "New agent work will happen directly in {path}, alongside your own changes.",
+  "settings.workspaceStrategy.confirmFiles":
+    "Agents can read tracked and untracked files in this repository, including local-only files.",
+  "settings.workspaceStrategy.confirmExternalTools":
+    "Loomrail cannot lock your editor, terminal, or other tools that may change the same folder.",
+  "settings.workspaceStrategy.confirmSerial":
+    "Loomrail allows only one of its own writers or verification runs in this project at a time.",
+  "settings.workspaceStrategy.acknowledge": "I understand the shared-folder risk",
+  "settings.workspaceStrategy.confirm": "Use this project folder",
   "providerAllowance.provider": "Provider",
   "providerAllowance.title": "{provider} · Provider allowance",
   "providerAllowance.surface.command-center": "{provider} provider allowance in Command Center",
@@ -110,7 +134,8 @@ const en = {
   "providerAllowance.unavailable.unsupported": "This provider does not expose an allowance signal.",
   "providerAllowance.unavailable.unverified":
     "Allowance is hidden until this exact provider target is verified.",
-  "providerAllowance.unavailable.notAuthenticated": "Sign in to the provider before checking allowance.",
+  "providerAllowance.unavailable.notAuthenticated":
+    "Configure the provider API key before checking allowance.",
   "providerAllowance.unavailable.noData": "No allowance reading has been received yet.",
   "providerAllowance.unavailable.schemaDrift": "The provider response changed and was rejected safely.",
   "providerAllowance.unavailable.timeout": "The provider did not answer within the bounded check.",
@@ -403,8 +428,9 @@ const en = {
   "activation.eyebrow": "First local result",
   "activation.title": "Guided demo",
   "activation.description":
-    "Create one real local task, follow its measured workflow, and make the final acceptance decision yourself.",
-  "activation.zeroQuota": "Deterministic Mock only — no provider process, login, or quota.",
+    "Create one real local task and run its currently supported provider stages with an explicit quota ceiling.",
+  "activation.zeroQuota":
+    "Real provider only — every request is capped before dispatch and consumes provider quota.",
   "activation.progress": "Guided demo progress",
   "activation.step": "Step {current} of {total}",
   "activation.status.complete": "Complete",
@@ -415,22 +441,22 @@ const en = {
   "activation.phase.task": "Create the guided task",
   "activation.phase.ready": "Approve it for work",
   "activation.phase.run": "Start the workflow",
-  "activation.phase.request": "Human Request and delivery",
-  "activation.phase.review": "Independent review",
-  "activation.phase.qa": "Measured Browser QA",
+  "activation.phase.request": "Human Request and provider result",
+  "activation.phase.review": "Independent review after execution",
+  "activation.phase.qa": "Measured Browser QA after execution",
   "activation.phase.acceptance": "Review the result",
   "activation.phase.complete": "Owner decision recorded",
   "activation.copy.workspace":
     "Materialize Loomrail's bundled web-app repository in local application storage.",
   "activation.copy.provider":
-    "Select Mock explicitly for this project. It produces deterministic evidence without starting Claude or Codex.",
+    "Select OpenAI Responses for this project. A session starts only when OPENAI_API_KEY is configured and the hard token cap fits.",
   "activation.copy.task":
     "Create the exact reviewed sample task. Retrying this action cannot create a duplicate.",
   "activation.copy.ready": "Move the task from the backlog to Ready with a recorded state transition.",
   "activation.copy.run":
-    "Start the existing durable workflow with a visible token ceiling and the Fast model tier.",
+    "Start the durable workflow with a visible token ceiling and the Fast model tier. Provider API calls consume quota.",
   "activation.copy.request":
-    "The delivery begins with a Human Request. Answer it in Attention; follow implementation and any pause in the Task Cockpit.",
+    "Answer provider questions in Attention. This build stops before repository writes until the local workspace executor passes security review.",
   "activation.copy.review":
     "An independent reviewer checks the implementation before Browser QA. Its findings remain attached to this task.",
   "activation.copy.qa":
@@ -440,7 +466,7 @@ const en = {
   "activation.copy.complete":
     "Your final decision is durable. The walkthrough is complete; Loomrail did not decide on its own result.",
   "activation.action.workspace": "Prepare demo workspace",
-  "activation.action.provider": "Use Mock for this project",
+  "activation.action.provider": "Select OpenAI Responses",
   "activation.action.task": "Create guided task",
   "activation.action.ready": "Move task to Ready",
   "activation.action.run": "Start guided workflow",
@@ -451,6 +477,7 @@ const en = {
     "A LOOMRAIL_PROVIDER override is active. Restart without it, then run loomrail try again.",
   "activation.recipe.title": "What this run will do",
   "activation.recipe.provider": "Provider",
+  "activation.provider.real": "OpenAI Responses or Anthropic Messages",
   "activation.recipe.model": "Model tier",
   "activation.recipe.budget": "Loomrail task budget",
   "activation.next.title": "Where to go next",
@@ -645,7 +672,7 @@ const en = {
   "task.activityCountMore": "{count}+",
   "task.loadMoreActivity": "Show more",
   "workflow.title": "Workflow",
-  "workflow.mockName": "Delivery workflow",
+  "workflow.name": "Delivery workflow",
   "workflow.start": "Start workflow",
   "workflow.startDescription":
     "Run the bounded Discovery → Acceptance workflow. It may stop for a durable question or owner decision before continuing.",
@@ -698,9 +725,8 @@ const en = {
     "Applies to future agent runs and is recorded in each immutable policy snapshot.",
   "workflow.model.input": "Model",
   "workflow.model.autoOption": "{tier} · Auto",
-  "workflow.model.autoDescription": "Codex: {codex} · Claude Code: {claude}",
+  "workflow.model.autoDescription": "OpenAI: {codex} · Anthropic: {claude}",
   "workflow.model.providerDescription": "{provider} · {tier} cost policy",
-  "workflow.model.mockDescription": "Mock provider · no live model or provider billing",
   "workflow.model.loading": "Loading the provider model catalog…",
   "workflow.modelTier.current": "Tier: {tier}",
   "workflow.modelTier.roleDefault": "Role default",
@@ -746,14 +772,22 @@ const en = {
   "workspace.status.ORPHANED": "Worktree gone",
   "workspace.status.REMOVED": "Removed",
   "workspace.repository": "Repository",
+  "workspace.mode": "Mode",
+  "workspace.mode.ISOLATED_WORKTREE": "Separate worktree",
+  "workspace.mode.SHARED_CURRENT_DIRECTORY": "Project folder",
   "workspace.branch": "Branch",
   "workspace.worktree": "Worktree",
+  "workspace.workingDirectory": "Working directory",
   "workspace.baseCommit": "Base commit",
   "workspace.baseCommit.none": "No commit yet",
   "workspace.notReady":
     "The worktree for this task is no longer on disk. Loomrail does not cut a second one, and nothing returns this workspace to service — the branch still holds whatever was committed to it.",
+  "workspace.sharedNotReady":
+    "The Project's recorded working directory is no longer available. Loomrail will not choose another directory or branch on its own.",
   "workspace.uncommitted":
     "Loomrail has committed nothing. The work sits in this worktree, on this branch, until you keep it or discard it.",
+  "workspace.sharedUncommitted":
+    "Loomrail has committed nothing. Agent changes are in your project folder alongside any work that was already there.",
   "changes.title": "Changes",
   "changes.empty": "This task has changed nothing in its worktree yet.",
   "changes.truncated":
@@ -1096,7 +1130,9 @@ const en = {
   "event.contextFloorExceeded": "Required context did not fit",
   "event.contextFloorExceededDetail": "Session {ordinal} needed {requiredBytes} bytes of {budgetBytes}",
   "event.workspaceCreated": "Workspace created",
-  "event.workspaceCreatedDetail": "Branch {branch}",
+  "event.workspaceCreatedDetail": "{mode} · branch {branch} · carried files: {count}",
+  "event.workspaceStrategyChanged": "Working directory mode changed",
+  "event.workspaceStrategyChangedDetail": "New workspaces use {mode}",
   "event.workspaceOrphaned": "Workspace orphaned",
   "event.workspaceOrphanedDetail": "The worktree is gone or prunable",
   "field.title": "title",
@@ -1164,28 +1200,53 @@ const ru = {
   "settings.projects.repair": "Починить demo-репозиторий",
   "settings.provider.title": "ИИ-провайдер",
   "settings.provider.description":
-    "Выберите, кто запускает новые агентские сессии проекта. Loomrail требует установленный, проверенный CLI с активным входом.",
+    "Выберите реальный API для новых сессий. Loomrail требует API-ключ и применяет token ceiling до dispatch.",
   "settings.provider.label": "Провайдер новых сессий",
   "settings.provider.option.auto": "Авто",
-  "settings.provider.option.auto.description": "Использовать exact verified CLI с активным входом",
-  "settings.provider.option.mock.description": "Детерминированное демо без живого агента",
-  "settings.provider.loading": "Проверяем локальные провайдеры…",
+  "settings.provider.option.auto.description":
+    "Использовать настроенный реальный API с hard token enforcement",
+  "settings.provider.loading": "Проверяем credentials провайдеров…",
   "settings.provider.effective": "Новые сессии запускает {provider}.",
   "settings.provider.fallback":
-    "Проверенный live CLI с активным входом не найден. Авто использует явно обозначенный Mock-режим. Проверьте совместимость и повторите проверку.",
-  "settings.provider.compatibility": "Совместимость найденных CLI",
+    "Нет credentials реального провайдера. Сессия агента не запустится, пока не задан OPENAI_API_KEY или ANTHROPIC_API_KEY.",
+  "settings.provider.compatibility": "Готовность реальных провайдеров",
   "settings.provider.status.ready": "Готов",
   "settings.provider.status.notInstalled": "Не установлен",
   "settings.provider.status.tooOld": "Слишком старая версия для managed runs",
   "settings.provider.status.unverified": "Версия не проверена",
   "settings.provider.status.versionUnreadable": "Версию не удалось проверить",
-  "settings.provider.status.authRequired": "Нужно войти",
+  "settings.provider.status.authRequired": "Нужен API key",
+  "settings.provider.status.noHardTokenBudget": "Нет жёсткого лимита токенов",
   "settings.provider.status.unknown": "Не удалось проверить",
+  "settings.provider.selectedUnavailable":
+    "Этот провайдер не готов к запрошенной стадии. Сессия не запустится.",
   "settings.provider.refresh": "Проверить снова",
   "settings.provider.override":
     "Сейчас LOOMRAIL_PROVIDER принудительно выбирает {provider}. Перезапустите без override, чтобы менять выбор здесь.",
   "settings.provider.overrideInvalid":
-    "В LOOMRAIL_PROVIDER указано неизвестное значение. До исправления и перезапуска Loomrail остаётся в Mock-режиме.",
+    "В LOOMRAIL_PROVIDER указано неизвестное значение. До исправления и перезапуска dispatch провайдера заблокирован.",
+  "settings.workspaceStrategy.title": "Рабочая папка",
+  "settings.workspaceStrategy.description": "Выберите, где агенты читают и изменяют файлы этого проекта.",
+  "settings.workspaceStrategy.label": "Рабочая область агентов",
+  "settings.workspaceStrategy.isolated": "Отдельный worktree — рекомендуется",
+  "settings.workspaceStrategy.isolatedDescription":
+    "Каждая задача получает отдельный checkout. Текущая папка проекта остаётся нетронутой.",
+  "settings.workspaceStrategy.shared": "Эта папка проекта",
+  "settings.workspaceStrategy.sharedDescription": "Агенты работают прямо в {path}.",
+  "settings.workspaceStrategy.scope":
+    "Существующие рабочие области задач не перемещаются. Выбор применяется, когда Loomrail создаст следующую рабочую область.",
+  "settings.workspaceStrategy.loading": "Загружаем настройку рабочей папки…",
+  "settings.workspaceStrategy.confirmTitle": "Перед работой Loomrail в этой папке",
+  "settings.workspaceStrategy.confirmDescription":
+    "Новая работа агентов будет идти прямо в {path}, рядом с вашими изменениями.",
+  "settings.workspaceStrategy.confirmFiles":
+    "Агенты смогут читать отслеживаемые и неотслеживаемые файлы репозитория, включая локальные файлы.",
+  "settings.workspaceStrategy.confirmExternalTools":
+    "Loomrail не может заблокировать ваш редактор, терминал или другие инструменты, которые меняют ту же папку.",
+  "settings.workspaceStrategy.confirmSerial":
+    "Loomrail допускает в этом проекте только одного своего автора или один verification run одновременно.",
+  "settings.workspaceStrategy.acknowledge": "Я понимаю риск общей папки",
+  "settings.workspaceStrategy.confirm": "Работать в папке проекта",
   "providerAllowance.provider": "Провайдер",
   "providerAllowance.title": "{provider} · Лимит провайдера",
   "providerAllowance.surface.command-center": "Лимит провайдера {provider} в Command Center",
@@ -1211,7 +1272,7 @@ const ru = {
   "providerAllowance.bucket.SPEND_LIMIT": "Лимит расходов",
   "providerAllowance.unavailable.unsupported": "Этот провайдер не передаёт данные о лимите.",
   "providerAllowance.unavailable.unverified": "Лимит скрыт, пока эта точная версия провайдера не проверена.",
-  "providerAllowance.unavailable.notAuthenticated": "Войдите в провайдер, чтобы проверить лимит.",
+  "providerAllowance.unavailable.notAuthenticated": "Настройте API key провайдера до проверки лимита.",
   "providerAllowance.unavailable.noData": "Данные о лимите ещё не получены.",
   "providerAllowance.unavailable.schemaDrift": "Ответ провайдера изменился и был безопасно отклонён.",
   "providerAllowance.unavailable.timeout": "Провайдер не ответил за отведённое время.",
@@ -1511,8 +1572,9 @@ const ru = {
   "activation.eyebrow": "Первый локальный результат",
   "activation.title": "Пошаговое демо",
   "activation.description":
-    "Создайте настоящую локальную задачу, пройдите её измеряемый процесс и сами примите итоговый результат.",
-  "activation.zeroQuota": "Только детерминированный Mock — без процесса провайдера, входа и расхода квоты.",
+    "Создайте настоящую локальную задачу и запустите поддержанные provider stages с явным лимитом quota.",
+  "activation.zeroQuota":
+    "Только реальный провайдер — каждый запрос ограничен до dispatch и расходует квоту провайдера.",
   "activation.progress": "Прогресс пошагового демо",
   "activation.step": "Шаг {current} из {total}",
   "activation.status.complete": "Готово",
@@ -1523,21 +1585,21 @@ const ru = {
   "activation.phase.task": "Создать демо-задачу",
   "activation.phase.ready": "Разрешить работу",
   "activation.phase.run": "Запустить процесс",
-  "activation.phase.request": "Human Request и поставка",
-  "activation.phase.review": "Независимое ревью",
-  "activation.phase.qa": "Измеренный Browser QA",
+  "activation.phase.request": "Human Request и результат провайдера",
+  "activation.phase.review": "Независимое ревью после execution",
+  "activation.phase.qa": "Измеренный Browser QA после execution",
   "activation.phase.acceptance": "Проверить результат",
   "activation.phase.complete": "Решение владельца записано",
   "activation.copy.workspace": "Развернём встроенный репозиторий web-app в локальном хранилище Loomrail.",
   "activation.copy.provider":
-    "Явно выберите Mock для проекта. Он создаёт детерминированные свидетельства, не запуская Claude или Codex.",
+    "Выберите OpenAI Responses для проекта. Сессия запустится только с OPENAI_API_KEY и помещающимся hard token cap.",
   "activation.copy.task":
     "Создайте точную проверенную тестовую задачу. Повтор этого действия не создаст дубль.",
   "activation.copy.ready": "Переведите задачу из бэклога в Ready отдельным записанным переходом.",
   "activation.copy.run":
-    "Запустите существующий надёжный процесс с видимым лимитом токенов и уровнем модели Fast.",
+    "Запустите durable workflow с видимым лимитом токенов и уровнем Fast. Provider API calls расходуют quota.",
   "activation.copy.request":
-    "Поставка начинается с Human Request. Ответьте во «Внимании»; реализация и возможная пауза видны в Task Cockpit.",
+    "Отвечайте на вопросы провайдера во «Внимании». До security review локального workspace executor сборка останавливается перед записью в repository.",
   "activation.copy.review":
     "Независимый ревьюер проверяет реализацию до Browser QA. Его findings остаются привязаны к этой задаче.",
   "activation.copy.qa":
@@ -1547,7 +1609,7 @@ const ru = {
   "activation.copy.complete":
     "Ваше итоговое решение сохранено. Маршрут завершён; Loomrail не решал судьбу собственного результата.",
   "activation.action.workspace": "Подготовить демо-проект",
-  "activation.action.provider": "Выбрать Mock для проекта",
+  "activation.action.provider": "Выбрать OpenAI Responses",
   "activation.action.task": "Создать демо-задачу",
   "activation.action.ready": "Перевести задачу в Ready",
   "activation.action.run": "Запустить демо-процесс",
@@ -1558,6 +1620,7 @@ const ru = {
     "Активен override LOOMRAIL_PROVIDER. Перезапустите Loomrail без него и снова выполните loomrail try.",
   "activation.recipe.title": "Что сделает этот запуск",
   "activation.recipe.provider": "Провайдер",
+  "activation.provider.real": "OpenAI Responses или Anthropic Messages",
   "activation.recipe.model": "Уровень модели",
   "activation.recipe.budget": "Бюджет задачи Loomrail",
   "activation.next.title": "Что дальше",
@@ -1754,7 +1817,7 @@ const ru = {
   "task.activityCountMore": "{count}+",
   "task.loadMoreActivity": "Показать ещё",
   "workflow.title": "Процесс",
-  "workflow.mockName": "Процесс поставки",
+  "workflow.name": "Процесс поставки",
   "workflow.start": "Запустить процесс",
   "workflow.startDescription":
     "Запустить ограниченный процесс «Исследование → Приёмка». Перед продолжением он может остановиться на сохранённом вопросе или решении владельца.",
@@ -1807,9 +1870,8 @@ const ru = {
     "Применяется к будущим запускам агентов и сохраняется в каждом неизменяемом снимке политики.",
   "workflow.model.input": "Модель",
   "workflow.model.autoOption": "{tier} · Авто",
-  "workflow.model.autoDescription": "Codex: {codex} · Claude Code: {claude}",
+  "workflow.model.autoDescription": "OpenAI: {codex} · Anthropic: {claude}",
   "workflow.model.providerDescription": "{provider} · политика стоимости «{tier}»",
-  "workflow.model.mockDescription": "Mock-провайдер · без реальной модели и оплаты провайдера",
   "workflow.model.loading": "Загружаем каталог моделей провайдера…",
   "workflow.modelTier.current": "Уровень: {tier}",
   "workflow.modelTier.roleDefault": "По умолчанию роли",
@@ -1855,14 +1917,22 @@ const ru = {
   "workspace.status.ORPHANED": "Worktree исчез",
   "workspace.status.REMOVED": "Удалена",
   "workspace.repository": "Репозиторий",
+  "workspace.mode": "Режим",
+  "workspace.mode.ISOLATED_WORKTREE": "Отдельный worktree",
+  "workspace.mode.SHARED_CURRENT_DIRECTORY": "Папка проекта",
   "workspace.branch": "Ветка",
   "workspace.worktree": "Worktree",
+  "workspace.workingDirectory": "Рабочая папка",
   "workspace.baseCommit": "Базовый коммит",
   "workspace.baseCommit.none": "Коммитов ещё не было",
   "workspace.notReady":
     "Каталога worktree этой задачи больше нет на диске. Loomrail не создаёт второй, и вернуть эту рабочую область в строй нечем — ветка по-прежнему хранит всё, что в неё закоммичено.",
+  "workspace.sharedNotReady":
+    "Записанная рабочая папка проекта больше недоступна. Loomrail не будет сам выбирать другую папку или ветку.",
   "workspace.uncommitted":
     "Loomrail ничего не коммитил. Работа лежит в этом worktree, на этой ветке, пока вы её не сохраните или не удалите.",
+  "workspace.sharedUncommitted":
+    "Loomrail ничего не коммитил. Изменения агента лежат в папке проекта рядом с работой, которая уже была там.",
   "changes.title": "Изменения",
   "changes.empty": "Задача пока ничего не изменила в своей рабочей области.",
   "changes.truncated":
@@ -2204,7 +2274,9 @@ const ru = {
   "event.contextFloorExceeded": "Обязательный контекст не поместился",
   "event.contextFloorExceededDetail": "Сессии {ordinal} нужно {requiredBytes} байт из {budgetBytes}",
   "event.workspaceCreated": "Рабочая область создана",
-  "event.workspaceCreatedDetail": "Ветка {branch}",
+  "event.workspaceCreatedDetail": "{mode} · ветка {branch} · перенесено файлов: {count}",
+  "event.workspaceStrategyChanged": "Режим рабочей папки изменён",
+  "event.workspaceStrategyChangedDetail": "Новые рабочие области используют: {mode}",
   "event.workspaceOrphaned": "Рабочая область осиротела",
   "event.workspaceOrphanedDetail": "Worktree отсутствует или может быть удалён",
   "field.title": "название",

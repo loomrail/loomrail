@@ -69,6 +69,9 @@ export const prepareReviewContext = async (input: {
   workspace: WorkItemWorkspace | null;
   readDiff: ReviewDiffReader;
 }): Promise<ReviewContextPreparation> => {
+  if (input.sources.workflowPosition.stage !== "REVIEW") {
+    return { type: "READY", sources: input.sources };
+  }
   const reviewInput = input.sources.reviewInput;
   if (reviewInput === null) return { type: "READY", sources: input.sources };
   if (input.workspace === null) {

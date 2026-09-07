@@ -76,39 +76,6 @@
             >
           </p>
         </div>
-
-        <figure class="hero-shot shell">
-          <div class="frame">
-            <div class="frame-bar">
-              <span class="frame-dot" aria-hidden="true"></span>
-              <span class="frame-url" aria-hidden="true">127.0.0.1:4176</span>
-            </div>
-            <div class="frame-player">
-              <video
-                class="frame-media"
-                width="1280"
-                height="800"
-                poster="./demo/mock-route-light.webp"
-                preload="auto"
-                muted
-                loop
-                playsinline
-                data-product-demo
-                data-i18n-aria-label="demoAlt"
-              >
-                <source data-demo-format="webm" src="./demo/mock-route-light.webm" type="video/webm" />
-                <source data-demo-format="mp4" src="./demo/mock-route-light.mp4" type="video/mp4" />
-              </video>
-              <button class="demo-play" type="button" data-demo-play hidden>
-                <span data-i18n="demoPlay">Play the demo</span>
-              </button>
-            </div>
-          </div>
-          <figcaption data-i18n="heroShotCaption">
-            A real run of 0.1.0-alpha.2 against the deterministic mock: the task contract, a blocking Human
-            Request, an approved budget increase, and the owner accepting the delivery.
-          </figcaption>
-        </figure>
       </section>
 
       <section class="strip" data-i18n-aria-label="promisesLabel">
@@ -163,8 +130,8 @@
           <header class="section-head" data-reveal>
             <h2 id="how-title" data-i18n="howTitle">How a task moves through Loomrail</h2>
             <p class="section-lede" data-i18n="howIntro">
-              Four steps, the same every time. The first run does all of this against a deterministic mock, so
-              nothing is sent to a provider and nothing in your repository is touched.
+              Four steps, the same every time. New sessions go only to OpenAI Responses or Anthropic Messages,
+              with a hard output-token ceiling set before dispatch.
             </p>
           </header>
 
@@ -201,7 +168,7 @@
                     </div>
                     <div>
                       <dt data-i18n="uiBudget">Budget</dt>
-                      <dd>2.00 USD</dd>
+                      <dd data-i18n="uiBudgetValue">Hard before dispatch</dd>
                     </div>
                   </dl>
                 </div>
@@ -228,17 +195,14 @@
                     <li data-i18n="flowReview">Review</li>
                     <li data-i18n="flowDone">Accepted</li>
                   </ol>
-                  <div class="meter" role="presentation">
-                    <span class="meter-fill"></span>
-                  </div>
                   <p class="meter-legend">
-                    <span data-i18n="uiSpend">Spend</span>
-                    <span class="ui-num">0.84 / 2.00 USD</span>
+                    <span data-i18n="uiSpend">Budget guard</span>
+                    <span class="ui-num" data-i18n="uiSpendValue">Hard cap before dispatch</span>
                   </p>
                   <dl class="ui-meta">
                     <div>
                       <dt data-i18n="uiProvider">Provider</dt>
-                      <dd data-i18n="uiProviderValue">Deterministic mock</dd>
+                      <dd data-i18n="uiProviderValue">OpenAI or Anthropic API</dd>
                     </div>
                     <div>
                       <dt data-i18n="uiSession">Session</dt>
@@ -292,15 +256,15 @@
                   <ul class="evidence-list">
                     <li>
                       <span data-i18n="uiChanges">Changes</span>
-                      <span class="ui-num">12 files · +341 / −88</span>
+                      <span class="ui-num" data-i18n="uiChangesValue">Snapshot-bound diff</span>
                     </li>
                     <li>
                       <span data-i18n="uiReview">Review</span>
-                      <span class="ui-num" data-i18n="uiReviewValue">2 findings, both resolved</span>
+                      <span class="ui-num" data-i18n="uiReviewValue">Current report attached</span>
                     </li>
                     <li>
                       <span data-i18n="uiQa">QA</span>
-                      <span class="ui-num" data-i18n="uiQaValue">84 checks passed</span>
+                      <span class="ui-num" data-i18n="uiQaValue">Measured browser report attached</span>
                     </li>
                   </ul>
                   <div class="ui-actions">
@@ -319,22 +283,30 @@
           <div class="install-copy" data-reveal>
             <h2 id="install-title" data-i18n="installTitle">Try Loomrail without giving it a repository.</h2>
             <p class="section-lede" data-i18n="installIntro">
-              The first run uses a deterministic mock, binds to loopback, and does not start an agent. Start
-              in a new empty directory, not inside a repository you care about.
+              The copy block makes the package and Chromium downloads explicit, then runs a real-provider
+              preflight on loopback. Set OPENAI_API_KEY or ANTHROPIC_API_KEY first and use a new empty
+              directory.
             </p>
             <ol class="run-steps">
               <li data-i18n="runStepOne">
-                Choose “Initialize demo workspace” in the browser tab that opens.
+                Run the five visible commands. npm fetches Loomrail; Playwright fetches Chromium separately.
               </li>
-              <li data-i18n="runStepTwo">Create a task, move it to Ready and start the workflow.</li>
+              <li data-i18n="runStepTwo">
+                The read-only preflight runs first. When it is ready, /try opens and names local state and log
+                creation.
+              </li>
               <li data-i18n="runStepThree">
-                Answer the blocking Human Request and approve the budget increase.
+                Prepare the demo workspace, choose OpenAI Responses or Anthropic Messages, create the seeded
+                task, move it to Ready and start the workflow.
               </li>
-              <li data-i18n="runStepFour">Inspect the evidence, then accept the delivery or return it.</li>
+              <li data-i18n="runStepFour">
+                Answer the Human Request, approve a bounded provider budget if asked, inspect the available
+                evidence, then decide yourself.
+              </li>
             </ol>
             <p class="install-note" data-i18n="installLive">
-              Live providers are opt-in. Install and authenticate the provider CLI yourself, then start the
-              same installation with LOOMRAIL_PROVIDER=CODEX or LOOMRAIL_PROVIDER=CLAUDE_CODE.
+              Requests use the OpenAI Responses API or Anthropic Messages API. Without a credential or an
+              enforceable remaining token budget, Loomrail refuses dispatch.
             </p>
           </div>
 
@@ -347,9 +319,7 @@
                   <span data-copy-label data-i18n="copy" aria-live="polite">Copy</span>
                 </button>
               </div>
-              <pre
-                data-i18n-aria-label="installCommandLabel"
-              ><code><span class="line">mkdir loomrail-evaluation</span><span class="line">cd loomrail-evaluation</span><span class="line">npm install loomrail@next</span><span class="line line-last">npx loomrail</span></code></pre>
+              <pre data-i18n-aria-label="installCommandLabel"><code data-install-commands></code></pre>
             </div>
             <dl class="facts">
               <div class="fact">
@@ -362,7 +332,7 @@
               </div>
               <div class="fact">
                 <dt data-i18n="firstRunLabel">First run</dt>
-                <dd data-i18n="firstRunValue">Deterministic mock</dd>
+                <dd data-i18n="firstRunValue">Real API preflight</dd>
               </div>
               <div class="fact">
                 <dt data-i18n="platformLabel">Platforms</dt>
@@ -376,10 +346,10 @@
       <section class="section section-alt" id="boundary" aria-labelledby="boundary-title">
         <div class="shell">
           <header class="section-head" data-reveal>
-            <h2 id="boundary-title" data-i18n="boundaryTitle">What alpha.2 actually does</h2>
+            <h2 id="boundary-title" data-i18n="boundaryTitle">What this pre-alpha actually does</h2>
             <p class="section-lede" data-i18n="boundaryIntro">
-              Loomrail 0.1.0-alpha.2 is public pre-alpha. The second column is an honest list of what it does
-              not do yet — not a roadmap.
+              This is a public pre-alpha. The second column is an honest list of what it does not do yet — not
+              a roadmap.
             </p>
           </header>
 
@@ -394,7 +364,8 @@
                   Same-machine browser UI, loopback daemon, and local SQLite state.
                 </li>
                 <li data-i18n="todayProviders">
-                  Deterministic mock, plus bounded Codex and Claude Code adapters.
+                  OpenAI Responses and Anthropic Messages adapters with a provider-side token ceiling and
+                  fail-closed credential checks.
                 </li>
                 <li data-i18n="todayRecovery">
                   Restart recovery, Human Requests, budgets, evidence, and Decisions.
@@ -425,7 +396,7 @@
           <header class="section-head" data-reveal>
             <h2 id="docs-title" data-i18n="docsTitle">Documentation</h2>
             <p class="section-lede" data-i18n="docsIntro">
-              Run the mock first. Register a repository second. Connect a live provider only after reading the
+              Configure a provider credential, run the preflight, then register a repository after reading the
               threat model.
             </p>
           </header>
@@ -437,7 +408,7 @@
               data-doc-link="quick-start"
             >
               <strong data-i18n="quickStartTitle">Quick start</strong>
-              <span data-i18n="quickStartBody">From an empty directory to a persisted mock acceptance.</span>
+              <span data-i18n="quickStartBody">From an empty directory to a bounded real-provider task.</span>
               <span class="arrow" aria-hidden="true">→</span>
             </a>
             <a
@@ -488,22 +459,6 @@
           </nav>
         </div>
       </section>
-
-      <section class="cta" aria-labelledby="cta-title">
-        <div class="shell cta-inner" data-reveal>
-          <h2 id="cta-title" data-i18n="ctaTitle">Start with the mock. It spends nothing.</h2>
-          <p data-i18n="ctaBody">
-            One command, a new empty directory, and a workflow that runs end to end without touching a
-            repository or a provider account.
-          </p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="#install" data-i18n="ctaAction">Get the commands</a>
-            <a class="button button-quiet" href="https://github.com/loomrail/loomrail" data-i18n="sourceCta"
-              >View the source</a
-            >
-          </div>
-        </div>
-      </section>
     </main>
 
     <footer class="site-footer">
@@ -522,7 +477,7 @@
             >Docs</a
           >
         </nav>
-        <p class="footer-meta">0.1.0-alpha.2 · Apache-2.0 · 2026</p>
+        <p class="footer-meta"><span data-product-version></span> · Apache-2.0 · 2026</p>
       </div>
     </footer>
   </body>

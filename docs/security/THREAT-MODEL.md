@@ -6,17 +6,17 @@
 
 ## 1. Scope
 
-Phase 0 includes a local loopback daemon, browser UI, SQLite state, local artifacts and a deterministic mock provider.
-Later surfaces are listed so current contracts do not make them impossible to secure, but their detailed controls
-require Phase-specific threat deltas.
+The current local product includes a loopback daemon, browser UI, SQLite state, local artifacts and two real HTTPS
+provider adapters: OpenAI Responses and Anthropic Messages. The former Phase 0 synthetic provider is historical/test
+only and is not an active runtime capability.
 
-The sentence "it does not execute shell/Git/provider/browser actions" stood here through Phase 0 and is **no longer
-true of the provider, Git and browser surfaces**. A2 made Loomrail spawn real provider CLIs as daemon children, E1
-made it run bounded `git` operations and hand those CLIs writable worktrees, and Q1 added a bounded Playwright
-BrowserDriver for daemon-measured QA against loopback targets. Their deltas in §6 own those authorities; Loomrail still
-has no general-purpose product shell. New Projects default to `AUTO`: the daemon may select only an installed, exact
-verified and authenticated live CLI, while an owner can choose Mock explicitly for a zero-quota run. The
-provider-selection and compatibility controls are specified in T26 and T43.
+The sentence "it does not execute Git/provider/browser actions" stood here through Phase 0 and is **no longer true
+of those surfaces**. Git workspace preparation and bounded BrowserDriver checks exist, while provider execution now
+uses OpenAI Responses or Anthropic Messages over HTTPS. The current API adapters intentionally do not expose a local
+workspace tool executor, so `IMPLEMENT` and `QA` fail closed before remote dispatch. Loomrail still has no
+general-purpose product shell. New Projects default to `AUTO`: the daemon may select only a configured API adapter
+with hard token enforcement. Missing credentials and unknown overrides fail closed; there is no successful synthetic
+fallback. The API-provider controls are specified in T55 and ADR-0013.
 
 ## 2. Security objectives
 
@@ -113,7 +113,10 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T46 | Insights/report export leaks sensitive local workflow or machine metadata    | High     | numeric/enum facts; strict nested schemas; exact preview/download object; authenticated loopback; no network sender                                                                          | see Q12 private-reporting delta below                                             |
 | T47 | Forged, stale or ambiguous provider allowance misleads scheduling or spend   | High     | official structured surface only; closed adapter schema; explicit used/remaining label; observed/reset time and freshness; advisory-only scheduling; no account/credential persistence       | Q16 provider-allowance delta below                                                |
 | T48 | Repository-proposed verification recipe executes attacker-controlled code    | Critical | inert proposal; exact owner revision; argv/no-shell supervisor; scoped cwd/env/network; bounded output/time; durable process identity; stop-before-release; no install/Git/deploy authority  | see Q17 Project-verification delta below                                          |
-| T49 | Guided activation hides authority or publishes an unsafe install sequence    | High     | exact closed install contract; Mock-only preflight; explicit side effects and owner actions; fragment-only bootstrap; durable idempotent Task; no parallel progress truth                    | see Q15 canonical-activation delta below                                          |
+| T49 | Guided activation hides authority or publishes an unsafe install sequence    | High     | exact closed install contract; real-provider preflight; explicit quota/side effects and owner actions; fragment-only bootstrap; durable idempotent Task; no parallel progress truth          | see Q15 canonical-activation delta below                                          |
+| T50 | Shared current directory exposes local files or admits concurrent writers    | High     | explicit Project opt-in; immutable workspace fact and carry-in baseline; project-wide writer/verifier authority; named-branch/preflight refusal; no hidden branch/worktree mutation          | see Shared current-directory delta below                                          |
+| T54 | Terminal-only usage is presented as a hard provider budget                   | High     | explicit HARD/POST_SESSION capability; immutable remainder in invocation; AUTO excludes POST_SESSION; daemon refuses before ProviderSession/process spawn; UI names the missing guarantee    | see Hard token-budget enforcement delta below                                     |
+| T55 | API credential leaks or provider request crosses the owner's token authority | High     | environment-only key; header-only transport; conservative input reserve; provider-native output cap; strict response/usage validation; no synthetic fallback; writing stages disabled        | see Real-provider API delta below                                                 |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -337,8 +340,9 @@ Required controls and verification:
 
 - the orchestrator creates the exact child and stores its `ChildProcess` handle; it accepts no PID and signals only
   that handle after a machine-readable `PROVIDER_STARTED` message;
-- state, fixture projects and tokens are test-owned. The drill uses a bundled synthetic repository, a blocking Mock
-  adapter and an exact temporary directory; it starts no provider CLI, MCP server, BrowserDriver or network client;
+- state, fixture projects and tokens are test-owned. The drill uses a bundled synthetic repository, an injected
+  blocking provider double and an exact temporary directory; it starts no provider API call, MCP server,
+  BrowserDriver or network client;
 - bootstrap exchange, SameSite session, Origin and CSRF use normal daemon routes. Tokens/cookies and temporary paths
   are not printed; child stderr is bounded and reported only when the fixture fails;
 - after `SIGKILL`, a new process on the same SQLite/WAL files must expose one `DAEMON_RESTART` interruption and one
@@ -425,21 +429,21 @@ remote support upload are not claimed. Raw provider stdout/stderr remains delibe
 
 Q8 combines system, Browser QA and provider observations into a first-run recommendation. A command named `setup`
 could be mistaken for authority to install dependencies, authenticate a provider, migrate state or persist the route;
-it could also print executable/data paths or raw probe errors, or recommend Mock while an environment override forces
-a live provider. Rated **High** because a false-safe result could make the owner's first workflow spend quota or
+it could also print executable/data paths or raw probe errors, or claim readiness while an environment override
+forces another provider. Rated **High** because a false-safe result could make the owner's first workflow spend quota or
 cross a repository boundary they did not knowingly select.
 
 Required controls and verification:
 
-- Setup Route is a transient `MOCK | LIVE` choice. It is not persisted and never changes Project Provider Preference
-  or `LOOMRAIL_PROVIDER`; any present or invalid override blocks both routes until the owner removes it;
+- Setup Route is a transient `LIVE` check. It is not persisted and never changes Project Provider Preference or
+  `LOOMRAIL_PROVIDER`; an invalid override blocks the route until the owner removes it;
 - `loomrail setup` reuses the Q4 Doctor Report and its fixed argv/no-shell/output-free probes. It creates no data
   directory or SQLite/log file, applies no migration/recovery and launches no daemon, browser, agent session, login,
   package manager or network download;
 - the Browser QA prerequisite is observed only by asking the installed Playwright runtime for its executable
   location and applying `stat`; neither the path nor an exception is returned, and Chromium is never launched;
-- interactive mode requires stdin/stdout TTY, accepts only empty/`1`/`mock` or `2`/`live`, defaults to Mock and never
-  asks for a path, account or secret. Machine-readable mode requires an explicit route before any probe;
+- interactive mode requires stdin/stdout TTY, offers only the live route and never asks for a path, account or
+  secret. Machine-readable mode requires the explicit live route before any probe;
 - `SetupReadinessReport` is a closed deterministic schema containing three typed checks and ordered remediation or
   next-action codes. Pending migration blocks with a backup instruction; missing state/provider login remains safe
   only where the selected route permits it;
@@ -666,11 +670,11 @@ Required controls and verification:
 - the versioned JSON contract is strict and accepts exactly five reviewed literal commands in their reviewed order;
   arbitrary standalone commands, shell composition, traversal, unknown fields and policy expansion fail closed in
   both the runtime schema and an independent standard-library verifier;
-- `loomrail try` always calls the read-only Q8 Mock preflight before opening logs, SQLite or the daemon. `BLOCKED`
+- `loomrail try` always calls the read-only real-provider preflight before opening logs, SQLite or the daemon. `BLOCKED`
   reports that nothing was started or written; `READY` names the local state/log side effects before startup;
-- the route starts no live provider and spends no provider quota. Project `MOCK`, Task creation, Ready, workflow start,
-  budget changes and final disposition remain separate authenticated owner actions through existing Origin/CSRF,
-  optimistic-version and audit controls;
+- the route may spend provider quota only after the owner starts a workflow. Provider selection, Task creation,
+  Ready, workflow start, budget changes and final disposition remain separate authenticated owner actions through
+  existing Origin/CSRF, optimistic-version and audit controls;
 - the bootstrap value remains fragment-only and is consumed by the existing one-time session exchange. It is neither
   persisted in guided state nor admitted to operational logs;
 - one Project-derived mission command ID makes lost-response Task creation idempotent. Progress is reconstructed only
@@ -682,7 +686,7 @@ Required controls and verification:
   narrow viewport. The same named contract, browser and package gates run on macOS/Windows CI before unrelated lint.
 
 Residual risk remains until that CI run exists for the fixed Q15 commit and the protected landing consumes the same
-contract. Windows live-provider compatibility is unrelated: Q15 remains Mock-only on every platform.
+contract. Credentialed cross-platform API evidence remains a separate pending gate.
 
 ### Q16 provider-allowance delta (T47)
 
@@ -847,12 +851,11 @@ throws"), so ADR-0002's "publication failure does not roll back state" holds for
 code is careful with text, but because there is no text in the frame at all, by schema. The mitigation and the
 test are the same one cited for content leakage above — "carries no work item text on the wire".
 
-### A2 live-provider-adapters delta (T16, T17, T18)
+### Historical A2 CLI-adapter delta (T16, T17, T18)
 
-A2 (`docs/plans/11-a2-live-provider-adapters-spec.ru.md`) replaces the synthetic mock provider with two live
-adapters, `packages/provider-codex` and `packages/provider-claude-code`, that spawn the real `codex` and
-`claude` CLIs as child processes of the daemon, running as the same OS user who launched Loomrail. This is the
-first place in the tree where Loomrail does anything beyond read SQLite and the filesystem it already owns.
+A2 (`docs/plans/11-a2-live-provider-adapters-spec.ru.md`) documents the former CLI execution boundary. ADR-0013
+supersedes that execution path with the two HTTPS adapters described by T55; the process controls below remain
+historical security evidence and do not describe the active provider registry.
 
 **T16 — a live adapter spawns an owner-privileged child process.** Rated High: a child that inherits the
 owner's full permissions is exactly the actor SD-001 exists to keep out of "no approval needed" territory.
@@ -913,7 +916,7 @@ its session. Mitigation, verified in code:
   `SIGKILL` before the session is marked `ENDED` — kill first, mark second, so a crash between the two steps
   can never commit a session that reads as over while its process is still running. An inconclusive or failed
   probe/signal leaves both the session `RUNNING` and its writer lease held instead of exposing the worktree to a
-  second writer. Verified against a real detached child process, not a mock, by
+  second writer. Verified against a real detached child process rather than an in-memory process stub, by
   `packages/persistence-sqlite/test/local-state.integration.test.ts`'s "kills a process orphaned by a daemon
   restart before ending its session", and the ordering itself by that file's "still has the session marked
   RUNNING at the moment it kills the process", which reads the row through the store's own connection from
@@ -1165,6 +1168,92 @@ repository on the next start than it did on this one. `repositoryPathSchema`
 (`packages/contracts/src/work-management.ts`) enforces it on the command and on the Project itself, so no route
 or fixture can put one in the database, and `resolveRegisteredRepository` answers `REPOSITORY_PATH_NOT_ABSOLUTE`
 naming the path, rather than letting the owner discover it as a Project pointing somewhere they never chose.
+
+### Hard token-budget enforcement delta (T54)
+
+Private dogfood showed that a valid terminal usage report can arrive after a single live session has already crossed
+both its AgentRun ceiling and the remaining pipeline allowance. Rated **High**: the owner sees an explicit hard cap,
+yet a terminal-only adapter can consume an unbounded amount before the deterministic workflow can react. Correct
+ledger accounting and a pause before the next session do not mitigate the current spend.
+
+Mitigation:
+
+- provider capabilities distinguish `HARD` from `POST_SESSION`; the field is required and closed;
+- the daemon checks the capability before workspace preparation, ProviderSession creation, MCP opening or process
+  spawn and completes the dispatch with an actionable owner-visible refusal;
+- a `HARD` invocation carries immutable maximum, already-recorded AgentRun usage and exact positive remainder;
+- AUTO selection excludes `POST_SESSION`, while explicit selection remains visible for diagnostics and is still
+  fenced by the daemon;
+- the OpenAI Responses and Anthropic Messages adapters are `HARD`: before dispatch they conservatively reserve the
+  complete serialized request and constrain generated output with the provider-native token-limit field;
+- a configured CLI cannot satisfy this gate. Only an API credential and an adapter with an enforceable request cap
+  make a provider selectable;
+- existing terminal report, append-only ledger and next-stage pause remain defense in depth, not the preventive
+  boundary.
+
+Verification lives in provider-core contract tests, domain dispatch tests, live-adapter capability tests, provider
+selection tests and daemon session integration tests that assert adapter `start` was never called and no session row
+was created. Windows uses the same code path; live Windows evidence remains deferred.
+
+### Real-provider API delta (T55)
+
+Removing the selectable synthetic provider makes remote API traffic the only successful provider path. A leaked key,
+an accidentally unbounded request or permissive response parsing would therefore spend the owner's quota or allow
+untrusted provider output to cross the deterministic workflow boundary. Rated **High**.
+
+- credentials are read from `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` when the adapter is constructed, sent only in the
+  provider's authorization header, and are never persisted, returned in outcomes or logged;
+- the adapter reserves a conservative upper bound for the complete serialized request before dispatch and sets
+  OpenAI `max_output_tokens` or Anthropic `max_tokens` from the remaining domain-owned allowance;
+- HTTP status, response envelope, usage and the stage-specific structured result are validated at runtime; malformed,
+  incomplete or over-budget responses fail closed and cannot mutate workflow state;
+- tests replace only the JSON transport. There is no selectable production test provider and no successful fallback
+  when a credential is absent or a provider request fails;
+- `IMPLEMENT` and `QA` are deliberately absent from API-adapter capabilities until a separately reviewed local
+  workspace tool executor can prove file and command effects. Provider prose is never accepted as evidence of them.
+
+Verification lives in adapter unit tests, provider selection and settings integration tests, and the production-source
+scan recorded by Q19. Credentialed live and cross-platform evidence remains pending; it must not be inferred from an
+injected transport test.
+
+### Shared current-directory workspace delta (T50)
+
+Some repositories deliberately forbid linked worktrees. Falling back silently to their current checkout would be
+worse than refusing: a live provider running as the owner can read untracked local files, write beside unfinished
+owner edits and collide with a verification command or another WorkItem. Rated **High**. The mode is useful for
+private dogfood, but it is neither a sandbox nor a lock over every process running as the same OS user.
+
+The implemented controls keep that residual risk explicit and bound Loomrail's own authority:
+
+- `ISOLATED_WORKTREE` remains the absence/default value. `SHARED_CURRENT_DIRECTORY` can be selected only through an
+  authenticated, Origin/CSRF-protected, optimistic-version Project command. Settings shows both choices and requires
+  a separate checked acknowledgement that tracked/untracked files are visible, external editors are not locked and
+  only new workspaces use the selection;
+- the resulting WorkItemWorkspace stores its strategy permanently. Shared provisioning resolves the registered
+  repository's canonical top level, requires a named current branch and refuses an in-progress Git operation before
+  provider start. It records that top level as the working directory and never creates/checks out/deletes a branch
+  or linked worktree;
+- the existing temporary-index Carry-in Baseline captures the exact initial tracked/staged/deleted/unignored state
+  without changing the owner's real index, working tree or refs. Its bounded carried-path count is visible in the
+  workspace-created activity; task diffs are derived from that baseline instead of pretending the dirty checkout
+  started at HEAD;
+- one SQLite-guarded project-wide authority class covers both IMPLEMENT writer leases and VerificationRuns across
+  every shared WorkItem. Writer↔writer, writer↔verification and verification↔verification races return the typed
+  `WORKSPACE_PROJECT_AUTHORITY_HELD`; a partial unique index is the storage backstop. Discovery, Plan, Review and the
+  provider part of QA receive read-only access without taking writer authority. Isolated workspaces retain their
+  independent per-workspace claims;
+- recovery treats the shared path as the registered canonical repository rather than linked-worktree metadata. It
+  releases only authority proven dead by the existing process-identity checks and never auto-resumes unknown
+  provider work. A missing/moved repository becomes ORPHANED without deleting or restoring owner files;
+- Cockpit names the fact as `Mode: Project folder` and `Working directory`, and states that Loomrail committed
+  nothing and cannot isolate concurrent owner tools. External same-user processes remain a residual risk: users must
+  stop or avoid overlapping writes while a shared IMPLEMENT or verification run is active.
+
+Verification covers strategy CAS/default/no-op/restart, migration 0053 backfill, current-directory provisioning with
+dirty tracked/untracked/non-ASCII/path-with-spaces fixtures, no new refs/worktrees/index changes, detached-HEAD and
+Git-operation refusal, all cross-WorkItem authority races, dead-holder recovery, isolated-workspace independence,
+HTTP auth/CSRF/Origin and owner-facing confirmation/Cockpit projections. Private dogfood additionally compares the
+pre-existing file set before and after the workflow and restarts the daemon mid-run.
 
 ### E1.5 change-visibility delta (T21)
 
@@ -1425,18 +1514,19 @@ return path of `finding()`), not dependent on the one literal value exercised by
 - output size/rate bounds;
 - never enable permission bypass automatically.
 
-### Provider Selection delta (T26)
+### Provider API selection delta (T26)
 
-AUTO selection adds two child-process probes and lets an authenticated browser mutation choose which live CLI a
-Project will launch next. The High-rated failure is a poisoned executable/config or a stale selector silently routing
+AUTO selection inspects two API credentials and lets an authenticated browser mutation choose which provider API a
+Project will call next. The High-rated failure is a stale selector silently routing
 work to a different provider while the owner believes the chosen one ran.
 
-- executable and auth status are separate observations; a PATH hit alone never proves readiness;
-- probes use fixed argv arrays, no shell, closed stdin, a short deadline and discarded stdout/stderr. Only provider
-  id, installed/auth state and time are kept in memory; credential/account output is never parsed, persisted or logged;
+- credential presence and adapter capability are separate observations; a configured key alone never bypasses the
+  adapter's stage or hard-budget gate;
+- only provider id and readiness are exposed to the browser; credential content is never returned, parsed, persisted
+  or logged;
 - preference changes use Project optimistic version, CSRF/Origin/session enforcement and one transaction containing
   state, append-only Event and idempotent command receipt;
-- explicit live preference never falls through to another live adapter or a successful mock result;
+- explicit provider preference never falls through to another adapter or a successful synthetic result;
 - daemon owns a stable adapter registry. The worker captures the exact adapter serving the live ProviderSession, so
   a concurrent Settings change cannot redirect abort/handoff;
 - `LOOMRAIL_PROVIDER` override is reported to UI and disables mutation rather than secretly defeating the selector;
@@ -1541,7 +1631,8 @@ light/dark browser coverage on macOS and Windows.
 
 **T35 — an incomplete or stale checklist authorizes stable staging. High.** A manual confirmation and green CI prove
 intent and automated source health, but neither proves private dogfood, protected landing integration or exact live
-provider rows. The stage workflow therefore consumes one strict versioned index with an exact ten-gate key set and
+provider rows or an enforceable live-provider token ceiling. The stage workflow therefore consumes one strict
+versioned index with an exact eleven-gate key set and
 matching stable version. `PASSED` entries name only bounded repository evidence under `docs/evidence`, bind its
 SHA-256, require the same bytes at the recorded commit, and require that commit to be an ancestor of the release
 source; pending entries cannot carry evidence or pass the workflow. Evidence paths reject traversal and symlinks, and
@@ -1561,6 +1652,7 @@ retry; redaction canaries; RU/EN, keyboard, light/dark E2E.
 - canonical workspace allowlist;
 - task branch/worktree default;
 - one writer lease per worktree;
+- explicit shared-current-directory opt-in with one project-wide Loomrail writer/verifier authority;
 - command/working-directory/network permission tuple;
 - preflight user changes;
 - destructive commands and push/merge require human approval;

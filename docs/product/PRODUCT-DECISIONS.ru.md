@@ -1,7 +1,7 @@
 # Loomrail — зафиксированные продуктовые и архитектурные решения
 
 **Дата фиксации:** 2026-08-22
-**Последнее дополнение:** 2026-09-04 — activation, provider allowance и project verification
+**Последнее дополнение:** 2026-09-06 — real-provider-only API pivot
 **Статус:** approved baseline
 **Основание:** последовательный product/architecture grilling с владельцем проекта
 
@@ -95,7 +95,8 @@ Rust, Tauri и Electron не входят в Phase 0.
 ### AD-005 — Provider capabilities, а не фальшивая одинаковость
 
 Каждый adapter сообщает поддерживаемые start/resume/steer/interrupt/approval/usage/rate-limit-window/browser
-capabilities. UI не показывает неподдерживаемое действие как рабочее.
+capabilities, включая способность реально ограничить расход текущей сессии. UI не показывает неподдерживаемое
+действие как рабочее.
 
 ### AD-006 — Разделение профиля, запуска и provider session
 
@@ -260,6 +261,11 @@ map, commands и rules, затем задаёт grill-вопросы. Запис
 
 Лимиты задаются на run, WorkItem, Project и rolling day: tokens/cost estimate, time, attempts, turns, concurrency и
 browser/runtime minutes. Alerts: 50%, 80%, 95%; при 100% stage hard-paused до ручного подтверждения.
+
+**Уточнение 2026-09-06.** `hard` означает, что работа провайдера не может пересечь подтверждённый лимит текущей
+сессии. Terminal usage, пришедший после завершения работы, годится для ledger и остановки следующей сессии, но не
+является hard enforcement. Adapter обязан объявить `HARD` либо `POST_SESSION`; второй не допускается к managed run
+с token hard budget. Повышение лимита не превращает неограниченную сессию в ограниченную и не служит bypass.
 
 ### BD-002 — Честные usage данные
 
@@ -584,8 +590,8 @@ checkpoint; любой writer конфликтует и с writer, и с reader.
 
 ### PD-016 — Платный слой продаёт внедрение и совместную работу, а не безопасность core
 
-Apache-2.0 local Community остаётся полезным полным accountable workflow: durable state, budgets, Review, QA,
-Acceptance, Mock и samples не становятся искусственными paid gates. Ближайшая проверяемая коммерческая ступень —
+Apache-2.0 local Community остаётся полезным accountable workflow: durable state, budgets, Review, QA,
+Acceptance и samples не становятся искусственными paid gates. Ближайшая проверяемая коммерческая ступень —
 bounded `Guided Launch`: readiness/security review проекта, предложение Constitution и verification policy, настройка
 первого реального маршрута, разбор Acceptance Package и ограниченный срок поддержки/обучения.
 
@@ -593,6 +599,26 @@ Recurring Team/Cloud tier появляется только после отде�
 collaboration, RBAC, shared policies/audit, hosted or remote workers, enterprise identity/retention и SLA. Loomrail не
 обещает lifetime updates за один платёж, экономию «в X раз», число клиентов или provider compatibility без
 проверяемой методики и evidence.
+
+### PD-017 — Активный продукт работает только с реальными API-провайдерами
+
+Решением владельца от 2026-09-06 синтетический Mock удалён из активного продукта, onboarding, provider selection и
+release artifact. Новые ProviderSession направляются только в OpenAI Responses API или Anthropic Messages API.
+Отсутствие ключа, неизвестный `LOOMRAIL_PROVIDER`, неподдерживаемая stage или недостаточный enforceable token budget
+блокируют dispatch; успешного синтетического fallback нет.
+
+Ключи читаются только из process environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`), не попадают в prompt, SQLite,
+logs или Git. Каждый API request получает provider-native верхнюю границу до отправки: `max_output_tokens` у OpenAI
+или `max_tokens` у Anthropic. Transport заменяется только в тестах, где проверяются exact request, untrusted response,
+usage и превышение лимита; production transport всегда выполняет реальный HTTPS request.
+
+Сейчас API adapters честно объявляют только `DISCOVERY | PLAN | REVIEW | ACCEPTANCE`. `IMPLEMENT` и `QA` остаются
+fail-closed, пока не появится отдельно спроектированный и проверенный local workspace tool executor: прямой shell из
+ответа модели не получает authority автоматически. Это незакрытая часть реальной работы, а не повод возвращать Mock.
+
+Append-only команды, Events, миграции и старые EvidenceArtifact с идентификатором `MOCK` остаются читаемыми как
+исторические факты. Миграция переводит только активную Project preference `MOCK -> AUTO`; переписывать аудит задним
+числом запрещено. Полный механизм — ADR-0013 и планы 87–88.
 
 ## 14. Отложенные решения
 

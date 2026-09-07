@@ -1,7 +1,7 @@
 # Loomrail architecture overview
 
-**Status:** public pre-alpha; local stable-scope runtime implemented through Q13
-**Updated:** 2026-09-03
+**Status:** public pre-alpha; real-provider API transition in progress
+**Updated:** 2026-09-06
 
 Loomrail separates deterministic product authority from non-deterministic agent work. The daemon owns state,
 permissions, budgets, transitions and recovery. Providers produce proposals, tool activity and artifacts; they do not
@@ -18,11 +18,9 @@ flowchart LR
     D --> APP[Application commands and queries]
     APP --> DOMAIN[Domain state machines]
     APP --> WF[Workflow engine]
-    WF --> COMP[Provider compatibility registry]
-    COMP --> PC[Provider contract]
-    PC --> MOCK[Mock provider]
-    PC --> CODEX[Codex CLI adapter]
-    PC --> CLAUDE[Claude Code CLI adapter]
+    WF --> PC[Provider contract]
+    PC --> OPENAI[OpenAI Responses API]
+    PC --> ANTHROPIC[Anthropic Messages API]
 
     APP --> PORT[Persistence ports]
     PORT --> DB[(SQLite current state)]
@@ -54,16 +52,15 @@ packaging remain outside the stable scope.
 
 ## Provider compatibility boundary
 
-Each live-provider adapter owns its fixed version command, exact parser, admission floor and verified-version
-allowlist in `packages/provider-codex/src/diagnostics.ts` or `packages/provider-claude-code/src/diagnostics.ts`.
-`packages/provider-core/src/diagnostics.ts` owns the shared bounded process observation and closed classifier. The
-daemon registry combines adapter diagnostics with executable presence and provider-owned authentication; only
-`VERIFIED + AUTHENTICATED` can make a live adapter startable. Mock remains `BUILT_IN` and ready.
+Each provider adapter owns a fixed HTTPS endpoint, closed model-tier mapping, strict request/response parser and hard
+output-token cap. The daemon registry contains only OpenAI Responses and Anthropic Messages adapters. An adapter is
+startable only when its environment-owned API credential is present; missing credentials, an unknown override and
+remote failures all fail closed without switching providers.
 
-Compatibility is transient admission policy for a new ProviderSession, not workflow authority or durable Project
-state. A refresh cannot change Project preference or reinterpret a running session. A new upstream CLI is
-`UNVERIFIED` until one reviewed matrix-row change carries sanitized real-stream evidence and macOS/Windows parity;
-no semver range or successful `--version` promotes it implicitly.
+Readiness is a transient observation for a new ProviderSession, not workflow authority or durable Project state. A
+refresh cannot change Project preference or reinterpret a running session. Provider payloads stay inside the adapter,
+credentials stay out of SQLite/logs/outcomes, and only a validated stage result may cross into the deterministic
+workflow.
 
 ## Dependency rules
 
@@ -279,11 +276,12 @@ current implementation tree, without raw output or local paths.
 - stable-checkpoint and workspace read/write compatibility;
 - advisory selection only: persistence remains authority through the atomic AgentRun/lease claim.
 
-### `packages/provider-core` and `provider-mock`
+### `packages/provider-core`, `provider-codex` and `provider-claude-code`
 
 - normalized capabilities/lifecycle contract;
 - validated provider-local `FAST`/`STANDARD`/`DEEP` model mapping applied to every invocation;
-- deterministic fixture sessions/events/usage and one final cumulative usage callback per session;
+- strict HTTPS transport, structured stage-result decoding and actual usage reporting;
+- injected network transports only in tests; no selectable synthetic runtime provider;
 - no provider JSON in domain/UI.
 
 ### `packages/ui`

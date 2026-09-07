@@ -215,6 +215,8 @@ const run = async () => {
       ...process.env,
       LOOMRAIL_DATA_DIR: dataDirectory,
       LOOMRAIL_PROVIDER: "",
+      OPENAI_API_KEY: "",
+      ANTHROPIC_API_KEY: "",
     };
     const interactiveSetup = spawnSync(process.execPath, [binaryPath, "setup"], {
       cwd: installDirectory,
@@ -229,22 +231,25 @@ const run = async () => {
     ) {
       throw new Error("the packaged setup did not refuse a non-interactive invocation safely");
     }
-    const setupOutput = execFileSync(process.execPath, [binaryPath, "setup", "--mode", "mock", "--json"], {
+    const blockedSetup = spawnSync(process.execPath, [binaryPath, "setup", "--mode", "live", "--json"], {
       cwd: installDirectory,
       env: diagnosticEnvironment,
       encoding: "utf8",
     });
+    const setupOutput = blockedSetup.stdout;
     const setup = JSON.parse(setupOutput);
     if (
+      blockedSetup.status !== 1 ||
       setup.schemaVersion !== 1 ||
-      setup.status !== "READY" ||
-      setup.route !== "MOCK" ||
+      setup.status !== "BLOCKED" ||
+      setup.route !== "LIVE" ||
       setup.checks?.browser?.code !== "BROWSER_READY" ||
+      setup.checks?.route?.code !== "LIVE_PROVIDER_NOT_READY" ||
       !Array.isArray(setup.nextActions) ||
-      !setup.nextActions.includes("SELECT_MOCK") ||
+      !setup.nextActions.includes("SIGN_IN_PROVIDER") ||
       setupOutput.includes(dataDirectory)
     ) {
-      throw new Error("the packaged guided setup report is invalid or not ready");
+      throw new Error("the packaged guided setup did not fail closed without a real API credential");
     }
     const diagnosticOutput = execFileSync(process.execPath, [binaryPath, "doctor", "--json"], {
       cwd: installDirectory,
@@ -253,27 +258,22 @@ const run = async () => {
     });
     const diagnostic = JSON.parse(diagnosticOutput);
     const providerItems = diagnostic.checks?.providers?.items;
-    const liveProviderInvariantHolds =
+    const providerInvariantHolds =
       Array.isArray(providerItems) &&
-      providerItems
-        .filter(({ provider }) => provider !== "MOCK")
-        .every(
-          ({ installed, version: providerVersion, compatibility, authentication, ready }) =>
-            typeof installed === "boolean" &&
-            (providerVersion === null || typeof providerVersion === "string") &&
-            typeof compatibility === "string" &&
-            ready === (installed && compatibility === "VERIFIED" && authentication === "AUTHENTICATED"),
-        );
-    const mockProvider = Array.isArray(providerItems)
-      ? providerItems.find(({ provider }) => provider === "MOCK")
-      : undefined;
+      providerItems.length === 2 &&
+      providerItems.every(
+        ({ provider, installed, version: providerVersion, compatibility, authentication, ready }) =>
+          (provider === "CODEX" || provider === "CLAUDE_CODE") &&
+          installed === true &&
+          providerVersion === null &&
+          compatibility === "BUILT_IN" &&
+          authentication === "REQUIRED" &&
+          ready === false,
+      );
     if (
       diagnostic.schemaVersion !== 1 ||
       !["PASS", "WARN"].includes(diagnostic.status) ||
-      !liveProviderInvariantHolds ||
-      mockProvider?.compatibility !== "BUILT_IN" ||
-      mockProvider.version !== null ||
-      mockProvider.ready !== true ||
+      !providerInvariantHolds ||
       diagnosticOutput.includes(dataDirectory)
     ) {
       throw new Error(
@@ -310,9 +310,10 @@ const run = async () => {
     ) {
       throw new Error("the packaged diagnostic did not fail closed for an unusable data path");
     }
+    const launchEnvironment = { ...diagnosticEnvironment, OPENAI_API_KEY: "release-test-not-sent" };
     launcher = spawn(process.execPath, [binaryPath, "try", "--no-open", "--port", String(port)], {
       cwd: installDirectory,
-      env: diagnosticEnvironment,
+      env: launchEnvironment,
     });
 
     let output = "";

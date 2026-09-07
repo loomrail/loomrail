@@ -27,20 +27,20 @@ criteria одного recipe в новую задачу Loomrail. Recipes — о
 дополнительные определения workflow.
 
 Web sample можно явно запустить командой `npm start` на `http://127.0.0.1:4173`. Loomrail сам его не запускает.
-Встроенный Mock walkthrough по-прежнему измеряет readiness endpoint самого Loomrail, поэтому для первой проверки не
-нужен второй server. Чтобы измерить sample application, запустите его и добавьте явный `.loomrail/browser-qa.json` по
+Встроенный readiness plan измеряет endpoint самого Loomrail, поэтому для этой проверки не нужен второй server. Чтобы
+измерить sample application, запустите его и добавьте явный `.loomrail/browser-qa.json` по
 [гайду Browser QA](BROWSER-QA.ru.md).
 
 ## Один поставляемый delivery workflow
 
-Все recipes используют один domain-owned workflow, `mock-delivery-v1` revision 4:
+Все recipes используют один domain-owned workflow revision 4:
 
 ```text
 Discovery → Plan → Implement → Review → QA → Acceptance
 ```
 
-Исторический ID не означает, что у live providers другой workflow. Mock, Codex и Claude Code adapters передают
-результат в один deterministic state machine. Текущая pre-alpha не предлагает выбор workflow или custom templates.
+OpenAI Responses и Anthropic Messages передают результат в один deterministic state machine. Текущая pre-alpha не
+предлагает выбор workflow или custom templates.
 
 ## Каталог встроенных ролей
 
@@ -64,10 +64,10 @@ Recipe не может изменить capabilities роли, budget, выбо�
 
 ## Выберите подходящий маршрут
 
-- Используйте **Mock** и любой sample, чтобы без provider quota изучить durable requests, budgets, evidence, recovery
-  после restart и acceptance. Mock не меняет source примера.
-- Переходите к [примеру полного маршрута](../examples/full-route/README.md) только после допуска exact live provider
-  version. Он запускает настоящий CLI, расходует quota и демонстрирует реальное изменение репозитория.
+- Используйте любой sample с настроенным API provider, чтобы изучить durable requests, budgets, evidence, recovery
+  после restart и acceptance. Работа провайдера расходует quota.
+- [Пример полного маршрута](../examples/full-route/README.md) описывает целевой end-to-end route. Текущие API adapters
+  останавливаются до Implementation, пока не готов локальный workspace executor.
 - Зелёный baseline sample — release evidence встроенного шаблона. Это не private dogfood evidence и не подтверждение
   совместимости unverified provider.
 

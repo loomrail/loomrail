@@ -224,11 +224,11 @@ export const ProviderSessionTimeline = ({
     <ol className="lr-session-timeline">
       {sessions.map((session) => (
         <li aria-label={session.ariaLabel} className="lr-session-timeline__item" key={session.id}>
-          <span aria-hidden="true" className="lr-session-timeline__ordinal">
-            {session.ordinal}
-          </span>
           <div className="lr-session-timeline__body">
             <div className="lr-session-timeline__row">
+              <span aria-hidden="true" className="lr-session-timeline__ordinal">
+                {session.ordinal}
+              </span>
               <Status label={session.statusLabel} tone={session.tone} />
               {session.handoffRequestedLabel ? (
                 <Badge tone="warning">{session.handoffRequestedLabel}</Badge>

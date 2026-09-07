@@ -82,7 +82,7 @@ describe("walking-skeleton contracts", () => {
       foundation: {
         phase: "phase-0",
         milestone: "M99",
-        providers: "mock-only",
+        providers: "real-api-only",
         persistence: "not-enabled",
       },
     });

@@ -135,7 +135,7 @@ export const agentRunPolicySnapshotSchema = z
     effectiveCapabilities: z.array(agentCapabilitySchema).max(6),
     modelTier: modelTierSchema,
     // Optional only for snapshots written before exact provider-model binding. New live AgentRuns
-    // persist the validated adapter model ID; Mock persists explicit null.
+    // persist the validated adapter model ID; historical pre-API records persist explicit null.
     modelId: providerModelIdSchema.nullable().optional(),
     // Optional only for policy snapshots written before the Constitution binding existed. New
     // AgentRuns always write either the exact immutable content reference or explicit null.

@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+
+import cliPackage from "../../cli/package.json" with { type: "json" };
+import guidedActivationSource from "../../../packages/contracts/src/guided-activation.v1.json" with { type: "json" };
+
 import { initializeLanding } from "./main";
 
 const writeTextMock = vi.fn<(value: string) => Promise<void>>();
@@ -18,14 +22,9 @@ function renderControls(): void {
       <p data-i18n="heroTitle">Hero</p>
       <a data-doc-link="quick-start" href="https://example.test/start">Guide</a>
       <button data-theme-toggle><span data-theme-label></span></button>
-      <div class="frame-player">
-        <video data-product-demo poster="./demo/mock-route-light.webp">
-          <source data-demo-format="webm" src="./demo/mock-route-light.webm" type="video/webm" />
-          <source data-demo-format="mp4" src="./demo/mock-route-light.mp4" type="video/mp4" />
-        </video>
-        <button data-demo-play hidden><span data-i18n="demoPlay">Play</span></button>
-      </div>
       <button data-copy><span data-copy-label data-i18n="copy">Copy</span></button>
+      <pre><code data-install-commands></code></pre>
+      <span data-product-version></span>
       <section data-reveal><p data-i18n="whyTitle">Why</p></section>
       <ol data-flow><li>Backlog</li><li>Ready</li><li>Running</li></ol>
     </body>
@@ -63,22 +62,15 @@ describe("landing interactions", () => {
     initializeLanding(document, window);
   });
 
-  test("switches and stores the selected theme across the hero recording", () => {
+  test("switches and stores the selected theme", () => {
     const toggle = document.querySelector<HTMLButtonElement>("[data-theme-toggle]");
-    const sources = () => [...document.querySelectorAll<HTMLSourceElement>("source[data-demo-format]")];
-    const poster = () => document.querySelector<HTMLVideoElement>("[data-product-demo]")?.poster ?? "";
     expect(document.documentElement.dataset["theme"]).toBe("light");
-    expect(sources().every((source) => source.src.includes("mock-route-light"))).toBe(true);
-    expect(poster()).toContain("mock-route-light.webp");
 
     toggle?.click();
 
     expect(document.documentElement.dataset["theme"]).toBe("dark");
     expect(localStorage.getItem("loomrail-landing-theme")).toBe("dark");
     expect(toggle?.getAttribute("aria-label")).toBe("Switch to light theme");
-    expect(sources().every((source) => source.src.includes("mock-route-dark"))).toBe(true);
-    expect(poster()).toContain("mock-route-dark.webp");
-    expect(sources().map((source) => source.dataset["demoFormat"])).toEqual(["webm", "mp4"]);
   });
 
   test("switches the full document and guide destination to Russian", () => {
@@ -104,26 +96,35 @@ describe("landing interactions", () => {
     copy?.click();
     await Promise.resolve();
 
-    expect(writeTextMock).toHaveBeenCalledWith(
-      [
-        "mkdir loomrail-evaluation",
-        "cd loomrail-evaluation",
-        "npm install loomrail@next",
-        "npx loomrail",
-      ].join("\n"),
-    );
+    expect(writeTextMock).toHaveBeenCalledWith(guidedActivationSource.install.commands.join("\n"));
     expect(copy?.dataset["state"]).toBe("success");
     expect(copy?.textContent).toBe("Copied");
   });
 
-  test("offers its own play control instead of native chrome when autoplay is refused", () => {
-    const video = document.querySelector<HTMLVideoElement>("[data-product-demo]");
-    const trigger = document.querySelector<HTMLButtonElement>("[data-demo-play]");
-    // jsdom cannot play media, which is the same observable state as a browser refusing autoplay.
-    expect(video?.paused).toBe(true);
-    expect(video?.controls).toBe(false);
-    expect(trigger?.hidden).toBe(false);
-    expect(trigger?.textContent).toBe("Play the demo");
+  test("renders the canonical commands and current CLI version", () => {
+    expect(
+      [...document.querySelectorAll<HTMLElement>("[data-install-commands] .line")].map(
+        (line) => line.textContent,
+      ),
+    ).toEqual(guidedActivationSource.install.commands);
+    expect(document.querySelector("[data-install-commands] .line-last")?.textContent).toBe(
+      guidedActivationSource.install.commands.at(-1),
+    );
+    expect(document.querySelector("[data-product-version]")?.textContent).toBe(cliPackage.version);
+  });
+
+  test("shows an explicit error state when clipboard access is unavailable", () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+    const copy = document.querySelector<HTMLButtonElement>("[data-copy]");
+
+    copy?.click();
+
+    expect(copy?.dataset["state"]).toBe("error");
+    expect(copy?.disabled).toBe(false);
+    expect(copy?.textContent).toBe("Failed");
   });
 
   test("marks exactly one workflow stage as current", () => {
@@ -197,36 +198,25 @@ describe("landing public contract", () => {
     expect(parsed.querySelectorAll("[style]")).toHaveLength(0);
   });
 
-  test("publishes one heading outline and one product recording", () => {
+  test("publishes one heading outline and no unverified product recording", () => {
     expect(parsed.querySelectorAll("h1")).toHaveLength(1);
-    const demo = parsed.querySelectorAll<HTMLVideoElement>("[data-product-demo]");
-    expect(demo).toHaveLength(1);
-    // Muted and inline are what let the recording autoplay at all; a poster keeps the hero
-    // meaningful before the file loads, and both codecs keep it playable outside Chromium.
-    expect(demo[0]?.hasAttribute("muted")).toBe(true);
-    expect(demo[0]?.hasAttribute("loop")).toBe(true);
-    expect(demo[0]?.hasAttribute("playsinline")).toBe(true);
-    expect(demo[0]?.getAttribute("poster")).toBe("./demo/mock-route-light.webp");
-    expect(demo[0]?.hasAttribute("controls")).toBe(false);
-    expect(demo[0]?.getAttribute("preload")).toBe("auto");
-    expect(parsed.querySelectorAll("[data-demo-play]")).toHaveLength(1);
-    expect([...(demo[0]?.querySelectorAll("source") ?? [])].map((s) => s.getAttribute("type"))).toEqual([
-      "video/webm",
-      "video/mp4",
-    ]);
+    expect(parsed.querySelectorAll("[data-product-demo]")).toHaveLength(0);
     expect(parsed.querySelectorAll("[data-copy-label][aria-live='polite']")).toHaveLength(1);
     expect(html).toContain("data-locale-toggle");
   });
 
-  test("publishes the honest bilingual alpha.2 boundary", () => {
+  test("publishes the honest bilingual pre-alpha boundary without duplicating the activation contract", () => {
     expect(html).toContain("The task outlives the chat.");
-    expect(html).toContain("0.1.0-alpha.2");
     expect(html).toContain("Apache-2.0");
     expect(html).not.toContain("· MIT ·");
-    expect(html).toContain("npm install loomrail@next");
+    expect(html).not.toContain("0.1.0-alpha.2");
+    expect(html).not.toContain("npm install loomrail@next");
+    expect(html).toContain("data-install-commands");
+    expect(html).toContain("data-product-version");
     expect(html).toContain("Try Loomrail without giving it a repository.");
     expect(html).toContain("Automatic commit, push, merge, deploy, or browser execution.");
     expect(html).toContain("A complete operating-system sandbox");
+    expect(html).not.toMatch(/\bmock\b/i);
   });
 
   test("repeats the never-does guarantees the README makes", () => {

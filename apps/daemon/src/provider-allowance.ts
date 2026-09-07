@@ -5,7 +5,7 @@ import {
   type ProviderAllowanceSnapshot,
   type ProviderAllowanceUnavailableReason,
   type ProviderAvailability,
-  type ProviderId,
+  type LiveProviderId,
 } from "@loomrail/contracts";
 import { projectProviderAllowanceAdvisory, projectProviderAllowanceFreshness } from "@loomrail/provider-core";
 
@@ -23,7 +23,7 @@ const unavailableReasonFor = (availability: ProviderAvailability): ProviderAllow
 };
 
 const unavailableSnapshot = (
-  provider: ProviderId,
+  provider: LiveProviderId,
   observedAt: string,
   reason: ProviderAllowanceUnavailableReason,
 ): ProviderAllowanceSnapshot =>
@@ -38,7 +38,7 @@ const unavailableSnapshot = (
 
 export const projectProviderAllowanceResponse = (input: {
   projectId: string;
-  effectiveProvider: ProviderId;
+  effectiveProvider: LiveProviderId;
   snapshots: readonly ProviderAllowanceSnapshot[];
   availability: readonly ProviderAvailability[];
   now: Date;
@@ -56,10 +56,7 @@ export const projectProviderAllowanceResponse = (input: {
       ? unavailableSnapshot(provider, observedAt, "DATA_NOT_PRESENT")
       : projectProviderAllowanceFreshness(saved, input.now);
   });
-  const current =
-    input.effectiveProvider === "MOCK"
-      ? unavailableSnapshot("MOCK", observedAt, "PROVIDER_UNSUPPORTED")
-      : providers.find((snapshot) => snapshot.provider === input.effectiveProvider);
+  const current = providers.find((snapshot) => snapshot.provider === input.effectiveProvider);
   if (current === undefined) throw new Error("The effective provider has no allowance projection");
   return projectProviderAllowanceResponseSchema.parse({
     schemaVersion: 1,

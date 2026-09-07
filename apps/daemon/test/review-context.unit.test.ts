@@ -48,6 +48,7 @@ const workspace = (): WorkItemWorkspace => ({
   id: "workspace-1",
   projectId: "project-1",
   workItemId: "work-item-1",
+  strategy: "ISOLATED_WORKTREE",
   branch: "loomrail/work-item-1",
   worktreePath: "/tmp/loomrail-worktree",
   baseCommit: baseline,
@@ -156,13 +157,16 @@ describe("stable REVIEW context preparation", () => {
     expect(result).toMatchObject({ type: "REFUSED", reason: "DIFF_UNREADABLE", cause: failure });
   });
 
-  it("does no Git work outside an actual REVIEW input", async () => {
-    const withoutReview = { ...sources(), reviewInput: null };
+  it("does no Git work when review findings are carried into a correction IMPLEMENT", async () => {
+    const correctionSources = {
+      ...sources(),
+      workflowPosition: { ...sources().workflowPosition, stage: "IMPLEMENT", attempt: 2 },
+    };
     const readDiff = vi.fn<ReviewDiffReader>();
 
     await expect(
-      prepareReviewContext({ sources: withoutReview, workspace: null, readDiff }),
-    ).resolves.toEqual({ type: "READY", sources: withoutReview });
+      prepareReviewContext({ sources: correctionSources, workspace: null, readDiff }),
+    ).resolves.toEqual({ type: "READY", sources: correctionSources });
     expect(readDiff).not.toHaveBeenCalled();
   });
 });

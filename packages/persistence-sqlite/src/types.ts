@@ -19,6 +19,7 @@ import type {
   ProjectConstitutionSnapshot,
   ProjectConstitutionVersion,
   ProjectReadinessSnapshot,
+  ProjectWorkspaceStrategySelection,
   QAAttachmentRef,
   QACorrectionRun,
   QADefect,
@@ -98,6 +99,9 @@ export type StateStoreErrorCode =
   | "WORKSPACE_VERSION_CONFLICT"
   // ACQUIRE_WORKSPACE_LEASE refuses to hand a workspace another StageAttempt is already writing in.
   | "WORKSPACE_LEASE_HELD"
+  // Shared-current-directory authority is Project-scoped: another WorkItem's writer or verifier
+  // already owns the one checkout every shared workspace points at.
+  | "WORKSPACE_PROJECT_AUTHORITY_HELD"
   // ACQUIRE_WORKSPACE_LEASE refuses an attempt that is no longer executable (cancelled, paused,
   // finished): a claim landing after the attempt left its run would hold the writer lease with no
   // session left to release it, and every later attempt on the WorkItem would be postponed.
@@ -130,6 +134,7 @@ export type StateQuery =
   | { type: "LIST_PROJECTS" }
   | { type: "GET_REPORTING_FACTS" }
   | { type: "GET_PROJECT"; projectId: string }
+  | { type: "GET_PROJECT_WORKSPACE_STRATEGY"; projectId: string }
   | { type: "GET_PROVIDER_ALLOWANCES"; projectId: string }
   // Reads the raw `projects` row for a path, PROVISIONING included -- unlike LIST_PROJECTS, which
   // hides a Project whose repository the scaffold publisher has not verified yet. A caller about to
@@ -221,6 +226,7 @@ export type StateQueryResult =
   | { type: "PROJECTS"; projects: Project[] }
   | { type: "REPORTING_FACTS"; facts: ReportingFacts }
   | { type: "PROJECT"; project: Project | null }
+  | { type: "PROJECT_WORKSPACE_STRATEGY"; selection: ProjectWorkspaceStrategySelection }
   | { type: "PROVIDER_ALLOWANCES"; snapshots: ProviderAllowanceSnapshot[] }
   | { type: "PROJECT_CONSTITUTION_SNAPSHOT"; snapshot: ProjectConstitutionSnapshot }
   | {

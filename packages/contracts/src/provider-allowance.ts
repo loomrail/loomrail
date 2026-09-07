@@ -7,7 +7,7 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
-import { providerIdSchema } from "./workflow.js";
+import { liveProviderIdSchema } from "./provider-selection.js";
 
 export const providerAllowanceFreshnessSchema = z.enum(["LIVE", "STALE", "UNAVAILABLE"]);
 export const providerAllowanceBucketKindSchema = z.enum([
@@ -74,7 +74,7 @@ export const providerAllowanceBucketSchema = z
 
 const snapshotBaseSchema = z.object({
   schemaVersion: schemaVersionSchema,
-  provider: providerIdSchema,
+  provider: liveProviderIdSchema,
   observedAt: utcTimestampSchema,
 });
 
@@ -86,13 +86,6 @@ const presentProviderAllowanceSnapshotSchema = snapshotBaseSchema
   })
   .strict()
   .superRefine((snapshot, context) => {
-    if (snapshot.provider === "MOCK") {
-      context.addIssue({
-        code: "custom",
-        path: ["provider"],
-        message: "Mock has no external provider allowance",
-      });
-    }
     if (new Set(snapshot.buckets.map((bucket) => bucket.id)).size !== snapshot.buckets.length) {
       context.addIssue({
         code: "custom",
@@ -108,16 +101,7 @@ const unavailableProviderAllowanceSnapshotSchema = snapshotBaseSchema
     buckets: z.array(z.never()).length(0),
     unavailableReason: providerAllowanceUnavailableReasonSchema,
   })
-  .strict()
-  .superRefine((snapshot, context) => {
-    if (snapshot.provider === "MOCK" && snapshot.unavailableReason !== "PROVIDER_UNSUPPORTED") {
-      context.addIssue({
-        code: "custom",
-        path: ["unavailableReason"],
-        message: "Mock allowance is unavailable because the provider is unsupported",
-      });
-    }
-  });
+  .strict();
 
 export const providerAllowanceSnapshotSchema = z.discriminatedUnion("freshness", [
   presentProviderAllowanceSnapshotSchema,
@@ -135,7 +119,7 @@ export const projectProviderAllowanceResponseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
     projectId: z.string().min(1).max(128),
-    effectiveProvider: providerIdSchema,
+    effectiveProvider: liveProviderIdSchema,
     current: providerAllowanceSnapshotSchema,
     advisory: providerAllowanceAdvisorySchema,
     providers: z.array(providerAllowanceSnapshotSchema).length(2),

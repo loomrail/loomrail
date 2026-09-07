@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
 import { passingBrowserQADriver } from "../apps/daemon/test/browser-qa-fixture.js";
-import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
+import { startDaemon, type RunningDaemon } from "./provider-test-daemon.js";
 import type { ProviderAdapter } from "../packages/provider-core/dist/index.js";
 
 const initializeWorkspace = async (page: Page): Promise<void> => {
@@ -55,6 +55,7 @@ const reviewRouteAdapter = (
       contextWindowTokens: 128_000,
       stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
       costReporting: false,
+      tokenBudgetEnforcement: "HARD",
     }),
     start: async (invocation) => {
       const { attempt, stage } = invocation.session;

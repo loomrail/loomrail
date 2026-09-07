@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { VerificationPlan, VerificationRunSnapshotResponse } from "../packages/contracts/dist/index.js";
 
-import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
+import { startDaemon, type RunningDaemon } from "./provider-test-daemon.js";
 
 const projectId = "project-fixture-web-app-a";
 const timestamp = "2026-09-05T12:00:00.000Z";
@@ -222,7 +222,7 @@ test.describe("project verification Task Cockpit", () => {
             id: "pipeline-run-browser",
             projectId,
             workItemId,
-            workflowTemplateId: "mock-delivery-v1",
+            workflowTemplateId: "delivery-v1",
             workflowVersion: 1,
             status: "WAITING_HUMAN",
             currentStageAttemptId: "stage-attempt-browser",

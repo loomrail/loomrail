@@ -6,13 +6,14 @@ const liveAvailability = {
   provider: "CODEX",
   installed: true,
   authentication: "AUTHENTICATED",
-  version: "0.152.1",
-  compatibility: "VERIFIED",
+  version: null,
+  compatibility: "BUILT_IN",
   ready: true,
   stages: ["DISCOVERY"],
   checkpointOnRequest: false,
   contextWindowReporting: true,
   costReporting: false,
+  tokenBudgetEnforcement: "HARD",
   canReportRateLimits: false,
   models: {
     FAST: "gpt-5.6-luna",
@@ -22,20 +23,35 @@ const liveAvailability = {
 } as const;
 
 describe("provider availability compatibility", () => {
-  it("accepts the built-in Mock invariant", () => {
+  it("accepts a built-in real API adapter", () => {
     expect(
       providerAvailabilitySchema.parse({
         ...liveAvailability,
-        provider: "MOCK",
-        version: null,
-        compatibility: "BUILT_IN",
-        models: null,
+        provider: "CLAUDE_CODE",
       }),
-    ).toMatchObject({ provider: "MOCK", ready: true });
+    ).toMatchObject({ provider: "CLAUDE_CODE", ready: true });
   });
 
-  it("accepts an authenticated exact verified live provider", () => {
+  it("accepts an authenticated built-in real provider", () => {
     expect(providerAvailabilitySchema.parse(liveAvailability)).toEqual(liveAvailability);
+  });
+
+  it("keeps provider readiness separate from post-session-only budget reporting", () => {
+    expect(
+      providerAvailabilitySchema.parse({
+        ...liveAvailability,
+        tokenBudgetEnforcement: "POST_SESSION",
+      }),
+    ).toMatchObject({ ready: true, tokenBudgetEnforcement: "POST_SESSION" });
+  });
+
+  it("rejects a historical Mock row from active availability", () => {
+    expect(() =>
+      providerAvailabilitySchema.parse({
+        ...liveAvailability,
+        provider: "MOCK",
+      }),
+    ).toThrow();
   });
 
   it("rejects ready=true for an unverified live version", () => {
@@ -43,6 +59,7 @@ describe("provider availability compatibility", () => {
       providerAvailabilitySchema.parse({
         ...liveAvailability,
         compatibility: "UNVERIFIED",
+        version: "legacy-cli-version",
         authentication: "UNKNOWN",
       }),
     ).toThrow("Live provider readiness must match install, compatibility and auth state");
@@ -53,6 +70,7 @@ describe("provider availability compatibility", () => {
       providerAvailabilitySchema.parse({
         ...liveAvailability,
         compatibility: "UNVERIFIED",
+        version: "legacy-cli-version",
         authentication: "REQUIRED",
         ready: false,
         canReportRateLimits: true,

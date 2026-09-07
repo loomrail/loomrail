@@ -96,7 +96,7 @@ describe("ProviderAllowanceStrip", () => {
   it("labels remaining, window, reset, freshness and used detail without a bare percentage", () => {
     const html = renderStrip();
 
-    expect(html).toContain("Codex · Provider allowance");
+    expect(html).toContain("OpenAI Responses · Provider allowance");
     expect(html).toContain("Live");
     expect(html).toContain("62% remaining");
     expect(html).toContain("5 h window");
@@ -109,7 +109,7 @@ describe("ProviderAllowanceStrip", () => {
     window.localStorage.setItem("loomrail.locale", "ru");
     const html = renderStrip();
 
-    expect(html).toContain("Codex · Лимит провайдера");
+    expect(html).toContain("OpenAI Responses · Лимит провайдера");
     expect(html).toContain("Актуально");
     expect(html).toContain("62% осталось");
     expect(html).toContain("окно 5 ч");

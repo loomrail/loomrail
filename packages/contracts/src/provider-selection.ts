@@ -7,9 +7,12 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
-import { providerIdSchema, workflowStageSchema } from "./workflow.js";
+import { providerTokenBudgetEnforcementSchema, workflowStageSchema } from "./workflow.js";
 
-export const providerPreferenceSchema = z.enum(["AUTO", "CODEX", "CLAUDE_CODE", "MOCK"]);
+// MOCK remains a readable historical ProviderId in append-only audit records, but it is no longer
+// an active Project preference. New selection can target only the two real API adapters.
+export const liveProviderIdSchema = z.enum(["CODEX", "CLAUDE_CODE"]);
+export const providerPreferenceSchema = z.enum(["AUTO", ...liveProviderIdSchema.options]);
 
 export const projectProviderSelectionSchema = z
   .object({
@@ -52,7 +55,7 @@ export const providerModelMappingSchema = z
 
 export const providerAvailabilitySchema = z
   .object({
-    provider: providerIdSchema,
+    provider: liveProviderIdSchema,
     installed: z.boolean(),
     authentication: providerAuthenticationSchema,
     version: z.string().min(1).max(48).nullable(),
@@ -62,30 +65,27 @@ export const providerAvailabilitySchema = z
     checkpointOnRequest: z.boolean(),
     contextWindowReporting: z.boolean(),
     costReporting: z.boolean(),
+    tokenBudgetEnforcement: providerTokenBudgetEnforcementSchema,
     canReportRateLimits: z.boolean().default(false),
     models: providerModelMappingSchema.nullable(),
   })
   .strict()
   .superRefine((availability, context) => {
-    if (availability.provider === "MOCK") {
+    if (availability.models === null) {
+      context.addIssue({ code: "custom", message: "A real provider must expose its model mapping" });
+    }
+    if (availability.compatibility === "BUILT_IN") {
       if (
         !availability.installed ||
-        availability.authentication !== "AUTHENTICATED" ||
         availability.version !== null ||
-        availability.compatibility !== "BUILT_IN" ||
-        !availability.ready ||
-        availability.canReportRateLimits ||
-        availability.models !== null
+        availability.ready !== (availability.authentication === "AUTHENTICATED")
       ) {
         context.addIssue({
           code: "custom",
-          message: "The Mock provider is always ready and has no live model mapping",
+          message: "A built-in API adapter is ready exactly when its credential is configured",
         });
       }
       return;
-    }
-    if (availability.models === null) {
-      context.addIssue({ code: "custom", message: "A live provider must expose its model mapping" });
     }
     if (!availability.installed && availability.compatibility !== "MISSING") {
       context.addIssue({ code: "custom", message: "A missing live provider must report MISSING" });
@@ -123,13 +123,13 @@ export const projectProviderSelectionResponseSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
     selection: projectProviderSelectionSchema,
-    effectiveProvider: providerIdSchema,
+    effectiveProvider: liveProviderIdSchema,
     source: providerSelectionSourceSchema,
     fallbackReason: providerFallbackReasonSchema,
-    environmentOverride: providerIdSchema.nullable(),
+    environmentOverride: liveProviderIdSchema.nullable(),
     environmentOverrideLocked: z.boolean(),
     environmentOverrideInvalid: z.boolean(),
-    providers: z.array(providerAvailabilitySchema).length(3),
+    providers: z.array(providerAvailabilitySchema).length(2),
   })
   .strict();
 
@@ -201,6 +201,7 @@ export const refreshProviderAvailabilityRequestSchema = z
   .strict();
 
 export type ProviderPreference = z.infer<typeof providerPreferenceSchema>;
+export type LiveProviderId = z.infer<typeof liveProviderIdSchema>;
 export type ProjectProviderSelection = z.infer<typeof projectProviderSelectionSchema>;
 export type ProviderAuthentication = z.infer<typeof providerAuthenticationSchema>;
 export type ProviderCompatibility = z.infer<typeof providerCompatibilitySchema>;

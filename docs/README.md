@@ -6,18 +6,18 @@ Use the shortest document that matches what you are trying to do.
 
 | Goal                                                     | English                                                    | Русский                                                          |
 | -------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------- |
-| Guided setup and first safe mock delivery                | [Quick start](guides/GETTING-STARTED.md)                   | [Быстрый старт](guides/GETTING-STARTED.ru.md)                    |
+| Guided setup for a real API provider                     | [Quick start](guides/GETTING-STARTED.md)                   | [Быстрый старт](guides/GETTING-STARTED.ru.md)                    |
 | Try bundled repositories, task recipes, and roles        | [Samples](guides/SAMPLES.md)                               | [Примеры](guides/SAMPLES.ru.md)                                  |
 | Repository, providers, recovery, backup, troubleshooting | [Owner guide](guides/USER-GUIDE.md)                        | [Руководство владельца](guides/USER-GUIDE.ru.md)                 |
 | Configure and inspect deterministic browser QA           | [Browser QA](guides/BROWSER-QA.md)                         | [QA в браузере](guides/BROWSER-QA.ru.md)                         |
 | Build a local read-only tool plugin                      | [Plugin SDK](guides/PLUGIN-SDK.md)                         | [Plugin SDK](guides/PLUGIN-SDK.ru.md)                            |
 | Diagnose, back up, restore, and manage local logs        | [Operations](guides/OPERATIONS.md)                         | [Эксплуатация](guides/OPERATIONS.ru.md)                          |
-| Check exact live-provider CLI support                    | [Provider compatibility](guides/PROVIDER-COMPATIBILITY.md) | [Совместимость провайдеров](guides/PROVIDER-COMPATIBILITY.ru.md) |
+| Configure supported provider APIs and models             | [Provider compatibility](guides/PROVIDER-COMPATIBILITY.md) | [Совместимость провайдеров](guides/PROVIDER-COMPATIBILITY.ru.md) |
 | Verify dependencies, release integrity, and provenance   | [Supply chain](security/SUPPLY-CHAIN.md)                   | [Supply chain](security/SUPPLY-CHAIN.ru.md)                      |
 
-For a disposable repository and exact live-provider task, use the
-[full-route example](examples/full-route/README.md). Before a live run, read the
-[security and trust boundaries](security/THREAT-MODEL.md).
+Before a credentialed run, read the [security and trust boundaries](security/THREAT-MODEL.md). The former
+full-delivery fixture is retained as an explicit [executor readiness note](examples/full-route/README.md); it is not
+currently a runnable acceptance route.
 
 ## Understand or contribute to Loomrail
 

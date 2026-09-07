@@ -12,7 +12,7 @@ import type {
   CreateWorkItemCommand,
   CreateWorkItemWorkspaceCommand,
   EndProviderSessionCommand,
-  LegacyApplyMockProviderOutcomeCommand,
+  LegacyApplyProviderOutcomeCommand,
   MarkWorkspaceOrphanedCommand,
   MoveWorkItemCommand,
   PublishCheckpointCommand,
@@ -20,7 +20,7 @@ import type {
   RegisterProjectCommand,
   ReleaseWorkspaceLeaseCommand,
   RequestContextHandoffCommand,
-  StartMockPipelineCommand,
+  LegacyStartPipelineCommand,
   StartAgentRunCommand,
   StartProviderSessionCommand,
   UpdateWorkItemCommand,
@@ -202,12 +202,12 @@ const countLegacyStageAttempts = (raw: DatabaseSync): { events: number; commands
   return { events: count("events", "data_json"), commands: count("commands", "result_json") };
 };
 
-const contextPack: StartMockPipelineCommand["payload"]["template"]["stages"][number]["contextPack"] = {
+const contextPack: LegacyStartPipelineCommand["payload"]["template"]["stages"][number]["contextPack"] = {
   schemaVersion: 1,
   sections: [{ id: "WORK_ITEM_BRIEF", ordinal: 0, required: true }],
 };
 
-const mockTemplate: StartMockPipelineCommand["payload"]["template"] = {
+const mockTemplate: LegacyStartPipelineCommand["payload"]["template"] = {
   schemaVersion: 1,
   id: "mock-delivery-v1",
   version: 1,
@@ -698,7 +698,7 @@ describe("SQLite local state", () => {
     const created = localState.execute(createWorkItem("create-acceptance-item"));
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
     localState.execute(moveWorkItem("ready-acceptance-item", created.workItem.id, 1, "READY"));
-    const acceptanceTemplate: StartMockPipelineCommand["payload"]["template"] = {
+    const acceptanceTemplate: LegacyStartPipelineCommand["payload"]["template"] = {
       schemaVersion: 1,
       id: "acceptance-fixture-v1",
       version: 1,
@@ -1226,7 +1226,7 @@ describe("SQLite local state", () => {
       ),
     ).toBe(true);
     const legacyReceipt = legacyState.execute(applyAcceptanceCommand);
-    if (legacyReceipt.type !== "MOCK_PROVIDER_OUTCOME_APPLIED" || !legacyReceipt.acceptancePackage) {
+    if (legacyReceipt.type !== "PROVIDER_OUTCOME_APPLIED" || !legacyReceipt.acceptancePackage) {
       throw new Error("Expected the historical Acceptance command receipt");
     }
     expect(legacyReceipt.replayed).toBe(true);
@@ -1244,7 +1244,7 @@ describe("SQLite local state", () => {
     const created = localState.execute(createWorkItem("create-pre-0014-evidence-item"));
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
     localState.execute(moveWorkItem("ready-pre-0014-evidence", created.workItem.id, 1, "READY"));
-    const reviewOnlyTemplate: StartMockPipelineCommand["payload"]["template"] = {
+    const reviewOnlyTemplate: LegacyStartPipelineCommand["payload"]["template"] = {
       schemaVersion: 1,
       id: "pre-0014-review-v1",
       version: 1,
@@ -1372,7 +1372,7 @@ describe("SQLite local state", () => {
     const localState = await open();
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-      29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52,
+      29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -1380,6 +1380,81 @@ describe("SQLite local state", () => {
     const backup = new DatabaseSync(localState.startup.backupPath, { readOnly: true });
     expect(backup.prepare("SELECT value FROM legacy_marker").get()).toEqual({ value: "preserve-me" });
     backup.close();
+  });
+
+  it("migrates an existing workspace to the isolated default and preserves its Events", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    const { workItemId, projectId } = (() => {
+      const created = localState.execute(createWorkItem("create-pre-0053"));
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      return { workItemId: created.workItem.id, projectId: created.workItem.projectId };
+    })();
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "workspace-pre-0053",
+      correlationId: "correlation-workspace-pre-0053",
+      actor: { type: "SYSTEM", id: "workspace-manager" },
+      type: "CREATE_WORK_ITEM_WORKSPACE",
+      payload: {
+        workItemId,
+        projectId,
+        branch: "loomrail/pre-0053",
+        worktreePath: join(temporaryDirectory, "pre-0053-worktree"),
+        baseCommit: null,
+        snapshotCommit: null,
+        carriedPaths: [],
+      },
+    });
+    const eventsBefore = localState.query({ type: "LIST_EVENTS", aggregateId: workItemId });
+    if (eventsBefore.type !== "EVENTS") throw new Error("Expected Events");
+    localState.close();
+    state = undefined;
+
+    // Restore the columns/tables a v52 database actually had. The Events table may already accept
+    // the new vocabulary in this fixture; migration 53 still rebuilds it and must preserve every
+    // historical row, while the absent workspace column proves the compatibility backfill.
+    const pre53 = new DatabaseSync(databasePath);
+    pre53.exec(`
+      DROP INDEX shared_workspace_project_authority_idx;
+      DROP TABLE project_workspace_strategies;
+      ALTER TABLE work_item_workspaces DROP COLUMN strategy;
+      DELETE FROM schema_migrations WHERE version = 53;
+    `);
+    pre53.close();
+
+    const migrated = await open();
+    expect(migrated.startup.appliedMigrations).toEqual([53]);
+    expect(migrated.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId })).toMatchObject({
+      type: "WORKSPACE",
+      workspace: { strategy: "ISOLATED_WORKTREE" },
+    });
+    expect(migrated.query({ type: "GET_PROJECT_WORKSPACE_STRATEGY", projectId })).toMatchObject({
+      type: "PROJECT_WORKSPACE_STRATEGY",
+      selection: { strategy: "ISOLATED_WORKTREE" },
+    });
+    const eventsAfter = migrated.query({ type: "LIST_EVENTS", aggregateId: workItemId });
+    expect(eventsAfter.type === "EVENTS" ? eventsAfter.events : null).toEqual(eventsBefore.events);
+  });
+
+  it("migrates the retired provider preference to automatic real-provider selection", async () => {
+    const localState = await open();
+    localState.execute(registerProject());
+    localState.close();
+    state = undefined;
+
+    const pre54 = new DatabaseSync(databasePath);
+    pre54.prepare("UPDATE projects SET provider_preference = 'MOCK' WHERE id = ?").run("project-web");
+    pre54.prepare("DELETE FROM schema_migrations WHERE version = 54").run();
+    pre54.close();
+
+    const migrated = await open();
+    expect(migrated.startup.appliedMigrations).toEqual([54]);
+    const projects = migrated.query({ type: "LIST_PROJECTS" });
+    if (projects.type !== "PROJECTS") throw new Error("Expected the migrated Project");
+    expect(projects.projects).toEqual([
+      expect.objectContaining({ id: "project-web", providerPreference: "AUTO" }),
+    ]);
   });
 
   it("adds a nullable model-tier override without inventing one for an older BudgetPolicy", async () => {
@@ -1468,7 +1543,7 @@ describe("SQLite local state", () => {
     const created = localState.execute(createWorkItem("create-q2-lineage"));
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
     localState.execute(moveWorkItem("ready-q2-lineage", created.workItem.id, 1, "READY"));
-    const qaOnlyTemplate: StartMockPipelineCommand["payload"]["template"] = {
+    const qaOnlyTemplate: LegacyStartPipelineCommand["payload"]["template"] = {
       schemaVersion: 1,
       id: "q2-lineage-v1",
       version: 1,
@@ -2093,7 +2168,7 @@ describe("SQLite local state", () => {
     const created = localState.execute(createWorkItem("create-q2-owner-gate"));
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
     localState.execute(moveWorkItem("ready-q2-owner-gate", created.workItem.id, 1, "READY"));
-    const template: StartMockPipelineCommand["payload"]["template"] = {
+    const template: LegacyStartPipelineCommand["payload"]["template"] = {
       schemaVersion: 1,
       id: "q2-owner-gate-v1",
       version: 1,
@@ -2490,7 +2565,7 @@ describe("SQLite local state", () => {
     const created = localState.execute(createWorkItem("create-pre-q2-history"));
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
     localState.execute(moveWorkItem("ready-pre-q2-history", created.workItem.id, 1, "READY"));
-    const startCommand: StartMockPipelineCommand = {
+    const startCommand: LegacyStartPipelineCommand = {
       schemaVersion: 1,
       commandId: "pipeline-pre-q2-history",
       correlationId: "correlation-pipeline-pre-q2-history",
@@ -2710,7 +2785,7 @@ describe("SQLite local state", () => {
     const created = localState.execute(createWorkItem());
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
     localState.execute(moveWorkItem("ready-review-state", created.workItem.id, 1, "READY"));
-    const reviewOnlyTemplate: StartMockPipelineCommand["payload"]["template"] = {
+    const reviewOnlyTemplate: LegacyStartPipelineCommand["payload"]["template"] = {
       schemaVersion: 1,
       id: "review-state-v1",
       version: 1,
@@ -3398,7 +3473,7 @@ describe("SQLite local state", () => {
       const created = localState.execute(createWorkItem("create-r1-review-loop"));
       if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
       localState.execute(moveWorkItem("ready-r1-review-loop", created.workItem.id, 1, "READY"));
-      const reviewLoopTemplate: StartMockPipelineCommand["payload"]["template"] = {
+      const reviewLoopTemplate: LegacyStartPipelineCommand["payload"]["template"] = {
         schemaVersion: 1,
         id: "review-loop-v1",
         version: 1,
@@ -3521,7 +3596,7 @@ describe("SQLite local state", () => {
       });
 
       expect(applied).toMatchObject({
-        type: "MOCK_PROVIDER_OUTCOME_APPLIED",
+        type: "PROVIDER_OUTCOME_APPLIED",
         run: { status: "RUNNING" },
         stageAttempt: { id: reviewDispatch.stageAttemptId, stage: "REVIEW", status: "SUCCEEDED" },
         events: [
@@ -3532,6 +3607,31 @@ describe("SQLite local state", () => {
       });
       const fixDispatch = nextDispatch();
       expect(fixDispatch).toMatchObject({ status: "PENDING" });
+      expect(
+        localState.query({
+          type: "READ_CONTEXT_SOURCES",
+          stageAttemptId: fixDispatch.stageAttemptId,
+          sessionOrdinal: 1,
+        }),
+      ).toMatchObject({
+        type: "CONTEXT_SOURCES",
+        sources: {
+          reviewInput: {
+            implementationAttempt: { attempt: 1, resultTree: reviewedTree },
+            authorAgentRun: { id: author.run.id, provider: "CODEX" },
+            openFindings: [
+              {
+                severity: "HIGH",
+                title: "Expected version is ignored",
+                description: "The mutation can overwrite a concurrent update.",
+                reproduction: "Submit the command with the previous aggregate version.",
+                criterion: "Concurrent updates fail closed.",
+                suggestedFix: "Include expectedVersion in the guarded update predicate.",
+              },
+            ],
+          },
+        },
+      });
 
       const snapshot = localState.query({
         type: "GET_WORKFLOW_SNAPSHOT",
@@ -3679,7 +3779,7 @@ describe("SQLite local state", () => {
           resultTree: fixedTree,
         },
       });
-      if (passed.type !== "MOCK_PROVIDER_OUTCOME_APPLIED") {
+      if (passed.type !== "PROVIDER_OUTCOME_APPLIED") {
         throw new Error("Expected passed review outcome");
       }
       expect(passed.events.map(({ type }) => type)).toEqual([
@@ -4076,7 +4176,7 @@ describe("SQLite local state", () => {
       const created = localState.execute(createWorkItem("create-q1-failed-qa"));
       if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
       localState.execute(moveWorkItem("ready-q1-failed-qa", created.workItem.id, 1, "READY"));
-      const template: StartMockPipelineCommand["payload"]["template"] = {
+      const template: LegacyStartPipelineCommand["payload"]["template"] = {
         schemaVersion: 1,
         id: "q1-failed-qa-v1",
         version: 1,
@@ -5565,7 +5665,7 @@ describe("SQLite local state", () => {
       const created = localState.execute(createWorkItem("create-r1-owner-round"));
       if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
       localState.execute(moveWorkItem("ready-r1-owner-round", created.workItem.id, 1, "READY"));
-      const reviewLoopTemplate: StartMockPipelineCommand["payload"]["template"] = {
+      const reviewLoopTemplate: LegacyStartPipelineCommand["payload"]["template"] = {
         schemaVersion: 1,
         id: "review-owner-round-v1",
         version: 1,
@@ -5807,7 +5907,7 @@ describe("SQLite local state", () => {
     });
     // The pre-rename discriminant, still accepted so that a receipt recorded under it stays
     // replayable (docs/plans/07-a1-session-handoff-spec.ru.md §5.3).
-    const legacyApply: LegacyApplyMockProviderOutcomeCommand = {
+    const legacyApply: LegacyApplyProviderOutcomeCommand = {
       schemaVersion: 1,
       commandId: "legacy-apply-outcome",
       correlationId: "correlation-legacy-apply-outcome",
@@ -5887,7 +5987,7 @@ describe("SQLite local state", () => {
     const created = localState.execute(createWorkItem("create-migration-workflow"));
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
     localState.execute(moveWorkItem("ready-migration-workflow", created.workItem.id, 1, "READY"));
-    const startCommand: StartMockPipelineCommand = {
+    const startCommand: LegacyStartPipelineCommand = {
       schemaVersion: 1,
       commandId: "start-migration-workflow",
       correlationId: "correlation-start-migration-workflow",
@@ -5910,7 +6010,7 @@ describe("SQLite local state", () => {
       type: "MARK_WORKFLOW_DISPATCH_STARTED",
       payload: { dispatchId: started.dispatch.id },
     });
-    const applyCommand: LegacyApplyMockProviderOutcomeCommand = {
+    const applyCommand: LegacyApplyProviderOutcomeCommand = {
       schemaVersion: 1,
       commandId: "apply-migration-workflow",
       correlationId: "correlation-apply-migration-workflow",
@@ -6036,7 +6136,7 @@ describe("SQLite local state", () => {
     const created = localState.execute(createWorkItem("create-pre-a1-counters-item"));
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
     localState.execute(moveWorkItem("ready-pre-a1-counters", created.workItem.id, 1, "READY"));
-    const acceptanceTemplate: StartMockPipelineCommand["payload"]["template"] = {
+    const acceptanceTemplate: LegacyStartPipelineCommand["payload"]["template"] = {
       schemaVersion: 1,
       id: "pre-a1-counters-v1",
       version: 1,
@@ -6048,7 +6148,7 @@ describe("SQLite local state", () => {
         { stage: "ACCEPTANCE", ordinal: 3, contextPack },
       ],
     };
-    const startCommand: StartMockPipelineCommand = {
+    const startCommand: LegacyStartPipelineCommand = {
       schemaVersion: 1,
       commandId: "start-pre-a1-counters",
       correlationId: "correlation-start-pre-a1-counters",
@@ -6289,7 +6389,7 @@ describe("SQLite local state", () => {
     const created = localState.execute(createWorkItem("create-half-legacy-item"));
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
     localState.execute(moveWorkItem("ready-half-legacy", created.workItem.id, 1, "READY"));
-    const startCommand: StartMockPipelineCommand = {
+    const startCommand: LegacyStartPipelineCommand = {
       schemaVersion: 1,
       commandId: "start-half-legacy",
       correlationId: "correlation-start-half-legacy",
@@ -6404,7 +6504,7 @@ describe("SQLite local state", () => {
     const created = localState.execute(createWorkItem("create-pre-0013-item"));
     if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
     localState.execute(moveWorkItem("ready-pre-0013", created.workItem.id, 1, "READY"));
-    const preLabelTemplate: StartMockPipelineCommand["payload"]["template"] = {
+    const preLabelTemplate: LegacyStartPipelineCommand["payload"]["template"] = {
       schemaVersion: 1,
       id: "pre-0013-v1",
       version: 1,
@@ -6414,7 +6514,7 @@ describe("SQLite local state", () => {
         { stage: "QA", ordinal: 1, contextPack },
       ],
     };
-    const startCommand: StartMockPipelineCommand = {
+    const startCommand: LegacyStartPipelineCommand = {
       schemaVersion: 1,
       commandId: "start-pre-0013",
       correlationId: "correlation-start-pre-0013",
@@ -7099,7 +7199,7 @@ describe("SQLite local state", () => {
     }
     localState.execute(moveWorkItem("ready-workflow", created.workItem.id, 1, "READY"));
     localState.execute(moveWorkItem("ready-independent", independent.workItem.id, 1, "READY"));
-    const start: StartMockPipelineCommand = {
+    const start: LegacyStartPipelineCommand = {
       schemaVersion: 1,
       commandId: "start-mock-workflow",
       correlationId: "correlation-start-mock-workflow",
@@ -9730,6 +9830,161 @@ describe("SQLite local state", () => {
       payload: {},
     });
 
+    it("allows only one shared-current-directory writer across WorkItems of one Project", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const first = startWorkflow(localState, "start-shared-first", "create-shared-first");
+      const second = startWorkflow(localState, "start-shared-second", "create-shared-second");
+      const firstWorkspace = localState.execute(
+        createWorkspaceCommand("workspace-shared-first", first.workItemId, first.projectId, {
+          strategy: "SHARED_CURRENT_DIRECTORY",
+          worktreePath: temporaryDirectory,
+        }),
+      );
+      const secondWorkspace = localState.execute(
+        createWorkspaceCommand("workspace-shared-second", second.workItemId, second.projectId, {
+          strategy: "SHARED_CURRENT_DIRECTORY",
+          worktreePath: temporaryDirectory,
+        }),
+      );
+      if (
+        firstWorkspace.type !== "WORK_ITEM_WORKSPACE_CREATED" ||
+        secondWorkspace.type !== "WORK_ITEM_WORKSPACE_CREATED"
+      ) {
+        throw new Error("Expected shared workspaces");
+      }
+
+      const firstClaim = localState.execute(
+        acquireLeaseCommand(
+          "claim-shared-first",
+          firstWorkspace.workspace.id,
+          first.stageAttemptId,
+          firstWorkspace.workspace.version,
+        ),
+      );
+      expect(firstClaim).toMatchObject({ type: "WORKSPACE_LEASE_ACQUIRED" });
+      expect(() =>
+        localState.execute(
+          acquireLeaseCommand(
+            "claim-shared-second",
+            secondWorkspace.workspace.id,
+            second.stageAttemptId,
+            secondWorkspace.workspace.version,
+          ),
+        ),
+      ).toThrow(expect.objectContaining({ code: "WORKSPACE_PROJECT_AUTHORITY_HELD" }));
+
+      if (firstClaim.type !== "WORKSPACE_LEASE_ACQUIRED") throw new Error("Expected first lease");
+      localState.execute(
+        releaseLeaseCommand(
+          "release-shared-first",
+          firstClaim.workspace.id,
+          first.stageAttemptId,
+          firstClaim.workspace.version,
+        ),
+      );
+      expect(
+        localState.execute(
+          acquireLeaseCommand(
+            "claim-shared-second-after-release",
+            secondWorkspace.workspace.id,
+            second.stageAttemptId,
+            secondWorkspace.workspace.version,
+          ),
+        ),
+      ).toMatchObject({ type: "WORKSPACE_LEASE_ACQUIRED" });
+    });
+
+    it("refuses a competing initial shared writer with the same typed Project authority error", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const first = startWorkflow(localState, "start-initial-shared-first", "create-initial-shared-first");
+      const second = startWorkflow(localState, "start-initial-shared-second", "create-initial-shared-second");
+      const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected pending dispatches");
+      const secondDispatch = pending.dispatches.find(
+        ({ stageAttemptId }) => stageAttemptId === second.stageAttemptId,
+      );
+      if (secondDispatch === undefined) throw new Error("Expected second pending dispatch");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "start-initial-shared-second-agent",
+        correlationId: "correlation-start-initial-shared-second-agent",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "START_AGENT_RUN",
+        payload: {
+          dispatchId: secondDispatch.id,
+          provider: "CODEX",
+          limits: { global: 3, project: 3, provider: 3 },
+        },
+      });
+      const firstWorkspace = localState.execute(
+        createWorkspaceCommand("workspace-initial-shared-first", first.workItemId, first.projectId, {
+          strategy: "SHARED_CURRENT_DIRECTORY",
+          worktreePath: temporaryDirectory,
+        }),
+      );
+      if (firstWorkspace.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace");
+      localState.execute(
+        acquireLeaseCommand(
+          "claim-initial-shared-first",
+          firstWorkspace.workspace.id,
+          first.stageAttemptId,
+          firstWorkspace.workspace.version,
+        ),
+      );
+
+      expect(() =>
+        localState.execute(
+          createWorkspaceCommand("workspace-initial-shared-second", second.workItemId, second.projectId, {
+            strategy: "SHARED_CURRENT_DIRECTORY",
+            worktreePath: temporaryDirectory,
+            initialLeaseHolder: second.stageAttemptId,
+          }),
+        ),
+      ).toThrow(expect.objectContaining({ code: "WORKSPACE_PROJECT_AUTHORITY_HELD" }));
+    });
+
+    it("keeps isolated workspace writers independent across WorkItems", async () => {
+      const localState = await open();
+      localState.execute(registerProject());
+      const first = startWorkflow(localState, "start-isolated-first", "create-isolated-first");
+      const second = startWorkflow(localState, "start-isolated-second", "create-isolated-second");
+      const firstWorkspace = localState.execute(
+        createWorkspaceCommand("workspace-isolated-first", first.workItemId, first.projectId),
+      );
+      const secondWorkspace = localState.execute(
+        createWorkspaceCommand("workspace-isolated-second", second.workItemId, second.projectId),
+      );
+      if (
+        firstWorkspace.type !== "WORK_ITEM_WORKSPACE_CREATED" ||
+        secondWorkspace.type !== "WORK_ITEM_WORKSPACE_CREATED"
+      ) {
+        throw new Error("Expected isolated workspaces");
+      }
+
+      expect(
+        localState.execute(
+          acquireLeaseCommand(
+            "claim-isolated-first",
+            firstWorkspace.workspace.id,
+            first.stageAttemptId,
+            firstWorkspace.workspace.version,
+          ),
+        ),
+      ).toMatchObject({ type: "WORKSPACE_LEASE_ACQUIRED" });
+      expect(
+        localState.execute(
+          acquireLeaseCommand(
+            "claim-isolated-second",
+            secondWorkspace.workspace.id,
+            second.stageAttemptId,
+            secondWorkspace.workspace.version,
+          ),
+        ),
+      ).toMatchObject({ type: "WORKSPACE_LEASE_ACQUIRED" });
+    });
+
     it("creates a workspace and reads it back by WorkItem id", async () => {
       const localState = await open();
       localState.execute(registerProject());
@@ -10085,6 +10340,65 @@ describe("SQLite local state", () => {
         status: "READY",
         leaseHolder: null,
       });
+    });
+
+    it("recovers a dead shared writer without orphaning the Project's current directory", async () => {
+      const localState = await open();
+      const repositoryPath = join(temporaryDirectory, "project-web");
+      await mkdir(repositoryPath, { recursive: true });
+      makeThrowawayRepo(repositoryPath);
+      localState.execute(registerProject());
+      const { workItemId, stageAttemptId, projectId } = startWorkflow(
+        localState,
+        "start-dead-shared-lease",
+        "create-work-item-dead-shared-lease",
+      );
+      const branch = execFileSync("git", ["branch", "--show-current"], {
+        cwd: repositoryPath,
+        encoding: "utf8",
+      }).trim();
+      const created = localState.execute(
+        createWorkspaceCommand("create-workspace-dead-shared-lease", workItemId, projectId, {
+          strategy: "SHARED_CURRENT_DIRECTORY",
+          branch,
+          worktreePath: repositoryPath,
+        }),
+      );
+      if (created.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace creation");
+      localState.execute(
+        acquireLeaseCommand("acquire-dead-shared-lease", created.workspace.id, stageAttemptId, 1),
+      );
+      const queued = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+      if (queued.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected the dispatch queue");
+      const dispatch = queued.dispatches.find((candidate) => candidate.stageAttemptId === stageAttemptId);
+      if (dispatch === undefined) throw new Error("Expected a pending dispatch for this StageAttempt");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "mark-dead-shared-lease-dispatch-started",
+        correlationId: "correlation-mark-dead-shared-lease-dispatch-started",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "MARK_WORKFLOW_DISPATCH_STARTED",
+        payload: { dispatchId: dispatch.id },
+      });
+
+      const reconciled = localState.execute(reconcileWorkflowsCommand("reconcile-dead-shared-lease"));
+      if (reconciled.type !== "WORKFLOWS_RECONCILED") throw new Error("Expected reconciliation");
+      expect(reconciled.orphanedWorkspaces).toEqual([]);
+      expect(reconciled.recoveryReports).toEqual([
+        expect.objectContaining({ stageAttemptId, recoveredStatus: "INTERRUPTED" }),
+      ]);
+      expect(localState.query({ type: "GET_WORKSPACE_BY_WORK_ITEM", workItemId })).toMatchObject({
+        type: "WORKSPACE",
+        workspace: {
+          strategy: "SHARED_CURRENT_DIRECTORY",
+          status: "READY",
+          leaseHolder: null,
+          worktreePath: repositoryPath,
+        },
+      });
+      expect(execFileSync("git", ["status", "--porcelain"], { cwd: repositoryPath, encoding: "utf8" })).toBe(
+        "",
+      );
     });
 
     // The lease the test above does NOT cover, and the one the product actually loses. The session

@@ -143,7 +143,7 @@ const start = async (options: StartCliCommand | TryCliCommand): Promise<void> =>
 
 const chooseSetupRoute = async (): Promise<SetupRoute> => {
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
-    throw new Error("setup requires --mode mock or --mode live outside an interactive terminal");
+    throw new Error("setup requires --mode live outside an interactive terminal");
   }
   for (const promptLine of setupRoutePrompt()) writeLine(promptLine);
   const terminal = createInterface({ input: process.stdin, output: process.stdout });
@@ -161,7 +161,7 @@ const run = async (): Promise<void> => {
       await start(command);
       return;
     case "TRY": {
-      const report = await collectSetupReadiness("MOCK");
+      const report = await collectSetupReadiness("LIVE");
       for (const reportLine of formatGuidedLaunchReadiness(report)) writeLine(reportLine);
       if (report.status === "BLOCKED") {
         for (const reportLine of formatSetupReadiness(report)) writeLine(reportLine);

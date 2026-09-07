@@ -112,7 +112,7 @@ import {
   useResolveAcceptance,
   useResolveQACorrectionGate,
   useStageAttemptSessions,
-  useStartMockPipeline,
+  useStartPipeline,
   useUpdateWorkItem,
   useWaiveQADefect,
   useWorkspace,
@@ -1203,10 +1203,23 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
       };
     case "WORK_ITEM_WORKSPACE_CREATED":
       return {
-        detail: t("event.workspaceCreatedDetail", { branch: event.data.workspace.branch }),
+        detail: t("event.workspaceCreatedDetail", {
+          branch: event.data.workspace.branch,
+          count: event.data.carriedPaths.length,
+          mode: t(`workspace.mode.${event.data.workspace.strategy}`),
+        }),
         icon: "branch",
         label: t("event.workspaceCreated"),
         tone: "success",
+      };
+    case "PROJECT_WORKSPACE_STRATEGY_CHANGED":
+      return {
+        detail: t("event.workspaceStrategyChangedDetail", {
+          mode: t(`workspace.mode.${event.data.selection.strategy}`),
+        }),
+        icon: "projects",
+        label: t("event.workspaceStrategyChanged"),
+        tone: "neutral",
       };
     case "WORK_ITEM_WORKSPACE_ORPHANED":
       return {
@@ -2505,6 +2518,10 @@ const WorkspacePanel = ({ item }: { item: WorkItem }): React.JSX.Element | null 
               ),
             },
             {
+              label: t("workspace.mode"),
+              value: t(`workspace.mode.${workspace.strategy}`),
+            },
+            {
               label: t("workspace.baseCommit"),
               value:
                 workspace.baseCommit === null ? (
@@ -2518,7 +2535,7 @@ const WorkspacePanel = ({ item }: { item: WorkItem }): React.JSX.Element | null 
           ]}
         />
         <dl className="workspace-identity__locations">
-          {project ? (
+          {project && workspace.strategy === "ISOLATED_WORKTREE" ? (
             <div>
               <dt>{t("workspace.repository")}</dt>
               <dd>{project.repositoryPath}</dd>
@@ -2529,7 +2546,13 @@ const WorkspacePanel = ({ item }: { item: WorkItem }): React.JSX.Element | null 
             <dd>{workspace.branch}</dd>
           </div>
           <div>
-            <dt>{t("workspace.worktree")}</dt>
+            <dt>
+              {t(
+                workspace.strategy === "SHARED_CURRENT_DIRECTORY"
+                  ? "workspace.workingDirectory"
+                  : "workspace.worktree",
+              )}
+            </dt>
             <dd>{workspace.worktreePath}</dd>
           </div>
         </dl>
@@ -2538,10 +2561,20 @@ const WorkspacePanel = ({ item }: { item: WorkItem }): React.JSX.Element | null 
           // returns a workspace to READY (session-loop.ts, workspaceNotReadyRefusal) -- and a
           // button that cannot work is worse than the plain fact.
           <p className="workspace-identity__note" role="status">
-            {t("workspace.notReady")}
+            {t(
+              workspace.strategy === "SHARED_CURRENT_DIRECTORY"
+                ? "workspace.sharedNotReady"
+                : "workspace.notReady",
+            )}
           </p>
         )}
-        <p className="inspector-copy">{t("workspace.uncommitted")}</p>
+        <p className="inspector-copy">
+          {t(
+            workspace.strategy === "SHARED_CURRENT_DIRECTORY"
+              ? "workspace.sharedUncommitted"
+              : "workspace.uncommitted",
+          )}
+        </p>
       </div>
     </InspectorSection>
   );
@@ -2584,7 +2617,7 @@ const modelPolicyOptions = (
       }
     }
     return {
-      description: preference === "MOCK" ? t("workflow.model.mockDescription") : t("workflow.model.loading"),
+      description: t("workflow.model.loading"),
       label: t(`workflow.modelTier.${tier}`),
       value: tier,
     };
@@ -2594,7 +2627,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const { t } = useI18n();
   const workflowQuery = useWorkItemWorkflow(item.id);
   const providerSelectionQuery = useProjectProviderSelection(item.projectId);
-  const startMutation = useStartMockPipeline();
+  const startMutation = useStartPipeline();
   const controlMutation = usePipelineControl();
   const overrideMutation = useApproveBudgetOverride();
   const [lastAction, setLastAction] = useState<"pause" | "resume" | "cancel" | "override" | null>(null);
@@ -2803,7 +2836,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   return (
     <div className="workflow-panel">
       <div className="workflow-panel__status">
-        <span>{t("workflow.mockName")}</span>
+        <span>{t("workflow.name")}</span>
         <Status
           label={
             snapshot.run.status === "HARD_PAUSED"

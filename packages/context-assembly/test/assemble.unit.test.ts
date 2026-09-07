@@ -63,8 +63,13 @@ describe("context pack assembly", () => {
       sampleSources().evidence.map((item) => ({ kind: "EVIDENCE", id: item.id, version: item.version })),
     );
     const workflowPositionEntry = result.recipe.sections.find(({ id }) => id === "WORKFLOW_POSITION");
-    // Legitimately empty: templateId/templateVersion are recorded at the recipe's top level.
-    expect(workflowPositionEntry?.sources).toEqual([]);
+    // The template identity is recorded at recipe level; a correction position additionally carries
+    // the exact durable implementation/finding authority rendered into that required section.
+    expect(workflowPositionEntry?.sources).toEqual([
+      { kind: "STAGE_ATTEMPT", id: "attempt_implement_01", version: 3 },
+      { kind: "AGENT_RUN", id: "agent_run_author_01", version: 2 },
+      { kind: "REVIEW_FINDING", id: "finding_01", version: 1 },
+    ]);
   });
 
   it("accounts for separator bytes in the floor check", () => {

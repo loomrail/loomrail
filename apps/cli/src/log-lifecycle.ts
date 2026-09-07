@@ -156,7 +156,7 @@ const allowedTopLevelFields = new Set([
   "attachmentId",
   "budgetTokens",
   "carriedPaths",
-  "cliAvailable",
+  "providerReady",
   "code",
   "correlationId",
   "costUsd",

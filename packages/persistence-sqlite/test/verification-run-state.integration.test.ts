@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import type { StartMockPipelineCommand, VerificationPlanProposal } from "@loomrail/contracts";
+import type { LegacyStartPipelineCommand, VerificationPlanProposal } from "@loomrail/contracts";
 import { VerificationDomainError } from "@loomrail/domain";
 import { verificationPlanProposalHash } from "@loomrail/project-readiness";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -61,7 +61,7 @@ const template = {
     },
   ],
 };
-const correctionWorkflowTemplate: StartMockPipelineCommand["payload"]["template"] = {
+const correctionWorkflowTemplate: LegacyStartPipelineCommand["payload"]["template"] = {
   schemaVersion: 1,
   id: "verification-correction-workflow",
   version: 1,
@@ -126,7 +126,8 @@ describe("verification Run local state", () => {
   };
 
   const prepare = async (
-    workflowTemplate: StartMockPipelineCommand["payload"]["template"] = template,
+    workflowTemplate: LegacyStartPipelineCommand["payload"]["template"] = template,
+    workspaceStrategy: "ISOLATED_WORKTREE" | "SHARED_CURRENT_DIRECTORY" = "ISOLATED_WORKTREE",
   ): Promise<{
     localState: LocalState;
     workItemId: string;
@@ -169,6 +170,22 @@ describe("verification Run local state", () => {
       type: "COMPLETE_VERIFICATION_PLAN_PUBLICATION",
       payload: { publicationId: adopted.publication.id, expectedVersion: adopted.publication.version },
     });
+    if (workspaceStrategy === "SHARED_CURRENT_DIRECTORY") {
+      const project = localState.query({ type: "GET_PROJECT", projectId: "project-one" });
+      if (project.type !== "PROJECT" || project.project === null) throw new Error("Expected Project");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "select-shared-workspace-strategy",
+        correlationId: "correlation-select-shared-workspace-strategy",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "SET_PROJECT_WORKSPACE_STRATEGY",
+        payload: {
+          projectId: project.project.id,
+          expectedProjectVersion: project.project.version,
+          strategy: workspaceStrategy,
+        },
+      });
+    }
     const created = localState.execute({
       schemaVersion: 1,
       commandId: "create-work-item",
@@ -224,6 +241,7 @@ describe("verification Run local state", () => {
         baseCommit: null,
         snapshotCommit: null,
         carriedPaths: [],
+        strategy: workspaceStrategy,
       },
     });
     if (workspace.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace");
@@ -258,6 +276,85 @@ describe("verification Run local state", () => {
         platform: "darwin",
       },
     });
+
+  const prepareAnotherSharedWorkItem = (
+    fixture: Awaited<ReturnType<typeof prepare>>,
+    suffix: string,
+  ): Awaited<ReturnType<typeof prepare>> => {
+    const created = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: `create-work-item-${suffix}`,
+      correlationId: `correlation-create-work-item-${suffix}`,
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CREATE_WORK_ITEM",
+      payload: {
+        projectId: "project-one",
+        parentId: null,
+        type: "TASK",
+        title: `Verify ${suffix}`,
+        description: "Second synthetic verification fixture",
+        priority: "MEDIUM",
+        risk: "LOW",
+        acceptanceCriteria: ["Checks are durable"],
+      },
+    });
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem");
+    const ready = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: `ready-work-item-${suffix}`,
+      correlationId: `correlation-ready-work-item-${suffix}`,
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "MOVE_WORK_ITEM",
+      payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
+    });
+    if (ready.type !== "WORK_ITEM_MOVED") throw new Error("Expected READY WorkItem");
+    const pipeline = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: `start-pipeline-${suffix}`,
+      correlationId: `correlation-start-pipeline-${suffix}`,
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: ready.workItem.id,
+        expectedVersion: ready.workItem.version,
+        template,
+        budget: { maxEstimatedTokens: 100_000, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected PipelineRun");
+    const secondWorkspacePath = `${workspacePath}-${suffix}`;
+    const workspace = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: `create-workspace-${suffix}`,
+      correlationId: `correlation-create-workspace-${suffix}`,
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "CREATE_WORK_ITEM_WORKSPACE",
+      payload: {
+        projectId: "project-one",
+        workItemId: ready.workItem.id,
+        branch: "main",
+        worktreePath: secondWorkspacePath,
+        baseCommit: null,
+        snapshotCommit: null,
+        carriedPaths: [],
+        strategy: "SHARED_CURRENT_DIRECTORY",
+      },
+    });
+    if (workspace.type !== "WORK_ITEM_WORKSPACE_CREATED") throw new Error("Expected workspace");
+    const current = fixture.localState.query({ type: "GET_WORK_ITEM", workItemId: ready.workItem.id });
+    if (current.type !== "WORK_ITEM" || current.workItem === null) throw new Error("Expected WorkItem");
+    return {
+      localState: fixture.localState,
+      workItemId: ready.workItem.id,
+      workItemVersion: current.workItem.version,
+      pipelineRunId: pipeline.run.id,
+      stageAttemptId: pipeline.stageAttempt.id,
+      workspaceId: workspace.workspace.id,
+      planId: fixture.planId,
+      planRevision: fixture.planRevision,
+      planContentHash: fixture.planContentHash,
+    };
+  };
 
   it("reserves, measures, stores output reference and releases the workspace atomically", async () => {
     const fixture = await prepare();
@@ -469,6 +566,58 @@ describe("verification Run local state", () => {
         closedBefore: "2026-09-05T11:00:01.000Z",
       }),
     ).toEqual({ type: "VERIFICATION_OUTPUTS", artifacts: [] });
+  });
+
+  it("refuses Project verification while another shared WorkItem holds writer authority", async () => {
+    const writer = await prepare(template, "SHARED_CURRENT_DIRECTORY");
+    const verifier = prepareAnotherSharedWorkItem(writer, "verifier");
+    writer.localState.execute({
+      schemaVersion: 1,
+      commandId: "take-shared-writer-authority",
+      correlationId: "correlation-take-shared-writer-authority",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "ACQUIRE_WORKSPACE_LEASE",
+      payload: {
+        workspaceId: writer.workspaceId,
+        stageAttemptId: writer.stageAttemptId,
+        expectedVersion: 1,
+      },
+    });
+
+    expect(() => reserve(verifier, "verify-during-shared-write")).toThrow(
+      expect.objectContaining({ code: "WORKSPACE_PROJECT_AUTHORITY_HELD" }),
+    );
+  });
+
+  it("refuses a shared writer while another WorkItem is being verified", async () => {
+    const verifier = await prepare(template, "SHARED_CURRENT_DIRECTORY");
+    const writer = prepareAnotherSharedWorkItem(verifier, "writer");
+    reserve(verifier, "take-shared-verification-authority");
+
+    expect(() =>
+      writer.localState.execute({
+        schemaVersion: 1,
+        commandId: "write-during-shared-verification",
+        correlationId: "correlation-write-during-shared-verification",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "ACQUIRE_WORKSPACE_LEASE",
+        payload: {
+          workspaceId: writer.workspaceId,
+          stageAttemptId: writer.stageAttemptId,
+          expectedVersion: 1,
+        },
+      }),
+    ).toThrow(expect.objectContaining({ code: "WORKSPACE_PROJECT_AUTHORITY_HELD" }));
+  });
+
+  it("allows only one shared verification authority across a Project", async () => {
+    const first = await prepare(template, "SHARED_CURRENT_DIRECTORY");
+    const second = prepareAnotherSharedWorkItem(first, "second-verifier");
+    reserve(first, "take-first-shared-verification-authority");
+
+    expect(() => reserve(second, "take-second-shared-verification-authority")).toThrow(
+      expect.objectContaining({ code: "WORKSPACE_PROJECT_AUTHORITY_HELD" }),
+    );
   });
 
   it("atomically returns a failed QA verification gate to a distinct correction IMPLEMENT", async () => {
@@ -916,7 +1065,7 @@ describe("verification Run local state", () => {
             resultTree: implementationTree,
           },
         }),
-      ).toMatchObject({ type: "MOCK_PROVIDER_OUTCOME_APPLIED", stageAttempt: { status: "SUCCEEDED" } });
+      ).toMatchObject({ type: "PROVIDER_OUTCOME_APPLIED", stageAttempt: { status: "SUCCEEDED" } });
     };
     const completeReview = (suffix: string, reviewedTree: string): void => {
       const dispatch = startAgent(`${suffix}-review`, "CLAUDE_CODE");
@@ -954,7 +1103,7 @@ describe("verification Run local state", () => {
             resultTree: reviewedTree,
           },
         }),
-      ).toMatchObject({ type: "MOCK_PROVIDER_OUTCOME_APPLIED", stageAttempt: { status: "SUCCEEDED" } });
+      ).toMatchObject({ type: "PROVIDER_OUTCOME_APPLIED", stageAttempt: { status: "SUCCEEDED" } });
     };
     const currentWorkItem = () => {
       const result = fixture.localState.query({ type: "GET_WORK_ITEM", workItemId: fixture.workItemId });

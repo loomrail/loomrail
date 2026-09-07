@@ -22,30 +22,17 @@ const providers = (
   environmentOverride,
   providers: [
     {
-      provider: "MOCK",
+      provider: "CODEX",
       installed: true,
-      authentication: "AUTHENTICATED",
+      authentication: liveReady ? "AUTHENTICATED" : "REQUIRED",
       version: null,
       compatibility: "BUILT_IN",
-      ready: true,
-      stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
-      checkpointOnRequest: true,
-      contextWindowReporting: true,
-      costReporting: true,
-      canReportRateLimits: false,
-      models: null,
-    },
-    {
-      provider: "CODEX",
-      installed: liveReady,
-      authentication: liveReady ? "AUTHENTICATED" : "REQUIRED",
-      version: liveReady ? "0.152.1" : null,
-      compatibility: liveReady ? "VERIFIED" : "MISSING",
       ready: liveReady,
       stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
       checkpointOnRequest: true,
       contextWindowReporting: true,
       costReporting: false,
+      tokenBudgetEnforcement: "HARD",
       canReportRateLimits: liveReady,
       models: { FAST: "gpt-fast", STANDARD: "gpt-standard", DEEP: "gpt-deep" },
     },
@@ -79,7 +66,7 @@ const doctor = (
     },
     providers: {
       status: options.liveReady ? "PASS" : "WARN",
-      code: options.liveReady ? "LIVE_PROVIDER_READY" : "MOCK_ONLY",
+      code: options.liveReady ? "LIVE_PROVIDER_READY" : "REAL_PROVIDER_REQUIRED",
       environmentOverride: options.environmentOverride ?? "NONE",
       items: providers(options.liveReady ?? false, options.environmentOverride).providers,
     },
@@ -93,13 +80,13 @@ describe("Loomrail guided setup", () => {
     await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true })));
   });
 
-  it("defaults the exact interactive choice to Mock and rejects free text without echoing it", async () => {
-    expect(parseSetupRouteChoice("")).toBe("MOCK");
-    expect(parseSetupRouteChoice("1")).toBe("MOCK");
-    expect(parseSetupRouteChoice("mock")).toBe("MOCK");
-    expect(parseSetupRouteChoice("2")).toBe("LIVE");
+  it("defaults the exact interactive choice to the real-provider route and rejects free text", async () => {
+    expect(parseSetupRouteChoice("")).toBe("LIVE");
+    expect(parseSetupRouteChoice("1")).toBe("LIVE");
+    expect(() => parseSetupRouteChoice("mock")).toThrow(SetupRouteSelectionError);
+    expect(() => parseSetupRouteChoice("2")).toThrow(SetupRouteSelectionError);
     expect(parseSetupRouteChoice("live")).toBe("LIVE");
-    await expect(selectSetupRoute(() => Promise.resolve(""))).resolves.toBe("MOCK");
+    await expect(selectSetupRoute(() => Promise.resolve(""))).resolves.toBe("LIVE");
 
     const secretCanary = "owner-secret-free-text";
     expect(() => parseSetupRouteChoice(secretCanary)).toThrow("Setup choice must be");
@@ -123,7 +110,7 @@ describe("Loomrail guided setup", () => {
     );
   });
 
-  it("keeps a new mock installation ready without provider login or state creation", async () => {
+  it("keeps a new installation blocked until a real API credential is ready", async () => {
     const parent = await mkdtemp(join(tmpdir(), "loomrail setup "));
     directories.push(parent);
     const missing = join(parent, "not-created");
@@ -137,20 +124,20 @@ describe("Loomrail guided setup", () => {
         Promise.resolve({ status: "MISSING", appliedMigrations: 0, expectedMigrations: 29 }),
       inspectProviders: () => Promise.resolve(providers(false)),
     });
-    const setup = await collectSetupReadiness("MOCK", {
+    const setup = await collectSetupReadiness("LIVE", {
       collectDoctor: () => Promise.resolve(report),
       inspectBrowser: () => Promise.resolve("AVAILABLE"),
     });
 
     expect(setup).toMatchObject({
-      status: "READY",
-      route: "MOCK",
+      status: "BLOCKED",
+      route: "LIVE",
       checks: {
         system: { status: "WARN", code: "SYSTEM_READY_WITH_WARNINGS" },
         browser: { status: "PASS", code: "BROWSER_READY" },
-        route: { status: "PASS", code: "MOCK_ROUTE_READY" },
+        route: { status: "FAIL", code: "LIVE_PROVIDER_NOT_READY" },
       },
-      nextActions: ["RUN_START", "INITIALIZE_DEMO_WORKSPACE", "SELECT_MOCK"],
+      nextActions: ["SIGN_IN_PROVIDER"],
     });
     await expect(stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -162,25 +149,7 @@ describe("Loomrail guided setup", () => {
     });
     expect(blocked.status).toBe("BLOCKED");
     expect(blocked.checks.route.code).toBe("LIVE_PROVIDER_NOT_READY");
-    expect(blocked.nextActions).toEqual(["REVIEW_PROVIDER_COMPATIBILITY"]);
-
-    const verifiedButSignedOut = doctor();
-    verifiedButSignedOut.checks.providers.items = verifiedButSignedOut.checks.providers.items.map((item) =>
-      item.provider === "CODEX"
-        ? {
-            ...item,
-            installed: true,
-            version: "0.152.1",
-            compatibility: "VERIFIED",
-            authentication: "REQUIRED",
-          }
-        : item,
-    );
-    const signInRequired = await collectSetupReadiness("LIVE", {
-      collectDoctor: () => Promise.resolve(verifiedButSignedOut),
-      inspectBrowser: () => Promise.resolve("AVAILABLE"),
-    });
-    expect(signInRequired.nextActions).toEqual(["SIGN_IN_PROVIDER"]);
+    expect(blocked.nextActions).toEqual(["SIGN_IN_PROVIDER"]);
 
     const ready = await collectSetupReadiness("LIVE", {
       collectDoctor: () => Promise.resolve(doctor({ liveReady: true, status: "PASS" })),
@@ -192,7 +161,7 @@ describe("Loomrail guided setup", () => {
   });
 
   it("blocks pending migration, missing Chromium, and every provider override in stable order", async () => {
-    const report = await collectSetupReadiness("MOCK", {
+    const report = await collectSetupReadiness("LIVE", {
       collectDoctor: () =>
         Promise.resolve(doctor({ stateCode: "STATE_UPGRADE_REQUIRED", environmentOverride: "VALID" })),
       inspectBrowser: () => Promise.resolve("MISSING"),

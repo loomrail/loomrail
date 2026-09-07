@@ -31,7 +31,6 @@ const runtimeWorkspacePackages = [
   "packages/provider-claude-code",
   "packages/provider-codex",
   "packages/provider-core",
-  "packages/provider-mock",
   "packages/workflow-engine",
   "packages/workspace",
 ];

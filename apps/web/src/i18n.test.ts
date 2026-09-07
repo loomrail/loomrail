@@ -22,10 +22,10 @@ describe("i18n", () => {
     expect(translate("ru", "state.READY")).toBe("Готово к работе");
   });
 
-  it("names the provider-neutral workflow without claiming that a live run is mock work", () => {
-    expect(translate("en", "workflow.mockName")).toBe("Delivery workflow");
+  it("names the provider-neutral workflow without claiming offline work", () => {
+    expect(translate("en", "workflow.name")).toBe("Delivery workflow");
     expect(translate("en", "workflow.start")).toBe("Start workflow");
-    expect(translate("ru", "workflow.mockName")).toBe("Процесс поставки");
+    expect(translate("ru", "workflow.name")).toBe("Процесс поставки");
     expect(translate("ru", "workflow.start")).toBe("Запустить процесс");
   });
 

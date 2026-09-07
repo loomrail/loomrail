@@ -4,52 +4,25 @@ import {
   type ProjectProviderSelectionResponse,
   type ProviderAuthentication,
   type ProviderAvailability,
-  type ProviderCompatibility,
   type ProviderId,
   type ProviderPreference,
   type WorkflowStage,
 } from "@loomrail/contracts";
-import type {
-  CliProviderDiagnostics,
-  ProviderAdapter,
-  ProviderVersionObservation,
-} from "@loomrail/provider-core";
-import { claudeCodeProviderDiagnostics, createClaudeCodeProvider } from "@loomrail/provider-claude-code";
-import {
-  codexProviderDiagnostics,
-  codexRateLimitReportingTargetVerified,
-  createCodexProvider,
-  probeCodexAuthenticationMode,
-  type CodexAuthenticationMode,
-} from "@loomrail/provider-codex";
-import { createMockProvider } from "@loomrail/provider-mock";
+import type { ProviderAdapter } from "@loomrail/provider-core";
+import { createAnthropicMessagesProvider } from "@loomrail/provider-claude-code";
+import { createOpenAIResponsesProvider } from "@loomrail/provider-codex";
 
 export const LOOMRAIL_PROVIDER_ENV_VAR = "LOOMRAIL_PROVIDER";
-export const LOOMRAIL_PROVIDER_VALUES = ["MOCK", "CODEX", "CLAUDE_CODE"] as const;
+export const LOOMRAIL_PROVIDER_VALUES = ["CODEX", "CLAUDE_CODE"] as const;
 
-const AUTH_PROBE_DEADLINE_MS = 3_000;
-const LIVE_PROVIDER_IDS = ["CODEX", "CLAUDE_CODE"] as const;
-
+const LIVE_PROVIDER_IDS = LOOMRAIL_PROVIDER_VALUES;
 type LiveProviderId = (typeof LIVE_PROVIDER_IDS)[number];
-type ProviderAdapters = Readonly<Record<ProviderId, ProviderAdapter>>;
-
-const providerDiagnostics: Readonly<Record<LiveProviderId, CliProviderDiagnostics>> = {
-  CODEX: codexProviderDiagnostics,
-  CLAUDE_CODE: claudeCodeProviderDiagnostics,
-};
+type ProviderAdapters = Readonly<Record<LiveProviderId, ProviderAdapter>>;
 
 export type ProviderAuthProbe = (provider: LiveProviderId) => Promise<ProviderAuthentication>;
-export type ProviderCompatibilityProbe = (provider: LiveProviderId) => Promise<ProviderVersionObservation>;
-export type ProviderRateLimitVersionTargetProbe = (
-  provider: LiveProviderId,
-  observation: { compatibility: ProviderCompatibility; version: string | null },
-) => boolean;
-export type ProviderRateLimitAuthenticationModeProbe = (
-  provider: LiveProviderId,
-) => Promise<CodexAuthenticationMode>;
 
 export type ProviderResolution = {
-  provider: ProviderId;
+  provider: LiveProviderId;
   adapter: ProviderAdapter;
   recognised: boolean;
   requested: string | null;
@@ -68,72 +41,35 @@ export type ProviderRegistry = {
     options?: { stage?: WorkflowStage | undefined; avoidProvider?: ProviderId | null | undefined },
   ) => ProjectProviderResolution;
   environment: {
-    override: ProviderId | null;
+    override: LiveProviderId | null;
     invalid: boolean;
     requested: string | null;
   };
 };
 
-const isProviderId = (value: string): value is ProviderId =>
+const isLiveProviderId = (value: string): value is LiveProviderId =>
   LOOMRAIL_PROVIDER_VALUES.some((provider) => provider === value);
 
 const requestedEnvironmentProvider = (
   env: Readonly<Record<string, string | undefined>>,
-): { override: ProviderId | null; invalid: boolean; requested: string | null } => {
+): { override: LiveProviderId | null; invalid: boolean; requested: string | null } => {
   const raw = env[LOOMRAIL_PROVIDER_ENV_VAR];
   const requested = raw === undefined || raw.trim().length === 0 ? null : raw;
   if (requested === null) return { override: null, invalid: false, requested: null };
-  return isProviderId(requested)
+  return isLiveProviderId(requested)
     ? { override: requested, invalid: false, requested }
     : { override: null, invalid: true, requested };
-};
-
-export const probeProviderAuthentication: ProviderAuthProbe = (provider) =>
-  providerDiagnostics[provider].probeAuthentication({ deadlineMs: AUTH_PROBE_DEADLINE_MS });
-
-const probeProviderRateLimitAuthenticationMode: ProviderRateLimitAuthenticationModeProbe = (provider) =>
-  provider === "CODEX"
-    ? probeCodexAuthenticationMode({ deadlineMs: AUTH_PROBE_DEADLINE_MS })
-    : Promise.resolve("UNKNOWN");
-
-// One process may open many in-memory daemons in integration tests. Re-running two real CLI probes
-// for every instance would make unrelated suites depend on local login latency. Production opens
-// one daemon; an explicit Settings refresh bypasses this startup cache below.
-const startupProbeCache = new Map<LiveProviderId, Promise<ProviderAuthentication>>();
-const cachedStartupProbe: ProviderAuthProbe = (provider) => {
-  const existing = startupProbeCache.get(provider);
-  if (existing !== undefined) return existing;
-  const pending = probeProviderAuthentication(provider);
-  startupProbeCache.set(provider, pending);
-  return pending;
-};
-const startupRateLimitAuthModeProbeCache = new Map<LiveProviderId, Promise<CodexAuthenticationMode>>();
-const cachedStartupRateLimitAuthenticationModeProbe: ProviderRateLimitAuthenticationModeProbe = (
-  provider,
-) => {
-  const existing = startupRateLimitAuthModeProbeCache.get(provider);
-  if (existing !== undefined) return existing;
-  const pending = probeProviderRateLimitAuthenticationMode(provider);
-  startupRateLimitAuthModeProbeCache.set(provider, pending);
-  return pending;
 };
 
 const adapterWithAvailability = (
   adapter: ProviderAdapter,
   availability: ProviderAvailability,
 ): ProviderAdapter => {
-  const allowanceAdmitted =
-    availability.canReportRateLimits && availability.authentication === "AUTHENTICATED";
+  const readAllowance = adapter.readAllowance;
   return {
-    capabilities: () => ({
-      ...adapter.capabilities(),
-      start: availability.ready,
-      canReportRateLimits: allowanceAdmitted,
-    }),
+    capabilities: () => ({ ...adapter.capabilities(), start: availability.ready }),
     ...(adapter.modelMapping === undefined ? {} : { modelMapping: adapter.modelMapping }),
-    ...(adapter.readAllowance === undefined || !allowanceAdmitted
-      ? {}
-      : { readAllowance: adapter.readAllowance }),
+    ...(readAllowance === undefined ? {} : { readAllowance: () => readAllowance() }),
     start: (invocation, listener) => adapter.start(invocation, listener),
     requestHandoff: (sessionId) => adapter.requestHandoff(sessionId),
     abortSession: (sessionId) => adapter.abortSession(sessionId),
@@ -141,32 +77,24 @@ const adapterWithAvailability = (
 };
 
 const availabilityFor = (
-  provider: ProviderId,
+  provider: LiveProviderId,
   adapter: ProviderAdapter,
-  installed: boolean,
   authentication: ProviderAuthentication,
-  observation: { compatibility: ProviderCompatibility; version: string | null },
-  rateLimitTargetVerified: boolean,
 ): ProviderAvailability => {
   const capabilities = adapter.capabilities();
-  const ready =
-    provider === "MOCK" ||
-    (installed && observation.compatibility === "VERIFIED" && authentication === "AUTHENTICATED");
   return {
     provider,
-    installed,
+    installed: true,
     authentication,
-    version: observation.version,
-    compatibility: observation.compatibility,
-    ready,
+    version: null,
+    compatibility: "BUILT_IN",
+    ready: capabilities.start && authentication === "AUTHENTICATED",
     stages: capabilities.stages,
     checkpointOnRequest: capabilities.checkpointOnRequest,
     contextWindowReporting: capabilities.contextWindowReporting,
     costReporting: capabilities.costReporting,
-    canReportRateLimits:
-      rateLimitTargetVerified &&
-      (capabilities.canReportRateLimits ?? false) &&
-      adapter.readAllowance !== undefined,
+    tokenBudgetEnforcement: capabilities.tokenBudgetEnforcement,
+    canReportRateLimits: capabilities.canReportRateLimits ?? false,
     models: adapter.modelMapping?.() ?? null,
   };
 };
@@ -179,7 +107,7 @@ const selectionProjection = (project: Project) => ({
   updatedAt: project.updatedAt,
 });
 
-const preferenceProvider = (preference: ProviderPreference): ProviderId | null =>
+const preferenceProvider = (preference: ProviderPreference): LiveProviderId | null =>
   preference === "AUTO" ? null : preference;
 
 export const createProviderRegistry = (
@@ -187,138 +115,32 @@ export const createProviderRegistry = (
     env?: Readonly<Record<string, string | undefined>>;
     adapters?: Partial<ProviderAdapters>;
     probeAuthentication?: ProviderAuthProbe;
-    probeCompatibility?: ProviderCompatibilityProbe;
-    rateLimitVersionTargetVerified?: ProviderRateLimitVersionTargetProbe;
-    probeRateLimitAuthenticationMode?: ProviderRateLimitAuthenticationModeProbe;
-    executableAvailable?: (provider: LiveProviderId) => boolean;
   } = {},
 ): ProviderRegistry => {
   const env = options.env ?? process.env;
   const environment = requestedEnvironmentProvider(env);
   const adapters: ProviderAdapters = {
-    MOCK: options.adapters?.MOCK ?? createMockProvider(),
-    CODEX: options.adapters?.CODEX ?? createCodexProvider(),
-    CLAUDE_CODE: options.adapters?.CLAUDE_CODE ?? createClaudeCodeProvider(),
+    CODEX: options.adapters?.CODEX ?? createOpenAIResponsesProvider({ apiKey: env["OPENAI_API_KEY"] }),
+    CLAUDE_CODE:
+      options.adapters?.CLAUDE_CODE ?? createAnthropicMessagesProvider({ apiKey: env["ANTHROPIC_API_KEY"] }),
   };
-  const customAuthProbe = options.probeAuthentication;
-  const compatibilityProbe =
-    options.probeCompatibility ??
-    ((provider: LiveProviderId) => providerDiagnostics[provider].probeVersion({ environment: env }));
-  const executableAvailable =
-    options.executableAvailable ??
-    ((provider: LiveProviderId): boolean => providerDiagnostics[provider].executableAvailable(env));
-  const rateLimitVersionTargetVerified =
-    options.rateLimitVersionTargetVerified ??
-    ((
-      provider: LiveProviderId,
-      observation: { compatibility: ProviderCompatibility; version: string | null },
-    ): boolean => provider === "CODEX" && codexRateLimitReportingTargetVerified(observation.version));
-  const customRateLimitAuthenticationModeProbe = options.probeRateLimitAuthenticationMode;
-  let firstRefresh = true;
-  let availability: Readonly<Record<ProviderId, ProviderAvailability>> = {
-    MOCK: availabilityFor(
-      "MOCK",
-      adapters.MOCK,
-      true,
-      "AUTHENTICATED",
-      {
-        compatibility: "BUILT_IN",
-        version: null,
-      },
-      false,
-    ),
-    CODEX: availabilityFor(
-      "CODEX",
-      adapters.CODEX,
-      false,
-      "UNKNOWN",
-      {
-        compatibility: "MISSING",
-        version: null,
-      },
-      false,
-    ),
-    CLAUDE_CODE: availabilityFor(
-      "CLAUDE_CODE",
-      adapters.CLAUDE_CODE,
-      false,
-      "UNKNOWN",
-      {
-        compatibility: "MISSING",
-        version: null,
-      },
-      false,
-    ),
+  const defaultAuthenticationProbe: ProviderAuthProbe = (provider) =>
+    Promise.resolve(adapters[provider].capabilities().start ? "AUTHENTICATED" : "REQUIRED");
+  const probeAuthentication = options.probeAuthentication ?? defaultAuthenticationProbe;
+  let availability: Readonly<Record<LiveProviderId, ProviderAvailability>> = {
+    CODEX: availabilityFor("CODEX", adapters.CODEX, "UNKNOWN"),
+    CLAUDE_CODE: availabilityFor("CLAUDE_CODE", adapters.CLAUDE_CODE, "UNKNOWN"),
   };
 
   const refresh = async (): Promise<void> => {
-    const authProbe = customAuthProbe ?? (firstRefresh ? cachedStartupProbe : probeProviderAuthentication);
-    const rateLimitAuthenticationModeProbe =
-      customRateLimitAuthenticationModeProbe ??
-      (firstRefresh
-        ? cachedStartupRateLimitAuthenticationModeProbe
-        : probeProviderRateLimitAuthenticationMode);
-    const installed = {
-      CODEX: executableAvailable("CODEX"),
-      CLAUDE_CODE: executableAvailable("CLAUDE_CODE"),
-    } as const;
-    const [codexCompatibility, claudeCompatibility] = await Promise.all([
-      installed.CODEX
-        ? compatibilityProbe("CODEX")
-        : Promise.resolve({ compatibility: "MISSING" as const, version: null }),
-      installed.CLAUDE_CODE
-        ? compatibilityProbe("CLAUDE_CODE")
-        : Promise.resolve({ compatibility: "MISSING" as const, version: null }),
+    const [openAIAuthentication, anthropicAuthentication] = await Promise.all([
+      probeAuthentication("CODEX"),
+      probeAuthentication("CLAUDE_CODE"),
     ]);
-    const rateLimitVersionTargets = {
-      CODEX: rateLimitVersionTargetVerified("CODEX", codexCompatibility),
-      CLAUDE_CODE: rateLimitVersionTargetVerified("CLAUDE_CODE", claudeCompatibility),
-    } as const;
-    const [codexAuthentication, claudeAuthentication, codexRateLimitAuthMode, claudeRateLimitAuthMode] =
-      await Promise.all([
-        codexCompatibility.compatibility === "VERIFIED" || rateLimitVersionTargets.CODEX
-          ? authProbe("CODEX")
-          : Promise.resolve<ProviderAuthentication>("UNKNOWN"),
-        claudeCompatibility.compatibility === "VERIFIED" || rateLimitVersionTargets.CLAUDE_CODE
-          ? authProbe("CLAUDE_CODE")
-          : Promise.resolve<ProviderAuthentication>("UNKNOWN"),
-        rateLimitVersionTargets.CODEX
-          ? rateLimitAuthenticationModeProbe("CODEX")
-          : Promise.resolve<CodexAuthenticationMode>("UNKNOWN"),
-        rateLimitVersionTargets.CLAUDE_CODE
-          ? rateLimitAuthenticationModeProbe("CLAUDE_CODE")
-          : Promise.resolve<CodexAuthenticationMode>("UNKNOWN"),
-      ]);
     availability = {
-      MOCK: availabilityFor(
-        "MOCK",
-        adapters.MOCK,
-        true,
-        "AUTHENTICATED",
-        {
-          compatibility: "BUILT_IN",
-          version: null,
-        },
-        false,
-      ),
-      CODEX: availabilityFor(
-        "CODEX",
-        adapters.CODEX,
-        installed.CODEX,
-        codexAuthentication,
-        codexCompatibility,
-        rateLimitVersionTargets.CODEX && codexRateLimitAuthMode === "CHATGPT",
-      ),
-      CLAUDE_CODE: availabilityFor(
-        "CLAUDE_CODE",
-        adapters.CLAUDE_CODE,
-        installed.CLAUDE_CODE,
-        claudeAuthentication,
-        claudeCompatibility,
-        rateLimitVersionTargets.CLAUDE_CODE && claudeRateLimitAuthMode === "CHATGPT",
-      ),
+      CODEX: availabilityFor("CODEX", adapters.CODEX, openAIAuthentication),
+      CLAUDE_CODE: availabilityFor("CLAUDE_CODE", adapters.CLAUDE_CODE, anthropicAuthentication),
     };
-    firstRefresh = false;
   };
 
   const resolve = (
@@ -326,33 +148,37 @@ export const createProviderRegistry = (
     resolveOptions: { stage?: WorkflowStage | undefined; avoidProvider?: ProviderId | null | undefined } = {},
   ): ProjectProviderResolution => {
     const preferred = environment.invalid
-      ? "MOCK"
+      ? null
       : (environment.override ?? preferenceProvider(project.providerPreference));
     const source =
-      environment.override || environment.invalid
+      environment.override !== null || environment.invalid
         ? "ENVIRONMENT_OVERRIDE"
         : preferred === null
           ? "AUTO"
           : "PROJECT_PREFERENCE";
-    const autoCandidates = LIVE_PROVIDER_IDS.map((provider) => availability[provider])
-      .filter(
-        (candidate) =>
-          candidate.ready &&
-          (resolveOptions.stage === undefined || candidate.stages.includes(resolveOptions.stage)),
-      )
-      .sort(
-        (left, right) =>
-          Number(right.provider !== resolveOptions.avoidProvider) -
-            Number(left.provider !== resolveOptions.avoidProvider) ||
-          right.stages.length - left.stages.length ||
-          left.provider.localeCompare(right.provider),
+    const eligible = LIVE_PROVIDER_IDS.filter((provider) => {
+      const candidate = availability[provider];
+      return (
+        candidate.ready &&
+        candidate.tokenBudgetEnforcement === "HARD" &&
+        (resolveOptions.stage === undefined || candidate.stages.includes(resolveOptions.stage))
       );
-    const effectiveProvider = preferred ?? autoCandidates[0]?.provider ?? "MOCK";
+    }).sort(
+      (left, right) =>
+        Number(right !== resolveOptions.avoidProvider) - Number(left !== resolveOptions.avoidProvider) ||
+        availability[right].stages.length - availability[left].stages.length ||
+        left.localeCompare(right),
+    );
+    const effectiveProvider: LiveProviderId = preferred ?? eligible[0] ?? "CODEX";
     const effectiveAvailability = availability[effectiveProvider];
     const fallbackReason =
-      preferred === null && effectiveProvider === "MOCK"
+      preferred === null && eligible.length === 0
         ? "NO_READY_LIVE_PROVIDER"
-        : preferred !== null && !effectiveAvailability.ready
+        : preferred !== null &&
+            (!effectiveAvailability.ready ||
+              effectiveAvailability.tokenBudgetEnforcement !== "HARD" ||
+              (resolveOptions.stage !== undefined &&
+                !effectiveAvailability.stages.includes(resolveOptions.stage)))
           ? "LIVE_PROVIDER_UNAVAILABLE"
           : null;
     const response = projectProviderSelectionResponseSchema.parse({
@@ -364,7 +190,7 @@ export const createProviderRegistry = (
       environmentOverride: environment.override,
       environmentOverrideLocked: environment.override !== null || environment.invalid,
       environmentOverrideInvalid: environment.invalid,
-      providers: [availability.MOCK, availability.CODEX, availability.CLAUDE_CODE],
+      providers: [availability.CODEX, availability.CLAUDE_CODE],
     });
     return {
       response,
@@ -372,13 +198,12 @@ export const createProviderRegistry = (
     };
   };
 
-  const readAvailability = (): readonly ProviderAvailability[] => [
-    availability.MOCK,
-    availability.CODEX,
-    availability.CLAUDE_CODE,
-  ];
-
-  return { refresh, availability: readAvailability, resolve, environment };
+  return {
+    refresh,
+    availability: () => [availability.CODEX, availability.CLAUDE_CODE],
+    resolve,
+    environment,
+  };
 };
 
 export type ProviderAvailabilitySnapshot = {
@@ -401,28 +226,18 @@ export const inspectProviderAvailability = async (
   };
 };
 
-// Compatibility projection for launchers/tests that still ask for the startup environment alone.
-// Production dispatch uses createProviderRegistry().resolve(project), never this process-wide value.
 export const resolveDefaultProviderAdapter = (
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): ProviderResolution => {
   const environment = requestedEnvironmentProvider(env);
-  const requested = environment.requested;
-  if (environment.override === "CODEX") {
-    return { provider: "CODEX", adapter: createCodexProvider(), recognised: true, requested };
-  }
-  if (environment.override === "CLAUDE_CODE") {
-    return {
-      provider: "CLAUDE_CODE",
-      adapter: createClaudeCodeProvider(),
-      recognised: true,
-      requested,
-    };
-  }
+  const provider = environment.override ?? "CODEX";
   return {
-    provider: "MOCK",
-    adapter: createMockProvider(),
+    provider,
+    adapter:
+      provider === "CODEX"
+        ? createOpenAIResponsesProvider({ apiKey: env["OPENAI_API_KEY"] })
+        : createAnthropicMessagesProvider({ apiKey: env["ANTHROPIC_API_KEY"] }),
     recognised: !environment.invalid,
-    requested,
+    requested: environment.requested,
   };
 };

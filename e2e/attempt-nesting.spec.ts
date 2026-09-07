@@ -6,9 +6,9 @@ import { dirname, join, resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
 import { materialiseFixtureRepository, resolveBundledFixture } from "../apps/daemon/dist/fixtures.js";
-import { startDaemon, type RunningDaemon } from "../apps/daemon/dist/server.js";
+import { startDaemon, type RunningDaemon } from "./provider-test-daemon.js";
 import { openLocalState, type LocalState } from "../packages/persistence-sqlite/dist/index.js";
-import { mockDeliveryTemplate } from "../packages/workflow-engine/dist/index.js";
+import { deliveryTemplate } from "../packages/workflow-engine/dist/index.js";
 
 /**
  * Spec D5: a StageAttempt is the unit of work and a ProviderSession is the unit of execution, and
@@ -91,8 +91,8 @@ const sessionLoopActor = { type: "SYSTEM" as const, id: "session-loop" };
 
 const seededRecipe = (workItemId: string, roleProfile: { id: string; revision: number }) => ({
   schemaVersion: 1 as const,
-  templateId: mockDeliveryTemplate.id,
-  templateVersion: mockDeliveryTemplate.version,
+  templateId: deliveryTemplate.id,
+  templateVersion: deliveryTemplate.version,
   specSource: "ROLE_PLAYBOOK" as const,
   roleProfile,
   sections: [
@@ -121,7 +121,7 @@ const seededRecipe = (workItemId: string, roleProfile: { id: string; revision: n
  *  - session 3 is never measured at all, so it carries no occupancy line -- distinct from zero.
  *
  * Seeded through real commands against the database the daemon then opens, exactly as
- * walking-skeleton.spec.ts's session fixtures are: the in-tree mock adapter runs the scripted M6
+ * walking-skeleton.spec.ts's session fixtures are: the test adapter runs the scripted M6
  * delivery and reports no occupancy at all, and the one that does report replays the same options
  * on every session it opens, so neither can produce two sessions that differ in this way.
  */
@@ -185,11 +185,11 @@ const seedMeasuredAndHandedOffSessions = async (databasePath: string, title: str
       commandId: "seed-start-pipeline",
       correlationId: "correlation-seed-start-pipeline",
       actor: humanActor,
-      type: "START_MOCK_PIPELINE",
+      type: "START_PIPELINE",
       payload: {
         workItemId: moved.workItem.id,
         expectedVersion: moved.workItem.version,
-        template: mockDeliveryTemplate,
+        template: deliveryTemplate,
         budget: { maxEstimatedTokens: 100, warningThresholds: [0.5, 0.8, 0.95] },
       },
     });
@@ -204,7 +204,7 @@ const seedMeasuredAndHandedOffSessions = async (databasePath: string, title: str
       type: "START_AGENT_RUN",
       payload: {
         dispatchId,
-        provider: "MOCK",
+        provider: "CODEX",
         limits: { global: 3, project: 3, provider: 3 },
       },
     });
@@ -275,8 +275,15 @@ const seedMeasuredAndHandedOffSessions = async (databasePath: string, title: str
         payload: {
           providerSessionId: session.session.id,
           checkpoint: {
-            summary: `Deterministic seeded checkpoint from session ${ordinal.toString()}.`,
-            completed: [`Session ${ordinal.toString()} did its share of the seeded work.`],
+            summary:
+              ordinal === 1
+                ? `Deterministic${"unbreakable".repeat(30)}SessionOne`
+                : `Deterministic seeded checkpoint from session ${ordinal.toString()}.`,
+            completed: [
+              ordinal === 1
+                ? `SessionOne${"unbreakable".repeat(30)}Completed`
+                : `Session ${ordinal.toString()} did its share of the seeded work.`,
+            ],
             remaining: ["Continue on the next session."],
             deadEnds: [],
             openQuestions: [],
@@ -335,7 +342,7 @@ const seedMeasuredAndHandedOffSessions = async (databasePath: string, title: str
             allowOther: false,
           },
         },
-        template: mockDeliveryTemplate,
+        template: deliveryTemplate,
       },
     });
   } finally {
@@ -363,11 +370,17 @@ test.describe("attempt nesting", () => {
     await createTask(page, "Attempt header task");
 
     const inspector = page.getByRole("complementary", { name: "Attempt header task" });
+    const availableMove = inspector.getByRole("button", { name: "Move", exact: true });
+    await availableMove.click();
+    await expect(page.getByRole("menuitem")).toHaveCount(2);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".lr-menu")).toHaveCount(0);
+
     await inspector.getByRole("button", { name: "Move to Ready" }).click();
     await expect(inspector.getByRole("button", { name: "Start workflow" })).toBeEnabled();
     await inspector.getByRole("button", { name: "Start workflow" }).click();
 
-    // The mock pipeline's first ProviderSession has ended by the time this human decision surfaces
+    // The test pipeline's first ProviderSession has ended by the time this human decision surfaces
     // -- the earliest point the sessions list (and so its attempt header) is guaranteed to render.
     await expect(inspector.getByRole("heading", { name: "Choose the discovery depth" })).toBeVisible({
       timeout: DISCOVERY_DECISION_MS,
@@ -378,6 +391,17 @@ test.describe("attempt nesting", () => {
       .filter({ has: page.getByText("Workflow", { exact: true }) });
     const sessionsPanel = workflowSection.locator(".lr-session-timeline-panel");
     await expect(sessionsPanel.getByRole("listitem", { name: "Session 1" })).toBeVisible();
+
+    // A workflow-owned task has no legal manual transitions. The disabled-looking Move control
+    // must not still mount an empty dropdown that opens from the pointer events Radix observes
+    // before the browser suppresses a disabled button's click.
+    const unavailableMove = inspector.getByRole("button", { name: "Move", exact: true });
+    await expect(unavailableMove).toBeDisabled();
+    await expect(unavailableMove).not.toHaveAttribute("aria-haspopup", "menu");
+    const moveBox = await unavailableMove.boundingBox();
+    if (moveBox === null) throw new Error("expected the Move control to have a layout box");
+    await page.mouse.click(moveBox.x + moveBox.width / 2, moveBox.y + moveBox.height / 2);
+    await expect(page.locator(".lr-menu")).toHaveCount(0);
 
     // D5's fix: the header identifying the attempt -- its ordinal and its status -- sits above the
     // sessions list, not just a bare "Sessions" heading.
@@ -438,6 +462,46 @@ test.describe("attempt nesting", () => {
       const session1 = workflowSection.getByRole("listitem", { name: "Session 1" });
       const session2 = workflowSection.getByRole("listitem", { name: "Session 2" });
       const session3 = workflowSection.getByRole("listitem", { name: "Session 3" });
+
+      // Provider text is untrusted and may contain long paths, hashes or tokens without ordinary
+      // line-break opportunities. Even at the supported minimum inspector width, that content must
+      // wrap inside the cockpit rather than turning the whole right panel into a horizontal scroller.
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty("--lr-size-inspector", "280px");
+      });
+      for (const theme of ["light", "dark"] as const) {
+        await page.evaluate((nextTheme) => {
+          document.documentElement.dataset["theme"] = nextTheme;
+        }, theme);
+        const horizontalOverflow = await inspector.evaluate((element) => ({
+          fits: element.scrollWidth <= element.clientWidth,
+          offenders: Array.from(element.querySelectorAll<HTMLElement>("*"))
+            .filter((descendant) => descendant.scrollWidth > descendant.clientWidth)
+            .map((descendant) => ({
+              className: descendant.className,
+              clientWidth: descendant.clientWidth,
+              scrollWidth: descendant.scrollWidth,
+            })),
+        }));
+        expect(horizontalOverflow).toEqual({ fits: true, offenders: [] });
+      }
+
+      // The session ordinal belongs to the session header only. A dedicated grid column reserves
+      // the badge's width beside every checkpoint below it and makes already narrow cards narrower.
+      const session1Box = await session1.boundingBox();
+      const checkpointBox = await session1.locator(".lr-checkpoint-card").boundingBox();
+      if (session1Box === null || checkpointBox === null) {
+        throw new Error("expected the session and its checkpoint to have layout boxes");
+      }
+      expect(checkpointBox.x).toBe(session1Box.x);
+
+      const checkpoint = session1.locator(".lr-checkpoint-card");
+      const checkpointSummary = checkpoint.locator("summary");
+      await expect(checkpoint).not.toHaveAttribute("open", "");
+      await checkpointSummary.focus();
+      await expect(checkpointSummary).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(checkpoint).toHaveAttribute("open", "");
 
       // Measured, never wound down: the peak wording, and no claim that a handoff happened.
       await expect(session1.getByText("Peaked at 62% of the window", { exact: true })).toBeVisible();

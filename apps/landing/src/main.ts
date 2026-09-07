@@ -1,17 +1,17 @@
 import "./styles.css";
 
+import cliPackage from "../../cli/package.json" with { type: "json" };
+import guidedActivationSource from "../../../packages/contracts/src/guided-activation.v1.json" with { type: "json" };
+
 type Theme = "light" | "dark";
 type Locale = "en" | "ru";
 type CopyState = "idle" | "loading" | "success" | "error";
 
 const themeStorageKey = "loomrail-landing-theme";
 const localeStorageKey = "loomrail-landing-locale";
-const installCommand = [
-  "mkdir loomrail-evaluation",
-  "cd loomrail-evaluation",
-  "npm install loomrail@next",
-  "npx loomrail",
-].join("\n");
+const installCommands = Object.freeze([...guidedActivationSource.install.commands]);
+const installCommand = installCommands.join("\n");
+const productVersion = cliPackage.version;
 
 const messages = {
   en: {
@@ -42,12 +42,6 @@ const messages = {
     heroPrimaryCta: "Install and run",
     heroSecondaryCta: "See how it works",
     heroNote: "Free and open source · Apache-2.0 · Runs entirely on your machine",
-    heroShotCaption:
-      "A real run of 0.1.0-alpha.2 against the deterministic mock: the task contract, a blocking Human Request, an approved budget increase, and the owner accepting the delivery.",
-    demoAlt:
-      "Screen recording of Loomrail: a task is created, the workflow blocks on a Human Request, a budget increase is approved, and the owner accepts the delivery",
-    demoPlay: "Play the demo",
-
     promisesLabel: "What Loomrail never does",
     promiseCommit: "Never commits",
     promisePush: "Never pushes",
@@ -70,7 +64,7 @@ const messages = {
 
     howTitle: "How a task moves through Loomrail",
     howIntro:
-      "Four steps, the same every time. The first run does all of this against a deterministic mock, so nothing is sent to a provider and nothing in your repository is touched.",
+      "Four steps, the same every time. New sessions go only to OpenAI Responses or Anthropic Messages, with a hard output-token ceiling set before dispatch.",
     stepOneTitle: "Write the task, not the prompt",
     stepOneBody:
       "A task states its outcome, its acceptance criteria, which actions the agent may take and how much it may spend. That contract is fixed before any work starts, and it is what the result is judged against later.",
@@ -94,15 +88,17 @@ const messages = {
     uiAllowed: "Allowed actions",
     uiAllowedValue: "Read, edit, run tests",
     uiBudget: "Budget",
+    uiBudgetValue: "Hard before dispatch",
     flowBacklog: "Backlog",
     flowReady: "Ready",
     flowRunning: "Running",
     flowReview: "Review",
     flowDone: "Accepted",
     uiWorkflowState: "Workflow state",
-    uiSpend: "Spend",
+    uiSpend: "Budget guard",
+    uiSpendValue: "Hard cap before dispatch",
     uiProvider: "Provider",
-    uiProviderValue: "Deterministic mock",
+    uiProviderValue: "OpenAI or Anthropic API",
     uiSession: "Session",
     uiSessionValue: "Restarted once, state kept",
     uiRequestLabel: "Human Request",
@@ -112,42 +108,47 @@ const messages = {
     uiReturn: "Return to work",
     uiEvidence: "Evidence",
     uiChanges: "Changes",
+    uiChangesValue: "Snapshot-bound diff",
     uiReview: "Review",
-    uiReviewValue: "2 findings, both resolved",
+    uiReviewValue: "Current report attached",
     uiQa: "QA",
-    uiQaValue: "84 checks passed",
+    uiQaValue: "Measured browser report attached",
     uiAccept: "Accept delivery",
 
     installTitle: "Try Loomrail without giving it a repository.",
     installIntro:
-      "The first run uses a deterministic mock, binds to loopback, and does not start an agent. Start in a new empty directory, not inside a repository you care about.",
+      "The copy block makes the package and Chromium downloads explicit, then runs a real-provider preflight on loopback. Set OPENAI_API_KEY or ANTHROPIC_API_KEY first and start in a new empty directory.",
     installCommandLabel: "Install and launch Loomrail safely",
     copyInstallCommand: "Copy the safe install and launch commands",
     copy: "Copy",
     copying: "Copying…",
     copied: "Copied",
     copyFailed: "Failed",
-    runStepOne: "Choose “Initialize demo workspace” in the browser tab that opens.",
-    runStepTwo: "Create a task, move it to Ready and start the workflow.",
-    runStepThree: "Answer the blocking Human Request and approve the budget increase.",
-    runStepFour: "Inspect the evidence, then accept the delivery or return it.",
+    runStepOne:
+      "Run the five visible commands. npm fetches Loomrail; Playwright fetches Chromium separately.",
+    runStepTwo:
+      "The read-only preflight runs first. When it is ready, /try opens and names local state and log creation.",
+    runStepThree:
+      "Prepare the demo workspace, choose OpenAI Responses or Anthropic Messages, create the seeded task, move it to Ready and start the workflow.",
+    runStepFour:
+      "Answer the Human Request, approve a bounded real-provider budget if asked, inspect the available evidence, then decide yourself.",
     installLive:
-      "Live providers are opt-in. Install and authenticate the provider CLI yourself, then start the same installation with LOOMRAIL_PROVIDER=CODEX or LOOMRAIL_PROVIDER=CLAUDE_CODE.",
+      "Provider requests use the OpenAI Responses API or Anthropic Messages API. Without a credential or an enforceable remaining token budget, Loomrail refuses dispatch.",
     runtimeLabel: "Runtime",
     runtimeValue: "Node.js 24.19–24.x",
     networkLabel: "Network",
     networkValue: "127.0.0.1 only",
     firstRunLabel: "First run",
-    firstRunValue: "Deterministic mock",
+    firstRunValue: "Real API preflight",
     platformLabel: "Platforms",
     platformValue: "macOS, Windows, Linux",
 
-    boundaryTitle: "What alpha.2 actually does",
-    boundaryIntro:
-      "Loomrail 0.1.0-alpha.2 is public pre-alpha. The second column is an honest list of what it does not do yet — not a roadmap.",
+    boundaryTitle: "What this pre-alpha actually does",
+    boundaryIntro: `Loomrail ${productVersion} is public pre-alpha. The second column is an honest list of what it does not do yet — not a roadmap.`,
     todayTitle: "Available today",
     todayLocal: "Same-machine browser UI, loopback daemon, and local SQLite state.",
-    todayProviders: "Deterministic mock, plus bounded Codex and Claude Code adapters.",
+    todayProviders:
+      "OpenAI Responses and Anthropic Messages adapters with a provider-side token ceiling and fail-closed credential checks.",
     todayRecovery: "Restart recovery, Human Requests, budgets, evidence, and Decisions.",
     todayRepo: "Repository registration, per-task worktrees, and change inspection.",
     notYetTitle: "Not claimed yet",
@@ -158,10 +159,10 @@ const messages = {
 
     docsTitle: "Documentation",
     docsIntro:
-      "Run the mock first. Register a repository second. Connect a live provider only after reading the threat model.",
+      "Configure a provider credential, run the preflight, then register a repository after reading the threat model.",
     docsNavigation: "Loomrail documentation",
     quickStartTitle: "Quick start",
-    quickStartBody: "From an empty directory to a persisted mock acceptance.",
+    quickStartBody: "From an empty directory to a bounded real-provider task.",
     userGuideTitle: "Owner guide",
     userGuideBody: "Repositories, providers, recovery, backup, troubleshooting.",
     fullRouteTitle: "Full-route example",
@@ -173,11 +174,6 @@ const messages = {
     sourceTitle: "Source code",
     sourceBody: "Read it, build it, or open an issue on GitHub.",
 
-    ctaTitle: "Start with the mock. It spends nothing.",
-    ctaBody:
-      "One command, a new empty directory, and a workflow that runs end to end without touching a repository or a provider account.",
-    ctaAction: "Get the commands",
-    sourceCta: "View the source",
     footerNavigation: "Footer navigation",
     footerTagline: "Local state. Human acceptance.",
     footerSource: "Source",
@@ -212,12 +208,6 @@ const messages = {
     heroPrimaryCta: "Установить и запустить",
     heroSecondaryCta: "Как это работает",
     heroNote: "Открытый исходный код · Apache-2.0 · Работает полностью на вашей машине",
-    heroShotCaption:
-      "Реальный прогон 0.1.0-alpha.2 на детерминированном mock: контракт задачи, блокирующий Human Request, подтверждение бюджета и приёмка владельцем.",
-    demoAlt:
-      "Запись экрана Loomrail: создаётся задача, workflow блокируется на Human Request, подтверждается увеличение бюджета, владелец принимает поставку",
-    demoPlay: "Запустить демо",
-
     promisesLabel: "Чего Loomrail не делает",
     promiseCommit: "Не коммитит",
     promisePush: "Не пушит",
@@ -240,7 +230,7 @@ const messages = {
 
     howTitle: "Как задача проходит через Loomrail",
     howIntro:
-      "Четыре шага, каждый раз одинаковых. Первый запуск проходит их на детерминированном mock: ничего не уходит провайдеру и ничего в вашем репозитории не меняется.",
+      "Четыре шага, каждый раз одинаковых. Новые сессии идут только в OpenAI Responses или Anthropic Messages с жёстким лимитом output tokens до dispatch.",
     stepOneTitle: "Пишете задачу, а не промпт",
     stepOneBody:
       "Задача описывает результат, критерии приёмки, разрешённые действия и лимит трат. Этот контракт фиксируется до начала работы, и именно по нему потом оценивается результат.",
@@ -264,15 +254,17 @@ const messages = {
     uiAllowed: "Разрешено",
     uiAllowedValue: "Чтение, правки, тесты",
     uiBudget: "Бюджет",
+    uiBudgetValue: "Жёсткий до запуска",
     flowBacklog: "Backlog",
     flowReady: "Ready",
     flowRunning: "Running",
     flowReview: "Review",
     flowDone: "Accepted",
     uiWorkflowState: "Состояние workflow",
-    uiSpend: "Потрачено",
+    uiSpend: "Бюджетный guard",
+    uiSpendValue: "Hard cap до dispatch",
     uiProvider: "Провайдер",
-    uiProviderValue: "Детерминированный mock",
+    uiProviderValue: "OpenAI или Anthropic API",
     uiSession: "Сессия",
     uiSessionValue: "Перезапущена, состояние сохранено",
     uiRequestLabel: "Human Request",
@@ -282,42 +274,47 @@ const messages = {
     uiReturn: "Вернуть в работу",
     uiEvidence: "Доказательства",
     uiChanges: "Изменения",
+    uiChangesValue: "Diff привязан к snapshot",
     uiReview: "Ревью",
-    uiReviewValue: "2 замечания, оба закрыты",
+    uiReviewValue: "Актуальный отчёт приложен",
     uiQa: "QA",
-    uiQaValue: "84 проверки пройдено",
+    uiQaValue: "Измеренный browser-отчёт приложен",
     uiAccept: "Принять поставку",
 
     installTitle: "Попробуйте Loomrail без доступа к репозиторию.",
     installIntro:
-      "Первый запуск использует детерминированный mock, слушает только loopback и не запускает агента. Начните в новом пустом каталоге, а не внутри репозитория, который вам дорог.",
+      "Copy-блок явно показывает загрузку пакета и Chromium, затем запускает preflight реального провайдера на loopback. Сначала задайте OPENAI_API_KEY или ANTHROPIC_API_KEY и начните в новом пустом каталоге.",
     installCommandLabel: "Безопасная установка и запуск Loomrail",
     copyInstallCommand: "Скопировать безопасные команды установки и запуска",
     copy: "Копировать",
     copying: "Копируем…",
     copied: "Скопировано",
     copyFailed: "Ошибка",
-    runStepOne: "Выберите «Initialize demo workspace» во вкладке, которая откроется.",
-    runStepTwo: "Создайте задачу, переведите её в Ready и запустите workflow.",
-    runStepThree: "Ответьте на блокирующий Human Request и подтвердите увеличение бюджета.",
-    runStepFour: "Посмотрите доказательства и примите поставку либо верните её в работу.",
+    runStepOne:
+      "Выполните пять видимых команд. npm загрузит Loomrail, а Playwright отдельно загрузит Chromium.",
+    runStepTwo:
+      "Сначала выполнится read-only preflight. Если он готов, откроется /try с явным описанием создания local state и logs.",
+    runStepThree:
+      "Подготовьте demo workspace, выберите OpenAI Responses или Anthropic Messages, создайте задачу, переведите её в Ready и запустите workflow.",
+    runStepFour:
+      "Ответьте на Human Request, при необходимости подтвердите ограниченный бюджет реального провайдера, проверьте доступные свидетельства и решите сами.",
     installLive:
-      "Живые провайдеры подключаются явно. Установите и авторизуйте CLI провайдера сами, затем запустите ту же установку с LOOMRAIL_PROVIDER=CODEX или LOOMRAIL_PROVIDER=CLAUDE_CODE.",
+      "Запросы идут через OpenAI Responses API или Anthropic Messages API. Без credential или enforceable остатка token budget Loomrail откажет в dispatch.",
     runtimeLabel: "Runtime",
     runtimeValue: "Node.js 24.19–24.x",
     networkLabel: "Сеть",
     networkValue: "Только 127.0.0.1",
     firstRunLabel: "Первый запуск",
-    firstRunValue: "Детерминированный mock",
+    firstRunValue: "Preflight реального API",
     platformLabel: "Платформы",
     platformValue: "macOS, Windows, Linux",
 
-    boundaryTitle: "Что alpha.2 действительно умеет",
-    boundaryIntro:
-      "Loomrail 0.1.0-alpha.2 — публичная pre-alpha. Вторая колонка — честный список того, чего он пока не делает, а не дорожная карта.",
+    boundaryTitle: "Что эта pre-alpha действительно умеет",
+    boundaryIntro: `Loomrail ${productVersion} — публичная pre-alpha. Вторая колонка — честный список того, чего он пока не делает, а не дорожная карта.`,
     todayTitle: "Доступно сейчас",
     todayLocal: "Браузер на той же машине, loopback daemon и локальное состояние SQLite.",
-    todayProviders: "Детерминированный mock и ограниченные адаптеры Codex и Claude Code.",
+    todayProviders:
+      "Адаптеры OpenAI Responses и Anthropic Messages с provider-side token ceiling и fail-closed проверкой credentials.",
     todayRecovery: "Восстановление после перезапуска, Human Requests, бюджеты, доказательства и Decisions.",
     todayRepo: "Регистрация репозитория, worktree на задачу и просмотр изменений.",
     notYetTitle: "Пока не обещаем",
@@ -328,10 +325,10 @@ const messages = {
 
     docsTitle: "Документация",
     docsIntro:
-      "Сначала запустите mock. Потом зарегистрируйте репозиторий. Живого провайдера подключайте только после чтения threat model.",
+      "Настройте credential провайдера, пройдите preflight и только потом регистрируйте репозиторий после чтения threat model.",
     docsNavigation: "Документация Loomrail",
     quickStartTitle: "Быстрый старт",
-    quickStartBody: "От пустого каталога до сохранённой mock-приёмки.",
+    quickStartBody: "От пустого каталога до ограниченной задачи реального провайдера.",
     userGuideTitle: "Руководство владельца",
     userGuideBody: "Репозитории, провайдеры, восстановление, бэкап, диагностика.",
     fullRouteTitle: "Full-route пример",
@@ -343,11 +340,6 @@ const messages = {
     sourceTitle: "Исходный код",
     sourceBody: "Прочитать, собрать или завести issue на GitHub.",
 
-    ctaTitle: "Начните с mock. Он ничего не тратит.",
-    ctaBody:
-      "Одна команда, новый пустой каталог и workflow, который проходит целиком, не трогая ни репозиторий, ни аккаунт провайдера.",
-    ctaAction: "Показать команды",
-    sourceCta: "Открыть исходники",
     footerNavigation: "Навигация в подвале",
     footerTagline: "Локальное состояние. Приёмка человеком.",
     footerSource: "Исходники",
@@ -405,6 +397,22 @@ function localeFor(doc: Document): Locale {
 
 function message(doc: Document, key: MessageKey): string {
   return messages[localeFor(doc)][key];
+}
+
+function setupActivationContract(doc: Document): void {
+  for (const code of doc.querySelectorAll<HTMLElement>("[data-install-commands]")) {
+    const lines = installCommands.map((command, index) => {
+      const line = doc.createElement("span");
+      line.className = index === installCommands.length - 1 ? "line line-last" : "line";
+      line.textContent = command;
+      return line;
+    });
+    code.replaceChildren(...lines);
+  }
+
+  for (const version of doc.querySelectorAll<HTMLElement>("[data-product-version]")) {
+    version.textContent = productVersion;
+  }
 }
 
 function applyLocale(doc: Document, locale: Locale): void {
@@ -475,44 +483,6 @@ function applyTheme(doc: Document, theme: Theme): void {
   if (label !== null && label !== undefined) {
     label.textContent = message(doc, nextTheme === "dark" ? "darkTheme" : "lightTheme");
   }
-  applyDemoTheme(doc, theme);
-}
-
-/** The hero demo ships one recording per theme, so a theme switch reloads the matching sources. */
-function applyDemoTheme(doc: Document, theme: Theme): void {
-  for (const video of doc.querySelectorAll<HTMLVideoElement>("[data-product-demo]")) {
-    const wasPlaying = !video.paused;
-    video.poster = `./demo/mock-route-${theme}.webp`;
-    for (const source of video.querySelectorAll<HTMLSourceElement>("source[data-demo-format]")) {
-      source.src = `./demo/mock-route-${theme}.${source.dataset["demoFormat"] ?? "webm"}`;
-    }
-    try {
-      video.load();
-    } catch {
-      // Media is unavailable in this environment; the poster frame stands in for it.
-    }
-    if (wasPlaying) playDemo(video);
-  }
-}
-
-/** Native controls do not belong on a looping hero; a blocked autoplay reveals our own button. */
-function playDemo(video: HTMLVideoElement): void {
-  const settle = (): void => {
-    syncDemoTrigger(video);
-  };
-  try {
-    const started: unknown = video.play();
-    if (started instanceof Promise) started.then(settle, settle);
-    else settle();
-  } catch {
-    settle();
-  }
-}
-
-function syncDemoTrigger(video: HTMLVideoElement): void {
-  const trigger = video.parentElement?.querySelector<HTMLButtonElement>("[data-demo-play]");
-  if (trigger === null || trigger === undefined) return;
-  trigger.hidden = !video.paused;
 }
 
 function setupTheme(doc: Document, win: Window): void {
@@ -619,34 +589,6 @@ function setupFlow(doc: Document, win: Window): void {
   }, 1700);
 }
 
-/** Autoplay is motion: a reader who asked for less of it gets the poster frame and real controls. */
-function setupDemo(doc: Document, win: Window): void {
-  const videos = doc.querySelectorAll<HTMLVideoElement>("[data-product-demo]");
-  if (videos.length === 0) return;
-
-  const reduced = win.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  for (const video of videos) {
-    video.controls = false;
-    video.addEventListener("play", () => {
-      syncDemoTrigger(video);
-    });
-    video.addEventListener("pause", () => {
-      syncDemoTrigger(video);
-    });
-    video.parentElement
-      ?.querySelector<HTMLButtonElement>("[data-demo-play]")
-      ?.addEventListener("click", () => {
-        playDemo(video);
-      });
-
-    if (!reduced) {
-      video.autoplay = true;
-      playDemo(video);
-    }
-    syncDemoTrigger(video);
-  }
-}
-
 /** Progressive enhancement: sections stay visible unless the browser can observe and animate them. */
 function setupReveal(doc: Document, win: Window): void {
   const targets = doc.querySelectorAll<HTMLElement>("[data-reveal]");
@@ -671,10 +613,10 @@ function setupReveal(doc: Document, win: Window): void {
 export function initializeLanding(doc: Document, win: Window): void {
   if (doc.documentElement.dataset["landingReady"] === "true") return;
   doc.documentElement.dataset["landingReady"] = "true";
+  setupActivationContract(doc);
   setupLocale(doc, win);
   setupTheme(doc, win);
   setupCopyButtons(doc, win);
-  setupDemo(doc, win);
   setupFlow(doc, win);
   setupReveal(doc, win);
 }

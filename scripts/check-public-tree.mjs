@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -38,6 +38,9 @@ for (const relativePath of candidateFiles) {
   }
 
   const absolutePath = resolve(repositoryRoot, relativePath);
+  // `git ls-files --cached` includes tracked files deleted by the current change. A removal is not
+  // public content to scan and should not make the readiness check crash before the diff is committed.
+  if (!existsSync(absolutePath)) continue;
   // `git ls-files --others` reports an untracked DIRECTORY as a single path -- a nested worktree
   // or any other unignored directory -- and readFileSync throws EISDIR on it. Skip anything that
   // is not a regular file rather than crashing the whole readiness check on it.

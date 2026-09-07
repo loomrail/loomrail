@@ -168,7 +168,7 @@ const seedVerification = async (directory: string): Promise<SeededVerification> 
       commandId: "start-verification-pipeline",
       correlationId: "correlation-start-verification-pipeline",
       actor: { type: "HUMAN", id: "local-owner" },
-      type: "START_MOCK_PIPELINE",
+      type: "START_PIPELINE",
       payload: {
         workItemId: created.workItem.id,
         expectedVersion: ready.workItem.version,

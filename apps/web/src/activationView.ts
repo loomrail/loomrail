@@ -65,8 +65,13 @@ export const projectGuidedActivation = (
   const currentAttempt = workflow?.stageAttempts.find(({ id }) => id === run?.currentStageAttemptId) ?? null;
   let current: GuidedActivationPhase;
   if (project?.repositoryStatus !== "READY") current = "WORKSPACE";
-  else if (providerSelection?.selection.preference !== "MOCK") current = "PROVIDER";
-  else if (workItem === null) current = "TASK";
+  else if (
+    providerSelection === null ||
+    providerSelection.providers.find(({ provider }) => provider === providerSelection.effectiveProvider)
+      ?.ready !== true
+  ) {
+    current = "PROVIDER";
+  } else if (workItem === null) current = "TASK";
   else if (workItem.state === "BACKLOG") current = "READY";
   else if (run === null) current = "RUN";
   else if (acceptancePackage !== null && acceptancePackage.status !== "PENDING") {

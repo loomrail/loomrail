@@ -11,7 +11,7 @@ import {
 } from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import { validateSchedulerLimits } from "@loomrail/scheduler";
-import { mockDeliveryTemplate } from "@loomrail/workflow-engine";
+import { deliveryTemplate } from "@loomrail/workflow-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { buildAgentFleet } from "../src/agent-fleet.js";
@@ -168,11 +168,9 @@ describe("Agent Fleet projection", () => {
       type: "MOVE_WORK_ITEM",
       payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
     });
-    const stages = mockDeliveryTemplate.stages.filter(
-      ({ stage }) => stage === "IMPLEMENT" || stage === "REVIEW",
-    );
+    const stages = deliveryTemplate.stages.filter(({ stage }) => stage === "IMPLEMENT" || stage === "REVIEW");
     const template: WorkflowTemplate = {
-      ...mockDeliveryTemplate,
+      ...deliveryTemplate,
       id: "review-routing-v1",
       version: 1,
       name: "Review routing",
@@ -183,7 +181,7 @@ describe("Agent Fleet projection", () => {
       commandId: createCommandId(),
       correlationId: "review-routing-pipeline",
       actor: { type: "HUMAN", id: "local-owner" },
-      type: "START_MOCK_PIPELINE",
+      type: "START_PIPELINE",
       payload: {
         workItemId: created.workItem.id,
         expectedVersion: 2,
@@ -240,10 +238,10 @@ describe("Agent Fleet projection", () => {
 
   it("projects queued Acceptance preparation as the bounded Acceptance Manager", async () => {
     const localState = await open();
-    const acceptanceStage = mockDeliveryTemplate.stages.find(({ stage }) => stage === "ACCEPTANCE");
+    const acceptanceStage = deliveryTemplate.stages.find(({ stage }) => stage === "ACCEPTANCE");
     if (acceptanceStage === undefined) throw new Error("Expected the Acceptance stage");
     const acceptanceTemplate: WorkflowTemplate = {
-      ...mockDeliveryTemplate,
+      ...deliveryTemplate,
       id: "fleet-acceptance-v1",
       name: "Fleet acceptance",
       stages: [{ ...acceptanceStage, ordinal: 0 }],
