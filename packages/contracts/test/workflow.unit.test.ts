@@ -3,11 +3,31 @@ import { describe, expect, it } from "vitest";
 import {
   evidenceArtifactSchema,
   humanRequestDraftSchema,
+  providerOutcomeSchema,
   providerUsageReportSchema,
   providerUsageSchema,
   resolveQACorrectionGateRequestSchema,
   stateCommandSchema,
 } from "../src/index.js";
+
+describe("provider human-request quality boundary", () => {
+  it("rejects a one-character title and context instead of opening a meaningless owner request", () => {
+    expect(
+      providerOutcomeSchema.safeParse({
+        type: "NEEDS_HUMAN",
+        request: {
+          kind: "FREE_TEXT",
+          blocking: false,
+          title: "x",
+          context: "x",
+          recommendation: null,
+          options: [],
+          allowOther: true,
+        },
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe("QA correction owner gate contract", () => {
   const request = {

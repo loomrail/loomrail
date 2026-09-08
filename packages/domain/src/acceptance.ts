@@ -7,9 +7,102 @@ import type {
   EvidenceArtifact,
   QAAttachmentSummary,
   QAEvidenceBundle,
+  QARun,
   VerificationEvidence,
   WorkItem,
 } from "@loomrail/contracts";
+
+export type DeriveMeasuredQAChecksInput = {
+  qaRun: QARun;
+  evidence: QAEvidenceBundle;
+  currentTree: string;
+};
+
+export type DeriveMeasuredQAChecksResult =
+  { type: "DERIVED"; checks: readonly string[] } | { type: "INVALID"; reason: string };
+
+const executionKey = (targetId: string, scenarioId: string): string => `${targetId}\u0000${scenarioId}`;
+
+const sameOrderedIds = (actual: readonly { id: string }[], expected: readonly { id: string }[]): boolean =>
+  actual.length === expected.length && actual.every(({ id }, index) => id === expected[index]?.id);
+
+const displaySegment = (value: string): string => (value.length <= 100 ? value : `${value.slice(0, 99)}…`);
+
+/**
+ * Builds the QA check vocabulary from the daemon-measured plan and evidence. Provider prose is
+ * deliberately absent from this contract: it may explain a run, but it cannot rename what ran.
+ */
+export const deriveMeasuredQAChecks = (input: DeriveMeasuredQAChecksInput): DeriveMeasuredQAChecksResult => {
+  const { evidence, qaRun } = input;
+  if (
+    qaRun.status !== "PASSED" ||
+    evidence.verdict !== "PASSED" ||
+    qaRun.id !== evidence.qaRunId ||
+    qaRun.projectId !== evidence.projectId ||
+    qaRun.workItemId !== evidence.workItemId ||
+    qaRun.pipelineRunId !== evidence.pipelineRunId ||
+    qaRun.stageAttemptId !== evidence.stageAttemptId ||
+    qaRun.testedTree !== evidence.testedTree ||
+    qaRun.testedTree !== input.currentTree
+  ) {
+    return { type: "INVALID", reason: "Measured Browser QA identities and tree must agree" };
+  }
+
+  const targets = new Set(qaRun.plan.targets.map(({ id }) => id));
+  const executions = new Map<string, (typeof evidence.executions)[number]>();
+  for (const execution of evidence.executions) {
+    const scenario = qaRun.plan.scenarios.find(({ id }) => id === execution.scenarioId);
+    const key = executionKey(execution.targetId, execution.scenarioId);
+    if (
+      !targets.has(execution.targetId) ||
+      scenario === undefined ||
+      executions.has(key) ||
+      !sameOrderedIds(execution.steps, scenario.steps) ||
+      !sameOrderedIds(execution.assertions, scenario.assertions) ||
+      execution.steps.some(({ status }) => status !== "PASSED") ||
+      execution.assertions.some(({ status }) => status !== "PASSED")
+    ) {
+      return {
+        type: "INVALID",
+        reason: "Measured Browser QA executions must be unique, planned, complete, and passed",
+      };
+    }
+    executions.set(key, execution);
+  }
+
+  if (
+    qaRun.scope.type === "FULL" &&
+    executions.size !== qaRun.plan.targets.length * qaRun.plan.scenarios.length
+  ) {
+    return { type: "INVALID", reason: "Measured Browser QA does not cover the complete plan matrix" };
+  }
+
+  const checks: string[] = [];
+  for (const scenario of qaRun.plan.scenarios) {
+    const scenarioExecutions = qaRun.plan.targets.flatMap((target) => {
+      const execution = executions.get(executionKey(target.id, scenario.id));
+      return execution === undefined ? [] : [execution];
+    });
+    if (scenarioExecutions.length === 0) continue;
+    if (qaRun.scope.type === "FULL" && scenarioExecutions.length !== qaRun.plan.targets.length) {
+      return { type: "INVALID", reason: "Measured Browser QA omits a planned scenario execution" };
+    }
+    const route = scenario.steps.find(({ action }) => action.type === "NAVIGATE")?.action;
+    const routeLabel = route?.type === "NAVIGATE" ? displaySegment(route.path) : "the current route";
+    checks.push(
+      `Browser QA scenario ${scenario.id} (${displaySegment(scenario.title)}) at ${routeLabel}: ${scenario.assertions.length.toString()} assertion(s) passed on ${scenarioExecutions.length.toString()}/${
+        qaRun.scope.type === "FULL"
+          ? qaRun.plan.targets.length.toString()
+          : scenarioExecutions.length.toString()
+      } target execution(s).`,
+    );
+  }
+
+  if (checks.length === 0 || checks.length > 20 || checks.some((check) => check.length > 500)) {
+    return { type: "INVALID", reason: "Measured Browser QA cannot be represented as bounded checks" };
+  }
+  return { type: "DERIVED", checks };
+};
 
 export type BindAcceptanceCriteriaInput = {
   acceptanceCriteria: readonly string[];
@@ -22,11 +115,53 @@ export type BindAcceptanceCriteriaInput = {
 export type BindAcceptanceCriteriaResult =
   { type: "BOUND"; criteria: readonly AcceptanceCriterionEvidence[] } | { type: "INVALID"; reason: string };
 
+export type AcceptanceNarrative = {
+  releaseNote: string;
+  verifyInstructions: readonly string[];
+};
+
 const unique = (values: readonly string[]): boolean => new Set(values).size === values.length;
 
 // Code-unit order, never `localeCompare`: the release summary is an audit artifact and its order
 // must be the same on every machine that renders it.
 const compareText = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
+
+const projectVerificationLabel = (evidence: VerificationEvidence | undefined): string =>
+  evidence === undefined
+    ? "not configured"
+    : `${evidence.requiredCheckIds.length.toString()} required check(s) passed`;
+
+const knownVerificationRisk = (evidence: VerificationEvidence | undefined): string | null =>
+  evidence === undefined || evidence.optionalFailedCheckIds.length === 0
+    ? null
+    : `Project verification optional checks not passed [${evidence.optionalFailedCheckIds.join(", ")}].`;
+
+/** Builds owner-facing package prose exclusively from durable evaluator identities and status. */
+export const deriveAcceptanceNarrative = (input: {
+  workItem: WorkItem;
+  reviewArtifact: EvidenceArtifact;
+  qaArtifact: EvidenceArtifact;
+  verificationEvidence?: VerificationEvidence | undefined;
+}): AcceptanceNarrative => {
+  const tree = input.qaArtifact.testedTree?.slice(0, 8) ?? "unknown";
+  const verification = input.verificationEvidence;
+  const releaseVerification =
+    verification === undefined
+      ? "is not configured"
+      : `passed ${verification.requiredCheckIds.length.toString()} required check(s)`;
+  return {
+    releaseNote: `${input.workItem.title} — independent Review and measured Browser QA passed on tree ${tree}; Project verification ${releaseVerification}.`,
+    verifyInstructions: [
+      "Inspect the criterion matrix and the referenced Review and measured Browser QA evidence.",
+      ...(verification === undefined
+        ? ["Confirm that Project verification is intentionally not configured for this Project."]
+        : [
+            `Inspect Project verification run ${verification.verificationRunId}: ${verification.requiredCheckIds.length.toString()} required check(s) passed.`,
+          ]),
+      `Inspect Browser QA run ${input.qaArtifact.qaRunId ?? "missing"} and its verified attachments.`,
+    ],
+  };
+};
 
 /**
  * Turns a provider's criterion claims into authority-bound package rows.
@@ -83,8 +218,8 @@ export const bindAcceptanceCriteria = (input: BindAcceptanceCriteriaInput): Bind
       ...(input.verificationEvidence === undefined
         ? {}
         : { verificationCheckIds: [...input.verificationEvidence.requiredCheckIds] }),
-      verification: claim.ownerVerification,
-      knownRisk: claim.knownRisk,
+      verification: `Review check [${claim.reviewCheck}] · Browser QA check [${claim.qaCheck}] · Project verification [${projectVerificationLabel(input.verificationEvidence)}].`,
+      knownRisk: knownVerificationRisk(input.verificationEvidence),
     });
   }
   return { type: "BOUND", criteria };

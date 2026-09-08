@@ -6,9 +6,12 @@ import {
   type ProviderId,
   type QACorrectionRun,
   type QADefect,
+  type QAPlanSnapshot,
   type QARetestPlan,
   type ReviewChangedFile,
   type ReviewFindingSeverity,
+  type VerificationCheck,
+  type VerificationRun,
 } from "@loomrail/contracts";
 
 // REVIEW_INPUT is required, so its diff summary must have a tighter intrinsic bound than the
@@ -117,6 +120,7 @@ export type ContextSources = {
       testedTree: string;
       targetOrigin: string;
       scope: "FULL" | "RETEST";
+      plan: QAPlanSnapshot;
     };
     evidence: {
       id: string;
@@ -137,6 +141,27 @@ export type ContextSources = {
       }[];
       observations: readonly { kind: string; blocking: boolean; summary: string }[];
     };
+  } | null;
+  projectVerification?: {
+    run: {
+      id: string;
+      version: number;
+      status: VerificationRun["status"];
+      implementationTree: string;
+      planId: string;
+      planRevision: number;
+      platform: string;
+      terminalReason: VerificationRun["terminalReason"];
+    };
+    checks: readonly {
+      id: string;
+      version: number;
+      ordinal: number;
+      recipeId: string;
+      required: boolean;
+      status: VerificationCheck["status"];
+      errorCode: VerificationCheck["errorCode"];
+    }[];
   } | null;
   evidence: readonly {
     id: string;
@@ -517,6 +542,28 @@ const renderEvidence = (sources: ContextSources): RenderedBody => {
           `  Tested tree: ${measured.qaRun.testedTree}`,
           `  Scope: ${measured.qaRun.scope}`,
           `  Target origin: ${measured.qaRun.targetOrigin}`,
+          `  Plan revision: ${String(measured.qaRun.plan.revision)}`,
+          ...measured.qaRun.plan.targets
+            .slice(0, 24)
+            .map(
+              (target) =>
+                `  - Target ${target.id}: ${String(target.viewport.width)}x${String(target.viewport.height)}; ${target.locale}; ${target.theme}`,
+            ),
+          ...measured.qaRun.plan.scenarios.slice(0, 20).flatMap((scenario) => [
+            `  - Scenario ${scenario.id}: ${scenario.title}`,
+            ...scenario.steps.slice(0, 50).map((step) => {
+              const action =
+                step.action.type === "NAVIGATE"
+                  ? `navigate ${utf8Prefix(step.action.path, 512)}`
+                  : step.action.type.toLowerCase();
+              return `    - Step ${step.id}: ${step.title}; ${action}`;
+            }),
+            ...scenario.assertions
+              .slice(0, 50)
+              .map(
+                (assertion) => `    - Assertion ${assertion.id}: ${assertion.title}; ${assertion.rule.type}`,
+              ),
+          ]),
           `  Environment: ${measured.evidence.environment.osFamily}; ${measured.evidence.environment.runtimeName} ${measured.evidence.environment.runtimeVersion}; ${measured.evidence.environment.browserName} ${measured.evidence.environment.browserVersion}`,
           ...measured.evidence.executions.map(
             (execution) =>
@@ -527,7 +574,24 @@ const renderEvidence = (sources: ContextSources): RenderedBody => {
               `  - Observation ${observation.kind}${observation.blocking ? " (blocking)" : ""}: ${observation.summary}`,
           ),
         ];
-  const body = [...recordedEvidence, ...measuredEvidence].join("\n");
+  const projectVerification = sources.projectVerification;
+  const projectVerificationEvidence =
+    projectVerification === undefined || projectVerification === null
+      ? []
+      : [
+          `- Project verification [${projectVerification.run.id} v${String(projectVerification.run.version)}]: ${projectVerification.run.status}`,
+          `  Implementation tree: ${projectVerification.run.implementationTree}`,
+          `  Plan: ${projectVerification.run.planId} revision ${String(projectVerification.run.planRevision)}`,
+          `  Platform: ${projectVerification.run.platform}`,
+          `  Terminal reason: ${projectVerification.run.terminalReason ?? "none"}`,
+          ...projectVerification.checks
+            .slice(0, 12)
+            .map(
+              (check) =>
+                `  - ${check.required ? "Required" : "Optional"} check ${String(check.ordinal)} [${check.id}]: ${check.recipeId} — ${check.status}${check.errorCode === null ? "" : ` (${check.errorCode})`}`,
+            ),
+        ];
+  const body = [...recordedEvidence, ...measuredEvidence, ...projectVerificationEvidence].join("\n");
   return {
     text: block("Evidence", body.length === 0 ? ["(no evidence recorded yet)"] : [untrusted(body)]),
     sources: [
@@ -541,6 +605,20 @@ const renderEvidence = (sources: ContextSources): RenderedBody => {
               id: measured.evidence.id,
               version: measured.evidence.version,
             },
+          ]),
+      ...(projectVerification === undefined || projectVerification === null
+        ? []
+        : [
+            {
+              kind: "VERIFICATION_RUN" as const,
+              id: projectVerification.run.id,
+              version: projectVerification.run.version,
+            },
+            ...projectVerification.checks.slice(0, 12).map((check) => ({
+              kind: "VERIFICATION_CHECK" as const,
+              id: check.id,
+              version: check.version,
+            })),
           ]),
     ],
   };

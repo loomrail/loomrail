@@ -1,7 +1,7 @@
 # Loomrail — зафиксированные продуктовые и архитектурные решения
 
 **Дата фиксации:** 2026-08-22
-**Последнее дополнение:** 2026-09-07 — local subscription CLI runtime pivot
+**Последнее дополнение:** 2026-09-08 — authoritative Acceptance evidence vocabulary
 **Статус:** approved baseline
 **Основание:** последовательный product/architecture grilling с владельцем проекта
 
@@ -685,6 +685,37 @@ ledger и останавливает следующую работу, но ак�
 Stable-release index следует этой же границе по ADR-0016: schema v3 заменяет отменённый
 `liveProviderHardTokenBudgetEnforcement` на `q20LocalSubscriptionWorkspaceExecution`. Compatibility evidence означает
 только exact local CLI/runtime/executor contract; незакоммиченный результат остаётся `PENDING`.
+
+### PD-020 — Provider не именует measured evidence и authoritative Acceptance facts
+
+**Дата:** 2026-09-08. Уточняет PD-018 и Q3, не меняя final human gate.
+
+Provider-authored QA artifact больше не определяет список checks, представленных как measured Browser QA. Для нового
+artifact Loomrail детерминированно выводит bounded check vocabulary из exact QARun plan и matching PASSED
+QAEvidenceBundle. Provider может объяснить результат, но не переименовать фактически выполненный login scenario в
+проверку другого product surface.
+
+Authoritative release note, owner verification instructions и known-risk status нового AcceptancePackage выводятся
+domain из current Review, measured QA и Project verification evidence на одном tree. Provider сохраняет право
+объяснить implementation и выбрать exact доступные Review/QA checks; его свободный пересказ не может превратить
+`PASSED` verification в «не запускалась» или скрыть typed optional failure.
+
+Semantic inference связи произвольного check с criterion по-прежнему не выполняется. Владелец видит exact выбранный
+scenario/check и сохраняет единственное право `Accept | Return | Reject`. Механизм — ADR-0017 и планы 97–98.
+
+### PD-021 — Readiness проверяет фактический session engine локального CLI
+
+**Дата:** 2026-09-08. Уточняет PD-019 и stable-release compatibility gate.
+
+Версия native launcher не считается достаточной runtime identity: launcher и движок, реально разбирающий session
+argv, могут расходиться в зависимости от cwd и provider-owned engine selection state. Claude Code probe запускается
+в новом temporary directory с тем же allowlisted environment, входит в parser через inert
+`--setting-sources "" --version`, не запускает model session и только после этого применяет exact
+version/platform/architecture admission. Старый, unreadable или unverified engine означает явный `blocked`, даже
+если bare launcher из другого cwd печатает поддерживаемую версию.
+
+Loomrail не удаляет обязательный `--restricted`, не повторяет запуск с ослабленными флагами, не обновляет CLI и не
+переходит на API. `AUTO` вправе выбрать другой независимо готовый локальный CLI. Полный механизм — ADR-0018.
 
 ## 14. Отложенные решения
 

@@ -23,6 +23,8 @@ export type ProviderDiagnosticProbeOptions = {
   command?: string;
   commandArgsPrefix?: readonly string[];
   environment?: Readonly<Record<string, string | undefined>>;
+  /** Optional inert working directory used to match the provider's real session launcher path. */
+  cwd?: string;
   deadlineMs?: number;
   outputLimitBytes?: number;
 };
@@ -46,6 +48,8 @@ export type CliProviderDiagnostics = {
 type CliProviderDiagnosticDefinition = {
   command: string;
   versionArguments: readonly string[];
+  /** Provider-owned config roots needed to select the same engine as a real session. */
+  versionEnvironmentKeys?: readonly string[];
   authenticationArguments: readonly string[];
   versionFromOutput: (output: string) => string | null;
   minimumVersion?: string;
@@ -102,6 +106,7 @@ const allowEnvironment = (
 
 const versionProbeEnvironment = (
   environment: Readonly<Record<string, string | undefined>> = process.env,
+  providerKeys: readonly string[] = [],
 ): NodeJS.ProcessEnv =>
   allowEnvironment(environment, [
     "PATH",
@@ -113,6 +118,7 @@ const versionProbeEnvironment = (
     "TEMP",
     "TMP",
     "TMPDIR",
+    ...providerKeys,
   ]);
 
 const authenticationProbeEnvironment = (
@@ -216,7 +222,8 @@ export const createCliProviderDiagnostics = (
           options.command ?? definition.command,
           [...(options.commandArgsPrefix ?? []), ...definition.versionArguments],
           {
-            env: versionProbeEnvironment(options.environment),
+            ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+            env: versionProbeEnvironment(options.environment, definition.versionEnvironmentKeys),
             shell: false,
             stdio: ["ignore", "pipe", "ignore"],
           },

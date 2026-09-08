@@ -62,7 +62,7 @@ import { MAX_TOTAL_REVIEW_ROUNDS } from "@loomrail/contracts";
 import { nextWorkflowStage, validateWorkflowTemplate } from "@loomrail/workflow-engine";
 
 import { isSessionPauseFailureCode } from "./session-pause.js";
-import { bindAcceptanceCriteria } from "./acceptance.js";
+import { bindAcceptanceCriteria, deriveAcceptanceNarrative, deriveMeasuredQAChecks } from "./acceptance.js";
 import { decideReviewLoop, ReviewLoopError } from "./review.js";
 import { assertQACorrectionAcceptanceLineage } from "./qa-correction.js";
 import { projectVerificationAcceptanceGate } from "./verification.js";
@@ -1210,6 +1210,7 @@ export const decideApplyProviderOutcome = (
           qaArtifact.correctionRunId ===
             (measuredQA.qaRun.scope.type === "RETEST" ? measuredQA.qaRun.scope.correctionRunId : null);
     if (
+      measuredQA === undefined ||
       qaArtifact.qaRunId === undefined ||
       qaArtifact.qaEvidenceBundleId === undefined ||
       qaArtifact.testedTree === undefined ||
@@ -1220,8 +1221,25 @@ export const decideApplyProviderOutcome = (
         "Owner acceptance requires current daemon-measured browser QA evidence",
       );
     }
+    const authoritativeQAChecks = deriveMeasuredQAChecks({
+      qaRun: measuredQA.qaRun,
+      evidence: measuredQA.evidence,
+      currentTree: measuredQA.currentTree,
+    });
+    if (
+      authoritativeQAChecks.type === "INVALID" ||
+      authoritativeQAChecks.checks.length !== qaArtifact.checks.length ||
+      authoritativeQAChecks.checks.some((check, index) => check !== qaArtifact.checks[index])
+    ) {
+      throw new WorkflowDomainError(
+        "ACCEPTANCE_NOT_READY",
+        authoritativeQAChecks.type === "INVALID"
+          ? authoritativeQAChecks.reason
+          : "Owner acceptance requires the domain-derived measured Browser QA check vocabulary",
+      );
+    }
     if (qaArtifact.correctionRunId !== null) {
-      if (measuredQA === undefined || context.qaCorrectionHistory === undefined) {
+      if (context.qaCorrectionHistory === undefined) {
         throw new WorkflowDomainError(
           "ACCEPTANCE_NOT_READY",
           "Corrected acceptance requires its complete QA correction history",
@@ -1313,6 +1331,14 @@ export const decideApplyProviderOutcome = (
     if (boundCriteria.type === "INVALID") {
       throw new WorkflowDomainError("ACCEPTANCE_NOT_READY", boundCriteria.reason);
     }
+    const narrative = deriveAcceptanceNarrative({
+      workItem,
+      reviewArtifact,
+      qaArtifact,
+      ...(projectVerification.evidence === null
+        ? {}
+        : { verificationEvidence: projectVerification.evidence }),
+    });
     const acceptancePackage: AcceptancePackage = {
       schemaVersion: 1,
       id: context.acceptancePackageId,
@@ -1325,8 +1351,8 @@ export const decideApplyProviderOutcome = (
       criteria: [...boundCriteria.criteria],
       verificationEvidence: projectVerification.evidence,
       artifactIds,
-      releaseNote: acceptanceOutcome.releaseNote,
-      verifyInstructions: [...acceptanceOutcome.verifyInstructions],
+      releaseNote: narrative.releaseNote,
+      verifyInstructions: [...narrative.verifyInstructions],
       version: 1,
       createdAt: context.now,
       resolvedAt: null,
@@ -1708,6 +1734,14 @@ export const decideApplyProviderOutcome = (
       throw new WorkflowDomainError("ACCEPTANCE_NOT_FOUND", "Durable EvidenceArtifact ID was not supplied");
     }
     const measuredQA = draft.kind === "QA_REPORT" ? context.measuredQA : undefined;
+    const measuredQAChecks =
+      measuredQA === undefined
+        ? undefined
+        : deriveMeasuredQAChecks({
+            qaRun: measuredQA.qaRun,
+            evidence: measuredQA.evidence,
+            currentTree: measuredQA.currentTree,
+          });
     if (draft.kind === "QA_REPORT" && measuredQA !== undefined) {
       if (
         measuredQA.qaRun.status !== "PASSED" ||
@@ -1721,6 +1755,12 @@ export const decideApplyProviderOutcome = (
         throw new WorkflowDomainError(
           "ACCEPTANCE_NOT_READY",
           "A QA evidence artifact requires a current passed browser QA bundle",
+        );
+      }
+      if (measuredQAChecks?.type !== "DERIVED") {
+        throw new WorkflowDomainError(
+          "ACCEPTANCE_NOT_READY",
+          measuredQAChecks?.reason ?? "A QA evidence artifact requires measured Browser QA checks",
         );
       }
     }
@@ -1740,6 +1780,7 @@ export const decideApplyProviderOutcome = (
       provider: command.payload.provider ?? "MOCK",
       createdAt: context.now,
       ...draft,
+      ...(measuredQAChecks?.type === "DERIVED" ? { checks: [...measuredQAChecks.checks] } : {}),
       ...(draft.kind === "REVIEW_REPORT" && reviewReport !== undefined
         ? {
             reviewReportId: reviewReport.id,

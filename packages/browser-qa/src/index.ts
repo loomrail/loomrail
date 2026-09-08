@@ -744,10 +744,14 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
                     );
                     break;
                   case "FOCUSED":
-                    passed =
-                      (await locatorFor(page, assertion.rule.locator).evaluate(
-                        "element => element === document.activeElement",
-                      )) === true;
+                    passed = await locatorFor(page, assertion.rule.locator).evaluate((element: object) => {
+                      const ownerDocument: unknown = Reflect.get(element, "ownerDocument");
+                      return (
+                        typeof ownerDocument === "object" &&
+                        ownerDocument !== null &&
+                        element === Reflect.get(ownerDocument, "activeElement")
+                      );
+                    });
                     break;
                 }
               } catch (error: unknown) {

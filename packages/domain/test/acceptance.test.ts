@@ -261,7 +261,8 @@ describe("criterion-bound acceptance", () => {
           qaArtifactId: qaArtifact.id,
           reviewCheck: "Criterion A reviewed",
           qaCheck: "Criterion A measured",
-          verification: "Inspect A.",
+          verification:
+            "Review check [Criterion A reviewed] · Browser QA check [Criterion A measured] · Project verification [not configured].",
           knownRisk: null,
         },
         {
@@ -271,8 +272,9 @@ describe("criterion-bound acceptance", () => {
           qaArtifactId: qaArtifact.id,
           reviewCheck: "Criterion B reviewed",
           qaCheck: "Criterion B measured",
-          verification: "Inspect B.",
-          knownRisk: "B still depends on the fixture browser.",
+          verification:
+            "Review check [Criterion B reviewed] · Browser QA check [Criterion B measured] · Project verification [not configured].",
+          knownRisk: null,
         },
       ],
     });
@@ -289,10 +291,27 @@ describe("criterion-bound acceptance", () => {
     expect(result.type).toBe("BOUND");
     if (result.type !== "BOUND") throw new Error("Expected bound Project verification evidence");
     expect(
-      result.criteria.map(({ criterion, verificationCheckIds }) => ({ criterion, verificationCheckIds })),
+      result.criteria.map(({ criterion, verification, verificationCheckIds, knownRisk }) => ({
+        criterion,
+        verification,
+        verificationCheckIds,
+        knownRisk,
+      })),
     ).toEqual([
-      { criterion: "Criterion A", verificationCheckIds: ["verification-check-unit"] },
-      { criterion: "Criterion B", verificationCheckIds: ["verification-check-unit"] },
+      {
+        criterion: "Criterion A",
+        verification:
+          "Review check [Criterion A reviewed] · Browser QA check [Criterion A measured] · Project verification [1 required check(s) passed].",
+        verificationCheckIds: ["verification-check-unit"],
+        knownRisk: "Project verification optional checks not passed [verification-check-lint].",
+      },
+      {
+        criterion: "Criterion B",
+        verification:
+          "Review check [Criterion B reviewed] · Browser QA check [Criterion B measured] · Project verification [1 required check(s) passed].",
+        verificationCheckIds: ["verification-check-unit"],
+        knownRisk: "Project verification optional checks not passed [verification-check-lint].",
+      },
     ]);
   });
 

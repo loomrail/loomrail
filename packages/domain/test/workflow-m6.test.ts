@@ -26,6 +26,8 @@ import {
 
 const now = "2026-08-24T14:00:00.000Z";
 const testedTree = "a".repeat(40);
+const measuredQACheck =
+  "Browser QA scenario baseline (Baseline) at /: 1 assertion(s) passed on 1/1 target execution(s).";
 const contextPack: ApplyProviderOutcomeCommand["payload"]["template"]["stages"][number]["contextPack"] = {
   schemaVersion: 1,
   sections: [{ id: "WORK_ITEM_BRIEF", ordinal: 0, required: true }],
@@ -143,7 +145,7 @@ const artifact = (
   provider: "MOCK",
   title: `${stage} report`,
   summary: `${stage} checks passed.`,
-  checks: ["Synthetic check passed."],
+  checks: [kind === "QA_REPORT" ? measuredQACheck : "Synthetic check passed."],
   ...(kind === "REVIEW_REPORT" ? { reviewReportId: "review-report-1", testedTree } : {}),
   ...(kind === "QA_REPORT" ? { qaRunId: "qa-run-1", qaEvidenceBundleId: "qa-evidence-1", testedTree } : {}),
   createdAt: now,
@@ -327,6 +329,111 @@ const currentProjectVerification = {
 };
 
 describe("M6 acceptance decisions", () => {
+  it("derives measured QA checks from the completed browser run instead of provider labels", () => {
+    const attempt = stageAttempt("QA", "attempt-qa");
+    const decision = decideApplyProviderOutcome(
+      {
+        schemaVersion: 1,
+        commandId: "complete-measured-qa",
+        correlationId: "correlation-complete-measured-qa",
+        actor: { type: "SYSTEM", id: "codex-provider" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          resultTree: testedTree,
+          dispatchId: "dispatch-qa",
+          provider: "CODEX",
+          template,
+          outcome: {
+            type: "COMPLETED",
+            summary: "QA synthesis completed.",
+            artifacts: [
+              {
+                kind: "QA_REPORT",
+                title: "QA report",
+                summary: "The provider called the browser run something else.",
+                checks: ["Invented Project Overview check"],
+              },
+            ],
+          },
+        },
+      },
+      {
+        now,
+        workItem: { ...workItem, currentStage: "QA" },
+        run: { ...run, currentStageAttemptId: attempt.id },
+        stageAttempt: attempt,
+        dispatch: dispatch(attempt),
+        budgetPolicy: null,
+        existingUsageRecords: [],
+        usageRecordIds: [],
+        artifactIds: ["artifact-qa-measured"],
+        measuredQA: { qaRun: measuredQARun, evidence: measuredQAEvidence, currentTree: testedTree },
+        qaRunRequired: true,
+        qaRunCompletion: measuredQARun,
+        nextStageAttemptId: "attempt-acceptance",
+        nextDispatchId: "dispatch-acceptance",
+      },
+    );
+
+    expect(decision.artifacts).toMatchObject([
+      {
+        kind: "QA_REPORT",
+        checks: [measuredQACheck],
+      },
+    ]);
+    expect(decision.artifacts[0]?.checks).not.toContain("Invented Project Overview check");
+
+    expect(() =>
+      decideApplyProviderOutcome(
+        {
+          schemaVersion: 1,
+          commandId: "complete-incomplete-measured-qa",
+          correlationId: "correlation-complete-incomplete-measured-qa",
+          actor: { type: "SYSTEM", id: "codex-provider" },
+          type: "APPLY_PROVIDER_OUTCOME",
+          payload: {
+            resultTree: testedTree,
+            dispatchId: "dispatch-qa",
+            provider: "CODEX",
+            template,
+            outcome: {
+              type: "COMPLETED",
+              summary: "QA synthesis completed.",
+              artifacts: [
+                {
+                  kind: "QA_REPORT",
+                  title: "QA report",
+                  summary: "The provider claims an incomplete run passed.",
+                  checks: ["Invented check"],
+                },
+              ],
+            },
+          },
+        },
+        {
+          now,
+          workItem: { ...workItem, currentStage: "QA" },
+          run: { ...run, currentStageAttemptId: attempt.id },
+          stageAttempt: attempt,
+          dispatch: dispatch(attempt),
+          budgetPolicy: null,
+          existingUsageRecords: [],
+          usageRecordIds: [],
+          artifactIds: ["artifact-qa-incomplete"],
+          measuredQA: {
+            qaRun: measuredQARun,
+            evidence: { ...measuredQAEvidence, executions: [] },
+            currentTree: testedTree,
+          },
+          qaRunRequired: true,
+          qaRunCompletion: measuredQARun,
+          nextStageAttemptId: "attempt-acceptance-incomplete",
+          nextDispatchId: "dispatch-acceptance-incomplete",
+        },
+      ),
+    ).toThrow(expect.objectContaining({ code: "ACCEPTANCE_NOT_READY" }));
+  });
+
   it("rejects a legacy Review artifact without the structured independent-review report", () => {
     const attempt = stageAttempt("REVIEW", "attempt-review");
     const command: ApplyProviderOutcomeCommand = {
@@ -538,6 +645,10 @@ describe("M6 acceptance decisions", () => {
       currentStage: "ACCEPTANCE",
       version: 10,
     };
+    const authoritativeQAArtifact = {
+      ...artifact("QA_REPORT", "QA", "artifact-qa"),
+      checks: [measuredQACheck],
+    };
     const ready = decideApplyProviderOutcome(
       {
         schemaVersion: 1,
@@ -551,16 +662,16 @@ describe("M6 acceptance decisions", () => {
           template,
           outcome: {
             type: "READY_FOR_ACCEPTANCE",
-            releaseNote: "Review and QA evidence are ready.",
-            verifyInstructions: ["Run pnpm verify."],
+            releaseNote: "Project verification was not run.",
+            verifyInstructions: ["Run the checks later."],
             criteria: [
               {
                 criterion: workItem.acceptanceCriteria[0] ?? "missing criterion",
                 implementation: "The owner-facing evidence flow was implemented.",
                 reviewCheck: "Synthetic check passed.",
-                qaCheck: "Synthetic check passed.",
-                ownerVerification: "Run pnpm verify.",
-                knownRisk: null,
+                qaCheck: measuredQACheck,
+                ownerVerification: "No trusted verification is available.",
+                knownRisk: "Required checks were denied.",
               },
             ],
           },
@@ -575,10 +686,7 @@ describe("M6 acceptance decisions", () => {
         budgetPolicy: null,
         existingUsageRecords: [],
         usageRecordIds: [],
-        existingArtifacts: [
-          artifact("REVIEW_REPORT", "REVIEW", "artifact-review"),
-          artifact("QA_REPORT", "QA", "artifact-qa"),
-        ],
+        existingArtifacts: [artifact("REVIEW_REPORT", "REVIEW", "artifact-review"), authoritativeQAArtifact],
         measuredQA: { qaRun: measuredQARun, evidence: measuredQAEvidence, currentTree: testedTree },
         projectVerification: currentProjectVerification,
         humanRequestId: "request-acceptance",
@@ -592,11 +700,25 @@ describe("M6 acceptance decisions", () => {
       acceptancePackage: { status: "PENDING", artifactIds: ["artifact-review", "artifact-qa"] },
     });
     expect(ready.acceptancePackage).toMatchObject({
+      releaseNote:
+        "Ship M6 — independent Review and measured Browser QA passed on tree aaaaaaaa; Project verification passed 1 required check(s).",
+      verifyInstructions: [
+        "Inspect the criterion matrix and the referenced Review and measured Browser QA evidence.",
+        "Inspect Project verification run verification-run-1: 1 required check(s) passed.",
+        "Inspect Browser QA run qa-run-1 and its verified attachments.",
+      ],
       verificationEvidence: {
         verificationRunId: verificationRun.id,
         requiredCheckIds: [verificationCheck.id],
       },
-      criteria: [{ verificationCheckIds: [verificationCheck.id] }],
+      criteria: [
+        {
+          verificationCheckIds: [verificationCheck.id],
+          verification:
+            "Review check [Synthetic check passed.] · Browser QA check [Browser QA scenario baseline (Baseline) at /: 1 assertion(s) passed on 1/1 target execution(s).] · Project verification [1 required check(s) passed].",
+          knownRisk: null,
+        },
+      ],
     });
     const acceptancePackage = ready.acceptancePackage;
     const request = ready.request;
@@ -727,7 +849,7 @@ describe("M6 acceptance decisions", () => {
                   criterion: workItem.acceptanceCriteria[0] ?? "missing criterion",
                   implementation: "The implementation is not yet verified.",
                   reviewCheck: "Synthetic check passed.",
-                  qaCheck: "Synthetic check passed.",
+                  qaCheck: measuredQACheck,
                   ownerVerification: "Wait for a fresh passing Project check.",
                   knownRisk: null,
                 },

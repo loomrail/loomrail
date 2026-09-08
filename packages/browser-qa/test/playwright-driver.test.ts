@@ -183,6 +183,62 @@ describe("Playwright BrowserDriver", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("reports keyboard focus through the public measured result", async () => {
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        '<!doctype html><html><body><main><a href="#start">Start</a><button>Continue</button></main></body></html>',
+      );
+    });
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-focus-"));
+    resources.push({ server: fixture.server, directory });
+    const baseline = qaRun(fixture.origin);
+    const run: QARun = {
+      ...baseline,
+      plan: {
+        ...baseline.plan,
+        scenarios: [
+          {
+            id: "keyboard-focus",
+            title: "Owner can reach the primary action with the keyboard",
+            steps: [
+              { id: "open-home", title: "Open home", action: { type: "NAVIGATE", path: "/" } },
+              {
+                id: "focus-action",
+                title: "Move focus to the primary action",
+                action: {
+                  type: "PRESS",
+                  locator: { by: "ROLE", role: "link", name: "Start" },
+                  key: "Tab",
+                },
+              },
+            ],
+            assertions: [
+              {
+                id: "primary-action-focused",
+                title: "The primary action receives keyboard focus",
+                rule: { type: "FOCUSED", locator: { by: "ROLE", role: "button", name: "Continue" } },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const execution = await createPlaywrightDriver({ artifactsDirectory: directory }).run(run);
+
+    expect(execution.result).toMatchObject({
+      outcome: "MEASURED",
+      executions: [
+        {
+          assertions: [{ id: "primary-action-focused", status: "PASSED", details: null }],
+        },
+      ],
+      defects: [],
+    });
+    await execution.dispose();
+  });
+
   it("executes only the ordered cells selected by a correction retest plan", async () => {
     const fixture = await startServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });

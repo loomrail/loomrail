@@ -119,6 +119,8 @@ export const contextSourceKindSchema = z.enum([
   "QA_EVIDENCE_BUNDLE",
   "QA_RETEST_PLAN",
   "QA_DEFECT",
+  "VERIFICATION_RUN",
+  "VERIFICATION_CHECK",
   "PROJECT_CONSTITUTION_VERSION",
 ]);
 export const contextPackSpecSourceSchema = z.enum(["WORKFLOW_TEMPLATE", "ROLE_PLAYBOOK"]);
@@ -823,9 +825,15 @@ export const workflowDispatchSchema = z
 const humanRequestDraftBaseSchema = humanRequestSchema
   .pick({
     blocking: true,
-    title: true,
-    context: true,
     recommendation: true,
+  })
+  // Durable historical requests retain the original non-empty bounds above. New provider output
+  // has a stricter quality floor so an exhausted or hostile model cannot turn `x` into an owner
+  // interruption that looks valid in the cockpit. This is structural, not semantic validation:
+  // the domain still cannot infer whether a well-formed question is genuinely necessary.
+  .extend({
+    title: z.string().trim().min(3).max(200),
+    context: z.string().trim().min(10).max(4_000),
   })
   .strict();
 

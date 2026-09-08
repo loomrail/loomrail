@@ -1306,6 +1306,22 @@ fail closed; threat T39, restart/history/idempotency и Q2 correction-to-downloa
 full build/typecheck/unit, 52/52 E2E, production audit и clean-install tarball. Phase 7 implementation deliverables
 закрыты, но exit gate остаётся открыт до private dogfood run и общего macOS/Windows `verify`; npm publish запрещён.
 
+Private Recurkit rehearsal 2026-09-08 выявил следующий evidence-integrity разрыв: measured Browser QA проверил login,
+но provider QA назвал его checks проверками Project Overview; Acceptance prose одновременно объявил успешный
+durable Project verification неподтверждённым. Владелец вернул package, PipelineRun остался failed и не считается
+private-dogfood evidence. PD-020/ADR-0017 и планы 97–98 закрепляют исправление: measured QA vocabulary и
+authoritative Acceptance narrative выводит domain, provider не переименовывает evaluator facts; semantic inference
+между произвольным criterion и scenario по-прежнему отсутствует.
+
+**Implementation checkpoint (2026-09-08):** Q20.4 implementation закрыла этот разрыв по PD-020/ADR-0017: Acceptance
+package получает QA vocabulary только из текущих durable QARun/QAEvidence/plan facts, domain строит authoritative
+narrative, а exact snapshot восстанавливается после restart. Provider HumanRequest теперь имеет минимальные
+содержательные границы; Focused Playwright probe работает под CSP; Claude readiness по PD-021/ADR-0018 проверяет
+реально используемый session engine в свежем production-shaped temporary directory. Полный `pnpm verify`, 61/61
+последовательный product E2E и clean-install release-package gate прошли. Повтор private Recurkit dogfood подтвердил
+реальный Claude Discovery и честный `POST_SESSION` hard pause, но не дошёл до IMPLEMENT/QA из-за 703351 токена при
+run ceiling 700000; поэтому full private pass и Phase exit gate остаются `PENDING`, без synthetic success.
+
 ### Phase 8 — Public Alpha hardening (3–4 недели)
 
 **Outcome:** внешний solo developer может безопасно установить и dogfood продукт.
@@ -1793,10 +1809,12 @@ human waiver с documented risk.
    dogfood доказал реальные IMPLEMENT/QA через Codex CLI `0.153.4` и Claude Code `2.1.260`. Q20.3 провёл точную
    public fixture Task через Discovery, Plan, bounded Implement, cross-provider Review, project verification и
    measured Browser QA до намеренно `PENDING` owner Acceptance; 9 audited writes произошли только в Implement, QA
-   оставался read-only. Финальные `pnpm verify`, 60/60 product E2E, 7/7 landing E2E и clean-install release-package
+   оставался read-only. Финальные `pnpm verify`, 61/61 product E2E, 7/7 landing E2E и clean-install release-package
    gate прошли после обновления зависимостей. Не переносить это доказательство на Windows или private Epic.
 3. Провести owner-approved subscription-backed private dogfood Epic из 2–3 зависимых Task через оба local provider,
-   restart, review, Browser QA и owner Acceptance. Test doubles не считаются live доказательством.
+   restart, review, Browser QA и owner Acceptance. Q20.4 evidence-integrity regression закрыт, но повторный Recurkit
+   run остановился по честному post-session budget gate до IMPLEMENT/QA и не считается pass. Test doubles не считаются
+   live доказательством.
 4. macOS local CLI compatibility rows и protected landing fixed-commit gate закрыты. Получить real Codex/Claude
    execution evidence на Windows; неизвестные результаты оставить `PENDING`, не возвращая Mock.
 5. Repository-side stage-only workflow уже подготовлен с exact-intent, six-job CI и strict eleven-gate evidence

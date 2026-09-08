@@ -4607,34 +4607,82 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           summary: artifact.summary,
           checks: artifact.checks,
         }));
-        const qaMeasurement =
-          stageAttempt.stage !== "QA" || runningAgentRunValue === undefined
+        const qaMeasurement = (() => {
+          const qaRunValue =
+            stageAttempt.stage === "QA" && runningAgentRunValue !== undefined
+              ? (selectQARunByAgentRun.get(agentRunFromRow(runningAgentRunValue).id) ??
+                selectPassedQARunByStageAttempt.get(stageAttempt.id))
+              : stageAttempt.stage === "ACCEPTANCE"
+                ? (() => {
+                    const qaRunId = evidenceArtifacts.find(({ kind }) => kind === "QA_REPORT")?.qaRunId;
+                    return qaRunId === undefined ? undefined : selectQARunById.get(qaRunId);
+                  })()
+                : undefined;
+          if (qaRunValue === undefined) return null;
+          const qaRun = qaRunFromRow(qaRunValue);
+          const evidenceValue = selectQAEvidenceBundleByQARun.get(qaRun.id);
+          if (qaRun.status !== "PASSED" || evidenceValue === undefined) return null;
+          const bundle = qaEvidenceBundleFromRow(evidenceValue);
+          if (
+            bundle.verdict !== "PASSED" ||
+            bundle.projectId !== workItem.projectId ||
+            bundle.workItemId !== workItem.id ||
+            bundle.pipelineRunId !== run.id ||
+            bundle.qaRunId !== qaRun.id ||
+            bundle.testedTree !== qaRun.testedTree
+          ) {
+            return null;
+          }
+          return {
+            qaRun: {
+              id: qaRun.id,
+              version: qaRun.version,
+              testedTree: qaRun.testedTree,
+              targetOrigin: qaRun.targetOrigin,
+              scope: qaRun.scope.type,
+              plan: qaRun.plan,
+            },
+            evidence: {
+              id: bundle.id,
+              version: 1,
+              verdict: bundle.verdict,
+              environment: bundle.environment,
+              executions: bundle.executions,
+              observations: bundle.observations,
+            },
+          };
+        })();
+        const projectVerification =
+          stageAttempt.stage !== "ACCEPTANCE"
             ? null
             : (() => {
-                const qaRunValue =
-                  selectQARunByAgentRun.get(agentRunFromRow(runningAgentRunValue).id) ??
-                  selectPassedQARunByStageAttempt.get(stageAttempt.id);
-                if (qaRunValue === undefined) return null;
-                const qaRun = qaRunFromRow(qaRunValue);
-                const evidenceValue = selectQAEvidenceBundleByQARun.get(qaRun.id);
-                if (qaRun.status !== "PASSED" || evidenceValue === undefined) return null;
-                const bundle = qaEvidenceBundleFromRow(evidenceValue);
+                const verificationRun = readLatestVerificationRun(workItem.id);
+                if (
+                  verificationRun?.projectId !== workItem.projectId ||
+                  verificationRun.pipelineRunId !== run.id
+                ) {
+                  return null;
+                }
                 return {
-                  qaRun: {
-                    id: qaRun.id,
-                    version: qaRun.version,
-                    testedTree: qaRun.testedTree,
-                    targetOrigin: qaRun.targetOrigin,
-                    scope: qaRun.scope.type,
+                  run: {
+                    id: verificationRun.id,
+                    version: verificationRun.version,
+                    status: verificationRun.status,
+                    implementationTree: verificationRun.implementationTree,
+                    planId: verificationRun.planId,
+                    planRevision: verificationRun.planRevision,
+                    platform: verificationRun.platform,
+                    terminalReason: verificationRun.terminalReason,
                   },
-                  evidence: {
-                    id: bundle.id,
-                    version: 1,
-                    verdict: bundle.verdict,
-                    environment: bundle.environment,
-                    executions: bundle.executions,
-                    observations: bundle.observations,
-                  },
+                  checks: readVerificationChecks(verificationRun.id).map((check) => ({
+                    id: check.id,
+                    version: check.version,
+                    ordinal: check.ordinal,
+                    recipeId: check.recipeId,
+                    required: check.required,
+                    status: check.status,
+                    errorCode: check.errorCode,
+                  })),
                 };
               })();
 
@@ -4679,6 +4727,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           latestCheckpoint,
           reviewInput,
           qaMeasurement,
+          projectVerification,
           evidence,
           activity,
         };

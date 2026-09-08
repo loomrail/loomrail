@@ -37,6 +37,7 @@ if (hangMarkerPath !== undefined) {
 } else {
   const recordPath = optionValue("--fixture-record") ?? process.env.FAKE_CLAUDE_RECORD_PATH;
   const outputFile = optionValue("--fixture-output") ?? process.env.FAKE_CLAUDE_OUTPUT_FILE;
+  const versionOutput = optionValue("--fixture-version");
   const args = process.argv.slice(2);
   const settingsIndex = args.indexOf("--settings");
   const settingsPath = settingsIndex === -1 ? undefined : args[settingsIndex + 1];
@@ -66,6 +67,9 @@ if (hangMarkerPath !== undefined) {
   }
   if (outputFile !== undefined) {
     process.stdout.write(readFileSync(outputFile, "utf8"));
+  }
+  if (versionOutput !== undefined) {
+    process.stdout.write(`${versionOutput}\n`);
   }
   // `process.exitCode`, never `process.exit(0)` -- see fake-codex.mjs's copy of this note: a pipe
   // write is asynchronous, and exiting outright can truncate a recording larger than the pipe

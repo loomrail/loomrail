@@ -46,6 +46,8 @@ import {
 } from "../src/index.js";
 
 const timestamp = "2026-08-22T18:00:00.000Z";
+const measuredQAArtifactCheck =
+  "Browser QA scenario task-cockpit (Task Cockpit shows the current state) at /: 1 assertion(s) passed on 1/1 target execution(s).";
 
 // Removes the named A1 fields from every embedded StageAttempt, wherever one appears in a stored
 // payload -- i.e. turns a payload this branch wrote into the shape an older database actually
@@ -933,6 +935,48 @@ describe("SQLite local state", () => {
         },
       },
     });
+    const acceptanceContext = localState.query({
+      type: "READ_CONTEXT_SOURCES",
+      stageAttemptId: acceptanceDispatch.stageAttemptId,
+      sessionOrdinal: 1,
+    });
+    if (acceptanceContext.type !== "CONTEXT_SOURCES") throw new Error("Expected Acceptance context");
+    expect(acceptanceContext.sources.qaMeasurement).toMatchObject({
+      qaRun: {
+        testedTree: acceptedTree,
+        plan: {
+          revision: 1,
+          scenarios: [
+            {
+              id: "task-cockpit",
+              steps: [{ action: { type: "NAVIGATE", path: "/" } }],
+              assertions: [{ id: "state-visible" }],
+            },
+          ],
+        },
+      },
+      evidence: {
+        verdict: "PASSED",
+        executions: [{ targetId: "desktop-light-en", scenarioId: "task-cockpit" }],
+      },
+    });
+    expect(acceptanceContext.sources.projectVerification).toMatchObject({
+      run: {
+        id: verification.run.id,
+        status: "PASSED",
+        implementationTree: acceptedTree,
+        planId: adopted.plan.id,
+        planRevision: adopted.plan.revision,
+      },
+      checks: [
+        {
+          id: verificationCheck.id,
+          ordinal: 1,
+          required: true,
+          status: "PASSED",
+        },
+      ],
+    });
     const beforeInvalid = localState.query({
       type: "GET_WORKFLOW_SNAPSHOT",
       workItemId: created.workItem.id,
@@ -943,16 +987,16 @@ describe("SQLite local state", () => {
     });
     const acceptanceOutcome: ApplyProviderOutcomeCommand["payload"]["outcome"] = {
       type: "READY_FOR_ACCEPTANCE",
-      releaseNote: "The bounded fixture is ready for owner acceptance.",
-      verifyInstructions: ["Run pnpm verify."],
+      releaseNote: "Project verification was not run.",
+      verifyInstructions: ["Trust the provider without inspecting evidence."],
       criteria: [
         {
           criterion: "State is durable",
           implementation: "The durable acceptance flow was implemented.",
           reviewCheck: "Contract review passed.",
-          qaCheck: "1 required assertions passed.",
-          ownerVerification: "Run pnpm verify.",
-          knownRisk: null,
+          qaCheck: measuredQAArtifactCheck,
+          ownerVerification: "No trusted verification is available.",
+          knownRisk: "Required checks were denied.",
         },
       ],
     };
@@ -1023,14 +1067,29 @@ describe("SQLite local state", () => {
       ],
       acceptancePackage: {
         status: "PENDING",
+        releaseNote:
+          "Work for create-acceptance-item — independent Review and measured Browser QA passed on tree aaaaaaaa; Project verification passed 1 required check(s).",
+        verifyInstructions: [
+          "Inspect the criterion matrix and the referenced Review and measured Browser QA evidence.",
+          expect.stringContaining("1 required check(s) passed"),
+          expect.stringContaining("verified attachments"),
+        ],
         verificationEvidence: {
           verificationRunId: verification.run.id,
           implementationTree: acceptedTree,
           requiredCheckIds: [verificationCheck.id],
         },
-        criteria: [{ verificationCheckIds: [verificationCheck.id] }],
+        criteria: [
+          {
+            verificationCheckIds: [verificationCheck.id],
+            knownRisk: null,
+          },
+        ],
       },
     });
+    expect(pendingSnapshot.snapshot.acceptancePackage.criteria[0]?.verification).toContain(
+      "Project verification [1 required check(s) passed]",
+    );
     const measuredQAArtifact = pendingSnapshot.snapshot.artifacts.find(({ kind }) => kind === "QA_REPORT");
     expect(typeof measuredQAArtifact?.qaRunId).toBe("string");
     expect(typeof measuredQAArtifact?.qaEvidenceBundleId).toBe("string");
@@ -1068,7 +1127,7 @@ describe("SQLite local state", () => {
       expect.objectContaining({
         criterion: "State is durable",
         reviewCheck: "Contract review passed.",
-        qaCheck: "1 required assertions passed.",
+        qaCheck: measuredQAArtifactCheck,
         verificationCheckIds: [verificationCheck.id],
       }),
     ]);
@@ -1077,6 +1136,15 @@ describe("SQLite local state", () => {
       planId: adopted.plan.id,
       implementationTree: acceptedTree,
     });
+    expect(restored.snapshot.acceptancePackage.releaseNote).toBe(
+      pendingSnapshot.snapshot.acceptancePackage.releaseNote,
+    );
+    expect(restored.snapshot.acceptancePackage.verifyInstructions).toEqual(
+      pendingSnapshot.snapshot.acceptancePackage.verifyInstructions,
+    );
+    expect(restored.snapshot.acceptancePackage.criteria).toEqual(
+      pendingSnapshot.snapshot.acceptancePackage.criteria,
+    );
     expect(acceptanceState.query({ type: "GET_ATTENTION_INBOX" })).toMatchObject({
       type: "ATTENTION_INBOX",
       inbox: {
@@ -6363,7 +6431,7 @@ describe("SQLite local state", () => {
           criterion: "State is durable",
           implementation: "The durable acceptance flow was implemented.",
           reviewCheck: "Contract review passed.",
-          qaCheck: "1 required assertions passed.",
+          qaCheck: measuredQAArtifactCheck,
           ownerVerification: "Run pnpm verify.",
           knownRisk: null,
         },

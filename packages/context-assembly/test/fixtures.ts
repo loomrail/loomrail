@@ -89,6 +89,8 @@ export const sampleSources = (): ContextSources => ({
       },
     ],
   },
+  qaMeasurement: null,
+  projectVerification: null,
   evidence: [
     {
       id: "ev_01",

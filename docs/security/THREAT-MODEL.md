@@ -1821,6 +1821,48 @@ Acceptance package. It exposed and closed exact-recipe schema discovery, root-pa
 cross-session same-StageAttempt mutation-proof defects. The sanitized evidence is
 `docs/evidence/phase-8/Q20-MANAGED-PUBLIC-DOGFOOD-EVIDENCE.md`; it does not promote Windows or private-dogfood claims.
 
+**T64 — a provider launcher identifies a different engine than production will run. Critical.** A native launcher may
+answer a bare `--version` fast path itself or select a bundled engine from cwd/provider-owned state. If readiness
+inherits the daemon's project directory, it can mark one engine `VERIFIED` and then launch a different engine in the
+production scratch directory, where containment flags could be rejected or misinterpreted.
+
+Claude Code compatibility is therefore probed in a new temporary directory with its production allowlisted
+engine-selection environment, through the same option parser as sessions, using the inert
+`--setting-sources "" --version` prefix. This starts no model turn and receives no workspace capability. The returned
+engine version must pass the existing exact target/floor before authentication or dispatch. A mismatch blocks Claude;
+there is no weaker-flag retry, automatic update, API fallback or synthetic result. Raw probe output is bounded and
+reduced to typed compatibility/version facts before it can reach state or UI.
+
+Required verification: a test double records the exact engine-probe argv, fresh cwd and secret-denying environment; a
+divergent launcher/engine fixture returns the older engine and is refused; unreadable/oversized/non-zero probes remain
+typed unavailable; a local read-only probe confirms the production-shaped classification without persisting its raw
+output.
+
+### Q20.4 Acceptance evidence-integrity delta (T63)
+
+**T63 — provider synthesis renames measured evidence or contradicts trusted verification. High.** A provider can
+return schema-valid QA checks, release prose and known-risk text that describe a different product surface or an
+obsolete failed command. Artifact/run/tree lineage alone does not make that prose true. A pending package can then
+look authoritative while its embedded Project verification evidence records the opposite result.
+
+For every new measured QA artifact Loomrail derives the bounded check list from the exact QARun plan and matching
+PASSED QAEvidenceBundle: one deterministic entry per executed scenario, in plan order, with stable identity and
+measured target/assertion counts. Provider-authored checks are discarded at the domain transition. Acceptance
+release note, owner-verification instructions and known-risk status are likewise derived from current Review,
+measured QA and Project verification evidence. Provider text remains only an escaped implementation explanation and
+a selection from closed Review/QA values.
+
+QA and Acceptance context include the actual bounded measured plan/executions; Acceptance also receives the current
+Project verification run/check state. Repository-authored titles are framed as untrusted data. Raw provider payload,
+command output, console/network bodies, credentials, absolute paths and attachment storage keys never enter this
+projection. Existing historical packages remain readable and are not rewritten.
+
+Required verification: invented QA check cannot survive the public domain transition; missing/duplicate/failed or
+foreign QARun cells fail closed; contradictory provider release/risk/verification prose cannot change authoritative
+package fields; restart/idempotent replay produces the same package; context/export/log snapshots contain no secret,
+path or raw-output canaries. Semantic inference that a scenario proves a criterion remains explicitly out of scope,
+so the final owner gate remains mandatory.
+
 ### Filesystem, shell and Git
 
 - canonical workspace allowlist;
