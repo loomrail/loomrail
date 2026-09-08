@@ -23,7 +23,7 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # Windows runs the explicit Q17 and fault-injection gates before the repository-wide verify.
+    # Windows runs the explicit process, Q17 and fault-injection gates before repository-wide verify.
     # Keep the job cap above that intentional sequential matrix; individual process and test
     # deadlines remain the hang detectors.
     timeout-minutes: 40
@@ -61,6 +61,15 @@ jobs:
         run: |
           pnpm --filter "@loomrail/mcp-gateway..." build
           pnpm --filter @loomrail/mcp-gateway test
+
+      # Q20 is the only verification path that composes the scrubbed recipe environment with the
+      # durable process supervisor. Exercise that exact boundary early on Windows instead of hiding
+      # a cleanup-runtime regression at the end of the repository-wide suite.
+      - name: Verify Windows workspace executor lifecycle
+        if: runner.os == 'Windows'
+        run: |
+          pnpm --filter "@loomrail/workspace-executor..." build
+          pnpm --filter @loomrail/workspace-executor test
 
       - name: Audit production dependencies
         run: pnpm audit --prod --audit-level high

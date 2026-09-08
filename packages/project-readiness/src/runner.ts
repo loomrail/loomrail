@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, mkdtemp, open, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep, win32 } from "node:path";
 
 import type {
   VerificationCheckErrorCode,
@@ -86,6 +86,20 @@ const copyEnvironmentValue = (
   if (value !== undefined && value !== "") target[key] = value;
 };
 
+const windowsPowerShellDirectory = (source: EnvironmentSource): string | null => {
+  const systemRoot = source["SystemRoot"] ?? source["WINDIR"];
+  if (
+    systemRoot === undefined ||
+    systemRoot.length > 260 ||
+    systemRoot.includes("\u0000") ||
+    systemRoot.startsWith("\\\\") ||
+    !win32.isAbsolute(systemRoot)
+  ) {
+    return null;
+  }
+  return win32.join(win32.normalize(systemRoot), "System32", "WindowsPowerShell", "v1.0");
+};
+
 export const verificationBaselineEnvironment = (input: {
   platform: VerificationPlatform;
   isolatedHome: string;
@@ -109,8 +123,17 @@ export const verificationBaselineEnvironment = (input: {
     npm_config_fund: "false",
     npm_config_audit: "false",
   };
-  environment["PATH"] = input.runtimePath.join(input.platform === "win32" ? ";" : ":");
+  const runtimePath = [...input.runtimePath];
   if (input.platform === "win32") {
+    const powerShellDirectory = windowsPowerShellDirectory(input.source);
+    if (
+      powerShellDirectory !== null &&
+      !runtimePath.some((candidate) => candidate.toLowerCase() === powerShellDirectory.toLowerCase())
+    ) {
+      // The durable supervisor uses the inbox Windows PowerShell host for bounded CIM process-tree
+      // proof. System32 alone does not contain powershell.exe, and the owner's wider PATH stays out.
+      runtimePath.push(powerShellDirectory);
+    }
     for (const key of ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT"] as const) {
       copyEnvironmentValue(environment, input.source, key);
     }
@@ -118,6 +141,7 @@ export const verificationBaselineEnvironment = (input: {
     copyEnvironmentValue(environment, input.source, "LANG");
     copyEnvironmentValue(environment, input.source, "LC_ALL");
   }
+  environment["PATH"] = runtimePath.join(input.platform === "win32" ? ";" : ":");
   // pnpm 11 defaults verifyDepsBeforeRun to `install`. In Loomrail's CI-shaped baseline that can
   // reinterpret a read-only `pnpm run <check>` recipe as a full dependency install, mutate
   // node_modules and spend the entire check deadline before the approved script even starts.
