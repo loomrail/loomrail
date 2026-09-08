@@ -1,6 +1,6 @@
 # Q20.3 — Managed public dogfood через local subscription CLI: implementation plan
 
-**Статус:** implementation and rehearsal complete; repository promotion in progress
+**Статус:** complete; implementation, rehearsal and repository promotion recorded
 
 1. Зафиксировать public-only scope, production provider boundary, recovery point и evidence contract. **Done.**
 2. Подготовить отдельный временный `LOOMRAIL_DATA_DIR`, проверить exact local CLI readiness и materialize встроенный

@@ -4,7 +4,7 @@
 
 **Последнее уточнение:** 2026-09-08 — local subscription CLI boundary
 
-**Статус:** implemented; fresh fixed-commit evidence pending
+**Статус:** complete; fixed-commit evidence recorded
 
 **Предшественники:** Q6, Q8, Q10, Q14, Q20
 

@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-04
 
-**Статус:** local-CLI implementation complete; fresh fixed-commit Q15/landing evidence pending
+**Статус:** complete; local-CLI Q15 and protected landing gates recorded
 
 **Спецификация:**
 [75-q15-canonical-activation-route-spec.ru.md](75-q15-canonical-activation-route-spec.ru.md)
@@ -35,7 +35,7 @@
 ### Q15.4 — Protected consumer и exit
 
 - [x] Подключить `apps/landing/**` к canonical install/version contract и закрыть protected lint/browser gate локально.
-- [ ] Зафиксировать свежие Q15 и protected landing CI/Pages evidence на неизменяемом commit.
+- [x] Зафиксировать свежие Q15 и protected landing CI/Pages evidence на неизменяемом commit.
 - [x] Получить clean macOS/Windows source/browser/package evidence; Windows live-provider capture не относится к Q15.
 - [x] Обновить release/evidence/master plan локальными результатами.
 - [x] Пройти independent Standards/Spec review.

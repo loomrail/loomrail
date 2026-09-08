@@ -34,13 +34,11 @@ test("records the current honest stable readiness without promoting pending gate
   const summary = summarizeStableReleaseGates(parseStableReleaseGateManifest(content));
   assert.equal(summary.releaseVersion, null);
   assert.deepEqual(summary.pending, [
-    "q15CanonicalActivationNonLanding",
     "privateDogfood",
-    "protectedLandingCanonicalActivation",
     "codexWindowsCompatibility",
     "claudeWindowsCompatibility",
   ]);
-  assert.equal(summary.passed.length, 6);
+  assert.equal(summary.passed.length, 8);
 });
 
 test("rejects the superseded schema-v2 local API gate contract", () => {

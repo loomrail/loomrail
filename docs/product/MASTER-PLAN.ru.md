@@ -1045,13 +1045,14 @@ docs/
 7. проверить Environment Setup: найденные `.env` keys и недостающие значения;
 8. при необходимости вставить secret в защищённое UI-поле и сохранить в OS credential store;
 9. выбрать trust/budget/workspace policy;
-10. выполнить mocked/sandboxed test Task;
+10. выполнить bounded sample Task через готовый local CLI;
 11. увидеть первый managed run и Attention request.
 
-До live-provider пути публичная `/try`-поверхность предлагает zero-quota guided mission: один canonical safe copy
-block открывает setup, Q8 проверяет среду, Q10 даёт готовую Task recipe, а приложение проводит пользователя через
-Human Request, budget, Review, measured QA и owner Acceptance до экспортируемого Acceptance Package. Каждый шаг имеет
-один outcome, primary action, progress и короткое объяснение «зачем».
+Публичная `/try`-поверхность предлагает guided mission без API-ключа и отдельного API-биллинга: один canonical safe
+copy block открывает setup, readiness проверяет установленный и авторизованный Codex/Claude CLI, bundled fixture даёт
+готовую Task recipe, а приложение проводит пользователя через Human Request, budget, Review, measured QA и owner
+Acceptance до экспортируемого Acceptance Package. Подписочная provider quota расходуется только после явного Start;
+каждый шаг имеет один outcome, primary action, progress и короткое объяснение «зачем».
 
 Marketing progress хранится только локально и не является workflow truth. После открытия приложения progress
 выводится из durable state и переживает restart. Landing, README, RU/EN guides и CLI help не содержат вручную
@@ -1489,8 +1490,9 @@ recovery reports допускают новые orphaning episodes после я�
 `PENDING` package при 4 818 908 из 5 000 000 фактически учтённых токенов. 2026-09-04 владелец отдельно нажал
 `Accept`: package стал `ACCEPTED`, WorkItem — `DONE`, а PipelineRun завершился одной durable transition. Q14 macOS
 slice, correction path, Standards/Spec review и доступный release verification завершены. Public rehearsal остаётся
-одной Task с cancelled precursor, а не требуемым private Epic с 2–3 зависимыми Task; Windows live-provider rows,
-private dogfood, protected landing и trusted publisher provenance остаются отдельными stable gates.
+одной Task с cancelled precursor, а не требуемым private Epic с 2–3 зависимыми Task; Windows local-CLI rows, private
+dogfood и trusted publisher provenance остаются отдельными stable gates. Protected landing закрывается отдельным Q15
+fixed-surface evidence.
 
 ### Phase 8 approved extension — Q15–Q17
 
@@ -1501,8 +1503,9 @@ private dogfood, protected landing и trusted publisher provenance остают�
 
 #### Q15 — Canonical activation route
 
-**Outcome:** новый пользователь без регистрации и расхода provider quota проходит первую доказуемую поставку, а все
-публичные поверхности показывают один безопасный install contract.
+**Outcome:** новый пользователь без регистрации, API-ключа и отдельного API-биллинга проходит первую доказуемую
+поставку через существующую подписочную сессию local CLI, а все публичные поверхности показывают один безопасный
+install contract.
 
 **Deliverables:**
 
@@ -1515,22 +1518,20 @@ private dogfood, protected landing и trusted publisher provenance остают�
 - хранить progress лендинга только локально, а in-product progress выводить только из durable domain state;
 - проверить RU/EN, light/dark, keyboard, narrow viewport и restart/resume.
 
-**Exit gate:** clean macOS и Windows environment стартуют из одного canonical блока; zero-quota пользователь создаёт
-seeded Task без пустого brief, видит фактические Review/QA results, переживает restart и сам принимает или возвращает
-результат. Setup не устанавливает зависимости, не логинит provider и не пишет repository скрыто.
+**Exit gate:** clean macOS и Windows environment стартуют из одного canonical блока; пользователь создаёт seeded Task
+без пустого brief, видит фактические Review/QA results, переживает restart и сам принимает или возвращает результат.
+Setup не устанавливает зависимости, не логинит provider и не пишет repository скрыто.
 
-**Implementation checkpoint 2026-09-04:** один runtime-validated contract теперь владеет install commands, точной
-Q10 Task и Mock run policy. `loomrail try` выполняет read-only preflight, явно сообщает будущие local side effects и
-открывает authenticated `/try`; route выводит progress из durable Project/WorkItem/Pipeline/Acceptance state, ведёт
-через Human Request, отдельное budget approval, Review/измеренную QA и оставляет final disposition только владельцу.
-Локально проходят contract gate, typecheck, complete unit/integration suite, clean-package invocation и 54/54
-Playwright E2E, включая RU/EN, keyboard, light/dark, narrow viewport и daemon restart. `apps/landing/**` не изменён:
-его canonical consumer и три защищённых lint finding остаются отдельной авторизованной работой. На фиксированном
-коммите `cebfc51` canonical activation gate, 54/54 browser cases и clean packaged `loomrail try` прошли на macOS и
-Windows в [CI run 33910486837](https://github.com/loomrail/loomrail/actions/runs/33910486837/attempts/2). Повторный
-Windows Verify прошёл fault/recovery и, как macOS, остановился только на трёх protected landing lint diagnostics.
-Q15 non-landing cross-platform evidence закрыт; protected consumer, Windows live-provider capture и stable claim
-остаются открыты.
+**Implementation checkpoint 2026-09-08:** один runtime-validated contract владеет install commands, exact bounded
+Task и local-CLI run policy. `loomrail try` выполняет read-only provider readiness, явно сообщает будущие local side
+effects и открывает authenticated `/try`; route выводит progress из durable Project/WorkItem/Pipeline/Acceptance
+state, использует domain-owned AUTO, ведёт через Human Request, Review, measured verification/QA и оставляет final
+disposition только владельцу. Stale unavailable provider preference восстанавливается явным возвратом в AUTO.
+На фиксированном коммите `dd4f5ac` contract, Browser smoke, clean package и полные Verify прошли на macOS/Windows в
+[CI run 34201045784](https://github.com/loomrail/loomrail/actions/runs/34201045784). Protected landing потребляет тот
+же contract; неизменная surface прошла build, browser и deploy в
+[Pages run 34165990314](https://github.com/loomrail/loomrail/actions/runs/34165990314). Q15 non-landing и protected
+landing stable gates закрыты; Windows real local-CLI execution остаётся отдельным pending gate.
 
 #### Q16 — Provider allowance visibility
 
@@ -1796,12 +1797,11 @@ human waiver с documented risk.
    gate прошли после обновления зависимостей. Не переносить это доказательство на Windows или private Epic.
 3. Провести owner-approved subscription-backed private dogfood Epic из 2–3 зависимых Task через оба local provider,
    restart, review, Browser QA и owner Acceptance. Test doubles не считаются live доказательством.
-4. Закрыть macOS/Windows local CLI compatibility rows и protected landing fixed-commit gate; неизвестные результаты
-   оставить `PENDING`, не возвращая Mock.
+4. macOS local CLI compatibility rows и protected landing fixed-commit gate закрыты. Получить real Codex/Claude
+   execution evidence на Windows; неизвестные результаты оставить `PENDING`, не возвращая Mock.
 5. Repository-side stage-only workflow уже подготовлен с exact-intent, six-job CI и strict eleven-gate evidence
-   index. Schema v3 сейчас честно показывает 6/11 и не содержит выбранной stable version; `PENDING` Q15 non-landing,
-   private dogfood, protected landing и Windows local-CLI rows машинно запрещают staging. После их
-   закрытия владелец отдельно настраивает
+   index. Schema v3 сейчас честно показывает 8/11 и не содержит выбранной stable version; `PENDING` private dogfood и
+   обе Windows local-CLI rows машинно запрещают staging. После их закрытия владелец отдельно настраивает
    protected main-only `npm-release` environment и npm OIDC trust только для `npm stage publish`. Trusted job
    read-only проверяет непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или
    auto-created environment не сможет stage-ить package. Staged artifact требует ещё одного owner 2FA approval.

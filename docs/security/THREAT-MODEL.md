@@ -695,8 +695,8 @@ Required controls and verification:
   Human Request, budget pause, separate Review/QA evidence, owner-only disposition, RU/EN, keyboard, light/dark and
   narrow viewport. The same named contract, browser and package gates run on macOS/Windows CI before unrelated lint.
 
-Residual risk remains until fresh fixed-commit CI exists for the local-CLI Q15 contract and the protected landing
-consumer. Real Codex and Claude Code execution on Windows remains a separate pending gate.
+Fixed-commit local-CLI Q15 CI and the protected landing consumer are recorded in the stable evidence index. Real
+Codex and Claude Code execution on Windows remains a separate pending gate.
 
 ### Q16 provider-allowance delta (T47)
 
@@ -1543,23 +1543,24 @@ return path of `finding()`), not dependent on the one literal value exercised by
 - output size/rate bounds;
 - never enable permission bypass automatically.
 
-### Provider API selection delta (T26)
+### Provider local-CLI selection delta (T26)
 
-AUTO selection inspects two API credentials and lets an authenticated browser mutation choose which provider API a
-Project will call next. The High-rated failure is a stale selector silently routing
-work to a different provider while the owner believes the chosen one ran.
+AUTO selection inspects the two supported local CLI runtimes and lets an authenticated browser mutation choose which
+provider a Project will use next. The High-rated failure is a stale selector silently routing work to a different
+provider while the owner believes the chosen one ran.
 
-- credential presence and adapter capability are separate observations; a configured key alone never bypasses the
-  adapter's stage or hard-budget gate;
-- only provider id and readiness are exposed to the browser; credential content is never returned, parsed, persisted
-  or logged;
+- installed executable, exact compatible version, existing CLI authentication and adapter capability are separate
+  observations; Loomrail neither reads provider tokens nor accepts API keys as provider configuration;
+- only provider id, version, compatibility and bounded readiness are exposed to the browser; raw probe output and
+  authentication material are never returned, persisted or logged;
 - preference changes use Project optimistic version, CSRF/Origin/session enforcement and one transaction containing
   state, append-only Event and idempotent command receipt;
-- explicit provider preference never falls through to another adapter or a successful synthetic result;
+- explicit provider preference never falls through to another adapter, direct API or a successful synthetic result;
 - daemon owns a stable adapter registry. The worker captures the exact adapter serving the live ProviderSession, so
   a concurrent Settings change cannot redirect abort/handoff;
 - `LOOMRAIL_PROVIDER` override is reported to UI and disables mutation rather than secretly defeating the selector;
-- no probe or selector adds a permission-bypass argument or inherits user MCP/plugin configuration.
+- no probe or selector adds a permission-bypass argument. A launched provider receives only the bounded local-CLI
+  adapter environment and session-scoped Loomrail MCP authority, not ambient repository/plugin configuration.
 
 Verification: domain tests cover no-op and version conflict; persistence covers atomic replay and restart;
 daemon integration covers probe output canaries, missing/auth-required states, AUTO and environment precedence, and

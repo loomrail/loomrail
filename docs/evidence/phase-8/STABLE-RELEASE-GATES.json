@@ -9,8 +9,10 @@
       "evidenceCommit": "9722e1a7f4ce1982ee99dad57bfbd13ae6fe55fe"
     },
     "q15CanonicalActivationNonLanding": {
-      "status": "PENDING",
-      "reason": "The former evidence covered the retired synthetic route; the local-CLI-only activation contract needs fresh fixed-commit evidence."
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/Q15-GUIDED-ACTIVATION-EVIDENCE.md",
+      "evidenceSha256": "5f2eed7bd16361fdad54ddb5aa24152a6e5e23522af11d1cb645c4e5aa1f110d",
+      "evidenceCommit": "c182f249fa14499c40b994000cacfd7fff56234b"
     },
     "q17MeasuredProjectVerification": {
       "status": "PASSED",
@@ -47,8 +49,10 @@
       "reason": "Owner must choose one private full-stack repository and approve a bounded 2-3 Task dogfood Epic."
     },
     "protectedLandingCanonicalActivation": {
-      "status": "PENDING",
-      "reason": "The landing consumes the new contract locally, but fixed-commit protected browser evidence is still required."
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/STABLE-PROTECTED-LANDING-EVIDENCE.md",
+      "evidenceSha256": "6899a4e0b38ab966420cb4a4c2427f2ca869a2084b48380809148715a72c005e",
+      "evidenceCommit": "c182f249fa14499c40b994000cacfd7fff56234b"
     },
     "codexWindowsCompatibility": {
       "status": "PENDING",
