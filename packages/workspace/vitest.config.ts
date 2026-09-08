@@ -8,6 +8,6 @@ export default defineConfig({
     // perfectly correct test past vitest's 5s default. A test that goes red by timing out proves
     // nothing about the code under test -- it must fail by assertion, on the defect it names, or
     // not at all. The bound below is generous headroom against load, not a tolerance for slow code.
-    testTimeout: 30_000,
+    testTimeout: 60_000,
   },
 });

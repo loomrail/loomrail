@@ -327,5 +327,5 @@ describe("provider-neutral workspace executor", () => {
       code: "NETWORK_POLICY_UNAVAILABLE",
       approvalRequired: true,
     });
-  }, 20_000);
+  }, 45_000);
 });

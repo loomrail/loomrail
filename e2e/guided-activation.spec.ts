@@ -173,8 +173,10 @@ test.describe("canonical guided activation", () => {
     const selector = settings.getByRole("combobox", { name: "Provider for new sessions" });
     await selector.focus();
     await page.keyboard.press("Enter");
-    await page.keyboard.press("Home");
+    const codexOption = page.getByRole("option", { name: "Codex CLI", exact: true });
+    await expect(codexOption).toBeVisible();
     await page.keyboard.press("ArrowDown");
+    await expect(codexOption).toHaveAttribute("data-highlighted");
     await page.keyboard.press("Enter");
     await expect(selector).toContainText("Codex CLI");
     await settings.getByRole("button", { name: "Close dialog" }).click();

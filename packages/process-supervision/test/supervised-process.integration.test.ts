@@ -275,7 +275,10 @@ describe("supervised local process", () => {
         "  setTimeout(() => {",
         '    writeFileSync(registryFile, JSON.stringify({ schemaVersion: 1, runId, state: "STOPPED", stoppedAt: new Date().toISOString() }));',
         "    process.exit(0);",
-        "  }, 1200);",
+        // Keep cleanup longer than the target deadline while leaving enough launch headroom for
+        // loaded macOS/Windows CI hosts. The old 250 ms deadline measured scheduler contention,
+        // not the post-exit invariant this test owns.
+        "  }, 4000);",
         "});",
       ].join("\n"),
     );
@@ -286,7 +289,7 @@ describe("supervised local process", () => {
       args: ["-e", "process.exit(0)"],
       cwd: root,
       env: { PATH: process.env["PATH"] ?? "" },
-      deadlineMs: 250,
+      deadlineMs: 3_000,
       graceMs: 100,
       outputLimitBytes: 128,
       redactValues: [],
@@ -294,7 +297,7 @@ describe("supervised local process", () => {
     });
 
     expect(result).toMatchObject({ termination: "EXITED", exitCode: 0, signal: null });
-    expect(result.durationMs).toBeGreaterThanOrEqual(1_000);
+    expect(result.durationMs).toBeGreaterThanOrEqual(3_800);
     await expect(
       verificationProcessIsStopped(verificationProcessRecordPath(registryDirectory, runId), runId),
     ).resolves.toBe(true);
