@@ -449,7 +449,7 @@ const en = {
   "activation.copy.workspace":
     "Materialize Loomrail's bundled web-app repository in local application storage.",
   "activation.copy.provider":
-    "Select Codex CLI for this project. A session starts only when its exact version is compatible and the CLI is already signed in.",
+    "Return this project to Auto so Loomrail can use a compatible, signed-in Codex or Claude Code CLI. No session starts until a local CLI is ready.",
   "activation.copy.task":
     "Create the exact reviewed sample task. Retrying this action cannot create a duplicate.",
   "activation.copy.ready": "Move the task from the backlog to Ready with a recorded state transition.",
@@ -466,7 +466,7 @@ const en = {
   "activation.copy.complete":
     "Your final decision is durable. The walkthrough is complete; Loomrail did not decide on its own result.",
   "activation.action.workspace": "Prepare demo workspace",
-  "activation.action.provider": "Select Codex CLI",
+  "activation.action.provider": "Use available local CLI",
   "activation.action.task": "Create guided task",
   "activation.action.ready": "Move task to Ready",
   "activation.action.run": "Start guided workflow",
@@ -1605,7 +1605,7 @@ const ru = {
   "activation.phase.complete": "Решение владельца записано",
   "activation.copy.workspace": "Развернём встроенный репозиторий web-app в локальном хранилище Loomrail.",
   "activation.copy.provider":
-    "Выберите Codex CLI для проекта. Сессия запустится только для совместимой точной версии и уже авторизованного CLI.",
+    "Верните проект в режим «Авто», чтобы Loomrail мог использовать совместимый авторизованный Codex или Claude Code CLI. Пока локальный CLI не готов, сессия не запустится.",
   "activation.copy.task":
     "Создайте точную проверенную тестовую задачу. Повтор этого действия не создаст дубль.",
   "activation.copy.ready": "Переведите задачу из бэклога в Ready отдельным записанным переходом.",
@@ -1622,7 +1622,7 @@ const ru = {
   "activation.copy.complete":
     "Ваше итоговое решение сохранено. Маршрут завершён; Loomrail не решал судьбу собственного результата.",
   "activation.action.workspace": "Подготовить демо-проект",
-  "activation.action.provider": "Выбрать Codex CLI",
+  "activation.action.provider": "Использовать доступный локальный CLI",
   "activation.action.task": "Создать демо-задачу",
   "activation.action.ready": "Перевести задачу в Ready",
   "activation.action.run": "Запустить демо-процесс",

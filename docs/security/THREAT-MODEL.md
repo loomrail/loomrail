@@ -682,6 +682,9 @@ Required controls and verification:
 - the route may spend provider quota only after the owner starts a workflow. Provider selection, Task creation,
   Ready, workflow start, budget changes and final disposition remain separate authenticated owner actions through
   existing Origin/CSRF, optimistic-version and audit controls;
+- a stale unavailable Project preference is recovered only by an explicit owner action that restores `AUTO`; the
+  provider registry then selects a compatible authenticated local CLI, so the guided UI cannot silently pin Codex or
+  Claude and cannot introduce an API fallback;
 - the bootstrap value remains fragment-only and is consumed by the existing one-time session exchange. It is neither
   persisted in guided state nor admitted to operational logs;
 - one Project-derived mission command ID makes lost-response Task creation idempotent. Progress is reconstructed only
@@ -692,8 +695,8 @@ Required controls and verification:
   Human Request, budget pause, separate Review/QA evidence, owner-only disposition, RU/EN, keyboard, light/dark and
   narrow viewport. The same named contract, browser and package gates run on macOS/Windows CI before unrelated lint.
 
-Residual risk remains until that CI run exists for the fixed Q15 commit and the protected landing consumes the same
-contract. Credentialed cross-platform API evidence remains a separate pending gate.
+Residual risk remains until fresh fixed-commit CI exists for the local-CLI Q15 contract and the protected landing
+consumer. Real Codex and Claude Code execution on Windows remains a separate pending gate.
 
 ### Q16 provider-allowance delta (T47)
 

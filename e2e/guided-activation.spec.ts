@@ -16,26 +16,29 @@ const guidedUrl = (bootstrapUrl: string): string => {
   return url.toString();
 };
 
-const providerContractRegistry = () => {
+const providerContractRegistry = (readyProvider: "CODEX" | "CLAUDE_CODE" | null = "CODEX") => {
   const adapter = createProviderTestDouble();
   const capabilities = adapter.capabilities();
+  const boundedAdapter = {
+    ...adapter,
+    capabilities: () => ({
+      ...capabilities,
+      stages: ["DISCOVERY", "PLAN", "REVIEW", "ACCEPTANCE"] as const,
+    }),
+  };
   return createProviderRegistry({
     env: {},
     adapters: {
-      CODEX: {
-        ...adapter,
-        capabilities: () => ({
-          ...capabilities,
-          stages: ["DISCOVERY", "PLAN", "REVIEW", "ACCEPTANCE"],
-        }),
-      },
+      CODEX: boundedAdapter,
+      CLAUDE_CODE: boundedAdapter,
     },
-    probeAuthentication: (provider) => Promise.resolve(provider === "CODEX" ? "AUTHENTICATED" : "REQUIRED"),
+    probeAuthentication: (provider) =>
+      Promise.resolve(provider === readyProvider ? "AUTHENTICATED" : "REQUIRED"),
     probeRuntime: (provider) =>
       Promise.resolve({
-        installed: provider === "CODEX",
-        compatibility: provider === "CODEX" ? "VERIFIED" : "MISSING",
-        version: provider === "CODEX" ? "0.153.4" : null,
+        installed: provider === readyProvider,
+        compatibility: provider === readyProvider ? "VERIFIED" : "MISSING",
+        version: provider === readyProvider ? (provider === "CODEX" ? "0.153.4" : "2.1.260") : null,
       }),
   });
 };
@@ -148,5 +151,47 @@ test.describe("canonical guided activation", () => {
     await expect(page.locator(".activation")).toHaveCSS("overflow-y", "visible");
     await page.reload();
     await expect(page.getByRole("heading", { name: "Human Request и результат провайдера" })).toBeVisible();
+  });
+
+  test("recovers a stale unavailable provider preference through Auto", async ({ page }) => {
+    dataDirectory = await mkdtemp(join(tmpdir(), "loomrail guided provider recovery "));
+    const databasePath = join(dataDirectory, "state.sqlite");
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      browserQADriver: passingBrowserQADriver(),
+      logger: false,
+      providerRegistry: providerContractRegistry(null),
+      stateDatabasePath: databasePath,
+      webRoot: resolve("apps/web/dist"),
+    });
+
+    await page.goto(guidedUrl(daemon.bootstrapUrl));
+    await page.getByRole("button", { name: "Prepare demo workspace" }).click();
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    const selector = settings.getByRole("combobox", { name: "Provider for new sessions" });
+    await selector.focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Home");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await expect(selector).toContainText("Codex CLI");
+    await settings.getByRole("button", { name: "Close dialog" }).click();
+
+    await daemon.close();
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      browserQADriver: passingBrowserQADriver(),
+      logger: false,
+      providerRegistry: providerContractRegistry("CLAUDE_CODE"),
+      stateDatabasePath: databasePath,
+      webRoot: resolve("apps/web/dist"),
+    });
+    await page.goto(guidedUrl(daemon.bootstrapUrl));
+
+    const recover = page.getByRole("button", { name: "Use available local CLI" });
+    await expect(recover).toBeVisible();
+    await recover.click();
+    await expect(page.getByRole("button", { name: "Create guided task" })).toBeVisible();
   });
 });

@@ -167,7 +167,7 @@ export const ActivationPage = (): React.JSX.Element => {
             icon="agents"
             loading={setProviderMutation.isPending}
             onClick={() => {
-              setProviderMutation.mutate({ preference: "CODEX", project });
+              setProviderMutation.mutate({ preference: "AUTO", project });
             }}
             variant="primary"
           >
