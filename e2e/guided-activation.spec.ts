@@ -8,6 +8,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { passingBrowserQADriver } from "../apps/daemon/test/browser-qa-fixture.js";
 import { createProviderTestDouble } from "../apps/daemon/test/provider-double.js";
 import { createProviderRegistry } from "../apps/daemon/dist/provider-selection.js";
+import type { ProviderAdapter } from "../packages/provider-core/dist/index.js";
 import { startDaemon, type RunningDaemon } from "./provider-test-daemon.js";
 
 const guidedUrl = (bootstrapUrl: string): string => {
@@ -19,11 +20,11 @@ const guidedUrl = (bootstrapUrl: string): string => {
 const providerContractRegistry = (readyProvider: "CODEX" | "CLAUDE_CODE" | null = "CODEX") => {
   const adapter = createProviderTestDouble();
   const capabilities = adapter.capabilities();
-  const boundedAdapter = {
+  const boundedAdapter: ProviderAdapter = {
     ...adapter,
     capabilities: () => ({
       ...capabilities,
-      stages: ["DISCOVERY", "PLAN", "REVIEW", "ACCEPTANCE"] as const,
+      stages: ["DISCOVERY", "PLAN", "REVIEW", "ACCEPTANCE"],
     }),
   };
   return createProviderRegistry({
