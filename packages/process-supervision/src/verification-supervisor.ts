@@ -9,10 +9,13 @@ import {
   parseVerificationProcessRecord,
   type VerificationProcessRecord,
 } from "./verification-process-record.js";
+import {
+  parseSupervisorStartFrame,
+  SUPERVISOR_START_FRAME_MAX_BYTES,
+} from "./verification-supervisor-protocol.js";
 
 const FORCE_WAIT_MS = 2_000;
 const PARENT_CHECK_MS = 250;
-const CONTROL_LIMIT_BYTES = 256;
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/u;
 const runIdPattern = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u;
 const processTree = createProcessTreeOperations();
@@ -183,14 +186,14 @@ if (invocation === null) {
     })();
   };
 
-  const startTarget = (): void => {
+  const startTarget = (targetEnvironment: Readonly<Record<string, string>>): void => {
     if (child !== null || stopping || finished || !processTree.pidExists(invocation.parentPid)) {
       stop();
       return;
     }
     const target = spawn(invocation.command, invocation.args, {
       detached: processTree.detachChild,
-      env: process.env,
+      env: { ...targetEnvironment },
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -251,7 +254,7 @@ if (invocation === null) {
   process.stdin.on("data", (chunk: Buffer) => {
     if (child !== null || stopping || finished) return;
     controlBuffer = Buffer.concat([controlBuffer, chunk]);
-    if (controlBuffer.byteLength > CONTROL_LIMIT_BYTES) {
+    if (controlBuffer.byteLength > SUPERVISOR_START_FRAME_MAX_BYTES) {
       stop();
       return;
     }
@@ -259,11 +262,12 @@ if (invocation === null) {
     if (newline === -1) return;
     const command = controlBuffer.subarray(0, newline).toString("utf8");
     controlBuffer = controlBuffer.subarray(newline + 1);
-    if (command !== `GO:${invocation.controlToken}` || controlBuffer.byteLength !== 0) {
+    const targetEnvironment = parseSupervisorStartFrame(command, invocation.controlToken);
+    if (targetEnvironment === null || controlBuffer.byteLength !== 0) {
       stop();
       return;
     }
-    startTarget();
+    startTarget(targetEnvironment);
   });
   process.stdin.once("end", stop);
   process.stdin.once("error", stop);

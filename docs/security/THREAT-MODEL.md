@@ -1594,9 +1594,10 @@ slower CIM query is reserved for descendant relationships. Live cleanup tolerate
 CIM query or per-process creation-time observation failures and resets its quiet proof across every failed
 observation; two successful quiet scans are still required, and a third failure remains fail-closed. A candidate
 created before the supervised root is ignored as a stale Windows parent-PID collision and is never signalled; a
-creation time missing across all bounded retries remains an identity failure. The scrubbed verification environment
-retains the inbox `%SystemRoot%\\System32\\WindowsPowerShell\\v1.0` directory for this trusted bounded probe without
-inheriting the owner's wider `PATH`; absence or launch failure still retains process authority. Process-record
+creation time missing across all bounded retries remains an identity failure. The trusted supervisor retains the
+daemon's host environment for OS lifecycle probes, while the approved recipe receives a separately bounded scrubbed
+environment over the authenticated private control pipe. Daemon credentials and the owner's wider `PATH` are not
+forwarded to the recipe; an invalid environment frame or lifecycle-probe failure retains process authority. Process-record
 v2 captures a maximum-ten-second interval directly around the synchronous spawn call, then recovery accepts only an
 OS creation time inside that interval plus the fixed two-second precision tolerance. One unavailable observation may
 be retried while the PID remains live; a second absence, an over-wide interval or an actual mismatch never signals

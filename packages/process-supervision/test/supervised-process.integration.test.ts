@@ -15,6 +15,7 @@ import {
   verificationProcessRecordPath,
   type ProcessTreeOperations,
 } from "../src/index.js";
+import { encodeSupervisorStartFrame } from "../src/verification-supervisor-protocol.js";
 
 const verificationSupervisorEntrypoint = fileURLToPath(
   new URL("../dist/verification-supervisor.js", import.meta.url),
@@ -341,6 +342,46 @@ describe("supervised local process", () => {
     ).resolves.toBe(true);
     await removeVerificationProcessRecord(registryDirectory, runId);
   }, 105_000);
+
+  it("keeps the daemon environment out of an approved target", async () => {
+    const root = await mkdtemp(join(tmpdir(), "loomrail separated environment "));
+    roots.push(root);
+    const registryDirectory = join(root, "processes");
+    const runId = "verification-run-separated-environment";
+    const hostOnlyKey = "LOOMRAIL_SUPERVISOR_HOST_ONLY_TEST";
+    const targetOnlyKey = "LOOMRAIL_TARGET_ONLY_TEST";
+    const previous = process.env[hostOnlyKey];
+    process.env[hostOnlyKey] = "must-not-reach-target";
+    await prepareVerificationProcessIntent(registryDirectory, runId);
+
+    try {
+      const result = await runSupervisedProcess({
+        command: process.execPath,
+        args: [
+          "-e",
+          `process.stdout.write(JSON.stringify({ target: process.env.${targetOnlyKey}, host: process.env.${hostOnlyKey} }))`,
+        ],
+        cwd: root,
+        env: { PATH: "", [targetOnlyKey]: "present" },
+        deadlineMs: 2_000,
+        graceMs: 100,
+        outputLimitBytes: 4_096,
+        redactValues: ["must-not-reach-target"],
+        orphanGuard: { runId, registryDirectory, supervisorEntrypoint: verificationSupervisorEntrypoint },
+      });
+
+      expect(result).toMatchObject({ termination: "EXITED", exitCode: 0, signal: null });
+      expect(result.output.text).toContain('{"target":"present"}');
+      expect(result.output.text).not.toContain("must-not-reach-target");
+      await expect(
+        verificationProcessIsStopped(verificationProcessRecordPath(registryDirectory, runId), runId),
+      ).resolves.toBe(true);
+      await removeVerificationProcessRecord(registryDirectory, runId);
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, hostOnlyKey);
+      else process.env[hostOnlyKey] = previous;
+    }
+  });
 
   it("removes control sequences and exact sensitive values from captured text", async () => {
     const root = await mkdtemp(join(tmpdir(), "loomrail redact test "));
@@ -675,7 +716,7 @@ describe("supervised local process", () => {
         resolve();
       });
     });
-    supervisor.stdin.write(`GO:${token}\n`);
+    supervisor.stdin.write(encodeSupervisorStartFrame(token, { PATH: process.env["PATH"] ?? "" }));
     let parsed: { rootPid: number; descendantPid: number } | null = null;
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline && parsed === null) {

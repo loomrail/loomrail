@@ -8,6 +8,7 @@ import {
   verificationProcessIsStopped,
   verificationProcessRecordPath,
 } from "./verification-process-record.js";
+import { encodeSupervisorStartFrame } from "./verification-supervisor-protocol.js";
 
 export type SupervisedProcessTermination =
   "EXITED" | "TIMED_OUT" | "OUTPUT_LIMIT_REACHED" | "CANCELLED" | "SPAWN_FAILED" | "TERMINATION_FAILED";
@@ -156,6 +157,8 @@ export const runSupervisedProcess = async (
   let settled = false;
   let stopPromise: Promise<void> | undefined;
   const controlToken = options.orphanGuard === undefined ? null : randomBytes(32).toString("base64url");
+  const supervisorStartFrame =
+    controlToken === null ? null : encodeSupervisorStartFrame(controlToken, options.env);
   const recordFile =
     options.orphanGuard === undefined
       ? null
@@ -207,7 +210,10 @@ export const runSupervisedProcess = async (
   const child = spawn(supervisedCommand, supervisedArgs, {
     cwd: options.cwd,
     detached: processTree.detachChild,
-    env: { ...options.env },
+    // The trusted supervisor needs the daemon's host process-management environment. It receives
+    // the separately bounded target environment over the authenticated private control pipe and
+    // never forwards daemon credentials to the approved recipe.
+    env: options.orphanGuard === undefined ? { ...options.env } : { ...process.env },
     shell: false,
     stdio: options.orphanGuard === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe", "pipe"],
     windowsHide: true,
@@ -331,7 +337,7 @@ export const runSupervisedProcess = async (
           controlBuffer = controlBuffer.subarray(newline + 1);
           if (message === `READY:${controlToken}` && !supervisorReady) {
             supervisorReady = true;
-            child.stdin?.write(`GO:${controlToken}\n`);
+            child.stdin?.write(supervisorStartFrame ?? "");
           } else {
             const exit = new RegExp(`^EXIT:${controlToken}:(-?\\d+|null):(SIG[A-Z0-9]+|null)$`, "u").exec(
               message,

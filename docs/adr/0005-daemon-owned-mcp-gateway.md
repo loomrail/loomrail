@@ -46,10 +46,10 @@ Loomrail implements a daemon-owned MCP gateway.
   transient CIM query or per-process creation-time observation failures and still requires two successful quiet
   scans before publishing `STOPPED`; a third failure remains fail-closed. Windows can retain a dead creator PID on
   an older unrelated process, so descendant discovery ignores candidates created before the supervised root instead
-  of signalling them or treating that stale numeric relationship as part of the current tree. A verification
-  recipe's scrubbed environment retains the inbox
-  `%SystemRoot%\\System32\\WindowsPowerShell\\v1.0` directory solely for this trusted lifecycle probe; it does not
-  inherit the owner's wider `PATH`.
+  of signalling them or treating that stale numeric relationship as part of the current tree. The trusted
+  supervisor keeps the daemon's host environment for OS lifecycle probes, while the approved recipe receives its
+  separately bounded scrubbed environment over the authenticated private control pipe. The supervisor never forwards
+  daemon credentials or the owner's wider `PATH` to the recipe.
 
 ## Alternatives rejected
 

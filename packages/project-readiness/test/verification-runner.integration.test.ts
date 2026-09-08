@@ -446,7 +446,7 @@ describe("verification recipe runner", () => {
       LOOMRAIL_VERIFICATION: "1",
     });
     expect(windows).toMatchObject({
-      PATH: "C:\\runtime;C:\\Windows\\System32;C:\\Windows\\System32\\WindowsPowerShell\\v1.0",
+      PATH: "C:\\runtime;C:\\Windows\\System32",
       HOME: "C:\\isolated",
       USERPROFILE: "C:\\isolated",
       SystemRoot: "C:\\Windows",
@@ -455,24 +455,5 @@ describe("verification recipe runner", () => {
     expect(JSON.stringify({ posix, windows })).not.toContain("do-not-inherit");
     expect(JSON.stringify({ posix, windows })).not.toContain("/owner/home");
     expect(JSON.stringify({ posix, windows })).not.toContain("Users\\owner");
-  });
-
-  it("keeps the trusted Windows cleanup runtime in a scrubbed recipe environment", () => {
-    const environment = verificationBaselineEnvironment({
-      platform: "win32",
-      isolatedHome: "C:\\isolated",
-      runtimePath: ["C:\\runtime"],
-      source: {
-        SystemRoot: "C:\\Windows",
-        PATH: "C:\\owner-tools;C:\\Program Files\\PowerShell\\7",
-      },
-    });
-
-    expect(environment["PATH"]?.split(";")).toEqual([
-      "C:\\runtime",
-      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0",
-    ]);
-    expect(environment["PATH"]).not.toContain("owner-tools");
-    expect(environment["PATH"]).not.toContain("Program Files");
   });
 });
