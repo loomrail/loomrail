@@ -15,6 +15,7 @@ import {
   providerModelMappingSchema,
   providerStageResultSchemaFor,
   ProcessSpawnError,
+  renderProviderInvocationPrompt,
   runProcess,
   type DecodedProviderStageResult,
   type ProcessExitOutcome,
@@ -232,7 +233,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
           scratchDirectory,
           "--output-schema",
           schemaPath,
-          invocation.contextPack.text,
+          renderProviderInvocationPrompt(invocation),
         ];
 
         let result: DecodedProviderStageResult | undefined;

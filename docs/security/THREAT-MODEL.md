@@ -1790,6 +1790,13 @@ server. The admitted profiles are therefore exact and version-gated, not a colle
 - The sole explicit MCP connection is a daemon-owned, one-use loopback proxy. Its random capability is passed only to
   the child proxy, never persisted/logged, and deleted with the lease. The broker maps only the five ADR-0014 tools;
   unknown tools/fields are refused before executor I/O.
+- A contained provider can mistake its empty native read-only scratch for the authoritative repository and either
+  manufacture a blocked result or report completion without using the granted executor. One provider-neutral prompt
+  renderer therefore distinguishes scratch from workspace, explains CAS use, and checks the exact connector/tool
+  allowlist before process spawn, including refusal of a write-shaped tool on `READ_ONLY`. A mismatch is a typed
+  `ProviderInvocationAuthorityError`; the prompt contains no workspace path, branch, proxy argv or capability.
+  Read-only MCP discovery omits write/delete entirely. This is guidance plus an early wiring invariant, not
+  permission: executor policy still rechecks every call.
 - Authentication remains provider-owned. Loomrail runs only bounded `login status`/`auth status` probes, observes a
   closed exit outcome and never reads provider credential stores or returns account identity. `--bare` is not used
   for Claude because it disables subscription OAuth/keychain login and would reintroduce API-key auth.
@@ -1808,7 +1815,8 @@ attempt; another WorkItem, attempt or correction lineage cannot. Read-only, reci
 calls do not count. Missing evidence produces typed `IMPLEMENT_EFFECT_NOT_OBSERVED`, interrupts the session and
 hard-pauses with an owner-visible `PROVIDER_OUTCOME_REJECTED` request; it never advances the pipeline.
 
-Required verification: same-attempt cross-session mutation proof plus cross-attempt/work-item refusal; exact
+Required verification: same-attempt cross-session mutation proof plus cross-attempt/work-item refusal; typed missing
+connector/tool failures and no private binding data in the authority prompt; read-only discovery without write/delete; exact
 argv/config allowlists for both CLIs; repository/secret canary absent from child cwd and
 arguments; built-in-tool denial; ambient config/hook/plugin/MCP canaries; executable/version/auth states; one-use proxy
 authentication and revocation; real proxy-to-executor allowed/denied calls; malformed/oversized streams; token and
@@ -1923,6 +1931,10 @@ Q1 tightens the deterministic baseline further:
   path forms before they can enter normalized evidence or Defects;
 - `PASSED`, `FAILED` and `ERROR` are derived from a complete bounded scenario matrix; a driver/provider aggregate
   verdict is not part of the input schema;
+- assertions after an action share one bounded settle deadline. The driver repeats only the closed read-only probe
+  for `VISIBLE`, `TEXT_CONTAINS`, `URL_PATH`, `NO_HORIZONTAL_OVERFLOW` or `FOCUSED`; it does not run model-authored
+  JavaScript or use an unbounded/fixed sleep. This prevents client navigation, hydration or streamed rendering from
+  becoming a false defect while keeping total wait independent of assertion count. Expiry remains a measured fail;
 - screenshot/trace handles are not evidence. The daemon must quarantine, hash, size-check and atomically finalize each
   file before `COMPLETE_QA_RUN`; the command accepts only matching relative storage refs and persists no absolute path;
 - finalization writes a bounded marker before the directory rename and removes it only after the SQLite transaction;

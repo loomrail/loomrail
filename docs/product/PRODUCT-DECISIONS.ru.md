@@ -650,6 +650,13 @@ call становится `UNKNOWN_OUTCOME`; automatic replay отсутству
 repository и встроенные shell/file tools. Finite tool/turn guard переводит отсутствие прогресса в typed failure/
 attention, а terminal usage один раз попадает в immutable AgentRun ledger.
 
+Один provider-neutral renderer объясняет runtime разницу между пустым native read-only scratch и реальным
+Loomrail workspace. До spawn он проверяет наличие exact `loomrail_workspace` connector и обязательных list/read,
+а для `READ_WRITE` — write/delete tools; tool, запрещённый immutable access level, также блокирует spawn. Любой такой
+mismatch даёт typed internal-contract failure. Prompt не содержит workspace path, branch, proxy argv или capability.
+MCP discovery публикует write/delete только для `READ_WRITE`. Это guidance и ранняя проверка wiring, а не новая
+authority: разрешение по-прежнему выводится из immutable AgentRun и повторно проверяется executor на каждом вызове.
+
 QA сохраняет две независимые authority: daemon-owned BrowserDriver сначала создаёт exact measured evidence. Только
 его `PASSED` оставляет StageAttempt открытым для read-only provider synthesis; domain связывает provider `QA_REPORT`
 с exact QARun/evidence/tree. Failed/error measurement идёт в существующий correction/HumanRequest flow без provider

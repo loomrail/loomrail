@@ -2,12 +2,12 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-08 — bounded local-subscription public dogfood
+**Последнее дополнение:** 2026-09-09 — accepted private Recurkit full-workflow dogfood
 
 **Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
 локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood
-и одна полная public-fixture Task прошли до `PENDING` owner Acceptance, а private Epic, Windows evidence и stable
-publish gates остаются pending
+и public fixture прошли, один private Recurkit WorkItem прошёл полный workflow до owner Acceptance; durable
+2–3-WorkItem private Epic, Windows evidence и stable publish gates остаются pending
 
 **Продукт:** Loomrail
 
@@ -1322,6 +1322,24 @@ narrative, а exact snapshot восстанавливается после resta
 реальный Claude Discovery и честный `POST_SESSION` hard pause, но не дошёл до IMPLEMENT/QA из-за 703351 токена при
 run ceiling 700000; поэтому full private pass и Phase exit gate остаются `PENDING`, без synthetic success.
 
+**Implementation checkpoint (2026-09-09):** новый owner-approved Recurkit WorkItem «Private beta: безопасное
+восстановление пароля» прошёл production local-CLI маршрут Discovery → Plan → bounded Implement → cross-provider
+Review → daemon-owned Project verification → measured Browser QA → Acceptance и был принят владельцем. Codex
+выполнял authoring/QA/Acceptance, Claude Code — независимый Review; фактический `POST_SESSION` usage составил
+13 222 791 из явно утверждённых 20 000 000 токенов. Project verification прошёл три required recipe, Browser QA
+прошёл desktop light и mobile dark на macOS Chromium; restart продолжил durable workflow без replay. Dogfood выявил
+две Loomrail integration-проблемы: provider путал read-only scratch с отдельным writable MCP workspace, а Browser QA
+проверял client navigation/streamed render мгновенно. Общий authority renderer, access-shaped tool discovery и
+bounded shared assertion settle deadline закрывают их regression tests. Дополнительный полный Recurkit E2E прошёл
+10/10. Accepted package относится к measured tree `2d53c8d8`; последующая test-hardening меняет working tree и не
+приписывается этому package.
+
+Это полный private workflow одного WorkItem, но не формальный Dogfood Alpha Epic: три последовательные части были
+зафиксированы в brief/plan, а не как 2–3 отдельные durable зависимые WorkItem. До появления/использования domain-owned
+dependency DAG чекбокс §22 и stable `privateDogfood` остаются `PENDING`. Password-reset delivery в Recurkit также
+намеренно dry-run: сырой token не выдаётся и внешнее письмо не отправляется; production email/outbox adapter требует
+отдельного решения и review.
+
 ### Phase 8 — Public Alpha hardening (3–4 недели)
 
 **Outcome:** внешний solo developer может безопасно установить и dogfood продукт.
@@ -1811,14 +1829,14 @@ human waiver с documented risk.
    measured Browser QA до намеренно `PENDING` owner Acceptance; 9 audited writes произошли только в Implement, QA
    оставался read-only. Финальные `pnpm verify`, 61/61 product E2E, 7/7 landing E2E и clean-install release-package
    gate прошли после обновления зависимостей. Не переносить это доказательство на Windows или private Epic.
-3. Провести owner-approved subscription-backed private dogfood Epic из 2–3 зависимых Task через оба local provider,
-   restart, review, Browser QA и owner Acceptance. Q20.4 evidence-integrity regression закрыт, но повторный Recurkit
-   run остановился по честному post-session budget gate до IMPLEMENT/QA и не считается pass. Test doubles не считаются
-   live доказательством.
+3. Один owner-approved private Recurkit WorkItem прошёл оба local provider, restart, Review, Project verification,
+   Browser QA и owner Acceptance в пределах явно утверждённого бюджета. Довести контракт до domain-owned Epic из
+   2–3 durable зависимых WorkItem; textual three-step plan не выдавать за dependency graph. Test doubles и прежние
+   cancelled/returned runs не считать live доказательством.
 4. macOS local CLI compatibility rows и protected landing fixed-commit gate закрыты. Получить real Codex/Claude
    execution evidence на Windows; неизвестные результаты оставить `PENDING`, не возвращая Mock.
 5. Repository-side stage-only workflow уже подготовлен с exact-intent, six-job CI и strict eleven-gate evidence
-   index. Schema v3 сейчас честно показывает 8/11 и не содержит выбранной stable version; `PENDING` private dogfood и
+   index. Schema v3 сейчас честно показывает 8/11 и не содержит выбранной stable version; `PENDING` durable private Epic и
    обе Windows local-CLI rows машинно запрещают staging. После их закрытия владелец отдельно настраивает
    protected main-only `npm-release` environment и npm OIDC trust только для `npm stage publish`. Trusted job
    read-only проверяет непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или

@@ -1,6 +1,6 @@
 # Q20.1 — Локальные Codex/Claude runtime через подписочную авторизацию: спецификация
 
-**Статус:** implemented; full private workflow and Windows live evidence pending
+**Статус:** implemented; one accepted private full-workflow WorkItem complete; formal private Epic and Windows live evidence pending
 
 ## Цель
 
@@ -31,6 +31,9 @@ Loomrail не выполняет login/update за пользователя и �
 - MCP config содержит только session-scoped Loomrail proxy; proxy token одноразовый, не логируется и не сохраняется;
 - proxy экспортирует только `loomrail_list_directory`, `loomrail_read_file`, `loomrail_write_file`,
   `loomrail_delete_file`, `loomrail_run_recipe`;
+- общий provider-neutral renderer до spawn проверяет соответствие connector/tool allowlist immutable workspace
+  access и объясняет runtime, что read-only scratch не является repository; private path/branch/capability в prompt
+  не попадают, а read-only discovery не публикует write/delete;
 - daemon повторно валидирует operation и вызывает `WorkspaceToolExecutor`; результат bounded/redacted и считается
   недоверенными данными следующего provider turn;
 - IMPLEMENT получает READ_WRITE, QA и читающие стадии — READ_ONLY; recipe остаётся owner-approved exact ID.
@@ -79,4 +82,5 @@ Loomrail не выполняет login/update за пользователя и �
 
 Focused evidence 2026-09-07: on macOS arm64, Codex CLI `0.153.4` and Claude Code `2.1.260` each completed a real
 IMPLEMENT read/write and QA read-only session through the proxy/executor in a temporary workspace with spaces and
-Unicode. This does not replace full private-project or Windows acceptance.
+Unicode. A later accepted private Recurkit WorkItem exercised the full route and exposed the need for the explicit
+authority renderer. It does not replace the separate durable 2–3-WorkItem Epic or Windows acceptance.

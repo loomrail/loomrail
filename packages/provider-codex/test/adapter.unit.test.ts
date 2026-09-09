@@ -127,7 +127,7 @@ describe("local Codex provider", () => {
         path: "/private/Workspace With Spaces/秘密",
         branch: "codex/test",
         baseCommit: "a".repeat(40),
-        access: "READ_ONLY",
+        access: "READ_WRITE",
         networkAccess: false,
       },
       mcpConnections: [
@@ -135,7 +135,12 @@ describe("local Codex provider", () => {
           id: "loomrail_workspace",
           proxyCommand: process.execPath,
           proxyArgs: ["/private/proxy.js", "--token", "session-capability-not-a-provider-key"],
-          enabledTools: ["loomrail_read_file"],
+          enabledTools: [
+            "loomrail_list_directory",
+            "loomrail_read_file",
+            "loomrail_write_file",
+            "loomrail_delete_file",
+          ],
         },
       ],
     };
@@ -159,6 +164,10 @@ describe("local Codex provider", () => {
     );
     expect(record.args).toContain('mcp_servers.loomrail_workspace.default_tools_approval_mode="approve"');
     expect(record.args).toContain("read-only");
+    expect(record.args.at(-1)).toContain(
+      "The native read-only sandbox applies only to the empty scratch directory",
+    );
+    expect(record.args.at(-1)).toContain("`loomrail_write_file` or `loomrail_delete_file`");
     expect(record.args.join("\0")).not.toContain(input.workspace?.path ?? "unreachable");
     expect(record.args.join("\0")).not.toContain("OPENAI_API_KEY");
     expect(record.environmentKeys).not.toContain("OPENAI_API_KEY");

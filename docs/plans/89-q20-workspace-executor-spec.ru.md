@@ -1,6 +1,6 @@
 # Q20 — Безопасное provider-neutral выполнение workspace tools: спецификация
 
-**Статус:** implemented; full private workflow and Windows live evidence pending
+**Статус:** implemented; one accepted private full-workflow WorkItem complete; formal private Epic and Windows live evidence pending
 
 ## Цель
 
@@ -44,6 +44,11 @@ session-bound SHA-256. File content и command output возвращаются �
 - live IMPLEMENT не завершается по одному provider JSON: domain требует успешный audited `WRITE_FILE`/`DELETE_FILE`
   той же ProviderSession/StageAttempt, иначе даёт `IMPLEMENT_EFFECT_NOT_OBSERVED` и hard pause;
 - untrusted file/process/provider text не интерпретируется как HTML, команда, путь или workflow decision.
+- provider видит явное neutral объяснение, что native read-only sandbox относится только к scratch, а repository
+  доступен через `loomrail_workspace`; renderer fail closed до spawn, если connector/tool allowlist не соответствует
+  immutable access, и не раскрывает path/branch/capability;
+- read-only MCP discovery не публикует write/delete tools; `READ_WRITE` публикует их только как closed shapes,
+  остающиеся subject to executor validation.
 
 ## QA authority
 
@@ -63,13 +68,16 @@ synthesis; domain принимает provider `QA_REPORT` только вмес�
 - [x] secret values, `.env`, API keys, raw provider payload/file/command output отсутствуют в state/events/logs;
 - [x] UI различает approval-needed/blocked, provider/tool failure и running/succeeded audit state без color-only;
 - [x] integration/E2E показывают real file diff, measured QA binding и recovery с test-only transports/doubles;
+- [x] production private-workflow выявил и закрыл mismatch между native scratch и provider-visible workspace
+      authority; оба adapters используют общий renderer, а read-only discovery не показывает write tools;
 - [x] финальный `pnpm verify`, 60/60 product E2E, 7/7 landing E2E и clean-install release-package gate прошли
       после последних live-runtime уточнений.
 
 Owner-approved focused subscription dogfood на macOS arm64 прошёл для Codex CLI `0.153.4` и Claude Code `2.1.260`:
 оба runtime выполнили реальные bounded IMPLEMENT read/write и QA read-only calls через Loomrail proxy/executor в
-workspace с пробелами/Unicode. Полный private-project workflow и реальный Windows host остаются отдельными pending
-gates Master Plan.
+workspace с пробелами/Unicode. Позднее один private Recurkit WorkItem прошёл полный workflow и был принят владельцем;
+формальный private Epic с 2–3 durable dependent WorkItem и реальный Windows host остаются отдельными pending gates
+Master Plan.
 
 ## Не входит
 

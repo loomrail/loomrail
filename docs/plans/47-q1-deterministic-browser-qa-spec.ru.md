@@ -65,6 +65,11 @@ Scenario manifest исполняется как bounded typed DSL: same-origin `
 `WAIT_FOR_IDLE` и assertions `VISIBLE`, `TEXT_CONTAINS`, `URL_PATH`, `NO_HORIZONTAL_OVERFLOW`, `FOCUSED`.
 Произвольный JavaScript, CSS/XPath selector и absolute URL в manifest не допускаются.
 
+После последнего action assertions получают один общий bounded settle deadline, а не мгновенный snapshot и не
+отдельный полный timeout на каждую проверку. Driver повторяет только закрытый read-only assertion probe до pass или
+этого deadline. Это покрывает client-side navigation, hydration и streamed render без произвольного sleep; failure
+остаётся measured, а общий bound не растёт с количеством assertions.
+
 Codex/Claude browser capabilities и signed-in Chrome остаются будущими adapters. Они не заменяют
 Playwright baseline.
 
@@ -124,6 +129,8 @@ metadata; atomic rename в final evidence directory делается до commit
 8. Task Cockpit показывает measured state, target matrix, scenarios, observations, attachments и Defects без raw JSON.
 9. RU/EN, light/dark, keyboard, 320 px, reconnect и stale/conflict покрыты browser QA Loomrail UI.
 10. macOS/Windows CI запускает один и тот же deterministic fixture baseline.
+11. Client-side navigation/hydration может завершиться внутри общего bounded assertion deadline; по его истечении
+    driver фиксирует обычный failed assertion без бесконечного ожидания.
 
 ## 6. Non-goals
 

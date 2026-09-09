@@ -131,7 +131,7 @@ describe("local Claude Code provider", () => {
         path: "C:\\Users\\Owner\\Workspace With Spaces\\秘密",
         branch: "codex/test",
         baseCommit: "a".repeat(40),
-        access: "READ_ONLY",
+        access: "READ_WRITE",
         networkAccess: false,
       },
       mcpConnections: [
@@ -139,7 +139,12 @@ describe("local Claude Code provider", () => {
           id: "loomrail_workspace",
           proxyCommand: process.execPath,
           proxyArgs: ["/private/proxy.js", "--token", "session-capability-not-a-provider-key"],
-          enabledTools: ["loomrail_read_file"],
+          enabledTools: [
+            "loomrail_list_directory",
+            "loomrail_read_file",
+            "loomrail_write_file",
+            "loomrail_delete_file",
+          ],
         },
       ],
     };
@@ -160,6 +165,10 @@ describe("local Claude Code provider", () => {
     expect(record.args).toContain("--no-session-persistence");
     expect(record.args).not.toContain("--bare");
     expect(record.args).not.toContain("--max-budget-usd");
+    expect(record.args.at(-1)).toContain(
+      "The native read-only sandbox applies only to the empty scratch directory",
+    );
+    expect(record.args.at(-1)).toContain("`loomrail_write_file` or `loomrail_delete_file`");
     expect(record.args.join("\0")).not.toContain(input.workspace?.path ?? "unreachable");
     expect(record.environmentKeys).not.toContain("ANTHROPIC_API_KEY");
     expect(record.environmentKeys).not.toContain("PROJECT_SECRET");

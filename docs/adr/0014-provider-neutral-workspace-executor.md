@@ -56,9 +56,20 @@ publishes the captured approved recipe IDs as an exact JSON Schema enum; labels 
 into provider-visible prose. The executor still repeats the authoritative plan/revocation check at execution time,
 so schema discovery is guidance rather than permission.
 
+The provider-neutral invocation renderer is the sole source of the provider-visible explanation of that authority.
+It distinguishes the empty native read-only scratch directory from the authoritative Loomrail workspace, tells a
+read-write IMPLEMENT session to use only the closed MCP file tools, and explains compare-and-swap without copying the
+workspace path, branch, proxy arguments or capability into the prompt. Before a CLI is spawned, it verifies that a
+workspace grant has the `loomrail_workspace` connector plus list/read and, for `READ_WRITE`, write/delete tools. A
+missing connector/required tool or a tool forbidden by the immutable access level is a typed
+`ProviderInvocationAuthorityError`; there is no best-effort launch. This prose remains guidance, not authority: the
+immutable invocation, advertised tool allowlist and executor checks are the enforcement layers.
+
 `READ_ONLY` permits list/read and approved verification recipes. `READ_WRITE` additionally permits write/delete.
 Only IMPLEMENT receives `READ_WRITE`; QA remains `READ_ONLY`. A plan recipe is not editable provider input: the
 provider supplies only its bounded ID. A missing, disabled, changed or network-incompatible plan refuses execution.
+The MCP server advertises write/delete only for `READ_WRITE`; a read-only session cannot discover a write-shaped tool
+that it will inevitably be denied from using.
 
 ### Filesystem confinement
 

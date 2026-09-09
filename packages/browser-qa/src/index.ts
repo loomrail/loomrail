@@ -262,6 +262,26 @@ const isTimeoutError = (error: unknown): boolean =>
   error instanceof Error &&
   (error.name === "TimeoutError" || /(?:timeout|timed out).*\d+\s*ms/i.test(error.message));
 
+const waitForAssertion = async (
+  probe: () => Promise<boolean>,
+  deadline: number,
+): Promise<
+  { passed: true } | { passed: false; error: { present: false } | { present: true; value: unknown } }
+> => {
+  let lastError: { present: false } | { present: true; value: unknown } = { present: false };
+  do {
+    try {
+      if (await probe()) return { passed: true };
+    } catch (error: unknown) {
+      lastError = { present: true, value: error };
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return { passed: false, error: lastError };
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(50, remainingMs)));
+  } while (Date.now() < deadline);
+  return { passed: false, error: lastError };
+};
+
 const errorSummary = (error: unknown): string =>
   safeSummary(
     error instanceof Error ? error.message : "The Playwright driver failed without an Error value.",
@@ -579,6 +599,7 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
       let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
       let browserVersion = "unknown";
       let finalized = false;
+      const hasTerminalFailure = (): boolean => securityViolations.size > 0 || timedOut || targetUnavailable;
 
       const confirmAttachments = async (): Promise<void> => {
         if (!finalized) return;
@@ -719,90 +740,95 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
               stepResults.push({ id: step.id, status, durationMs: Date.now() - startedAt });
             }
 
-            for (const assertion of scenario.assertions) {
-              let passed = false;
-              let details: string | null = null;
-              try {
-                switch (assertion.rule.type) {
-                  case "VISIBLE":
-                    passed = await locatorFor(page, assertion.rule.locator).isVisible();
-                    break;
-                  case "TEXT_CONTAINS": {
-                    const actual = await locatorFor(page, assertion.rule.locator).textContent();
-                    passed = actual?.includes(assertion.rule.expected) === true;
-                    details = passed
-                      ? null
-                      : safeSummary(`Expected text containing “${assertion.rule.expected}”.`);
-                    break;
-                  }
-                  case "URL_PATH":
-                    passed = pathOfUrl(page.url()) === assertion.rule.path;
-                    break;
-                  case "NO_HORIZONTAL_OVERFLOW":
-                    passed = await page.evaluate<boolean>(
-                      "document.documentElement.scrollWidth <= document.documentElement.clientWidth",
-                    );
-                    break;
-                  case "FOCUSED":
-                    passed = await locatorFor(page, assertion.rule.locator).evaluate((element: object) => {
-                      const ownerDocument: unknown = Reflect.get(element, "ownerDocument");
-                      return (
-                        typeof ownerDocument === "object" &&
-                        ownerDocument !== null &&
-                        element === Reflect.get(ownerDocument, "activeElement")
+            if (!hasTerminalFailure()) {
+              const assertionDeadline = Date.now() + timeoutMs;
+              for (const assertion of scenario.assertions) {
+                const settled = await waitForAssertion(async () => {
+                  switch (assertion.rule.type) {
+                    case "VISIBLE":
+                      return locatorFor(page, assertion.rule.locator).isVisible();
+                    case "TEXT_CONTAINS": {
+                      const actual = await locatorFor(page, assertion.rule.locator).textContent();
+                      return actual?.includes(assertion.rule.expected) === true;
+                    }
+                    case "URL_PATH":
+                      return pathOfUrl(page.url()) === assertion.rule.path;
+                    case "NO_HORIZONTAL_OVERFLOW":
+                      return page.evaluate<boolean>(
+                        "document.documentElement.scrollWidth <= document.documentElement.clientWidth",
                       );
-                    });
-                    break;
+                    case "FOCUSED":
+                      return locatorFor(page, assertion.rule.locator).evaluate((element: object) => {
+                        const ownerDocument: unknown = Reflect.get(element, "ownerDocument");
+                        return (
+                          typeof ownerDocument === "object" &&
+                          ownerDocument !== null &&
+                          element === Reflect.get(ownerDocument, "activeElement")
+                        );
+                      });
+                  }
+                }, assertionDeadline);
+                const passed = settled.passed;
+                let details = settled.passed
+                  ? null
+                  : settled.error.present
+                    ? errorSummary(settled.error.value)
+                    : assertion.rule.type === "TEXT_CONTAINS"
+                      ? safeSummary(`Expected text containing “${assertion.rule.expected}”.`)
+                      : null;
+                if (!passed) {
+                  details ??= `Assertion failed: ${assertion.title}`;
+                  defect(defects, {
+                    severity: "HIGH",
+                    title: assertion.title,
+                    description: details,
+                    reproduction: [`Run scenario “${scenario.title}” on target ${target.id}.`],
+                    targetId: target.id,
+                    scenarioId: scenario.id,
+                  });
                 }
-              } catch (error: unknown) {
-                details = errorSummary(error);
+                assertionResults.push({
+                  id: assertion.id,
+                  status: passed ? "PASSED" : "FAILED",
+                  details,
+                });
               }
-              if (!passed) {
-                details ??= `Assertion failed: ${assertion.title}`;
+            }
+
+            if (!hasTerminalFailure()) {
+              const screenshotFilename = `target-${(targetIndex + 1).toString()}--scenario-${(
+                scenarioIndex + 1
+              ).toString()}.png`;
+              const screenshotPath = join(quarantineDirectory, screenshotFilename);
+              try {
+                await page.screenshot({ path: screenshotPath, fullPage: true });
+                const metadata = await sha256File(screenshotPath);
+                if (attachmentBytes + metadata.byteSize > MAX_QA_TOTAL_ATTACHMENT_BYTES) {
+                  throw new QAEvidenceLimitError("Browser QA evidence exceeded the per-run size limit");
+                }
+                attachmentBytes += metadata.byteSize;
+                const draft = qaAttachmentDraftSchema.parse({
+                  handle: `screenshot:${target.id}:${scenario.id}`,
+                  kind: "SCREENSHOT",
+                  ...metadata,
+                  targetId: target.id,
+                  scenarioId: scenario.id,
+                  capturedAt: new Date().toISOString(),
+                });
+                pendingAttachments.push({ draft, filename: screenshotFilename, path: screenshotPath });
+              } catch (error: unknown) {
+                if (error instanceof QAEvidenceLimitError) {
+                  securityViolations.add("INVALID_EVIDENCE");
+                }
                 defect(defects, {
                   severity: "HIGH",
-                  title: assertion.title,
-                  description: details,
+                  title: `Screenshot capture failed: ${scenario.title}`,
+                  description: errorSummary(error),
                   reproduction: [`Run scenario “${scenario.title}” on target ${target.id}.`],
                   targetId: target.id,
                   scenarioId: scenario.id,
                 });
               }
-              assertionResults.push({ id: assertion.id, status: passed ? "PASSED" : "FAILED", details });
-            }
-
-            const screenshotFilename = `target-${(targetIndex + 1).toString()}--scenario-${(
-              scenarioIndex + 1
-            ).toString()}.png`;
-            const screenshotPath = join(quarantineDirectory, screenshotFilename);
-            try {
-              await page.screenshot({ path: screenshotPath, fullPage: true });
-              const metadata = await sha256File(screenshotPath);
-              if (attachmentBytes + metadata.byteSize > MAX_QA_TOTAL_ATTACHMENT_BYTES) {
-                throw new QAEvidenceLimitError("Browser QA evidence exceeded the per-run size limit");
-              }
-              attachmentBytes += metadata.byteSize;
-              const draft = qaAttachmentDraftSchema.parse({
-                handle: `screenshot:${target.id}:${scenario.id}`,
-                kind: "SCREENSHOT",
-                ...metadata,
-                targetId: target.id,
-                scenarioId: scenario.id,
-                capturedAt: new Date().toISOString(),
-              });
-              pendingAttachments.push({ draft, filename: screenshotFilename, path: screenshotPath });
-            } catch (error: unknown) {
-              if (error instanceof QAEvidenceLimitError) {
-                securityViolations.add("INVALID_EVIDENCE");
-              }
-              defect(defects, {
-                severity: "HIGH",
-                title: `Screenshot capture failed: ${scenario.title}`,
-                description: errorSummary(error),
-                reproduction: [`Run scenario “${scenario.title}” on target ${target.id}.`],
-                targetId: target.id,
-                scenarioId: scenario.id,
-              });
             }
             executions.push({
               targetId: target.id,
@@ -811,45 +837,51 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
               steps: stepResults,
               assertions: assertionResults,
             });
+            if (hasTerminalFailure()) break;
           }
 
           const traceFilename = `target-${(targetIndex + 1).toString()}--trace.zip`;
           const tracePath = join(quarantineDirectory, traceFilename);
-          try {
-            await context.tracing.stop({ path: tracePath });
-            const metadata = await sha256File(tracePath);
-            if (attachmentBytes + metadata.byteSize > MAX_QA_TOTAL_ATTACHMENT_BYTES) {
-              throw new QAEvidenceLimitError("Browser QA evidence exceeded the per-run size limit");
-            }
-            attachmentBytes += metadata.byteSize;
-            const firstScenario = selectedScenarios[0];
-            if (!firstScenario) throw new Error("QA plan has no scenario for trace attribution");
-            const draft = qaAttachmentDraftSchema.parse({
-              handle: `trace:${target.id}`,
-              kind: "TRACE",
-              ...metadata,
-              targetId: target.id,
-              scenarioId: firstScenario.id,
-              capturedAt: new Date().toISOString(),
-            });
-            pendingAttachments.push({ draft, filename: traceFilename, path: tracePath });
-          } catch (error: unknown) {
-            if (error instanceof QAEvidenceLimitError) {
-              securityViolations.add("INVALID_EVIDENCE");
-            }
-            const firstScenario = selectedScenarios[0];
-            if (firstScenario) {
-              defect(defects, {
-                severity: "HIGH",
-                title: `Trace capture failed: ${target.id}`,
-                description: errorSummary(error),
-                reproduction: [`Run the target ${target.id}.`],
+          if (hasTerminalFailure()) {
+            await context.tracing.stop().catch(() => undefined);
+          } else {
+            try {
+              await context.tracing.stop({ path: tracePath });
+              const metadata = await sha256File(tracePath);
+              if (attachmentBytes + metadata.byteSize > MAX_QA_TOTAL_ATTACHMENT_BYTES) {
+                throw new QAEvidenceLimitError("Browser QA evidence exceeded the per-run size limit");
+              }
+              attachmentBytes += metadata.byteSize;
+              const firstScenario = selectedScenarios[0];
+              if (!firstScenario) throw new Error("QA plan has no scenario for trace attribution");
+              const draft = qaAttachmentDraftSchema.parse({
+                handle: `trace:${target.id}`,
+                kind: "TRACE",
+                ...metadata,
                 targetId: target.id,
                 scenarioId: firstScenario.id,
+                capturedAt: new Date().toISOString(),
               });
+              pendingAttachments.push({ draft, filename: traceFilename, path: tracePath });
+            } catch (error: unknown) {
+              if (error instanceof QAEvidenceLimitError) {
+                securityViolations.add("INVALID_EVIDENCE");
+              }
+              const firstScenario = selectedScenarios[0];
+              if (firstScenario) {
+                defect(defects, {
+                  severity: "HIGH",
+                  title: `Trace capture failed: ${target.id}`,
+                  description: errorSummary(error),
+                  reproduction: [`Run the target ${target.id}.`],
+                  targetId: target.id,
+                  scenarioId: firstScenario.id,
+                });
+              }
             }
           }
           await context.close();
+          if (hasTerminalFailure()) break;
         }
       } catch (error: unknown) {
         await browser?.close().catch(() => undefined);

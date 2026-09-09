@@ -9,6 +9,7 @@ import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
 import {
   workspaceToolRequestSchema,
   type WorkspaceToolExecutor,
+  type WorkspaceToolPolicyDescription,
   type WorkspaceToolResult,
 } from "@loomrail/provider-core";
 
@@ -31,7 +32,7 @@ const oneProjectId = (snapshots: readonly McpSessionSnapshot[]): string | null =
   return snapshots[0]?.projectId ?? null;
 };
 
-const workspaceTools = (approvedRecipeIds: readonly string[]) =>
+const workspaceTools = (policy: WorkspaceToolPolicyDescription) =>
   [
     {
       name: "loomrail_list_directory",
@@ -57,31 +58,37 @@ const workspaceTools = (approvedRecipeIds: readonly string[]) =>
         additionalProperties: false,
       },
     },
-    {
-      name: "loomrail_write_file",
-      description: "Atomically create or replace one relative file with compare-and-swap protection.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          path: { type: "string" },
-          expectedSha256: { type: ["string", "null"] },
-          content: { type: "string" },
-        },
-        required: ["path", "expectedSha256", "content"],
-        additionalProperties: false,
-      },
-    },
-    {
-      name: "loomrail_delete_file",
-      description: "Delete one relative regular file when its digest still matches.",
-      inputSchema: {
-        type: "object",
-        properties: { path: { type: "string" }, expectedSha256: { type: "string" } },
-        required: ["path", "expectedSha256"],
-        additionalProperties: false,
-      },
-    },
-    ...(approvedRecipeIds.length === 0
+    ...(policy.access === "READ_WRITE"
+      ? [
+          {
+            name: "loomrail_write_file",
+            description:
+              "The only authorized repository write path for this session, even though the provider scratch sandbox is read-only. Atomically create or replace one relative file with compare-and-swap protection after reading its current digest.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                expectedSha256: { type: ["string", "null"] },
+                content: { type: "string" },
+              },
+              required: ["path", "expectedSha256", "content"],
+              additionalProperties: false,
+            },
+          },
+          {
+            name: "loomrail_delete_file",
+            description:
+              "The only authorized repository delete path for this session. Delete one relative regular file when its digest still matches.",
+            inputSchema: {
+              type: "object",
+              properties: { path: { type: "string" }, expectedSha256: { type: "string" } },
+              required: ["path", "expectedSha256"],
+              additionalProperties: false,
+            },
+          },
+        ]
+      : []),
+    ...(policy.recipes.length === 0
       ? []
       : [
           {
@@ -89,7 +96,7 @@ const workspaceTools = (approvedRecipeIds: readonly string[]) =>
             description: "Run one exact owner-approved Loomrail verification recipe using an enum value.",
             inputSchema: {
               type: "object",
-              properties: { recipeId: { type: "string", enum: approvedRecipeIds } },
+              properties: { recipeId: { type: "string", enum: policy.recipes.map(({ id }) => id) } },
               required: ["recipeId"],
               additionalProperties: false,
             },
@@ -129,7 +136,7 @@ const workspaceDirectBinding = (input: {
 }): McpDirectSessionBinding => ({
   providerSessionId: input.providerSessionId,
   connectionId: "loomrail_workspace",
-  tools: workspaceTools(input.executor.describePolicy().recipes.map(({ id }) => id)),
+  tools: workspaceTools(input.executor.describePolicy()),
   callTool: async ({ callId, toolName, arguments: untrustedArguments }) => {
     const operation = operationFor(toolName);
     const request = workspaceToolRequestSchema.safeParse({

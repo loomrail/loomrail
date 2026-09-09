@@ -239,6 +239,74 @@ describe("Playwright BrowserDriver", () => {
     await execution.dispose();
   });
 
+  it("waits a bounded interval for client-side navigation and rendered assertions", async () => {
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(`<!doctype html><html><body>
+        <button id="continue">Continue</button>
+        <script>
+          document.querySelector("#continue").addEventListener("click", () => {
+            setTimeout(() => {
+              history.pushState({}, "", "/ready");
+              document.body.innerHTML = '<main><h1>Ready</h1><input aria-label="Email"></main>';
+              document.querySelector('input').focus();
+            }, 100);
+          });
+        </script>
+      </body></html>`);
+    });
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-client-navigation-"));
+    resources.push({ server: fixture.server, directory });
+    const baseline = qaRun(fixture.origin);
+    const run: QARun = {
+      ...baseline,
+      plan: {
+        ...baseline.plan,
+        scenarios: [
+          {
+            id: "client-navigation",
+            title: "Client navigation settles before assertions",
+            steps: [
+              { id: "open-home", title: "Open home", action: { type: "NAVIGATE", path: "/" } },
+              {
+                id: "continue",
+                title: "Continue",
+                action: {
+                  type: "CLICK",
+                  locator: { by: "ROLE", role: "button", name: "Continue" },
+                },
+              },
+            ],
+            assertions: [
+              {
+                id: "ready-path",
+                title: "Ready path is current",
+                rule: { type: "URL_PATH", path: "/ready" },
+              },
+              {
+                id: "ready-heading",
+                title: "Ready heading is visible",
+                rule: { type: "VISIBLE", locator: { by: "ROLE", role: "heading", name: "Ready" } },
+              },
+              {
+                id: "email-focused",
+                title: "Email is focused",
+                rule: { type: "FOCUSED", locator: { by: "ROLE", role: "textbox", name: "Email" } },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const execution = await createPlaywrightDriver({ artifactsDirectory: directory, timeoutMs: 1_000 }).run(
+      run,
+    );
+
+    expect(execution.result).toMatchObject({ outcome: "MEASURED", defects: [] });
+    await execution.dispose();
+  });
+
   it("executes only the ordered cells selected by a correction retest plan", async () => {
     const fixture = await startServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -514,12 +582,15 @@ describe("Playwright BrowserDriver", () => {
     const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-"));
     resources.push({ server: fixture.server }, { server: destination.server, directory });
 
-    const execution = await createPlaywrightDriver({ artifactsDirectory: directory }).run(
-      qaRun(fixture.origin),
-    );
+    const startedAt = Date.now();
+    const execution = await createPlaywrightDriver({
+      artifactsDirectory: directory,
+      timeoutMs: 30_000,
+    }).run(qaRun(fixture.origin));
 
     if (execution.result.outcome !== "ERROR") throw new Error(JSON.stringify(execution.result));
     expect(execution.result).toMatchObject({ outcome: "ERROR", code: "ORIGIN_FORBIDDEN" });
+    expect(Date.now() - startedAt).toBeLessThan(15_000);
     await expect(
       execution.finalizeAttachments({ qaRunId: "qa-run-1", createAttachmentId: () => "attachment-1" }),
     ).resolves.toEqual([]);
@@ -627,9 +698,10 @@ describe("Playwright BrowserDriver", () => {
     const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-"));
     resources.push({ server: fixture.server, directory });
 
-    const execution = await createPlaywrightDriver({ artifactsDirectory: directory }).run(
-      qaRun(fixture.origin),
-    );
+    const execution = await createPlaywrightDriver({
+      artifactsDirectory: directory,
+      timeoutMs: 1_000,
+    }).run(qaRun(fixture.origin));
 
     expect(execution.result).toMatchObject({ outcome: "ERROR", code: "EVIDENCE_INVALID" });
     await execution.dispose();

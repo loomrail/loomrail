@@ -46,7 +46,7 @@
     },
     "privateDogfood": {
       "status": "PENDING",
-      "reason": "Owner must choose one private full-stack repository and approve a bounded 2-3 Task dogfood Epic."
+      "reason": "One private Recurkit WorkItem completed and was accepted, but the approved gate still requires a domain-owned Epic with 2-3 durable dependent WorkItems."
     },
     "protectedLandingCanonicalActivation": {
       "status": "PASSED",

@@ -15,6 +15,7 @@ import {
   providerModelMappingSchema,
   providerStageResultSchemaFor,
   ProcessSpawnError,
+  renderProviderInvocationPrompt,
   runProcess,
   type DecodedProviderStageResult,
   type ProcessExitOutcome,
@@ -199,7 +200,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
           model,
           "--json-schema",
           stageResultSchema(invocation),
-          invocation.contextPack.text,
+          renderProviderInvocationPrompt(invocation),
         ];
 
         let outcome: ProviderOutcome | undefined;

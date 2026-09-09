@@ -9,5 +9,9 @@ export default defineConfig({
     // cascade of EBUSY failures. Assertions that are actually about time keep their own explicit
     // bounds, so this package-level timeout remains a hang detector rather than a performance claim.
     testTimeout: 20_000,
+    // Each file opens real SQLite databases and several also spawn Git. Running them concurrently
+    // creates avoidable I/O contention on developer machines and CI runners; one worker keeps the
+    // integration boundary deterministic without widening any production or per-test deadline.
+    maxWorkers: 1,
   },
 });

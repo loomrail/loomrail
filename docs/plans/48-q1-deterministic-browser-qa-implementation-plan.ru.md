@@ -61,6 +61,8 @@
 - [x] Artifact recovery: committed marker, orphan quarantine и hash/size mismatch.
 - [x] Daemon: green baseline, intentional assertion failure, driver error, off-origin redirect и timeout.
 - [x] Browser: real green route и real failed route; Acceptance никогда не стартует на неподтверждённом pass.
+- [x] Client-side navigation/streamed render assertions используют общий bounded settle deadline; regression
+      проверяет delayed URL, visible heading и focus без fixed sleep в product driver.
 - [ ] Полный `pnpm verify` (локально остаются три lint-ошибки параллельного `apps/landing/src/main.ts`).
 - [x] Production audit без high-severity уязвимостей.
 - [x] Clean npm tarball устанавливается и запускается только из опубликованного layout.

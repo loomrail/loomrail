@@ -1,6 +1,6 @@
 # Q20.1 — Локальные Codex/Claude runtime: implementation plan
 
-**Статус:** implementation and automated verification complete; private workflow and Windows live evidence pending
+**Статус:** implementation and one private full-workflow WorkItem complete; formal private Epic and Windows live evidence pending
 
 1. Зафиксировать local-subscription-only boundary в Product Decisions, ADR, Master Plan и Threat Model. **Done.**
 2. Расширить daemon-owned MCP gateway прямым session binding к provider-neutral workspace executor без нового
@@ -14,5 +14,5 @@
    cancellation/recovery и absence-of-secrets. **Done.**
 7. Требовать в domain successful same-session audited write/delete перед live IMPLEMENT completion. **Done.**
 8. Выполнить полный `pnpm verify`, release build/package checks и owner-approved local dogfood только на совместимых
-   установленных runtimes. **Done for automated gates and focused macOS Codex/Claude IMPLEMENT+QA; full private
-   workflow and Windows live evidence remain pending.**
+   установленных runtimes. **Done for automated gates, focused macOS Codex/Claude IMPLEMENT+QA and one accepted full
+   private Recurkit WorkItem; formal 2–3-WorkItem private Epic and Windows live evidence remain pending.**

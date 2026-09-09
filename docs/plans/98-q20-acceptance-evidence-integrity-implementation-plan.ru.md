@@ -1,6 +1,6 @@
 # Q20.4 — План реализации целостности Acceptance evidence
 
-**Статус:** implementation complete; private dogfood gate pending
+**Статус:** implementation and relevant private-workflow verification complete; full private Epic gate pending
 
 **Спецификация:**
 [97-q20-acceptance-evidence-integrity-spec.ru.md](97-q20-acceptance-evidence-integrity-spec.ru.md)
@@ -15,7 +15,9 @@
 5. Добавить persistence/daemon restart, idempotency, hostile text/redaction и browser/API regression coverage.
    **Done.**
 6. Повторить private Recurkit dogfood на релевантном Browser QA scope; прежний returned run не считать pass.
-   **Pending.**
+   **Done:** новый WorkItem прошёл authoritative Review, Project verification, measured Browser QA и owner Acceptance;
+   прежние returned/cancelled runs не переименованы в pass. Формальный 2–3-WorkItem private Epic остаётся отдельным
+   Master Plan gate.
 7. Выполнить полный `pnpm verify`, обновить evidence/status и только затем commit/push по отдельному уже полученному
    разрешению. npm publish остаётся запрещён. **Done:** `pnpm verify`, последовательный полный product E2E 61/61,
    release pack и clean-install release verification прошли.
@@ -31,5 +33,6 @@ update запрещены.
 provider-side cause не выдумывается. Один STANDARD
 Discovery session дал валидный результат, но authoritative terminal usage составил 703351 токен и честно
 hard-paused PLAN при run limit 700000. Run отменён вместо расширения subscription spend. Это не full private pass:
-шага 6 остаётся Pending, пока полезный полный маршрут не уложится в явно утверждённый бюджет. Санитизированный отчёт:
+этот historical run не засчитан. Более поздний owner-approved run уложился в явно утверждённый бюджет и закрыл шаг 6.
+Санитизированный отчёт:
 `docs/evidence/phase-8/Q20-PRIVATE-RECURKIT-DOGFOOD-2026-09-08.md`.

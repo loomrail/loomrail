@@ -1,6 +1,6 @@
 # Q20 — Безопасное provider-neutral выполнение workspace tools: implementation plan
 
-**Статус:** implementation and automated verification complete; private workflow and Windows live evidence pending
+**Статус:** implementation and one private full-workflow WorkItem complete; formal private Epic and Windows live evidence pending
 
 1. Зафиксировать deep-module boundary, QA authority и residual risk в ADR/Product Decisions/Threat Model. **Done.**
 2. Добавить neutral tool schemas/interface и production `@loomrail/workspace-executor`: canonical rooted paths,
@@ -19,4 +19,5 @@
 9. Выполнить format/lint/typecheck/package tests, full `pnpm verify`, E2E и release artifact проверки без provider
    model calls. **Done: `pnpm verify`, 60/60 product E2E, 7/7 landing E2E и clean-install release package passed.**
 10. Subscription-backed macOS/Windows dogfood выполнять только по отдельному owner approval. **Focused macOS arm64
-    Codex `0.153.4` + Claude Code `2.1.260` IMPLEMENT/QA passed; full private workflow and Windows pending.**
+    Codex `0.153.4` + Claude Code `2.1.260` IMPLEMENT/QA и один полный принятый private Recurkit WorkItem passed;
+    formal 2–3-WorkItem private Epic и Windows pending.**

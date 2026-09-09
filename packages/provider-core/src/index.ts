@@ -261,6 +261,106 @@ export type ProviderWorkspace = {
   networkAccess: boolean;
 };
 
+export type ProviderInvocationAuthorityErrorCode =
+  "WORKSPACE_CONNECTOR_MISSING" | "WORKSPACE_TOOL_MISSING" | "WORKSPACE_TOOL_FORBIDDEN";
+
+/**
+ * A typed internal-contract failure raised before provider work starts. The names are safe to
+ * report diagnostically; no connector argument, token, workspace path or provider payload is
+ * retained on the error.
+ */
+export class ProviderInvocationAuthorityError extends Error {
+  readonly code: ProviderInvocationAuthorityErrorCode;
+  readonly details: Readonly<{ access: ProviderWorkspace["access"]; tool: string | null }>;
+
+  constructor(
+    code: ProviderInvocationAuthorityErrorCode,
+    message: string,
+    details: { access: ProviderWorkspace["access"]; tool: string | null },
+  ) {
+    super(message);
+    this.name = "ProviderInvocationAuthorityError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
+const requireWorkspaceTool = (
+  tools: ReadonlySet<string>,
+  toolName: string,
+  access: ProviderWorkspace["access"],
+): void => {
+  if (tools.has(toolName)) return;
+  throw new ProviderInvocationAuthorityError(
+    "WORKSPACE_TOOL_MISSING",
+    "The bounded workspace connector is missing a tool required by the immutable session policy",
+    { access, tool: toolName },
+  );
+};
+
+/**
+ * Adds the deterministic runtime-authority bridge shared by local CLI adapters.
+ *
+ * Codex and Claude run with their native filesystem authority confined to an empty read-only
+ * scratch directory. A provider can otherwise mistake that containment control for the durable
+ * workspace policy and decline an IMPLEMENT session even though the separate Loomrail MCP
+ * executor grants READ_WRITE. This text explains the two layers without exposing the workspace
+ * path, branch, connector capability or any provider-specific payload. It is guidance only: the
+ * typed invocation, MCP allowlist and executor remain the enforcement boundary.
+ */
+export const renderProviderInvocationPrompt = (invocation: ProviderInvocation): string => {
+  const workspace = invocation.workspace;
+  if (workspace === undefined) return invocation.contextPack.text;
+
+  const connection = invocation.mcpConnections.find(({ id }) => id === "loomrail_workspace");
+  if (connection === undefined) {
+    throw new ProviderInvocationAuthorityError(
+      "WORKSPACE_CONNECTOR_MISSING",
+      "The immutable session policy grants workspace access but no bounded workspace connector exists",
+      { access: workspace.access, tool: null },
+    );
+  }
+
+  const tools = new Set(connection.enabledTools);
+  const allowedTools = new Set([
+    "loomrail_list_directory",
+    "loomrail_read_file",
+    "loomrail_run_recipe",
+    ...(workspace.access === "READ_WRITE" ? ["loomrail_write_file", "loomrail_delete_file"] : []),
+  ]);
+  const forbiddenTool = connection.enabledTools.find((toolName) => !allowedTools.has(toolName));
+  if (forbiddenTool !== undefined) {
+    throw new ProviderInvocationAuthorityError(
+      "WORKSPACE_TOOL_FORBIDDEN",
+      "The bounded workspace connector exposes a tool forbidden by the immutable session policy",
+      { access: workspace.access, tool: forbiddenTool },
+    );
+  }
+  requireWorkspaceTool(tools, "loomrail_list_directory", workspace.access);
+  requireWorkspaceTool(tools, "loomrail_read_file", workspace.access);
+
+  const authority = [
+    "## Loomrail execution authority",
+    "The native read-only sandbox applies only to the empty scratch directory. Repository access is separate and available only through the `loomrail_workspace` MCP tools listed for this session.",
+  ];
+
+  if (workspace.access === "READ_WRITE") {
+    requireWorkspaceTool(tools, "loomrail_write_file", workspace.access);
+    requireWorkspaceTool(tools, "loomrail_delete_file", workspace.access);
+    authority.push(
+      "This IMPLEMENT session has READ_WRITE workspace authority. Use `loomrail_list_directory` and `loomrail_read_file` to inspect files, then use `loomrail_write_file` or `loomrail_delete_file` for every required repository change.",
+      "Writes are whole-file compare-and-swap operations: read the current file first, preserve unrelated owner changes, and pass its returned SHA-256 as `expectedSha256` (or null only when creating an absent file).",
+      "Do not report implementation completion unless at least one required write or delete succeeds; Loomrail validates that effect independently.",
+    );
+  } else {
+    authority.push(
+      "This session has READ_ONLY workspace authority. Use only `loomrail_list_directory`, `loomrail_read_file`, and any explicitly listed owner-approved recipe tool. Do not attempt repository writes or deletes.",
+    );
+  }
+
+  return `${invocation.contextPack.text}\n\n${authority.join("\n")}`;
+};
+
 // Neither method is speculative. Without a stream of window occupancy, Loomrail only learns how
 // full the window was after the session ended, and the preventive cut degrades to a purely
 // reactive one. Without checkpoints arriving during the session, a crashed process loses the
