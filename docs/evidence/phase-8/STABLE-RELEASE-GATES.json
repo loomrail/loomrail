@@ -45,8 +45,10 @@
       "evidenceCommit": "000997668cf5d2cee25678b9807d8e2796111bb8"
     },
     "privateDogfood": {
-      "status": "PENDING",
-      "reason": "One private Recurkit WorkItem completed and was accepted, but the approved gate still requires a domain-owned Epic with 2-3 durable dependent WorkItems."
+      "status": "PASSED",
+      "evidencePath": "docs/evidence/phase-8/STABLE-PRIVATE-DOGFOOD-EVIDENCE.md",
+      "evidenceSha256": "7ea83685ba4b4be8d5c1792d99da63806aa106db5efcdd5739a7b314ff15789e",
+      "evidenceCommit": "b0487ab9cfe0b895cc00e72eba2b146baa6ae2c7"
     },
     "protectedLandingCanonicalActivation": {
       "status": "PASSED",

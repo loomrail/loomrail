@@ -29,16 +29,12 @@ const completeManifest = () => ({
   gates: Object.fromEntries(requiredStableReleaseGates.map((name) => [name, passedGate(name)])),
 });
 
-test("records the current honest stable readiness without promoting pending gates", async () => {
+test("records the current honest stable readiness with Windows gates pending", async () => {
   const content = await readFile(`${repositoryRoot}/docs/evidence/phase-8/STABLE-RELEASE-GATES.json`, "utf8");
   const summary = summarizeStableReleaseGates(parseStableReleaseGateManifest(content));
   assert.equal(summary.releaseVersion, null);
-  assert.deepEqual(summary.pending, [
-    "privateDogfood",
-    "codexWindowsCompatibility",
-    "claudeWindowsCompatibility",
-  ]);
-  assert.equal(summary.passed.length, 8);
+  assert.deepEqual(summary.pending, ["codexWindowsCompatibility", "claudeWindowsCompatibility"]);
+  assert.equal(summary.passed.length, 9);
 });
 
 test("rejects the superseded schema-v2 local API gate contract", () => {

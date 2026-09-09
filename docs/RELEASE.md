@@ -155,11 +155,10 @@ Browser smoke and Clean install jobs. It also reads the versioned
 required gates are `PASSED`, the selected stable version matches, every evidence file is a bounded regular file with
 the recorded SHA-256, and the identical bytes exist at a recorded ancestor commit. Run `pnpm release:status` to inspect
 the current index without changing external state. Schema v3 replaces the retired hard-token/API gate with
-`q20LocalSubscriptionWorkspaceExecution`. Before the current private-Epic evidence is bound to an immutable commit,
-the index proves eight of eleven gates. After that promotion it proves nine of eleven and deliberately keeps both
-Windows local-CLI rows `PENDING`; no stable version is selected. The accepted Recurkit Epic contains three durable
-child WorkItems and a persisted `BLOCKS` edge. Earlier single-WorkItem evidence remains historical and does not
-substitute for the Epic. Both ordinary source-CI platforms run
+`q20LocalSubscriptionWorkspaceExecution`. The index proves nine of eleven gates and deliberately keeps both Windows
+local-CLI rows `PENDING`; no stable version is selected. The accepted Recurkit Epic contains three durable child
+WorkItems and a persisted `BLOCKS` edge. Earlier single-WorkItem evidence remains historical and does not substitute
+for the Epic. Both ordinary source-CI platforms run
 the same status check from full Git history, so a changed or unreachable recorded evidence object fails the candidate
 before the longer verification matrix.
 

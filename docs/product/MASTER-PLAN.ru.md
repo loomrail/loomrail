@@ -1858,7 +1858,7 @@ human waiver с documented risk.
 4. macOS local CLI compatibility rows и protected landing fixed-commit gate закрыты. Получить real Codex/Claude
    execution evidence на Windows; неизвестные результаты оставить `PENDING`, не возвращая Mock.
 5. Repository-side stage-only workflow уже подготовлен с exact-intent, six-job CI и strict eleven-gate evidence
-   index. Schema v3 сейчас честно показывает 8/11 и не содержит выбранной stable version; обе Windows local-CLI rows
+   index. Schema v3 сейчас честно показывает 9/11 и не содержит выбранной stable version; обе Windows local-CLI rows
    машинно запрещают staging. После их закрытия владелец отдельно настраивает
    protected main-only `npm-release` environment и npm OIDC trust только для `npm stage publish`. Trusted job
    read-only проверяет непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или
