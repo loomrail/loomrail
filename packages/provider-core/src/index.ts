@@ -12,6 +12,7 @@ import type {
   WorkflowStage,
 } from "@loomrail/contracts";
 import {
+  MAX_VERIFICATION_RECIPE_TIMEOUT_SECONDS,
   providerIdSchema,
   providerModelIdSchema,
   providerModelMappingSchema,
@@ -21,6 +22,7 @@ import {
 import { z } from "zod";
 
 import type { ProviderAcceptanceInput, ProviderStageResultPolicy } from "./stage-result.js";
+import { renderProviderAcceptanceReferences } from "./stage-result.js";
 
 export type { ProcessExitOutcome, ProcessRun, RunProcessOptions } from "./process-runner.js";
 export { ProcessListenerError, ProcessSpawnError, runProcess } from "./process-runner.js";
@@ -32,7 +34,11 @@ export type {
   ProviderAcceptanceInput,
   ProviderStageResultPolicy,
 } from "./stage-result.js";
-export { decodeProviderStageResult, providerStageResultSchemaFor } from "./stage-result.js";
+export {
+  decodeProviderStageResult,
+  providerStageResultSchemaFor,
+  renderProviderAcceptanceReferences,
+} from "./stage-result.js";
 export type {
   CliProviderDiagnostics,
   ProviderDiagnosticProbeOptions,
@@ -50,6 +56,7 @@ export {
 export {
   WORKSPACE_TOOL_MAX_CALLS,
   WORKSPACE_TOOL_MAX_DIRECTORY_ENTRIES,
+  WORKSPACE_TOOL_MAX_EDIT_FRAGMENT_BYTES,
   WORKSPACE_TOOL_MAX_READ_BYTES,
   WORKSPACE_TOOL_MAX_TURNS,
   WORKSPACE_TOOL_MAX_WRITE_BYTES,
@@ -68,6 +75,10 @@ export { providerIdSchema };
 export type { ProviderId };
 export { providerModelIdSchema, providerModelMappingSchema };
 export type { ProviderModelMapping };
+
+export const LOCAL_PROVIDER_SESSION_CONTROL_PLANE_RESERVE_MS = 300_000;
+export const LOCAL_PROVIDER_SESSION_DEADLINE_MS =
+  MAX_VERIFICATION_RECIPE_TIMEOUT_SECONDS * 1_000 + LOCAL_PROVIDER_SESSION_CONTROL_PLANE_RESERVE_MS;
 
 // `contextWindowTokens` is required, not optional: the pack budget (spec §4.3) is computed as a
 // share of the window before the session starts, so an adapter that cannot declare its window
@@ -309,8 +320,12 @@ const requireWorkspaceTool = (
  * typed invocation, MCP allowlist and executor remain the enforcement boundary.
  */
 export const renderProviderInvocationPrompt = (invocation: ProviderInvocation): string => {
+  const promptSections = [invocation.contextPack.text];
+  const acceptanceReferences = renderProviderAcceptanceReferences(invocation.acceptanceInput);
+  if (acceptanceReferences !== null) promptSections.push(acceptanceReferences);
+
   const workspace = invocation.workspace;
-  if (workspace === undefined) return invocation.contextPack.text;
+  if (workspace === undefined) return promptSections.join("\n\n");
 
   const connection = invocation.mcpConnections.find(({ id }) => id === "loomrail_workspace");
   if (connection === undefined) {
@@ -326,7 +341,9 @@ export const renderProviderInvocationPrompt = (invocation: ProviderInvocation): 
     "loomrail_list_directory",
     "loomrail_read_file",
     "loomrail_run_recipe",
-    ...(workspace.access === "READ_WRITE" ? ["loomrail_write_file", "loomrail_delete_file"] : []),
+    ...(workspace.access === "READ_WRITE"
+      ? ["loomrail_write_file", "loomrail_edit_file", "loomrail_delete_file"]
+      : []),
   ]);
   const forbiddenTool = connection.enabledTools.find((toolName) => !allowedTools.has(toolName));
   if (forbiddenTool !== undefined) {
@@ -346,11 +363,12 @@ export const renderProviderInvocationPrompt = (invocation: ProviderInvocation): 
 
   if (workspace.access === "READ_WRITE") {
     requireWorkspaceTool(tools, "loomrail_write_file", workspace.access);
+    requireWorkspaceTool(tools, "loomrail_edit_file", workspace.access);
     requireWorkspaceTool(tools, "loomrail_delete_file", workspace.access);
     authority.push(
-      "This IMPLEMENT session has READ_WRITE workspace authority. Use `loomrail_list_directory` and `loomrail_read_file` to inspect files, then use `loomrail_write_file` or `loomrail_delete_file` for every required repository change.",
-      "Writes are whole-file compare-and-swap operations: read the current file first, preserve unrelated owner changes, and pass its returned SHA-256 as `expectedSha256` (or null only when creating an absent file).",
-      "Do not report implementation completion unless at least one required write or delete succeeds; Loomrail validates that effect independently.",
+      "This IMPLEMENT session has READ_WRITE workspace authority. Use `loomrail_list_directory` and `loomrail_read_file` to inspect files, then use `loomrail_write_file`, `loomrail_edit_file`, or `loomrail_delete_file` for every required repository change.",
+      "Writes are whole-file compare-and-swap operations. For a bounded change in a large existing text file, prefer `loomrail_edit_file`: provide the current whole-file SHA-256 plus one exact non-empty old fragment that occurs exactly once and its replacement. Read the current file first, preserve unrelated owner changes, and never guess a digest.",
+      "Do not report implementation completion unless at least one required write, edit, or delete succeeds; Loomrail validates that effect independently.",
     );
   } else {
     authority.push(
@@ -358,7 +376,8 @@ export const renderProviderInvocationPrompt = (invocation: ProviderInvocation): 
     );
   }
 
-  return `${invocation.contextPack.text}\n\n${authority.join("\n")}`;
+  promptSections.push(authority.join("\n"));
+  return promptSections.join("\n\n");
 };
 
 // Neither method is speculative. Without a stream of window occupancy, Loomrail only learns how

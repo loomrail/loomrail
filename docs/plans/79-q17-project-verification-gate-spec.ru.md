@@ -94,7 +94,7 @@ Plan v1 содержит 1..12 recipes. Limits:
 - executable — basename из `pnpm | npm | yarn | bun | node`, без separator/path traversal;
 - argv — 1..16 items, каждый 1..256 UTF-8 bytes, без NUL; shell metacharacters остаются обычными argv bytes;
 - cwd — `.` или нормализованный relative directory под Project root, без symlink escape;
-- timeout — 1..900 seconds, default 300;
+- timeout — 1..900 seconds; scanner default 300 для `LINT | BUILD | UNIT | INTEGRATION` и 900 для `E2E`;
 - output cap — 1 KiB..256 KiB aggregate stdout+stderr, default 256 KiB; exceeding the cap remains a typed
   `OUTPUT_LIMIT_REACHED` error and stops the process tree;
 - required — boolean; хотя бы одна recipe required;

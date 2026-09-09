@@ -315,28 +315,31 @@ describe("provider stage result contract", () => {
     ).toMatchObject({ outcome: { type: "READY_FOR_ACCEPTANCE" } });
   });
 
-  it("constrains Acceptance claims to the exact current criteria and evidence checks", () => {
+  it("binds hostile Acceptance vocabulary through bounded wire indices without embedding it in JSON Schema", () => {
+    const criterion = 'The API accepts "quoted" Unicode данные and C:\\work\\paths.';
+    const reviewCheck = 'Reviewed new URL("/reset-password", base) and C:\\review.';
+    const qaCheck = "Browser QA ✓ for мобильный режим.";
     const policy = {
       humanRequests: "DISALLOWED" as const,
       acceptanceInput: {
-        criteria: ["The API filters pending todos."],
+        criteria: [criterion],
         evidence: [
-          { kind: "REVIEW_REPORT" as const, checks: ["Current review passed"] },
-          { kind: "QA_REPORT" as const, checks: ["Current browser QA passed"] },
+          { kind: "REVIEW_REPORT" as const, checks: [reviewCheck] },
+          { kind: "QA_REPORT" as const, checks: [qaCheck] },
         ],
       },
     };
-    const exact = {
+    const wireResult = {
       result: {
         type: "READY_FOR_ACCEPTANCE",
         releaseNote: "The delivery is ready for owner review.",
         verifyInstructions: ["Inspect the recorded evidence."],
         criteria: [
           {
-            criterion: "The API filters pending todos.",
+            criterionIndex: 0,
             implementation: "The route applies the validated status predicate.",
-            reviewCheck: "Current review passed",
-            qaCheck: "Current browser QA passed",
+            reviewCheckIndex: 0,
+            qaCheckIndex: 0,
             ownerVerification: "Choose Pending and inspect the result.",
             knownRisk: null,
           },
@@ -345,25 +348,62 @@ describe("provider stage result contract", () => {
     };
 
     const schema = providerStageResultSchemaFor("ACCEPTANCE", policy);
-    expect(schema.safeParse(exact).success).toBe(true);
-    expect(decodeProviderStageResult("ACCEPTANCE", exact, policy)).not.toBeNull();
+    expect(schema.safeParse(wireResult).success).toBe(true);
+    expect(decodeProviderStageResult("ACCEPTANCE", wireResult, policy)).toMatchObject({
+      outcome: {
+        type: "READY_FOR_ACCEPTANCE",
+        criteria: [{ criterion, reviewCheck, qaCheck }],
+      },
+    });
     const jsonSchema = JSON.stringify(z.toJSONSchema(schema));
-    expect(jsonSchema).toContain('"enum":["Current review passed"]');
-    expect(jsonSchema).toContain('"enum":["Current browser QA passed"]');
+    expect(jsonSchema).not.toContain(criterion);
+    expect(jsonSchema).not.toContain(reviewCheck);
+    expect(jsonSchema).not.toContain(qaCheck);
+    expect(jsonSchema).toContain('"criterionIndex"');
+    expect(jsonSchema).toContain('"maximum":0');
     expect(
       providerStageResultSchemaFor("ACCEPTANCE", policy).safeParse({
         result: {
-          ...exact.result,
-          criteria: [{ ...exact.result.criteria[0], reviewCheck: "An older review passed" }],
+          ...wireResult.result,
+          criteria: [{ ...wireResult.result.criteria[0], reviewCheckIndex: 1 }],
         },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects duplicate or reordered Acceptance criterion references", () => {
+    const policy = {
+      humanRequests: "DISALLOWED" as const,
+      acceptanceInput: {
+        criteria: ["First criterion", "Second criterion"],
+        evidence: [
+          { kind: "REVIEW_REPORT" as const, checks: ["Review check"] },
+          { kind: "QA_REPORT" as const, checks: ["QA check"] },
+        ],
+      },
+    };
+    const result = {
+      type: "READY_FOR_ACCEPTANCE",
+      releaseNote: "Ready for owner review.",
+      verifyInstructions: ["Inspect evidence."],
+      criteria: [0, 1].map((criterionIndex) => ({
+        criterionIndex,
+        implementation: "Implemented.",
+        reviewCheckIndex: 0,
+        qaCheckIndex: 0,
+        ownerVerification: "Inspect it.",
+        knownRisk: null,
+      })),
+    };
+
+    expect(
+      providerStageResultSchemaFor("ACCEPTANCE", policy).safeParse({
+        result: { ...result, criteria: [result.criteria[1], result.criteria[0]] },
       }).success,
     ).toBe(false);
     expect(
       providerStageResultSchemaFor("ACCEPTANCE", policy).safeParse({
-        result: {
-          ...exact.result,
-          criteria: [{ ...exact.result.criteria[0], criterion: "The API filters todos." }],
-        },
+        result: { ...result, criteria: [result.criteria[0], result.criteria[0]] },
       }).success,
     ).toBe(false);
   });

@@ -32,6 +32,7 @@ import type {
   ScaffoldProposal,
   PipelineRun,
   WorkItem,
+  WorkItemDependency,
   WorkItemState,
   VerificationPlanPublication,
   VerificationPlanSettingsResponse,
@@ -72,6 +73,7 @@ import {
   listConstitutionPresets,
   listProjects,
   listProjectWorkItems,
+  listProjectWorkItemDependencies,
   listProviderSessions,
   listWorkItemEvents,
   listWorkItemVerificationRuns,
@@ -100,6 +102,7 @@ import {
   scanProjectConstitution,
   setProjectProviderPreference,
   setProjectWorkspaceStrategy,
+  setWorkItemDependencies,
   adoptVerificationPlan,
   revokeMcpProfile,
   updateWorkItem,
@@ -122,6 +125,8 @@ const projectReadinessKey = (projectId: string) => ["projects", projectId, "read
 const projectVerificationPlanKey = (projectId: string) =>
   ["projects", projectId, "verification-plan"] as const;
 const projectWorkItemsKey = (projectId: string) => ["projects", projectId, "work-items"] as const;
+const projectWorkItemDependenciesKey = (projectId: string) =>
+  ["projects", projectId, "work-items", "dependencies"] as const;
 const workItemEventsKey = (projectId: string, workItemId: string) =>
   ["projects", projectId, "work-items", workItemId, "events"] as const;
 const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "workflow"] as const;
@@ -235,6 +240,18 @@ export const useProjectWorkItems = (projectId: string | undefined) =>
     queryFn: () => {
       if (!projectId) throw new Error("A project is required to list work items");
       return listProjectWorkItems(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+
+export const useProjectWorkItemDependencies = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: projectId
+      ? projectWorkItemDependenciesKey(projectId)
+      : ["projects", "none", "work-items", "dependencies"],
+    queryFn: () => {
+      if (!projectId) throw new Error("A project is required to list WorkItem dependencies");
+      return listProjectWorkItemDependencies(projectId);
     },
     enabled: projectId !== undefined,
   });
@@ -824,6 +841,36 @@ export const useCreateGuidedActivationWorkItem = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
         queryClient.invalidateQueries({ queryKey: attentionKey }),
+      ]);
+    },
+  });
+};
+
+export const useSetWorkItemDependencies = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      blockerWorkItemIds,
+      workItem,
+    }: {
+      blockerWorkItemIds: readonly string[];
+      workItem: WorkItem;
+    }) => setWorkItemDependencies(workItem, blockerWorkItemIds),
+    onSuccess: async (dependencies, { workItem }) => {
+      const key = projectWorkItemDependenciesKey(workItem.projectId);
+      queryClient.setQueryData(key, {
+        schemaVersion: 1,
+        projectId: workItem.projectId,
+        dependencies: [
+          ...(
+            queryClient.getQueryData<{ dependencies: readonly WorkItemDependency[] }>(key)?.dependencies ?? []
+          ).filter(({ blockedWorkItemId }) => blockedWorkItemId !== workItem.id),
+          ...dependencies,
+        ],
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectWorkItemsKey(workItem.projectId) }),
+        queryClient.invalidateQueries({ queryKey: workItemEventsKey(workItem.projectId, workItem.id) }),
       ]);
     },
   });

@@ -17,6 +17,7 @@ import {
 import {
   WORKSPACE_TOOL_MAX_CALLS,
   WORKSPACE_TOOL_MAX_DIRECTORY_ENTRIES,
+  WORKSPACE_TOOL_MAX_EDIT_FRAGMENT_BYTES,
   WORKSPACE_TOOL_MAX_READ_BYTES,
   WORKSPACE_TOOL_MAX_WRITE_BYTES,
   workspaceToolRequestSchema,
@@ -358,6 +359,7 @@ export const createWorkspaceToolExecutor = async (
         maxCalls: WORKSPACE_TOOL_MAX_CALLS,
         maxReadBytes: WORKSPACE_TOOL_MAX_READ_BYTES,
         maxWriteBytes: WORKSPACE_TOOL_MAX_WRITE_BYTES,
+        maxEditFragmentBytes: WORKSPACE_TOOL_MAX_EDIT_FRAGMENT_BYTES,
         maxDirectoryEntries: WORKSPACE_TOOL_MAX_DIRECTORY_ENTRIES,
       },
     }),
@@ -374,6 +376,7 @@ export const createWorkspaceToolExecutor = async (
       maxCalls: WORKSPACE_TOOL_MAX_CALLS,
       maxReadBytes: WORKSPACE_TOOL_MAX_READ_BYTES,
       maxWriteBytes: WORKSPACE_TOOL_MAX_WRITE_BYTES,
+      maxEditFragmentBytes: WORKSPACE_TOOL_MAX_EDIT_FRAGMENT_BYTES,
       maxDirectoryEntries: WORKSPACE_TOOL_MAX_DIRECTORY_ENTRIES,
     },
   });
@@ -577,6 +580,114 @@ export const createWorkspaceToolExecutor = async (
           status: "SUCCEEDED",
           operation: request.operation,
           output: { type: "FILE_DELETED", previousSha256: currentSha },
+        };
+      }
+
+      if (request.operation === "EDIT_FILE") {
+        if (!located.exists) {
+          return failure(request.operation, "FAILED", "TARGET_NOT_FOUND", "The file does not exist");
+        }
+        const metadata = await lstat(located.absolute);
+        if (!metadata.isFile() || metadata.isSymbolicLink()) {
+          return failure(
+            request.operation,
+            "DENIED",
+            "TARGET_TYPE_FORBIDDEN",
+            "Only a regular file can be edited",
+          );
+        }
+        if (metadata.size > WORKSPACE_TOOL_MAX_WRITE_BYTES) {
+          return failure(
+            request.operation,
+            "FAILED",
+            "SIZE_LIMIT_REACHED",
+            "The file exceeds the editable size limit",
+          );
+        }
+        const current = await readFile(located.absolute);
+        const currentSha = sha256(current);
+        if (currentSha !== request.expectedSha256) {
+          return failure(
+            request.operation,
+            "FAILED",
+            "CONTENT_CONFLICT",
+            "The file changed after it was read",
+          );
+        }
+        let source: string;
+        try {
+          source = new TextDecoder("utf-8", { fatal: true }).decode(current);
+        } catch {
+          return failure(
+            request.operation,
+            "DENIED",
+            "CONTENT_INVALID",
+            "Only UTF-8 text files are editable",
+          );
+        }
+        if (request.oldText.includes("\u0000") || request.newText.includes("\u0000")) {
+          return failure(request.operation, "DENIED", "CONTENT_INVALID", "Edit fragments cannot contain NUL");
+        }
+        const match = source.indexOf(request.oldText);
+        if (match < 0 || source.includes(request.oldText, match + 1)) {
+          return failure(
+            request.operation,
+            "FAILED",
+            "CONTENT_CONFLICT",
+            "The exact old fragment must occur once",
+          );
+        }
+        const edited = `${source.slice(0, match)}${request.newText}${source.slice(match + request.oldText.length)}`;
+        const content = Buffer.from(edited, "utf8");
+        if (content.byteLength > WORKSPACE_TOOL_MAX_WRITE_BYTES) {
+          return failure(
+            request.operation,
+            "FAILED",
+            "SIZE_LIMIT_REACHED",
+            "The edited file exceeds the write limit",
+          );
+        }
+        signal.throwIfAborted();
+        const temporary = join(
+          dirname(located.absolute),
+          `.${basename(located.absolute)}.loomrail-${randomUUID()}`,
+        );
+        const handle = await open(temporary, "wx", 0o600);
+        try {
+          await handle.writeFile(content);
+          await handle.sync();
+          await handle.close();
+          const finalCheck = await lstat(located.absolute).catch(() => null);
+          if (finalCheck?.isSymbolicLink() === true || (finalCheck !== null && !finalCheck.isFile())) {
+            await rm(temporary, { force: true });
+            return failure(
+              request.operation,
+              "DENIED",
+              "TARGET_TYPE_FORBIDDEN",
+              "The destination changed to a forbidden target",
+            );
+          }
+          const finalSha = finalCheck === null ? null : sha256(await readFile(located.absolute));
+          if (finalSha !== currentSha) {
+            await rm(temporary, { force: true });
+            return failure(
+              request.operation,
+              "FAILED",
+              "CONTENT_CONFLICT",
+              "The file changed before the atomic edit",
+            );
+          }
+          signal.throwIfAborted();
+          await rename(temporary, located.absolute);
+        } catch (error: unknown) {
+          await handle.close().catch(() => undefined);
+          await rm(temporary, { force: true }).catch(() => undefined);
+          throw error;
+        }
+        return {
+          status: "SUCCEEDED",
+          operation: request.operation,
+          output: { type: "FILE_CHANGED", sha256: sha256(content), bytes: content.byteLength },
         };
       }
 

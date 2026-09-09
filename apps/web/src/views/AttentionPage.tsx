@@ -5,7 +5,12 @@ import { useNavigate } from "@tanstack/react-router";
 import type { AttentionItem, AttentionSection } from "@loomrail/contracts";
 import { Badge, Button, FeedbackState, Icon, Skeleton } from "@loomrail/ui";
 
-import { groupAttentionItems, nextAttentionIndex, type AttentionNavigationKey } from "../attentionView";
+import {
+  canAnswerAttentionInline,
+  groupAttentionItems,
+  nextAttentionIndex,
+  type AttentionNavigationKey,
+} from "../attentionView";
 import { HumanRequestAnswerForm } from "../components/HumanRequestAnswerForm";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type TranslationKey } from "../i18n";
@@ -212,13 +217,21 @@ export const AttentionPage = (): React.JSX.Element => {
               </div>
             </dl>
 
-            {selectedItem.action === "ANSWER_REQUEST" ? (
+            {canAnswerAttentionInline(selectedItem.action) ? (
               <HumanRequestAnswerForm request={selectedItem.request} showTitle={false} />
             ) : (
               <div className="attention-detail__acceptance">
                 <div>
-                  <strong>{t("attention.acceptanceTitle")}</strong>
-                  <p>{t("attention.acceptanceDescription")}</p>
+                  <strong>
+                    {selectedItem.action === "REVIEW_ACCEPTANCE"
+                      ? t("attention.acceptanceTitle")
+                      : selectedItem.request.title}
+                  </strong>
+                  <p>
+                    {selectedItem.action === "REVIEW_ACCEPTANCE"
+                      ? t("attention.acceptanceDescription")
+                      : selectedItem.request.context}
+                  </p>
                 </div>
                 <Button
                   onClick={() => {
@@ -227,12 +240,14 @@ export const AttentionPage = (): React.JSX.Element => {
                   trailingIcon="chevronRight"
                   variant="primary"
                 >
-                  {t("attention.reviewAcceptance")}
+                  {selectedItem.action === "REVIEW_ACCEPTANCE"
+                    ? t("attention.reviewAcceptance")
+                    : t("attention.openTask")}
                 </Button>
               </div>
             )}
 
-            {selectedItem.action === "ANSWER_REQUEST" ? (
+            {canAnswerAttentionInline(selectedItem.action) ? (
               <Button
                 className="attention-detail__open-task"
                 onClick={() => {

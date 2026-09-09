@@ -531,6 +531,7 @@ describe("stage attempt session loop", () => {
     // CONTEXT_EXHAUSTED once its simulated window fills, so the assertion below would pass with no
     // deadline logic at all.
     const abortedSessionIds: string[] = [];
+    const pendingSessions = new Map<string, (outcome: ProviderOutcome) => void>();
     const stubborn: ProviderAdapter = {
       capabilities: () =>
         providerCapabilitiesSchema.parse({
@@ -546,13 +547,16 @@ describe("stage attempt session loop", () => {
           costReporting: false,
           tokenBudgetEnforcement: "HARD",
         }),
-      start: (_invocation: ProviderInvocation, listener: ProviderSessionListener) =>
-        new Promise<ProviderOutcome>(() => {
+      start: (invocation: ProviderInvocation, listener: ProviderSessionListener) =>
+        new Promise<ProviderOutcome>((resolve) => {
+          pendingSessions.set(invocation.session.id, resolve);
           listener.onContextWindow({ usedTokens: 3_900, windowTokens: 4_000, quality: "ACTUAL" });
         }),
       requestHandoff: () => Promise.resolve(),
       abortSession: (sessionId) => {
         abortedSessionIds.push(sessionId);
+        pendingSessions.get(sessionId)?.({ type: "CONTEXT_EXHAUSTED" });
+        pendingSessions.delete(sessionId);
         return Promise.resolve();
       },
     };

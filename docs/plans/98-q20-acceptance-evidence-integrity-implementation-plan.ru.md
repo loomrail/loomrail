@@ -1,6 +1,6 @@
 # Q20.4 — План реализации целостности Acceptance evidence
 
-**Статус:** implementation and relevant private-workflow verification complete; full private Epic gate pending
+**Статус:** implemented; accepted private Recurkit Epic complete on macOS
 
 **Спецификация:**
 [97-q20-acceptance-evidence-integrity-spec.ru.md](97-q20-acceptance-evidence-integrity-spec.ru.md)
@@ -16,8 +16,8 @@
    **Done.**
 6. Повторить private Recurkit dogfood на релевантном Browser QA scope; прежний returned run не считать pass.
    **Done:** новый WorkItem прошёл authoritative Review, Project verification, measured Browser QA и owner Acceptance;
-   прежние returned/cancelled runs не переименованы в pass. Формальный 2–3-WorkItem private Epic остаётся отдельным
-   Master Plan gate.
+   прежние returned/cancelled runs не переименованы в pass. Более поздний formal 3-WorkItem private Epic также
+   завершён и записан отдельным stable evidence.
 7. Выполнить полный `pnpm verify`, обновить evidence/status и только затем commit/push по отдельному уже полученному
    разрешению. npm publish остаётся запрещён. **Done:** `pnpm verify`, последовательный полный product E2E 61/61,
    release pack и clean-install release verification прошли.

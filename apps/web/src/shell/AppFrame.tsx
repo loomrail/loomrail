@@ -5,6 +5,7 @@ import {
   constitutionPresetIdSchema,
   prioritySchema,
   providerPreferenceSchema,
+  workItemTypeSchema,
   type ConstitutionPresetId,
   type ListedProject,
   type ProviderAvailability,
@@ -48,6 +49,7 @@ import {
   useProjectConstitution,
   useProjectReadiness,
   useProjectProviderSelection,
+  useProjectWorkItems,
   useAttentionInbox,
   useAgentFleet,
   useRegisterRepositoryProject,
@@ -68,6 +70,8 @@ const NewTaskDialog = (): React.JSX.Element => {
   const createMutation = useCreateWorkItem();
   const [requestedProjectId, setRequestedProjectId] = useState<string | null>(null);
   const [priority, setPriority] = useState<WorkItem["priority"]>("MEDIUM");
+  const [type, setType] = useState<WorkItem["type"]>("TASK");
+  const [parentId, setParentId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [criteriaText, setCriteriaText] = useState("");
   const acceptanceCriteria = criteriaText
@@ -81,6 +85,13 @@ const NewTaskDialog = (): React.JSX.Element => {
     acceptanceCriteria.every((criterion) => criterion.length <= 500);
   const projectId =
     projects.find((project) => project.id === requestedProjectId)?.id ?? selectedProject?.id ?? "";
+  const projectWorkItemsQuery = useProjectWorkItems(projectId || undefined);
+  const parentOptions = (projectWorkItemsQuery.data?.workItems ?? []).filter(
+    ({ state }) => state !== "DONE" && state !== "CANCELLED",
+  );
+  useEffect(() => {
+    setParentId(null);
+  }, [projectId]);
 
   const submit = (event: SyntheticEvent<HTMLFormElement, SubmitEvent>): void => {
     event.preventDefault();
@@ -98,15 +109,18 @@ const NewTaskDialog = (): React.JSX.Element => {
         description,
         priority,
         projectId,
+        parentId,
         risk: "MEDIUM",
         title,
-        type: "TASK",
+        type,
       },
       {
         onSuccess: () => {
           formElement.reset();
           setCriteriaText("");
           setTitle("");
+          setParentId(null);
+          setType("TASK");
           setOpen(false);
         },
       },
@@ -146,6 +160,8 @@ const NewTaskDialog = (): React.JSX.Element => {
         if (!next) {
           setTitle("");
           setCriteriaText("");
+          setParentId(null);
+          setType("TASK");
           createMutation.reset();
         }
         setOpen(next);
@@ -237,6 +253,40 @@ const NewTaskDialog = (): React.JSX.Element => {
                 { label: t("priority.URGENT"), value: "URGENT" },
               ]}
               value={priority}
+            />
+          </Field>
+        </div>
+        <div className="new-task-form__row">
+          <Field htmlFor="new-task-type" label={t("task.create.type")}>
+            <SelectControl
+              ariaLabel={t("task.create.type")}
+              id="new-task-type"
+              onValueChange={(value) => {
+                setType(workItemTypeSchema.parse(value));
+              }}
+              options={(["EPIC", "FEATURE", "TASK", "BUG", "SPIKE", "SUBTASK"] as const).map(
+                (workItemType) => ({ label: t(`type.${workItemType}`), value: workItemType }),
+              )}
+              value={type}
+            />
+          </Field>
+          <Field
+            description={t("task.create.parentDescription")}
+            htmlFor="new-task-parent"
+            label={t("task.create.parent")}
+          >
+            <SelectControl
+              ariaLabel={t("task.create.parent")}
+              disabled={projectWorkItemsQuery.isPending || parentOptions.length === 0}
+              id="new-task-parent"
+              onValueChange={(value) => {
+                setParentId(value === "none" ? null : value);
+              }}
+              options={[
+                { label: t("task.create.noParent"), value: "none" },
+                ...parentOptions.map((candidate) => ({ label: candidate.title, value: candidate.id })),
+              ]}
+              value={parentId ?? "none"}
             />
           </Field>
         </div>

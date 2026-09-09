@@ -1606,6 +1606,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
                 projectId: deps.dispatch.projectId,
                 workspace: invocationWorkspace.workspace,
                 policy: executionPolicy.snapshot,
+                verificationPlan: contextSnapshot.verificationPlan,
               });
         if (started.mcpSnapshots.length === 0 && workspaceTools === undefined) {
           mcpLease = { connections: [], close: () => Promise.resolve() };
@@ -1669,7 +1670,13 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       }
     };
 
-    const result: SessionOutcome = await Promise.race([startSession(), deadlineReached]);
+    // Keep the losing side of the race: Promise.race observes a winner but does not cancel or join
+    // the other promise. The handoff-deadline branch must await this exact task after aborting the
+    // provider, because its finally owns the MCP lease close/drain. Starting another session while
+    // this task is still draining would detach accepted workspace authority from the durable
+    // ProviderSession that owns it (ADR-0025/T74).
+    const sessionTask = startSession();
+    const result: SessionOutcome = await Promise.race([sessionTask, deadlineReached]);
     live.closed = true;
     deadline?.cancel();
 
@@ -1802,6 +1809,11 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           lease.releaseOnExit = false;
           return;
         }
+        // A successful abort proves the provider process is gone, not that its accepted workspace
+        // calls have settled. `sessionTask` reaches here only after startSession's finally has
+        // closed and drained the MCP lease. Its late outcome is intentionally ignored: the handoff
+        // deadline remains the authoritative reason for this session ending.
+        await sessionTask;
         if (isAuthorityRevoked(authoritySignal)) return;
         endReason = "CONTEXT_EXHAUSTED";
         deps.logger.warn(

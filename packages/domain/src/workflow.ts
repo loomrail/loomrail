@@ -69,6 +69,7 @@ import { projectVerificationAcceptanceGate } from "./verification.js";
 
 export type WorkflowDomainErrorCode =
   | "WORKFLOW_NOT_READY"
+  | "WORKFLOW_DEPENDENCIES_BLOCKED"
   | "WORKFLOW_ALREADY_ACTIVE"
   | "WORKFLOW_NOT_FOUND"
   | "WORKFLOW_DISPATCH_NOT_FOUND"
@@ -500,6 +501,7 @@ export const decideStartPipeline = (
     now: string;
     workItem: WorkItem;
     hasChildren: boolean;
+    unsatisfiedDependencies?: readonly { blockerWorkItemId: string; state: WorkItem["state"] }[];
     activeRun: PipelineRun | null;
     ids: WorkflowIds;
   },
@@ -511,6 +513,13 @@ export const decideStartPipeline = (
       "WORKFLOW_NOT_READY",
       "Only a leaf WorkItem in Ready can start a workflow",
       { state: context.workItem.state },
+    );
+  }
+  if ((context.unsatisfiedDependencies?.length ?? 0) > 0) {
+    throw new WorkflowDomainError(
+      "WORKFLOW_DEPENDENCIES_BLOCKED",
+      "The WorkItem cannot start until every blocker is Done",
+      { count: context.unsatisfiedDependencies?.length ?? 0 },
     );
   }
   if (context.activeRun && activeRunStatuses.has(context.activeRun.status)) {
@@ -1081,7 +1090,9 @@ export const decideApplyProviderOutcome = (
         call.workItemId === context.workItem.id &&
         call.stageAttemptId === context.stageAttempt.id &&
         call.status === "SUCCEEDED" &&
-        (call.operation === "WRITE_FILE" || call.operation === "DELETE_FILE"),
+        (call.operation === "WRITE_FILE" ||
+          call.operation === "EDIT_FILE" ||
+          call.operation === "DELETE_FILE"),
     );
     if (!observedMutation) {
       throw new WorkflowDomainError(
@@ -2107,6 +2118,7 @@ export const decideAnswerHumanRequest = (
     request: HumanRequest;
     decisionId: string;
     dispatchId: string;
+    acceptancePackageRequestId: string | null;
     nextStageAttemptId?: string;
     reviewRound?: number;
   },
@@ -2150,20 +2162,27 @@ export const decideAnswerHumanRequest = (
       "The HumanRequest is not attached to the current waiting workflow stage",
     );
   }
-  // Once an AcceptancePackage exists, its dedicated owner transition remains the only way to
-  // finish Acceptance. A session-loop hard pause happens before any package exists, though, and
-  // deliberately opens this request as the safe retry path. Keeping the blanket stage check here
-  // made that recovery question impossible to answer.
-  if (context.stageAttempt.stage === "ACCEPTANCE" && !pausedBySessionLoop) {
+  // Once an AcceptancePackage exists, only the exact HumanRequest owned by that package is
+  // protected by the dedicated owner transition. Operational provider/runtime requests and a
+  // genuine NEEDS_HUMAN can occur before a package exists on this same stage; they must retain the
+  // ordinary auditable answer/resume path or Acceptance becomes unrecoverable after a safe
+  // fail-closed provider turn.
+  if (
+    context.stageAttempt.stage === "ACCEPTANCE" &&
+    context.acceptancePackageRequestId === context.request.id
+  ) {
     throw new WorkflowDomainError(
       "WORKFLOW_CONTROL_NOT_ALLOWED",
       "Final acceptance must be accepted, returned, or rejected through its AcceptancePackage",
     );
   }
-  if (context.stageAttempt.failureCode === "QA_CORRECTION_EXHAUSTED") {
+  if (
+    context.stageAttempt.failureCode === "QA_CORRECTION_EXHAUSTED" ||
+    context.stageAttempt.failureCode === "VERIFICATION_CORRECTION_EXHAUSTED"
+  ) {
     throw new WorkflowDomainError(
       "WORKFLOW_CONTROL_NOT_ALLOWED",
-      "An exhausted QA correction requires its dedicated bounded owner transition",
+      "An exhausted QA or Project verification correction requires its dedicated bounded owner transition",
     );
   }
   validateAnswer(context.request, command.payload.answer);

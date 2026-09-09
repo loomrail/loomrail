@@ -83,6 +83,7 @@ import {
   publishProjectScaffoldRequestSchema,
   setProjectProviderPreferenceRequestSchema,
   setProjectWorkspaceStrategyRequestSchema,
+  setWorkItemDependenciesRequestSchema,
   setMcpProfileGrantRequestSchema,
   sessionExchangeRequestSchema,
   sessionExchangeResponseSchema,
@@ -91,6 +92,7 @@ import {
   cancelVerificationRunRequestSchema,
   updateWorkItemRequestSchema,
   workItemChangesResponseSchema,
+  workItemDependenciesResponseSchema,
   workItemFileDiffResponseSchema,
   workItemResponseSchema,
   workItemsResponseSchema,
@@ -131,6 +133,7 @@ import {
   ScaffoldDomainError,
   WorkflowDomainError,
   WorkItemDomainError,
+  WorkItemDependencyError,
 } from "@loomrail/domain";
 import { canonicalMcpProfileSource } from "@loomrail/domain";
 import { createMcpGateway, McpGatewayError, type McpGateway } from "@loomrail/mcp-gateway";
@@ -674,6 +677,13 @@ const sendOperationError = (
   }
   if (error instanceof WorkItemDomainError) {
     const status = error.code === "WORK_ITEM_NOT_FOUND" || error.code === "PARENT_NOT_FOUND" ? 404 : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof WorkItemDependencyError) {
+    const status =
+      error.code === "DEPENDENCY_TARGET_NOT_FOUND" || error.code === "DEPENDENCY_WORK_ITEM_NOT_FOUND"
+        ? 404
+        : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
   if (error instanceof ReviewFindingDispositionError) {
@@ -2842,6 +2852,28 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
+    app.get("/api/v1/projects/:projectId/work-item-dependencies", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const result = localState.query({
+          type: "LIST_WORK_ITEM_DEPENDENCIES",
+          projectId: params.projectId,
+        });
+        if (result.type !== "WORK_ITEM_DEPENDENCIES") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The WorkItem dependency graph could not be read");
+        }
+        return workItemDependenciesResponseSchema.parse({
+          schemaVersion: 1,
+          projectId: result.projectId,
+          dependencies: result.dependencies,
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
     app.get("/api/v1/work-items/:workItemId", (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!requireSession(request, reply, correlationId)) return;
@@ -3641,6 +3673,29 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       }
     });
 
+    app.put("/api/v1/work-items/:workItemId/dependencies", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = workItemParamsSchema.parse(request.params);
+        const body = setWorkItemDependenciesRequestSchema.parse(request.body);
+        return localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "SET_WORK_ITEM_DEPENDENCIES",
+          payload: {
+            workItemId: params.workItemId,
+            expectedVersion: body.expectedVersion,
+            blockerWorkItemIds: body.blockerWorkItemIds,
+          },
+        });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
     app.post("/api/v1/work-items/:workItemId/move", (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!authorizeMutation(request, reply, correlationId)) return;
@@ -4010,7 +4065,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             "The exhausted QA correction gate does not exist",
           );
         }
-        return qaCorrectionGateResolvedResultSchema.parse(
+        const resolved = qaCorrectionGateResolvedResultSchema.parse(
           localState.execute({
             schemaVersion: 1,
             commandId: body.commandId,
@@ -4027,6 +4082,8 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             },
           }),
         );
+        worker.wake();
+        return resolved;
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }
@@ -4055,7 +4112,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
               "The exhausted Project verification correction gate does not exist",
             );
           }
-          return verificationCorrectionGateResolvedResultSchema.parse(
+          const resolved = verificationCorrectionGateResolvedResultSchema.parse(
             localState.execute({
               schemaVersion: 1,
               commandId: body.commandId,
@@ -4074,6 +4131,8 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
               },
             }),
           );
+          worker.wake();
+          return resolved;
         } catch (error: unknown) {
           return sendOperationError(error, request, reply, correlationId);
         }

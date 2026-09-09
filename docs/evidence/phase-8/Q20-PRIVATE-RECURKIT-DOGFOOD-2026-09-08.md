@@ -1,5 +1,9 @@
 # Q20 private Recurkit dogfood — 2026-09-08/09
 
+> Historical single-WorkItem evidence. The later three-WorkItem Epic that closes the macOS private-dogfood gate is
+> recorded in [STABLE-PRIVATE-DOGFOOD-EVIDENCE.md](STABLE-PRIVATE-DOGFOOD-EVIDENCE.md). The cancelled and returned
+> runs below remain historical and were not promoted retroactively.
+
 ## Result
 
 **One private full-stack WorkItem passed the complete production workflow and the owner accepted its Acceptance

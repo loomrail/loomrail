@@ -5,6 +5,7 @@ import type {
   StateCommand,
   StateCommandResult,
   VerificationCheck,
+  VerificationCorrectionRun,
   VerificationFailure,
   VerificationPlan,
   VerificationPlanPublication,
@@ -222,6 +223,8 @@ const createHarness = (options: {
   initialRun?: VerificationRun | null;
   initialChecks?: VerificationCheck[];
   initialFailure?: VerificationFailure | null;
+  stageAttempt?: StageAttempt;
+  correctionRuns?: VerificationCorrectionRun[];
   completion?: "PASSED" | "FAILED";
   moveDispatchAfterCompletion?: boolean;
 }) => {
@@ -231,6 +234,7 @@ const createHarness = (options: {
   const wakes: string[] = [];
   const waits: string[] = [];
   let dispatchPending = true;
+  const currentStageAttempt = options.stageAttempt ?? stageAttempt;
 
   const query: LocalState["query"] = (request): StateQueryResult => {
     switch (request.type) {
@@ -261,7 +265,7 @@ const createHarness = (options: {
           snapshot: {
             schemaVersion: 1,
             run: pipelineRun,
-            stageAttempts: [stageAttempt],
+            stageAttempts: [currentStageAttempt],
             humanRequests: [],
             decisions: [],
             budgetPolicies: [],
@@ -270,6 +274,11 @@ const createHarness = (options: {
             artifacts: [],
             acceptancePackage: null,
           },
+        };
+      case "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS":
+        return {
+          type: "VERIFICATION_CORRECTIONS",
+          correctionRuns: options.correctionRuns ?? [],
         };
       case "LIST_PENDING_DISPATCHES":
         return { type: "WORKFLOW_DISPATCHES", dispatches: dispatchPending ? [dispatch] : [] };
@@ -438,6 +447,64 @@ describe("Project verification workflow gate", () => {
       blocker: "STALE",
     });
     expect(harness.commands).toEqual([]);
+  });
+
+  it("starts fresh measurement when a newer active correction reaches QA after a materialized stale run", async () => {
+    const previousCorrectionId = "verification-correction-two";
+    const activeCorrectionId = "verification-correction-three";
+    const originalTree = "a".repeat(40);
+    const staleRun = passedRun({
+      ...queuedRun(),
+      implementationTree: originalTree,
+      verificationCorrectionRunId: previousCorrectionId,
+    });
+    const staleFailure: VerificationFailure = {
+      schemaVersion: 1,
+      id: "verification-failure-stale-two",
+      projectId: staleRun.projectId,
+      workItemId: staleRun.workItemId,
+      pipelineRunId: staleRun.pipelineRunId,
+      verificationRunId: staleRun.id,
+      verificationCheckId: null,
+      planId: staleRun.planId,
+      planRevision: staleRun.planRevision,
+      planContentHash: staleRun.planContentHash,
+      implementationTree: staleRun.implementationTree,
+      reason: "STALE",
+      staleReasons: ["TREE_CHANGED"],
+      createdAt: completedAt,
+    };
+    const activeCorrection: VerificationCorrectionRun = {
+      schemaVersion: 1,
+      id: activeCorrectionId,
+      projectId: project.id,
+      workItemId: workItem.id,
+      pipelineRunId: pipelineRun.id,
+      budgetPosition: 3,
+      automatic: false,
+      sourceFailureId: staleFailure.id,
+      sourceVerificationRunId: staleRun.id,
+      sourceImplementationTree: staleRun.implementationTree,
+      resumesQACorrectionRunId: null,
+      status: "ACTIVE",
+      createdAt: completedAt,
+      completedAt: null,
+      version: 1,
+    };
+    const harness = createHarness({
+      initialRun: staleRun,
+      initialChecks: [passedCheck(queuedCheck(staleRun.id))],
+      initialFailure: staleFailure,
+      stageAttempt: { ...stageAttempt, verificationCorrectionRunId: activeCorrectionId },
+      correctionRuns: [activeCorrection],
+    });
+
+    await expect(harness.gate.beforeBrowserQA({ dispatch, testedTree: tree })).resolves.toEqual({
+      status: "READY",
+      configured: true,
+    });
+    expect(harness.commands.map(({ type }) => type)).toEqual(["START_VERIFICATION_RUN"]);
+    expect(harness.wakes).toEqual(["verification-run-one"]);
   });
 
   it("preserves Projects without an adopted Plan and starts no verification process", async () => {

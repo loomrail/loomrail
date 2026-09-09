@@ -1,6 +1,6 @@
 # Q20.1 — Локальные Codex/Claude runtime через подписочную авторизацию: спецификация
 
-**Статус:** implemented; one accepted private full-workflow WorkItem complete; formal private Epic and Windows live evidence pending
+**Статус:** implemented; accepted private Recurkit Epic complete on macOS; Windows live evidence pending
 
 ## Цель
 
@@ -34,6 +34,9 @@ Loomrail не выполняет login/update за пользователя и �
 - общий provider-neutral renderer до spawn проверяет соответствие connector/tool allowlist immutable workspace
   access и объясняет runtime, что read-only scratch не является repository; private path/branch/capability в prompt
   не попадают, а read-only discovery не публикует write/delete;
+- обязательный `WORKFLOW_POSITION` показывает обоим providers одну safe projection active Verification Plan:
+  identity/revision и bounded recipe metadata без argv/cwd/script/provenance/path; это описание существующей
+  authority, а HumanRequest answer не может расширить permissions, allowlist или budget;
 - daemon повторно валидирует operation и вызывает `WorkspaceToolExecutor`; результат bounded/redacted и считается
   недоверенными данными следующего provider turn;
 - IMPLEMENT получает READ_WRITE, QA и читающие стадии — READ_ONLY; recipe остаётся owner-approved exact ID.
@@ -61,8 +64,11 @@ Loomrail не выполняет login/update за пользователя и �
 
 - adapters declare `POST_SESSION`, never `HARD`;
 - immutable token ledger is checked before session and updated exactly once from terminal actual usage;
-- 10-minute deadline, bounded JSONL lines, finite tool-call count and provider turn count are preventive;
+- shared 20-minute deadline equals the 15-minute maximum single verification call plus a fixed 5-minute
+  control-plane reserve; bounded JSONL lines, finite tool-call count and provider turn count are preventive;
 - abort kills the process tree and revokes the proxy before workflow recovery;
+- forced context handoff awaits the aborted session task through MCP lease drain before recording session end or
+  opening a successor;
 - provider PID and every workspace tool call remain durable; restart never replays uncertain effects;
 - raw stdout/stderr, provider transcript, MCP capability, account identifier, auth output, source/file content and
   command output are not persisted.
@@ -79,8 +85,11 @@ Loomrail не выполняет login/update за пользователя и �
 - spaces/Unicode and modeled Windows paths remain covered;
 - integration/E2E use only test-code CLI doubles; no billable live call is required for `pnpm verify`;
 - owner-approved local dogfood records the provider/runtime version and result without credentials or raw payloads.
+- one maximum-duration recipe can return a terminal result before the shared Codex/Claude session deadline when it
+  begins within the fixed reserve; expiry remains typed, cancellable and non-replaying.
 
 Focused evidence 2026-09-07: on macOS arm64, Codex CLI `0.153.4` and Claude Code `2.1.260` each completed a real
 IMPLEMENT read/write and QA read-only session through the proxy/executor in a temporary workspace with spaces and
-Unicode. A later accepted private Recurkit WorkItem exercised the full route and exposed the need for the explicit
-authority renderer. It does not replace the separate durable 2–3-WorkItem Epic or Windows acceptance.
+Unicode. The accepted private Recurkit Epic later completed three accepted WorkItems, including a durable dependency
+edge and a clean final run through both providers, independent Project Verification, measured Browser QA and owner
+Acceptance. It does not replace Windows acceptance.

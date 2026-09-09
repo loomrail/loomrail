@@ -1,7 +1,7 @@
 # Releasing the Loomrail launcher
 
-**Status:** alpha.4 published; alpha.5 candidate passes automated macOS/Windows source, browser, fault and clean-install gates; one accepted private WorkItem is recorded, while the durable private Epic and Windows live-provider gates remain pending
-**Updated:** 2026-09-09
+**Status:** alpha.4 published; alpha.5 candidate and the three-WorkItem private Recurkit Epic pass on macOS; Windows live-provider gates remain pending
+**Updated:** 2026-09-10
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
 the SQLite migrations and the bundled fixture projects. Consumers install one package and run one binary; they never
@@ -155,10 +155,11 @@ Browser smoke and Clean install jobs. It also reads the versioned
 required gates are `PASSED`, the selected stable version matches, every evidence file is a bounded regular file with
 the recorded SHA-256, and the identical bytes exist at a recorded ancestor commit. Run `pnpm release:status` to inspect
 the current index without changing external state. Schema v3 replaces the retired hard-token/API gate with
-`q20LocalSubscriptionWorkspaceExecution`. The index currently proves eight of eleven gates and deliberately keeps
-the durable 2–3-WorkItem private Epic plus both Windows local-CLI rows `PENDING`; no stable version is selected. The
-accepted private Recurkit WorkItem is useful full-workflow evidence, but its textual three-step plan is not a
-domain-owned dependency graph and therefore does not promote `privateDogfood`. Both ordinary source-CI platforms run
+`q20LocalSubscriptionWorkspaceExecution`. Before the current private-Epic evidence is bound to an immutable commit,
+the index proves eight of eleven gates. After that promotion it proves nine of eleven and deliberately keeps both
+Windows local-CLI rows `PENDING`; no stable version is selected. The accepted Recurkit Epic contains three durable
+child WorkItems and a persisted `BLOCKS` edge. Earlier single-WorkItem evidence remains historical and does not
+substitute for the Epic. Both ordinary source-CI platforms run
 the same status check from full Git history, so a changed or unreachable recorded evidence object fails the candidate
 before the longer verification matrix.
 

@@ -22,6 +22,8 @@ const MAX_SCRIPT_ENTRIES = 64;
 const TARGET_DIRECTORY = ".loomrail";
 const TARGET_PATH = ".loomrail/verification-plan.json";
 const MAX_TARGET_BYTES = 512 * 1024;
+const DEFAULT_RECIPE_TIMEOUT_SECONDS = 300;
+const DEFAULT_E2E_TIMEOUT_SECONDS = 900;
 
 const supportedScripts: readonly {
   name: VerificationScriptName;
@@ -228,7 +230,7 @@ const recipeFor = (
   executable,
   argv: ["run", definition.name],
   cwd: ".",
-  timeoutSeconds: 300,
+  timeoutSeconds: definition.kind === "E2E" ? DEFAULT_E2E_TIMEOUT_SECONDS : DEFAULT_RECIPE_TIMEOUT_SECONDS,
   outputLimitBytes: 262_144,
   environmentProfile: "VERIFICATION_BASELINE",
   networkPolicy: "INHERIT_HOST",

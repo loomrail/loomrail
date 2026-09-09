@@ -66,6 +66,7 @@ describe("context pack assembly", () => {
     // The template identity is recorded at recipe level; a correction position additionally carries
     // the exact durable implementation/finding authority rendered into that required section.
     expect(workflowPositionEntry?.sources).toEqual([
+      { kind: "PROJECT_VERIFICATION_PLAN", id: "verification-plan-03", version: 3 },
       { kind: "STAGE_ATTEMPT", id: "attempt_implement_01", version: 3 },
       { kind: "AGENT_RUN", id: "agent_run_author_01", version: 2 },
       { kind: "REVIEW_FINDING", id: "finding_01", version: 1 },

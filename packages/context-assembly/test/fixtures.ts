@@ -25,6 +25,21 @@ export const sampleSources = (): ContextSources => ({
     attempt: 1,
     sessionOrdinal: 2,
   },
+  projectVerificationPlan: {
+    id: "verification-plan-03",
+    revision: 3,
+    status: "ACTIVE",
+    recipes: [
+      {
+        id: "package test é2e",
+        kind: "E2E",
+        label: "Dashboard E2E — путь с пробелом",
+        required: true,
+        timeoutSeconds: 900,
+        networkPolicy: "INHERIT_HOST",
+      },
+    ],
+  },
   projectConstitution: {
     id: "constitution_01",
     version: 2,

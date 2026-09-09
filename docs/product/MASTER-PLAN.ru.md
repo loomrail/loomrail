@@ -2,12 +2,12 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-09 — accepted private Recurkit full-workflow dogfood
+**Последнее дополнение:** 2026-09-10 — accepted private Recurkit Epic and safe Verification Plan context
 
 **Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
-локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood
-и public fixture прошли, один private Recurkit WorkItem прошёл полный workflow до owner Acceptance; durable
-2–3-WorkItem private Epic, Windows evidence и stable publish gates остаются pending
+локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood,
+public fixture и private Recurkit Epic прошли до owner Acceptance; Windows live-provider evidence и stable publish
+gates остаются pending
 
 **Продукт:** Loomrail
 
@@ -163,6 +163,11 @@ Workspace
 
 Связи `blocks`, `blocked by` и `relates to` существуют отдельно от hierarchy. Один Epic может связывать несколько
 Project позднее, но в первой версии каждый исполняемый leaf WorkItem изменяет только один repository.
+
+**Beta boundary (PD-022/ADR-0019):** первый исполняемый relation — same-Project `BLOCKS`; `blocked by` выводится как
+его обратная сторона. Входящий набор blockers меняется одной owner-командой с optimistic version, а
+`START_PIPELINE` в той же transaction требует `DONE` каждого blocker. Board `READY` и dependency-ready являются
+разными фактами; automatic next-WorkItem dispatch и cross-Project graph остаются вне этого среза.
 
 ### 5.2. Основные сущности
 
@@ -1340,6 +1345,23 @@ dependency DAG чекбокс §22 и stable `privateDogfood` остаются `
 намеренно dry-run: сырой token не выдаётся и внешнее письмо не отправляется; production email/outbox adapter требует
 отдельного решения и review.
 
+**Implementation checkpoint (2026-09-10):** domain-owned dependency DAG и formal private Recurkit Epic теперь
+проверены production local-CLI workflow. Три дочерних WorkItem имеют `DONE`/`ACCEPTED`; первые две связаны durable
+`BLOCKS`, а финальная чистая Task прошла Codex Discovery/Plan/Implement/QA/Acceptance и независимый Claude Review.
+Первая verification попытка честно упала, automatic correction исправил E2E, повторный Plan revision 6 прошёл четыре
+required recipe на одном tree; Browser QA проверил три password-reset сценария на desktop-light и mobile-dark,
+сохранил шесть screenshots и два traces. Acceptance принят только после совпадения verification/QA tree и проверки
+нулевых active calls/sessions и cross-session/cross-stage overlap. Экспорт содержит 107324 байта readable audit и не
+содержит provider keys, session/CSRF или абсолютный owner path. В середине Epic daemon перезапускался после отмены
+overlap-Run; durable cancelled state восстановилось, а новый clean Run не наследовал background calls. Cancelled
+операционные попытки evidence не считаются.
+
+Dogfood также выявил два последних Loomrail gaps. Handoff deadline раньше отделял проигравший session task от MCP
+drain; PD-026/ADR-0025 теперь требуют abort + join, что чистый Run подтвердил нулевым overlap. Provider не видел
+identity уже active Verification Plan и мог сформулировать misleading HumanRequest; PD-027/ADR-0026 добавляют одну
+transactional safe projection без argv/cwd/script/path и отдельный UI notice, что ответ не расширяет authority.
+Windows live-provider evidence остаётся явно отложенным blocking platform gate; SMTP/deploy Recurkit не выполнялись.
+
 ### Phase 8 — Public Alpha hardening (3–4 недели)
 
 **Outcome:** внешний solo developer может безопасно установить и dogfood продукт.
@@ -1705,26 +1727,26 @@ Windows. Точные числа, команды и их вывод — в
 
 ## 22. Dogfood Alpha acceptance contract
 
-Milestone не закрывается, пока один private dogfood Epic не докажет всё одновременно:
+Private Recurkit Epic закрыл macOS milestone; Windows остаётся отдельным platform gate:
 
-- [ ] intake начат коротким natural-language goal;
-- [ ] discovery сформировал вопросы без дублирования;
-- [ ] пользователь ответил через typed Attention Inbox;
-- [ ] brief, scope/non-scope и acceptance criteria approved;
-- [ ] Task DAG содержит 2–3 зависимые Task;
-- [ ] Codex и Claude использованы в разных ролях;
-- [ ] shared working tree соблюдает single-writer lease;
-- [ ] implementation не перетёр existing user changes;
-- [ ] independent cross-provider review завершён;
-- [ ] owner-approved build/test/lint verification recipes прошли на exact current tree;
-- [ ] browser QA сохранил screenshots, trace, console/network evidence;
-- [ ] high/blocker findings закрыты или явно waived;
-- [ ] Acceptance Package связывает каждый criterion с evidence;
-- [ ] daemon был перезапущен в середине workflow и корректно recovered;
-- [ ] hard budget не превышен;
-- [ ] provider allowance, если доступен, показывает окно/reset/freshness отдельно от hard budget;
-- [ ] человек принял результат;
-- [ ] export содержит читаемые artifacts и audit trail.
+- [x] intake начат коротким natural-language goal;
+- [x] discovery сформировал вопросы без дублирования;
+- [x] пользователь ответил через typed Attention Inbox;
+- [x] brief, scope/non-scope и acceptance criteria approved;
+- [x] Task DAG содержит 2–3 зависимые Task;
+- [x] Codex и Claude использованы в разных ролях;
+- [x] shared working tree соблюдает single-writer lease;
+- [x] implementation не перетёр existing user changes;
+- [x] independent cross-provider review завершён;
+- [x] owner-approved build/test/lint verification recipes прошли на exact current tree;
+- [x] browser QA сохранил screenshots, trace, console/network evidence;
+- [x] high/blocker findings закрыты или явно waived;
+- [x] Acceptance Package связывает каждый criterion с evidence;
+- [x] daemon был перезапущен в середине Epic и корректно recovered;
+- [x] hard budget не превышен;
+- [x] provider allowance не был доступен и не смешивался с hard budget;
+- [x] человек принял результат;
+- [x] export содержит читаемые artifacts и audit trail.
 
 ## 23. Главные риски
 
@@ -1829,15 +1851,15 @@ human waiver с documented risk.
    measured Browser QA до намеренно `PENDING` owner Acceptance; 9 audited writes произошли только в Implement, QA
    оставался read-only. Финальные `pnpm verify`, 61/61 product E2E, 7/7 landing E2E и clean-install release-package
    gate прошли после обновления зависимостей. Не переносить это доказательство на Windows или private Epic.
-3. Один owner-approved private Recurkit WorkItem прошёл оба local provider, restart, Review, Project verification,
-   Browser QA и owner Acceptance в пределах явно утверждённого бюджета. Довести контракт до domain-owned Epic из
-   2–3 durable зависимых WorkItem; textual three-step plan не выдавать за dependency graph. Test doubles и прежние
-   cancelled/returned runs не считать live доказательством.
+3. Owner-approved private Recurkit Epic с тремя принятыми WorkItem и durable dependency edge прошёл оба local
+   provider, restart, Review, Project verification, Browser QA, export и owner Acceptance в пределах явно
+   утверждённых бюджетов. Cancelled/returned runs не считаются live evidence; финальный clean Run имеет нулевой
+   cross-session/cross-stage overlap.
 4. macOS local CLI compatibility rows и protected landing fixed-commit gate закрыты. Получить real Codex/Claude
    execution evidence на Windows; неизвестные результаты оставить `PENDING`, не возвращая Mock.
 5. Repository-side stage-only workflow уже подготовлен с exact-intent, six-job CI и strict eleven-gate evidence
-   index. Schema v3 сейчас честно показывает 8/11 и не содержит выбранной stable version; `PENDING` durable private Epic и
-   обе Windows local-CLI rows машинно запрещают staging. После их закрытия владелец отдельно настраивает
+   index. Schema v3 сейчас честно показывает 8/11 и не содержит выбранной stable version; обе Windows local-CLI rows
+   машинно запрещают staging. После их закрытия владелец отдельно настраивает
    protected main-only `npm-release` environment и npm OIDC trust только для `npm stage publish`. Trusted job
    read-only проверяет непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или
    auto-created environment не сможет stage-ить package. Staged artifact требует ещё одного owner 2FA approval.

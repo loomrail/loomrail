@@ -21,6 +21,7 @@ export const workspaceToolOperationSchema = z.enum([
   "LIST_DIRECTORY",
   "READ_FILE",
   "WRITE_FILE",
+  "EDIT_FILE",
   "DELETE_FILE",
   "RUN_RECIPE",
 ]);

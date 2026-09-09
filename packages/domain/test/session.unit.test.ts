@@ -421,6 +421,7 @@ describe("provider session decisions", () => {
           request: openRequest,
           decisionId: "decision-1",
           dispatchId: "dispatch-2",
+          acceptancePackageRequestId: null,
         },
       );
       expect(decision.request.status).toBe("RESOLVED");
@@ -462,6 +463,7 @@ describe("provider session decisions", () => {
           request: openRequest,
           decisionId: "decision-acceptance",
           dispatchId: "dispatch-acceptance",
+          acceptancePackageRequestId: null,
         },
       );
 
@@ -499,6 +501,7 @@ describe("provider session decisions", () => {
             request: openRequest,
             decisionId: "decision-1",
             dispatchId: "dispatch-2",
+            acceptancePackageRequestId: null,
           },
         ),
       ).toThrow(WorkflowDomainError);

@@ -1,7 +1,7 @@
 # Loomrail — зафиксированные продуктовые и архитектурные решения
 
 **Дата фиксации:** 2026-08-22
-**Последнее дополнение:** 2026-09-08 — authoritative Acceptance evidence vocabulary
+**Последнее дополнение:** 2026-09-09 — context handoff ждёт terminal MCP lease
 **Статус:** approved baseline
 **Основание:** последовательный product/architecture grilling с владельцем проекта
 
@@ -314,6 +314,13 @@ credentials и raw provider status output не сохраняются.
 Публичные async-операции driver используют один экспортируемый typed error с закрытым code vocabulary; raw browser,
 filesystem и callback messages не переходят через эту границу.
 
+Локальный development target может зависеть от WebSocket для hydration. Детерминированный PlaywrightDriver
+перехватывает все такие соединения до навигации: разрешён только exact same-origin loopback handshake,
+page-to-server frames отбрасываются, все frames имеют жёсткие количественные и byte limits, а off-origin или
+превышение лимита делает evidence невалидным. После bounded `load` драйвер даёт framework 250 ms внутри того же
+navigation deadline для attachment hydration перед первым interaction; он не ждёт бесконечного network idle. Это
+compatibility seam для read-only QA, а не общая network или command capability (ADR-0020).
+
 ### QD-002 — Evidence gate
 
 Сообщение агента «всё работает» не проходит QA. Evidence связано с точным code snapshot и становится stale после
@@ -329,6 +336,10 @@ policy snapshot запуска.
 Verification result создаёт daemon-owned evidence с recipe revision, exact tested tree, platform, exit status,
 duration и bounded/redacted output. Изменение tree делает результат `STALE`; обязательная failing, error либо stale
 проверка блокирует Acceptance. Запуск tests не даёт authority на commit, push, merge или deploy.
+
+Scanner назначает deadline по виду проверки: 300 секунд для lint/build/unit/integration и 900 секунд для E2E. Это
+owner-visible значение входит в exact proposal и принятую revision; общий contract по-прежнему ограничивает любую
+recipe максимумом 900 секунд. Истечение срока остаётся typed error и не может стать passing evidence.
 
 ## 10. Permissions, privacy и secrets
 
@@ -630,9 +641,10 @@ Append-only команды, Events, миграции и старые EvidenceArt
 
 Для IMPLEMENT и QA принят один provider-neutral session-scoped executor. Адаптеры локальных Codex/Claude Code
 владеют только native CLI/MCP protocol и переводят его в закрытые
-`LIST_DIRECTORY | READ_FILE | WRITE_FILE | DELETE_FILE | RUN_RECIPE`.
+`LIST_DIRECTORY | READ_FILE | WRITE_FILE | EDIT_FILE | DELETE_FILE | RUN_RECIPE`.
 Пути — portable relative NFC, каждый existing component проверяется canonical/no-symlink; `.git`, `.loomrail`,
-`.env*` и credential/key paths не видны tools. Write/delete используют expected SHA-256; QA остаётся `READ_ONLY`,
+`.env*` и credential/key paths не видны tools. Write/edit/delete используют expected SHA-256; `EDIT_FILE` меняет
+ровно один exact UTF-8 fragment и отклоняет отсутствующее или неоднозначное совпадение. QA остаётся `READ_ONLY`,
 IMPLEMENT получает `READ_WRITE` только из immutable AgentRun snapshot.
 
 Произвольной command строки нет. `RUN_RECIPE` принимает только ID exact active owner-approved Verification Plan;
@@ -663,7 +675,7 @@ QA сохраняет две независимые authority: daemon-owned Brow
 переоценки. Полный механизм — ADR-0014 и планы 89–90.
 
 Schema-valid `COMPLETED` от provider не является доказательством реализации. Для live IMPLEMENT domain требует
-успешный audited `WRITE_FILE` или `DELETE_FILE` той же ProviderSession/StageAttempt; чтение, recipe, отказ/ошибка или
+успешный audited `WRITE_FILE`, `EDIT_FILE` или `DELETE_FILE` той же ProviderSession/StageAttempt; чтение, recipe, отказ/ошибка или
 чужая сессия не проходят gate. Отсутствие эффекта даёт typed `IMPLEMENT_EFFECT_NOT_OBSERVED` и hard pause, а не
 synthetic success.
 
@@ -723,6 +735,92 @@ version/platform/architecture admission. Старый, unreadable или unverif
 
 Loomrail не удаляет обязательный `--restricted`, не повторяет запуск с ослабленными флагами, не обновляет CLI и не
 переходит на API. `AUTO` вправе выбрать другой независимо готовый локальный CLI. Полный механизм — ADR-0018.
+
+### PD-022 — Порядок WorkItem хранится как domain-owned `BLOCKS` DAG
+
+**Дата:** 2026-09-09. Реализует ранее утверждённые WD-001 и WD-006; не меняет provider authority или final
+Acceptance.
+
+Hierarchy Epic/child через `parentId` означает состав результата, а dependency означает порядок исполнения и
+хранится отдельно. В Beta исполняется один relation kind: направленное ребро `BLOCKS`; `blocked by` является его
+обратной проекцией, а `relates to` остаётся non-executing future relation.
+
+Владелец одной атомарной командой заменяет полный набор входящих blockers WorkItem с expected version. Loomrail
+проверяет same-Project membership, отсутствие self/duplicate edges и cycle на bounded snapshot графа, затем в одной
+SQLite transaction применяет edge diff, увеличивает version WorkItem, пишет Event и command receipt. Provider не
+получает команду изменения графа и не определяет readiness.
+
+Board state `READY` недостаточен для старта: все incoming blocker должны находиться в `DONE`, достигнутом через
+human Acceptance. `CANCELLED` не считается выполнением и остаётся видимым блокером до отдельного решения владельца.
+Первый срез не запускает следующий WorkItem автоматически и не разрешает cross-Project dependencies. Полный
+контракт — ADR-0019 и планы 99–100.
+
+### PD-023 — Acceptance provider wire ссылается на evidence по bounded ordinal
+
+**Дата:** 2026-09-09. Уточняет PD-020 и ADR-0017; не меняет human-only acceptance.
+
+Критерии и Review/QA checks остаются exact domain strings, но больше не встраиваются как dynamic string literals в
+provider-native strict JSON Schema. Новый provider-neutral wire использует zero-based integer references с верхней
+границей из immutable Acceptance input. Один bounded ordered reference table передаётся в prompt как недоверенный
+контекст; после schema validation `provider-core` сам разрешает refs обратно в exact строки, а domain повторно
+проверяет ordered total coverage и membership в current evidence.
+
+Codex и Claude Code используют один wire contract. Provider-specific schema transport остаётся внутри adapters.
+Ошибка provider schema или неверный ref остаются fail-closed operational failure; string fallback, synthetic package
+и автоматическое принятие запрещены. Полный механизм — ADR-0021 и план 104.
+
+### PD-024 — ProviderSession закрывается только после terminal workspace tool calls
+
+**Дата:** 2026-09-09. Уточняет PD-019 и ADR-0014; не расширяет executor authority.
+
+Закрытие native provider transport не означает, что принятый daemon-owned tool call завершён. Gateway lease при
+закрытии сначала отказывает новым calls и разрывает provider socket, затем обязан дождаться terminal состояния всех
+уже начатых direct calls. Только после этого ProviderSession, StageAttempt и workspace lease могут перейти дальше.
+
+Незавершённый recipe не может выполняться одновременно со следующим Review/QA и не считается evidence. Owner cancel
+сначала отзывает authority, чтобы executor остановил process tree, а затем проходит тот же drain. Crash/restart
+остаётся на durable `UNKNOWN_OUTCOME` recovery path. Полный механизм — ADR-0023 и план 106.
+
+### PD-025 — Local provider session переживает одну максимально долгую verification operation
+
+**Дата:** 2026-09-09. Уточняет PD-019, PD-024 и QD-003; не расширяет provider или executor authority.
+
+Потолок одной owner-approved E2E recipe равен 900 секундам. Общий wall-clock deadline локальной Codex/Claude
+ProviderSession равен этому потолку плюс фиксированные 300 секунд на provider reasoning, MCP round trip и terminal
+structured result. Один shared provider-core policy задаёт 1 200 000 мс для обоих adapters; provider-specific числа
+запрещены.
+
+Deadline остаётся preventive bounded control, а не обещанием закончить произвольное количество recipes за одну
+сессию. Если provider тратит control-plane reserve до запуска долгой операции или исчерпывает общий лимит, transport
+останавливается typed failure. Уже принятый tool call всё равно проходит drain из PD-024, но его потерянный ответ не
+превращается в success и не replay-ится автоматически. Полный механизм — ADR-0024 и план 107.
+
+### PD-026 — Handoff deadline не отделяет ProviderSession от её MCP lease
+
+**Дата:** 2026-09-09. Закрывает пропущенную ветку PD-024; не расширяет длительность или authority tool call.
+
+`Promise.race` между provider runtime и context-handoff deadline выбирает момент принудительной остановки, но не
+отменяет ещё выполняющийся session task. После победы deadline Loomrail сначала вызывает и дожидается typed
+`abortSession`, затем обязан дождаться того же session task вместе с его `finally`/MCP lease drain. Только после
+этого разрешены durable `END_PROVIDER_SESSION` и следующая ProviderSession того же StageAttempt.
+
+Context handoff не отзывает workspace authority уже принятой recipe: она может закончиться только внутри своего
+owner-approved deadline или быть остановлена общим owner cancellation. Её результат после потери provider transport
+не replay-ится и не считается stage success. Полный механизм — ADR-0025 и план 108.
+
+### PD-027 — Provider видит только безопасную проекцию immutable Verification Plan
+
+**Дата:** 2026-09-09. Уточняет PD-019 и PD-020; не передаёт provider право изменять Plan или workflow authority.
+
+Каждая новая ProviderSession получает в обязательном `WORKFLOW_POSITION` exact identity активного Project
+Verification Plan и bounded список разрешённых recipe: ID, kind, label, required, timeout и network policy. `argv`,
+script body/provenance, cwd, output limit, repository path и publication payload в context не попадают. Snapshot
+читается в одной транзакции с остальными context sources и записывается в recipe provenance по Plan revision.
+
+Эта проекция только объясняет уже существующую authority. Исполняется по-прежнему только exact recipe ID через
+daemon-owned executor, который сверяет captured Plan с текущим durable Plan. Ответ на `HumanRequest` никогда сам по
+себе не расширяет permissions, recipe allowlist, budget или stage authority; provider обязан формулировать запрос как
+вопрос о недостающей информации, а не как обещание выдать capability. Полный механизм — ADR-0026 и план 109.
 
 ## 14. Отложенные решения
 

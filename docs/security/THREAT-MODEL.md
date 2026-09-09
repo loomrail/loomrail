@@ -73,57 +73,70 @@ data. A Git worktree is collision isolation, not a security sandbox.
 
 ## 6. Phase 0 threats and controls
 
-| ID  | Threat                                                                       | Risk     | Required controls                                                                                                                                                                            | Verification / gate                                                               |
-| --- | ---------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| T01 | Host binds to LAN/all interfaces                                             | Critical | explicit loopback bind and startup assertion                                                                                                                                                 | M1/M2 integration asserts the listener address                                    |
-| T02 | Malicious site sends localhost commands                                      | Critical | one-time bootstrap, HttpOnly SameSite session, exact Origin, CSRF header, no wildcard CORS                                                                                                   | M1/M2 foreign-Origin, session and CSRF integration tests                          |
-| T03 | Unauthorized or persistent access to the event stream                        | High     | `requireSession` on the SSE route, same as every other GET; `Origin` compared when sent, `SameSite=Strict` otherwise; heartbeat closes the stream on session expiry; open-stream limit       | see A1.5 event-channel delta below                                                |
-| T04 | Bootstrap token leaks in URL/log/referrer                                    | High     | URL fragment, one-minute TTL, hash storage, atomic consume, log redaction                                                                                                                    | M1/M2 replay, request-URL, fragment, referrer and log tests                       |
-| T05 | Stored XSS through WorkItem/artifact                                         | High     | output escaping, no raw HTML Markdown, CSP, size limits                                                                                                                                      | M3 persisted-text browser test and CSP                                            |
-| T06 | Path traversal in fixture project                                            | High     | canonical path containment and no symlink escape                                                                                                                                             | M2 HTTP traversal plus directory/manifest symlink tests                           |
-| T07 | Duplicate command/dispatch                                                   | High     | command ID idempotency, transaction + unique constraints                                                                                                                                     | M2 concurrent retry and command-reuse tests                                       |
-| T08 | False Done/approval tampering                                                | High     | state-machine gate, append-only Event/Decision/evidence, optimistic version                                                                                                                  | M2 transition tests; M6 Scenario D and acceptance replay                          |
-| T09 | SQLite corruption/migration failure                                          | High     | WAL, short transactions, backup before migration, fail closed                                                                                                                                | M2 backup/checksum/reopen tests; Q5 process crash drill; full restore drill in M7 |
-| T10 | Sensitive values in logs/errors                                              | High     | structured allowlisted fields, pre-persistence redaction, bounded local retention and explicit scoped deletion                                                                               | M2 canaries plus Q7 local-log lifecycle delta below                               |
-| T11 | Event/resource exhaustion                                                    | Medium   | payload limits, pagination, queue bounds, open-stream cap; event-stream frames are three opaque identifiers and are not queued per subscriber (no slow-consumer policy — see the A1.5 delta) | M2 body/query bounds; A1.5 open-stream limit tests                                |
-| T12 | Dependency/supply-chain compromise                                           | High     | frozen lockfile; strict release age/trust/source/build-script policy; audit; reviewed exact exceptions                                                                                       | see Q6 release-integrity and supply-chain delta below                             |
-| T13 | Private data committed publicly                                              | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                                                                                                                          | automated public-tree scan; full history scan in M7                               |
-| T14 | Theme/UI hides critical state                                                | Medium   | text/icon semantics, contrast, no color-only gates                                                                                                                                           | M1–M3 light/dark, keyboard and state browser checks                               |
-| T15 | Checkpoint steers the next provider session across a swap                    | High     | schema-validated checkpoint, explicit untrusted-data delimiters in the pack, full text visible to owner (see A1 delta below)                                                                 | see A1 delta below                                                                |
-| T16 | Live adapter spawns an owner-privileged child process                        | High     | argv array to `child_process.spawn`, scratch cwd/minimal env; no bypass flag; built-ins/ambient config disabled; one scoped proxy                                                            | see Q20.1 local-runtime delta below                                               |
-| T17 | Child process orphaned by a dead daemon outlives it                          | Medium   | pid recorded on the `ProviderSession`; startup recovery ends authority only after kill/confirmed absence and otherwise retains session plus writer lease                                     | see A2 and Q5 recovery deltas below                                               |
-| T18 | Untrusted provider stream carries the owner's own hook output                | High     | hooks/settings disabled; only typed fields cross the adapter boundary; no raw wire line retained                                                                                             | see Q20.1 local-runtime delta below                                               |
-| T21 | Client path expands a diff read or exhausts the daemon                       | Medium   | authenticated route; canonical worktree boundary; literal Git pathspec plus exact name match; file-count and byte limits; summary debounce                                                   | see E1.5 change-visibility delta below                                            |
-| T22 | Live provider bypasses typed evidence or owner acceptance                    | High     | stage-specific strict result schema; daemon-owned provider attribution; Review/QA typed artifacts; domain rejects ordinary Acceptance completion                                             | see D2 live-route delta below                                                     |
-| T23 | Public landing leaks private data or executes third-party code               | High     | static build from reviewed assets; no forms, analytics or external runtime resources; self-only CSP; pinned Pages actions; build and deploy permissions separated                            | landing public-contract test, public-tree scan and Pages CI                       |
-| T24 | Repository onboarding leaks data or overwrites owner policy                  | High     | bounded allowlist scan; no source/env/lock contents; no command execution; untrusted provenance; explicit owner adoption; compare-and-set digest; atomic publication; durable recovery       | see B5+B1 Constitution delta below                                                |
-| T33 | Plugin manifest is mistaken for a sandbox or gains workflow authority        | High     | separate process; closed read-only SDK; no domain hooks; ordinary C1 Consent/probe/Grant; manifest claims are labelled unverified                                                            | see C2 Plugin SDK delta below                                                     |
-| T34 | New-project scaffold overwrites a path or executes a template payload        | Critical | built-in immutable recipes only; nonexistent target; exclusive directory claim; create-new writes; no package install/hooks/commit/push; durable marker-bound recovery                       | see B4 scaffolding delta below                                                    |
-| T35 | Global Attention read leaks cross-Project text or weakens acceptance         | High     | authenticated bounded projection; closed schemas; referential validation; React text rendering; acceptance only deep-links to its exact owner gate                                           | see A4 Attention delta below                                                      |
-| T36 | Parallel scheduling oversubscribes capacity or crosses workspace authority   | High     | bounded deterministic plan; transactional AgentRun/limit/lease claim; stable checkpoint; exact profile/provider snapshot; no automatic interrupted-run retry                                 | see A3 scheduling delta below                                                     |
-| T37 | Reviewer forges independence, closes findings, or reviews a stale tree       | High     | distinct durable AgentRuns; daemon-owned relation/IDs; exact tree compare; closed reports; owner-only dispositions; bounded rounds                                                           | see R1 independent-review delta below                                             |
-| T38 | Provider or hostile page waives a QA defect or turns waiver into evidence    | High     | HUMAN-only optimistic command; session/Origin/CSRF; reason; atomic disposition/Event/receipt; waiver cannot create pass/evidence/Acceptance                                                  | see Q2 QA-defect lifecycle delta below                                            |
-| T39 | Acceptance export leaks local authority or turns untrusted prose active      | High     | authenticated exact-correlation read; domain-validated allowlist; escaped Markdown and path redaction; attachment+nosniff; audit/byte bounds; complete-or-error                              | see Q3 Acceptance export delta below                                              |
-| T40 | Diagnostics leak local metadata or mutate state during inspection            | High     | closed allowlisted report; no raw paths/output/errors/env; argv/no-shell bounded probes; read-only SQLite; explicit path disclosure; no cleanup                                              | see Q4 local-diagnostics delta below                                              |
-| T41 | Release artifact is substituted or an unsigned checksum is called provenance | High     | closed receipt; tarball/file digests; clean CI source; trusted OIDC publish; registry signature verification                                                                                 | see Q6 release-integrity and supply-chain delta below                             |
-| T42 | Guided setup performs hidden actions or reports a false-safe route           | High     | zero-write setup report; exact route input; reuse read-only probes; stat-only browser check; no login/install/start; closed output                                                           | see Q8 guided-setup delta below                                                   |
-| T43 | Poisoned or drifted provider CLI is falsely admitted as compatible           | High     | version-before-auth; verified security-control floor; fixed argv/no shell/minimal env; bounded parser; closed readiness                                                                      | see Q9 and Q20.1 local-runtime deltas                                             |
-| T44 | Bundled sample executes hidden code or carries unreviewed repository input   | High     | exact file catalog; regular bounded files; no dependencies/lifecycle scripts/links; no implicit execution                                                                                    | see Q10 bundled-sample delta below                                                |
-| T45 | Public issue intake exposes private data or routes a vulnerability publicly  | High     | closed forms; explicit public-data acknowledgement; enabled private reporting; no uploads/log requests; no runtime ingestion                                                                 | see Q11 public-intake delta below                                                 |
-| T46 | Insights/report export leaks sensitive local workflow or machine metadata    | High     | numeric/enum facts; strict nested schemas; exact preview/download object; authenticated loopback; no network sender                                                                          | see Q12 private-reporting delta below                                             |
-| T47 | Forged, stale or ambiguous provider allowance misleads scheduling or spend   | High     | official structured surface only; closed adapter schema; explicit used/remaining label; observed/reset time and freshness; advisory-only scheduling; no account/credential persistence       | Q16 provider-allowance delta below                                                |
-| T48 | Repository-proposed verification recipe executes attacker-controlled code    | Critical | inert proposal; exact owner revision; argv/no-shell supervisor; scoped cwd/env/network; bounded output/time; durable process identity; stop-before-release; no install/Git/deploy authority  | see Q17 Project-verification delta below                                          |
-| T49 | Guided activation hides authority or publishes an unsafe install sequence    | High     | exact closed install contract; real-provider preflight; explicit quota/side effects and owner actions; fragment-only bootstrap; durable idempotent Task; no parallel progress truth          | see Q15 canonical-activation delta below                                          |
-| T50 | Shared current directory exposes local files or admits concurrent writers    | High     | explicit Project opt-in; immutable workspace fact and carry-in baseline; project-wide writer/verifier authority; named-branch/preflight refusal; no hidden branch/worktree mutation          | see Shared current-directory delta below                                          |
-| T54 | Terminal-only usage is presented as a hard provider budget                   | High     | explicit POST_SESSION capability; pre-session ledger gate; hard time/turn/tool/output limits; UI names possible current-turn overshoot                                                       | see Hard token-budget and Q20.1 deltas                                            |
-| T55 | Historical API credential or request crosses token authority                 | High     | direct API adapters removed; API-key environment ignored by provider registry; no API or synthetic fallback                                                                                  | ADR-0015 and production-source scan                                               |
-| T56 | Provider tool path escapes the selected workspace or reaches secret metadata | Critical | portable relative paths; canonical root/component checks; no symlinks; secret/meta namespace denylist; CAS writes; no recursive delete                                                       | see Q20 workspace-tool delta below                                                |
-| T57 | Provider turns a tool call into arbitrary command, network or Git authority  | Critical | recipe-ID-only tool; exact active owner Plan; no shell/argv/env input; Q17 runner; network fail-closed; no Git/deploy tools                                                                  | see Q20 workspace-tool delta below                                                |
-| T58 | Crash or duplicate tool call repeats an uncertain local side effect          | High     | durable STARTED/terminal audit; session-bound call digest; input mismatch refusal; process proof before recovery; UNKNOWN_OUTCOME; no automatic replay                                       | see Q20 workspace-tool delta below                                                |
-| T59 | Tool/file/process/provider output leaks secrets or becomes active UI content | High     | secret files invisible; scrubbed env; pre-return redaction; strict bounded schemas; no raw output/payload persistence; React text rendering                                                  | see Q20 workspace-tool delta below                                                |
-| T60 | Multi-turn tool loop crosses token authority or fabricates passing QA        | High     | cumulative usage/cap each request; single-call and finite-loop guards; daemon-measured QA first; exact QARun/evidence/tree binding                                                           | see Q20 workspace-tool delta below                                                |
-| T61 | Local CLI bypasses Loomrail tools through built-ins or ambient configuration | Critical | empty scratch root; repository path withheld; settings/rules/hooks/plugins/browser/built-ins disabled; one-use Loomrail MCP proxy; version gate                                              | see Q20.1 local-runtime delta below                                               |
-| T62 | Local auth/session data leaks through argv, output, persistence or recovery  | High     | provider-owned cached login; no token reads; minimal env; ephemeral sessions; redacted typed events; capability token one-use/non-durable                                                    | see Q20.1 local-runtime delta below                                               |
+| ID  | Threat                                                                              | Risk     | Required controls                                                                                                                                                                            | Verification / gate                                                               |
+| --- | ----------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| T01 | Host binds to LAN/all interfaces                                                    | Critical | explicit loopback bind and startup assertion                                                                                                                                                 | M1/M2 integration asserts the listener address                                    |
+| T02 | Malicious site sends localhost commands                                             | Critical | one-time bootstrap, HttpOnly SameSite session, exact Origin, CSRF header, no wildcard CORS                                                                                                   | M1/M2 foreign-Origin, session and CSRF integration tests                          |
+| T03 | Unauthorized or persistent access to the event stream                               | High     | `requireSession` on the SSE route, same as every other GET; `Origin` compared when sent, `SameSite=Strict` otherwise; heartbeat closes the stream on session expiry; open-stream limit       | see A1.5 event-channel delta below                                                |
+| T04 | Bootstrap token leaks in URL/log/referrer                                           | High     | URL fragment, one-minute TTL, hash storage, atomic consume, log redaction                                                                                                                    | M1/M2 replay, request-URL, fragment, referrer and log tests                       |
+| T05 | Stored XSS through WorkItem/artifact                                                | High     | output escaping, no raw HTML Markdown, CSP, size limits                                                                                                                                      | M3 persisted-text browser test and CSP                                            |
+| T06 | Path traversal in fixture project                                                   | High     | canonical path containment and no symlink escape                                                                                                                                             | M2 HTTP traversal plus directory/manifest symlink tests                           |
+| T07 | Duplicate command/dispatch                                                          | High     | command ID idempotency, transaction + unique constraints                                                                                                                                     | M2 concurrent retry and command-reuse tests                                       |
+| T08 | False Done/approval tampering                                                       | High     | state-machine gate, append-only Event/Decision/evidence, optimistic version                                                                                                                  | M2 transition tests; M6 Scenario D and acceptance replay                          |
+| T09 | SQLite corruption/migration failure                                                 | High     | WAL, short transactions, backup before migration, fail closed                                                                                                                                | M2 backup/checksum/reopen tests; Q5 process crash drill; full restore drill in M7 |
+| T10 | Sensitive values in logs/errors                                                     | High     | structured allowlisted fields, pre-persistence redaction, bounded local retention and explicit scoped deletion                                                                               | M2 canaries plus Q7 local-log lifecycle delta below                               |
+| T11 | Event/resource exhaustion                                                           | Medium   | payload limits, pagination, queue bounds, open-stream cap; event-stream frames are three opaque identifiers and are not queued per subscriber (no slow-consumer policy — see the A1.5 delta) | M2 body/query bounds; A1.5 open-stream limit tests                                |
+| T12 | Dependency/supply-chain compromise                                                  | High     | frozen lockfile; strict release age/trust/source/build-script policy; audit; reviewed exact exceptions                                                                                       | see Q6 release-integrity and supply-chain delta below                             |
+| T13 | Private data committed publicly                                                     | High     | `.gitignore`, pre-public scan, review checklist, synthetic fixtures                                                                                                                          | automated public-tree scan; full history scan in M7                               |
+| T14 | Theme/UI hides critical state                                                       | Medium   | text/icon semantics, contrast, no color-only gates                                                                                                                                           | M1–M3 light/dark, keyboard and state browser checks                               |
+| T15 | Checkpoint steers the next provider session across a swap                           | High     | schema-validated checkpoint, explicit untrusted-data delimiters in the pack, full text visible to owner (see A1 delta below)                                                                 | see A1 delta below                                                                |
+| T16 | Live adapter spawns an owner-privileged child process                               | High     | argv array to `child_process.spawn`, scratch cwd/minimal env; no bypass flag; built-ins/ambient config disabled; one scoped proxy                                                            | see Q20.1 local-runtime delta below                                               |
+| T17 | Child process orphaned by a dead daemon outlives it                                 | Medium   | pid recorded on the `ProviderSession`; startup recovery ends authority only after kill/confirmed absence and otherwise retains session plus writer lease                                     | see A2 and Q5 recovery deltas below                                               |
+| T18 | Untrusted provider stream carries the owner's own hook output                       | High     | hooks/settings disabled; only typed fields cross the adapter boundary; no raw wire line retained                                                                                             | see Q20.1 local-runtime delta below                                               |
+| T21 | Client path expands a diff read or exhausts the daemon                              | Medium   | authenticated route; canonical worktree boundary; literal Git pathspec plus exact name match; file-count and byte limits; summary debounce                                                   | see E1.5 change-visibility delta below                                            |
+| T22 | Live provider bypasses typed evidence or owner acceptance                           | High     | stage-specific strict result schema; daemon-owned provider attribution; Review/QA typed artifacts; domain rejects ordinary Acceptance completion                                             | see D2 live-route delta below                                                     |
+| T23 | Public landing leaks private data or executes third-party code                      | High     | static build from reviewed assets; no forms, analytics or external runtime resources; self-only CSP; pinned Pages actions; build and deploy permissions separated                            | landing public-contract test, public-tree scan and Pages CI                       |
+| T24 | Repository onboarding leaks data or overwrites owner policy                         | High     | bounded allowlist scan; no source/env/lock contents; no command execution; untrusted provenance; explicit owner adoption; compare-and-set digest; atomic publication; durable recovery       | see B5+B1 Constitution delta below                                                |
+| T33 | Plugin manifest is mistaken for a sandbox or gains workflow authority               | High     | separate process; closed read-only SDK; no domain hooks; ordinary C1 Consent/probe/Grant; manifest claims are labelled unverified                                                            | see C2 Plugin SDK delta below                                                     |
+| T34 | New-project scaffold overwrites a path or executes a template payload               | Critical | built-in immutable recipes only; nonexistent target; exclusive directory claim; create-new writes; no package install/hooks/commit/push; durable marker-bound recovery                       | see B4 scaffolding delta below                                                    |
+| T35 | Global Attention read leaks cross-Project text or weakens acceptance                | High     | authenticated bounded projection; closed schemas; referential validation; React text rendering; acceptance only deep-links to its exact owner gate                                           | see A4 Attention delta below                                                      |
+| T36 | Parallel scheduling oversubscribes capacity or crosses workspace authority          | High     | bounded deterministic plan; transactional AgentRun/limit/lease claim; stable checkpoint; exact profile/provider snapshot; no automatic interrupted-run retry                                 | see A3 scheduling delta below                                                     |
+| T37 | Reviewer forges independence, closes findings, or reviews a stale tree              | High     | distinct durable AgentRuns; daemon-owned relation/IDs; exact tree compare; closed reports; owner-only dispositions; bounded rounds                                                           | see R1 independent-review delta below                                             |
+| T38 | Provider or hostile page waives a QA defect or turns waiver into evidence           | High     | HUMAN-only optimistic command; session/Origin/CSRF; reason; atomic disposition/Event/receipt; waiver cannot create pass/evidence/Acceptance                                                  | see Q2 QA-defect lifecycle delta below                                            |
+| T39 | Acceptance export leaks local authority or turns untrusted prose active             | High     | authenticated exact-correlation read; domain-validated allowlist; escaped Markdown and path redaction; attachment+nosniff; audit/byte bounds; complete-or-error                              | see Q3 Acceptance export delta below                                              |
+| T40 | Diagnostics leak local metadata or mutate state during inspection                   | High     | closed allowlisted report; no raw paths/output/errors/env; argv/no-shell bounded probes; read-only SQLite; explicit path disclosure; no cleanup                                              | see Q4 local-diagnostics delta below                                              |
+| T41 | Release artifact is substituted or an unsigned checksum is called provenance        | High     | closed receipt; tarball/file digests; clean CI source; trusted OIDC publish; registry signature verification                                                                                 | see Q6 release-integrity and supply-chain delta below                             |
+| T42 | Guided setup performs hidden actions or reports a false-safe route                  | High     | zero-write setup report; exact route input; reuse read-only probes; stat-only browser check; no login/install/start; closed output                                                           | see Q8 guided-setup delta below                                                   |
+| T43 | Poisoned or drifted provider CLI is falsely admitted as compatible                  | High     | version-before-auth; verified security-control floor; fixed argv/no shell/minimal env; bounded parser; closed readiness                                                                      | see Q9 and Q20.1 local-runtime deltas                                             |
+| T44 | Bundled sample executes hidden code or carries unreviewed repository input          | High     | exact file catalog; regular bounded files; no dependencies/lifecycle scripts/links; no implicit execution                                                                                    | see Q10 bundled-sample delta below                                                |
+| T45 | Public issue intake exposes private data or routes a vulnerability publicly         | High     | closed forms; explicit public-data acknowledgement; enabled private reporting; no uploads/log requests; no runtime ingestion                                                                 | see Q11 public-intake delta below                                                 |
+| T46 | Insights/report export leaks sensitive local workflow or machine metadata           | High     | numeric/enum facts; strict nested schemas; exact preview/download object; authenticated loopback; no network sender                                                                          | see Q12 private-reporting delta below                                             |
+| T47 | Forged, stale or ambiguous provider allowance misleads scheduling or spend          | High     | official structured surface only; closed adapter schema; explicit used/remaining label; observed/reset time and freshness; advisory-only scheduling; no account/credential persistence       | Q16 provider-allowance delta below                                                |
+| T48 | Repository-proposed verification recipe executes attacker-controlled code           | Critical | inert proposal; exact owner revision; argv/no-shell supervisor; scoped cwd/env/network; bounded output/time; durable process identity; stop-before-release; no install/Git/deploy authority  | see Q17 Project-verification delta below                                          |
+| T49 | Guided activation hides authority or publishes an unsafe install sequence           | High     | exact closed install contract; real-provider preflight; explicit quota/side effects and owner actions; fragment-only bootstrap; durable idempotent Task; no parallel progress truth          | see Q15 canonical-activation delta below                                          |
+| T50 | Shared current directory exposes local files or admits concurrent writers           | High     | explicit Project opt-in; immutable workspace fact and carry-in baseline; project-wide writer/verifier authority; named-branch/preflight refusal; no hidden branch/worktree mutation          | see Shared current-directory delta below                                          |
+| T54 | Terminal-only usage is presented as a hard provider budget                          | High     | explicit POST_SESSION capability; pre-session ledger gate; hard time/turn/tool/output limits; UI names possible current-turn overshoot                                                       | see Hard token-budget and Q20.1 deltas                                            |
+| T55 | Historical API credential or request crosses token authority                        | High     | direct API adapters removed; API-key environment ignored by provider registry; no API or synthetic fallback                                                                                  | ADR-0015 and production-source scan                                               |
+| T56 | Provider tool path escapes the selected workspace or reaches secret metadata        | Critical | portable relative paths; canonical root/component checks; no symlinks; secret/meta namespace denylist; CAS writes; no recursive delete                                                       | see Q20 workspace-tool delta below                                                |
+| T57 | Provider turns a tool call into arbitrary command, network or Git authority         | Critical | recipe-ID-only tool; exact active owner Plan; no shell/argv/env input; Q17 runner; network fail-closed; no Git/deploy tools                                                                  | see Q20 workspace-tool delta below                                                |
+| T58 | Crash or duplicate tool call repeats an uncertain local side effect                 | High     | durable STARTED/terminal audit; session-bound call digest; input mismatch refusal; process proof before recovery; UNKNOWN_OUTCOME; no automatic replay                                       | see Q20 workspace-tool delta below                                                |
+| T59 | Tool/file/process/provider output leaks secrets or becomes active UI content        | High     | secret files invisible; scrubbed env; pre-return redaction; strict bounded schemas; no raw output/payload persistence; React text rendering                                                  | see Q20 workspace-tool delta below                                                |
+| T60 | Multi-turn tool loop crosses token authority or fabricates passing QA               | High     | cumulative usage/cap each request; single-call and finite-loop guards; daemon-measured QA first; exact QARun/evidence/tree binding                                                           | see Q20 workspace-tool delta below                                                |
+| T61 | Local CLI bypasses Loomrail tools through built-ins or ambient configuration        | Critical | empty scratch root; repository path withheld; settings/rules/hooks/plugins/browser/built-ins disabled; one-use Loomrail MCP proxy; version gate                                              | see Q20.1 local-runtime delta below                                               |
+| T62 | Local auth/session data leaks through argv, output, persistence or recovery         | High     | provider-owned cached login; no token reads; minimal env; ephemeral sessions; redacted typed events; capability token one-use/non-durable                                                    | see Q20.1 local-runtime delta below                                               |
+| T63 | Provider renames measured evidence or contradicts trusted verification              | High     | domain-derived measured QA vocabulary and acceptance narrative; exact run/tree binding                                                                                                       | see Q20.4 Acceptance evidence-integrity delta below                               |
+| T64 | Provider launcher identifies a different engine than production will run            | Critical | production-shaped scratch probe; exact engine version/platform/architecture admission; no weak retry                                                                                         | see Q20.1 local subscription-runtime delta below                                  |
+| T65 | Forged/stale dependency graph starts work early or creates an unbounded cycle       | High     | HUMAN-only atomic set; expected version; same-Project FK; bounded whole-graph cycle check; start-time dependency gate; typed UI state                                                        | see WorkItem dependency-DAG delta below                                           |
+| T66 | Bounded text edit targets stale, ambiguous, escaped or secret file content          | Critical | canonical no-symlink containment; whole-file SHA-256 CAS; one exact non-empty occurrence; strict fragment/file limits; atomic same-directory replace; redacted digest-only audit             | see Q20 bounded exact-edit delta below                                            |
+| T67 | Generic Attention answer bypasses a specialized exhausted-correction gate           | High     | typed inbox action; task-context-only specialized command; exact request/correction/run versions; idempotent passing revalidation; no prose-derived routing                                  | see Q20 owner-gate routing delta below                                            |
+| T68 | Long daemon downtime makes an interrupted verification record unparsable            | High     | separate live-observation and durable elapsed-time bounds; safe-integer recovery duration; typed interruption; no replay                                                                     | see Q20 owner-gate routing delta below                                            |
+| T69 | Browser QA compatibility bypass opens a local WebSocket command/exfil channel       | Critical | isolated browser flag plus pre-navigation catch-all routing; exact loopback origin; discard client frames; bounded server frames; fail-closed outcomes                                       | see Q1 read-only WebSocket delta below                                            |
+| T70 | Untrusted evidence text breaks or weakens a provider strict output schema           | High     | bounded ordinal wire refs; immutable prompt/schema/decoder input; exact post-parse resolution; domain membership and order recheck; no string fallback                                       | see Acceptance structured-output delta below                                      |
+| T71 | A generic verification deadline rejects a valid E2E suite or hides an unbounded run | High     | kind-aware bounded proposal; owner-visible exact timeout; 900-second schema ceiling; supervised process-tree kill; typed timeout; no pass on expiry                                          | see Project-verification deadline delta below                                     |
+| T72 | Provider exit leaves a workspace tool running while the next stage starts           | Critical | close admission; tracked in-flight calls; drain before session/stage completion; cancellation signal before drain; durable crash recovery                                                    | see workspace-tool lease-drain delta below                                        |
+| T73 | Provider session expires before a bounded verification call can return              | High     | shared recipe ceiling; fixed control-plane reserve; one provider-core session policy; typed timeout; T72 drain; no replay or success                                                         | see local-provider deadline delta below                                           |
+| T74 | Handoff deadline detaches its losing session task and overlaps a successor          | Critical | named session promise; abort then join through MCP drain; no successor/session end before terminal calls; cancellation/restart proof                                                         | see handoff session-join delta below                                              |
+| T75 | Missing or over-broad Plan context makes provider invent or expose authority        | High     | transactional safe Plan projection; bounded metadata; no argv/cwd/script/path; provenance; explicit non-escalation rule                                                                      | see safe verification-plan context delta below                                    |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -1788,7 +1801,7 @@ server. The admitted profiles are therefore exact and version-gated, not a colle
   Chrome/slash commands/session persistence, and deliberately omits `--safe-mode` because it disables custom MCP.
   Permission-bypass modes are prohibited. An exact compatible runtime target/floor is checked before auth and dispatch.
 - The sole explicit MCP connection is a daemon-owned, one-use loopback proxy. Its random capability is passed only to
-  the child proxy, never persisted/logged, and deleted with the lease. The broker maps only the five ADR-0014 tools;
+  the child proxy, never persisted/logged, and deleted with the lease. The broker maps only the six ADR-0014 tools;
   unknown tools/fields are refused before executor I/O.
 - A contained provider can mistake its empty native read-only scratch for the authoritative repository and either
   manufacture a blocked result or report completion without using the granted executor. One provider-neutral prompt
@@ -1809,7 +1822,7 @@ server. The admitted profiles are therefore exact and version-gated, not a colle
 
 **T62 — a provider claims IMPLEMENT completion without changing the workspace. High.** A structured final result is
 untrusted even when it matches the stage JSON Schema. The domain accepts a live IMPLEMENT completion only when a
-successful durable `WRITE_FILE` or `DELETE_FILE` belongs to the current Project, WorkItem and StageAttempt. A
+successful durable `WRITE_FILE`, `EDIT_FILE` or `DELETE_FILE` belongs to the current Project, WorkItem and StageAttempt. A
 provider-session handoff or answered HumanRequest may reuse that proof because it continues the same domain-owned
 attempt; another WorkItem, attempt or correction lineage cannot. Read-only, recipe, denied, failed and unfinished
 calls do not count. Missing evidence produces typed `IMPLEMENT_EFFECT_NOT_OBSERVED`, interrupts the session and
@@ -1822,6 +1835,63 @@ arguments; built-in-tool denial; ambient config/hook/plugin/MCP canaries; execut
 authentication and revocation; real proxy-to-executor allowed/denied calls; malformed/oversized streams; token and
 auth canaries absent from state/log snapshots; interrupt, orphan recovery and macOS/Windows path fixtures. Live
 subscription dogfood is separate evidence and may run only after owner approval on a compatible installed target.
+
+**T66 — bounded whole-file writes make a legitimate large-file correction practically unavailable. High.** The
+private Recurkit Epic exposed this in review: a provider could read the relevant range and identify schema drift, but
+could not safely reproduce the full `schema.prisma` through `WRITE_FILE`. Loomrail therefore exposes `EDIT_FILE` only
+to READ_WRITE IMPLEMENT sessions. It requires the digest of the whole current file plus one non-empty exact old
+fragment; zero or multiple matches, stale digest, oversized input/result, invalid UTF-8, secret path, symlink or
+workspace escape fail closed with typed outcomes. The executor computes the result locally and uses the existing
+same-directory atomic replacement; old/new content is hashed into the input digest but never stored in audit/events.
+Required verification covers large files, empty deletion replacement, ambiguous/absent/stale matches, paths with
+spaces and Unicode, simulated Windows policy, symlink/traversal/secret denial, read-only denial, idempotency and
+restart UNKNOWN_OUTCOME without replay.
+
+**T67 — a specialized correction gate is answered through the generic Attention form. High.** The private Recurkit
+dogfood proved that an exhausted Project-verification gate could be rendered as an ordinary question. A generic
+answer closed its `HumanRequest` without allocating the owner-authorized final correction, so a later retry carried
+incomplete authority. This failed closed rather than manufacturing a pass, but stranded the Run until cancellation
+and restart.
+
+Attention now carries a domain-derived closed action. `QA_CORRECTION_EXHAUSTED` and
+`VERIFICATION_CORRECTION_EXHAUSTED` expose only `OPEN_TASK_CONTEXT`; the web client cannot mount the generic answer
+form for them. Only the existing specialized HUMAN route may authorize position 3 or cancel, with exact request,
+PipelineRun, StageAttempt, failure and correction versions in the same transaction. A passing revalidation linked to
+an already historical `PASSED` verification correction may terminate the new Run but cannot reopen, close again or
+emit a second correction handoff. A successful gate transition explicitly wakes the workflow worker; a durable
+queued correction cannot depend on an unrelated refresh or daemon restart. Routing never parses request or provider
+prose. When a newer active verification correction reaches QA, its ID must differ from the correction on the latest
+materialized failure before the gate can reserve one fresh Run; the older failure is not rewritten or duplicated.
+
+The UI routing is defense in depth rather than the authority boundary. Domain command
+`ANSWER_HUMAN_REQUEST` rejects both exhausted failure codes, so a direct authenticated call to the generic answer
+endpoint cannot resolve the request, queue an ordinary resume or strand the correction lineage. Domain coverage
+exercises both codes with the same typed `WORKFLOW_CONTROL_NOT_ALLOWED` result.
+
+The same identity rule applies inside ACCEPTANCE. A generic answer is forbidden only when the current request ID is
+the HumanRequest owned by an existing AcceptancePackage; the package's dedicated `Accept | Return | Reject` route
+remains exclusive. A provider/runtime failure or genuine provider question before any package exists must remain
+answerable through the ordinary optimistic-versioned route, otherwise one safe fail-closed turn can strand the
+workflow permanently. Persistence supplies the exact package request identity; stage name, title and prose are never
+used as a proxy.
+
+Required verification: both exhausted codes project the typed navigation action and reject generic answer commands;
+ordinary questions and pre-package Acceptance operational requests remain answerable; an existing package request
+remains inaccessible to generic answer; malformed actions fail contract parsing; a passing retry after a passed
+correction remains terminal and leaves correction history unchanged; restart/retry dogfood proceeds only from durable
+state.
+
+**T68 — restart recovery confuses a live recipe timeout with durable elapsed time. High.** A live Check observation
+is limited to the maximum supervised recipe window, but an interrupted Check records wall time from its durable
+`startedAt` until authority is proved gone during a later startup. Private dogfood reproduced a daemon downtime
+longer than the one-million-millisecond live bound: process recovery succeeded, then schema validation rolled back
+the state transition and refused startup. No work was replayed, but the local app was unavailable.
+
+The live observation union keeps its strict one-million-millisecond bound. Only the persisted terminal Check accepts
+a non-negative safe-integer duration, allowing honest elapsed recovery evidence after arbitrary realistic downtime.
+Status remains `INTERRUPTED`, output remains absent, and startup still requires prior process-authority proof before
+the transaction can release the workspace. Required verification restarts a running Check after more than the live
+timeout and asserts one durable interruption, failure/correction handling and no automatic execution replay.
 The approved macOS arm64 run on 2026-09-07 proved real bounded IMPLEMENT/QA MCP calls with Codex CLI `0.153.4` and
 Claude Code `2.1.260`; the complete private workflow and a real Windows host remain separate release gates.
 The 2026-09-08 managed public rehearsal then exercised the full production route to a deliberately pending owner
@@ -1870,6 +1940,144 @@ foreign QARun cells fail closed; contradictory provider release/risk/verificatio
 package fields; restart/idempotent replay produces the same package; context/export/log snapshots contain no secret,
 path or raw-output canaries. Semantic inference that a scenario proves a criterion remains explicitly out of scope,
 so the final owner gate remains mandatory.
+
+### Acceptance structured-output compatibility delta (T70)
+
+**T70 — untrusted criterion or evidence text breaks the provider schema or pressures a weaker fallback. High.** The
+Acceptance vocabulary legitimately contains repository and provider-derived text. Embedding those values as dynamic
+JSON Schema `enum` literals lets quotes, backslashes or a future provider-dialect restriction reject the complete
+schema before a model turn. Retrying with an unbounded string schema or rewriting the value could either weaken exact
+evidence binding or make the provider select text different from the authoritative artifact.
+
+New production Acceptance invocations expose only zero-based integer references in the structured-result schema.
+Every integer has a bound derived from the immutable criterion/Review/QA lists used for that invocation, while the
+same ordered lists are rendered once in the prompt as bounded untrusted context. `provider-core` validates the wire
+result, requires criterion references in exact recorded order, then resolves all references against that same input
+before constructing the existing domain claim. The domain still independently verifies total coverage and exact
+current-artifact membership. No adapter retries with a weaker schema, no string analysis converts the provider error
+into success, and no raw response/schema payload is persisted.
+
+Required verification: generated Codex and Claude schemas contain no hostile vocabulary literals; quoted,
+backslashed and Unicode values round-trip exactly through bounded references; negative, out-of-range, duplicate and
+reordered references fail closed; restart/retry produces a normal new ProviderSession on the existing StageAttempt
+and cannot create an AcceptancePackage without current-tree Review, Project verification and measured QA evidence.
+
+### Project-verification deadline delta (T71)
+
+**T71 — один generic deadline либо ложно отклоняет полный E2E, либо провоцирует снятие ограничения. High.** Private
+Recurkit dogfood измерил зелёный полный API + browser E2E за 489 секунд. Прежний scanner всегда предлагал 300 секунд,
+поэтому корректная проверка не могла создать passing evidence. Первый owner-approved trial на 600 секунд затем
+достиг deadline под concurrent host load и тоже честно остался non-passing. Ручной обход runner или unlimited
+timeout разрушил бы owner-approved exact Plan и process-supervision boundary.
+
+Scanner теперь детерминированно предлагает 900 секунд только для allowlisted `test:e2e`; остальные allowlisted
+recipes сохраняют 300 секунд. Timeout виден владельцу до adoption, входит в proposal hash, опубликованную revision и
+policy snapshot запуска. Contract не принимает значение выше 900 секунд. Runner по-прежнему запускает argv без
+shell, ограничивает output, убивает process tree по deadline и записывает typed `TIMED_OUT`; истечение никогда не
+преобразуется в pass и не запускает скрытый retry.
+
+Required verification: scanner одновременно предлагает 300 секунд для unit и 900 для E2E; proposal hash стабилен;
+publisher сохраняет exact owner-approved значение; runner timeout/process-recovery tests остаются зелёными; private
+dogfood повторно выполняет полный E2E через принятую revision без ручного запуска или синтетического evidence.
+
+### Workspace-tool lease-drain delta (T72)
+
+**T72 — provider exit оставляет принятый tool call живым и открывает следующий stage. Critical.** Private Recurkit
+dogfood воспроизвёл разрыв: Codex завершил native IMPLEMENT transport, пока его direct `RUN_RECIPE(test:e2e)` ещё
+работал; gateway уничтожил socket, но не отслеживал promise вызова, и session loop начал независимый Claude Review.
+Recipe оставалась durable `STARTED` с живым supervised process tree. Passing Project Verification evidence не было,
+но single-workspace authority и stable-review premise уже нарушились.
+
+Каждый active gateway binding теперь ведёт закрытый set принятых in-flight call promises. Lease close сначала ставит
+binding в closing state, удаляет одноразовый token и закрывает socket/client, затем ждёт settlement snapshot всех
+принятых calls. Новый CALL после начала close не допускается. Для normal provider exit direct call получает время
+закончиться внутри собственного bounded deadline; session loop ждёт close в `finally` и не завершает ProviderSession
+или StageAttempt раньше. Owner cancellation синхронно abort-ит AgentRun authority, поэтому executor сначала
+останавливает child tree, после чего тот же drain возвращает управление. При daemon crash сохраняется существующая
+durable process-proof/`UNKNOWN_OUTCOME` reconciliation, а не in-memory предположение.
+
+Required verification: deferred direct call удерживает `lease.close()` и StageAttempt от terminal перехода до своего
+settlement; close не принимает второй call; cancellation прерывает bounded recipe и освобождает lease только после
+process proof; restart убивает/подтверждает прежний process до workspace release; новая private dogfood run не имеет
+`STARTED` workspace calls при начале Review или QA.
+
+### Local-provider deadline delta (T73)
+
+**T73 — provider transport истекает раньше допустимого workspace call и теряет terminal result. High.** Contract
+разрешает owner-approved E2E до 900 секунд, но оба local adapters имели отдельный 600-секундный session deadline.
+Recurkit dogfood показал fail-closed поведение T72: StageAttempt дождался recipe, однако уже остановленный Codex не
+получил её `exitCode: 1` и не мог продолжить коррекцию без recovery.
+
+Contracts теперь экспортирует один 900-секундный recipe ceiling. Provider-core добавляет фиксированный 300-секундный
+control-plane reserve и задаёт общий 1 200 000-миллисекундный deadline для Codex и Claude. Это покрывает одну
+максимальную operation, если provider запускает её внутри reserve, но не делает обещаний о неограниченной
+последовательности calls. Истечение по-прежнему typed, останавливает provider process tree и не создаёт evidence.
+Принятый call заканчивается через T72 drain; automatic replay и synthetic success отсутствуют.
+
+Required verification: schema принимает exact ceiling и отклоняет ceiling + 1; provider-core arithmetic test
+фиксирует reserve; оба adapters используют shared policy; existing deadline/cancellation/process-tree tests проходят;
+resumed private dogfood получает terminal E2E outcome до transport expiry.
+
+### Handoff session-join delta (T74)
+
+**T74 — context-handoff timer отделяет проигравший session task и открывает successor. Critical.** `Promise.race`
+возвращал `DEADLINE`, после чего loop ждал только `adapter.abortSession`. Сам `startSession()` продолжал background
+`finally`/MCP drain, но durable ProviderSession уже становилась `CONTEXT_EXHAUSTED`, и следующий Codex начинал
+recipes в том же workspace. Recurkit dogfood показал один `STARTED` E2E прежней session одновременно с lint/build
+новой. Owner cancellation остановил оба дерева; Review, evidence и Acceptance не создавались.
+
+Loop теперь хранит exact session promise. После handoff deadline он сначала ждёт provider process-tree abort, затем
+join-ит тот же promise до завершения MCP close/drain. Late outcome не применяется: end reason остаётся
+`CONTEXT_EXHAUSTED`, а call не replay-ится. Durable session end и successor разрешены только после terminal calls.
+Owner cancellation по-прежнему отзывает общий AgentRun signal и останавливает executor; crash recovery опирается на
+process proof/`UNKNOWN_OUTCOME`, не на in-memory promise.
+
+Required verification: forced deadline + deferred MCP close оставляет первую session `RUNNING`; successor не
+стартует до release; после release обычное continuation разрешено; cancellation/restart не оставляют `STARTED` calls;
+новый private dogfood не имеет cross-session или cross-stage overlap.
+
+### Safe Verification Plan context delta (T75)
+
+**T75 — отсутствие или избыточная проекция Plan заставляет provider угадывать authority либо раскрывает командные
+детали. High.** Без identity активного Plan provider может просить владельца повторить уже durable данные или
+ошибочно обещать, что ответ на HumanRequest включит recipe. Передача полного Plan, напротив, превращает argv, cwd и
+script preview в лишнее недоверенное instruction-bearing содержимое и раскрывает структуру локального проекта.
+
+`READ_CONTEXT_SOURCES` теперь читает optional ACTIVE Plan в той же snapshot transaction. Обязательный
+`WORKFLOW_POSITION` рендерит только Plan ID/revision/status и bounded recipe ID/kind/label/required/timeout/network
+policy, записывая Plan revision в provenance. Argv, cwd, script/provenance, output limits, repository path и
+publication payload не переходят provider boundary. Текст явно запрещает считать HumanRequest answer расширением
+permissions, allowlist, budget или workflow authority. Реальная authority остаётся в immutable AgentRun/MCP snapshot
+и exact-ID executor validation.
+
+Required verification: active/disabled/absent Plan; deterministic Unicode/space labels; forbidden Plan fields and
+paths absent; exact provenance; concurrent Plan adoption cannot tear one context snapshot; provider request/answer
+does not alter tool availability.
+
+### WorkItem dependency-DAG delta (T65)
+
+**T65 — forged, stale or oversized dependency state starts work early or makes the graph unsafe. High.** A browser,
+provider or concurrent owner tab could try to add a foreign/self edge, race two individually acyclic updates into a
+cycle, reuse a command receipt with another payload, or start a READY WorkItem from a stale view while its blocker is
+still unfinished. A provider-authored plan could also be mistaken for authoritative graph state. Unbounded traversal
+would turn a mutation into local resource exhaustion.
+
+Only an authenticated HUMAN mutation with exact Origin/CSRF may atomically replace one WorkItem's incoming blockers.
+The contract caps the set at 50. Inside one `BEGIN IMMEDIATE` transaction the state layer reloads the target and the
+bounded current Project graph, verifies expected version, same-Project identity, duplicates, self-reference and every
+transitive cycle, applies only the computed edge diff, advances the target WorkItem version, appends one allowlisted
+Event and stores the command receipt. Validation refuses graphs above 10 000 WorkItems or 50 000 edges rather than
+sampling them. Provider adapters receive no dependency mutation tool.
+
+`START_PIPELINE` independently reloads incoming edges in its own transaction and proceeds only when every blocker is
+currently `DONE`; `CANCELLED` remains unsatisfied. The read model contains bounded IDs/kind/timestamp only. Titles and
+states come from separately validated WorkItems and React renders them as text. Errors expose closed codes and counts,
+not raw SQL, provider payloads, repository paths or graph request bodies.
+
+Required verification: allowed chain and fan-in; direct/transitive/self/duplicate/foreign/missing/oversized refusal;
+two concurrent cycle-forming attempts; start-before/after blocker Acceptance; stale expected version; command replay
+and command-ID reuse; restart recovery; HTTP session/Origin/CSRF; deterministic order; hostile Unicode text remains
+ordinary UI text and no secret/path/provider payload enters Event, response or logs.
 
 ### Filesystem, shell and Git
 
@@ -1924,6 +2132,14 @@ Q1 tightens the deterministic baseline further:
   contain only loopback addresses and Chromium pins it to one verified address for the run; exact origin is rechecked
   for every request and redirect. A fresh context blocks service workers, drops response cookies, and rejects requests
   carrying Cookie, Authorization or Proxy-Authorization;
+- Chromium's Local Network Access compatibility check may be disabled only inside that isolated Browser QA process
+  and only while catch-all HTTP and WebSocket interception is installed before navigation. WebSockets are normalized
+  back to their HTTP(S) origin and only the exact loopback target may handshake. Page-to-server frames are discarded;
+  all directions share limits of 8 sockets, 256 messages, 1 MiB per message and 4 MiB total per context, and only
+  bounded server-to-page frames are forwarded. Non-empty subprotocols and limit breaches produce
+  `EVIDENCE_INVALID`; malformed/off-origin sockets produce `ORIGIN_FORBIDDEN`. Raw protocols and frames never become
+  evidence or provider input. Navigation reaches bounded `load` and uses only a 250 ms interaction-settle window
+  inside its action deadline, rather than waiting indefinitely for polling to become idle (ADR-0020/T69);
 - one target context delivers at most 250 requests, 8 MiB per response and 64 MiB across responses. One screenshot or
   trace is capped at 32 MiB and one run at 256 MiB; files are hashed incrementally rather than loaded whole. Limit
   breaches, malformed runtime options and timeouts fail closed without finalizable evidence;

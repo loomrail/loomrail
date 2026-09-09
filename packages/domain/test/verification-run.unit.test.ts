@@ -609,7 +609,7 @@ describe("verification Run lifecycle", () => {
       checks: [started.check, optionalCheck],
       expectedRunVersion: 2,
       reason: "DAEMON_RESTART",
-      now: "2026-09-05T10:00:02.000Z",
+      now: "2026-09-05T10:30:00.001Z",
     });
 
     expect(decision.run).toMatchObject({
@@ -619,8 +619,8 @@ describe("verification Run lifecycle", () => {
     });
     expect(decision.checks[0]).toMatchObject({
       status: "INTERRUPTED",
-      completedAt: "2026-09-05T10:00:02.000Z",
-      durationMs: 2_000,
+      completedAt: "2026-09-05T10:30:00.001Z",
+      durationMs: 1_800_001,
       version: 3,
     });
     expect(decision.checks[1]).toEqual(optionalCheck);

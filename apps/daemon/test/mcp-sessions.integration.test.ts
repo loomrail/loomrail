@@ -288,6 +288,7 @@ describe("daemon MCP session orchestration", () => {
           maxCalls: 64,
           maxReadBytes: 65_536,
           maxWriteBytes: 131_072,
+          maxEditFragmentBytes: 32_768,
           maxDirectoryEntries: 1_000,
         },
       }),
@@ -362,6 +363,7 @@ describe("daemon MCP session orchestration", () => {
           maxCalls: 64,
           maxReadBytes: 65_536,
           maxWriteBytes: 131_072,
+          maxEditFragmentBytes: 32_768,
           maxDirectoryEntries: 1_000,
         },
       }),
@@ -397,6 +399,7 @@ describe("daemon MCP session orchestration", () => {
         "loomrail_list_directory",
         "loomrail_read_file",
         "loomrail_write_file",
+        "loomrail_edit_file",
         "loomrail_delete_file",
       ]);
     } finally {
@@ -416,6 +419,7 @@ describe("daemon MCP session orchestration", () => {
           maxCalls: 64,
           maxReadBytes: 65_536,
           maxWriteBytes: 131_072,
+          maxEditFragmentBytes: 32_768,
           maxDirectoryEntries: 1_000,
         },
       }),

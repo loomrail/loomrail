@@ -16,7 +16,7 @@ export const attentionSectionSchema = z.enum([
 ]);
 
 export const attentionCategorySchema = z.enum(["APPROVAL", "QUESTION", "MANUAL_ACTION"]);
-export const attentionActionSchema = z.enum(["ANSWER_REQUEST", "REVIEW_ACCEPTANCE"]);
+export const attentionActionSchema = z.enum(["ANSWER_REQUEST", "OPEN_TASK_CONTEXT", "REVIEW_ACCEPTANCE"]);
 export const attentionReasonSchema = z.enum(["PROVIDER_RATE_LIMITED"]);
 
 export const attentionItemSchema = z

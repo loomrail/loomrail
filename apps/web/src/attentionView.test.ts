@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AttentionItem } from "@loomrail/contracts";
 
-import { groupAttentionItems, nextAttentionIndex } from "./attentionView";
+import { canAnswerAttentionInline, groupAttentionItems, nextAttentionIndex } from "./attentionView";
 
 const item = (id: string, section: AttentionItem["section"]): AttentionItem =>
   ({
@@ -11,6 +11,12 @@ const item = (id: string, section: AttentionItem["section"]): AttentionItem =>
   }) as AttentionItem;
 
 describe("Attention Inbox view model", () => {
+  it("keeps specialized owner gates out of the generic answer form", () => {
+    expect(canAnswerAttentionInline("ANSWER_REQUEST")).toBe(true);
+    expect(canAnswerAttentionInline("OPEN_TASK_CONTEXT")).toBe(false);
+    expect(canAnswerAttentionInline("REVIEW_ACCEPTANCE")).toBe(false);
+  });
+
   it("keeps the domain section order and removes empty groups", () => {
     expect(
       groupAttentionItems([

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer, type RequestListener, type Server } from "node:http";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -44,6 +45,86 @@ const startServer = async (
     throw new Error("The browser QA fixture server did not expose a TCP port");
   }
   return { server, origin: `http://127.0.0.1:${address.port.toString()}` };
+};
+
+const acceptWebSocketUpgrades = (
+  server: Server,
+  onClientFrame: (opcode: number, payload: Buffer) => void = () => undefined,
+  serverMessages: readonly Buffer[] = [],
+  upgradeDelayMs = 0,
+): void => {
+  server.on("upgrade", (request, socket) => {
+    const key = request.headers["sec-websocket-key"];
+    if (typeof key !== "string") {
+      socket.destroy();
+      return;
+    }
+    const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+    setTimeout(() => {
+      if (socket.destroyed) return;
+      socket.write(
+        [
+          "HTTP/1.1 101 Switching Protocols",
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          `Sec-WebSocket-Accept: ${accept}`,
+          "",
+          "",
+        ].join("\r\n"),
+        () => {
+          for (const payload of serverMessages) {
+            const header =
+              payload.byteLength < 126
+                ? Buffer.from([0x81, payload.byteLength])
+                : payload.byteLength <= 65_535
+                  ? (() => {
+                      const value = Buffer.alloc(4);
+                      value[0] = 0x81;
+                      value[1] = 126;
+                      value.writeUInt16BE(payload.byteLength, 2);
+                      return value;
+                    })()
+                  : (() => {
+                      const value = Buffer.alloc(10);
+                      value[0] = 0x81;
+                      value[1] = 127;
+                      value.writeBigUInt64BE(BigInt(payload.byteLength), 2);
+                      return value;
+                    })();
+            socket.write(Buffer.concat([header, payload]));
+          }
+        },
+      );
+    }, upgradeDelayMs);
+    let pending = Buffer.alloc(0);
+    socket.on("data", (chunk) => {
+      pending = Buffer.concat([pending, chunk]);
+      while (pending.byteLength >= 2) {
+        const first = pending.at(0);
+        const second = pending.at(1);
+        if (first === undefined || second === undefined) return;
+        const opcode = first & 0x0f;
+        const masked = (second & 0x80) !== 0;
+        const lengthCode = second & 0x7f;
+        if (lengthCode >= 126) throw new Error("Test WebSocket frame exceeded the fixture limit");
+        const headerLength = masked ? 6 : 2;
+        if (pending.byteLength < headerLength + lengthCode) return;
+        const payload = Buffer.from(pending.subarray(headerLength, headerLength + lengthCode));
+        if (masked) {
+          const mask = pending.subarray(2, 6);
+          for (let index = 0; index < payload.byteLength; index += 1) {
+            const value = payload.at(index);
+            const maskValue = mask.at(index % 4);
+            if (value === undefined || maskValue === undefined) return;
+            payload[index] = value ^ maskValue;
+          }
+        }
+        pending = pending.subarray(headerLength + lengthCode);
+        onClientFrame(opcode, payload);
+        if (opcode === 8) socket.destroy();
+      }
+    });
+  });
 };
 
 const qaRun = (targetOrigin: string): QARun => ({
@@ -596,6 +677,127 @@ describe("Playwright BrowserDriver", () => {
     ).resolves.toEqual([]);
     await execution.dispose();
     await expect(access(join(directory, ".quarantine"))).resolves.toBeUndefined();
+  });
+
+  it("hydrates through a bounded same-origin WebSocket without forwarding client frames", async () => {
+    const clientTextFrames: string[] = [];
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        "<!doctype html><html><body><h1>Current work</h1>" +
+          "<script>const socket=new WebSocket(`ws://${location.host}/dev`);" +
+          "socket.addEventListener('open',()=>{" +
+          "socket.send('client-command-must-not-leave-browser');" +
+          "const button=document.createElement('button');button.textContent='Continue';document.body.append(button)" +
+          "})</script></body></html>",
+      );
+    });
+    acceptWebSocketUpgrades(fixture.server, (opcode, payload) => {
+      if (opcode === 1) clientTextFrames.push(payload.toString("utf8"));
+    });
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-websocket-"));
+    resources.push({ server: fixture.server, directory });
+
+    const execution = await createPlaywrightDriver({ artifactsDirectory: directory }).run(
+      qaRun(fixture.origin),
+    );
+
+    expect(execution.result.outcome).toBe("MEASURED");
+    expect(clientTextFrames).toEqual([]);
+    await execution.dispose();
+  });
+
+  it("does not click server-rendered controls before same-origin hydration is ready", async () => {
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        "<!doctype html><html><body><h1>Current work</h1><button>Continue</button>" +
+          "<script>const socket=new WebSocket(`ws://${location.host}/dev`);" +
+          "socket.addEventListener('open',()=>document.querySelector('button').addEventListener('click',()=>{" +
+          "const input=document.createElement('input');input.setAttribute('aria-label','Email');document.body.append(input)" +
+          "}))</script></body></html>",
+      );
+    });
+    acceptWebSocketUpgrades(fixture.server, () => undefined, [], 200);
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-hydration-"));
+    resources.push({ server: fixture.server, directory });
+    const run = qaRun(fixture.origin);
+    const scenario = run.plan.scenarios[0];
+    if (!scenario) throw new Error("Expected a fixture scenario");
+    scenario.steps = [
+      { id: "open-home", title: "Open home", action: { type: "NAVIGATE", path: "/" } },
+      {
+        id: "continue",
+        title: "Continue",
+        action: { type: "CLICK", locator: { by: "ROLE", role: "button", name: "Continue" } },
+      },
+      {
+        id: "focus-email",
+        title: "Focus email",
+        action: { type: "PRESS", locator: { by: "ROLE", role: "textbox", name: "Email" }, key: "Space" },
+      },
+    ];
+
+    const execution = await createPlaywrightDriver({
+      artifactsDirectory: directory,
+      timeoutMs: 1_000,
+    }).run(run);
+
+    expect(execution.result.outcome).toBe("MEASURED");
+    await execution.dispose();
+  });
+
+  it("blocks an off-origin WebSocket and exposes no finalizable evidence", async () => {
+    const destination = await startServer((_request, response) => {
+      response.writeHead(204);
+      response.end();
+    });
+    const websocketOrigin = destination.origin.replace("http://", "ws://");
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        "<!doctype html><html><body><h1>Current work</h1><button>Continue</button>" +
+          `<script>new WebSocket('${websocketOrigin}/outside')</script></body></html>`,
+      );
+    });
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-websocket-"));
+    resources.push({ server: fixture.server }, { server: destination.server, directory });
+
+    const execution = await createPlaywrightDriver({ artifactsDirectory: directory }).run(
+      qaRun(fixture.origin),
+    );
+
+    expect(execution.result).toMatchObject({ outcome: "ERROR", code: "ORIGIN_FORBIDDEN" });
+    await expect(
+      execution.finalizeAttachments({ qaRunId: "qa-run-1", createAttachmentId: () => "attachment-1" }),
+    ).resolves.toEqual([]);
+    await execution.dispose();
+  });
+
+  it("fails closed when same-origin WebSocket evidence exceeds its message limit", async () => {
+    const fixture = await startServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        "<!doctype html><html><body><h1>Current work</h1>" +
+          "<script>const socket=new WebSocket(`ws://${location.host}/dev`);" +
+          "socket.addEventListener('message',()=>{" +
+          "const button=document.createElement('button');button.textContent='Continue';document.body.append(button)" +
+          "})</script></body></html>",
+      );
+    });
+    acceptWebSocketUpgrades(fixture.server, () => undefined, [
+      Buffer.from("ready", "utf8"),
+      Buffer.alloc(1 * 1_024 * 1_024 + 1, 97),
+    ]);
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-browser-qa-websocket-"));
+    resources.push({ server: fixture.server, directory });
+
+    const execution = await createPlaywrightDriver({ artifactsDirectory: directory }).run(
+      qaRun(fixture.origin),
+    );
+
+    expect(execution.result).toMatchObject({ outcome: "ERROR", code: "EVIDENCE_INVALID" });
+    await execution.dispose();
   });
 
   it("turns a blocked mutation into measured blocking evidence and a defect", async () => {

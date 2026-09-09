@@ -102,6 +102,88 @@ describe("MCP session gateway runtime", () => {
     }
   }, 20_000);
 
+  it("keeps a direct lease open until every accepted call settles", async () => {
+    let releaseCall: (() => void) | undefined;
+    let announceStarted: (() => void) | undefined;
+    const callStarted = new Promise<void>((resolve) => {
+      announceStarted = resolve;
+    });
+    const callReleased = new Promise<void>((resolve) => {
+      releaseCall = resolve;
+    });
+    let callCount = 0;
+    const gateway = createMcpGateway({ proxyEntrypoint, supervisorEntrypoint });
+    const lease = await gateway.open(
+      [],
+      [
+        {
+          providerSessionId: "provider-session-direct-drain",
+          connectionId: "loomrail_workspace",
+          tools: [
+            {
+              name: "loomrail_run_recipe",
+              description: "Run one bounded recipe",
+              inputSchema: {
+                type: "object",
+                properties: { recipeId: { type: "string" } },
+                required: ["recipeId"],
+                additionalProperties: false,
+              },
+            },
+          ],
+          callTool: async () => {
+            callCount += 1;
+            announceStarted?.();
+            await callReleased;
+            return {
+              content: [{ type: "text", text: '{"status":"SUCCEEDED"}' }],
+              structuredContent: { status: "SUCCEEDED" },
+            };
+          },
+        },
+      ],
+    );
+    const connection = lease.connections[0];
+    if (connection === undefined) throw new Error("Expected one direct MCP proxy connection");
+    const client = new Client({ name: "gateway-direct-drain-client", version: "1.0.0" });
+    let closing: Promise<void> | undefined;
+    let providerCall: Promise<unknown> | undefined;
+    try {
+      await client.connect(
+        new StdioClientTransport({
+          command: connection.proxyCommand,
+          args: connection.proxyArgs,
+          env: mcpProbeEnvironment(),
+          stderr: "pipe",
+        }),
+        { timeout: 5_000, maxTotalTimeout: 5_000 },
+      );
+      providerCall = client
+        .callTool({ name: "loomrail_run_recipe", arguments: { recipeId: "package-test-e2e" } })
+        .catch(() => undefined);
+      await callStarted;
+
+      let closed = false;
+      closing = lease.close().then(() => {
+        closed = true;
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(closed).toBe(false);
+      await client
+        .callTool({ name: "loomrail_run_recipe", arguments: { recipeId: "must-not-run" } })
+        .catch(() => undefined);
+      expect(callCount).toBe(1);
+    } finally {
+      releaseCall?.();
+      await closing;
+      await providerCall;
+      await client.close().catch(() => undefined);
+      await lease.close();
+      await gateway.shutdown();
+    }
+  }, 20_000);
+
   it("exposes only granted tools through a one-time Loomrail proxy and audits calls", async () => {
     const starts: { toolName: string; inputDigest: string }[] = [];
     const finishes: { callId: string; outcome: McpToolCallTerminalOutcome }[] = [];

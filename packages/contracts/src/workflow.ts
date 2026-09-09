@@ -121,6 +121,7 @@ export const contextSourceKindSchema = z.enum([
   "QA_DEFECT",
   "VERIFICATION_RUN",
   "VERIFICATION_CHECK",
+  "PROJECT_VERIFICATION_PLAN",
   "PROJECT_CONSTITUTION_VERSION",
 ]);
 export const contextPackSpecSourceSchema = z.enum(["WORKFLOW_TEMPLATE", "ROLE_PLAYBOOK"]);

@@ -397,8 +397,8 @@ describe("verification recipe runner", () => {
     await mkdir(tools, { recursive: true });
     await link(process.execPath, join(tools, "pnpm.exe")).catch(async () => {
       await copyFile(process.execPath, join(tools, "pnpm.exe"));
+      await chmod(join(tools, "pnpm.exe"), 0o700);
     });
-    await chmod(join(tools, "pnpm.exe"), 0o700);
 
     const result = await executeVerificationRecipe({
       recipe: approvedRecipe,

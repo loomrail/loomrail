@@ -1441,7 +1441,7 @@ describe("SQLite local state", () => {
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
       29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54,
-      55,
+      55, 56, 57,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -3318,7 +3318,7 @@ describe("SQLite local state", () => {
         payload: {
           providerSessionId: session.session.id,
           providerCallKey: "a".repeat(64),
-          operation: "WRITE_FILE",
+          operation: "EDIT_FILE",
           target: "src/файл с пробелом.ts",
           policyDigest: "b".repeat(64),
           inputDigest: "c".repeat(64),
@@ -9650,6 +9650,51 @@ describe("SQLite local state", () => {
         "create-context-sources-item",
         false,
       );
+      const verificationProposalContent: Omit<VerificationPlanProposal, "proposalHash"> = {
+        schemaVersion: 1,
+        projectId,
+        target: { state: "ABSENT", digest: null },
+        recipes: [
+          {
+            schemaVersion: 1,
+            id: "context-package-test-e2e",
+            kind: "E2E",
+            label: "E2E — каталог с пробелом",
+            required: true,
+            executable: "pnpm",
+            argv: ["run", "test:e2e"],
+            cwd: ".",
+            timeoutSeconds: 900,
+            outputLimitBytes: 65_536,
+            environmentProfile: "VERIFICATION_BASELINE",
+            networkPolicy: "INHERIT_HOST",
+            provenance: {
+              source: "PACKAGE_JSON_SCRIPT",
+              manifestPath: "package.json",
+              manifestContentHash: "d".repeat(64),
+              scriptName: "test:e2e",
+              scriptBodyPreview: "vitest run --project e2e",
+            },
+          },
+        ],
+        warnings: [],
+      };
+      const adoptedPlan = localState.execute({
+        schemaVersion: 1,
+        commandId: "adopt-context-verification-plan",
+        correlationId: "correlation-adopt-context-verification-plan",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "ADOPT_VERIFICATION_PLAN",
+        payload: {
+          projectId,
+          expectedProjectVersion: 1,
+          proposal: {
+            ...verificationProposalContent,
+            proposalHash: verificationPlanProposalHash(verificationProposalContent),
+          },
+        },
+      });
+      if (adoptedPlan.type !== "VERIFICATION_PLAN_ADOPTED") throw new Error("Expected verification Plan");
       const constitutionDatabase = new DatabaseSync(databasePath);
       seedActiveProjectConstitution(constitutionDatabase, projectId);
       constitutionDatabase.close();
@@ -9724,6 +9769,8 @@ describe("SQLite local state", () => {
       if (result.type !== "CONTEXT_SOURCES") throw new Error("Expected context sources");
       const sources = result.sources;
 
+      expect(result.verificationPlan).toEqual(adoptedPlan.plan);
+
       expect(sources.workItemBrief.id).toBe(workItemId);
       expect(sources.workflowPosition).toMatchObject({
         templateId: mockTemplate.id,
@@ -9738,6 +9785,21 @@ describe("SQLite local state", () => {
         ordinal: 1,
         contentDigest: "c".repeat(64),
         renderedMarkdown: "# Project Constitution\n\n- Keep persistence reads coherent.",
+      });
+      expect(sources.projectVerificationPlan).toEqual({
+        id: adoptedPlan.plan.id,
+        revision: adoptedPlan.plan.revision,
+        status: "ACTIVE",
+        recipes: [
+          {
+            id: "context-package-test-e2e",
+            kind: "E2E",
+            label: "E2E — каталог с пробелом",
+            required: true,
+            timeoutSeconds: 900,
+            networkPolicy: "INHERIT_HOST",
+          },
+        ],
       });
       expect(sources.latestCheckpoint).toMatchObject({
         summary: "Implemented the size guard and added a regression test.",
@@ -9861,6 +9923,7 @@ describe("SQLite local state", () => {
       // what a torn read would break and what one transaction around the read is meant to prevent.
       let hookCalls = 0;
       let workItemId = "";
+      let concurrentPlanJson = "";
 
       state = await openLocalState({
         databasePath,
@@ -9870,9 +9933,19 @@ describe("SQLite local state", () => {
           hookCalls += 1;
           const writer = new DatabaseSync(databasePath);
           try {
+            writer.exec("BEGIN IMMEDIATE");
+            writer
+              .prepare(
+                `INSERT INTO verification_plans (
+                  id, schema_version, project_id, revision, status, source_proposal_hash,
+                  content_hash, plan_json, created_at
+                ) VALUES ('verification-plan-mid-read', 1, 'project-web', 2, 'ACTIVE', ?, ?, ?, ?)`,
+              )
+              .run("e".repeat(64), "f".repeat(64), concurrentPlanJson, timestamp);
             writer
               .prepare("UPDATE work_items SET title = ?, version = version + 1, updated_at = ? WHERE id = ?")
               .run("Retitled mid-read", timestamp, workItemId);
+            writer.exec("COMMIT");
           } finally {
             writer.close();
           }
@@ -9886,6 +9959,60 @@ describe("SQLite local state", () => {
         "create-snapshot-isolation-item",
       );
       workItemId = seededWorkItemId;
+      const initialPlanContent: Omit<VerificationPlanProposal, "proposalHash"> = {
+        schemaVersion: 1,
+        projectId: "project-web",
+        target: { state: "ABSENT", digest: null },
+        recipes: [
+          {
+            schemaVersion: 1,
+            id: "snapshot-unit",
+            kind: "UNIT",
+            label: "Snapshot unit",
+            required: true,
+            executable: "pnpm",
+            argv: ["run", "test"],
+            cwd: ".",
+            timeoutSeconds: 300,
+            outputLimitBytes: 65_536,
+            environmentProfile: "VERIFICATION_BASELINE",
+            networkPolicy: "INHERIT_HOST",
+            provenance: {
+              source: "PACKAGE_JSON_SCRIPT",
+              manifestPath: "package.json",
+              manifestContentHash: "a".repeat(64),
+              scriptName: "test",
+              scriptBodyPreview: "vitest run",
+            },
+          },
+        ],
+        warnings: [],
+      };
+      const initialPlanResult = localState.execute({
+        schemaVersion: 1,
+        commandId: "adopt-snapshot-plan",
+        correlationId: "correlation-adopt-snapshot-plan",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "ADOPT_VERIFICATION_PLAN",
+        payload: {
+          projectId: "project-web",
+          expectedProjectVersion: 1,
+          proposal: {
+            ...initialPlanContent,
+            proposalHash: verificationPlanProposalHash(initialPlanContent),
+          },
+        },
+      });
+      if (initialPlanResult.type !== "VERIFICATION_PLAN_ADOPTED") {
+        throw new Error("Expected the initial snapshot Plan");
+      }
+      concurrentPlanJson = JSON.stringify({
+        ...initialPlanResult.plan,
+        id: "verification-plan-mid-read",
+        revision: 2,
+        sourceProposalHash: "e".repeat(64),
+        contentHash: "f".repeat(64),
+      });
 
       const baseline = localState.query({ type: "GET_WORK_ITEM", workItemId });
       if (baseline.type !== "WORK_ITEM" || !baseline.workItem) throw new Error("Expected the WorkItem");
@@ -9899,12 +10026,18 @@ describe("SQLite local state", () => {
       // The read observed the pre-write snapshot, not the write the hook committed mid-read.
       expect(result.sources.workItemBrief.title).toBe(baselineTitle);
       expect(result.sources.workItemBrief.version).toBe(baselineVersion);
+      expect(result.verificationPlan?.id).toBe(initialPlanResult.plan.id);
+      expect(result.sources.projectVerificationPlan?.id).toBe(initialPlanResult.plan.id);
 
       // The write genuinely committed -- a fresh read now sees it. Without this, the assertion
       // above would be equally true of a hook that silently did nothing.
       const after = localState.query({ type: "GET_WORK_ITEM", workItemId });
       expect(after.type === "WORK_ITEM" ? after.workItem?.title : null).toBe("Retitled mid-read");
       expect(after.type === "WORK_ITEM" ? after.workItem?.version : null).toBe(baselineVersion + 1);
+      const afterPlan = localState.query({ type: "GET_PROJECT_VERIFICATION_PLAN", projectId: "project-web" });
+      expect(afterPlan.type === "PROJECT_VERIFICATION_PLAN" ? afterPlan.plan?.id : null).toBe(
+        "verification-plan-mid-read",
+      );
     });
   });
 

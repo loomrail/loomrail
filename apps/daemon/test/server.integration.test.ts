@@ -17,6 +17,7 @@ import {
   reviewStateResponseSchema,
   stateCommandResultSchema,
   workItemChangesResponseSchema,
+  workItemDependenciesResponseSchema,
   workItemFileDiffResponseSchema,
   workItemsResponseSchema,
   workItemWorkspaceResponseSchema,
@@ -211,6 +212,149 @@ describe("local daemon session and state boundary", () => {
     expect(status.status).toBe(401);
     expect(new URL(daemon.baseUrl).hostname).toBe("127.0.0.1");
     expect(daemon.app.server.address()).toMatchObject({ address: "127.0.0.1" });
+  });
+
+  it("serves an authenticated owner-only dependency DAG and blocks stale workflow starts", async () => {
+    const token = bootstrapToken();
+    const started = await startDaemon({ bootstrapToken: token, logger: false });
+    daemon = started;
+    const session = await authenticate(started, token);
+    const headers = mutationHeaders(started, session);
+    const projectId = "project-fixture-web-app-a";
+
+    const registration = await fetch(`${daemon.baseUrl}/api/v1/projects/fixtures/register`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ schemaVersion: 1, commandId: "dependency-register", fixtureId: "web-app-a" }),
+    });
+    expect(registration.status).toBe(200);
+
+    const create = async (title: string, type: "EPIC" | "TASK", parentId: string | null) => {
+      const response = await fetch(`${started.baseUrl}/api/v1/work-items`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: `dependency-create-${title}`,
+          projectId,
+          parentId,
+          type,
+          title,
+          description: "Untrusted <script>token=secret-canary</script>",
+          priority: "MEDIUM",
+          risk: "LOW",
+          acceptanceCriteria: ["Dependency state is enforced"],
+        }),
+      });
+      expect(response.status).toBe(200);
+      const result = stateCommandResultSchema.parse(await response.json());
+      if (result.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      return result.workItem;
+    };
+    const epic = await create("recurkit-epic", "EPIC", null);
+    const first = await create("recurkit-first", "TASK", epic.id);
+    const second = await create("recurkit-second", "TASK", epic.id);
+
+    const dependencyUrl = `${daemon.baseUrl}/api/v1/work-items/${second.id}/dependencies`;
+    expect(
+      (await fetch(`${daemon.baseUrl}/api/v1/projects/${projectId}/work-item-dependencies`)).status,
+    ).toBe(401);
+    expect(
+      (
+        await fetch(dependencyUrl, {
+          method: "PUT",
+          headers: { "content-type": "application/json", cookie: session.cookie, origin: daemon.baseUrl },
+          body: JSON.stringify({
+            schemaVersion: 1,
+            commandId: "dependency-without-csrf",
+            expectedVersion: second.version,
+            blockerWorkItemIds: [first.id],
+          }),
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await fetch(dependencyUrl, {
+          method: "PUT",
+          headers: { ...headers, origin: "https://attacker.example" },
+          body: JSON.stringify({
+            schemaVersion: 1,
+            commandId: "dependency-foreign-origin",
+            expectedVersion: second.version,
+            blockerWorkItemIds: [first.id],
+          }),
+        })
+      ).status,
+    ).toBe(403);
+
+    const setResponse = await fetch(dependencyUrl, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "dependency-set",
+        expectedVersion: second.version,
+        blockerWorkItemIds: [first.id],
+      }),
+    });
+    expect(setResponse.status).toBe(200);
+    expect(stateCommandResultSchema.parse(await setResponse.json())).toMatchObject({
+      type: "WORK_ITEM_DEPENDENCIES_SET",
+      workItemVersion: 2,
+      dependencies: [{ blockerWorkItemId: first.id, blockedWorkItemId: second.id }],
+    });
+
+    const graphResponse = await fetch(
+      `${daemon.baseUrl}/api/v1/projects/${projectId}/work-item-dependencies`,
+      { headers: { cookie: session.cookie } },
+    );
+    expect(graphResponse.status).toBe(200);
+    const graph = workItemDependenciesResponseSchema.parse(await graphResponse.json());
+    expect(graph.dependencies).toEqual([
+      expect.objectContaining({ blockerWorkItemId: first.id, blockedWorkItemId: second.id }),
+    ]);
+    expect(JSON.stringify(graph)).not.toMatch(/script|secret-canary|repositoryPath|provider/);
+
+    const duplicate = await fetch(dependencyUrl, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "dependency-duplicate",
+        expectedVersion: 2,
+        blockerWorkItemIds: [first.id, first.id],
+      }),
+    });
+    expect(duplicate.status).toBe(409);
+    expect(apiErrorResponseSchema.parse(await duplicate.json()).error.code).toBe("DEPENDENCY_DUPLICATE");
+
+    const ready = await fetch(`${daemon.baseUrl}/api/v1/work-items/${second.id}/move`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "dependency-ready-second",
+        expectedVersion: 2,
+        targetState: "READY",
+      }),
+    });
+    expect(ready.status).toBe(200);
+    const blockedStart = await fetch(`${daemon.baseUrl}/api/v1/work-items/${second.id}/pipeline/start`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: "dependency-blocked-start",
+        expectedVersion: 3,
+        maxEstimatedTokens: 100_000,
+      }),
+    });
+    expect(blockedStart.status).toBe(409);
+    expect(apiErrorResponseSchema.parse(await blockedStart.json()).error).toMatchObject({
+      code: "WORKFLOW_DEPENDENCIES_BLOCKED",
+      details: { count: 1 },
+    });
   });
 
   it("serves privacy-safe local Insights only inside the authenticated loopback session", async () => {

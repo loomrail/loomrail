@@ -95,6 +95,22 @@ describe("workflow decisions", () => {
         },
       }),
     ).toThrow(WorkflowDomainError);
+
+    expect(() =>
+      decideStartPipeline(command, {
+        now: timestamp,
+        workItem: workItem("READY"),
+        activeRun: null,
+        hasChildren: false,
+        unsatisfiedDependencies: [{ blockerWorkItemId: "work-item-blocker", state: "CANCELLED" }],
+        ids: {
+          pipelineRunId: "run-3",
+          stageAttemptId: "attempt-3",
+          budgetPolicyId: "budget-3",
+          dispatchId: "dispatch-3",
+        },
+      }),
+    ).toThrow(expect.objectContaining({ code: "WORKFLOW_DEPENDENCIES_BLOCKED", details: { count: 1 } }));
   });
 
   it("records one valid decision and creates a resume dispatch", () => {
@@ -175,6 +191,7 @@ describe("workflow decisions", () => {
       request,
       decisionId: "decision-1",
       dispatchId: "dispatch-2",
+      acceptancePackageRequestId: null,
     });
     expect(answered).toMatchObject({
       request: { status: "RESOLVED", version: 2 },
@@ -191,8 +208,24 @@ describe("workflow decisions", () => {
         request,
         decisionId: "decision-2",
         dispatchId: "dispatch-3",
+        acceptancePackageRequestId: null,
       }),
     ).toThrow(expect.objectContaining({ code: "HUMAN_REQUEST_INVALID_ANSWER" }));
+
+    for (const failureCode of ["QA_CORRECTION_EXHAUSTED", "VERIFICATION_CORRECTION_EXHAUSTED"] as const) {
+      expect(() =>
+        decideAnswerHumanRequest(command("focused-pass"), {
+          now: timestamp,
+          workItem: { ...workItem("BLOCKED"), currentStage: "QA" },
+          run,
+          stageAttempt: { ...stageAttempt, stage: "QA", failureCode },
+          request,
+          decisionId: `decision-${failureCode}`,
+          dispatchId: `dispatch-${failureCode}`,
+          acceptancePackageRequestId: null,
+        }),
+      ).toThrow(expect.objectContaining({ code: "WORKFLOW_CONTROL_NOT_ALLOWED" }));
+    }
   });
 
   it("turns an exhausted review into one owner-authorized fix round or a cancellation", () => {
@@ -281,6 +314,7 @@ describe("workflow decisions", () => {
       request,
       decisionId: "decision-retry",
       dispatchId: "dispatch-final-fix",
+      acceptancePackageRequestId: null,
       nextStageAttemptId: "implement-5",
       reviewRound: 2,
     });
@@ -300,6 +334,7 @@ describe("workflow decisions", () => {
       request,
       decisionId: "decision-cancel",
       dispatchId: "unused-dispatch",
+      acceptancePackageRequestId: null,
       reviewRound: 2,
     });
     expect(cancelled).toMatchObject({

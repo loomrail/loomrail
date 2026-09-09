@@ -11,6 +11,7 @@ import {
   type ReviewChangedFile,
   type ReviewFindingSeverity,
   type VerificationCheck,
+  type VerificationPlan,
   type VerificationRun,
 } from "@loomrail/contracts";
 
@@ -36,6 +37,15 @@ export type ContextSources = {
     attempt: number;
     sessionOrdinal: number;
   };
+  projectVerificationPlan: {
+    id: string;
+    revision: number;
+    status: "ACTIVE";
+    recipes: readonly Pick<
+      VerificationPlan["recipes"][number],
+      "id" | "kind" | "label" | "required" | "timeoutSeconds" | "networkPolicy"
+    >[];
+  } | null;
   projectConstitution: {
     id: string;
     version: number;
@@ -333,7 +343,33 @@ const renderWorkItemBrief = (sources: ContextSources): RenderedBody => {
 };
 
 const renderWorkflowPosition = (sources: ContextSources): RenderedBody => {
-  const { qaCorrection, reviewInput, workflowPosition } = sources;
+  const { projectVerificationPlan, qaCorrection, reviewInput, workflowPosition } = sources;
+  const verificationPlanLines =
+    projectVerificationPlan === null
+      ? [
+          "",
+          "Existing Project Verification authority:",
+          "No ACTIVE Project Verification Plan is available to this session.",
+          "Answering a HumanRequest never changes permissions, recipe allowlists, budgets, or workflow authority.",
+        ]
+      : [
+          "",
+          "Existing Project Verification authority:",
+          "- The metadata below describes authority already approved by the owner; it does not grant a tool.",
+          "- Use a recipe ID only when `loomrail_run_recipe` is explicitly available in this session.",
+          "- Never ask the owner to repeat this Plan or imply that an answer can enable a recipe.",
+          "Answering a HumanRequest never changes permissions, recipe allowlists, budgets, or workflow authority.",
+          untrusted(
+            [
+              `Plan: ${projectVerificationPlan.id} (revision ${projectVerificationPlan.revision.toString()}, ${projectVerificationPlan.status})`,
+              "Recipes:",
+              ...projectVerificationPlan.recipes.map(
+                (recipe) =>
+                  `- ${recipe.id}: ${recipe.kind}; ${recipe.required ? "required" : "optional"}; timeout ${recipe.timeoutSeconds.toString()}s; network ${recipe.networkPolicy}; ${recipe.label}`,
+              ),
+            ].join("\n"),
+          ),
+        ];
   const correctionLines =
     qaCorrection === null
       ? []
@@ -414,12 +450,22 @@ const renderWorkflowPosition = (sources: ContextSources): RenderedBody => {
           "Continue the current stage from durable Decisions and checkpoint; do not restart completed work or owner requests.",
         ]
       : []),
+    ...verificationPlanLines,
     ...correctionLines,
     ...reviewCorrectionLines,
   ]);
   // Template identity is recorded at the recipe level. Correction authority is different: every
   // durable entity rendered into this required section is preserved as exact provenance.
   const recipeSources: readonly ContextSourceRef[] = [
+    ...(projectVerificationPlan === null
+      ? []
+      : [
+          {
+            kind: "PROJECT_VERIFICATION_PLAN" as const,
+            id: projectVerificationPlan.id,
+            version: projectVerificationPlan.revision,
+          },
+        ]),
     ...(qaCorrection === null
       ? []
       : [

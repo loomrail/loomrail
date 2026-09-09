@@ -34,6 +34,7 @@ only that contract and translate native tool calls into this closed request unio
 - list one directory;
 - read one bounded UTF-8 file range;
 - write one UTF-8 file with an expected prior SHA-256 (or explicit expected absence);
+- replace one uniquely matching UTF-8 fragment in an existing file with an expected prior SHA-256;
 - delete one regular file with an expected SHA-256;
 - run one recipe by ID from the captured owner-approved Verification Plan.
 
@@ -79,8 +80,11 @@ with `lstat` and `realpath`; symbolic links and non-regular targets are refused.
 below the canonical workspace root, with case-insensitive comparison on Windows.
 
 `.git`, `.loomrail`, `.env*`, common credential/key files and credential directories are outside the tool-visible
-namespace. Directory listings omit them; direct access is denied. Writes are compare-and-swap operations using a
-same-directory temporary regular file and atomic replacement. No recursive delete or cleanup operation exists.
+namespace. Directory listings omit them; direct access is denied. Writes and exact-fragment edits are
+compare-and-swap operations using a same-directory temporary regular file and atomic replacement. An edit requires a
+non-empty old fragment that occurs exactly once; absent or ambiguous matches are typed content conflicts, never
+best-effort patches. Both fragment input and final file size are bounded. No recursive delete or cleanup operation
+exists.
 
 ### Commands and processes
 
@@ -128,7 +132,7 @@ evidence fails closed with a typed state-store error; a completed correction is 
 ### Completion evidence
 
 A schema-valid provider result is still only a claim. A live IMPLEMENT StageAttempt may complete only when its
-durable tool-call audit contains at least one successful `WRITE_FILE` or `DELETE_FILE` for the same Project,
+durable tool-call audit contains at least one successful `WRITE_FILE`, `EDIT_FILE` or `DELETE_FILE` for the same Project,
 WorkItem and StageAttempt. The proof survives provider-session handoff and a resolved HumanRequest because those are
 continuations of the same domain-owned attempt; another WorkItem, attempt or correction cycle never counts. Reads,
 recipes and denied/failed/unfinished calls do not satisfy the gate. The domain rejects an unsupported claim with
@@ -139,6 +143,8 @@ ProviderSession completion remain readable.
 ## Consequences
 
 - IMPLEMENT can make real bounded file changes and run only pre-approved recipes through either local provider.
+- Large but bounded text files do not need to be echoed wholesale: exact unique-fragment CAS editing keeps the model
+  payload small while preserving the same path, symlink, audit, idempotency and atomic-replacement boundary.
 - Provider prose alone cannot make IMPLEMENT pass; an audited mutation in the same domain StageAttempt is required.
 - QA can inspect the real workspace and summarize already-measured evidence, but cannot write or replace Browser QA.
 - A budget/restart retry can continue QA synthesis from exact durable passing evidence without duplicating browser

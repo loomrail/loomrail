@@ -490,7 +490,7 @@ describe("M5 workflow decisions", () => {
       ).toThrow(expect.objectContaining({ code: "IMPLEMENT_EFFECT_NOT_OBSERVED" }));
     }
 
-    for (const operation of ["WRITE_FILE", "DELETE_FILE"] as const) {
+    for (const operation of ["WRITE_FILE", "EDIT_FILE", "DELETE_FILE"] as const) {
       expect(() =>
         decideApplyProviderOutcome(command, {
           ...baseContext,
@@ -787,6 +787,7 @@ describe("decideAnswerHumanRequest option cardinality", () => {
         request: confirmation,
         decisionId: "decision-confirmation",
         dispatchId: "dispatch-confirmation",
+        acceptancePackageRequestId: null,
       },
     );
 

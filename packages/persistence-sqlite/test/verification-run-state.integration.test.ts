@@ -113,10 +113,10 @@ describe("verification Run local state", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  const open = async (): Promise<LocalState> => {
+  const open = async (currentTimestamp = timestamp): Promise<LocalState> => {
     state = await openLocalState({
       databasePath,
-      now: () => new Date(timestamp),
+      now: () => new Date(currentTimestamp),
       createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
       listProjectWorktrees: () => [
         { path: workspacePath, branch: "loomrail/work-item-one", prunable: false },
@@ -1556,6 +1556,83 @@ describe("verification Run local state", () => {
       type: "VERIFICATION_CHECK_COMPLETED",
       replayed: true,
     });
+    const beforeRevalidation = currentWorkItem();
+    const reservedRevalidation = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "reserve-revalidation-after-passed-correction",
+      correlationId: "correlation-reserve-revalidation-after-passed-correction",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "RETRY_VERIFICATION_RUN",
+      payload: {
+        workItemId: fixture.workItemId,
+        expectedWorkItemVersion: beforeRevalidation.version,
+        expectedPlanRevision: fixture.planRevision,
+        expectedPlanContentHash: fixture.planContentHash,
+        implementationTree: finalTree,
+        platform: "darwin",
+        retryOfRunId: passedFinalRun.run.id,
+        expectedRetryOfRunVersion: passedFinalRun.run.version,
+      },
+    });
+    if (reservedRevalidation.type !== "VERIFICATION_RUN_RESERVED") {
+      throw new Error("Expected correction revalidation Run");
+    }
+    const revalidationCheck = reservedRevalidation.checks[0];
+    if (revalidationCheck === undefined) throw new Error("Expected correction revalidation Check");
+    const startedRevalidation = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "start-revalidation-after-passed-correction",
+      correlationId: "correlation-start-revalidation-after-passed-correction",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "START_VERIFICATION_CHECK",
+      payload: {
+        runId: reservedRevalidation.run.id,
+        checkId: revalidationCheck.id,
+        expectedRunVersion: reservedRevalidation.run.version,
+        expectedCheckVersion: revalidationCheck.version,
+      },
+    });
+    if (startedRevalidation.type !== "VERIFICATION_CHECK_STARTED") {
+      throw new Error("Expected correction revalidation Check start");
+    }
+    const revalidated = fixture.localState.execute({
+      schemaVersion: 1,
+      commandId: "pass-revalidation-after-passed-correction",
+      correlationId: "correlation-pass-revalidation-after-passed-correction",
+      actor: { type: "SYSTEM", id: "verification-runner" },
+      type: "COMPLETE_VERIFICATION_CHECK",
+      payload: {
+        runId: startedRevalidation.run.id,
+        checkId: startedRevalidation.check.id,
+        expectedRunVersion: startedRevalidation.run.version,
+        expectedCheckVersion: startedRevalidation.check.version,
+        observation: {
+          status: "PASSED",
+          completedAt: timestamp,
+          durationMs: 1,
+          exitCode: 0,
+          signal: null,
+          output: {
+            schemaVersion: 1,
+            artifactId: "revalidation-after-passed-correction-output",
+            sha256: "e".repeat(64),
+            capturedBytes: 1,
+            stdoutBytes: 1,
+            stderrBytes: 0,
+            truncated: false,
+            available: true,
+          },
+        },
+        outputStorageKey: "revalidation-after-passed-correction-output.txt",
+      },
+    });
+    expect(revalidated).toMatchObject({
+      type: "VERIFICATION_CHECK_COMPLETED",
+      run: { status: "PASSED", verificationCorrectionRunId: finalCorrection.id },
+    });
+    if (revalidated.type !== "VERIFICATION_CHECK_COMPLETED") {
+      throw new Error("Expected passing correction revalidation Run");
+    }
     expect(
       fixture.localState.query({
         type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
@@ -1607,11 +1684,11 @@ describe("verification Run local state", () => {
       type: "MATERIALIZE_STALE_VERIFICATION_FAILURE",
       payload: {
         workItemId: fixture.workItemId,
-        verificationRunId: passedFinalRun.run.id,
+        verificationRunId: revalidated.run.id,
         expectedWorkItemVersion: beforeStale.version,
         expectedPipelineRunVersion: workflowBeforeStale.snapshot.run.version,
         expectedStageAttemptVersion: stageBeforeStale.version,
-        expectedVerificationRunVersion: passedFinalRun.run.version,
+        expectedVerificationRunVersion: revalidated.run.version,
         expectedPlanRevision: fixture.planRevision,
         expectedPlanContentHash: fixture.planContentHash,
         currentTree: "7".repeat(40),
@@ -1625,7 +1702,7 @@ describe("verification Run local state", () => {
       replayed: false,
       action: "WAIT_FOR_OWNER",
       failure: {
-        verificationRunId: passedFinalRun.run.id,
+        verificationRunId: revalidated.run.id,
         reason: "STALE",
         staleReasons: ["TREE_CHANGED"],
       },
@@ -1708,7 +1785,7 @@ describe("verification Run local state", () => {
     });
     if (reopenedFailures.type !== "VERIFICATION_FAILURES") throw new Error("Expected reopened failures");
     expect(
-      reopenedFailures.failures.find(({ verificationRunId }) => verificationRunId === passedFinalRun.run.id),
+      reopenedFailures.failures.find(({ verificationRunId }) => verificationRunId === revalidated.run.id),
     ).toMatchObject({ reason: "STALE", staleReasons: ["TREE_CHANGED"] });
     expect(reopened.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: fixture.workItemId })).toMatchObject({
       snapshot: { run: { status: "CANCELLED" } },
@@ -1899,7 +1976,7 @@ describe("verification Run local state", () => {
     fixture.localState.close();
     state = undefined;
 
-    const reopened = await open();
+    const reopened = await open("2026-09-05T11:30:00.001Z");
     expect(
       reopened.execute({
         schemaVersion: 1,

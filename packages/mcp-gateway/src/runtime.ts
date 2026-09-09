@@ -64,6 +64,9 @@ type ActiveBinding = {
   providerSessionId: string;
   connectionId: string | null;
   grantId: string | null;
+  closing: boolean;
+  closePromise: Promise<void> | null;
+  inFlightCalls: Set<Promise<void>>;
   client: Client | null;
   directCall: McpDirectSessionBinding["callTool"] | null;
   startToolCall: McpGatewaySessionBinding["startToolCall"] | null;
@@ -121,9 +124,15 @@ const proxyTool = (tool: Tool): ProxyTool => ({
 });
 
 const closeClient = async (binding: ActiveBinding): Promise<void> => {
-  binding.socket?.destroy();
-  binding.socket = null;
-  await binding.client?.close().catch(() => undefined);
+  if (binding.closePromise !== null) return binding.closePromise;
+  binding.closing = true;
+  binding.closePromise = (async () => {
+    binding.socket?.destroy();
+    binding.socket = null;
+    await binding.client?.close().catch(() => undefined);
+    await Promise.allSettled([...binding.inFlightCalls]);
+  })();
+  return binding.closePromise;
 };
 
 const callFailure = (error: unknown): McpToolCallTerminalOutcome => {
@@ -144,6 +153,15 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
     binding: ActiveBinding,
     request: { id: string; name: string; arguments: Record<string, unknown> },
   ): Promise<void> => {
+    if (binding.closing) {
+      writeResponse(socket, {
+        type: "ERROR",
+        id: request.id,
+        code: "GRANT_REVOKED",
+        message: "The MCP session is closing",
+      });
+      return;
+    }
     if (binding.grantId !== null && revokedGrants.has(binding.grantId)) {
       writeResponse(socket, {
         type: "ERROR",
@@ -356,7 +374,12 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
           binding.socket = socket;
           writeResponse(socket, { type: "READY", tools: [...binding.tools.values()] });
         } else if (parsed.data.type === "CALL") {
-          void handleCall(socket, binding, parsed.data);
+          const activeBinding = binding;
+          const trackedCall: Promise<void> = handleCall(socket, activeBinding, parsed.data).finally(() => {
+            activeBinding.inFlightCalls.delete(trackedCall);
+          });
+          activeBinding.inFlightCalls.add(trackedCall);
+          void trackedCall;
         } else {
           writeResponse(socket, {
             type: "ERROR",
@@ -474,6 +497,9 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
           providerSessionId: binding.snapshot.providerSessionId,
           connectionId: null,
           grantId: binding.snapshot.grantId,
+          closing: false,
+          closePromise: null,
+          inFlightCalls: new Set(),
           client,
           directCall: null,
           startToolCall: binding.startToolCall,
@@ -506,6 +532,9 @@ export const createMcpRuntime = (options: McpGatewayRuntimeOptions = {}) => {
           providerSessionId: binding.providerSessionId,
           connectionId: binding.connectionId,
           grantId: null,
+          closing: false,
+          closePromise: null,
+          inFlightCalls: new Set(),
           client: null,
           directCall: binding.callTool,
           startToolCall: null,

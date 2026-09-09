@@ -96,6 +96,17 @@ const sectionFor = (request: HumanRequest, category: AttentionCategory): Attenti
   }
 };
 
+const actionFor = (source: AttentionProjectionSource) => {
+  if (source.acceptancePackageId !== null) return "REVIEW_ACCEPTANCE" as const;
+  if (
+    source.stageAttempt.failureCode === "QA_CORRECTION_EXHAUSTED" ||
+    source.stageAttempt.failureCode === "VERIFICATION_CORRECTION_EXHAUSTED"
+  ) {
+    return "OPEN_TASK_CONTEXT" as const;
+  }
+  return "ANSWER_REQUEST" as const;
+};
+
 /**
  * Builds the complete owner-facing Attention projection behind one deterministic interface.
  *
@@ -138,8 +149,7 @@ export const buildAttentionInbox = (
           source.stageAttempt.failureCode === "PROVIDER_RATE_LIMITED"
             ? ("PROVIDER_RATE_LIMITED" as const)
             : null,
-        action:
-          source.acceptancePackageId === null ? ("ANSWER_REQUEST" as const) : ("REVIEW_ACCEPTANCE" as const),
+        action: actionFor(source),
         acceptancePackageId: source.acceptancePackageId,
         affectedStages: [source.stageAttempt.stage],
       };

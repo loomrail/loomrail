@@ -76,6 +76,22 @@ const workspaceTools = (policy: WorkspaceToolPolicyDescription) =>
             },
           },
           {
+            name: "loomrail_edit_file",
+            description:
+              "Atomically replace one uniquely matching UTF-8 fragment in an existing relative file. Requires the current whole-file digest and is preferred for bounded edits to large files.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                expectedSha256: { type: "string" },
+                oldText: { type: "string", minLength: 1, maxLength: policy.limits.maxEditFragmentBytes },
+                newText: { type: "string", maxLength: policy.limits.maxEditFragmentBytes },
+              },
+              required: ["path", "expectedSha256", "oldText", "newText"],
+              additionalProperties: false,
+            },
+          },
+          {
             name: "loomrail_delete_file",
             description:
               "The only authorized repository delete path for this session. Delete one relative regular file when its digest still matches.",
@@ -112,6 +128,8 @@ const operationFor = (toolName: string): WorkspaceToolOperation => {
       return "READ_FILE";
     case "loomrail_write_file":
       return "WRITE_FILE";
+    case "loomrail_edit_file":
+      return "EDIT_FILE";
     case "loomrail_delete_file":
       return "DELETE_FILE";
     case "loomrail_run_recipe":

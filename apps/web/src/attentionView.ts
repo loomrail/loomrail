@@ -1,5 +1,8 @@
 import type { AttentionItem, AttentionSection } from "@loomrail/contracts";
 
+export const canAnswerAttentionInline = (action: AttentionItem["action"]): boolean =>
+  action === "ANSWER_REQUEST";
+
 export const attentionSectionOrder: readonly AttentionSection[] = [
   "BLOCKING_NOW",
   "APPROVALS",

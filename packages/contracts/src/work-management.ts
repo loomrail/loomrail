@@ -3,6 +3,11 @@ import { z } from "zod";
 import { agentRunClaimLimitsSchema, agentRunSchema, squadAssignmentSchema } from "./agents.js";
 import { providerModelMappingSchema } from "./provider-selection.js";
 import {
+  setWorkItemDependenciesCommandSchema,
+  workItemDependenciesSetEventSchema,
+  workItemDependenciesSetResultSchema,
+} from "./dependency.js";
+import {
   actorSchema,
   correlationIdSchema,
   opaqueIdSchema,
@@ -439,6 +444,7 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   workItemCreatedEventSchema,
   workItemUpdatedEventSchema,
   workItemStateChangedEventSchema,
+  workItemDependenciesSetEventSchema,
   squadAssignedEventSchema,
   agentRunStartedEventSchema,
   agentRunFinishedEventSchema,
@@ -659,6 +665,7 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   createWorkItemCommandSchema,
   updateWorkItemCommandSchema,
   moveWorkItemCommandSchema,
+  setWorkItemDependenciesCommandSchema,
   startAgentRunCommandSchema,
   reserveQARunCommandSchema,
   completeQARunCommandSchema,
@@ -794,6 +801,7 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   workItemCreatedResultSchema,
   workItemUpdatedResultSchema,
   workItemMovedResultSchema,
+  workItemDependenciesSetResultSchema,
   agentRunStartedResultSchema,
   agentRunBudgetParkedResultSchema,
   qaRunReservedResultSchema,

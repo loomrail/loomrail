@@ -56,6 +56,7 @@ export const HumanRequestAnswerForm = ({
           <span>{request.recommendation}</span>
         </div>
       ) : null}
+      <p className="human-request-card__authority-note">{t("humanRequest.authorityNotice")}</p>
       <RadioGroup
         aria-label={request.title}
         onValueChange={setSelection}

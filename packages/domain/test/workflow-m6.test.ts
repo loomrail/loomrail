@@ -3,6 +3,7 @@ import type {
   AnswerHumanRequestCommand,
   ApplyProviderOutcomeCommand,
   EvidenceArtifact,
+  HumanRequest,
   PipelineRun,
   QAEvidenceBundle,
   QARun,
@@ -590,6 +591,67 @@ describe("M6 acceptance decisions", () => {
     ).toThrow(expect.objectContaining({ code: "ACCEPTANCE_NOT_READY" }));
   });
 
+  it("resumes an operational provider failure before an AcceptancePackage exists", () => {
+    const attempt: StageAttempt = {
+      ...stageAttempt("ACCEPTANCE", "attempt-acceptance-retry"),
+      status: "WAITING_HUMAN",
+    };
+    const waitingRun: PipelineRun = {
+      ...run,
+      currentStageAttemptId: attempt.id,
+      status: "WAITING_HUMAN",
+    };
+    const request: HumanRequest = {
+      schemaVersion: 1,
+      id: "request-acceptance-provider-failure",
+      projectId: workItem.projectId,
+      workItemId: workItem.id,
+      stageAttemptId: attempt.id,
+      kind: "FREE_TEXT",
+      blocking: true,
+      title: "Provider failed",
+      context: "The strict output schema was rejected before a result existed.",
+      recommendation: "Retry after correcting the compatibility defect.",
+      options: [],
+      allowOther: true,
+      status: "OPEN",
+      version: 1,
+      createdAt: now,
+      resolvedAt: null,
+    };
+    const resumed = decideAnswerHumanRequest(
+      {
+        schemaVersion: 1,
+        commandId: "answer-operational-acceptance-request",
+        correlationId: "correlation-operational-acceptance-request",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "ANSWER_HUMAN_REQUEST",
+        payload: {
+          humanRequestId: request.id,
+          expectedVersion: request.version,
+          answer: { type: "OTHER", text: "Retry the corrected provider contract." },
+        },
+      },
+      {
+        now,
+        workItem: { ...workItem, currentStage: "ACCEPTANCE", state: "BLOCKED" },
+        run: waitingRun,
+        stageAttempt: attempt,
+        request,
+        decisionId: "decision-operational-acceptance-request",
+        dispatchId: "dispatch-operational-acceptance-request",
+        acceptancePackageRequestId: null,
+      },
+    );
+
+    expect(resumed).toMatchObject({
+      run: { status: "RUNNING" },
+      stageAttempt: { stage: "ACCEPTANCE", status: "QUEUED" },
+      request: { status: "RESOLVED" },
+      dispatch: { mode: "RESUME" },
+    });
+  });
+
   it("rejects structured review data outside the Review stage", () => {
     const attempt = stageAttempt("QA", "attempt-qa-review-payload");
     expect(() =>
@@ -770,6 +832,7 @@ describe("M6 acceptance decisions", () => {
         request,
         decisionId: "decision-generic-acceptance",
         dispatchId: "dispatch-generic-acceptance",
+        acceptancePackageRequestId: acceptancePackage.humanRequestId,
       }),
     ).toThrow(expect.objectContaining({ code: "WORKFLOW_CONTROL_NOT_ALLOWED" }));
     expect(() =>

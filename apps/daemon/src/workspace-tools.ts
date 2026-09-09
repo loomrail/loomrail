@@ -12,6 +12,7 @@ export type CreateSessionWorkspaceTools = (input: {
   projectId: string;
   workspace: ProviderWorkspace;
   policy: AgentRunPolicySnapshot;
+  verificationPlan: VerificationPlan | null;
 }) => Promise<WorkspaceToolExecutor>;
 
 export const createSessionWorkspaceToolFactory =
@@ -20,19 +21,18 @@ export const createSessionWorkspaceToolFactory =
     artifactsDirectory: string;
     processRegistryDirectory: string;
   }): CreateSessionWorkspaceTools =>
-  async ({ providerSession, projectId, workspace, policy }) => {
+  async ({ providerSession, projectId, workspace, policy, verificationPlan }) => {
     const readPlan = (): VerificationPlan | null => {
       const result = input.state.query({ type: "GET_PROJECT_VERIFICATION_PLAN", projectId });
       return result.type === "PROJECT_VERIFICATION_PLAN" ? result.plan : null;
     };
-    const capturedPlan = readPlan();
     const correlationId = `workspace-tool-${providerSession.id}`;
     return createWorkspaceToolExecutor({
       workspacePath: workspace.path,
       access: workspace.access,
       networkAccess: policy.workspace.networkAccess,
       providerSessionId: providerSession.id,
-      verificationPlan: capturedPlan,
+      verificationPlan,
       readCurrentVerificationPlan: readPlan,
       artifactsDirectory: input.artifactsDirectory,
       processRegistryDirectory: input.processRegistryDirectory,

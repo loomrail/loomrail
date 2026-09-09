@@ -6,16 +6,19 @@ import { dirname, join } from "node:path";
 import type {
   McpSessionSnapshot,
   ProviderOutcome,
+  VerificationPlanProposal,
   WorkflowDispatch,
   WorkflowTemplate,
   WorkItemWorkspace,
 } from "@loomrail/contracts";
 import { canonicalMcpProfileSource } from "@loomrail/domain";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
+import { verificationPlanProposalHash } from "@loomrail/project-readiness";
 import {
   providerCapabilitiesSchema,
   type ProviderAdapter,
   type ProviderInvocation,
+  type WorkspaceToolExecutor,
 } from "@loomrail/provider-core";
 import { deliveryTemplate } from "@loomrail/workflow-engine";
 import { addWorktree, listWorktrees, runGit } from "@loomrail/workspace";
@@ -217,6 +220,52 @@ describe("session loop workspace provisioning", () => {
   });
 
   const createCommandId = (): string => `command-${(nextCommandId += 1).toString()}`;
+
+  const adoptVerificationPlan = (localState: LocalState) => {
+    const content: Omit<VerificationPlanProposal, "proposalHash"> = {
+      schemaVersion: 1,
+      projectId: PROJECT_ID,
+      target: { state: "ABSENT", digest: null },
+      recipes: [
+        {
+          schemaVersion: 1,
+          id: "package-test-e2e",
+          kind: "E2E",
+          label: "Package E2E",
+          required: true,
+          executable: "pnpm",
+          argv: ["run", "test:e2e"],
+          cwd: ".",
+          timeoutSeconds: 900,
+          outputLimitBytes: 65_536,
+          environmentProfile: "VERIFICATION_BASELINE",
+          networkPolicy: "INHERIT_HOST",
+          provenance: {
+            source: "PACKAGE_JSON_SCRIPT",
+            manifestPath: "package.json",
+            manifestContentHash: "a".repeat(64),
+            scriptName: "test:e2e",
+            scriptBodyPreview: "vitest run --project e2e",
+          },
+        },
+      ],
+      warnings: [],
+    };
+    const adopted = localState.execute({
+      schemaVersion: 1,
+      commandId: createCommandId(),
+      correlationId: "correlation-adopt-verification-plan",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "ADOPT_VERIFICATION_PLAN",
+      payload: {
+        projectId: PROJECT_ID,
+        expectedProjectVersion: 1,
+        proposal: { ...content, proposalHash: verificationPlanProposalHash(content) },
+      },
+    });
+    if (adopted.type !== "VERIFICATION_PLAN_ADOPTED") throw new Error("Expected verification Plan");
+    return adopted.plan;
+  };
 
   const openState = (): LocalState => {
     if (!state) throw new Error("The local state is not open");
@@ -757,6 +806,265 @@ describe("session loop workspace provisioning", () => {
         },
       ]);
       expect(leaseClosed).toBe(true);
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "binds the workspace executor to the same Verification Plan revision rendered in the context pack",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      const plan = adoptVerificationPlan(localState);
+      const executor: WorkspaceToolExecutor = {
+        describePolicy: () => ({
+          access: "READ_WRITE",
+          recipes: [{ id: "package-test-e2e", label: "Package E2E" }],
+          limits: {
+            maxCalls: 64,
+            maxReadBytes: 65_536,
+            maxWriteBytes: 131_072,
+            maxEditFragmentBytes: 32_768,
+            maxDirectoryEntries: 1_000,
+          },
+        }),
+        execute: () => Promise.reject(new Error("This binding test does not execute a tool")),
+      };
+      let capturedPlanId: string | null | undefined;
+      let providerPack = "";
+
+      await runStageAttempt({
+        ...depsFor(
+          localState,
+          seeded,
+          completingAdapter(
+            (_count, invocation) => {
+              providerPack = invocation.contextPack.text;
+            },
+            { implementationEffectState: localState },
+          ),
+        ),
+        createWorkspaceTools: (input) => {
+          capturedPlanId = input.verificationPlan?.id ?? null;
+          return Promise.resolve(executor);
+        },
+        openMcpConnections: () =>
+          Promise.resolve({
+            connections: [
+              {
+                id: "loomrail_workspace",
+                proxyCommand: "/opt/loomrail/bin/mcp-proxy",
+                proxyArgs: ["connect", "opaque-token"],
+                enabledTools: [
+                  "loomrail_list_directory",
+                  "loomrail_read_file",
+                  "loomrail_write_file",
+                  "loomrail_edit_file",
+                  "loomrail_delete_file",
+                  "loomrail_run_recipe",
+                ],
+              },
+            ],
+            close: () => Promise.resolve(),
+          }),
+      });
+
+      expect(capturedPlanId).toBe(plan.id);
+      expect(providerPack).toContain(`Plan: ${plan.id} (revision ${plan.revision.toString()}, ACTIVE)`);
+      expect(providerPack).not.toContain("vitest run --project e2e");
+      expect(providerPack).not.toContain("package.json");
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps the StageAttempt running until its workspace connector lease drains",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      let announceCloseStarted: (() => void) | undefined;
+      let releaseClose: (() => void) | undefined;
+      const closeStarted = new Promise<void>((resolve) => {
+        announceCloseStarted = resolve;
+      });
+      const closeReleased = new Promise<void>((resolve) => {
+        releaseClose = resolve;
+      });
+      const executor: WorkspaceToolExecutor = {
+        describePolicy: () => ({
+          access: "READ_WRITE",
+          recipes: [],
+          limits: {
+            maxCalls: 64,
+            maxReadBytes: 65_536,
+            maxWriteBytes: 131_072,
+            maxEditFragmentBytes: 32_768,
+            maxDirectoryEntries: 1_000,
+          },
+        }),
+        execute: () => Promise.reject(new Error("This lifecycle test does not execute a tool")),
+      };
+      const adapter = completingAdapter(() => undefined, { implementationEffectState: localState });
+      let runSettled = false;
+      const running = runStageAttempt({
+        ...depsFor(localState, seeded, adapter),
+        createWorkspaceTools: () => Promise.resolve(executor),
+        openMcpConnections: () =>
+          Promise.resolve({
+            connections: [
+              {
+                id: "loomrail_workspace",
+                proxyCommand: "/opt/loomrail/bin/mcp-proxy",
+                proxyArgs: ["connect", "opaque-token"],
+                enabledTools: [
+                  "loomrail_list_directory",
+                  "loomrail_read_file",
+                  "loomrail_write_file",
+                  "loomrail_edit_file",
+                  "loomrail_delete_file",
+                ],
+              },
+            ],
+            close: async () => {
+              announceCloseStarted?.();
+              await closeReleased;
+            },
+          }),
+      }).then(() => {
+        runSettled = true;
+      });
+
+      try {
+        await closeStarted;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(runSettled).toBe(false);
+        expect(snapshotOf(localState, seeded.workItemId).stageAttempts.at(-1)?.status).toBe("RUNNING");
+      } finally {
+        releaseClose?.();
+        await running;
+      }
+
+      expect(snapshotOf(localState, seeded.workItemId).stageAttempts.at(-1)?.status).toBe("SUCCEEDED");
+    },
+    GIT_TIMEOUT_MS,
+  );
+
+  it(
+    "joins a forced context-handoff session through MCP drain before opening its successor",
+    async () => {
+      repositoryPath = await throwawayRepository(makeThrowawayRepo);
+      const localState = openState();
+      const seeded = seedAttempt(localState);
+      let firstSessionId: string | undefined;
+      let resolveFirst: ((outcome: ProviderOutcome) => void) | undefined;
+      let announceCloseStarted: (() => void) | undefined;
+      let releaseClose: (() => void) | undefined;
+      const closeStarted = new Promise<void>((resolve) => {
+        announceCloseStarted = resolve;
+      });
+      const closeReleased = new Promise<void>((resolve) => {
+        releaseClose = resolve;
+      });
+      const executor: WorkspaceToolExecutor = {
+        describePolicy: () => ({
+          access: "READ_WRITE",
+          recipes: [],
+          limits: {
+            maxCalls: 64,
+            maxReadBytes: 65_536,
+            maxWriteBytes: 131_072,
+            maxEditFragmentBytes: 32_768,
+            maxDirectoryEntries: 1_000,
+          },
+        }),
+        execute: () => Promise.reject(new Error("This lifecycle test does not execute a tool")),
+      };
+      const adapter: ProviderAdapter = {
+        capabilities: () =>
+          providerCapabilitiesSchema.parse({
+            provider: "CODEX",
+            start: true,
+            interrupt: true,
+            eventStream: true,
+            usageReporting: false,
+            contextWindowReporting: true,
+            checkpointOnRequest: true,
+            contextWindowTokens: 4_000,
+            stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+            costReporting: false,
+            tokenBudgetEnforcement: "HARD",
+          }),
+        start: (invocation, listener) => {
+          if (invocation.session.ordinal > 1) {
+            recordImplementationEffectInState(localState, invocation);
+            return Promise.resolve({
+              type: "COMPLETED",
+              summary: "The successor finished after the predecessor lease drained.",
+            });
+          }
+          firstSessionId = invocation.session.id;
+          return new Promise<ProviderOutcome>((resolve) => {
+            resolveFirst = resolve;
+            listener.onContextWindow({ usedTokens: 3_900, windowTokens: 4_000, quality: "ACTUAL" });
+          });
+        },
+        requestHandoff: () => Promise.resolve(),
+        abortSession: () => {
+          resolveFirst?.({ type: "CONTEXT_EXHAUSTED" });
+          return Promise.resolve();
+        },
+      };
+      let runSettled = false;
+      const running = runStageAttempt({
+        ...depsFor(localState, seeded, adapter),
+        scheduleHandoffDeadline: (_delayMs, onDeadline) => {
+          const handle = setTimeout(onDeadline, 0);
+          return {
+            cancel: () => {
+              clearTimeout(handle);
+            },
+          };
+        },
+        createWorkspaceTools: () => Promise.resolve(executor),
+        openMcpConnections: ({ providerSessionId }) =>
+          Promise.resolve({
+            connections: [],
+            close: async () => {
+              if (providerSessionId !== firstSessionId) return;
+              announceCloseStarted?.();
+              await closeReleased;
+            },
+          }),
+      }).then(() => {
+        runSettled = true;
+      });
+
+      try {
+        await closeStarted;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const sessions = localState.query({
+          type: "LIST_PROVIDER_SESSIONS",
+          stageAttemptId: seeded.stageAttemptId,
+        });
+        if (sessions.type !== "PROVIDER_SESSIONS") throw new Error("Expected provider sessions");
+        expect(sessions.sessions).toHaveLength(1);
+        expect(sessions.sessions[0]).toMatchObject({ id: firstSessionId, status: "RUNNING" });
+        expect(runSettled).toBe(false);
+      } finally {
+        releaseClose?.();
+        await running;
+      }
+
+      const sessions = localState.query({
+        type: "LIST_PROVIDER_SESSIONS",
+        stageAttemptId: seeded.stageAttemptId,
+      });
+      if (sessions.type !== "PROVIDER_SESSIONS") throw new Error("Expected provider sessions");
+      expect(sessions.sessions).toHaveLength(2);
+      expect(sessions.sessions[0]?.endReason).toBe("CONTEXT_EXHAUSTED");
+      expect(snapshotOf(localState, seeded.workItemId).stageAttempts.at(-1)?.status).toBe("SUCCEEDED");
     },
     GIT_TIMEOUT_MS,
   );

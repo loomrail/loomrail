@@ -156,6 +156,20 @@ describe("Attention Inbox projection", () => {
     });
   });
 
+  it.each(["QA_CORRECTION_EXHAUSTED", "VERIFICATION_CORRECTION_EXHAUSTED"])(
+    "routes the %s owner gate through the task context instead of the generic answer path",
+    (failureCode) => {
+      const inbox = buildAttentionInbox([
+        source({ id: failureCode.toLowerCase(), stage: "QA", failureCode }),
+      ]);
+
+      expect(inbox.items[0]).toMatchObject({
+        action: "OPEN_TASK_CONTEXT",
+        stage: { name: "QA", status: "WAITING_HUMAN" },
+      });
+    },
+  );
+
   it("sorts by section, priority, age and stable id", () => {
     const inbox = buildAttentionInbox([
       source({ id: "low", priority: "LOW", createdAt: "2026-09-01T08:00:00.000Z" }),

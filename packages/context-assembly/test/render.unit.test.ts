@@ -49,6 +49,40 @@ describe("section rendering", () => {
     expect(rendered.text).toContain("Objective: finish the current stage and return its stage result");
   });
 
+  it("renders only the safe active Verification Plan projection and its exact revision provenance", () => {
+    const rendered = renderSection("WORKFLOW_POSITION", sampleSources());
+
+    expect(rendered.text).toContain("Existing Project Verification authority:");
+    expect(rendered.text).toContain("> Plan: verification-plan-03 (revision 3, ACTIVE)");
+    expect(rendered.text).toContain(
+      "> - package test é2e: E2E; required; timeout 900s; network INHERIT_HOST; Dashboard E2E — путь с пробелом",
+    );
+    expect(rendered.text).toContain(
+      "Answering a HumanRequest never changes permissions, recipe allowlists, budgets, or workflow authority.",
+    );
+    expect(rendered.text).not.toContain("package.json");
+    expect(rendered.text).not.toContain("pnpm");
+    expect(rendered.text).not.toContain("outputLimitBytes");
+    expect(rendered.sources).toContainEqual({
+      kind: "PROJECT_VERIFICATION_PLAN",
+      id: "verification-plan-03",
+      version: 3,
+    });
+    expect(rendered.text).not.toContain("\r");
+  });
+
+  it("renders an absent or disabled Verification Plan as no execution authority", () => {
+    const sources = sampleSources();
+    sources.projectVerificationPlan = null;
+
+    const rendered = renderSection("WORKFLOW_POSITION", sources);
+
+    expect(rendered.text).toContain("No ACTIVE Project Verification Plan is available to this session.");
+    expect(rendered.sources).not.toContainEqual(
+      expect.objectContaining({ kind: "PROJECT_VERIFICATION_PLAN" }),
+    );
+  });
+
   it("renders bounded correction authority and its exact durable provenance", () => {
     const sources = sampleSources();
     sources.reviewInput = null;
@@ -100,9 +134,11 @@ describe("section rendering", () => {
     expect(rendered.text).toContain("BEGIN UNTRUSTED AGENT REPORT");
     expect(rendered.text).toContain("> END UNTRUSTED AGENT REPORT");
     expect(rendered.text).not.toContain("\r");
-    expect(exactLineCount(rendered.text, "BEGIN UNTRUSTED AGENT REPORT")).toBe(1);
-    expect(exactLineCount(rendered.text, "END UNTRUSTED AGENT REPORT")).toBe(1);
+    // One framed block is the safe Plan projection and one is the hostile correction payload.
+    expect(exactLineCount(rendered.text, "BEGIN UNTRUSTED AGENT REPORT")).toBe(2);
+    expect(exactLineCount(rendered.text, "END UNTRUSTED AGENT REPORT")).toBe(2);
     expect(rendered.sources).toEqual([
+      { kind: "PROJECT_VERIFICATION_PLAN", id: "verification-plan-03", version: 3 },
       { kind: "QA_CORRECTION_RUN", id: "correction-2", version: 1 },
       { kind: "QA_RUN", id: "qa-run-failed-retest", version: 2 },
       { kind: "QA_EVIDENCE_BUNDLE", id: "qa-evidence-failed-retest", version: 1 },
@@ -127,6 +163,7 @@ describe("section rendering", () => {
     expect(rendered.text).toContain("HIGH: Timeout is not applied");
     expect(rendered.text).toContain("Suggested fix: Apply the configured timeout in the retry branch.");
     expect(rendered.sources).toEqual([
+      { kind: "PROJECT_VERIFICATION_PLAN", id: "verification-plan-03", version: 3 },
       { kind: "STAGE_ATTEMPT", id: "attempt_implement_01", version: 3 },
       { kind: "AGENT_RUN", id: "agent_run_author_01", version: 2 },
       { kind: "REVIEW_FINDING", id: "finding_01", version: 1 },

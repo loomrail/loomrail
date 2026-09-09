@@ -25,7 +25,14 @@ import {
   type QARetestCell,
   type QARun,
 } from "@loomrail/contracts";
-import { chromium, type BrowserContext, type Locator, type Page, type Route } from "playwright";
+import {
+  chromium,
+  type BrowserContext,
+  type Locator,
+  type Page,
+  type Route,
+  type WebSocketRoute,
+} from "playwright";
 import { z } from "zod";
 
 import {
@@ -117,6 +124,15 @@ type PendingAttachment = {
   filename: string;
   path: string;
 };
+
+const MAX_QA_WEBSOCKETS = 8;
+const MAX_QA_WEBSOCKET_MESSAGES = 256;
+const MAX_QA_WEBSOCKET_MESSAGE_BYTES = 1 * 1_024 * 1_024;
+const MAX_QA_TOTAL_WEBSOCKET_BYTES = 4 * 1_024 * 1_024;
+const NAVIGATION_INTERACTION_SETTLE_MS = 250;
+const LOOPBACK_BROWSER_NETWORK_ARGS = [
+  "--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks",
+] as const;
 
 const normalizeBrowserDriverError = (code: BrowserDriverErrorCode, error: unknown): BrowserDriverError => {
   let normalizedCode = code;
@@ -239,7 +255,9 @@ const resolveTargetNetworkPolicy = async (
   resolveHostname: NonNullable<PlaywrightDriverOptions["resolveHostname"]>,
 ): Promise<{ allowedOrigin: string; launchArgs: readonly string[] }> => {
   const target = new URL(targetOrigin);
-  if (target.hostname !== "localhost") return { allowedOrigin: target.origin, launchArgs: [] };
+  if (target.hostname !== "localhost") {
+    return { allowedOrigin: target.origin, launchArgs: LOOPBACK_BROWSER_NETWORK_ARGS };
+  }
   let addresses;
   try {
     addresses = await resolveHostname(target.hostname);
@@ -254,7 +272,7 @@ const resolveTargetNetworkPolicy = async (
   const mappedAddress = selected.address.includes(":") ? `[${selected.address}]` : selected.address;
   return {
     allowedOrigin: target.origin,
-    launchArgs: [`--host-resolver-rules=MAP localhost ${mappedAddress}`],
+    launchArgs: [...LOOPBACK_BROWSER_NETWORK_ARGS, `--host-resolver-rules=MAP localhost ${mappedAddress}`],
   };
 };
 
@@ -320,6 +338,105 @@ const addDefectsForBlockingObservations = (
       scenarioId: item.scenarioId,
     });
   }
+};
+
+const bindReadOnlyWebSockets = async (input: {
+  context: BrowserContext;
+  allowedOrigin: string;
+  targetId: string;
+  currentScenarioId: () => string;
+  observations: QAObservation[];
+  onForbiddenOrigin: () => void;
+  onInvalidEvidence: () => void;
+}): Promise<void> => {
+  let websocketCount = 0;
+  let websocketMessageCount = 0;
+  let websocketBytes = 0;
+  let websocketLimitExceeded = false;
+  const rejectWebSocketEvidence = (): void => {
+    if (websocketLimitExceeded) return;
+    websocketLimitExceeded = true;
+    input.onInvalidEvidence();
+    observation(input.observations, {
+      kind: "NETWORK",
+      severity: "ERROR",
+      blocking: true,
+      targetId: input.targetId,
+      scenarioId: input.currentScenarioId(),
+      summary: "Blocked WebSocket because the Browser QA evidence limit was exceeded.",
+    });
+  };
+  const consumeWebSocketMessage = (message: string | Buffer): boolean => {
+    const byteLength = typeof message === "string" ? Buffer.byteLength(message) : message.byteLength;
+    websocketMessageCount += 1;
+    websocketBytes += byteLength;
+    if (
+      websocketMessageCount > MAX_QA_WEBSOCKET_MESSAGES ||
+      byteLength > MAX_QA_WEBSOCKET_MESSAGE_BYTES ||
+      websocketBytes > MAX_QA_TOTAL_WEBSOCKET_BYTES
+    ) {
+      rejectWebSocketEvidence();
+      return false;
+    }
+    return true;
+  };
+  await input.context.routeWebSocket("**/*", async (socket) => {
+    let websocketOrigin = "";
+    try {
+      const url = new URL(socket.url());
+      if (url.protocol === "ws:") url.protocol = "http:";
+      else if (url.protocol === "wss:") url.protocol = "https:";
+      else throw new TypeError("Unsupported WebSocket protocol");
+      websocketOrigin = url.origin;
+    } catch {
+      input.onForbiddenOrigin();
+      await socket.close({ code: 1008, reason: "Blocked by Browser QA origin policy" });
+      return;
+    }
+    if (websocketOrigin !== input.allowedOrigin) {
+      input.onForbiddenOrigin();
+      observation(input.observations, {
+        kind: "NETWORK",
+        severity: "ERROR",
+        blocking: true,
+        targetId: input.targetId,
+        scenarioId: input.currentScenarioId(),
+        summary: `Blocked off-origin WebSocket to ${websocketOrigin.slice(0, 300)}`,
+      });
+      await socket.close({ code: 1008, reason: "Blocked by Browser QA origin policy" });
+      return;
+    }
+    websocketCount += 1;
+    if (websocketCount > MAX_QA_WEBSOCKETS || socket.protocols().length > 0) {
+      rejectWebSocketEvidence();
+      await socket.close({ code: 1008, reason: "Blocked by Browser QA evidence policy" });
+      return;
+    }
+    let server: WebSocketRoute;
+    try {
+      server = socket.connectToServer();
+    } catch {
+      rejectWebSocketEvidence();
+      await socket.close({ code: 1011, reason: "Browser QA connection failed" });
+      return;
+    }
+    // Browser QA is read-only: the handshake may unblock local development hydration, but the page
+    // never gains a bidirectional command channel to the target.
+    socket.onMessage((message) => {
+      if (!consumeWebSocketMessage(message)) {
+        void socket.close({ code: 1009, reason: "Browser QA evidence limit exceeded" });
+        void server.close({ code: 1009, reason: "Browser QA evidence limit exceeded" });
+      }
+    });
+    server.onMessage((message) => {
+      if (consumeWebSocketMessage(message)) {
+        socket.send(message);
+        return;
+      }
+      void socket.close({ code: 1009, reason: "Browser QA evidence limit exceeded" });
+      void server.close({ code: 1009, reason: "Browser QA evidence limit exceeded" });
+    });
+  });
 };
 
 const bindEvidenceListeners = async (input: {
@@ -652,8 +769,21 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
           });
           context.setDefaultTimeout(timeoutMs);
           await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
-          const page = await context.newPage();
           let scenarioId = selectedScenarios[0]?.id ?? "baseline";
+          await bindReadOnlyWebSockets({
+            context,
+            allowedOrigin: networkPolicy.allowedOrigin,
+            targetId: target.id,
+            currentScenarioId: () => scenarioId,
+            observations,
+            onForbiddenOrigin: () => {
+              securityViolations.add("FORBIDDEN_ORIGIN");
+            },
+            onInvalidEvidence: () => {
+              securityViolations.add("INVALID_EVIDENCE");
+            },
+          });
+          const page = await context.newPage();
           await bindEvidenceListeners({
             context,
             page,
@@ -701,6 +831,7 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
               try {
                 switch (step.action.type) {
                   case "NAVIGATE": {
+                    const navigationDeadline = Date.now() + timeoutMs;
                     const response = await page.goto(`${qaRun.targetOrigin}${step.action.path}`, {
                       waitUntil: "domcontentloaded",
                       timeout: timeoutMs,
@@ -709,6 +840,18 @@ export const createPlaywrightDriver = (options: PlaywrightDriverOptions): Browse
                       throw new Error(
                         `Navigation returned ${response?.status().toString() ?? "no response"}`,
                       );
+                    const loadBudgetMs = navigationDeadline - Date.now();
+                    if (loadBudgetMs <= 0)
+                      throw new Error(`Navigation timed out after ${timeoutMs.toString()} ms`);
+                    await page.waitForLoadState("load", { timeout: loadBudgetMs });
+                    // Locator actionability cannot tell whether a server-rendered control has a
+                    // client handler yet. Give already-loaded framework work one short, fixed,
+                    // driver-owned turn without waiting for application polling to become idle.
+                    const settleBudgetMs = Math.min(
+                      NAVIGATION_INTERACTION_SETTLE_MS,
+                      navigationDeadline - Date.now(),
+                    );
+                    if (settleBudgetMs > 0) await page.waitForTimeout(settleBudgetMs);
                     break;
                   }
                   case "CLICK":

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_VERIFICATION_RECIPE_TIMEOUT_SECONDS,
   cancelVerificationRunRequestSchema,
   resolveVerificationCorrectionGateRequestSchema,
   retryVerificationRunRequestSchema,
@@ -103,6 +104,15 @@ describe("project verification contract", () => {
     );
   });
 
+  it("accepts the exact shared recipe timeout ceiling", () => {
+    expect(
+      verificationRecipeSchema.parse({
+        ...recipe,
+        timeoutSeconds: MAX_VERIFICATION_RECIPE_TIMEOUT_SECONDS,
+      }).timeoutSeconds,
+    ).toBe(MAX_VERIFICATION_RECIPE_TIMEOUT_SECONDS);
+  });
+
   it.each([
     { ...recipe, executable: "./node_modules/.bin/vitest" },
     { ...recipe, executable: "sh", argv: ["-c", "vitest run"] },
@@ -110,7 +120,7 @@ describe("project verification contract", () => {
     { ...recipe, argv: ["run", "test\u0000--watch"] },
     { ...recipe, cwd: "../outside" },
     { ...recipe, cwd: "/private/project" },
-    { ...recipe, timeoutSeconds: 901 },
+    { ...recipe, timeoutSeconds: MAX_VERIFICATION_RECIPE_TIMEOUT_SECONDS + 1 },
     { ...recipe, outputLimitBytes: 262_145 },
     { ...recipe, secretEnvironment: { TOKEN: "secret" } },
   ])("rejects an authority-expanding recipe", (candidate) => {

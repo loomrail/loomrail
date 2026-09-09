@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { providerCapabilitiesSchema, providerTokenBudgetSchema } from "../src/index.js";
+import {
+  providerCapabilitiesSchema,
+  providerTokenBudgetSchema,
+  workspaceToolRequestSchema,
+} from "../src/index.js";
 
 const validCapabilities = {
   provider: "CODEX" as const,
@@ -140,5 +144,27 @@ describe("provider token budget", () => {
         remainingEstimatedTokens: 0,
       }),
     ).toThrow();
+  });
+});
+
+describe("workspace exact edit request", () => {
+  const valid = {
+    callId: "edit-1",
+    operation: "EDIT_FILE",
+    path: "packages/db/prisma/schema.prisma",
+    expectedSha256: "a".repeat(64),
+    oldText: "projectId String",
+    newText: "projectId String?",
+  } as const;
+
+  it("accepts one closed bounded CAS edit shape", () => {
+    expect(workspaceToolRequestSchema.parse(valid)).toEqual(valid);
+  });
+
+  it("rejects empty or oversized old fragments, oversized replacements and extra fields", () => {
+    expect(() => workspaceToolRequestSchema.parse({ ...valid, oldText: "" })).toThrow();
+    expect(() => workspaceToolRequestSchema.parse({ ...valid, oldText: "я".repeat(20_000) })).toThrow();
+    expect(() => workspaceToolRequestSchema.parse({ ...valid, newText: "я".repeat(20_000) })).toThrow();
+    expect(() => workspaceToolRequestSchema.parse({ ...valid, offset: 10 })).toThrow();
   });
 });

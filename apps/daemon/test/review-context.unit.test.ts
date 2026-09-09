@@ -24,6 +24,7 @@ const sources = (): ContextSources => ({
     attempt: 1,
     sessionOrdinal: 1,
   },
+  projectVerificationPlan: null,
   projectConstitution: null,
   qaCorrection: null,
   decisions: [],

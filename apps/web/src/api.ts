@@ -27,6 +27,7 @@ import {
   scaffoldOperationsResponseSchema,
   stateCommandResultSchema,
   workItemChangesResponseSchema,
+  workItemDependenciesResponseSchema,
   workItemFileDiffResponseSchema,
   workItemsResponseSchema,
   workItemWorkspaceResponseSchema,
@@ -64,6 +65,7 @@ import {
   type ReviewFindingOwnerDisposition,
   type PipelineRun,
   type WorkItem,
+  type WorkItemDependency,
   type WorkItemState,
   type VerificationPlanPublication,
   type VerificationPlanSettingsResponse,
@@ -375,6 +377,12 @@ export const attestProjectReadiness = async (
 
 export const listProjectWorkItems = async (projectId: string) =>
   requestLocalApi(`/api/v1/projects/${encodeURIComponent(projectId)}/work-items`, workItemsResponseSchema);
+
+export const listProjectWorkItemDependencies = async (projectId: string) =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/work-item-dependencies`,
+    workItemDependenciesResponseSchema,
+  );
 
 export const activityPageSize = 30;
 
@@ -767,6 +775,7 @@ export const retryNewProjectScaffold = async (operation: ScaffoldOperation): Pro
 export type CreateWorkItemInput = {
   acceptanceCriteria: readonly string[];
   description: string;
+  parentId?: string | null;
   priority: WorkItem["priority"];
   projectId: string;
   risk: WorkItem["risk"];
@@ -784,7 +793,7 @@ export const createWorkItem = async (
       schemaVersion: 1,
       commandId,
       projectId: input.projectId,
-      parentId: null,
+      parentId: input.parentId ?? null,
       type: input.type,
       title: input.title,
       description: input.description,
@@ -798,6 +807,29 @@ export const createWorkItem = async (
     throw new Error("The local daemon returned an unexpected create result");
   }
   return result.workItem;
+};
+
+export const setWorkItemDependencies = async (
+  workItem: WorkItem,
+  blockerWorkItemIds: readonly string[],
+): Promise<readonly WorkItemDependency[]> => {
+  const result = await requestLocalApi(
+    `/api/v1/work-items/${encodeURIComponent(workItem.id)}/dependencies`,
+    stateCommandResultSchema,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedVersion: workItem.version,
+        blockerWorkItemIds,
+      }),
+    },
+  );
+  if (result.type !== "WORK_ITEM_DEPENDENCIES_SET") {
+    throw new Error("The local daemon returned an unexpected dependency result");
+  }
+  return result.dependencies;
 };
 
 export const guidedActivationCreateCommandId = async (projectId: string): Promise<string> => {

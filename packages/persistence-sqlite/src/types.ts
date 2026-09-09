@@ -38,6 +38,7 @@ import type {
   StateCommand,
   StateCommandResult,
   WorkItem,
+  WorkItemDependency,
   WorkItemState,
   WorkflowDispatch,
   WorkflowSnapshot,
@@ -164,6 +165,7 @@ export type StateQuery =
   | { type: "LIST_PENDING_SCAFFOLD_OPERATIONS" }
   | { type: "LIST_OPEN_SCAFFOLD_OPERATIONS" }
   | { type: "GET_WORK_ITEM"; workItemId: string }
+  | { type: "LIST_WORK_ITEM_DEPENDENCIES"; projectId: string }
   | { type: "GET_WORKFLOW_SNAPSHOT"; workItemId: string }
   | { type: "GET_ATTENTION_INBOX" }
   | {
@@ -278,6 +280,7 @@ export type StateQueryResult =
       publications: { plan: VerificationPlan; publication: VerificationPlanPublication }[];
     }
   | { type: "WORK_ITEM"; workItem: WorkItem | null }
+  | { type: "WORK_ITEM_DEPENDENCIES"; projectId: string; dependencies: WorkItemDependency[] }
   | { type: "WORKFLOW_SNAPSHOT"; snapshot: WorkflowSnapshot }
   | { type: "ATTENTION_INBOX"; inbox: AttentionInboxResponse }
   | { type: "HUMAN_REQUESTS"; humanRequests: HumanRequest[] }
@@ -299,7 +302,7 @@ export type StateQueryResult =
   | { type: "REVIEW_FINDINGS"; findings: ReviewFinding[] }
   | { type: "WORK_ITEMS"; workItems: WorkItem[] }
   | { type: "EVENTS"; events: DomainEvent[]; nextSequence: number; hasMore: boolean }
-  | { type: "CONTEXT_SOURCES"; sources: ContextSources }
+  | { type: "CONTEXT_SOURCES"; sources: ContextSources; verificationPlan: VerificationPlan | null }
   | {
       type: "PROVIDER_SESSIONS";
       sessions: ProviderSession[];

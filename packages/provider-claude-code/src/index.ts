@@ -9,6 +9,7 @@ import {
   decodeProviderStageResult,
   describeUnproductiveSession,
   localProviderRuntimeEnvironment,
+  LOCAL_PROVIDER_SESSION_DEADLINE_MS,
   providerCapabilitiesSchema,
   providerMcpConnectionSchema,
   providerModelIdSchema,
@@ -33,7 +34,6 @@ export { claudeCodeProviderDiagnostics } from "./diagnostics.js";
 export type { ClaudeEvent } from "./stream.js";
 export { parseClaudeEvent } from "./stream.js";
 
-const SESSION_DEADLINE_MS = 600_000;
 const PROCESS_TERMINATION_GRACE_MS = 5_000;
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const DEFAULT_MODELS = {
@@ -248,7 +248,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
             }
           },
           onStderr: () => undefined,
-          deadlineMs: SESSION_DEADLINE_MS,
+          deadlineMs: LOCAL_PROVIDER_SESSION_DEADLINE_MS,
           graceMs: PROCESS_TERMINATION_GRACE_MS,
         });
         runningSessions.set(invocation.session.id, { stop: run.stop });

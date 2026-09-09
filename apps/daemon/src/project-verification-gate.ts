@@ -26,6 +26,7 @@ type GateSnapshot = {
   latestRunStatus: "QUEUED" | "RUNNING" | "CANCELLING" | "PASSED" | "FAILED" | "ERROR" | "INTERRUPTED" | null;
   latestRunVersion: number | null;
   latestRunFailureMaterialized: boolean;
+  activeCorrectionNeedsRun: boolean;
   planRevision: number | null;
   planContentHash: string | null;
   workItemVersion: number | null;
@@ -112,6 +113,24 @@ export const createProjectVerificationWorkflowGate = (input: {
     const currentStageAttempt = workflowResult.snapshot.stageAttempts.find(
       ({ id }) => id === dispatch.stageAttemptId,
     );
+    const currentVerificationCorrectionRunId = currentStageAttempt?.verificationCorrectionRunId ?? null;
+    const correctionsResult =
+      currentVerificationCorrectionRunId === null
+        ? null
+        : input.state.query({
+            type: "LIST_WORK_ITEM_VERIFICATION_CORRECTIONS",
+            workItemId: dispatch.workItemId,
+            limit: 100,
+          });
+    if (correctionsResult !== null && correctionsResult.type !== "VERIFICATION_CORRECTIONS") {
+      throw new StateStoreError(
+        "PERSISTENCE_FAILURE",
+        "Project verification correction authority is unavailable",
+      );
+    }
+    const currentVerificationCorrection = correctionsResult?.correctionRuns.find(
+      ({ id }) => id === currentVerificationCorrectionRunId,
+    );
     return {
       gate: projectVerificationAcceptanceGate({
         projectId: dispatch.projectId,
@@ -129,6 +148,9 @@ export const createProjectVerificationWorkflowGate = (input: {
       latestRunFailureMaterialized:
         currentRun !== undefined &&
         failuresResult.failures.some(({ verificationRunId }) => verificationRunId === currentRun.id),
+      activeCorrectionNeedsRun:
+        currentVerificationCorrection?.status === "ACTIVE" &&
+        currentRun?.verificationCorrectionRunId !== currentVerificationCorrection.id,
       planRevision: planResult.plan?.revision ?? null,
       planContentHash: planResult.plan?.contentHash ?? null,
       workItemVersion: workItemResult.workItem.version,
@@ -204,7 +226,7 @@ export const createProjectVerificationWorkflowGate = (input: {
       }
 
       if (
-        !needsFreshRun(snapshot.gate.blocker) ||
+        (!needsFreshRun(snapshot.gate.blocker) && !snapshot.activeCorrectionNeedsRun) ||
         snapshot.planRevision === null ||
         snapshot.planContentHash === null ||
         snapshot.workItemVersion === null

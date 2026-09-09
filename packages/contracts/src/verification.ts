@@ -8,6 +8,8 @@ import {
   utcTimestampSchema,
 } from "./shared.js";
 
+export const MAX_VERIFICATION_RECIPE_TIMEOUT_SECONDS = 900;
+
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const utf8ByteLength = (value: string): number => {
   let bytes = 0;
@@ -102,7 +104,7 @@ export const verificationRecipeSchema = z
     executable: verificationExecutableSchema,
     argv: z.array(boundedArgSchema).min(1).max(16),
     cwd: portableRelativeDirectorySchema,
-    timeoutSeconds: z.number().int().min(1).max(900),
+    timeoutSeconds: z.number().int().min(1).max(MAX_VERIFICATION_RECIPE_TIMEOUT_SECONDS),
     outputLimitBytes: z.number().int().min(1_024).max(262_144),
     environmentProfile: verificationEnvironmentProfileSchema,
     networkPolicy: verificationNetworkPolicySchema,
@@ -648,7 +650,10 @@ export const verificationCheckSchema = z
     status: verificationCheckStatusSchema,
     startedAt: utcTimestampSchema.nullable(),
     completedAt: utcTimestampSchema.nullable(),
-    durationMs: z.number().int().nonnegative().max(1_000_000).nullable(),
+    // A live observation is capped below, but a restart interruption records elapsed wall time.
+    // The daemon may have been offline for longer than the recipe timeout, so durable historical
+    // evidence must accept the complete safe-integer interval instead of blocking recovery.
+    durationMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
     exitCode: z.number().int().min(-2_147_483_648).max(2_147_483_647).nullable(),
     signal: z
       .string()

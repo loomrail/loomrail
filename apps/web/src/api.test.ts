@@ -3,6 +3,7 @@ import type {
   ProjectWorkspaceStrategySelection,
   VerificationPlanPublication,
   VerificationPlanSettingsResponse,
+  WorkItem,
 } from "@loomrail/contracts";
 
 import {
@@ -19,6 +20,9 @@ import {
   storeCsrfToken,
   setProjectWorkspaceStrategy,
   adoptVerificationPlan,
+  createWorkItem,
+  listProjectWorkItemDependencies,
+  setWorkItemDependencies,
   waiveQADefect,
   workItemQAAttachmentUrl,
   workItemAcceptanceExportUrl,
@@ -330,6 +334,132 @@ describe("local API client", () => {
     expect(await guidedActivationCreateCommandId("project-two")).not.toBe(first);
     expect(first).toMatch(/^guided-activation-v1-create-task:[a-f0-9]{64}$/);
     expect(first.length).toBeLessThanOrEqual(128);
+  });
+
+  it("creates hierarchy and reads and replaces dependencies through project-scoped routes", async () => {
+    const workItem: WorkItem = {
+      schemaVersion: 1,
+      id: "workItem:child",
+      projectId: "project:one",
+      parentId: "epic:one",
+      type: "TASK",
+      title: "Unicode delivery — проверка",
+      description: "",
+      state: "BACKLOG",
+      priority: "MEDIUM",
+      risk: "MEDIUM",
+      acceptanceCriteria: ["The result is measured"],
+      currentStage: null,
+      createdAt: "2026-09-09T10:00:00.000Z",
+      updatedAt: "2026-09-09T10:00:00.000Z",
+      version: 1,
+    };
+    const createdEvent = {
+      schemaVersion: 1,
+      sequence: 1,
+      id: "event-create",
+      type: "WORK_ITEM_CREATED",
+      aggregateType: "WORK_ITEM",
+      aggregateId: workItem.id,
+      projectId: workItem.projectId,
+      actor: { type: "HUMAN", id: "local-owner" },
+      occurredAt: workItem.createdAt,
+      correlationId: "correlation-create",
+      data: { workItem },
+    };
+    const dependency = {
+      schemaVersion: 1,
+      projectId: workItem.projectId,
+      kind: "BLOCKS",
+      blockerWorkItemId: "blocker:one",
+      blockedWorkItemId: workItem.id,
+      createdAt: "2026-09-09T10:01:00.000Z",
+    };
+    const dependencyEvent = {
+      schemaVersion: 1,
+      sequence: 2,
+      id: "event-dependency",
+      type: "WORK_ITEM_DEPENDENCIES_SET",
+      aggregateType: "WORK_ITEM",
+      aggregateId: workItem.id,
+      projectId: workItem.projectId,
+      actor: { type: "HUMAN", id: "local-owner" },
+      occurredAt: dependency.createdAt,
+      correlationId: "correlation-dependency",
+      data: {
+        blockedWorkItemId: workItem.id,
+        previousBlockerWorkItemIds: [],
+        blockerWorkItemIds: [dependency.blockerWorkItemId],
+        workItemVersion: 2,
+      },
+    };
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            schemaVersion: 1,
+            type: "WORK_ITEM_CREATED",
+            replayed: false,
+            workItem,
+            event: createdEvent,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ schemaVersion: 1, projectId: workItem.projectId, dependencies: [dependency] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            schemaVersion: 1,
+            type: "WORK_ITEM_DEPENDENCIES_SET",
+            replayed: false,
+            blockedWorkItemId: workItem.id,
+            workItemVersion: 2,
+            dependencies: [dependency],
+            event: dependencyEvent,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    storeCsrfToken("csrf-fixture-token");
+
+    await expect(
+      createWorkItem({
+        acceptanceCriteria: workItem.acceptanceCriteria,
+        description: workItem.description,
+        parentId: workItem.parentId,
+        priority: workItem.priority,
+        projectId: workItem.projectId,
+        risk: workItem.risk,
+        title: workItem.title,
+        type: workItem.type,
+      }),
+    ).resolves.toEqual(workItem);
+    const createBody = fetchMock.mock.calls[0]?.[1]?.body;
+    if (typeof createBody !== "string") throw new Error("Expected a create JSON body");
+    expect(JSON.parse(createBody)).toMatchObject({ parentId: "epic:one", type: "TASK" });
+
+    await expect(listProjectWorkItemDependencies(workItem.projectId)).resolves.toMatchObject({
+      dependencies: [dependency],
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/projects/project%3Aone/work-item-dependencies");
+
+    await expect(setWorkItemDependencies(workItem, [dependency.blockerWorkItemId])).resolves.toEqual([
+      dependency,
+    ]);
+    const [dependencyUrl, dependencyInit] = fetchMock.mock.calls[2] ?? [];
+    expect(dependencyUrl).toBe("/api/v1/work-items/workItem%3Achild/dependencies");
+    expect(dependencyInit?.method).toBe("PUT");
+    if (typeof dependencyInit?.body !== "string") throw new Error("Expected a dependency JSON body");
+    expect(JSON.parse(dependencyInit.body)).toMatchObject({
+      expectedVersion: 1,
+      blockerWorkItemIds: ["blocker:one"],
+    });
   });
 
   it("sends an optimistic owner waiver for the exact QA defect", async () => {

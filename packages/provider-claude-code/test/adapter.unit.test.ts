@@ -112,6 +112,37 @@ describe("local Claude Code provider", () => {
     expect(sink.pids).toHaveLength(1);
   });
 
+  it("keeps hostile Acceptance vocabulary out of its native output schema", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-claude-acceptance-test-"));
+    temporaryDirectories.push(directory);
+    const recordPath = join(directory, "record.json");
+    const provider = createClaudeCodeProvider({
+      command: process.execPath,
+      commandArgsPrefix: [fixture, "--fixture-record", recordPath],
+    });
+    const quotedCheck = 'Reviewed URL("/reset-password", base) and C:\\work.';
+    const input: ProviderInvocation = {
+      ...invocation(),
+      session: { ...invocation().session, stage: "ACCEPTANCE" },
+      acceptanceInput: {
+        criteria: ["Unicode критерий"],
+        evidence: [
+          { kind: "REVIEW_REPORT", checks: [quotedCheck] },
+          { kind: "QA_REPORT", checks: ["Browser QA ✓"] },
+        ],
+      },
+      humanRequests: "DISALLOWED",
+    };
+
+    await provider.start(input, listener());
+    const record = JSON.parse(await readFile(recordPath, "utf8")) as { args: string[] };
+    const schemaIndex = record.args.indexOf("--json-schema");
+    const schema = record.args[schemaIndex + 1];
+    expect(schema).toContain('"criterionIndex"');
+    expect(schema).not.toContain(quotedCheck);
+    expect(record.args.at(-1)).toContain(JSON.stringify(quotedCheck));
+  });
+
   it("runs only in scratch, disables built-ins, and passes only scoped MCP proxies", async () => {
     const directory = await mkdtemp(join(tmpdir(), "loomrail-claude-test-"));
     temporaryDirectories.push(directory);
@@ -143,6 +174,7 @@ describe("local Claude Code provider", () => {
             "loomrail_list_directory",
             "loomrail_read_file",
             "loomrail_write_file",
+            "loomrail_edit_file",
             "loomrail_delete_file",
           ],
         },
@@ -168,7 +200,7 @@ describe("local Claude Code provider", () => {
     expect(record.args.at(-1)).toContain(
       "The native read-only sandbox applies only to the empty scratch directory",
     );
-    expect(record.args.at(-1)).toContain("`loomrail_write_file` or `loomrail_delete_file`");
+    expect(record.args.at(-1)).toContain("`loomrail_edit_file`");
     expect(record.args.join("\0")).not.toContain(input.workspace?.path ?? "unreachable");
     expect(record.environmentKeys).not.toContain("ANTHROPIC_API_KEY");
     expect(record.environmentKeys).not.toContain("PROJECT_SECRET");

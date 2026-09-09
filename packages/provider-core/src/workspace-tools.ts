@@ -6,6 +6,7 @@ export const WORKSPACE_TOOL_MAX_CALLS = 64;
 export const WORKSPACE_TOOL_MAX_TURNS = 32;
 export const WORKSPACE_TOOL_MAX_READ_BYTES = 65_536;
 export const WORKSPACE_TOOL_MAX_WRITE_BYTES = 131_072;
+export const WORKSPACE_TOOL_MAX_EDIT_FRAGMENT_BYTES = 32_768;
 export const WORKSPACE_TOOL_MAX_DIRECTORY_ENTRIES = 1_000;
 
 const hasControlCharacters = (value: string): boolean => {
@@ -63,6 +64,27 @@ export const workspaceToolRequestSchema = z.discriminatedUnion("operation", [
   z
     .object({
       callId: providerCallIdSchema,
+      operation: z.literal("EDIT_FILE"),
+      path: relativePathInputSchema,
+      expectedSha256: sha256Schema,
+      oldText: z
+        .string()
+        .min(1)
+        .refine(
+          (value) => Buffer.byteLength(value, "utf8") <= WORKSPACE_TOOL_MAX_EDIT_FRAGMENT_BYTES,
+          "Workspace edit old fragment exceeds the UTF-8 byte limit",
+        ),
+      newText: z
+        .string()
+        .refine(
+          (value) => Buffer.byteLength(value, "utf8") <= WORKSPACE_TOOL_MAX_EDIT_FRAGMENT_BYTES,
+          "Workspace edit new fragment exceeds the UTF-8 byte limit",
+        ),
+    })
+    .strict(),
+  z
+    .object({
+      callId: providerCallIdSchema,
       operation: z.literal("DELETE_FILE"),
       path: relativePathInputSchema,
       expectedSha256: sha256Schema,
@@ -86,6 +108,7 @@ export type WorkspaceToolPolicyDescription = {
     maxCalls: number;
     maxReadBytes: number;
     maxWriteBytes: number;
+    maxEditFragmentBytes: number;
     maxDirectoryEntries: number;
   };
 };

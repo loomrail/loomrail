@@ -146,6 +146,168 @@ describe("provider-neutral workspace executor", () => {
     ).toBe(true);
   });
 
+  it("edits one exact fragment in a large Unicode file with CAS without replacing the whole file", async () => {
+    const { workspace, executor, calls } = await setup();
+    const signal = new AbortController().signal;
+    const prefix = "model Account {\n" + "  field String\n".repeat(5_000);
+    const original = `${prefix}  projectId String\n}\n`;
+    const path = "schema с пробелами.prisma";
+    await writeFile(join(workspace, path), original);
+
+    const result = await executor.execute(
+      {
+        callId: "edit-1",
+        operation: "EDIT_FILE",
+        path,
+        expectedSha256: sha256(original),
+        oldText: "  projectId String\n",
+        newText: "  projectId String?\n  scope MessageScope @default(PROJECT)\n",
+      },
+      signal,
+    );
+
+    const expected = `${prefix}  projectId String?\n  scope MessageScope @default(PROJECT)\n}\n`;
+    expect(result).toMatchObject({
+      status: "SUCCEEDED",
+      operation: "EDIT_FILE",
+      output: { type: "FILE_CHANGED", sha256: sha256(expected), bytes: Buffer.byteLength(expected) },
+    });
+    expect(await readFile(join(workspace, path), "utf8")).toBe(expected);
+    expect([...calls.values()].at(-1)).toMatchObject({ operation: "EDIT_FILE", status: "SUCCEEDED" });
+    await expect(
+      executor.execute(
+        {
+          callId: "edit-1",
+          operation: "EDIT_FILE",
+          path,
+          expectedSha256: sha256(original),
+          oldText: "  projectId String\n",
+          newText: "  projectId String?\n  scope MessageScope @default(PROJECT)\n",
+        },
+        signal,
+      ),
+    ).resolves.toMatchObject({ status: "FAILED", code: "REPLAYED_WITHOUT_OUTPUT" });
+    expect(await readFile(join(workspace, path), "utf8")).toBe(expected);
+  });
+
+  it("applies exact-fragment edits under the simulated Windows portable-path policy", async () => {
+    const { workspace, executor } = await setup("READ_WRITE", "win32");
+    const path = "nested folder/данные file.txt";
+    await mkdir(join(workspace, "nested folder"));
+    await writeFile(join(workspace, path), "до\n");
+
+    await expect(
+      executor.execute(
+        {
+          callId: "edit-windows",
+          operation: "EDIT_FILE",
+          path,
+          expectedSha256: sha256("до\n"),
+          oldText: "до",
+          newText: "после",
+        },
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ status: "SUCCEEDED", operation: "EDIT_FILE" });
+    expect(await readFile(join(workspace, path), "utf8")).toBe("после\n");
+  });
+
+  it("refuses ambiguous, stale, secret, symlink and read-only exact-fragment edits", async () => {
+    const { root, workspace, executor } = await setup();
+    const signal = new AbortController().signal;
+    await writeFile(join(workspace, "ambiguous.txt"), "same\nsame\n");
+    await writeFile(join(workspace, ".env"), "TOKEN=secret\n");
+    await writeFile(join(root, "outside.txt"), "outside\n");
+    await symlink(join(root, "outside.txt"), join(workspace, "escape.txt"));
+
+    await expect(
+      executor.execute(
+        {
+          callId: "edit-ambiguous",
+          operation: "EDIT_FILE",
+          path: "ambiguous.txt",
+          expectedSha256: sha256("same\nsame\n"),
+          oldText: "same",
+          newText: "changed",
+        },
+        signal,
+      ),
+    ).resolves.toMatchObject({ status: "FAILED", code: "CONTENT_CONFLICT" });
+    await expect(
+      executor.execute(
+        {
+          callId: "edit-absent",
+          operation: "EDIT_FILE",
+          path: "ambiguous.txt",
+          expectedSha256: sha256("same\nsame\n"),
+          oldText: "missing",
+          newText: "changed",
+        },
+        signal,
+      ),
+    ).resolves.toMatchObject({ status: "FAILED", code: "CONTENT_CONFLICT" });
+    await expect(
+      executor.execute(
+        {
+          callId: "edit-nul",
+          operation: "EDIT_FILE",
+          path: "ambiguous.txt",
+          expectedSha256: sha256("same\nsame\n"),
+          oldText: "same\nsame",
+          newText: "changed\u0000value",
+        },
+        signal,
+      ),
+    ).resolves.toMatchObject({ status: "DENIED", code: "CONTENT_INVALID" });
+    await expect(
+      executor.execute(
+        {
+          callId: "edit-stale",
+          operation: "EDIT_FILE",
+          path: "ambiguous.txt",
+          expectedSha256: "0".repeat(64),
+          oldText: "same\nsame",
+          newText: "changed",
+        },
+        signal,
+      ),
+    ).resolves.toMatchObject({ status: "FAILED", code: "CONTENT_CONFLICT" });
+    for (const [callId, path] of [
+      ["edit-secret", ".env"],
+      ["edit-symlink", "escape.txt"],
+      ["edit-traversal", "../outside.txt"],
+    ] as const) {
+      const result = await executor.execute(
+        {
+          callId,
+          operation: "EDIT_FILE",
+          path,
+          expectedSha256: sha256("outside\n"),
+          oldText: "outside",
+          newText: "changed",
+        },
+        signal,
+      );
+      expect(result.status).not.toBe("SUCCEEDED");
+    }
+
+    const readOnly = await setup("READ_ONLY");
+    await writeFile(join(readOnly.workspace, "file.txt"), "before\n");
+    await expect(
+      readOnly.executor.execute(
+        {
+          callId: "edit-readonly",
+          operation: "EDIT_FILE",
+          path: "file.txt",
+          expectedSha256: sha256("before\n"),
+          oldText: "before",
+          newText: "after",
+        },
+        signal,
+      ),
+    ).resolves.toMatchObject({ status: "DENIED", code: "WORKSPACE_ACCESS_DENIED" });
+  });
+
   it("denies traversal, credential paths, symlinks and read-only mutation on portable paths", async () => {
     const { root, workspace, executor, calls } = await setup("READ_ONLY", "win32");
     const signal = new AbortController().signal;

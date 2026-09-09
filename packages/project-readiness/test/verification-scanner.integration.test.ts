@@ -46,6 +46,7 @@ describe("verification plan scanner", () => {
       argv: ["run", "test"],
       cwd: ".",
       required: true,
+      timeoutSeconds: 300,
       outputLimitBytes: 262_144,
     });
     expect(first.recipes[0]?.provenance.scriptName).toBe("test");
@@ -55,6 +56,7 @@ describe("verification plan scanner", () => {
       kind: "E2E",
       executable: "pnpm",
       argv: ["run", "test:e2e"],
+      timeoutSeconds: 900,
     });
     expect(first.proposalHash).toBe(second.proposalHash);
     expect(JSON.stringify(first)).not.toContain("preinstall");

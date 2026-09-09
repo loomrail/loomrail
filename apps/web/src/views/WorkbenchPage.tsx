@@ -107,12 +107,14 @@ import {
   usePipelineControl,
   useProjectProviderSelection,
   useProjectHumanRequests,
+  useProjectWorkItemDependencies,
   useProjectWorkItems,
   useProviderCapabilities,
   useResolveAcceptance,
   useResolveQACorrectionGate,
   useStageAttemptSessions,
   useStartPipeline,
+  useSetWorkItemDependencies,
   useUpdateWorkItem,
   useWaiveQADefect,
   useWorkspace,
@@ -122,6 +124,7 @@ import {
   useWorkItemReviews,
   useWorkItemWorkspace,
 } from "../workspace";
+import { deriveWorkItemDependencyView } from "../workItemDependencies";
 
 const viewOrderingOptions = (t: Translator): readonly { label: string; value: BoardOrdering }[] => [
   { label: t("property.priority"), value: "priority" },
@@ -646,6 +649,15 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         }),
         icon: "settings",
         label: t("event.updated"),
+      };
+    case "WORK_ITEM_DEPENDENCIES_SET":
+      return {
+        detail: t("event.dependenciesSetDetail", {
+          count: event.data.blockerWorkItemIds.length,
+        }),
+        icon: "link",
+        label: t("event.dependenciesSet"),
+        ...(event.data.blockerWorkItemIds.length === 0 ? {} : { tone: "accent" }),
       };
     case "WORK_ITEM_STATE_CHANGED":
       return {
@@ -2653,10 +2665,181 @@ const modelPolicyOptions = (
     };
   });
 
+const workflowIsActive = (snapshot: ReturnType<typeof useWorkItemWorkflow>["data"]): boolean =>
+  snapshot === undefined ||
+  ["RUNNING", "WAITING_HUMAN", "SOFT_PAUSED", "HARD_PAUSED", "INTERRUPTED"].includes(
+    snapshot.run?.status ?? "",
+  );
+
+const DependencyPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
+  const { t } = useI18n();
+  const workItemsQuery = useProjectWorkItems(item.projectId);
+  const dependenciesQuery = useProjectWorkItemDependencies(item.projectId);
+  const workflowQuery = useWorkItemWorkflow(item.id);
+  const mutation = useSetWorkItemDependencies();
+  const [open, setOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<readonly string[]>([]);
+  const projectWorkItems = workItemsQuery.data?.workItems ?? [];
+  const dependencies = dependenciesQuery.data?.dependencies ?? [];
+  const view = deriveWorkItemDependencyView(item, projectWorkItems, dependencies);
+  const candidateBlockers = projectWorkItems.filter(({ id }) => id !== item.id);
+  const currentIds = view.blockers.map(({ id }) => id).sort();
+  const nextIds = [...selectedIds].sort();
+  const changed =
+    currentIds.length !== nextIds.length || currentIds.some((id, index) => id !== nextIds[index]);
+  const editingDisabled =
+    workflowIsActive(workflowQuery.data) ||
+    item.state === "DONE" ||
+    item.state === "CANCELLED" ||
+    workItemsQuery.isPending ||
+    dependenciesQuery.isPending ||
+    workItemsQuery.isError ||
+    dependenciesQuery.isError;
+
+  const renderItems = (items: readonly WorkItem[], emptyKey: TranslationKey): React.JSX.Element =>
+    items.length === 0 ? (
+      <span className="dependency-graph__empty">{t(emptyKey)}</span>
+    ) : (
+      <ul className="dependency-graph__list">
+        {items.map((candidate) => (
+          <li key={candidate.id}>
+            <span>{candidate.title}</span>
+            <Status label={stateLabel(candidate.state, t)} tone={stateTones[candidate.state]} />
+          </li>
+        ))}
+      </ul>
+    );
+
+  return (
+    <InspectorSection
+      action={
+        <DialogSurface
+          closeLabel={t("action.closeDialog")}
+          description={t("dependency.editDescription")}
+          footer={
+            <>
+              <Button
+                disabled={mutation.isPending}
+                onClick={() => {
+                  setOpen(false);
+                  mutation.reset();
+                }}
+              >
+                {t("action.cancel")}
+              </Button>
+              <Button
+                disabled={!changed}
+                loading={mutation.isPending}
+                onClick={() => {
+                  if (!changed) return;
+                  mutation.mutate(
+                    { blockerWorkItemIds: nextIds, workItem: item },
+                    {
+                      onSuccess: () => {
+                        setOpen(false);
+                      },
+                    },
+                  );
+                }}
+                variant="primary"
+              >
+                {t("dependency.save")}
+              </Button>
+            </>
+          }
+          onOpenChange={(nextOpen) => {
+            if (nextOpen) {
+              setSelectedIds(currentIds);
+              mutation.reset();
+            }
+            setOpen(nextOpen);
+          }}
+          open={open}
+          title={t("dependency.edit")}
+          trigger={
+            <Button disabled={editingDisabled} icon="edit" size="sm" variant="surface">
+              {t("dependency.edit")}
+            </Button>
+          }
+        >
+          {mutation.error ? (
+            <LocalConnectionRecovery
+              error={mutation.error}
+              onRetry={() => {
+                mutation.mutate({ blockerWorkItemIds: nextIds, workItem: item });
+              }}
+              retrying={mutation.isPending}
+            />
+          ) : null}
+          <div className="dependency-dialog-list" role="group" aria-label={t("dependency.blockedBy")}>
+            {candidateBlockers.length === 0 ? (
+              <p className="inspector-copy">{t("dependency.noCandidates")}</p>
+            ) : (
+              candidateBlockers.map((candidate) => (
+                <Checkbox
+                  checked={selectedIds.includes(candidate.id)}
+                  description={stateLabel(candidate.state, t)}
+                  key={candidate.id}
+                  label={candidate.title}
+                  onCheckedChange={(checked) => {
+                    setSelectedIds((current) =>
+                      checked === true
+                        ? [...current.filter((id) => id !== candidate.id), candidate.id]
+                        : current.filter((id) => id !== candidate.id),
+                    );
+                  }}
+                />
+              ))
+            )}
+          </div>
+        </DialogSurface>
+      }
+      title={t("dependency.title")}
+    >
+      {dependenciesQuery.error || workItemsQuery.error ? (
+        <LocalConnectionRecovery
+          error={dependenciesQuery.error ?? workItemsQuery.error}
+          onRetry={() => {
+            void dependenciesQuery.refetch();
+            void workItemsQuery.refetch();
+          }}
+          retrying={dependenciesQuery.isFetching || workItemsQuery.isFetching}
+        />
+      ) : dependenciesQuery.isPending || workItemsQuery.isPending ? (
+        <p className="inspector-copy">{t("dependency.loading")}</p>
+      ) : (
+        <dl className="dependency-graph">
+          <div>
+            <dt>{t("dependency.parent")}</dt>
+            <dd>{view.parent?.title ?? t("dependency.none")}</dd>
+          </div>
+          <div>
+            <dt>{t("dependency.children")}</dt>
+            <dd>{renderItems(view.children, "dependency.noChildren")}</dd>
+          </div>
+          <div>
+            <dt>{t("dependency.blockedBy")}</dt>
+            <dd>{renderItems(view.blockers, "dependency.noBlockers")}</dd>
+          </div>
+          <div>
+            <dt>{t("dependency.blocks")}</dt>
+            <dd>{renderItems(view.blockedWorkItems, "dependency.blocksNone")}</dd>
+          </div>
+        </dl>
+      )}
+      {!dependenciesQuery.isPending && !workItemsQuery.isPending && editingDisabled ? (
+        <p className="inspector-copy">{t("dependency.editUnavailable")}</p>
+      ) : null}
+    </InspectorSection>
+  );
+};
+
 const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const { t } = useI18n();
   const workflowQuery = useWorkItemWorkflow(item.id);
   const providerSelectionQuery = useProjectProviderSelection(item.projectId);
+  const workItemsQuery = useProjectWorkItems(item.projectId);
+  const dependenciesQuery = useProjectWorkItemDependencies(item.projectId);
   const startMutation = useStartPipeline();
   const controlMutation = usePipelineControl();
   const overrideMutation = useApproveBudgetOverride();
@@ -2666,6 +2849,13 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const [modelTierOverride, setModelTierOverride] = useState<ModelTier>("FAST");
   const modelOptions = modelPolicyOptions(providerSelectionQuery.data, t);
   const selectedModelDescription = modelOptions.find(({ value }) => value === modelTierOverride)?.description;
+  const dependencyDataReady = workItemsQuery.data !== undefined && dependenciesQuery.data !== undefined;
+  const dependencyView = deriveWorkItemDependencyView(
+    item,
+    workItemsQuery.data?.workItems ?? [],
+    dependenciesQuery.data?.dependencies ?? [],
+  );
+  const dependencyDataFailed = workItemsQuery.isError || dependenciesQuery.isError;
   const snapshot = workflowQuery.data;
   const budgetPolicy = snapshot?.budgetPolicies.at(-1) ?? null;
   const persistedPolicyValues = budgetPolicy === null ? null : workflowPolicyFormValues(budgetPolicy);
@@ -2692,7 +2882,15 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
     parsedAgentRunLimit > 0 &&
     parsedAgentRunLimit <= parsedBudgetLimit;
   const startWorkflow = (): void => {
-    if (!budgetLimitIsValid || !agentRunLimitIsValid) return;
+    if (
+      !budgetLimitIsValid ||
+      !agentRunLimitIsValid ||
+      !dependencyDataReady ||
+      dependencyDataFailed ||
+      dependencyView.children.length > 0 ||
+      dependencyView.unsatisfiedBlockers.length > 0
+    )
+      return;
     startMutation.mutate({
       policy: {
         maxEstimatedTokens: parsedBudgetLimit,
@@ -2715,8 +2913,26 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
     return (
       <div className="workflow-start">
         <p className="inspector-copy">
-          {item.state === "READY" ? t("workflow.startDescription") : t("workflow.readyRequired")}
+          {dependencyDataFailed
+            ? t("workflow.dependencyLoadFailed")
+            : dependencyView.children.length > 0
+              ? t("workflow.containerNotExecutable")
+              : dependencyView.unsatisfiedBlockers.length > 0
+                ? t("workflow.dependencyBlocked")
+                : item.state === "READY"
+                  ? t("workflow.startDescription")
+                  : t("workflow.readyRequired")}
         </p>
+        {dependencyView.unsatisfiedBlockers.length > 0 ? (
+          <ul className="workflow-blockers">
+            {dependencyView.unsatisfiedBlockers.map((blocker) => (
+              <li key={blocker.id}>
+                <span>{blocker.title}</span>
+                <Status label={stateLabel(blocker.state, t)} tone={stateTones[blocker.state]} />
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {startMutation.error ? (
           <LocalConnectionRecovery
             error={startMutation.error}
@@ -2791,7 +3007,15 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
             />
           </Field>
           <Button
-            disabled={item.state !== "READY" || !budgetLimitIsValid || !agentRunLimitIsValid}
+            disabled={
+              item.state !== "READY" ||
+              !budgetLimitIsValid ||
+              !agentRunLimitIsValid ||
+              !dependencyDataReady ||
+              dependencyDataFailed ||
+              dependencyView.children.length > 0 ||
+              dependencyView.unsatisfiedBlockers.length > 0
+            }
             loading={startMutation.isPending}
             type="submit"
             variant="primary"
@@ -3310,6 +3534,8 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
         />
         <p className="inspector-copy">{item.description || t("task.noBrief")}</p>
       </InspectorSection>
+
+      <DependencyPanel item={item} />
 
       <InspectorSection
         action={

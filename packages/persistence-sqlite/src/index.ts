@@ -26,6 +26,9 @@ import {
   humanRequestStatusSchema,
   MAX_AUTOMATIC_CORRECTION_RUNS,
   MAX_TOTAL_CORRECTION_RUNS,
+  MAX_DEPENDENCY_GRAPH_EDGES,
+  MAX_DEPENDENCY_GRAPH_WORK_ITEMS,
+  MAX_WORK_ITEM_BLOCKERS,
   maxContextPackRecipeSources,
   mcpCapabilitySnapshotSchema,
   mcpConsentSchema,
@@ -79,6 +82,7 @@ import {
   workflowSnapshotSchema,
   workflowTemplateSchema,
   workItemSchema,
+  workItemDependencySchema,
   workItemStateSchema,
   workItemWorkspaceSchema,
   type BudgetPolicy,
@@ -140,6 +144,7 @@ import {
   type StateCommandResult,
   type UsageRecord,
   type WorkItem,
+  type WorkItemDependency,
   type WorkflowDispatch,
   type WorkflowSnapshot,
   type WorkItemWorkspace,
@@ -226,6 +231,7 @@ import {
   decideParkQueuedStageAttemptForBudget,
   decideStartPipeline,
   decideWorkItemCommand,
+  decideSetWorkItemDependencies,
   isProviderOutcomeRejectionError,
   stageAttemptIsTerminal,
   WorkflowDomainError,
@@ -244,6 +250,7 @@ import {
   ReviewFindingDispositionError,
   ScaffoldDomainError,
   WorkItemDomainError,
+  WorkItemDependencyError,
   type BudgetOverrideDecision,
   type ConstitutionActivatedIntent,
   type ConstitutionProposedIntent,
@@ -287,6 +294,7 @@ import {
   type WorkItemCommand,
   type WorkItemDecision,
   type WorkItemEventIntent,
+  type WorkItemDependencyEventIntent,
 } from "@loomrail/domain";
 import { verificationPlanContentHash, verificationPlanProposalHash } from "@loomrail/project-readiness";
 import { parseWorktreeListPorcelain, type WorktreeEntry } from "@loomrail/workspace";
@@ -348,6 +356,20 @@ const workItemRowSchema = z.object({
   version: z.number().int(),
   created_at: z.string(),
   updated_at: z.string(),
+});
+
+const workItemDependencyRowSchema = z.object({
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  kind: z.string(),
+  blocker_work_item_id: z.string(),
+  blocked_work_item_id: z.string(),
+  created_at: z.string(),
+});
+
+const dependencyBlockerStateRowSchema = z.object({
+  blocker_work_item_id: z.string(),
+  state: z.string(),
 });
 
 const squadAssignmentRowSchema = z.object({
@@ -1299,6 +1321,7 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LIST_PENDING_SCAFFOLD_OPERATIONS") }).strict(),
   z.object({ type: z.literal("LIST_OPEN_SCAFFOLD_OPERATIONS") }).strict(),
   z.object({ type: z.literal("GET_WORK_ITEM"), workItemId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("LIST_WORK_ITEM_DEPENDENCIES"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_WORKFLOW_SNAPSHOT"), workItemId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_ATTENTION_INBOX") }).strict(),
   z
@@ -1410,6 +1433,18 @@ const projectFromRow = (value: unknown): Project => {
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  });
+};
+
+const workItemDependencyFromRow = (value: unknown): WorkItemDependency => {
+  const row = workItemDependencyRowSchema.parse(value);
+  return workItemDependencySchema.parse({
+    schemaVersion: row.schema_version,
+    projectId: row.project_id,
+    kind: row.kind,
+    blockerWorkItemId: row.blocker_work_item_id,
+    blockedWorkItemId: row.blocked_work_item_id,
+    createdAt: row.created_at,
   });
 };
 
@@ -3142,6 +3177,32 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        WHERE id = ? AND status = 'STARTED'`,
     );
     const selectWorkItemById = database.prepare("SELECT * FROM work_items WHERE id = ?");
+    const selectProjectWorkItemsForDependencyValidation = database.prepare(
+      "SELECT * FROM work_items WHERE project_id = ? ORDER BY id LIMIT ?",
+    );
+    const selectProjectWorkItemDependencies = database.prepare(
+      `SELECT * FROM work_item_dependencies
+       WHERE project_id = ? ORDER BY blocker_work_item_id, blocked_work_item_id LIMIT ?`,
+    );
+    const selectUnsatisfiedDependenciesForWorkItem = database.prepare(
+      `SELECT dependency.blocker_work_item_id, blocker.state
+       FROM work_item_dependencies AS dependency
+       INNER JOIN work_items AS blocker ON blocker.id = dependency.blocker_work_item_id
+       WHERE dependency.blocked_work_item_id = ? AND blocker.state <> 'DONE'
+       ORDER BY dependency.blocker_work_item_id LIMIT ?`,
+    );
+    const insertWorkItemDependency = database.prepare(
+      `INSERT INTO work_item_dependencies (
+         schema_version, project_id, kind, blocker_work_item_id, blocked_work_item_id, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const deleteWorkItemDependency = database.prepare(
+      `DELETE FROM work_item_dependencies
+       WHERE blocker_work_item_id = ? AND blocked_work_item_id = ?`,
+    );
+    const updateWorkItemForDependencyChange = database.prepare(
+      `UPDATE work_items SET version = ?, updated_at = ? WHERE id = ? AND version = ?`,
+    );
     // Migration 0011. Named `WorkItemWorkspace`, not `Workspace`, throughout this file to keep it
     // apart from the pre-existing `workspaces` table (DEFAULT_WORKSPACE_ID above) -- an unrelated,
     // older multi-tenant concept that a Project points at, not the Git worktree a WorkItem is
@@ -4379,7 +4440,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     // concurrent writer's commit landing partway through cannot make one source describe a
     // different moment than another -- the recipe records a per-section sourceVersion, and a
     // torn read would make that provenance describe a pack that never existed.
-    const readContextSourcesSnapshot = (stageAttemptId: string, sessionOrdinal: number): ContextSources => {
+    const readContextSourcesSnapshot = (
+      stageAttemptId: string,
+      sessionOrdinal: number,
+    ): { sources: ContextSources; verificationPlan: VerificationPlan | null } => {
       let transactionStarted = false;
       try {
         database.exec("BEGIN");
@@ -4400,6 +4464,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             "The workflow state backing this StageAttempt is incomplete",
           );
         }
+        const latestVerificationPlan = readLatestVerificationPlan(workItem.projectId);
+        const verificationPlan = latestVerificationPlan?.status === "ACTIVE" ? latestVerificationPlan : null;
 
         const decisions = decisionRowSchema
           .array()
@@ -4721,6 +4787,22 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             attempt: stageAttempt.attempt,
             sessionOrdinal,
           },
+          projectVerificationPlan:
+            verificationPlan === null
+              ? null
+              : {
+                  id: verificationPlan.id,
+                  revision: verificationPlan.revision,
+                  status: "ACTIVE",
+                  recipes: verificationPlan.recipes.map((recipe) => ({
+                    id: recipe.id,
+                    kind: recipe.kind,
+                    label: recipe.label,
+                    required: recipe.required,
+                    timeoutSeconds: recipe.timeoutSeconds,
+                    networkPolicy: recipe.networkPolicy,
+                  })),
+                },
           projectConstitution,
           qaCorrection,
           decisions,
@@ -4734,7 +4816,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
         database.exec("COMMIT");
         transactionStarted = false;
-        return sources;
+        return { sources, verificationPlan };
       } catch (error: unknown) {
         if (transactionStarted) database.exec("ROLLBACK");
         if (error instanceof WorkflowDomainError || error instanceof StateStoreError) throw error;
@@ -5303,7 +5385,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     };
 
     const appendEvent = (
-      intent: WorkItemEventIntent,
+      intent: WorkItemEventIntent | WorkItemDependencyEventIntent,
       metadata: {
         aggregateId: string;
         projectId: string;
@@ -7795,16 +7877,23 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               "A passing Project verification rerun has incomplete correction lineage",
             );
           }
-          passedCorrection = decidePassedVerificationCorrectionTransition({
-            verificationRun: decision.run,
-            sourceVerificationRun,
-            sourceFailure,
-            correctionRun,
-            now: occurredAt,
-          });
-          persistUpdatedVerificationCorrectionRun(passedCorrection.correctionRun);
-          const resumesQACorrectionRunId = passedCorrection.correctionRun.resumesQACorrectionRunId ?? null;
-          if (resumesQACorrectionRunId !== null) {
+          if (correctionRun.status === "ACTIVE") {
+            passedCorrection = decidePassedVerificationCorrectionTransition({
+              verificationRun: decision.run,
+              sourceVerificationRun,
+              sourceFailure,
+              correctionRun,
+              now: occurredAt,
+            });
+            persistUpdatedVerificationCorrectionRun(passedCorrection.correctionRun);
+          } else if (correctionRun.status !== "PASSED") {
+            throw new VerificationCorrectionError(
+              "LINEAGE_MISMATCH",
+              "A passing Project verification revalidation has no current correction authority",
+            );
+          }
+          const resumesQACorrectionRunId = correctionRun.resumesQACorrectionRunId ?? null;
+          if (resumesQACorrectionRunId !== null && passedCorrection !== null) {
             const qaCorrectionRun = readQACorrectionRun(resumesQACorrectionRunId);
             const pipelineRun = readPipelineRun(decision.run.pipelineRunId);
             const workItem = readWorkItem(decision.run.workItemId);
@@ -8620,11 +8709,19 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           database
             .prepare("SELECT 1 AS present FROM work_items WHERE parent_id = ? LIMIT 1")
             .get(workItem.id) !== undefined;
+        const unsatisfiedDependencies = dependencyBlockerStateRowSchema
+          .array()
+          .parse(selectUnsatisfiedDependenciesForWorkItem.all(workItem.id, MAX_WORK_ITEM_BLOCKERS + 1))
+          .map((row) => ({
+            blockerWorkItemId: row.blocker_work_item_id,
+            state: workItemStateSchema.parse(row.state),
+          }));
         const decision = decideStartPipeline(command, {
           now: occurredAt,
           workItem,
           activeRun,
           hasChildren,
+          unsatisfiedDependencies,
           ids: {
             pipelineRunId: createId("pipelineRun"),
             stageAttemptId: createId("stageAttempt"),
@@ -10352,6 +10449,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         }
         const reviewReportValue =
           stageAttempt.stage === "REVIEW" ? selectReviewReportByStageAttempt.get(stageAttempt.id) : undefined;
+        const acceptancePackageRequestId = readAcceptancePackageForRun(run.id)?.humanRequestId ?? null;
         const decision = decideAnswerHumanRequest(command, {
           now: occurredAt,
           workItem,
@@ -10360,6 +10458,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           request,
           decisionId: createId("decision"),
           dispatchId: createId("workflowDispatch"),
+          acceptancePackageRequestId,
           nextStageAttemptId: createId("stageAttempt"),
           ...(reviewReportValue === undefined
             ? {}
@@ -12034,6 +12133,121 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "SET_WORK_ITEM_DEPENDENCIES") {
+        const target = readWorkItem(command.payload.workItemId) ?? undefined;
+        if (target === undefined) {
+          throw new WorkItemDependencyError(
+            "DEPENDENCY_TARGET_NOT_FOUND",
+            "The blocked WorkItem does not exist",
+          );
+        }
+        const projectId = target.projectId;
+        if (!readProject(projectId)) {
+          throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+
+        const projectRows = workItemRowSchema
+          .array()
+          .parse(
+            selectProjectWorkItemsForDependencyValidation.all(projectId, MAX_DEPENDENCY_GRAPH_WORK_ITEMS + 1),
+          );
+        if (projectRows.length > MAX_DEPENDENCY_GRAPH_WORK_ITEMS) {
+          throw new WorkItemDependencyError(
+            "DEPENDENCY_GRAPH_LIMIT",
+            "The Project dependency graph is too large to validate safely",
+            { workItems: projectRows.length },
+          );
+        }
+        const projectWorkItems = projectRows.map((row) => {
+          const workItem = readWorkItem(row.id);
+          if (workItem === null) {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "A dependency graph WorkItem could not be reloaded",
+            );
+          }
+          return workItem;
+        });
+        const projectWorkItemIds = new Set(projectWorkItems.map(({ id }) => id));
+        for (const blockerWorkItemId of command.payload.blockerWorkItemIds) {
+          if (projectWorkItemIds.has(blockerWorkItemId)) continue;
+          const blocker = readWorkItem(blockerWorkItemId);
+          if (blocker !== null) projectWorkItems.push(blocker);
+        }
+
+        const dependencyRows = selectProjectWorkItemDependencies.all(
+          projectId,
+          MAX_DEPENDENCY_GRAPH_EDGES + 1,
+        );
+        if (dependencyRows.length > MAX_DEPENDENCY_GRAPH_EDGES) {
+          throw new WorkItemDependencyError(
+            "DEPENDENCY_GRAPH_LIMIT",
+            "The Project dependency graph is too large to validate safely",
+            { dependencies: dependencyRows.length },
+          );
+        }
+        const dependencies = dependencyRows.map(workItemDependencyFromRow);
+        const decision = decideSetWorkItemDependencies(command, {
+          now: occurredAt,
+          target,
+          projectWorkItems,
+          dependencies,
+          hasActiveWorkflow: selectActivePipelineRun.get(target.id) !== undefined,
+        });
+
+        const updated = updateWorkItemForDependencyChange.run(
+          decision.blockedWorkItem.version,
+          decision.blockedWorkItem.updatedAt,
+          decision.blockedWorkItem.id,
+          decision.blockedWorkItem.version - 1,
+        );
+        if (updated.changes !== 1) {
+          throw new WorkItemDependencyError(
+            "DEPENDENCY_VERSION_CONFLICT",
+            "The blocked WorkItem changed while dependencies were being applied",
+          );
+        }
+        for (const blockerWorkItemId of decision.removedBlockerWorkItemIds) {
+          const removed = deleteWorkItemDependency.run(blockerWorkItemId, target.id);
+          if (removed.changes !== 1) {
+            throw new StateStoreError("PERSISTENCE_FAILURE", "A removed WorkItem dependency was not current");
+          }
+        }
+        const incomingByBlocker = new Map(
+          decision.dependencies.map((dependency) => [dependency.blockerWorkItemId, dependency]),
+        );
+        for (const blockerWorkItemId of decision.addedBlockerWorkItemIds) {
+          const dependency = incomingByBlocker.get(blockerWorkItemId);
+          if (dependency === undefined) {
+            throw new StateStoreError("PERSISTENCE_FAILURE", "An added WorkItem dependency was not decided");
+          }
+          insertWorkItemDependency.run(
+            dependency.schemaVersion,
+            dependency.projectId,
+            dependency.kind,
+            dependency.blockerWorkItemId,
+            dependency.blockedWorkItemId,
+            dependency.createdAt,
+          );
+        }
+        const event = appendEvent(decision.event, {
+          aggregateId: target.id,
+          projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "WORK_ITEM_DEPENDENCIES_SET",
+          replayed: false,
+          blockedWorkItemId: target.id,
+          workItemVersion: decision.blockedWorkItem.version,
+          dependencies: decision.dependencies,
+          event,
+        });
+      }
+
       const projectId =
         command.type === "CREATE_WORK_ITEM"
           ? command.payload.projectId
@@ -12180,6 +12394,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           error instanceof QAReservationError ||
           error instanceof ReviewFindingDispositionError ||
           error instanceof ScaffoldDomainError ||
+          error instanceof WorkItemDependencyError ||
           error instanceof WorkItemDomainError ||
           error instanceof WorkflowDomainError ||
           error instanceof StateStoreError
@@ -12486,6 +12701,27 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           };
         case "GET_WORK_ITEM":
           return { type: "WORK_ITEM", workItem: readWorkItem(queryValue.workItemId) };
+        case "LIST_WORK_ITEM_DEPENDENCIES": {
+          if (!readProject(queryValue.projectId)) {
+            throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
+          }
+          const rows = selectProjectWorkItemDependencies.all(
+            queryValue.projectId,
+            MAX_DEPENDENCY_GRAPH_EDGES + 1,
+          );
+          if (rows.length > MAX_DEPENDENCY_GRAPH_EDGES) {
+            throw new WorkItemDependencyError(
+              "DEPENDENCY_GRAPH_LIMIT",
+              "The Project dependency graph is too large to read safely",
+              { dependencies: rows.length },
+            );
+          }
+          return {
+            type: "WORK_ITEM_DEPENDENCIES",
+            projectId: queryValue.projectId,
+            dependencies: rows.map(workItemDependencyFromRow),
+          };
+        }
         case "GET_WORKFLOW_SNAPSHOT":
           return { type: "WORKFLOW_SNAPSHOT", snapshot: readWorkflowSnapshot(queryValue.workItemId) };
         case "GET_ATTENTION_INBOX": {
@@ -12721,7 +12957,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         case "READ_CONTEXT_SOURCES":
           return {
             type: "CONTEXT_SOURCES",
-            sources: readContextSourcesSnapshot(queryValue.stageAttemptId, queryValue.sessionOrdinal),
+            ...readContextSourcesSnapshot(queryValue.stageAttemptId, queryValue.sessionOrdinal),
           };
         // The nesting spec §D5 introduces, read back in one place: the attempt's sessions in
         // ordinal order, the recipe each one was assembled from, and every checkpoint published
@@ -12779,6 +13015,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         if (
           error instanceof ReadinessDomainError ||
           error instanceof VerificationDomainError ||
+          error instanceof WorkItemDependencyError ||
           error instanceof WorkItemDomainError ||
           error instanceof WorkflowDomainError ||
           error instanceof StateStoreError

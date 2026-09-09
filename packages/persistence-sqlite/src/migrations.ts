@@ -277,6 +277,16 @@ const migrations: readonly Migration[] = [
     name: "workspace_tool_calls",
     filename: "0055_workspace_tool_calls.sql",
   },
+  {
+    version: 56,
+    name: "work_item_dependencies",
+    filename: "0056_work_item_dependencies.sql",
+  },
+  {
+    version: 57,
+    name: "workspace_tool_exact_edit",
+    filename: "0057_workspace_tool_exact_edit.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.
