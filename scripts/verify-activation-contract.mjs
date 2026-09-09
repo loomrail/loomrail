@@ -9,6 +9,16 @@ const documentationPaths = [
   "docs/guides/GETTING-STARTED.md",
   "docs/guides/GETTING-STARTED.ru.md",
 ];
+const activeReleaseDocumentationPaths = ["docs/RELEASE.md", "docs/releases/0.1.0-alpha.5.md"];
+const legacyProviderCopy = [
+  "setup --mode mock",
+  "guided Mock",
+  "choose **Mock**",
+  "Mock is the only admitted route",
+  "READY Mock",
+  "zero-write Mock/Live",
+  "Auto uses Mock",
+];
 const installCommands = [
   "mkdir loomrail-evaluation",
   "cd loomrail-evaluation",
@@ -189,6 +199,16 @@ export const verifyActivationContract = async (root = repositoryRoot) => {
     );
   }
 
+  for (const path of activeReleaseDocumentationPaths) {
+    const contents = await readFile(resolve(root, path), "utf8");
+    for (const obsolete of legacyProviderCopy) {
+      assert(
+        !contents.includes(obsolete),
+        `${path} retains superseded production provider copy: ${obsolete}`,
+      );
+    }
+  }
+
   const cliHelpSource = await readFile(resolve(root, "apps/cli/src/doctor.ts"), "utf8");
   assert(
     cliHelpSource.includes('import { guidedActivationContract } from "@loomrail/contracts";') &&
@@ -232,7 +252,7 @@ export const verifyActivationContract = async (root = repositoryRoot) => {
     activationGate >= 0 && repositoryGate > activationGate,
     "the named activation gate must run before repository-wide verification",
   );
-  return { contract, documentationPaths };
+  return { contract, documentationPaths, activeReleaseDocumentationPaths };
 };
 
 const directInvocation =
@@ -240,6 +260,6 @@ const directInvocation =
 if (directInvocation) {
   const result = await verifyActivationContract();
   process.stdout.write(
-    `Guided activation contract verified across CLI help, protected landing, ${result.documentationPaths.length.toString()} documentation surfaces and the Q10 recipe.\n`,
+    `Guided activation contract verified across CLI help, protected landing, ${result.documentationPaths.length.toString()} activation surfaces, ${result.activeReleaseDocumentationPaths.length.toString()} active release surfaces and the Q10 recipe.\n`,
   );
 }
