@@ -6,6 +6,7 @@ import {
   eventsResponseSchema,
   humanRequestsResponseSchema,
   insightsResponseSchema,
+  launchMeasurementProjectResponseSchema,
   mcpProfileProposalSchema,
   mcpProfilesResponseSchema,
   projectsResponseSchema,
@@ -49,6 +50,9 @@ import {
   type ConstitutionProposal,
   type ConstitutionPublication,
   type ListedProject,
+  type LaunchMeasurementPlanConfiguration,
+  type LaunchMeasurementProjectResponse,
+  type LaunchMeasurementRun,
   type ProjectReadinessRun,
   type ProjectWorkspaceStrategySelection,
   type QADefect,
@@ -312,6 +316,87 @@ export const disableVerificationPlan = async (settings: VerificationPlanSettings
     },
   );
 };
+
+export const getLaunchMeasurement = async (projectId: string): Promise<LaunchMeasurementProjectResponse> =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/launch-measurement`,
+    launchMeasurementProjectResponseSchema,
+  );
+
+export const adoptLaunchMeasurementPlan = async (input: {
+  configuration: LaunchMeasurementPlanConfiguration;
+  snapshot: LaunchMeasurementProjectResponse;
+}): Promise<LaunchMeasurementProjectResponse> =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(input.snapshot.projectId)}/launch-measurement/plan`,
+    launchMeasurementProjectResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: input.snapshot.projectVersion,
+        configuration: input.configuration,
+      }),
+    },
+  );
+
+export const disableLaunchMeasurementPlan = async (input: {
+  snapshot: LaunchMeasurementProjectResponse;
+}): Promise<LaunchMeasurementProjectResponse> => {
+  if (input.snapshot.plan === null) throw new Error("An active launch measurement Plan is required");
+  return requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(input.snapshot.projectId)}/launch-measurement/plan/disable`,
+    launchMeasurementProjectResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: input.snapshot.projectVersion,
+        expectedPlanRevision: input.snapshot.plan.revision,
+        expectedPlanContentHash: input.snapshot.plan.contentHash,
+      }),
+    },
+  );
+};
+
+export const startLaunchMeasurement = async (input: {
+  projectId: string;
+  snapshot: LaunchMeasurementProjectResponse;
+}): Promise<LaunchMeasurementProjectResponse> => {
+  if (input.snapshot.plan === null) throw new Error("An active launch measurement Plan is required");
+  return requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(input.projectId)}/launch-measurement/runs`,
+    launchMeasurementProjectResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedPlanRevision: input.snapshot.plan.revision,
+        expectedPlanContentHash: input.snapshot.plan.contentHash,
+      }),
+    },
+  );
+};
+
+export const cancelLaunchMeasurement = async (input: {
+  projectId: string;
+  run: LaunchMeasurementRun;
+}): Promise<LaunchMeasurementProjectResponse> =>
+  requestLocalApi(
+    `/api/v1/launch-measurement-runs/${encodeURIComponent(input.run.id)}/cancel`,
+    launchMeasurementProjectResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedVersion: input.run.version,
+      }),
+    },
+  );
 
 export const retryVerificationPlanPublication = async (
   projectId: string,

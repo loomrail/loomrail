@@ -32,6 +32,7 @@ import {
 import { BrandMark } from "../components/BrandMark";
 import { PanelResizer } from "../components/PanelResizer";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
+import { LaunchMeasurementPanel } from "../components/LaunchMeasurementPanel";
 import { McpSettingsPanel } from "../components/McpSettingsPanel";
 import { ProjectScaffoldPanel } from "../components/ProjectScaffoldPanel";
 import { ProjectWorkspaceStrategyPanel } from "../components/ProjectWorkspaceStrategyPanel";
@@ -1110,6 +1111,7 @@ const SettingsDialog = ({ onOpenChange, open }: SettingsDialogProps): React.JSX.
           {selectedProject === null ? null : <McpSettingsPanel project={selectedProject} />}
           {selectedProject === null ? null : <ProjectConstitutionPanel project={selectedProject} />}
           {selectedProject === null ? null : <VerificationPlanSettingsPanel project={selectedProject} />}
+          {selectedProject === null ? null : <LaunchMeasurementPanel project={selectedProject} />}
           {selectedProject === null ? null : <ProjectReadinessPanel project={selectedProject} />}
         </section>
       </div>

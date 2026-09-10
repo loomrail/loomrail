@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { lstat, open, realpath } from "node:fs/promises";
+import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, normalize, relative, sep } from "node:path";
 
 import {
+  MAX_VERIFICATION_RECIPES,
+  verificationRecipeCwdSchema,
   verificationPlanProposalSchema,
   type VerificationExecutable,
   type VerificationPlanProposal,
@@ -24,6 +26,7 @@ const TARGET_PATH = ".loomrail/verification-plan.json";
 const MAX_TARGET_BYTES = 512 * 1024;
 const DEFAULT_RECIPE_TIMEOUT_SECONDS = 300;
 const DEFAULT_E2E_TIMEOUT_SECONDS = 900;
+const MAX_WORKSPACE_APP_ENTRIES = 32;
 
 const supportedScripts: readonly {
   name: VerificationScriptName;
@@ -42,6 +45,10 @@ const supportedScripts: readonly {
     label: "Integration tests",
   },
   { name: "test:e2e", id: "package-test-e2e", kind: "E2E", label: "End-to-end tests" },
+  { name: "audit", id: "package-audit", kind: "AUDIT", label: "Dependency audit" },
+  { name: "start", id: "package-start", kind: "SERVE", label: "Start service" },
+  { name: "dev", id: "package-dev", kind: "SERVE", label: "Development service" },
+  { name: "preview", id: "package-preview", kind: "SERVE", label: "Preview service" },
 ];
 
 const sha256 = (value: string | Uint8Array): string => createHash("sha256").update(value).digest("hex");
@@ -221,15 +228,16 @@ const recipeFor = (
   body: string,
   executable: VerificationExecutable,
   manifestContentHash: string,
+  cwd = ".",
 ): VerificationRecipe => ({
   schemaVersion: 1,
-  id: definition.id,
+  id: cwd === "." ? definition.id : `workspace-${sha256(cwd).slice(0, 16)}-${definition.id}`,
   kind: definition.kind,
-  label: definition.label,
-  required: true,
+  label: cwd === "." ? definition.label : `${definition.label} · ${cwd}`,
+  required: definition.kind !== "SERVE",
   executable,
   argv: ["run", definition.name],
-  cwd: ".",
+  cwd,
   timeoutSeconds: definition.kind === "E2E" ? DEFAULT_E2E_TIMEOUT_SECONDS : DEFAULT_RECIPE_TIMEOUT_SECONDS,
   outputLimitBytes: 262_144,
   environmentProfile: "VERIFICATION_BASELINE",
@@ -242,6 +250,127 @@ const recipeFor = (
     scriptBodyPreview: body,
   },
 });
+
+const workspaceServiceRecipes = async (input: {
+  canonicalRoot: string;
+  executable: VerificationExecutable;
+  availableSlots: number;
+}): Promise<{
+  recipes: VerificationRecipe[];
+  warnings: VerificationProposalWarning[];
+}> => {
+  if (input.availableSlots <= 0) return { recipes: [], warnings: [] };
+  const appsPath = join(input.canonicalRoot, "apps");
+  let entries: import("node:fs").Dirent<string>[];
+  try {
+    const metadata = await lstat(appsPath);
+    const canonicalApps = await realpath(appsPath);
+    if (metadata.isSymbolicLink() || !metadata.isDirectory() || !samePath(canonicalApps, appsPath)) {
+      return {
+        recipes: [],
+        warnings: [
+          warning("SCRIPT_UNSAFE", "The conventional apps directory is not a regular directory.", null),
+        ],
+      };
+    }
+    entries = await readdir(canonicalApps, { withFileTypes: true });
+  } catch (error: unknown) {
+    return errorCode(error) === "ENOENT"
+      ? { recipes: [], warnings: [] }
+      : {
+          recipes: [],
+          warnings: [
+            warning("SCRIPT_UNSAFE", "The conventional apps directory could not be read safely.", null),
+          ],
+        };
+  }
+  if (entries.length > MAX_WORKSPACE_APP_ENTRIES) {
+    return {
+      recipes: [],
+      warnings: [
+        warning(
+          "SCRIPT_LIMIT_REACHED",
+          `The apps directory has more than ${MAX_WORKSPACE_APP_ENTRIES.toString()} entries; no workspace service was proposed.`,
+          null,
+        ),
+      ],
+    };
+  }
+
+  const recipes: VerificationRecipe[] = [];
+  const warnings: VerificationProposalWarning[] = [];
+  const serviceDefinitions = supportedScripts.filter(({ kind }) => kind === "SERVE");
+  const sortedEntries = [...entries].sort(({ name: left }, { name: right }) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  for (const entry of sortedEntries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const cwd = `apps/${entry.name}`;
+    if (!verificationRecipeCwdSchema.safeParse(cwd).success) {
+      warnings.push(warning("SCRIPT_UNSAFE", "An app directory name is not portable.", null));
+      continue;
+    }
+    const appPath = join(input.canonicalRoot, cwd);
+    const metadata = await lstat(appPath).catch(() => null);
+    const canonicalApp = await realpath(appPath).catch(() => null);
+    if (
+      metadata === null ||
+      metadata.isSymbolicLink() ||
+      !metadata.isDirectory() ||
+      canonicalApp === null ||
+      !samePath(canonicalApp, appPath)
+    ) {
+      warnings.push(warning("SCRIPT_UNSAFE", "An app workspace could not be inspected safely.", null));
+      continue;
+    }
+    const manifest = await readManifest(canonicalApp);
+    if (manifest.state !== "PRESENT") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(manifest.text);
+    } catch {
+      warnings.push(warning("MANIFEST_INVALID", "An app package.json is not valid JSON.", null));
+      continue;
+    }
+    if (!isRecord(parsed) || !isRecord(parsed["scripts"])) continue;
+    const scripts = parsed["scripts"];
+    if (Object.keys(scripts).length > MAX_SCRIPT_ENTRIES) {
+      warnings.push(
+        warning("SCRIPT_LIMIT_REACHED", "An app package.json exceeds the script-entry limit.", null),
+      );
+      continue;
+    }
+    const manifestContentHash = sha256(manifest.bytes);
+    for (const definition of serviceDefinitions) {
+      const body = scripts[definition.name];
+      if (typeof body !== "string") continue;
+      if (
+        typeof scripts[`pre${definition.name}`] === "string" ||
+        typeof scripts[`post${definition.name}`] === "string" ||
+        body.trim().length === 0 ||
+        body.includes("\u0000") ||
+        body.length > MAX_SCRIPT_BODY_CHARACTERS
+      ) {
+        warnings.push(
+          warning(
+            "SCRIPT_UNSAFE",
+            `The ${definition.name} script in an app workspace cannot be represented safely.`,
+            null,
+          ),
+        );
+        continue;
+      }
+      if (recipes.length >= input.availableSlots) {
+        warnings.push(
+          warning("SCRIPT_LIMIT_REACHED", "Additional app service recipes exceeded the Plan cap.", null),
+        );
+        return { recipes, warnings };
+      }
+      recipes.push(recipeFor(definition, body, input.executable, manifestContentHash, cwd));
+    }
+  }
+  return { recipes, warnings };
+};
 
 export const scanVerificationPlanProposal = async (input: {
   projectId: string;
@@ -330,6 +459,13 @@ export const scanVerificationPlanProposal = async (input: {
     }
     recipes.push(recipeFor(definition, body, executable, manifestContentHash));
   }
+  const workspaceServices = await workspaceServiceRecipes({
+    canonicalRoot,
+    executable,
+    availableSlots: MAX_VERIFICATION_RECIPES - recipes.length,
+  });
+  recipes.push(...workspaceServices.recipes);
+  warnings.push(...workspaceServices.warnings);
   if (recipes.length === 0) {
     warnings.push(
       warning("NO_SUPPORTED_SCRIPTS", "No supported package script is available for owner adoption."),
@@ -384,8 +520,21 @@ export const verificationRecipeAuthorityIsCurrent = async (input: {
       recipe.provenance.scriptBodyPreview === ["node", ...recipe.argv].join(" ")
     );
   }
+  let executableManifest = parsed;
+  if (recipe.cwd !== ".") {
+    const rootManifest = await readManifest(input.canonicalWorktree);
+    if (rootManifest.state !== "PRESENT") return false;
+    let rootParsed: unknown;
+    try {
+      rootParsed = JSON.parse(rootManifest.text);
+    } catch {
+      return false;
+    }
+    if (!isRecord(rootParsed)) return false;
+    executableManifest = rootParsed;
+  }
   return (
-    packageManagerFor(parsed) === recipe.executable &&
+    packageManagerFor(executableManifest) === recipe.executable &&
     recipe.argv.length === 2 &&
     recipe.argv[0] === "run" &&
     recipe.argv[1] === scriptName

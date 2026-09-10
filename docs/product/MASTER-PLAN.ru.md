@@ -2,12 +2,12 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-10 — accepted private Recurkit Epic and safe Verification Plan context
+**Последнее дополнение:** 2026-09-10 — L2 owner-approved local launch measurements and Recurkit dogfood
 
 **Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
 локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood,
-public fixture и private Recurkit Epic прошли до owner Acceptance; Windows live-provider evidence и stable publish
-gates остаются pending
+public fixture и private Recurkit Epic прошли до owner Acceptance; L2 local launch measurements реализованы и честно
+выявили target-level gaps Recurkit; Windows live-provider/lifecycle evidence и stable publish gates остаются pending
 
 **Продукт:** Loomrail
 
@@ -1723,7 +1723,18 @@ e2e-сценарий (1/1). `pnpm format:check` красен только на �
 репозитория покрывает обе блокирующие платформы, и это остаётся открытым пунктом до отдельного прогона на
 Windows. Точные числа, команды и их вывод — в
 [`83-l1-readiness-v2-implementation-plan.ru.md`](../plans/83-l1-readiness-v2-implementation-plan.ru.md), раздел
-«Результат реализации». L2–L5 не начаты.
+«Результат реализации».
+
+**Implementation checkpoint 2026-09-10:** L2 реализован на macOS по PD-028, ADR-0027 и планам 110–111. Owner
+принимает immutable plan, связанный с exact Verification Plan, одним `SERVE`, optional `AUDIT`, loopback target и
+явными budgets. Daemon запускает exact recipe через scrubbed supervised boundary, собирает шесть bounded typed gate
+results и освобождает authority только после доказанного `STOPPED`; неопределённая остановка остаётся active
+`BLOCKED`, а restart не replay-ит spawn. Bounded monorepo discovery допускает только direct regular
+`apps/<portable-name>/package.json`, closed `start | dev | preview` и общий cap 12. Production-shaped Recurkit run
+опубликовал 11 recipes, поднял dashboard, измерил current tree и остановил process tree; два gate прошли, один честно
+failed из-за отсутствующего `Permissions-Policy`, три потребовали явных входов/полных samples. Это подтверждает
+механизм, но не объявляет Recurkit production-ready. L3–L5 и Windows lifecycle evidence не начаты; sanitized result —
+в [`L2-LOCAL-LAUNCH-MEASUREMENT-EVIDENCE.md`](../evidence/phase-8/L2-LOCAL-LAUNCH-MEASUREMENT-EVIDENCE.md).
 
 ## 22. Dogfood Alpha acceptance contract
 

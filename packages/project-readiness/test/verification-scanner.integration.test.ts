@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -62,6 +62,88 @@ describe("verification plan scanner", () => {
     expect(JSON.stringify(first)).not.toContain("preinstall");
     expect(JSON.stringify(first)).not.toContain("publish-everything");
     await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("proposes bounded service recipes from direct conventional app manifests", async () => {
+    const repositoryPath = await makeRoot("monorepo with spaces-ёж");
+    await writeFile(
+      join(repositoryPath, "package.json"),
+      JSON.stringify({ packageManager: "pnpm@11.10.0", scripts: { test: "pnpm -r test" } }),
+    );
+    const appCwd = "apps/панель with spaces";
+    await mkdir(join(repositoryPath, appCwd), { recursive: true });
+    await writeFile(
+      join(repositoryPath, appCwd, "package.json"),
+      JSON.stringify({
+        scripts: {
+          start: "next start -p 4001",
+          predev: "node hidden-hook.js",
+          dev: "next dev -p 4001",
+          deploy: "must-not-be-proposed",
+        },
+      }),
+    );
+
+    const proposal = await scanVerificationPlanProposal({ projectId: "project-1", repositoryPath });
+
+    expect(proposal.recipes).toHaveLength(2);
+    expect(proposal.recipes[1]).toMatchObject({
+      kind: "SERVE",
+      label: "Start service · apps/панель with spaces",
+      required: false,
+      executable: "pnpm",
+      argv: ["run", "start"],
+      cwd: appCwd,
+      provenance: {
+        manifestPath: "package.json",
+        scriptName: "start",
+        scriptBodyPreview: "next start -p 4001",
+      },
+    });
+    expect(proposal.recipes[1]?.id).toMatch(/^workspace-[a-f0-9]{16}-package-start$/u);
+    expect(JSON.stringify(proposal)).not.toContain("must-not-be-proposed");
+    expect(proposal.warnings).toContainEqual(expect.objectContaining({ code: "SCRIPT_UNSAFE" }));
+  });
+
+  it("does not follow an app symlink or scan an unbounded conventional directory", async () => {
+    const repositoryPath = await makeRoot("bounded-monorepo");
+    const outside = await makeRoot("outside-app");
+    await writeFile(
+      join(repositoryPath, "package.json"),
+      JSON.stringify({ packageManager: "pnpm@11.10.0", scripts: { test: "pnpm -r test" } }),
+    );
+    await writeFile(
+      join(outside, "package.json"),
+      JSON.stringify({ scripts: { start: "SECRET_OUTSIDE_SERVICE_CANARY" } }),
+    );
+    await mkdir(join(repositoryPath, "apps"));
+    await symlink(
+      outside,
+      join(repositoryPath, "apps", "escaped"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const symlinkProposal = await scanVerificationPlanProposal({
+      projectId: "project-1",
+      repositoryPath,
+    });
+    expect(symlinkProposal.recipes).toHaveLength(1);
+    expect(JSON.stringify(symlinkProposal)).not.toContain("SECRET_OUTSIDE_SERVICE_CANARY");
+
+    await rm(join(repositoryPath, "apps", "escaped"));
+    await Promise.all(
+      Array.from({ length: 33 }, (_, index) =>
+        mkdir(join(repositoryPath, "apps", `app-${index.toString().padStart(2, "0")}`)),
+      ),
+    );
+    const boundedProposal = await scanVerificationPlanProposal({
+      projectId: "project-1",
+      repositoryPath,
+    });
+    expect(boundedProposal.recipes).toHaveLength(1);
+    expect(boundedProposal.warnings).toContainEqual(
+      expect.objectContaining({ code: "SCRIPT_LIMIT_REACHED" }),
+    );
   });
 
   it("returns warning-only inert proposals for a symlink, oversized file, and invalid JSON", async () => {

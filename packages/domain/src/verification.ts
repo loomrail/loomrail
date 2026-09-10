@@ -587,6 +587,13 @@ export const decideVerificationRunReservation = (
       "The verification Plan changed after it was loaded",
     );
   }
+  const finiteRecipes = plan.recipes.filter((recipe) => recipe.kind !== "SERVE");
+  if (finiteRecipes.length === 0) {
+    throw new VerificationDomainError(
+      "PLAN_UNAVAILABLE",
+      "Verification needs at least one finite recipe; SERVE is reserved for supervised launch measurement",
+    );
+  }
   const retryOfRun = command.type === "RETRY_VERIFICATION_RUN" ? context.retryOfRun : undefined;
   if (
     command.type === "RETRY_VERIFICATION_RUN" &&
@@ -599,7 +606,7 @@ export const decideVerificationRunReservation = (
   ) {
     throw new VerificationDomainError("RETRY_RUN_INVALID", "Only a terminal Run can be retried");
   }
-  if (context.newCheckIds.length !== plan.recipes.length) {
+  if (context.newCheckIds.length !== finiteRecipes.length) {
     throw new VerificationDomainError(
       "CHECK_RUN_MISMATCH",
       "Every recorded recipe needs exactly one verification Check identity",
@@ -629,7 +636,7 @@ export const decideVerificationRunReservation = (
     createdAt: context.now,
     version: 1,
   };
-  const checks = plan.recipes.map((recipe, index): VerificationCheck => ({
+  const checks = finiteRecipes.map((recipe, index): VerificationCheck => ({
     schemaVersion: 1,
     id: context.newCheckIds[index] ?? "",
     projectId: project.id,

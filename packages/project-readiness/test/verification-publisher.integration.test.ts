@@ -105,6 +105,30 @@ describe("verification plan publisher", () => {
     });
   });
 
+  it("publishes a monorepo service recipe using the root package manager authority", async () => {
+    const repositoryPath = await makeRepository("monorepo-service");
+    await mkdir(join(repositoryPath, "apps", "панель with spaces"), { recursive: true });
+    await writeFile(
+      join(repositoryPath, "apps", "панель with spaces", "package.json"),
+      JSON.stringify({ scripts: { start: "next start -p 4001" } }),
+    );
+    const proposal = await scanVerificationPlanProposal({ projectId: "project-1", repositoryPath });
+    const plan = planFrom(proposal);
+
+    await publishVerificationPlan({
+      repositoryPath,
+      expectedTargetDigest: proposal.target.digest,
+      plan,
+    });
+
+    const published = JSON.parse(
+      await readFile(join(repositoryPath, ".loomrail", "verification-plan.json"), "utf8"),
+    ) as VerificationPlan;
+    expect(published.recipes).toContainEqual(
+      expect.objectContaining({ kind: "SERVE", cwd: "apps/панель with spaces", executable: "pnpm" }),
+    );
+  });
+
   it("refuses publication when package.json changed after owner preview", async () => {
     const repositoryPath = await makeRepository("manifest-drift");
     const proposal = await scanVerificationPlanProposal({ projectId: "project-1", repositoryPath });

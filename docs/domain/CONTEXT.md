@@ -283,6 +283,25 @@ _Не означает_: содержимое секрета, полный secur
 Неизменяемое versioned решение владельца `Confirmed` либо обоснованное `Not applicable` для owner check.
 _Не означает_: автоматический вывод сканера, юридическую консультацию или канал передачи секретов.
 
+**Verification Plan**:
+Неизменяемая owner-approved ревизия закрытого набора Project recipes, разрешённых для локальной проверки точного
+repository state.
+_Не означает_: provider-authored command, произвольную shell-строку или право install/deploy/push/merge.
+
+**Launch Measurement Plan**:
+Активная owner-approved ревизия локальных launch-gates, связанная с exact Verification Plan и выбирающая один
+`SERVE`, optional `AUDIT`, loopback target и измеримые budgets.
+_Не означает_: deployment plan, production URL, provider permission или бессрочное readiness-доказательство.
+
+**Launch Measurement Run**:
+Append-only попытка поднять exact approved local service, измерить шесть launch-gates на одном repository tree и
+доказанно остановить его process tree.
+_Не означает_: Verification Run, QARun, provider session или synthetic release verdict.
+
+**Launch Gate**:
+Один domain-owned verdict `PASSED | FAILED | ACTION_REQUIRED` над bounded measurement evidence и exact plan/tree.
+_Не означает_: provider opinion, общий production-safety promise или разрешение обойти Acceptance.
+
 ## Project scaffolding
 
 **Scaffold Recipe**:

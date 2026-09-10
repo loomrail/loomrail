@@ -168,6 +168,7 @@ const verificationKindOrder: readonly VerificationRecipe["kind"][] = [
   "E2E",
   "BUILD",
   "LINT",
+  "AUDIT",
   "CUSTOM",
 ];
 

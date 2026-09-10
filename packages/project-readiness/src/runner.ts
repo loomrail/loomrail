@@ -40,6 +40,54 @@ export type ExecuteVerificationRecipeInput = {
   };
 };
 
+export type VerificationServiceErrorCode =
+  | "TREE_UNAVAILABLE"
+  | "TREE_MUTATED"
+  | "RECIPE_NOT_APPROVED"
+  | "SERVICE_SPAWN_FAILED"
+  | "SERVICE_EXITED"
+  | "SERVICE_TIMEOUT"
+  | "SERVICE_OUTPUT_LIMIT"
+  | "SERVICE_TERMINATION_FAILED";
+
+export type VerificationServiceTerminal = {
+  state: "STOPPED" | "EXITED" | "ERROR";
+  errorCode: VerificationServiceErrorCode | null;
+  beforeTree: string;
+  afterTree: string | null;
+  processStopped: boolean;
+  durationMs: number;
+  capturedOutputBytes: number;
+  outputTruncated: boolean;
+};
+
+export type VerificationServiceStart =
+  | {
+      state: "ERROR";
+      errorCode: VerificationServiceErrorCode;
+      beforeTree: string | null;
+      afterTree: string | null;
+    }
+  | {
+      state: "STARTED";
+      beforeTree: string;
+      stop: () => void;
+      completion: Promise<VerificationServiceTerminal>;
+    };
+
+export type StartVerificationServiceInput = {
+  recipe: VerificationRecipe;
+  worktreePath: string;
+  expectedTree: string;
+  systemEnvironment?: EnvironmentSource;
+  platform?: VerificationPlatform;
+  processGuard: {
+    runId: string;
+    registryDirectory: string;
+    supervisorEntrypoint?: string;
+  };
+};
+
 const samePath = (left: string, right: string, platform: VerificationPlatform): boolean => {
   const normalizedLeft = normalize(left);
   const normalizedRight = normalize(right);
@@ -604,5 +652,161 @@ export const executeVerificationRecipe = async (
     };
   } finally {
     await rm(isolatedHome, { recursive: true, force: true });
+  }
+};
+
+/**
+ * Starts one owner-approved long-running recipe behind the same workspace, executable, environment,
+ * output and process-tree guards as finite verification. The caller gets only a stop handle and a
+ * typed terminal projection; service output never crosses this interface or reaches persistence.
+ */
+export const startVerificationService = async (
+  input: StartVerificationServiceInput,
+): Promise<VerificationServiceStart> => {
+  const platform = input.platform ?? supportedPlatform(process.platform);
+  let canonicalWorktree: string;
+  let beforeTree: string;
+  try {
+    canonicalWorktree = await realpath(input.worktreePath);
+    beforeTree = await treeOfWorktree({ worktreePath: canonicalWorktree });
+  } catch {
+    return { state: "ERROR", errorCode: "TREE_UNAVAILABLE", beforeTree: null, afterTree: null };
+  }
+  if (beforeTree !== input.expectedTree) {
+    return { state: "ERROR", errorCode: "TREE_MUTATED", beforeTree, afterTree: beforeTree };
+  }
+  if (input.recipe.kind !== "SERVE" || input.recipe.required) {
+    return { state: "ERROR", errorCode: "RECIPE_NOT_APPROVED", beforeTree, afterTree: beforeTree };
+  }
+  if (input.recipe.networkPolicy === "DENIED_UNAVAILABLE") {
+    return { state: "ERROR", errorCode: "RECIPE_NOT_APPROVED", beforeTree, afterTree: beforeTree };
+  }
+  const requestedCwd =
+    input.recipe.cwd === "." ? canonicalWorktree : join(canonicalWorktree, input.recipe.cwd);
+  const canonicalCwd = await realpath(requestedCwd).catch(() => null);
+  if (canonicalCwd === null || !inside(canonicalWorktree, canonicalCwd, platform)) {
+    return { state: "ERROR", errorCode: "RECIPE_NOT_APPROVED", beforeTree, afterTree: beforeTree };
+  }
+  if (
+    !(await verificationRecipeAuthorityIsCurrent({
+      canonicalCwd,
+      canonicalWorktree,
+      recipe: input.recipe,
+    }))
+  ) {
+    return { state: "ERROR", errorCode: "RECIPE_NOT_APPROVED", beforeTree, afterTree: beforeTree };
+  }
+
+  const isolatedHome = await mkdtemp(join(tmpdir(), "loomrail-launch-service-"));
+  try {
+    await Promise.all([
+      mkdir(join(isolatedHome, "cache"), { recursive: true }),
+      mkdir(join(isolatedHome, "npm-cache"), { recursive: true }),
+      mkdir(join(isolatedHome, "corepack"), { recursive: true }),
+      mkdir(join(isolatedHome, "tmp"), { recursive: true }),
+    ]);
+    const source = input.systemEnvironment ?? process.env;
+    const runtimeDirectories = baselineRuntimeDirectories(platform, source);
+    const directories = await executableSearchDirectories({
+      canonicalWorktree,
+      platform,
+      runtimeDirectories,
+      source,
+    });
+    const invocation =
+      platform === "win32"
+        ? input.recipe.executable === "node"
+          ? { command: process.execPath, args: input.recipe.argv, runtimePath: runtimeDirectories }
+          : await resolveWindowsInvocation(input.recipe, canonicalWorktree, directories, runtimeDirectories)
+        : await resolvePosixInvocation(
+            input.recipe,
+            canonicalWorktree,
+            directories,
+            runtimeDirectories,
+            platform,
+          );
+    if (invocation === null) {
+      await rm(isolatedHome, { recursive: true, force: true });
+      return {
+        state: "ERROR",
+        errorCode: "SERVICE_SPAWN_FAILED",
+        beforeTree,
+        afterTree: beforeTree,
+      };
+    }
+
+    const controller = new AbortController();
+    const processPromise = runSupervisedProcess({
+      command: invocation.command,
+      args: invocation.args,
+      cwd: canonicalCwd,
+      env: verificationBaselineEnvironment({
+        platform,
+        isolatedHome,
+        runtimePath: invocation.runtimePath,
+        source,
+        executable: input.recipe.executable,
+      }),
+      deadlineMs: input.recipe.timeoutSeconds * 1_000,
+      outputLimitBytes: input.recipe.outputLimitBytes,
+      redactValues: outputRedactions(source, [canonicalWorktree, canonicalCwd, isolatedHome]),
+      signal: controller.signal,
+      orphanGuard: input.processGuard,
+    });
+    const completion = (async (): Promise<VerificationServiceTerminal> => {
+      try {
+        const processResult = await processPromise;
+        const afterTree = await treeOfWorktree({ worktreePath: canonicalWorktree }).catch(() => null);
+        const treeChanged = afterTree === null || afterTree !== beforeTree;
+        const errorCode: VerificationServiceErrorCode | null = treeChanged
+          ? afterTree === null
+            ? "TREE_UNAVAILABLE"
+            : "TREE_MUTATED"
+          : processResult.termination === "TIMED_OUT"
+            ? "SERVICE_TIMEOUT"
+            : processResult.termination === "OUTPUT_LIMIT_REACHED"
+              ? "SERVICE_OUTPUT_LIMIT"
+              : processResult.termination === "TERMINATION_FAILED"
+                ? "SERVICE_TERMINATION_FAILED"
+                : processResult.termination === "SPAWN_FAILED"
+                  ? "SERVICE_SPAWN_FAILED"
+                  : processResult.termination === "EXITED"
+                    ? "SERVICE_EXITED"
+                    : null;
+        return {
+          state:
+            errorCode === null
+              ? "STOPPED"
+              : processResult.termination === "EXITED" && !treeChanged
+                ? "EXITED"
+                : "ERROR",
+          errorCode,
+          beforeTree,
+          afterTree,
+          processStopped: processResult.termination !== "TERMINATION_FAILED",
+          durationMs: processResult.durationMs,
+          capturedOutputBytes: processResult.output.capturedBytes,
+          outputTruncated: processResult.output.truncated,
+        };
+      } finally {
+        await rm(isolatedHome, { recursive: true, force: true });
+      }
+    })();
+    return {
+      state: "STARTED",
+      beforeTree,
+      stop: () => {
+        controller.abort();
+      },
+      completion,
+    };
+  } catch {
+    await rm(isolatedHome, { recursive: true, force: true }).catch(() => undefined);
+    return {
+      state: "ERROR",
+      errorCode: "SERVICE_SPAWN_FAILED",
+      beforeTree,
+      afterTree: beforeTree,
+    };
   }
 };

@@ -809,6 +809,31 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.verificationPlanPublicationRetried"),
         tone: "accent",
       };
+    case "LAUNCH_MEASUREMENT_PLAN_CHANGED":
+      return {
+        detail: t("event.launchPlanChangedDetail", {
+          revision: event.data.plan.revision,
+          status: event.data.plan.status,
+        }),
+        icon: event.data.plan.status === "ACTIVE" ? "settings" : "pause",
+        label: t("event.launchPlanChanged"),
+        tone: event.data.plan.status === "ACTIVE" ? "accent" : "warning",
+      };
+    case "LAUNCH_MEASUREMENT_RUN_CHANGED":
+      return {
+        detail: t("event.launchRunChangedDetail", {
+          status: event.data.run.status,
+          tree: event.data.run.testedTree.slice(0, 8),
+        }),
+        icon: event.data.run.status === "PASSED" ? "check" : "test",
+        label: t("event.launchRunChanged"),
+        tone:
+          event.data.run.status === "PASSED"
+            ? "success"
+            : event.data.run.status === "RUNNING"
+              ? "accent"
+              : "warning",
+      };
     case "VERIFICATION_RUN_RESERVED":
       return {
         detail: t("event.verificationRunReservedDetail", {

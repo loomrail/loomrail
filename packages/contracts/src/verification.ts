@@ -9,6 +9,7 @@ import {
 } from "./shared.js";
 
 export const MAX_VERIFICATION_RECIPE_TIMEOUT_SECONDS = 900;
+export const MAX_VERIFICATION_RECIPES = 12;
 
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const utf8ByteLength = (value: string): number => {
@@ -35,7 +36,7 @@ const utf8ByteLength = (value: string): number => {
   return bytes;
 };
 const invalidPortableDirectoryCharacterPattern = /[<>:"\\|?*]|\p{Cc}/u;
-const portableRelativeDirectorySchema = z
+export const verificationRecipeCwdSchema = z
   .string()
   .min(1)
   .max(240)
@@ -67,7 +68,16 @@ const boundedArgSchema = z
   .refine((value) => !value.includes("\u0000"), "Verification argv cannot contain NUL")
   .refine((value) => utf8ByteLength(value) <= 256, "Verification argv items cannot exceed 256 UTF-8 bytes");
 
-export const verificationRecipeKindSchema = z.enum(["LINT", "BUILD", "UNIT", "INTEGRATION", "E2E", "CUSTOM"]);
+export const verificationRecipeKindSchema = z.enum([
+  "LINT",
+  "BUILD",
+  "UNIT",
+  "INTEGRATION",
+  "E2E",
+  "AUDIT",
+  "SERVE",
+  "CUSTOM",
+]);
 export const verificationExecutableSchema = z.enum(["pnpm", "npm", "yarn", "bun", "node"]);
 export const verificationEnvironmentProfileSchema = z.literal("VERIFICATION_BASELINE");
 export const verificationNetworkPolicySchema = z.enum(["INHERIT_HOST", "DENIED_UNAVAILABLE"]);
@@ -78,6 +88,10 @@ export const verificationScriptNameSchema = z.enum([
   "test:unit",
   "test:integration",
   "test:e2e",
+  "audit",
+  "start",
+  "dev",
+  "preview",
 ]);
 
 export const verificationRecipeProvenanceSchema = z
@@ -103,14 +117,45 @@ export const verificationRecipeSchema = z
     required: z.boolean(),
     executable: verificationExecutableSchema,
     argv: z.array(boundedArgSchema).min(1).max(16),
-    cwd: portableRelativeDirectorySchema,
+    cwd: verificationRecipeCwdSchema,
     timeoutSeconds: z.number().int().min(1).max(MAX_VERIFICATION_RECIPE_TIMEOUT_SECONDS),
     outputLimitBytes: z.number().int().min(1_024).max(262_144),
     environmentProfile: verificationEnvironmentProfileSchema,
     networkPolicy: verificationNetworkPolicySchema,
     provenance: verificationRecipeProvenanceSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((recipe, context) => {
+    if (recipe.kind === "SERVE" && recipe.required) {
+      context.addIssue({
+        code: "custom",
+        path: ["required"],
+        message: "A long-running service recipe cannot be part of a finite required verification run",
+      });
+    }
+    const serviceScripts: readonly VerificationScriptName[] = ["start", "dev", "preview"];
+    if (recipe.kind === "SERVE" && !serviceScripts.includes(recipe.provenance.scriptName)) {
+      context.addIssue({
+        code: "custom",
+        path: ["provenance", "scriptName"],
+        message: "A SERVE recipe must name an approved service package script",
+      });
+    }
+    if (recipe.kind !== "SERVE" && serviceScripts.includes(recipe.provenance.scriptName)) {
+      context.addIssue({
+        code: "custom",
+        path: ["kind"],
+        message: "Service package scripts are reserved for SERVE recipes",
+      });
+    }
+    if ((recipe.kind === "AUDIT") !== (recipe.provenance.scriptName === "audit")) {
+      context.addIssue({
+        code: "custom",
+        path: ["kind"],
+        message: "The audit package script is reserved for an AUDIT recipe",
+      });
+    }
+  });
 
 export const verificationProposalWarningCodeSchema = z.enum([
   "MANIFEST_ABSENT",
@@ -142,7 +187,7 @@ export const verificationPlanProposalSchema = z
     schemaVersion: schemaVersionSchema,
     projectId: opaqueIdSchema,
     target: verificationPlanTargetSchema,
-    recipes: z.array(verificationRecipeSchema).max(12),
+    recipes: z.array(verificationRecipeSchema).max(MAX_VERIFICATION_RECIPES),
     warnings: z.array(verificationProposalWarningSchema).max(32),
     proposalHash: sha256Schema,
   })
@@ -173,7 +218,7 @@ export const verificationPlanSchema = z
     projectId: opaqueIdSchema,
     revision: z.number().int().positive(),
     status: verificationPlanStatusSchema,
-    recipes: z.array(verificationRecipeSchema).min(1).max(12),
+    recipes: z.array(verificationRecipeSchema).min(1).max(MAX_VERIFICATION_RECIPES),
     sourceProposalHash: sha256Schema,
     contentHash: sha256Schema,
     createdAt: utcTimestampSchema,

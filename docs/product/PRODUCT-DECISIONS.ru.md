@@ -822,6 +822,28 @@ daemon-owned executor, который сверяет captured Plan с текущ
 себе не расширяет permissions, recipe allowlist, budget или stage authority; provider обязан формулировать запрос как
 вопрос о недостающей информации, а не как обещание выдать capability. Полный механизм — ADR-0026 и план 109.
 
+### PD-028 — Launch measurements принадлежат Project и не являются provider workflow
+
+**Дата:** 2026-09-10. Разрешает L2 после закрытия Dogfood Alpha; не разрешает L3/L4 deploy.
+
+Локальные launch-gates выполняются отдельным project-level `LaunchMeasurementRun`, а не AgentRun, QA prose или
+workspace tool call. Владелец принимает immutable Plan, связанный с exact активным Verification Plan: один `SERVE`
+recipe, optional `AUDIT` recipe, bare loopback target, bounded paths/samples и явные budgets. Provider не получает
+команд adoption/start/cancel и не может менять verdict.
+
+Daemon запускает только exact owner-approved recipe через существующую scrubbed environment/process-tree boundary,
+измеряет target через provider-neutral Browser QA driver и освобождает authority только после STOPPED proof. Restart
+не replay-ит spawn. Недоказанная остановка остаётся durable active `BLOCKED / SERVICE_TERMINATION_FAILED`, запрещает
+второй Run и требует повторной безопасной остановки; отсутствие process-record не считается proof после такого
+блокирования. Domain вычисляет gate result и freshness; отсутствующее evidence означает `ACTION_REQUIRED`, не
+success. Raw response bodies, header values, service output, secret matches и абсолютные paths не становятся
+persisted measurement evidence.
+
+L2 не получает install, commit, push, merge, deploy, external URL, production secret или automatic retry authority.
+Для conventional monorepo service root package-manager authority и exact nested script manifest проверяются
+раздельно перед публикацией и ещё раз перед spawn; вложенный manifest не может неявно подменить executable.
+Полный контракт — ADR-0027 и планы 110–111.
+
 ## 14. Отложенные решения
 
 Следующие решения намеренно принимаются отдельным spike/ADR после Phase 0, а не угадываются заранее:

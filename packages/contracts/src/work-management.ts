@@ -1,6 +1,18 @@
 import { z } from "zod";
 
 import { agentRunClaimLimitsSchema, agentRunSchema, squadAssignmentSchema } from "./agents.js";
+import {
+  adoptLaunchMeasurementPlanCommandSchema,
+  cancelLaunchMeasurementRunCommandSchema,
+  completeLaunchMeasurementRunCommandSchema,
+  disableLaunchMeasurementPlanCommandSchema,
+  interruptLaunchMeasurementRunCommandSchema,
+  launchMeasurementPlanChangedEventSchema,
+  launchMeasurementPlanChangedResultSchema,
+  launchMeasurementRunChangedEventSchema,
+  launchMeasurementRunChangedResultSchema,
+  startLaunchMeasurementRunCommandSchema,
+} from "./launch-measurement.js";
 import { providerModelMappingSchema } from "./provider-selection.js";
 import {
   setWorkItemDependenciesCommandSchema,
@@ -422,6 +434,8 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   projectReadinessAttestedEventSchema,
   projectProviderPreferenceChangedEventSchema,
   projectWorkspaceStrategyChangedEventSchema,
+  launchMeasurementPlanChangedEventSchema,
+  launchMeasurementRunChangedEventSchema,
   verificationPlanAdoptedEventSchema,
   verificationPlanDisabledEventSchema,
   verificationPlanPublicationAppliedEventSchema,
@@ -641,6 +655,12 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   attestProjectReadinessCheckCommandSchema,
   setProjectProviderPreferenceCommandSchema,
   setProjectWorkspaceStrategyCommandSchema,
+  adoptLaunchMeasurementPlanCommandSchema,
+  disableLaunchMeasurementPlanCommandSchema,
+  startLaunchMeasurementRunCommandSchema,
+  cancelLaunchMeasurementRunCommandSchema,
+  completeLaunchMeasurementRunCommandSchema,
+  interruptLaunchMeasurementRunCommandSchema,
   adoptVerificationPlanCommandSchema,
   disableVerificationPlanCommandSchema,
   completeVerificationPlanPublicationCommandSchema,
@@ -782,6 +802,8 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   projectReadinessAttestedResultSchema,
   projectProviderPreferenceChangedResultSchema,
   projectWorkspaceStrategyChangedResultSchema,
+  launchMeasurementPlanChangedResultSchema,
+  launchMeasurementRunChangedResultSchema,
   verificationPlanAdoptedResultSchema,
   verificationPlanDisabledResultSchema,
   verificationPlanPublicationAppliedResultSchema,

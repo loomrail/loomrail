@@ -12,6 +12,7 @@ import {
   createPlaywrightDriver,
   openVerifiedBrowserQAArtifact,
   type BrowserDriver,
+  type LaunchMeasurementDriver,
 } from "@loomrail/browser-qa";
 import {
   attentionInboxResponseSchema,
@@ -35,6 +36,10 @@ import {
   humanRequestsResponseSchema,
   insightsResponseSchema,
   moveWorkItemRequestSchema,
+  adoptLaunchMeasurementPlanRequestSchema,
+  cancelLaunchMeasurementRunRequestSchema,
+  disableLaunchMeasurementPlanRequestSchema,
+  launchMeasurementProjectResponseSchema,
   mcpProfilesResponseSchema,
   mcpProfileProposalSchema,
   MAX_QA_RUN_HISTORY,
@@ -88,6 +93,7 @@ import {
   sessionExchangeRequestSchema,
   sessionExchangeResponseSchema,
   startPipelineRequestSchema,
+  startLaunchMeasurementRunRequestSchema,
   startVerificationRunRequestSchema,
   cancelVerificationRunRequestSchema,
   updateWorkItemRequestSchema,
@@ -118,6 +124,7 @@ import {
   buildReportingSnapshot,
   MAX_RELEASE_SUMMARY_AUDIT_EVENTS,
   ConstitutionDomainError,
+  LaunchMeasurementDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
   WorkspaceStrategyDomainError,
@@ -128,6 +135,7 @@ import {
   ReadinessDomainError,
   VerificationDomainError,
   projectVerificationRunFreshness,
+  launchMeasurementFreshness,
   renderReleaseSummary,
   ReviewFindingDispositionError,
   ScaffoldDomainError,
@@ -220,6 +228,7 @@ import {
 import { createSessionWorker } from "./session-worker.js";
 import { createProjectVerificationWorkflowGate } from "./project-verification-gate.js";
 import { createProjectVerificationRunner, type VerificationRecipeExecutor } from "./verification-runner.js";
+import { createLaunchMeasurementRunner, type LaunchServiceStarter } from "./launch-measurement-runner.js";
 import { describeReportingRuntime } from "./reporting.js";
 import { createMcpProposalChallengeStore, McpProposalError } from "./mcp-proposals.js";
 import { createMcpConnectionOpener } from "./mcp-sessions.js";
@@ -303,6 +312,10 @@ export type StartDaemonOptions = {
   verificationArtifactsDirectory?: string;
   /** Test seam; production owns the exact-argv supervised recipe executor. */
   verificationRecipeExecutor?: VerificationRecipeExecutor;
+  /** Test seam; production uses the isolated, same-origin Chromium measurement driver. */
+  launchMeasurementDriver?: LaunchMeasurementDriver;
+  /** Test seam; production starts only the adopted SERVE recipe through the supervised executor. */
+  launchServiceStarter?: LaunchServiceStarter;
   /** Injected only for daemon route tests; production owns the real bounded stdio gateway. */
   mcpGateway?: McpGateway;
   // Injected for the same reason as `providerAdapter` above, and only for it: the heartbeat is the
@@ -386,6 +399,7 @@ const mcpProposalParamsSchema = z.object({ projectId: opaqueIdSchema, challengeI
 const mcpRevisionParamsSchema = z.object({ projectId: opaqueIdSchema, revisionId: opaqueIdSchema }).strict();
 const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
 const verificationRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
+const launchMeasurementRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 const verificationCheckParamsSchema = z.object({ checkId: opaqueIdSchema }).strict();
 const qaAttachmentParamsSchema = z
   .object({ workItemId: opaqueIdSchema, attachmentId: opaqueIdSchema })
@@ -606,6 +620,15 @@ const sendOperationError = (
       error.code === "WORK_ITEM_NOT_FOUND"
         ? 404
         : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof LaunchMeasurementDomainError) {
+    const status =
+      error.code === "PROJECT_NOT_FOUND" || error.code === "PLAN_NOT_FOUND" || error.code === "RUN_NOT_FOUND"
+        ? 404
+        : error.code === "OWNER_REQUIRED" || error.code === "SYSTEM_REQUIRED"
+          ? 403
+          : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
   }
   if (error instanceof ScaffoldDomainError) {
@@ -1426,6 +1449,16 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       ? {}
       : { executeRecipe: options.verificationRecipeExecutor }),
   });
+  const launchMeasurementRunner = createLaunchMeasurementRunner({
+    state: localState,
+    artifactsDirectory: verificationArtifactsDirectory,
+    createCommandId: () => `launch-measurement-command-${randomUUID()}`,
+    now,
+    logger: app.log,
+    ...(options.launchMeasurementDriver === undefined ? {} : { driver: options.launchMeasurementDriver }),
+    ...(options.launchServiceStarter === undefined ? {} : { startService: options.launchServiceStarter }),
+  });
+  await launchMeasurementRunner.recover();
 
   const verificationPlatform = (): "darwin" | "linux" | "win32" => {
     const current = normalizePlatform();
@@ -1530,6 +1563,33 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       plan: context.plan,
       checks: context.checks,
       ...freshness,
+    });
+  };
+
+  const readLaunchMeasurementSnapshot = async (projectId: string) => {
+    const snapshot = localState.query({ type: "GET_PROJECT_LAUNCH_MEASUREMENT", projectId });
+    if (snapshot.type !== "PROJECT_LAUNCH_MEASUREMENT") {
+      throw new StateStoreError("PERSISTENCE_FAILURE", "Launch measurement state is unavailable");
+    }
+    const verification = localState.query({ type: "GET_PROJECT_VERIFICATION_PLAN", projectId });
+    if (verification.type !== "PROJECT_VERIFICATION_PLAN") {
+      throw new StateStoreError("PERSISTENCE_FAILURE", "The current verification Plan is unavailable");
+    }
+    return launchMeasurementProjectResponseSchema.parse({
+      schemaVersion: 1,
+      projectId: snapshot.project.id,
+      projectVersion: snapshot.project.version,
+      plan: snapshot.plan,
+      latestRun: snapshot.latestRun,
+      freshness:
+        snapshot.latestRun === null
+          ? null
+          : launchMeasurementFreshness({
+              run: snapshot.latestRun,
+              currentTree: await readVerificationTree(snapshot.project.repositoryPath),
+              currentPlan: snapshot.plan ?? undefined,
+              currentVerificationPlan: verification.plan ?? undefined,
+            }),
     });
   };
   const sessionForRequest = (request: FastifyRequest): Session | undefined => {
@@ -2575,6 +2635,125 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         });
         await drainVerificationPlanPublications();
         return await readVerificationPlanSettings(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/projects/:projectId/launch-measurement", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        return await readLaunchMeasurementSnapshot(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/launch-measurement/plan", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = adoptLaunchMeasurementPlanRequestSchema.parse(request.body);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "ADOPT_LAUNCH_MEASUREMENT_PLAN",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            configuration: body.configuration,
+          },
+        });
+        return await readLaunchMeasurementSnapshot(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/launch-measurement/plan/disable", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = disableLaunchMeasurementPlanRequestSchema.parse(request.body);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "DISABLE_LAUNCH_MEASUREMENT_PLAN",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            expectedPlanRevision: body.expectedPlanRevision,
+            expectedPlanContentHash: body.expectedPlanContentHash,
+          },
+        });
+        return await readLaunchMeasurementSnapshot(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/launch-measurement/runs", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = startLaunchMeasurementRunRequestSchema.parse(request.body);
+        const projectResult = localState.query({ type: "GET_PROJECT", projectId: params.projectId });
+        const project = projectResult.type === "PROJECT" ? projectResult.project : null;
+        if (project === null) {
+          throw new LaunchMeasurementDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+        const reserved = localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "START_LAUNCH_MEASUREMENT_RUN",
+          payload: {
+            projectId: params.projectId,
+            expectedPlanRevision: body.expectedPlanRevision,
+            expectedPlanContentHash: body.expectedPlanContentHash,
+            testedTree: await readVerificationTree(project.repositoryPath),
+          },
+        });
+        if (reserved.type !== "LAUNCH_MEASUREMENT_RUN_CHANGED") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The launch measurement Run was not reserved");
+        }
+        launchMeasurementRunner.wake(reserved.run.id);
+        return await readLaunchMeasurementSnapshot(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/launch-measurement-runs/:runId/cancel", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = launchMeasurementRunParamsSchema.parse(request.params);
+        const body = cancelLaunchMeasurementRunRequestSchema.parse(request.body);
+        await launchMeasurementRunner.cancel({
+          runId: params.runId,
+          expectedVersion: body.expectedVersion,
+          commandId: body.commandId,
+          correlationId,
+        });
+        const context = localState.query({
+          type: "GET_LAUNCH_MEASUREMENT_RUN_CONTEXT",
+          runId: params.runId,
+        });
+        if (context.type !== "LAUNCH_MEASUREMENT_RUN_CONTEXT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "Launch measurement context is unavailable");
+        }
+        return await readLaunchMeasurementSnapshot(context.project.id);
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }
@@ -4420,13 +4599,18 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         worksInRepository: adapterWorksInWorkspace(providerCapabilities.stages),
       },
       whenIdle: async () => {
-        await Promise.all([worker.whenIdle(), verificationRunner.whenIdle()]);
+        await Promise.all([
+          worker.whenIdle(),
+          verificationRunner.whenIdle(),
+          launchMeasurementRunner.whenIdle(),
+        ]);
       },
       close: async () => {
         if (closing) return;
         closing = true;
         try {
           // The live session must be asked to stop before the server starts closing connections.
+          await launchMeasurementRunner.stop();
           await verificationRunner.stop();
           await worker.stop();
           await mcpGateway.shutdown();
@@ -4437,6 +4621,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       },
     };
   } catch (error: unknown) {
+    await launchMeasurementRunner.stop().catch(() => undefined);
     await verificationRunner.stop().catch(() => undefined);
     await mcpGateway.shutdown().catch(() => undefined);
     localState.close();

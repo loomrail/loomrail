@@ -11,6 +11,9 @@ import type {
   ConstitutionPublication,
   FixtureProjectId,
   HumanRequestAnswer,
+  LaunchMeasurementPlanConfiguration,
+  LaunchMeasurementProjectResponse,
+  LaunchMeasurementRun,
   ListedProject,
   McpProfileCandidate,
   McpProfileProposal,
@@ -42,6 +45,7 @@ import type {
 
 import {
   approveBudgetOverride,
+  adoptLaunchMeasurementPlan,
   adoptProjectConstitution,
   attestProjectReadiness,
   answerHumanRequest,
@@ -49,7 +53,9 @@ import {
   createWorkItem,
   createGuidedActivationWorkItem,
   disposeReviewFinding,
+  disableLaunchMeasurementPlan,
   disableVerificationPlan,
+  getLaunchMeasurement,
   getProviderCapabilities,
   getProjectProviderAllowance,
   getProjectProviderSelection,
@@ -92,7 +98,9 @@ import {
   retryNewProjectScaffold,
   retryProjectConstitutionPublication,
   retryVerificationPlanPublication,
+  startLaunchMeasurement,
   startWorkItemVerificationRun,
+  cancelLaunchMeasurement,
   cancelVerificationRun,
   runProjectReadiness,
   resolveAcceptance,
@@ -124,6 +132,8 @@ const projectConstitutionKey = (projectId: string) => ["projects", projectId, "c
 const projectReadinessKey = (projectId: string) => ["projects", projectId, "readiness"] as const;
 const projectVerificationPlanKey = (projectId: string) =>
   ["projects", projectId, "verification-plan"] as const;
+const projectLaunchMeasurementKey = (projectId: string) =>
+  ["projects", projectId, "launch-measurement"] as const;
 const projectWorkItemsKey = (projectId: string) => ["projects", projectId, "work-items"] as const;
 const projectWorkItemDependenciesKey = (projectId: string) =>
   ["projects", projectId, "work-items", "dependencies"] as const;
@@ -774,6 +784,67 @@ export const useRetryVerificationPlanPublication = () => {
     }) => retryVerificationPlanPublication(projectId, publication),
     onSuccess: async (settings) => {
       await queryClient.invalidateQueries({ queryKey: projectVerificationPlanKey(settings.projectId) });
+    },
+  });
+};
+
+export const useLaunchMeasurement = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: projectId ? projectLaunchMeasurementKey(projectId) : ["projects", "none", "launch-measurement"],
+    queryFn: () => {
+      if (!projectId) throw new Error("A project is required to load launch measurement");
+      return getLaunchMeasurement(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+
+export const useAdoptLaunchMeasurementPlan = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      configuration: LaunchMeasurementPlanConfiguration;
+      snapshot: LaunchMeasurementProjectResponse;
+    }) => adoptLaunchMeasurementPlan(input),
+    onSuccess: async (_, input) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectLaunchMeasurementKey(input.snapshot.projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectsKey }),
+      ]);
+    },
+  });
+};
+
+export const useDisableLaunchMeasurementPlan = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { snapshot: LaunchMeasurementProjectResponse }) =>
+      disableLaunchMeasurementPlan(input),
+    onSuccess: async (_, input) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectLaunchMeasurementKey(input.snapshot.projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectsKey }),
+      ]);
+    },
+  });
+};
+
+export const useStartLaunchMeasurement = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { projectId: string; snapshot: LaunchMeasurementProjectResponse }) =>
+      startLaunchMeasurement(input),
+    onSuccess: async (_, input) => {
+      await queryClient.invalidateQueries({ queryKey: projectLaunchMeasurementKey(input.projectId) });
+    },
+  });
+};
+
+export const useCancelLaunchMeasurement = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { projectId: string; run: LaunchMeasurementRun }) => cancelLaunchMeasurement(input),
+    onSuccess: async (_, input) => {
+      await queryClient.invalidateQueries({ queryKey: projectLaunchMeasurementKey(input.projectId) });
     },
   });
 };

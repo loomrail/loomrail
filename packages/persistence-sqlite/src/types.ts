@@ -12,6 +12,9 @@ import type {
   EventPageDirection,
   HumanRequest,
   HumanRequestStatus,
+  LaunchDependencyAuditEvidence,
+  LaunchMeasurementPlan,
+  LaunchMeasurementRun,
   McpProfileView,
   McpSessionSnapshot,
   McpToolCallRecord,
@@ -144,6 +147,15 @@ export type StateQuery =
   | { type: "GET_PROJECT_BY_REPOSITORY_PATH"; repositoryPath: string }
   | { type: "GET_PROJECT_CONSTITUTION_SNAPSHOT"; projectId: string }
   | { type: "GET_PROJECT_VERIFICATION_PLAN"; projectId: string }
+  | { type: "GET_PROJECT_LAUNCH_MEASUREMENT"; projectId: string }
+  | { type: "GET_LAUNCH_MEASUREMENT_RUN_CONTEXT"; runId: string }
+  | { type: "LIST_ACTIVE_LAUNCH_MEASUREMENT_RUNS" }
+  | {
+      type: "GET_LATEST_PROJECT_AUDIT_EVIDENCE";
+      projectId: string;
+      recipeId: string;
+      testedTree: string;
+    }
   | { type: "GET_VERIFICATION_RUN"; runId: string }
   | { type: "GET_VERIFICATION_RUN_CONTEXT"; runId: string }
   | { type: "LIST_WORK_ITEM_VERIFICATION_RUNS"; workItemId: string; limit?: number }
@@ -240,6 +252,21 @@ export type StateQueryResult =
       plan: VerificationPlan | null;
       publication: VerificationPlanPublication | null;
     }
+  | {
+      type: "PROJECT_LAUNCH_MEASUREMENT";
+      project: Project;
+      plan: LaunchMeasurementPlan | null;
+      latestRun: LaunchMeasurementRun | null;
+    }
+  | {
+      type: "LAUNCH_MEASUREMENT_RUN_CONTEXT";
+      project: Project;
+      plan: LaunchMeasurementPlan;
+      run: LaunchMeasurementRun;
+      verificationPlan: VerificationPlan;
+    }
+  | { type: "LAUNCH_MEASUREMENT_RUNS"; runs: LaunchMeasurementRun[] }
+  | { type: "LAUNCH_DEPENDENCY_AUDIT_EVIDENCE"; evidence: LaunchDependencyAuditEvidence | null }
   | { type: "VERIFICATION_RUN"; run: VerificationRun | null; checks: VerificationCheck[] }
   | {
       type: "VERIFICATION_RUN_CONTEXT";
@@ -376,6 +403,8 @@ export type LocalStateIdKind =
   | "verificationPlanPublication"
   | "verificationRun"
   | "verificationCheck"
+  | "launchMeasurementPlan"
+  | "launchMeasurementRun"
   | "verificationFailure"
   | "verificationCorrectionRun"
   | "correctionBudgetEntry"

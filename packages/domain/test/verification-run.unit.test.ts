@@ -325,6 +325,109 @@ describe("verification Run lifecycle", () => {
     ).toThrow(expect.objectContaining({ code: "WORKSPACE_UNAVAILABLE" }));
   });
 
+  it("keeps an optional SERVE recipe out of a finite verification Run", () => {
+    const basePlan: VerificationPlan = {
+      schemaVersion: 1,
+      id: run.planId,
+      projectId: project.id,
+      revision: 1,
+      status: "ACTIVE",
+      recipes: [
+        {
+          schemaVersion: 1,
+          id: "serve-app",
+          kind: "SERVE",
+          label: "Serve",
+          required: false,
+          executable: "pnpm",
+          argv: ["run", "start"],
+          cwd: ".",
+          timeoutSeconds: 300,
+          outputLimitBytes: 65_536,
+          environmentProfile: "VERIFICATION_BASELINE",
+          networkPolicy: "INHERIT_HOST",
+          provenance: {
+            source: "PACKAGE_JSON_SCRIPT",
+            manifestPath: "package.json",
+            manifestContentHash: "f".repeat(64),
+            scriptName: "start",
+            scriptBodyPreview: "node server.mjs",
+          },
+        },
+        {
+          schemaVersion: 1,
+          id: "package-test",
+          kind: "UNIT",
+          label: "Tests",
+          required: true,
+          executable: "pnpm",
+          argv: ["run", "test"],
+          cwd: ".",
+          timeoutSeconds: 300,
+          outputLimitBytes: 65_536,
+          environmentProfile: "VERIFICATION_BASELINE",
+          networkPolicy: "INHERIT_HOST",
+          provenance: {
+            source: "PACKAGE_JSON_SCRIPT",
+            manifestPath: "package.json",
+            manifestContentHash: "f".repeat(64),
+            scriptName: "test",
+            scriptBodyPreview: "vitest run",
+          },
+        },
+      ],
+      sourceProposalHash: "d".repeat(64),
+      contentHash: run.planContentHash,
+      createdAt: now,
+    };
+    const publication: VerificationPlanPublication = {
+      schemaVersion: 1,
+      id: "verification-publication-serve",
+      projectId: project.id,
+      planId: basePlan.id,
+      targetPath: ".loomrail/verification-plan.json",
+      expectedTargetDigest: null,
+      contentHash: basePlan.contentHash,
+      status: "APPLIED",
+      attempts: 1,
+      lastErrorCode: null,
+      version: 2,
+      createdAt: now,
+      updatedAt: now,
+      appliedAt: now,
+    };
+    const decision = decideVerificationRunReservation(
+      {
+        schemaVersion: 1,
+        commandId: "command-serve-filter",
+        correlationId: "correlation-serve-filter",
+        actor: { type: "HUMAN", id: "owner" },
+        type: "START_VERIFICATION_RUN",
+        payload: {
+          workItemId: workItem.id,
+          expectedWorkItemVersion: workItem.version,
+          expectedPlanRevision: basePlan.revision,
+          expectedPlanContentHash: basePlan.contentHash,
+          implementationTree: run.implementationTree,
+          platform: run.platform,
+        },
+      },
+      {
+        now,
+        newRunId: "verification-run-serve-filter",
+        newCheckIds: ["verification-check-test"],
+        ordinal: 1,
+        project,
+        workItem,
+        pipelineRun,
+        workspace,
+        plan: basePlan,
+        publication,
+      },
+    );
+    expect(decision.checks.map(({ recipeId }) => recipeId)).toEqual(["package-test"]);
+  });
+
   it("starts only the next queued Check and records one current identity", () => {
     const decision = decideVerificationCheckStart({
       actor: system,

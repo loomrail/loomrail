@@ -11,6 +11,9 @@ import {
   MAX_QA_RESPONSE_BYTES,
   MAX_QA_TOTAL_ATTACHMENT_BYTES,
   MAX_QA_TOTAL_RESPONSE_BYTES,
+  MAX_LAUNCH_MEASUREMENT_SCRIPT_BYTES,
+  launchBrowserMeasurementSchema,
+  launchMeasurementPlanConfigurationSchema,
   qaAttachmentDraftSchema,
   qaDriverResultSchema,
   qaFinalizedAttachmentSchema,
@@ -24,6 +27,9 @@ import {
   type QAObservation,
   type QARetestCell,
   type QARun,
+  type LaunchBrowserMeasurement,
+  type LaunchMeasurementPlanConfiguration,
+  type LaunchMeasurementSecretCategory,
 } from "@loomrail/contracts";
 import {
   chromium,
@@ -638,6 +644,465 @@ const bindEvidenceListeners = async (input: {
     responseBytes += body.byteLength;
     await route.fulfill({ status: response.status(), headers: responseHeaders, body });
   });
+};
+
+export type LaunchMeasurementDriverErrorCode =
+  | "INVALID_INPUT"
+  | "DRIVER_SETUP_FAILED"
+  | "ORIGIN_FORBIDDEN"
+  | "MEASUREMENT_TIMEOUT"
+  | "EVIDENCE_INVALID"
+  | "CANCELLED";
+
+export class LaunchMeasurementDriverError extends Error {
+  readonly code: LaunchMeasurementDriverErrorCode;
+
+  constructor(code: LaunchMeasurementDriverErrorCode, options?: ErrorOptions) {
+    super(
+      {
+        INVALID_INPUT: "The launch measurement input is invalid.",
+        DRIVER_SETUP_FAILED: "The launch measurement browser could not start safely.",
+        ORIGIN_FORBIDDEN: "The launch measurement attempted to leave its approved loopback origin.",
+        MEASUREMENT_TIMEOUT: "The launch measurement exceeded its deadline.",
+        EVIDENCE_INVALID: "The launch measurement could not produce bounded typed evidence.",
+        CANCELLED: "The launch measurement was cancelled.",
+      }[code],
+      options,
+    );
+    this.name = "LaunchMeasurementDriverError";
+    this.code = code;
+  }
+}
+
+export type LaunchMeasurementDriver = {
+  id: "PLAYWRIGHT";
+  measure: (
+    configuration: LaunchMeasurementPlanConfiguration,
+    signal?: AbortSignal,
+  ) => Promise<LaunchBrowserMeasurement>;
+};
+
+export type PlaywrightLaunchMeasurementOptions = {
+  timeoutMs?: number;
+  resolveHostname?: PlaywrightDriverOptions["resolveHostname"];
+};
+
+const launchMeasurementOptionsSchema = z
+  .object({ timeoutMs: z.number().int().min(250).max(120_000).optional() })
+  .strict();
+
+const measuredVitalsSchema = z
+  .object({
+    lcpMs: z.number().nonnegative().max(60_000).nullable(),
+    inpMs: z.number().nonnegative().max(10_000).nullable(),
+    cls: z.number().nonnegative().max(10).nullable(),
+  })
+  .strict();
+
+const MAX_LAUNCH_REQUESTS = 256;
+const MAX_LAUNCH_RESPONSE_BYTES = 8 * 1_024 * 1_024;
+const LAUNCH_SETTLE_MS = 250;
+
+type ScriptEvidence = {
+  bytes: number;
+  bodies: Buffer[];
+};
+
+type LaunchNetworkFailure = { code: LaunchMeasurementDriverErrorCode | null };
+
+const assertLaunchNetworkSucceeded = (failure: LaunchNetworkFailure): void => {
+  if (failure.code !== null) throw new LaunchMeasurementDriverError(failure.code);
+};
+
+const launchSecretPatterns: Readonly<Record<LaunchMeasurementSecretCategory, readonly RegExp[]>> = {
+  API_KEY: [
+    /\bsk-[A-Za-z0-9_-]{20,}\b/gu,
+    /\b(?:OPENAI|ANTHROPIC)_API_KEY\s*[:=]\s*["'][^"'\r\n]{12,}["']/giu,
+  ],
+  AUTH_TOKEN: [
+    /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b/giu,
+    /\b(?:auth[_-]?token|access[_-]?token)\s*[:=]\s*["'][^"'\r\n]{12,}["']/giu,
+  ],
+  PRIVATE_KEY: [/-----BEGIN [A-Z ]*PRIVATE KEY-----/gu],
+  PASSWORD_ASSIGNMENT: [/\b(?:password|passwd|client[_-]?secret)\s*[:=]\s*["'][^"'\r\n]{8,}["']/giu],
+};
+
+const secretCounts = (bodies: readonly Buffer[]): LaunchBrowserMeasurement["secrets"] => {
+  const counts = new Map<LaunchMeasurementSecretCategory, number>();
+  for (const body of bodies) {
+    const text = body.toString("utf8");
+    for (const [category, patterns] of Object.entries(launchSecretPatterns) as readonly [
+      LaunchMeasurementSecretCategory,
+      readonly RegExp[],
+    ][]) {
+      let count = counts.get(category) ?? 0;
+      for (const pattern of patterns) {
+        pattern.lastIndex = 0;
+        for (;;) {
+          const match = pattern.exec(text);
+          if (match === null) break;
+          count = Math.min(10_000, count + 1);
+          if (match[0].length === 0) pattern.lastIndex += 1;
+        }
+      }
+      if (count > 0) counts.set(category, count);
+    }
+  }
+  return [...counts.entries()].map(([category, count]) => ({ category, count }));
+};
+
+const exactOriginUrl = (origin: string, path: string): string => {
+  const target = new URL(path, origin);
+  if (target.origin !== origin || target.username !== "" || target.password !== "") {
+    throw new LaunchMeasurementDriverError("ORIGIN_FORBIDDEN");
+  }
+  return target.href;
+};
+
+const bindLaunchMeasurementNetwork = async (input: {
+  context: BrowserContext;
+  allowedOrigin: string;
+  timeoutMs: number;
+  collectScriptBodies: boolean;
+  scripts: ScriptEvidence;
+  failure: LaunchNetworkFailure;
+}): Promise<void> => {
+  let requestCount = 0;
+  let responseBytes = 0;
+  await input.context.routeWebSocket("**/*", async (socket) => {
+    input.failure.code ??= "EVIDENCE_INVALID";
+    await socket.close({ code: 1008, reason: "Blocked by launch measurement policy" });
+  });
+  await input.context.route("**/*", async (route) => {
+    const request = route.request();
+    requestCount += 1;
+    if (requestCount > MAX_LAUNCH_REQUESTS || !["GET", "HEAD", "OPTIONS"].includes(request.method())) {
+      input.failure.code ??= "EVIDENCE_INVALID";
+      await route.abort("blockedbyclient");
+      return;
+    }
+    let requestUrl: URL;
+    try {
+      requestUrl = new URL(request.url());
+    } catch {
+      input.failure.code ??= "ORIGIN_FORBIDDEN";
+      await route.abort("blockedbyclient");
+      return;
+    }
+    if (
+      requestUrl.origin !== input.allowedOrigin ||
+      requestUrl.username !== "" ||
+      requestUrl.password !== ""
+    ) {
+      input.failure.code ??= "ORIGIN_FORBIDDEN";
+      await route.abort("blockedbyclient");
+      return;
+    }
+    const requestHeaders = await request.allHeaders();
+    if (
+      Object.entries(requestHeaders).some(
+        ([name, value]) =>
+          ["authorization", "cookie", "proxy-authorization"].includes(name.toLowerCase()) && value.length > 0,
+      )
+    ) {
+      input.failure.code ??= "EVIDENCE_INVALID";
+      await route.abort("blockedbyclient");
+      return;
+    }
+    let response;
+    try {
+      response = await route.fetch({ headers: requestHeaders, maxRedirects: 0, timeout: input.timeoutMs });
+    } catch (error: unknown) {
+      input.failure.code ??= isTimeoutError(error) ? "MEASUREMENT_TIMEOUT" : "EVIDENCE_INVALID";
+      await route.abort("failed").catch(() => undefined);
+      return;
+    }
+    const responseHeaders = response.headers();
+    const location = responseHeaders["location"];
+    if (response.status() >= 300 && response.status() < 400 && location !== undefined) {
+      const redirect = new URL(location, request.url());
+      if (redirect.origin !== input.allowedOrigin) {
+        input.failure.code ??= "ORIGIN_FORBIDDEN";
+        await route.abort("blockedbyclient");
+        return;
+      }
+    }
+    const body = await response.body();
+    if (
+      body.byteLength > MAX_LAUNCH_RESPONSE_BYTES ||
+      responseBytes + body.byteLength > MAX_LAUNCH_MEASUREMENT_SCRIPT_BYTES
+    ) {
+      input.failure.code ??= "EVIDENCE_INVALID";
+      await route.abort("blockedbyclient");
+      return;
+    }
+    responseBytes += body.byteLength;
+    const contentType = responseHeaders["content-type"]?.toLowerCase() ?? "";
+    const isScript =
+      contentType.includes("javascript") || /\.(?:c?js|mjs)(?:$|[?#])/iu.test(requestUrl.pathname);
+    if (isScript) {
+      if (input.scripts.bytes + body.byteLength > MAX_LAUNCH_MEASUREMENT_SCRIPT_BYTES) {
+        input.failure.code ??= "EVIDENCE_INVALID";
+        await route.abort("blockedbyclient");
+        return;
+      }
+      input.scripts.bytes += body.byteLength;
+      if (input.collectScriptBodies) input.scripts.bodies.push(body);
+    }
+    await input.context.clearCookies();
+    delete responseHeaders["set-cookie"];
+    delete responseHeaders["set-cookie2"];
+    await route.fulfill({ status: response.status(), headers: responseHeaders, body });
+  });
+};
+
+const installVitalsObserver = async (page: Page): Promise<void> => {
+  await page.addInitScript(() => {
+    const state = { lcpMs: null as number | null, inpMs: null as number | null, cls: 0 };
+    type LaunchObserverOptions = {
+      type: string;
+      buffered: boolean;
+      durationThreshold?: number;
+    };
+    type LaunchObserver = { observe: (init: LaunchObserverOptions) => void };
+    const observe = (observer: unknown, init: LaunchObserverOptions): void => {
+      (observer as LaunchObserver).observe(init);
+    };
+    Object.defineProperty(globalThis, "__loomrailLaunchVitals", {
+      value: state,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    try {
+      const observer = new PerformanceObserver((list) => {
+        const last = list.getEntries().at(-1);
+        if (last !== undefined) state.lcpMs = last.startTime;
+      });
+      observe(observer, { type: "largest-contentful-paint", buffered: true });
+    } catch {
+      // Missing browser evidence is represented as null and becomes ACTION_REQUIRED in domain.
+    }
+    try {
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          const duration = entry.duration;
+          if (duration > (state.inpMs ?? 0)) state.inpMs = duration;
+        }
+      });
+      observe(observer, { type: "event", buffered: true, durationThreshold: 0 });
+    } catch {
+      // Missing browser evidence is represented as null and becomes ACTION_REQUIRED in domain.
+    }
+    try {
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          const layoutEntry = entry as unknown as {
+            hadRecentInput?: unknown;
+            value?: unknown;
+          };
+          const hadRecentInput: unknown = layoutEntry.hadRecentInput;
+          const value: unknown = layoutEntry.value;
+          if (hadRecentInput !== true && typeof value === "number") state.cls += value;
+        }
+      });
+      observe(observer, { type: "layout-shift", buffered: true });
+    } catch {
+      // Missing browser evidence is represented as null and becomes ACTION_REQUIRED in domain.
+    }
+  });
+};
+
+const readVitals = async (page: Page): Promise<z.infer<typeof measuredVitalsSchema>> => {
+  const value: unknown = await page.evaluate(() => {
+    const candidate: unknown = (globalThis as typeof globalThis & { __loomrailLaunchVitals?: unknown })
+      .__loomrailLaunchVitals;
+    if (typeof candidate !== "object" || candidate === null) return null;
+    const record = candidate as Record<string, unknown>;
+    return {
+      lcpMs: record["lcpMs"],
+      inpMs: record["inpMs"],
+      cls: record["cls"],
+    };
+  });
+  return measuredVitalsSchema.parse(value);
+};
+
+const cancellation = (signal: AbortSignal | undefined): Promise<never> =>
+  new Promise((_, reject) => {
+    if (signal?.aborted === true) {
+      reject(new LaunchMeasurementDriverError("CANCELLED"));
+      return;
+    }
+    signal?.addEventListener(
+      "abort",
+      () => {
+        reject(new LaunchMeasurementDriverError("CANCELLED"));
+      },
+      {
+        once: true,
+      },
+    );
+  });
+
+/**
+ * Creates the browser adapter at the launch-measurement seam. Raw pages, headers and script bodies
+ * stay inside this module; callers receive only the bounded contract projection.
+ */
+export const createPlaywrightLaunchMeasurementDriver = (
+  options: PlaywrightLaunchMeasurementOptions = {},
+): LaunchMeasurementDriver => {
+  const parsed = launchMeasurementOptionsSchema.parse({
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+  });
+  if (options.resolveHostname !== undefined && typeof options.resolveHostname !== "function") {
+    throw new TypeError("Launch measurement hostname resolver must be a function");
+  }
+  const timeoutMs = parsed.timeoutMs ?? 15_000;
+  const resolveHostname = options.resolveHostname ?? ((hostname: string) => lookup(hostname, { all: true }));
+
+  return {
+    id: "PLAYWRIGHT",
+    measure: async (candidate, signal) => {
+      let configuration: LaunchMeasurementPlanConfiguration;
+      try {
+        configuration = launchMeasurementPlanConfigurationSchema.parse(candidate);
+      } catch (error: unknown) {
+        throw new LaunchMeasurementDriverError("INVALID_INPUT", { cause: error });
+      }
+      let policy: Awaited<ReturnType<typeof resolveTargetNetworkPolicy>>;
+      try {
+        policy = await resolveTargetNetworkPolicy(configuration.targetOrigin, resolveHostname);
+      } catch (error: unknown) {
+        throw new LaunchMeasurementDriverError("ORIGIN_FORBIDDEN", { cause: error });
+      }
+      let browser: Awaited<ReturnType<typeof chromium.launch>>;
+      try {
+        browser = await chromium.launch({ headless: true, args: [...policy.launchArgs] });
+      } catch (error: unknown) {
+        throw new LaunchMeasurementDriverError("DRIVER_SETUP_FAILED", { cause: error });
+      }
+      const measured = async (): Promise<LaunchBrowserMeasurement> => {
+        const samples: LaunchBrowserMeasurement["samples"] = [];
+        let headers: LaunchBrowserMeasurement["headers"] = [];
+        let firstScripts: ScriptEvidence = { bytes: 0, bodies: [] };
+        for (let index = 0; index < configuration.samples; index += 1) {
+          const context = await browser.newContext({
+            acceptDownloads: false,
+            serviceWorkers: "block",
+            permissions: [],
+          });
+          const scripts: ScriptEvidence = { bytes: 0, bodies: [] };
+          const failure: LaunchNetworkFailure = { code: null };
+          if (index === 0) firstScripts = scripts;
+          try {
+            await bindLaunchMeasurementNetwork({
+              context,
+              allowedOrigin: policy.allowedOrigin,
+              timeoutMs,
+              collectScriptBodies: index === 0,
+              scripts,
+              failure,
+            });
+            const page = await context.newPage();
+            page.setDefaultTimeout(timeoutMs);
+            page.on("dialog", (dialog) => {
+              failure.code ??= "EVIDENCE_INVALID";
+              void dialog.dismiss().catch(() => undefined);
+            });
+            page.on("download", (download) => {
+              failure.code ??= "EVIDENCE_INVALID";
+              void download.cancel().catch(() => undefined);
+            });
+            await installVitalsObserver(page);
+            let response;
+            try {
+              response = await page.goto(exactOriginUrl(policy.allowedOrigin, configuration.probePath), {
+                waitUntil: "load",
+                timeout: timeoutMs,
+              });
+            } catch (error: unknown) {
+              assertLaunchNetworkSucceeded(failure);
+              throw error;
+            }
+            assertLaunchNetworkSucceeded(failure);
+            if (response === null) throw new LaunchMeasurementDriverError("EVIDENCE_INVALID");
+            if (index === 0) {
+              const responseHeaders = response.headers();
+              headers = configuration.requiredHeaders.map((name) => ({
+                name,
+                present: typeof responseHeaders[name] === "string" && responseHeaders[name] !== "",
+              }));
+            }
+            await page.waitForTimeout(LAUNCH_SETTLE_MS);
+            await page.keyboard.press("Tab");
+            await page.waitForTimeout(LAUNCH_SETTLE_MS);
+            assertLaunchNetworkSucceeded(failure);
+            const vitals = await readVitals(page);
+            samples.push({ ...vitals, scriptBytes: scripts.bytes });
+          } finally {
+            await context.close().catch(() => undefined);
+          }
+        }
+
+        const privateRoutes: LaunchBrowserMeasurement["privateRoutes"] = [];
+        for (const path of configuration.privateRoutes) {
+          const context = await browser.newContext({
+            acceptDownloads: false,
+            serviceWorkers: "block",
+            permissions: [],
+          });
+          try {
+            const failure: LaunchNetworkFailure = { code: null };
+            await bindLaunchMeasurementNetwork({
+              context,
+              allowedOrigin: policy.allowedOrigin,
+              timeoutMs,
+              collectScriptBodies: false,
+              scripts: { bytes: 0, bodies: [] },
+              failure,
+            });
+            const page = await context.newPage();
+            let response;
+            try {
+              response = await page.goto(exactOriginUrl(policy.allowedOrigin, path), {
+                waitUntil: "domcontentloaded",
+                timeout: timeoutMs,
+              });
+            } catch (error: unknown) {
+              assertLaunchNetworkSucceeded(failure);
+              throw error;
+            }
+            assertLaunchNetworkSucceeded(failure);
+            if (response === null) throw new LaunchMeasurementDriverError("EVIDENCE_INVALID");
+            privateRoutes.push({ path, statusCode: response.status() });
+          } finally {
+            await context.close().catch(() => undefined);
+          }
+        }
+        return launchBrowserMeasurementSchema.parse({
+          samples,
+          headers,
+          privateRoutes,
+          secrets: secretCounts(firstScripts.bodies),
+          scannedScriptBytes: firstScripts.bytes,
+          browserName: "CHROMIUM",
+          browserVersion: browser.version(),
+        });
+      };
+      try {
+        return await Promise.race([measured(), cancellation(signal)]);
+      } catch (error: unknown) {
+        if (error instanceof LaunchMeasurementDriverError) throw error;
+        throw new LaunchMeasurementDriverError(
+          isTimeoutError(error) ? "MEASUREMENT_TIMEOUT" : "EVIDENCE_INVALID",
+          { cause: error },
+        );
+      } finally {
+        await browser.close().catch(() => undefined);
+      }
+    },
+  };
 };
 
 const playwrightDriverOptionsSchema = z

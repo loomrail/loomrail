@@ -17,9 +17,15 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import type { VerificationRecipe } from "@loomrail/contracts";
+import { treeOfWorktree } from "@loomrail/workspace";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { executeVerificationRecipe, verificationBaselineEnvironment } from "../src/index.js";
+import {
+  executeVerificationRecipe,
+  prepareVerificationProcessIntent,
+  startVerificationService,
+  verificationBaselineEnvironment,
+} from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
 // Production recipes default to 300 seconds. Fixtures stay much tighter while retaining enough
@@ -60,6 +66,38 @@ const installRecipe = async (
       manifestPath: "package.json",
       manifestContentHash: createHash("sha256").update(manifest).digest("hex"),
       scriptName: "test",
+      scriptBodyPreview: script,
+    },
+  };
+};
+
+const installServiceRecipe = async (repositoryPath: string, source: string): Promise<VerificationRecipe> => {
+  const script = "node launch-service-fixture.cjs";
+  const manifest = `${JSON.stringify({ scripts: { start: script } })}\n`;
+  await writeFile(join(repositoryPath, "launch-service-fixture.cjs"), `${source}\n`);
+  await writeFile(join(repositoryPath, "package.json"), manifest);
+  await execFileAsync("git", ["add", "package.json", "launch-service-fixture.cjs"], {
+    cwd: repositoryPath,
+  });
+  await execFileAsync("git", ["commit", "--amend", "--no-edit"], { cwd: repositoryPath });
+  return {
+    schemaVersion: 1,
+    id: "package-start",
+    kind: "SERVE",
+    label: "Start service",
+    required: false,
+    executable: "npm",
+    argv: ["run", "start"],
+    cwd: ".",
+    timeoutSeconds: TEST_RECIPE_TIMEOUT_SECONDS,
+    outputLimitBytes: 4_096,
+    environmentProfile: "VERIFICATION_BASELINE",
+    networkPolicy: "INHERIT_HOST",
+    provenance: {
+      source: "PACKAGE_JSON_SCRIPT",
+      manifestPath: "package.json",
+      manifestContentHash: createHash("sha256").update(manifest).digest("hex"),
+      scriptName: "start",
       scriptBodyPreview: script,
     },
   };
@@ -122,6 +160,87 @@ describe("verification recipe runner", () => {
     expect(output).not.toContain(secret);
     expect(output).not.toContain(ownerHome);
     expect(result.observation.output?.available).toBe(true);
+  });
+
+  it("keeps an approved service alive until stop and returns only bounded typed metadata", async () => {
+    const { artifacts, repositoryPath } = await makeRepo();
+    const recipe = await installServiceRecipe(repositoryPath, "setInterval(() => undefined, 1_000);");
+    const runId = "launch-service-1";
+    await prepareVerificationProcessIntent(artifacts, runId);
+    const expectedTree = await execFileAsync("git", ["write-tree"], { cwd: repositoryPath }).then(
+      ({ stdout }) => stdout.trim(),
+    );
+    const started = await startVerificationService({
+      recipe,
+      worktreePath: repositoryPath,
+      expectedTree,
+      processGuard: { runId, registryDirectory: artifacts },
+    });
+    expect(started.state).toBe("STARTED");
+    if (started.state !== "STARTED") throw new Error("Service did not start");
+    const early = await Promise.race([
+      started.completion.then(() => "completed" as const),
+      new Promise<"running">((resolve) =>
+        setTimeout(() => {
+          resolve("running");
+        }, 250),
+      ),
+    ]);
+    expect(early).toBe("running");
+    started.stop();
+    const terminal = await started.completion;
+    expect(terminal).toMatchObject({
+      state: "STOPPED",
+      errorCode: null,
+      beforeTree: expectedTree,
+      afterTree: expectedTree,
+      processStopped: true,
+      outputTruncated: false,
+    });
+    expect(terminal).not.toHaveProperty("output");
+  });
+
+  it("refuses a non-SERVE recipe, stale tree and symlink escape before spawn", async () => {
+    const { artifacts, repositoryPath } = await makeRepo();
+    const service = await installServiceRecipe(repositoryPath, "setInterval(() => undefined, 1_000);");
+    const expectedTree = await execFileAsync("git", ["write-tree"], { cwd: repositoryPath }).then(
+      ({ stdout }) => stdout.trim(),
+    );
+    const runId = "launch-service-refused";
+    await prepareVerificationProcessIntent(artifacts, runId);
+    await expect(
+      startVerificationService({
+        recipe: { ...service, kind: "CUSTOM" },
+        worktreePath: repositoryPath,
+        expectedTree,
+        processGuard: { runId, registryDirectory: artifacts },
+      }),
+    ).resolves.toMatchObject({ state: "ERROR", errorCode: "RECIPE_NOT_APPROVED" });
+    await expect(
+      startVerificationService({
+        recipe: service,
+        worktreePath: repositoryPath,
+        expectedTree: "f".repeat(40),
+        processGuard: { runId, registryDirectory: artifacts },
+      }),
+    ).resolves.toMatchObject({ state: "ERROR", errorCode: "TREE_MUTATED" });
+
+    const outside = join(repositoryPath, "..", "outside service");
+    await mkdir(outside);
+    await symlink(
+      outside,
+      join(repositoryPath, "escaped-service"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const treeWithSymlink = await treeOfWorktree({ worktreePath: repositoryPath });
+    await expect(
+      startVerificationService({
+        recipe: { ...service, cwd: "escaped-service" },
+        worktreePath: repositoryPath,
+        expectedTree: treeWithSymlink,
+        processGuard: { runId, registryDirectory: artifacts },
+      }),
+    ).resolves.toMatchObject({ state: "ERROR", errorCode: "RECIPE_NOT_APPROVED" });
   });
 
   it("records a real non-zero exit as FAILED", async () => {

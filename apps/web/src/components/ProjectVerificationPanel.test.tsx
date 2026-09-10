@@ -200,7 +200,7 @@ describe("ProjectVerificationView", () => {
     expect(html).not.toContain("Cancel run");
   });
 
-  it("uses the stable Unit, Integration, E2E, Build, Lint, Custom group order", () => {
+  it("uses the stable Unit, Integration, E2E, Build, Lint, Audit, Custom group order", () => {
     const unit = plan.recipes[0];
     if (unit === undefined) throw new Error("Expected the fixture plan to carry a recipe");
     const groupedPlan: VerificationPlan = {
@@ -222,6 +222,14 @@ describe("ProjectVerificationView", () => {
           argv: ["run", "build"],
           provenance: { ...unit.provenance, scriptName: "build", scriptBodyPreview: "vite build" },
         },
+        {
+          ...unit,
+          id: "package-audit",
+          kind: "AUDIT",
+          label: "Audit",
+          argv: ["run", "audit"],
+          provenance: { ...unit.provenance, scriptName: "audit", scriptBodyPreview: "pnpm audit" },
+        },
         unit,
       ],
     };
@@ -229,6 +237,7 @@ describe("ProjectVerificationView", () => {
 
     expect(html.indexOf("UNIT checks")).toBeLessThan(html.indexOf("BUILD checks"));
     expect(html.indexOf("BUILD checks")).toBeLessThan(html.indexOf("LINT checks"));
+    expect(html.indexOf("LINT checks")).toBeLessThan(html.indexOf("AUDIT checks"));
   });
 
   it("makes stale evidence and the reason explicit instead of presenting it as passed", () => {

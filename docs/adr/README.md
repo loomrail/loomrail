@@ -34,3 +34,4 @@ record.
 | [0024](0024-local-provider-deadline-covers-one-verification-call.md) | Accepted              | Local session covers one maximum verification call   |
 | [0025](0025-handoff-deadline-joins-the-session-task.md)              | Accepted              | Handoff joins session task before successor          |
 | [0026](0026-safe-verification-plan-context-projection.md)            | Accepted              | Safe immutable verification-plan context projection  |
+| [0027](0027-owner-approved-local-launch-measurements.md)             | Accepted              | Owner-approved local launch measurements             |

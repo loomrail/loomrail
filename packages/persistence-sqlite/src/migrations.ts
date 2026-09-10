@@ -287,6 +287,12 @@ const migrations: readonly Migration[] = [
     name: "workspace_tool_exact_edit",
     filename: "0057_workspace_tool_exact_edit.sql",
   },
+  {
+    version: 58,
+    name: "launch_measurements",
+    filename: "0058_launch_measurements.sql",
+    rebuildsAReferencedTable: true,
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

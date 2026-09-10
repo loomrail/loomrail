@@ -2079,6 +2079,37 @@ two concurrent cycle-forming attempts; start-before/after blocker Acceptance; st
 and command-ID reuse; restart recovery; HTTP session/Origin/CSRF; deterministic order; hostile Unicode text remains
 ordinary UI text and no secret/path/provider payload enters Event, response or logs.
 
+### Local launch-measurement delta (T76)
+
+**T76 — untrusted launch config escapes the Project, leaks data or leaves a process alive. Critical.** Repository
+text could name an external origin, traversal/symlink cwd, hostile script, credential-bearing path, oversized response
+or service that forks descendants. A crash between spawn and terminal persistence could otherwise orphan that tree;
+provider prose could be mistaken for measured evidence; raw headers/body/output could disclose secrets.
+
+Only an authenticated HUMAN command adopts a bounded `LaunchMeasurementPlan` against the exact active Verification
+Plan. Startup is restricted to an exact `SERVE` recipe already previewed and adopted through Q17; argv stays an array,
+cwd is canonical below the repository, environment is scrubbed and `shell:false`. Target is a bare loopback origin
+with the existing DNS pinning and read-only network interception. Bodies are bounded in memory, scanned locally and
+discarded; persisted evidence contains only numeric metrics, status/header presence and secret category counts.
+Monorepo discovery reads only regular direct `apps/<portable-name>/package.json` entries, caps the directory at 32,
+never follows symlinks or evaluates workspace globs, and proposes only the closed service-script vocabulary under the
+existing 12-recipe cap. Exact nested manifest bytes and cwd are revalidated immediately before spawn.
+An inherited workspace package-manager executable is independently revalidated from the exact root manifest; the
+nested manifest supplies only the exact service script and cannot silently select another executable.
+
+Service execution uses the existing orphan-guard supervisor. Completion, cancellation and startup recovery retain
+authority until the exact process record proves `STOPPED`; an interrupted run is never replayed automatically.
+Uncertain termination is persisted as active `BLOCKED / SERVICE_TERMINATION_FAILED`, prevents a second Run and
+offers only another owner-initiated safe-stop attempt. A missing record after that state is not accepted as stop proof.
+Tree mutation, recipe/plan drift, off-origin redirect, Cookie/Authorization, output/response limit or early exit
+produces a closed typed error. `DEPS_AUDIT` links an exact current Q17 check and never parses arbitrary text. Providers
+receive no L2 mutation or result payload.
+
+Required verification: allowed local target; external/credential/path/redirect refusal; changed and disabled plan;
+symlink/traversal cwd; output/response/token-like canaries; service descendants; timeout/cancel/restart with STOPPED
+proof, durable blocked/missing-record recovery and no replay; current/stale/missing AUDIT reference; idempotency;
+macOS/Windows paths with spaces and Unicode; Event/API/UI/export/log leak scan.
+
 ### Filesystem, shell and Git
 
 - canonical workspace allowlist;

@@ -24,6 +24,9 @@ import {
   evidenceArtifactSchema,
   humanRequestSchema,
   humanRequestStatusSchema,
+  launchDependencyAuditEvidenceSchema,
+  launchMeasurementPlanSchema,
+  launchMeasurementRunSchema,
   MAX_AUTOMATIC_CORRECTION_RUNS,
   MAX_TOTAL_CORRECTION_RUNS,
   MAX_DEPENDENCY_GRAPH_EDGES,
@@ -100,6 +103,9 @@ import {
   type DomainEvent,
   type EvidenceArtifact,
   type HumanRequest,
+  type LaunchDependencyAuditEvidence,
+  type LaunchMeasurementPlan,
+  type LaunchMeasurementRun,
   type McpCapabilitySnapshot,
   type McpConsent,
   type McpGrant,
@@ -167,6 +173,12 @@ import {
   qaWorkflowOutcome,
   decideProjectProviderPreference,
   decideProjectWorkspaceStrategy,
+  decideLaunchMeasurementPlanAdoption,
+  decideLaunchMeasurementPlanDisable,
+  decideLaunchMeasurementRunCancellation,
+  decideLaunchMeasurementRunCompletion,
+  decideLaunchMeasurementRunInterruption,
+  decideLaunchMeasurementRunReservation,
   decideVerificationPlanAdoption,
   decideVerificationPlanDisable,
   decideVerificationPlanPublicationCompleted,
@@ -237,6 +249,7 @@ import {
   WorkflowDomainError,
   ReadinessDomainError,
   McpDomainError,
+  LaunchMeasurementDomainError,
   WorkspaceToolDomainError,
   ProviderSelectionDomainError,
   WorkspaceStrategyDomainError,
@@ -258,6 +271,8 @@ import {
   type ConstitutionPublicationRequestedIntent,
   type ProjectReadinessAssessedIntent,
   type ProjectReadinessAttestedIntent,
+  type LaunchMeasurementPlanChangedIntent,
+  type LaunchMeasurementRunChangedIntent,
   type ProjectProviderPreferenceChangedIntent,
   type ProjectWorkspaceStrategyChangedIntent,
   type VerificationPlanAdoptedIntent,
@@ -1204,6 +1219,38 @@ const providerSessionRowSchema = z.object({
 
 type ProviderSessionRow = z.infer<typeof providerSessionRowSchema>;
 
+const launchMeasurementPlanRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  revision: z.number().int(),
+  status: z.string(),
+  content_hash: z.string(),
+  plan_json: z.string(),
+  created_at: z.string(),
+});
+
+const launchMeasurementRunRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  plan_id: z.string(),
+  status: z.string(),
+  tested_tree: z.string(),
+  run_json: z.string(),
+  started_at: z.string(),
+  completed_at: z.string().nullable(),
+  version: z.number().int(),
+});
+
+const launchDependencyAuditRowSchema = z.object({
+  verification_run_id: z.string(),
+  verification_check_id: z.string(),
+  recipe_id: z.string(),
+  tested_tree: z.string(),
+  status: z.string(),
+});
+
 const contextPackRecipeRowSchema = z.object({
   id: z.string(),
   schema_version: z.number().int(),
@@ -1266,6 +1313,17 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("GET_PROJECT_CONSTITUTION_SNAPSHOT"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_VERIFICATION_PLAN"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_PROJECT_LAUNCH_MEASUREMENT"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_LAUNCH_MEASUREMENT_RUN_CONTEXT"), runId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("LIST_ACTIVE_LAUNCH_MEASUREMENT_RUNS") }).strict(),
+  z
+    .object({
+      type: z.literal("GET_LATEST_PROJECT_AUDIT_EVIDENCE"),
+      projectId: opaqueIdSchema,
+      recipeId: opaqueIdSchema,
+      testedTree: z.string().regex(/^[0-9a-f]{40}$/u),
+    })
+    .strict(),
   z.object({ type: z.literal("GET_VERIFICATION_RUN"), runId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_VERIFICATION_RUN_CONTEXT"), runId: opaqueIdSchema }).strict(),
   z
@@ -1545,6 +1603,48 @@ const verificationPlanFromRow = (value: unknown): VerificationPlan => {
     );
   }
   return plan;
+};
+
+const launchMeasurementPlanFromRow = (value: unknown): LaunchMeasurementPlan => {
+  const row = launchMeasurementPlanRowSchema.parse(value);
+  const plan = launchMeasurementPlanSchema.parse(parseJson(row.plan_json));
+  if (
+    plan.id !== row.id ||
+    plan.schemaVersion !== row.schema_version ||
+    plan.projectId !== row.project_id ||
+    plan.revision !== row.revision ||
+    plan.status !== row.status ||
+    plan.contentHash !== row.content_hash ||
+    plan.createdAt !== row.created_at
+  ) {
+    throw new StateStoreError(
+      "PERSISTENCE_FAILURE",
+      "The launch measurement Plan row does not match its normalized content",
+    );
+  }
+  return plan;
+};
+
+const launchMeasurementRunFromRow = (value: unknown): LaunchMeasurementRun => {
+  const row = launchMeasurementRunRowSchema.parse(value);
+  const run = launchMeasurementRunSchema.parse(parseJson(row.run_json));
+  if (
+    run.id !== row.id ||
+    run.schemaVersion !== row.schema_version ||
+    run.projectId !== row.project_id ||
+    run.planId !== row.plan_id ||
+    run.status !== row.status ||
+    run.testedTree !== row.tested_tree ||
+    run.startedAt !== row.started_at ||
+    run.completedAt !== row.completed_at ||
+    run.version !== row.version
+  ) {
+    throw new StateStoreError(
+      "PERSISTENCE_FAILURE",
+      "The launch measurement Run row does not match its normalized content",
+    );
+  }
+  return run;
 };
 
 const verificationPlanPublicationFromRow = (value: unknown): VerificationPlanPublication => {
@@ -2497,6 +2597,9 @@ const commandHash = (command: StateCommand): string =>
     )
     .digest("hex");
 
+const launchMeasurementPlanContentHash = (plan: Omit<LaunchMeasurementPlan, "contentHash">): string =>
+  createHash("sha256").update(canonicalJson(plan)).digest("hex");
+
 const lastInsertSequence = (value: number | bigint): number => {
   const sequence = typeof value === "bigint" ? Number(value) : value;
   if (!Number.isSafeInteger(sequence) || sequence < 1) {
@@ -2972,6 +3075,59 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectPendingVerificationPlanPublications = database.prepare(
       `SELECT * FROM verification_plan_publications
        WHERE status = 'PENDING' ORDER BY created_at, id`,
+    );
+    const selectLatestLaunchMeasurementPlan = database.prepare(
+      `SELECT * FROM launch_measurement_plans
+       WHERE project_id = ? ORDER BY revision DESC LIMIT 1`,
+    );
+    const selectLaunchMeasurementPlanById = database.prepare(
+      "SELECT * FROM launch_measurement_plans WHERE id = ?",
+    );
+    const insertLaunchMeasurementPlan = database.prepare(
+      `INSERT INTO launch_measurement_plans (
+        id, schema_version, project_id, revision, status, content_hash, plan_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectLaunchMeasurementRunById = database.prepare(
+      "SELECT * FROM launch_measurement_runs WHERE id = ?",
+    );
+    const selectLatestLaunchMeasurementRun = database.prepare(
+      `SELECT * FROM launch_measurement_runs
+       WHERE project_id = ? ORDER BY started_at DESC, id DESC LIMIT 1`,
+    );
+    const selectActiveLaunchMeasurementRunForProject = database.prepare(
+      `SELECT * FROM launch_measurement_runs
+       WHERE project_id = ? AND status IN ('RUNNING', 'CANCELLING', 'BLOCKED') LIMIT 1`,
+    );
+    const selectActiveLaunchMeasurementRuns = database.prepare(
+      `SELECT * FROM launch_measurement_runs
+       WHERE status IN ('RUNNING', 'CANCELLING', 'BLOCKED') ORDER BY started_at, id`,
+    );
+    const insertLaunchMeasurementRun = database.prepare(
+      `INSERT INTO launch_measurement_runs (
+        id, schema_version, project_id, plan_id, status, tested_tree, run_json,
+        started_at, completed_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateLaunchMeasurementRun = database.prepare(
+      `UPDATE launch_measurement_runs SET
+        status = ?, run_json = ?, completed_at = ?, version = ?
+       WHERE id = ? AND version = ?`,
+    );
+    const selectLatestProjectAuditEvidence = database.prepare(
+      `SELECT
+         verification_runs.id AS verification_run_id,
+         verification_checks.id AS verification_check_id,
+         verification_checks.recipe_id AS recipe_id,
+         verification_runs.implementation_tree AS tested_tree,
+         verification_checks.status AS status
+       FROM verification_checks
+       INNER JOIN verification_runs ON verification_runs.id = verification_checks.run_id
+       WHERE verification_runs.project_id = ?
+         AND verification_checks.recipe_id = ?
+         AND verification_runs.implementation_tree = ?
+         AND verification_checks.status IN ('PASSED', 'FAILED', 'ERROR', 'INTERRUPTED')
+       ORDER BY verification_runs.created_at DESC, verification_runs.id DESC LIMIT 1`,
     );
     const insertVerificationPlan = database.prepare(
       `INSERT INTO verification_plans (
@@ -3937,6 +4093,66 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const readVerificationPlan = (id: string): VerificationPlan | null => {
       const row = selectVerificationPlanById.get(id);
       return row === undefined ? null : verificationPlanFromRow(row);
+    };
+
+    const readLatestLaunchMeasurementPlan = (projectId: string): LaunchMeasurementPlan | null => {
+      const row = selectLatestLaunchMeasurementPlan.get(projectId);
+      return row === undefined ? null : launchMeasurementPlanFromRow(row);
+    };
+
+    const readLaunchMeasurementPlan = (id: string): LaunchMeasurementPlan | null => {
+      const row = selectLaunchMeasurementPlanById.get(id);
+      return row === undefined ? null : launchMeasurementPlanFromRow(row);
+    };
+
+    const readLaunchMeasurementRun = (id: string): LaunchMeasurementRun | null => {
+      const row = selectLaunchMeasurementRunById.get(id);
+      return row === undefined ? null : launchMeasurementRunFromRow(row);
+    };
+
+    const persistLaunchMeasurementPlan = (plan: LaunchMeasurementPlan): void => {
+      insertLaunchMeasurementPlan.run(
+        plan.id,
+        plan.schemaVersion,
+        plan.projectId,
+        plan.revision,
+        plan.status,
+        plan.contentHash,
+        JSON.stringify(plan),
+        plan.createdAt,
+      );
+    };
+
+    const persistNewLaunchMeasurementRun = (run: LaunchMeasurementRun): void => {
+      insertLaunchMeasurementRun.run(
+        run.id,
+        run.schemaVersion,
+        run.projectId,
+        run.planId,
+        run.status,
+        run.testedTree,
+        JSON.stringify(run),
+        run.startedAt,
+        run.completedAt,
+        run.version,
+      );
+    };
+
+    const persistChangedLaunchMeasurementRun = (run: LaunchMeasurementRun, expectedVersion: number): void => {
+      const updated = updateLaunchMeasurementRun.run(
+        run.status,
+        JSON.stringify(run),
+        run.completedAt,
+        run.version,
+        run.id,
+        expectedVersion,
+      );
+      if (updated.changes !== 1) {
+        throw new LaunchMeasurementDomainError(
+          "RUN_VERSION_CONFLICT",
+          "The launch measurement Run changed while the command was applied",
+        );
+      }
     };
 
     const readVerificationPlanPublication = (id: string): VerificationPlanPublication | null => {
@@ -5624,6 +5840,44 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
     const appendWorkspaceStrategyEvent = (
       intent: ProjectWorkspaceStrategyChangedIntent,
+      metadata: {
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "PROJECT",
+        metadata.projectId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "PROJECT",
+        aggregateId: metadata.projectId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
+    const appendLaunchMeasurementEvent = (
+      intent: LaunchMeasurementPlanChangedIntent | LaunchMeasurementRunChangedIntent,
       metadata: {
         projectId: string;
         actor: Actor;
@@ -7398,6 +7652,195 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "ADOPT_LAUNCH_MEASUREMENT_PLAN") {
+        const project = readProject(command.payload.projectId);
+        const currentPlan = readLatestLaunchMeasurementPlan(command.payload.projectId);
+        const verificationPlan = readLatestVerificationPlan(command.payload.projectId);
+        const newPlanId = createId("launchMeasurementPlan");
+        const draft: Omit<LaunchMeasurementPlan, "contentHash"> = {
+          schemaVersion: 1,
+          id: newPlanId,
+          projectId: command.payload.projectId,
+          revision: (currentPlan?.revision ?? 0) + 1,
+          status: "ACTIVE",
+          configuration: command.payload.configuration,
+          createdAt: occurredAt,
+        };
+        const decision = decideLaunchMeasurementPlanAdoption(command, {
+          now: occurredAt,
+          newPlanId,
+          contentHash: launchMeasurementPlanContentHash(draft),
+          project: project ?? undefined,
+          currentPlan: currentPlan ?? undefined,
+          verificationPlan: verificationPlan ?? undefined,
+        });
+        const updated = database
+          .prepare("UPDATE projects SET version = ?, updated_at = ? WHERE id = ? AND version = ?")
+          .run(
+            decision.project.version,
+            decision.project.updatedAt,
+            decision.project.id,
+            decision.project.version - 1,
+          );
+        if (updated.changes !== 1) {
+          throw new LaunchMeasurementDomainError(
+            "PROJECT_VERSION_CONFLICT",
+            "The Project changed while the launch measurement Plan was adopted",
+          );
+        }
+        persistLaunchMeasurementPlan(decision.plan);
+        const event = appendLaunchMeasurementEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "LAUNCH_MEASUREMENT_PLAN_CHANGED",
+          replayed: false,
+          plan: decision.plan,
+          projectVersion: decision.project.version,
+          event,
+        });
+      }
+
+      if (command.type === "DISABLE_LAUNCH_MEASUREMENT_PLAN") {
+        const project = readProject(command.payload.projectId);
+        const currentPlan = readLatestLaunchMeasurementPlan(command.payload.projectId);
+        const newPlanId = createId("launchMeasurementPlan");
+        const draft: Omit<LaunchMeasurementPlan, "contentHash"> | null =
+          currentPlan === null
+            ? null
+            : {
+                ...currentPlan,
+                id: newPlanId,
+                revision: currentPlan.revision + 1,
+                status: "DISABLED",
+                createdAt: occurredAt,
+              };
+        const decision = decideLaunchMeasurementPlanDisable(command, {
+          now: occurredAt,
+          newPlanId,
+          contentHash: draft === null ? "0".repeat(64) : launchMeasurementPlanContentHash(draft),
+          project: project ?? undefined,
+          currentPlan: currentPlan ?? undefined,
+        });
+        const updated = database
+          .prepare("UPDATE projects SET version = ?, updated_at = ? WHERE id = ? AND version = ?")
+          .run(
+            decision.project.version,
+            decision.project.updatedAt,
+            decision.project.id,
+            decision.project.version - 1,
+          );
+        if (updated.changes !== 1) {
+          throw new LaunchMeasurementDomainError(
+            "PROJECT_VERSION_CONFLICT",
+            "The Project changed while the launch measurement Plan was disabled",
+          );
+        }
+        persistLaunchMeasurementPlan(decision.plan);
+        const event = appendLaunchMeasurementEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "LAUNCH_MEASUREMENT_PLAN_CHANGED",
+          replayed: false,
+          plan: decision.plan,
+          projectVersion: decision.project.version,
+          event,
+        });
+      }
+
+      if (command.type === "START_LAUNCH_MEASUREMENT_RUN") {
+        const project = readProject(command.payload.projectId);
+        const plan = readLatestLaunchMeasurementPlan(command.payload.projectId);
+        const verificationPlan = readLatestVerificationPlan(command.payload.projectId);
+        const activeRow = selectActiveLaunchMeasurementRunForProject.get(command.payload.projectId);
+        const activeRun = activeRow === undefined ? null : launchMeasurementRunFromRow(activeRow);
+        const decision = decideLaunchMeasurementRunReservation(command, {
+          now: occurredAt,
+          newRunId: createId("launchMeasurementRun"),
+          project: project ?? undefined,
+          plan: plan ?? undefined,
+          verificationPlan: verificationPlan ?? undefined,
+          activeRun: activeRun ?? undefined,
+        });
+        persistNewLaunchMeasurementRun(decision.run);
+        const event = appendLaunchMeasurementEvent(decision.event, {
+          projectId: decision.run.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "LAUNCH_MEASUREMENT_RUN_CHANGED",
+          replayed: false,
+          run: decision.run,
+          event,
+        });
+      }
+
+      if (command.type === "CANCEL_LAUNCH_MEASUREMENT_RUN") {
+        const current = readLaunchMeasurementRun(command.payload.runId);
+        const decision = decideLaunchMeasurementRunCancellation(command, {
+          run: current ?? undefined,
+        });
+        persistChangedLaunchMeasurementRun(decision.run, command.payload.expectedVersion);
+        const event = appendLaunchMeasurementEvent(decision.event, {
+          projectId: decision.run.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "LAUNCH_MEASUREMENT_RUN_CHANGED",
+          replayed: false,
+          run: decision.run,
+          event,
+        });
+      }
+
+      if (
+        command.type === "COMPLETE_LAUNCH_MEASUREMENT_RUN" ||
+        command.type === "INTERRUPT_LAUNCH_MEASUREMENT_RUN"
+      ) {
+        const current = readLaunchMeasurementRun(command.payload.runId);
+        const plan = current === null ? null : readLaunchMeasurementPlan(current.planId);
+        const decision =
+          command.type === "COMPLETE_LAUNCH_MEASUREMENT_RUN"
+            ? decideLaunchMeasurementRunCompletion(command, {
+                now: occurredAt,
+                run: current ?? undefined,
+                plan: plan ?? undefined,
+              })
+            : decideLaunchMeasurementRunInterruption(command, {
+                now: occurredAt,
+                run: current ?? undefined,
+              });
+        persistChangedLaunchMeasurementRun(decision.run, command.payload.expectedVersion);
+        const event = appendLaunchMeasurementEvent(decision.event, {
+          projectId: decision.run.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "LAUNCH_MEASUREMENT_RUN_CHANGED",
+          replayed: false,
+          run: decision.run,
+          event,
+        });
+      }
+
       if (command.type === "ADOPT_VERIFICATION_PLAN") {
         const project = readProject(command.payload.projectId);
         const currentPlan = readLatestVerificationPlan(command.payload.projectId);
@@ -7720,7 +8163,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const decision = decideVerificationRunReservation(command, {
           now: occurredAt,
           newRunId: createId("verificationRun"),
-          newCheckIds: (plan?.recipes ?? []).map(() => createId("verificationCheck")),
+          newCheckIds: (plan?.recipes ?? [])
+            .filter((recipe) => recipe.kind !== "SERVE")
+            .map(() => createId("verificationCheck")),
           ordinal,
           project: project ?? undefined,
           workItem: workItem ?? undefined,
@@ -12386,6 +12831,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           error instanceof ProviderAllowanceDomainError ||
           error instanceof ProviderSelectionDomainError ||
           error instanceof WorkspaceStrategyDomainError ||
+          error instanceof LaunchMeasurementDomainError ||
           error instanceof VerificationDomainError ||
           error instanceof VerificationCorrectionError ||
           error instanceof QACompletionError ||
@@ -12519,6 +12965,62 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             publication:
               publicationRow === undefined ? null : verificationPlanPublicationFromRow(publicationRow),
           };
+        }
+        case "GET_PROJECT_LAUNCH_MEASUREMENT": {
+          const project = readProject(queryValue.projectId);
+          if (project === null) {
+            throw new LaunchMeasurementDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+          }
+          const latestRunRow = selectLatestLaunchMeasurementRun.get(queryValue.projectId);
+          return {
+            type: "PROJECT_LAUNCH_MEASUREMENT",
+            project,
+            plan: readLatestLaunchMeasurementPlan(queryValue.projectId),
+            latestRun: latestRunRow === undefined ? null : launchMeasurementRunFromRow(latestRunRow),
+          };
+        }
+        case "GET_LAUNCH_MEASUREMENT_RUN_CONTEXT": {
+          const run = readLaunchMeasurementRun(queryValue.runId);
+          const plan = run === null ? null : readLaunchMeasurementPlan(run.planId);
+          const project = run === null ? null : readProject(run.projectId);
+          const verificationPlan = run === null ? null : readVerificationPlan(run.verificationPlanId);
+          if (run === null || plan === null || project === null || verificationPlan === null) {
+            throw new LaunchMeasurementDomainError(
+              "RUN_NOT_FOUND",
+              "The launch measurement Run has incomplete execution context",
+            );
+          }
+          return {
+            type: "LAUNCH_MEASUREMENT_RUN_CONTEXT",
+            project,
+            plan,
+            run,
+            verificationPlan,
+          };
+        }
+        case "LIST_ACTIVE_LAUNCH_MEASUREMENT_RUNS":
+          return {
+            type: "LAUNCH_MEASUREMENT_RUNS",
+            runs: selectActiveLaunchMeasurementRuns.all().map(launchMeasurementRunFromRow),
+          };
+        case "GET_LATEST_PROJECT_AUDIT_EVIDENCE": {
+          const value = selectLatestProjectAuditEvidence.get(
+            queryValue.projectId,
+            queryValue.recipeId,
+            queryValue.testedTree,
+          );
+          let evidence: LaunchDependencyAuditEvidence | null = null;
+          if (value !== undefined) {
+            const row = launchDependencyAuditRowSchema.parse(value);
+            evidence = launchDependencyAuditEvidenceSchema.parse({
+              verificationRunId: row.verification_run_id,
+              verificationCheckId: row.verification_check_id,
+              recipeId: row.recipe_id,
+              testedTree: row.tested_tree,
+              status: row.status,
+            });
+          }
+          return { type: "LAUNCH_DEPENDENCY_AUDIT_EVIDENCE", evidence };
         }
         case "GET_VERIFICATION_RUN": {
           const run = readVerificationRun(queryValue.runId);
@@ -13014,6 +13516,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       } catch (error: unknown) {
         if (
           error instanceof ReadinessDomainError ||
+          error instanceof LaunchMeasurementDomainError ||
           error instanceof VerificationDomainError ||
           error instanceof WorkItemDependencyError ||
           error instanceof WorkItemDomainError ||

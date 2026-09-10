@@ -22,9 +22,14 @@ export {
 } from "./publisher.js";
 export {
   executeVerificationRecipe,
+  startVerificationService,
   verificationBaselineEnvironment,
   type ExecuteVerificationRecipeInput,
+  type StartVerificationServiceInput,
   type VerificationRecipeExecution,
+  type VerificationServiceErrorCode,
+  type VerificationServiceStart,
+  type VerificationServiceTerminal,
 } from "./runner.js";
 export {
   prepareVerificationProcessIntent,
