@@ -36,7 +36,7 @@ test.describe("local launch measurement", () => {
     await verification.getByRole("button", { name: /Approve Plan/ }).click();
     await expect(verification).toContainText("Published to .loomrail/verification-plan.json");
 
-    const launch = settings.locator(".launch-settings:not(.release-settings)");
+    const launch = settings.locator("div.launch-settings:not(.release-settings)");
     await expect(launch.getByRole("heading", { name: "Local launch gates" })).toBeVisible();
     const serviceCommand = launch.getByLabel("Local service command");
     await expect(serviceCommand).toHaveValue("package-start");
@@ -61,10 +61,10 @@ test.describe("local launch measurement", () => {
       .getByRole("group", { name: "Change language" })
       .getByRole("button", { name: "Русский" })
       .click();
-    await expect(page.locator(".launch-settings:not(.release-settings)")).toContainText(
+    await expect(page.locator("div.launch-settings:not(.release-settings)")).toContainText(
       "Локальные launch-gates",
     );
-    await expect(page.locator(".launch-settings:not(.release-settings)")).toContainText(
+    await expect(page.locator("div.launch-settings:not(.release-settings)")).toContainText(
       "Только локальное измерение",
     );
   });

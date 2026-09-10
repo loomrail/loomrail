@@ -2157,6 +2157,49 @@ normalization is not performed, and every other checksum still fails closed as `
 inspection and the mutating open path use the same matcher. Tests prove the one known pair opens/reports ready and an
 unrelated checksum remains refused.
 
+### Guided deployment delta (T79–T81)
+
+**T79 — forged or stale deploy identity dispatches the wrong source/workflow. Critical.** A browser, provider,
+repository file or stale tab can name another Project, Environment, branch, commit or workflow; a dirty tree can
+look like the Release while the remote branch still points elsewhere. L4a accepts mutations only from the
+authenticated HUMAN owner and binds the one-shot approval digest to immutable Release/Environment/Plan identities,
+exact repository slug, named branch, local/remote commit, workflow path/content hash, argv digest and intent. The
+daemon independently canonicalizes the registered Git top level, refuses in-progress operations, symlink workflow,
+dirty/detached source, credential-bearing/non-GitHub origin and a remote ref unequal to local HEAD. The only v1
+workflow path and argv are built in. A bounded conservative recognizer requires an explicit top-level
+`workflow_dispatch`; comments, nested keys and ambiguous YAML fail closed. HTTP/provider output cannot supply
+executable, inputs or secrets.
+
+Required verification: cross-Project and stale identity; SYSTEM actor; modified Environment/Plan/Release; dirty and
+detached source; merge/rebase/cherry-pick/bisect; origin mismatch/credentials/wrong host; unpublished commit;
+traversal/symlink workflow; missing, commented or nested `workflow_dispatch`; Unicode/space macOS and Windows
+repository paths; command ID replay/reuse; mutation routes without session/Origin/CSRF.
+
+**T80 — lost or ambiguous dispatch response causes duplicate deploy or wrong run correlation. Critical.** GitHub may
+accept `workflow_dispatch` while the local CLI times out, is cancelled, exceeds output limits or loses the response.
+Selecting a later run by timestamp/branch/actor or retrying the command would either attach foreign evidence or
+deploy twice. Loomrail writes `RUNNING` before invoking `gh`, accepts only one strict exact-repository run URL and
+otherwise records `UNKNOWN`. Startup changes interrupted `RUNNING` to `UNKNOWN`; it never invokes dispatch. Observe
+requires the already captured numeric run id and validates closed JSON, exact URL, commit and event. No automatic
+retry, latest-run search, polling, probe or rollback exists in L4a.
+
+Required verification: duplicate runner wake; missing/multiple/malformed/off-repository run URL; non-zero exit,
+timeout, cancellation and output overflow after spawn; crash/restart before and after run identity capture;
+malformed/oversized JSON; wrong id/commit/event/URL; terminal and non-terminal conclusion mapping; proof that
+recovery performs zero dispatch calls.
+
+**T81 — deployment auth, repository metadata or untrusted CLI payload leaks through state/log/UI. High.** GitHub CLI
+may inherit token-bearing environment or emit URLs, API messages and control sequences. The production adapter uses
+a closed minimal environment, does not pass `GH_TOKEN`/`GITHUB_TOKEN`, launches without a shell, strips terminal
+escapes/control characters and does not persist raw stdout/stderr/JSON. State and Events contain only validated
+portable slug/branch/commit/workflow hash/run id/URL plus closed error codes and fixed summaries. Absolute paths,
+remote URL, `.env`, provider payloads, response bodies and credential values are excluded from the contracts and
+structured logs.
+
+Required verification: canaries for `GH_TOKEN`, `GITHUB_TOKEN`, `.env`, bearer/token assignment, credential URL,
+provider JSON and absolute macOS/Windows paths across driver result, SQLite/Event, HTTP response and operational log;
+ANSI/OSC/control characters; bounded stdout/stderr/JSON and fixed typed error summaries.
+
 ### Filesystem, shell and Git
 
 - canonical workspace allowlist;

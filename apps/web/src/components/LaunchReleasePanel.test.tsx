@@ -1,9 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { LaunchReleaseProjectResponse, WorkItem } from "@loomrail/contracts";
+import type {
+  DeploymentPreviewResponse,
+  GuidedDeploymentProjectResponse,
+  GithubActionsDeploymentTarget,
+  LaunchReleaseProjectResponse,
+  WorkItem,
+} from "@loomrail/contracts";
 
 import { I18nProvider } from "../i18n";
-import { LaunchReleaseView } from "./LaunchReleasePanel";
+import { GuidedDeploymentView, LaunchReleaseView } from "./LaunchReleasePanel";
 
 const now = "2026-09-10T13:00:00.000Z";
 const environment = {
@@ -93,6 +99,53 @@ const renderView = (snapshot: LaunchReleaseProjectResponse): string =>
     </I18nProvider>,
   );
 
+const deploymentTarget: GithubActionsDeploymentTarget = {
+  presetId: "GITHUB_ACTIONS_WORKFLOW_V1",
+  presetRevision: 1,
+  repositorySlug: "recurkit/recurkit",
+  branch: "main",
+  commitSha: "d".repeat(40),
+  workflowPath: ".github/workflows/deploy-production.yml",
+  workflowContentHash: "e".repeat(64),
+  argvDigest: "f".repeat(64),
+  dispatchTimeoutSeconds: 30,
+  observeTimeoutSeconds: 15,
+  outputLimitBytes: 32_768,
+  observeOutputLimitBytes: 65_536,
+};
+
+const emptyDeployment: GuidedDeploymentProjectResponse = {
+  schemaVersion: 1,
+  projectId: "project-web",
+  projectVersion: 5,
+  latestPlan: null,
+  latestDeployment: null,
+  rollbackAvailability: "UNAVAILABLE",
+};
+
+const renderDeployment = (
+  snapshot: GuidedDeploymentProjectResponse,
+  preview: DeploymentPreviewResponse | null,
+): string =>
+  renderToStaticMarkup(
+    <I18nProvider>
+      <GuidedDeploymentView
+        adopting={false}
+        approving={false}
+        observing={false}
+        onAdopt={vi.fn()}
+        onApprove={vi.fn()}
+        onObserve={vi.fn()}
+        onStart={vi.fn()}
+        preview={preview}
+        previewLoading={false}
+        releaseId="release-web"
+        snapshot={snapshot}
+        starting={false}
+      />
+    </I18nProvider>,
+  );
+
 describe("LaunchReleaseView", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -164,5 +217,102 @@ describe("LaunchReleaseView", () => {
     expect(html).toContain("Action required");
     expect(html).toContain("Secret path evidence is incomplete.");
     expect(html).toContain("Download evidence package");
+  });
+
+  it("explains blocked deploy without offering authority", () => {
+    const html = renderDeployment(emptyDeployment, {
+      schemaVersion: 1,
+      projectId: "project-web",
+      projectVersion: 5,
+      releaseId: "release-web",
+      releaseContentHash: "c".repeat(64),
+      status: "BLOCKED",
+      code: "RELEASE_GATES_BLOCKED",
+    });
+
+    expect(html).toContain("Required release checks are not all passing");
+    expect(html).toContain("Existing workflow only");
+    expect(html).not.toContain("Approve and deploy once");
+    expect(html).not.toContain("Confirm exact plan");
+  });
+
+  it("shows the exact target, distinct final approval and fail-closed unknown state", () => {
+    const plan = {
+      schemaVersion: 1 as const,
+      id: "deployment-plan-web",
+      projectId: "project-web",
+      revision: 1 as const,
+      releaseId: "release-web",
+      releaseContentHash: "c".repeat(64),
+      environmentId: "environment-web",
+      environmentContentHash: environment.contentHash,
+      target: deploymentTarget,
+      contentHash: "1".repeat(64),
+      createdAt: now,
+    };
+    const deployment = {
+      schemaVersion: 1 as const,
+      id: "deployment-web",
+      projectId: "project-web",
+      planId: plan.id,
+      planRevision: 1 as const,
+      planContentHash: plan.contentHash,
+      releaseId: "release-web",
+      releaseContentHash: "c".repeat(64),
+      environmentId: "environment-web",
+      environmentContentHash: environment.contentHash,
+      intent: "STANDARD" as const,
+      approvalDigest: "2".repeat(64),
+      status: "PENDING_APPROVAL" as const,
+      approvalId: null,
+      remoteRunId: null,
+      remoteRunUrl: null,
+      failureCode: null,
+      createdAt: now,
+      approvedAt: null,
+      startedAt: null,
+      completedAt: null,
+      observedAt: null,
+      version: 1,
+    };
+    const ready: DeploymentPreviewResponse = {
+      schemaVersion: 1,
+      projectId: "project-web",
+      projectVersion: 5,
+      releaseId: "release-web",
+      releaseContentHash: "c".repeat(64),
+      status: "READY",
+      target: deploymentTarget,
+    };
+    const pendingHtml = renderDeployment(
+      { ...emptyDeployment, latestPlan: plan, latestDeployment: deployment },
+      ready,
+    );
+    expect(pendingHtml).toContain("recurkit/recurkit");
+    expect(pendingHtml).toContain(".github/workflows/deploy-production.yml");
+    expect(pendingHtml).toContain("Second confirmation");
+    expect(pendingHtml).toContain("Approve and deploy once");
+    expect(pendingHtml).toContain("Rollback is unavailable");
+
+    const unknownHtml = renderDeployment(
+      {
+        ...emptyDeployment,
+        latestPlan: plan,
+        latestDeployment: {
+          ...deployment,
+          status: "UNKNOWN",
+          approvalId: "deployment-approval-web",
+          approvedAt: now,
+          startedAt: now,
+          observedAt: now,
+          failureCode: "DISPATCH_OUTCOME_UNKNOWN",
+          version: 4,
+        },
+      },
+      ready,
+    );
+    expect(unknownHtml).toContain("Do not deploy again");
+    expect(unknownHtml).not.toContain("Prepare another exact attempt");
+    expect(unknownHtml).not.toContain("Approve and deploy once");
   });
 });

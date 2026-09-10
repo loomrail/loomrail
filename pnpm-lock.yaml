@@ -97,6 +97,9 @@ importers:
       '@loomrail/persistence-sqlite':
         specifier: workspace:*
         version: link:../../packages/persistence-sqlite
+      '@loomrail/process-supervision':
+        specifier: workspace:*
+        version: link:../../packages/process-supervision
       '@loomrail/project-constitution':
         specifier: workspace:*
         version: link:../../packages/project-constitution

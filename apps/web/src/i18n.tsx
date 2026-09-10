@@ -381,10 +381,84 @@ const en = {
   "settings.release.gateStatus.FAILED": "Failed",
   "settings.release.gateStatus.ACTION_REQUIRED": "Action required",
   "settings.release.gateStatus.STALE": "Stale",
+  "settings.deploy.title": "Guided deploy",
+  "settings.deploy.description":
+    "Run the repository-owned GitHub Actions workflow for an eligible Preview release after two explicit confirmations.",
+  "settings.deploy.loading": "Checking the exact deployment target…",
+  "settings.deploy.boundaryTitle": "Existing workflow only",
+  "settings.deploy.boundaryNotice":
+    "Loomrail can start only the fixed workflow already stored in this repository. It receives no hosting or SSH credentials and never retries or rolls back automatically.",
+  "settings.deploy.noRelease": "Create a current Preview Release snapshot before preparing a deploy.",
+  "settings.deploy.repository": "GitHub repository",
+  "settings.deploy.branch": "Published branch",
+  "settings.deploy.commit": "Exact commit",
+  "settings.deploy.workflow": "Workflow",
+  "settings.deploy.planNotice":
+    "First confirmation: save this exact repository, branch, commit and workflow as an immutable deployment plan.",
+  "settings.deploy.adopt": "Confirm exact plan",
+  "settings.deploy.adoptAgain": "Prepare another exact attempt",
+  "settings.deploy.approvalNotice":
+    "Second confirmation: this starts one external GitHub Actions run. Review the target above before continuing.",
+  "settings.deploy.approve": "Approve and deploy once",
+  "settings.deploy.approvedNotice":
+    "The exact attempt is approved but has not started. Start it once; Loomrail will not create a replacement automatically.",
+  "settings.deploy.startApproved": "Start approved attempt",
+  "settings.deploy.observe": "Check exact run",
+  "settings.deploy.openRun": "Open this run on GitHub",
+  "settings.deploy.unknownNotice":
+    "The outcome is unknown and the workflow may already have started. Do not deploy again. If an exact GitHub run is linked, check that run instead.",
+  "settings.deploy.failedNotice":
+    "This attempt did not complete successfully ({code}). Review the exact run or prepare a new plan only after the cause is understood.",
+  "settings.deploy.rollbackUnavailable":
+    "Rollback is unavailable: this repository workflow does not expose a verified rollback action.",
+  "settings.deploy.status.PENDING_APPROVAL": "Waiting for final approval",
+  "settings.deploy.status.APPROVED": "Approved, not started",
+  "settings.deploy.status.RUNNING": "GitHub run started",
+  "settings.deploy.status.SUCCEEDED": "Deploy succeeded",
+  "settings.deploy.status.FAILED": "Deploy failed",
+  "settings.deploy.status.UNKNOWN": "Outcome unknown",
+  "settings.deploy.block.RELEASE_STALE":
+    "The Release evidence is stale. Refresh the affected checks and create a new Release snapshot.",
+  "settings.deploy.block.RELEASE_GATES_BLOCKED":
+    "Required release checks are not all passing. Resolve them before preparing a deployment plan.",
+  "settings.deploy.block.ENVIRONMENT_UNSUPPORTED":
+    "Guided deploy currently supports Preview environments only. Production remains blocked.",
+  "settings.deploy.block.REPOSITORY_UNAVAILABLE":
+    "The repository cannot be read. Restore access to the registered project folder and check again.",
+  "settings.deploy.block.REPOSITORY_PATH_NOT_CANONICAL":
+    "The registered folder is a symlink or subfolder. Register the exact physical repository root.",
+  "settings.deploy.block.REPOSITORY_OPERATION_IN_PROGRESS":
+    "A merge, rebase or other Git operation is still in progress. Finish it before checking again.",
+  "settings.deploy.block.SOURCE_DIRTY":
+    "The current folder does not exactly match this Release. Commit the intended changes and create a new Release snapshot.",
+  "settings.deploy.block.DETACHED_HEAD":
+    "The repository is not on a named branch. Check out the branch that should be deployed.",
+  "settings.deploy.block.REMOTE_INVALID":
+    "The origin is not a credential-free GitHub remote. Fix the repository origin before continuing.",
+  "settings.deploy.block.WORKFLOW_MISSING":
+    "The fixed deploy workflow is missing from the commit. Add and review .github/workflows/deploy-production.yml.",
+  "settings.deploy.block.WORKFLOW_NOT_REGULAR":
+    "The deploy workflow is not a regular committed file. Replace the symlink or special entry with a reviewed file.",
+  "settings.deploy.block.WORKFLOW_TRIGGER_MISSING":
+    "The fixed workflow has no explicit workflow_dispatch trigger. Add and review that trigger before continuing.",
+  "settings.deploy.block.WORKFLOW_TOO_LARGE":
+    "The deploy workflow cannot be read within the safety limit. Reduce or repair the committed workflow.",
+  "settings.deploy.block.CLI_UNAVAILABLE":
+    "GitHub CLI is unavailable on this machine. Install it, then check the target again.",
+  "settings.deploy.block.AUTH_REQUIRED":
+    "GitHub CLI is not signed in. Sign in locally with gh; Loomrail will not store the token.",
+  "settings.deploy.block.REMOTE_BRANCH_UNAVAILABLE":
+    "The current branch is not readable on GitHub. Publish the named branch to origin first.",
+  "settings.deploy.block.REMOTE_COMMIT_MISMATCH":
+    "The GitHub branch does not point to this exact local commit. Publish the commit, then create current Release evidence.",
   "event.launchEnvironmentChanged": "Launch environment saved",
   "event.launchEnvironmentChangedDetail": "{kind} declaration · version {version}",
   "event.launchReleaseCreated": "Release evidence frozen",
   "event.launchReleaseCreatedDetail": "Tree {tree} · required gates {passed} of {required}",
+  "event.deploymentPlanAdopted": "Deployment plan confirmed",
+  "event.deploymentPlanAdoptedDetail": "{repository} · {branch} · commit {commit}",
+  "event.deploymentChanged": "Deployment state changed",
+  "event.deploymentChangedDetail": "{status}",
   "verification.title": "Project verification",
   "verification.loading": "Loading project verification",
   "verification.intro":
@@ -1672,10 +1746,84 @@ const ru = {
   "settings.release.gateStatus.FAILED": "Не пройдено",
   "settings.release.gateStatus.ACTION_REQUIRED": "Требуется действие",
   "settings.release.gateStatus.STALE": "Устарело",
+  "settings.deploy.title": "Управляемый deploy",
+  "settings.deploy.description":
+    "Запустите workflow GitHub Actions из репозитория для подходящего Preview-релиза после двух явных подтверждений.",
+  "settings.deploy.loading": "Проверяем точную цель deploy…",
+  "settings.deploy.boundaryTitle": "Только существующий workflow",
+  "settings.deploy.boundaryNotice":
+    "Loomrail может запустить только фиксированный workflow, уже сохранённый в репозитории. Он не получает hosting- или SSH-секреты и не делает автоматический retry или rollback.",
+  "settings.deploy.noRelease": "Сначала создайте актуальный снимок Preview Release.",
+  "settings.deploy.repository": "Репозиторий GitHub",
+  "settings.deploy.branch": "Опубликованная ветка",
+  "settings.deploy.commit": "Точный commit",
+  "settings.deploy.workflow": "Workflow",
+  "settings.deploy.planNotice":
+    "Первое подтверждение: сохраните этот репозиторий, ветку, commit и workflow как неизменяемый план deploy.",
+  "settings.deploy.adopt": "Подтвердить точный план",
+  "settings.deploy.adoptAgain": "Подготовить ещё одну точную попытку",
+  "settings.deploy.approvalNotice":
+    "Второе подтверждение запустит один внешний GitHub Actions run. Перед продолжением ещё раз проверьте цель выше.",
+  "settings.deploy.approve": "Подтвердить и запустить один раз",
+  "settings.deploy.approvedNotice":
+    "Точная попытка подтверждена, но ещё не запущена. Запустите её один раз; Loomrail не создаст замену автоматически.",
+  "settings.deploy.startApproved": "Запустить подтверждённую попытку",
+  "settings.deploy.observe": "Проверить точный run",
+  "settings.deploy.openRun": "Открыть этот run на GitHub",
+  "settings.deploy.unknownNotice":
+    "Результат неизвестен, и workflow уже мог запуститься. Не запускайте deploy повторно. Если указан точный GitHub run, проверьте именно его.",
+  "settings.deploy.failedNotice":
+    "Попытка не завершилась успешно ({code}). Проверьте точный run и готовьте новый план только после выяснения причины.",
+  "settings.deploy.rollbackUnavailable":
+    "Rollback недоступен: workflow этого репозитория не предоставляет проверенное действие отката.",
+  "settings.deploy.status.PENDING_APPROVAL": "Ожидает финального подтверждения",
+  "settings.deploy.status.APPROVED": "Подтверждено, не запущено",
+  "settings.deploy.status.RUNNING": "GitHub run запущен",
+  "settings.deploy.status.SUCCEEDED": "Deploy завершён успешно",
+  "settings.deploy.status.FAILED": "Deploy завершился ошибкой",
+  "settings.deploy.status.UNKNOWN": "Результат неизвестен",
+  "settings.deploy.block.RELEASE_STALE":
+    "Свидетельства Release устарели. Повторите затронутые проверки и создайте новый снимок Release.",
+  "settings.deploy.block.RELEASE_GATES_BLOCKED":
+    "Не все обязательные проверки релиза пройдены. Устраните причины до подготовки плана deploy.",
+  "settings.deploy.block.ENVIRONMENT_UNSUPPORTED":
+    "Управляемый deploy пока поддерживает только Preview-среду. Production остаётся заблокирован.",
+  "settings.deploy.block.REPOSITORY_UNAVAILABLE":
+    "Репозиторий не читается. Восстановите доступ к папке проекта и повторите проверку.",
+  "settings.deploy.block.REPOSITORY_PATH_NOT_CANONICAL":
+    "Зарегистрирована ссылка или подпапка. Укажите точный физический корень репозитория.",
+  "settings.deploy.block.REPOSITORY_OPERATION_IN_PROGRESS":
+    "Merge, rebase или другая Git-операция ещё не завершена. Сначала завершите её.",
+  "settings.deploy.block.SOURCE_DIRTY":
+    "Текущая папка не совпадает с этим Release. Зафиксируйте нужные изменения и создайте новый снимок Release.",
+  "settings.deploy.block.DETACHED_HEAD":
+    "Репозиторий не находится на именованной ветке. Переключитесь на ветку для deploy.",
+  "settings.deploy.block.REMOTE_INVALID":
+    "Origin не является GitHub-адресом без credentials. Исправьте origin репозитория.",
+  "settings.deploy.block.WORKFLOW_MISSING":
+    "В commit нет фиксированного deploy workflow. Добавьте и проверьте .github/workflows/deploy-production.yml.",
+  "settings.deploy.block.WORKFLOW_NOT_REGULAR":
+    "Deploy workflow не является обычным зафиксированным файлом. Замените ссылку или специальную запись проверенным файлом.",
+  "settings.deploy.block.WORKFLOW_TRIGGER_MISSING":
+    "В фиксированном workflow нет явного workflow_dispatch trigger. Добавьте и проверьте его перед продолжением.",
+  "settings.deploy.block.WORKFLOW_TOO_LARGE":
+    "Deploy workflow нельзя прочитать в пределах безопасного лимита. Уменьшите или исправьте файл.",
+  "settings.deploy.block.CLI_UNAVAILABLE":
+    "GitHub CLI недоступен на этом компьютере. Установите его и повторите проверку.",
+  "settings.deploy.block.AUTH_REQUIRED":
+    "GitHub CLI не авторизован. Войдите локально через gh; Loomrail не сохранит токен.",
+  "settings.deploy.block.REMOTE_BRANCH_UNAVAILABLE":
+    "Текущая ветка недоступна на GitHub. Сначала опубликуйте именованную ветку в origin.",
+  "settings.deploy.block.REMOTE_COMMIT_MISMATCH":
+    "Ветка GitHub не указывает на этот точный локальный commit. Опубликуйте commit и заново создайте актуальный Release.",
   "event.launchEnvironmentChanged": "Launch-среда сохранена",
   "event.launchEnvironmentChangedDetail": "Декларация {kind} · версия {version}",
   "event.launchReleaseCreated": "Свидетельства релиза зафиксированы",
   "event.launchReleaseCreatedDetail": "Tree {tree} · обязательных gates {passed} из {required}",
+  "event.deploymentPlanAdopted": "План deploy подтверждён",
+  "event.deploymentPlanAdoptedDetail": "{repository} · {branch} · commit {commit}",
+  "event.deploymentChanged": "Состояние deploy изменилось",
+  "event.deploymentChangedDetail": "{status}",
   "verification.title": "Проверка проекта",
   "verification.loading": "Загружаем проверки проекта",
   "verification.intro":

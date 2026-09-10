@@ -8,6 +8,9 @@ import type {
   ConstitutionPublication,
   ContextPackRecipe,
   ContextWindowUsage,
+  Deployment,
+  DeploymentApproval,
+  DeploymentPlan,
   DomainEvent,
   EventPageDirection,
   HumanRequest,
@@ -152,6 +155,9 @@ export type StateQuery =
   | { type: "GET_PROJECT_LAUNCH_MEASUREMENT"; projectId: string }
   | { type: "GET_PROJECT_LAUNCH_RELEASE"; projectId: string }
   | { type: "GET_LAUNCH_RELEASE"; releaseId: string }
+  | { type: "GET_PROJECT_GUIDED_DEPLOYMENT"; projectId: string }
+  | { type: "GET_DEPLOYMENT_CONTEXT"; deploymentId: string }
+  | { type: "LIST_ACTIVE_DEPLOYMENTS" }
   | { type: "GET_LAUNCH_MEASUREMENT_RUN_CONTEXT"; runId: string }
   | { type: "LIST_ACTIVE_LAUNCH_MEASUREMENT_RUNS" }
   | {
@@ -269,6 +275,21 @@ export type StateQueryResult =
       latestRelease: LaunchRelease | null;
     }
   | { type: "LAUNCH_RELEASE"; release: LaunchRelease | null }
+  | {
+      type: "PROJECT_GUIDED_DEPLOYMENT";
+      project: Project;
+      latestPlan: DeploymentPlan | null;
+      latestDeployment: Deployment | null;
+    }
+  | {
+      type: "DEPLOYMENT_CONTEXT";
+      project: Project;
+      plan: DeploymentPlan;
+      deployment: Deployment;
+      approval: DeploymentApproval | null;
+      release: LaunchRelease;
+    }
+  | { type: "DEPLOYMENTS"; deployments: Deployment[] }
   | {
       type: "LAUNCH_MEASUREMENT_RUN_CONTEXT";
       project: Project;
@@ -418,6 +439,9 @@ export type LocalStateIdKind =
   | "launchMeasurementRun"
   | "launchEnvironment"
   | "launchRelease"
+  | "deploymentPlan"
+  | "deployment"
+  | "deploymentApproval"
   | "verificationFailure"
   | "verificationCorrectionRun"
   | "correctionBudgetEntry"

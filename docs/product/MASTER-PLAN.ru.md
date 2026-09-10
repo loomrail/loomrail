@@ -2,13 +2,13 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-10 — L3 immutable Release evidence package and Recurkit dogfood
+**Последнее дополнение:** 2026-09-11 — L4a macOS implementation and fail-closed Recurkit dogfood
 
 **Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
 локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood,
-public fixture и private Recurkit Epic прошли до owner Acceptance; L1–L3 launch evidence реализованы и честно
-выявили target-level gaps Recurkit; Guided Deploy/L5, Windows live-provider/lifecycle evidence и stable publish gates
-остаются pending
+public fixture и private Recurkit Epic прошли до owner Acceptance; L1–L3 launch evidence и L4a Guided Deploy
+реализованы на macOS и честно выявили target-level gaps Recurkit; eligible live dispatch, L4b/L5, Windows
+live-provider/lifecycle evidence и stable publish gates остаются pending
 
 **Продукт:** Loomrail
 
@@ -1708,7 +1708,8 @@ process-supervision прошёл 21/21 в
 
 [L — Трек доказуемого запуска в продакшн](../plans/82-l-production-launch-track-spec.ru.md) описывает путь от
 репозитория до подтверждённого владельцем продакшн-деплоя через пять вех (L1–L5), не превращая Loomrail в
-CD-систему: automatic deployment остаётся запрещённым, а L4 (Guided Deploy) не начинается до отдельного PD.
+CD-систему: automatic deployment остаётся запрещённым. PD-030 разрешает L4a только как одноразовый owner-approved
+dispatch существующего GitHub Actions workflow; production/hotfix/probe/rollback остаются следующими slices.
 Полная декомпозиция, ubiquitous language и принятые решения — в самой спеке; здесь фиксируется только checkpoint.
 
 **Implementation checkpoint 2026-09-06:** L1 (Readiness v2) реализован. Закрытый каталог Project Readiness расширен
@@ -1747,8 +1748,24 @@ bounded redacted Markdown без repository path, secret values и raw provider 
 выявил superseded correction artifacts; регрессия закрепила выбор только exact `AcceptancePackage.artifactIds`.
 Итоговый Recurkit snapshot остался `CURRENT`, но прошёл 0/24 gates: 20 `ACTION_REQUIRED`, четыре `STALE`, поэтому
 никакого production-ready verdict нет. L3 не обращался к public origin и не исполнял deploy. Sanitized result — в
-[`L3-RELEASE-EVIDENCE-PACKAGE-RECURKIT.md`](../evidence/phase-8/L3-RELEASE-EVIDENCE-PACKAGE-RECURKIT.md). L4 требует
-отдельного PD и exact owner approval; L5 и Windows verification остаются pending.
+[`L3-RELEASE-EVIDENCE-PACKAGE-RECURKIT.md`](../evidence/phase-8/L3-RELEASE-EVIDENCE-PACKAGE-RECURKIT.md). L4a теперь
+разрешена PD-030/ADR-0029: только exact clean published commit, fixed repository-owned GitHub Actions workflow и
+одноразовый owner Approval. Recurkit deploy secrets остаются в GitHub; dirty/ahead-only source, production,
+HOTFIX, rollback и automatic retry остаются blocked.
+L4b/L5 и Windows verification остаются pending и требуют собственных exit gates.
+
+**Implementation checkpoint 2026-09-11:** L4a реализована на macOS по PD-030, ADR-0029 и планам 114–115.
+Provider-neutral `DeploymentDriver` имеет три операции: preflight, одноразовый dispatch и observation exact run;
+единственный production adapter допускает только зафиксированный `.github/workflows/deploy-production.yml` с
+явным `workflow_dispatch` на clean named branch, уже опубликованной exact SHA. Домен владеет eligibility, двумя
+HUMAN confirmations, approval digest, audit, idempotency и recovery; ambiguous dispatch/restart дают `UNKNOWN` без
+повтора. Migration 0060 сохраняет immutable Plans/Approvals и versioned Deployments, UI показывает blocked,
+approval, running, failure и unknown без raw GitHub/provider payloads. Installed-package Recurkit dogfood на
+согласованной копии durable state прошёл migration 59→60, сохранил четыре полных owner-accepted PipelineRuns и
+честно заблокировал deploy на `0/24`; adapter отдельно отказал `SOURCE_DIRTY`. Ни одного GitHub Actions run не
+создано. Sanitized result — в
+[`L4-GUIDED-DEPLOY-RECURKIT.md`](../evidence/phase-8/L4-GUIDED-DEPLOY-RECURKIT.md). Eligible live Preview dispatch,
+L4b/L5 и Windows остаются pending.
 
 ## 22. Dogfood Alpha acceptance contract
 

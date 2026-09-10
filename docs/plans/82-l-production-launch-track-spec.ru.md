@@ -2,12 +2,13 @@
 
 **Дата:** 2026-09-05
 
-**Статус:** L1–L3 реализованы и production-shaped dogfooded на macOS — детали в
+**Статус:** L1–L4a реализованы и production-shaped dogfooded на macOS — детали в
 [`83-l1-readiness-v2-implementation-plan.ru.md`](83-l1-readiness-v2-implementation-plan.ru.md) и
 [`111-l2-measured-launch-gates-implementation-plan.ru.md`](111-l2-measured-launch-gates-implementation-plan.ru.md);
 [`112-l3-release-evidence-package-spec.ru.md`](112-l3-release-evidence-package-spec.ru.md) и
-[`113-l3-release-evidence-package-implementation-plan.ru.md`](113-l3-release-evidence-package-implementation-plan.ru.md);
-L4–L5 и Windows verification остаются pending, а L4 дополнительно требует отдельного PD (§12)
+[`113-l3-release-evidence-package-implementation-plan.ru.md`](113-l3-release-evidence-package-implementation-plan.ru.md) и
+[`115-l4-github-actions-guided-deploy-implementation-plan.ru.md`](115-l4-github-actions-guided-deploy-implementation-plan.ru.md);
+eligible live L4a dispatch, L4b/L5 и Windows verification остаются pending
 
 **Основание:** PD-007 (вторая persona), WD-005, TD-001, HD-003, SD-001, SD-002, SD-003, QD-002, QD-003, PD-016;
 [B3+B2 project readiness](29-b3-b2-project-readiness-security-spec.ru.md),
@@ -32,16 +33,17 @@ L4–L5 и Windows verification остаются pending, а L4 дополнит
 
 ## 2. Декомпозиция
 
-| Веха   | Результат                                                                                                                                     | Новые границы                     | Статус                              |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | ----------------------------------- |
-| **L1** | Readiness v2: lockfile, разделение dev/prod окружения, решение по security headers, объявленный health-путь, аттестации бэкапа и плана отката | нет, только read-only наблюдения  | **Реализовано 2026-09-06**          |
-| **L2** | Измеряемые gates: локальный запуск по owner-approved recipe плюс браузерные измерения перфоманса и рантайм-безопасности                       | локальные сетевые пробы           | **Реализовано 2026-09-10 на macOS** |
-| **L3** | `Environment`, `Release`, обязательные gates и Launch Evidence Package без исполнения деплоя                                                  | новая миграция persistence        | **Реализовано 2026-09-10 на macOS** |
-| **L4** | Guided Deploy v1: рецепт класса irreversible, один встроенный пресет, два подтверждения, проба, откат                                         | **PD-017, ROADMAP, THREAT-MODEL** | не начата                           |
-| **L5** | Жизнь после запуска: health check, протухание проверок, повторный прогон, порядок действий при падении                                        | периодические внешние пробы       | не начата                           |
+| Веха   | Результат                                                                                                                                     | Новые границы                    | Статус                                  |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | --------------------------------------- |
+| **L1** | Readiness v2: lockfile, разделение dev/prod окружения, решение по security headers, объявленный health-путь, аттестации бэкапа и плана отката | нет, только read-only наблюдения | **Реализовано 2026-09-06**              |
+| **L2** | Измеряемые gates: локальный запуск по owner-approved recipe плюс браузерные измерения перфоманса и рантайм-безопасности                       | локальные сетевые пробы          | **Реализовано 2026-09-10 на macOS**     |
+| **L3** | `Environment`, `Release`, обязательные gates и Launch Evidence Package без исполнения деплоя                                                  | новая миграция persistence       | **Реализовано 2026-09-10 на macOS**     |
+| **L4** | Guided Deploy v1: irreversible attempt, два подтверждения; L4a — GitHub Actions, L4b — production/hotfix/probe/rollback                       | **PD-030, ADR-0029, T79–T81**    | **L4a реализована 2026-09-11 на macOS** |
+| **L5** | Жизнь после запуска: health check, протухание проверок, повторный прогон, порядок действий при падении                                        | периодические внешние пробы      | не начата                               |
 
-L1 и L2 приносят пользу самостоятельно и не зависят от решения по L4. L3 не требует нового нормативного решения,
-потому что ничего не исполняет. L4 не начинается до отдельного PD (§12).
+L1 и L2 приносят пользу самостоятельно и не зависят от решения по L4. L3 не требует deploy authority. PD-030
+разрешает только L4a: owner-approved dispatch существующего GitHub Actions workflow; остальные L4/L5 authority
+по-прежнему требуют отдельного решения.
 
 ## 3. Ubiquitous language
 
@@ -226,9 +228,9 @@ Launch Preset объявляет: применимый набор gates; шаг 
 Deployment не является AgentRun и не расходует provider budget; его ограничивают объявленные таймаут и предел
 вывода, а не BD-001.
 
-В v1 поставляется один встроенный пресет для самого частого пути второй persona: фронтенд с serverless-функциями.
-Остальные цели добавляются пресетами, не затрагивая ядро. SSH, VPS, контейнерные раскатки и мобильные сторы в v1 не
-входят.
+Первый встроенный пресет — `GITHUB_ACTIONS_WORKFLOW_V1`: Loomrail dispatch-ит exact repository-owned workflow, а
+hosting/VPS secrets и операционная процедура остаются внутри GitHub Actions. Это оркестрация существующего
+workflow, не SSH/VPS authority Loomrail. Остальные цели добавляются отдельными preset revisions/решениями.
 
 Post-Deploy Probe проверяет: доступность адреса, валидность TLS, фактические заголовки, Web Vitals на живом деплое,
 ответ 401/403 на объявленных приватных маршрутах, отсутствие секретоподобных строк в отданном клиентском бандле и
@@ -295,7 +297,7 @@ dark темы равноправны, клавиатурная работа и �
 
 ## 12. Нормативные изменения, требуемые до L4
 
-L1–L3 не меняют утверждённых границ. До начала L4 требуется отдельное владельческое решение:
+L1–L3 не меняют утверждённых границ. До начала L4 требовалось отдельное владельческое решение:
 
 1. новый PD (предположительно PD-017): guided owner-confirmed deploy разрешён, automatic deployment остаётся
    запрещённым;
@@ -303,7 +305,8 @@ L1–L3 не меняют утверждённых границ. До начал
 3. правка master plan §26.6, где сейчас записан запрет начинать deploy automation до закрытия Dogfood Alpha;
 4. обновление `docs/security/THREAT-MODEL.md` под продакшн-секреты, необратимую операцию и внешнюю пробу.
 
-Пока эти изменения не приняты, реализуются только L1–L3.
+PD-030, ADR-0029, ROADMAP и T79–T81 приняли эту дельту только для L4a. Production/HOTFIX/rollback/L5 не разрешены
+этим решением.
 
 ## 13. Первичные источники
 

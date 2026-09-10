@@ -315,6 +315,12 @@ const migrations: readonly Migration[] = [
     filename: "0059_launch_releases.sql",
     rebuildsAReferencedTable: true,
   },
+  {
+    version: 60,
+    name: "guided_deployments",
+    filename: "0060_guided_deployments.sql",
+    rebuildsAReferencedTable: true,
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

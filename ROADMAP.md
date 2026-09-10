@@ -23,6 +23,8 @@ implementation plans.
 
 ## Next — connect the proven loop to normal repository delivery
 
+- Prove one owner-approved, one-shot GitHub Actions Guided Deploy against an exact clean Release while keeping
+  deployment secrets and operational procedure inside the repository-owned workflow.
 - Validate an optional, bounded Guided Launch service around repository readiness, verification setup, the first live
   route, and Acceptance Package review; keep the Apache-2.0 local workflow fully useful.
 - Prepare GitHub pull requests with linked issues and required checks while preserving explicit owner merge authority.
@@ -41,7 +43,8 @@ implementation plans.
 
 ## Not planned before stable
 
-- Automatic merge, push, deployment, provider login, permission bypass, or silent dependency installation.
+- Automatic merge, push, deployment, retry/rollback, provider login, permission bypass, or silent dependency
+  installation. A separately approved one-shot Guided Deploy is not automatic deployment.
 - Marketplace execution, arbitrary workflow code, cloud sync, team accounts, or remote daemon exposure.
 - Calendar commitments, public support SLAs, reaction-based prioritization, or a promise to accept every proposal.
 

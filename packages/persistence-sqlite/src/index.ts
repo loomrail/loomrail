@@ -19,6 +19,9 @@ import {
   contextPackRecipeSchema,
   contextWindowUsageSchema,
   decisionSchema,
+  deploymentApprovalSchema,
+  deploymentPlanSchema,
+  deploymentSchema,
   domainEventSchema,
   eventPageDirectionSchema,
   evidenceArtifactSchema,
@@ -102,6 +105,9 @@ import {
   type ContextPackRecipe,
   type ContextWindowUsage,
   type Decision,
+  type Deployment,
+  type DeploymentApproval,
+  type DeploymentPlan,
   type DomainEvent,
   type EvidenceArtifact,
   type HumanRequest,
@@ -185,6 +191,12 @@ import {
   decideLaunchMeasurementRunReservation,
   decideCreateLaunchRelease,
   decideSaveLaunchEnvironment,
+  decideAdoptDeploymentPlan,
+  decideApproveDeployment,
+  decideRecordDeploymentDispatch,
+  decideRecordDeploymentObservation,
+  decideReconcileDeployment,
+  decideStartDeployment,
   decideVerificationPlanAdoption,
   decideVerificationPlanDisable,
   decideVerificationPlanPublicationCompleted,
@@ -257,6 +269,7 @@ import {
   McpDomainError,
   LaunchMeasurementDomainError,
   LaunchReleaseDomainError,
+  GuidedDeploymentDomainError,
   WorkspaceToolDomainError,
   ProviderSelectionDomainError,
   WorkspaceStrategyDomainError,
@@ -282,6 +295,8 @@ import {
   type LaunchMeasurementRunChangedIntent,
   type LaunchEnvironmentChangedIntent,
   type LaunchReleaseCreatedIntent,
+  type DeploymentChangedIntent,
+  type DeploymentPlanAdoptedIntent,
   type ProjectProviderPreferenceChangedIntent,
   type ProjectWorkspaceStrategyChangedIntent,
   type VerificationPlanAdoptedIntent,
@@ -1275,6 +1290,44 @@ const launchReleaseRowSchema = z.object({
   created_at: z.string(),
 });
 
+const deploymentPlanRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  release_id: z.string(),
+  environment_id: z.string(),
+  revision: z.number().int(),
+  content_hash: z.string(),
+  plan_json: z.string(),
+  created_at: z.string(),
+});
+
+const deploymentRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  plan_id: z.string(),
+  release_id: z.string(),
+  environment_id: z.string(),
+  status: z.string(),
+  approval_digest: z.string(),
+  remote_run_id: z.number().int().nullable(),
+  deployment_json: z.string(),
+  version: z.number().int(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+const deploymentApprovalRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  deployment_id: z.string(),
+  approval_digest: z.string(),
+  approval_json: z.string(),
+  created_at: z.string(),
+});
+
 const launchDependencyAuditRowSchema = z.object({
   verification_run_id: z.string(),
   verification_check_id: z.string(),
@@ -1348,6 +1401,9 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("GET_PROJECT_LAUNCH_MEASUREMENT"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_LAUNCH_RELEASE"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_LAUNCH_RELEASE"), releaseId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_PROJECT_GUIDED_DEPLOYMENT"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_DEPLOYMENT_CONTEXT"), deploymentId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("LIST_ACTIVE_DEPLOYMENTS") }).strict(),
   z.object({ type: z.literal("GET_LAUNCH_MEASUREMENT_RUN_CONTEXT"), runId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("LIST_ACTIVE_LAUNCH_MEASUREMENT_RUNS") }).strict(),
   z
@@ -1759,6 +1815,93 @@ const launchReleaseFromRow = (value: unknown): LaunchRelease => {
     );
   }
   return release;
+};
+
+const deploymentPlanContentHash = (plan: DeploymentPlan): string => {
+  const content: Partial<DeploymentPlan> = { ...plan };
+  delete content.contentHash;
+  return createHash("sha256").update(canonicalJson(content)).digest("hex");
+};
+
+const deploymentApprovalDigest = (input: { plan: DeploymentPlan; release: LaunchRelease }): string =>
+  createHash("sha256")
+    .update(
+      canonicalJson({
+        releaseContentHash: input.release.contentHash,
+        environmentId: input.release.environment.id,
+        environmentContentHash: input.release.environment.contentHash,
+        planRevision: input.plan.revision,
+        planContentHash: input.plan.contentHash,
+        repositorySlug: input.plan.target.repositorySlug,
+        branch: input.plan.target.branch,
+        commitSha: input.plan.target.commitSha,
+        workflowPath: input.plan.target.workflowPath,
+        workflowContentHash: input.plan.target.workflowContentHash,
+        argvDigest: input.plan.target.argvDigest,
+        intent: "STANDARD",
+      }),
+    )
+    .digest("hex");
+
+const deploymentPlanFromRow = (value: unknown): DeploymentPlan => {
+  const row = deploymentPlanRowSchema.parse(value);
+  const plan = deploymentPlanSchema.parse(parseJson(row.plan_json));
+  if (
+    plan.id !== row.id ||
+    plan.schemaVersion !== row.schema_version ||
+    plan.projectId !== row.project_id ||
+    plan.releaseId !== row.release_id ||
+    plan.environmentId !== row.environment_id ||
+    plan.revision !== row.revision ||
+    plan.contentHash !== row.content_hash ||
+    plan.contentHash !== deploymentPlanContentHash(plan) ||
+    plan.createdAt !== row.created_at
+  ) {
+    throw new StateStoreError("PERSISTENCE_FAILURE", "The Deployment Plan row is inconsistent");
+  }
+  return plan;
+};
+
+const deploymentFromRow = (value: unknown): Deployment => {
+  const row = deploymentRowSchema.parse(value);
+  const deployment = deploymentSchema.parse(parseJson(row.deployment_json));
+  if (
+    deployment.id !== row.id ||
+    deployment.schemaVersion !== row.schema_version ||
+    deployment.projectId !== row.project_id ||
+    deployment.planId !== row.plan_id ||
+    deployment.releaseId !== row.release_id ||
+    deployment.environmentId !== row.environment_id ||
+    deployment.status !== row.status ||
+    deployment.approvalDigest !== row.approval_digest ||
+    deployment.remoteRunId !== row.remote_run_id ||
+    deployment.version !== row.version ||
+    deployment.createdAt !== row.created_at ||
+    (deployment.observedAt ?? deployment.startedAt ?? deployment.approvedAt ?? deployment.createdAt) !==
+      row.updated_at
+  ) {
+    throw new StateStoreError("PERSISTENCE_FAILURE", "The Deployment row is inconsistent");
+  }
+  return deployment;
+};
+
+const deploymentUpdatedAt = (deployment: Deployment): string =>
+  deployment.observedAt ?? deployment.startedAt ?? deployment.approvedAt ?? deployment.createdAt;
+
+const deploymentApprovalFromRow = (value: unknown): DeploymentApproval => {
+  const row = deploymentApprovalRowSchema.parse(value);
+  const approval = deploymentApprovalSchema.parse(parseJson(row.approval_json));
+  if (
+    approval.id !== row.id ||
+    approval.schemaVersion !== row.schema_version ||
+    approval.projectId !== row.project_id ||
+    approval.deploymentId !== row.deployment_id ||
+    approval.approvalDigest !== row.approval_digest ||
+    approval.createdAt !== row.created_at
+  ) {
+    throw new StateStoreError("PERSISTENCE_FAILURE", "The Deployment Approval row is inconsistent");
+  }
+  return approval;
 };
 
 const verificationPlanPublicationFromRow = (value: unknown): VerificationPlanPublication => {
@@ -3260,6 +3403,44 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         content_hash, release_json, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    const selectDeploymentPlanById = database.prepare("SELECT * FROM deployment_plans WHERE id = ?");
+    const selectLatestDeploymentPlan = database.prepare(
+      `SELECT * FROM deployment_plans
+       WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+    );
+    const insertDeploymentPlan = database.prepare(
+      `INSERT INTO deployment_plans (
+        id, schema_version, project_id, release_id, environment_id, revision,
+        content_hash, plan_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectDeploymentById = database.prepare("SELECT * FROM deployments WHERE id = ?");
+    const selectLatestDeployment = database.prepare(
+      `SELECT * FROM deployments
+       WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+    );
+    const selectActiveDeployments = database.prepare(
+      "SELECT * FROM deployments WHERE status IN ('APPROVED', 'RUNNING') ORDER BY id",
+    );
+    const insertDeployment = database.prepare(
+      `INSERT INTO deployments (
+        id, schema_version, project_id, plan_id, release_id, environment_id, status,
+        approval_digest, remote_run_id, deployment_json, version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateDeployment = database.prepare(
+      `UPDATE deployments SET
+        status = ?, remote_run_id = ?, deployment_json = ?, version = ?, updated_at = ?
+       WHERE id = ? AND version = ?`,
+    );
+    const selectDeploymentApprovalByDeployment = database.prepare(
+      "SELECT * FROM deployment_approvals WHERE deployment_id = ?",
+    );
+    const insertDeploymentApproval = database.prepare(
+      `INSERT INTO deployment_approvals (
+        id, schema_version, project_id, deployment_id, approval_digest, approval_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
     const selectLatestProjectAuditEvidence = database.prepare(
       `SELECT
          verification_runs.id AS verification_run_id,
@@ -4274,6 +4455,31 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       return row === undefined ? null : launchReleaseFromRow(row);
     };
 
+    const readDeploymentPlan = (id: string): DeploymentPlan | null => {
+      const row = selectDeploymentPlanById.get(id);
+      return row === undefined ? null : deploymentPlanFromRow(row);
+    };
+
+    const readLatestDeploymentPlan = (projectId: string): DeploymentPlan | null => {
+      const row = selectLatestDeploymentPlan.get(projectId);
+      return row === undefined ? null : deploymentPlanFromRow(row);
+    };
+
+    const readDeployment = (id: string): Deployment | null => {
+      const row = selectDeploymentById.get(id);
+      return row === undefined ? null : deploymentFromRow(row);
+    };
+
+    const readLatestDeployment = (projectId: string): Deployment | null => {
+      const row = selectLatestDeployment.get(projectId);
+      return row === undefined ? null : deploymentFromRow(row);
+    };
+
+    const readDeploymentApproval = (deploymentId: string): DeploymentApproval | null => {
+      const row = selectDeploymentApprovalByDeployment.get(deploymentId);
+      return row === undefined ? null : deploymentApprovalFromRow(row);
+    };
+
     const persistLaunchEnvironment = (
       environment: LaunchEnvironment,
       previous: LaunchEnvironment | null,
@@ -4318,6 +4524,68 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         release.contentHash,
         JSON.stringify(release),
         release.createdAt,
+      );
+    };
+
+    const persistNewDeploymentPlan = (plan: DeploymentPlan): void => {
+      insertDeploymentPlan.run(
+        plan.id,
+        plan.schemaVersion,
+        plan.projectId,
+        plan.releaseId,
+        plan.environmentId,
+        plan.revision,
+        plan.contentHash,
+        JSON.stringify(plan),
+        plan.createdAt,
+      );
+    };
+
+    const persistNewDeployment = (deployment: Deployment): void => {
+      insertDeployment.run(
+        deployment.id,
+        deployment.schemaVersion,
+        deployment.projectId,
+        deployment.planId,
+        deployment.releaseId,
+        deployment.environmentId,
+        deployment.status,
+        deployment.approvalDigest,
+        deployment.remoteRunId,
+        JSON.stringify(deployment),
+        deployment.version,
+        deployment.createdAt,
+        deploymentUpdatedAt(deployment),
+      );
+    };
+
+    const persistChangedDeployment = (deployment: Deployment, expectedVersion: number): void => {
+      const updated = updateDeployment.run(
+        deployment.status,
+        deployment.remoteRunId,
+        JSON.stringify(deployment),
+        deployment.version,
+        deploymentUpdatedAt(deployment),
+        deployment.id,
+        expectedVersion,
+      );
+      if (updated.changes !== 1) {
+        throw new GuidedDeploymentDomainError(
+          "DEPLOYMENT_VERSION_CONFLICT",
+          "The Deployment changed while it was saved",
+        );
+      }
+    };
+
+    const persistDeploymentApproval = (approval: DeploymentApproval): void => {
+      insertDeploymentApproval.run(
+        approval.id,
+        approval.schemaVersion,
+        approval.projectId,
+        approval.deploymentId,
+        approval.approvalDigest,
+        JSON.stringify(approval),
+        approval.createdAt,
       );
     };
 
@@ -6139,6 +6407,44 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
     const appendLaunchReleaseEvent = (
       intent: LaunchEnvironmentChangedIntent | LaunchReleaseCreatedIntent,
+      metadata: {
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "PROJECT",
+        metadata.projectId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "PROJECT",
+        aggregateId: metadata.projectId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
+    const appendDeploymentEvent = (
+      intent: DeploymentPlanAdoptedIntent | DeploymentChangedIntent,
       metadata: {
         projectId: string;
         actor: Actor;
@@ -8226,6 +8532,142 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           replayed: false,
           release,
           projectVersion: draftDecision.project.version,
+          event,
+        });
+      }
+
+      if (command.type === "ADOPT_DEPLOYMENT_PLAN") {
+        const project = readProject(command.payload.projectId);
+        const release = readLaunchRelease(command.payload.releaseId);
+        const newPlanId = createId("deploymentPlan");
+        const newDeploymentId = createId("deployment");
+        const draftPlan: DeploymentPlan = {
+          schemaVersion: 1,
+          id: newPlanId,
+          projectId: command.payload.projectId,
+          revision: 1,
+          releaseId: command.payload.releaseId,
+          releaseContentHash: command.payload.expectedReleaseContentHash,
+          environmentId: release?.environment.id ?? "missing-environment",
+          environmentContentHash: release?.environment.contentHash ?? "0".repeat(64),
+          target: command.payload.target,
+          contentHash: "0".repeat(64),
+          createdAt: occurredAt,
+        };
+        const plan: DeploymentPlan = {
+          ...draftPlan,
+          contentHash: deploymentPlanContentHash(draftPlan),
+        };
+        const decision = decideAdoptDeploymentPlan(command, {
+          now: occurredAt,
+          newPlanId,
+          newDeploymentId,
+          planContentHash: plan.contentHash,
+          approvalDigest: release === null ? "0".repeat(64) : deploymentApprovalDigest({ plan, release }),
+          project: project ?? undefined,
+          release: release ?? undefined,
+        });
+        const updated = database
+          .prepare("UPDATE projects SET version = ?, updated_at = ? WHERE id = ? AND version = ?")
+          .run(
+            decision.project.version,
+            decision.project.updatedAt,
+            decision.project.id,
+            decision.project.version - 1,
+          );
+        if (updated.changes !== 1) {
+          throw new GuidedDeploymentDomainError(
+            "PROJECT_VERSION_CONFLICT",
+            "The Project changed while the Deployment Plan was saved",
+          );
+        }
+        persistNewDeploymentPlan(decision.plan);
+        persistNewDeployment(decision.deployment);
+        const event = appendDeploymentEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "DEPLOYMENT_PLAN_ADOPTED",
+          replayed: false,
+          plan: decision.plan,
+          deployment: decision.deployment,
+          projectVersion: decision.project.version,
+          event,
+        });
+      }
+
+      if (command.type === "APPROVE_DEPLOYMENT") {
+        const current = readDeployment(command.payload.deploymentId);
+        const decision = decideApproveDeployment(command, {
+          now: occurredAt,
+          newApprovalId: createId("deploymentApproval"),
+          deployment: current ?? undefined,
+        });
+        persistDeploymentApproval(decision.approval);
+        persistChangedDeployment(decision.deployment, command.payload.expectedVersion);
+        const event = appendDeploymentEvent(decision.event, {
+          projectId: decision.deployment.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "DEPLOYMENT_CHANGED",
+          replayed: false,
+          deployment: decision.deployment,
+          approval: decision.approval,
+          event,
+        });
+      }
+
+      if (
+        command.type === "START_DEPLOYMENT" ||
+        command.type === "RECORD_DEPLOYMENT_DISPATCH" ||
+        command.type === "RECORD_DEPLOYMENT_OBSERVATION" ||
+        command.type === "RECONCILE_DEPLOYMENT"
+      ) {
+        const current = readDeployment(command.payload.deploymentId);
+        const currentPlan = current === null ? null : readDeploymentPlan(current.planId);
+        const decision =
+          command.type === "START_DEPLOYMENT"
+            ? decideStartDeployment(command, {
+                now: occurredAt,
+                deployment: current ?? undefined,
+                approval: current === null ? undefined : (readDeploymentApproval(current.id) ?? undefined),
+              })
+            : command.type === "RECORD_DEPLOYMENT_DISPATCH"
+              ? decideRecordDeploymentDispatch(command, {
+                  now: occurredAt,
+                  deployment: current ?? undefined,
+                  ...(currentPlan === null ? {} : { plan: currentPlan }),
+                })
+              : command.type === "RECORD_DEPLOYMENT_OBSERVATION"
+                ? decideRecordDeploymentObservation(command, {
+                    now: occurredAt,
+                    deployment: current ?? undefined,
+                  })
+                : decideReconcileDeployment(command, {
+                    now: occurredAt,
+                    deployment: current ?? undefined,
+                  });
+        persistChangedDeployment(decision.deployment, command.payload.expectedVersion);
+        const event = appendDeploymentEvent(decision.event, {
+          projectId: decision.deployment.projectId,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "DEPLOYMENT_CHANGED",
+          replayed: false,
+          deployment: decision.deployment,
+          approval: null,
           event,
         });
       }
@@ -13222,6 +13664,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           error instanceof WorkspaceStrategyDomainError ||
           error instanceof LaunchMeasurementDomainError ||
           error instanceof LaunchReleaseDomainError ||
+          error instanceof GuidedDeploymentDomainError ||
           error instanceof VerificationDomainError ||
           error instanceof VerificationCorrectionError ||
           error instanceof QACompletionError ||
@@ -13383,6 +13826,43 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         }
         case "GET_LAUNCH_RELEASE":
           return { type: "LAUNCH_RELEASE", release: readLaunchRelease(queryValue.releaseId) };
+        case "GET_PROJECT_GUIDED_DEPLOYMENT": {
+          const project = readProject(queryValue.projectId);
+          if (project === null) {
+            throw new GuidedDeploymentDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+          }
+          return {
+            type: "PROJECT_GUIDED_DEPLOYMENT",
+            project,
+            latestPlan: readLatestDeploymentPlan(project.id),
+            latestDeployment: readLatestDeployment(project.id),
+          };
+        }
+        case "GET_DEPLOYMENT_CONTEXT": {
+          const deployment = readDeployment(queryValue.deploymentId);
+          if (deployment === null) {
+            throw new GuidedDeploymentDomainError("DEPLOYMENT_NOT_FOUND", "The Deployment does not exist");
+          }
+          const project = readProject(deployment.projectId);
+          const plan = readDeploymentPlan(deployment.planId);
+          const release = readLaunchRelease(deployment.releaseId);
+          if (project === null || plan === null || release === null) {
+            throw new StateStoreError("PERSISTENCE_FAILURE", "The Deployment context is incomplete");
+          }
+          return {
+            type: "DEPLOYMENT_CONTEXT",
+            project,
+            plan,
+            deployment,
+            approval: readDeploymentApproval(deployment.id),
+            release,
+          };
+        }
+        case "LIST_ACTIVE_DEPLOYMENTS":
+          return {
+            type: "DEPLOYMENTS",
+            deployments: selectActiveDeployments.all().map(deploymentFromRow),
+          };
         case "GET_LAUNCH_MEASUREMENT_RUN_CONTEXT": {
           const run = readLaunchMeasurementRun(queryValue.runId);
           const plan = run === null ? null : readLaunchMeasurementPlan(run.planId);

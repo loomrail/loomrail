@@ -17,7 +17,9 @@ import {
 import {
   attentionInboxResponseSchema,
   agentFleetResponseSchema,
+  adoptDeploymentPlanRequestSchema,
   answerHumanRequestRequestSchema,
+  approveDeploymentRequestSchema,
   attestProjectReadinessRequestSchema,
   adoptVerificationPlanRequestSchema,
   disableVerificationPlanRequestSchema,
@@ -28,6 +30,7 @@ import {
   constitutionPresetsResponseSchema,
   createWorkItemRequestSchema,
   daemonStatusResponseSchema,
+  deploymentPreviewResponseSchema,
   disposeReviewFindingRequestSchema,
   eventPageDirectionSchema,
   eventsResponseSchema,
@@ -36,6 +39,7 @@ import {
   humanRequestsResponseSchema,
   insightsResponseSchema,
   moveWorkItemRequestSchema,
+  observeDeploymentRequestSchema,
   adoptLaunchMeasurementPlanRequestSchema,
   cancelLaunchMeasurementRunRequestSchema,
   disableLaunchMeasurementPlanRequestSchema,
@@ -43,6 +47,7 @@ import {
   createLaunchReleaseRequestSchema,
   launchEvidencePackageResponseSchema,
   launchReleaseProjectResponseSchema,
+  guidedDeploymentProjectResponseSchema,
   saveLaunchEnvironmentRequestSchema,
   mcpProfilesResponseSchema,
   mcpProfileProposalSchema,
@@ -97,6 +102,7 @@ import {
   sessionExchangeRequestSchema,
   sessionExchangeResponseSchema,
   startPipelineRequestSchema,
+  startDeploymentRequestSchema,
   startLaunchMeasurementRunRequestSchema,
   startVerificationRunRequestSchema,
   cancelVerificationRunRequestSchema,
@@ -116,6 +122,7 @@ import {
   type DomainEvent,
   type PublishedWorkItemWorkspace,
   type Project,
+  type DeploymentPreflightFailureCode,
   type ProviderAllowanceSnapshot,
   type QAAttachmentRef,
   type QAAttachmentSummary,
@@ -130,6 +137,7 @@ import {
   ConstitutionDomainError,
   LaunchMeasurementDomainError,
   LaunchReleaseDomainError,
+  GuidedDeploymentDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
   WorkspaceStrategyDomainError,
@@ -238,6 +246,9 @@ import { createSessionWorker } from "./session-worker.js";
 import { createProjectVerificationWorkflowGate } from "./project-verification-gate.js";
 import { createProjectVerificationRunner, type VerificationRecipeExecutor } from "./verification-runner.js";
 import { createLaunchMeasurementRunner, type LaunchServiceStarter } from "./launch-measurement-runner.js";
+import type { DeploymentDriver } from "./deployment-driver.js";
+import { createDeploymentRunner } from "./deployment-runner.js";
+import { createGithubActionsDeploymentDriver } from "./github-actions-deployment.js";
 import { describeReportingRuntime } from "./reporting.js";
 import { createMcpProposalChallengeStore, McpProposalError } from "./mcp-proposals.js";
 import { createMcpConnectionOpener } from "./mcp-sessions.js";
@@ -256,6 +267,16 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1"]);
 const PROVIDER_ALLOWANCE_READ_DEADLINE_MS = 3_000;
 
 type Clock = () => Date;
+
+class DeploymentOperationError extends Error {
+  readonly code: DeploymentPreflightFailureCode;
+
+  constructor(code: DeploymentPreflightFailureCode, message: string) {
+    super(message);
+    this.name = "DeploymentOperationError";
+    this.code = code;
+  }
+}
 
 type DaemonLoggerOption = boolean | { level: string };
 type DaemonLoggerStream = { write: (message: string) => void };
@@ -325,6 +346,8 @@ export type StartDaemonOptions = {
   launchMeasurementDriver?: LaunchMeasurementDriver;
   /** Test seam; production starts only the adopted SERVE recipe through the supervised executor. */
   launchServiceStarter?: LaunchServiceStarter;
+  /** Test seam; production dispatches only the built-in exact GitHub Actions workflow preset. */
+  deploymentDriver?: DeploymentDriver;
   /** Injected only for daemon route tests; production owns the real bounded stdio gateway. */
   mcpGateway?: McpGateway;
   // Injected for the same reason as `providerAdapter` above, and only for it: the heartbeat is the
@@ -410,6 +433,8 @@ const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
 const verificationRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 const launchMeasurementRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 const launchReleaseParamsSchema = z.object({ releaseId: opaqueIdSchema }).strict();
+const deploymentParamsSchema = z.object({ deploymentId: opaqueIdSchema }).strict();
+const deploymentPreviewQuerySchema = z.object({ releaseId: opaqueIdSchema }).strict();
 const verificationCheckParamsSchema = z.object({ checkId: opaqueIdSchema }).strict();
 const qaAttachmentParamsSchema = z
   .object({ workItemId: opaqueIdSchema, attachmentId: opaqueIdSchema })
@@ -652,6 +677,21 @@ const sendOperationError = (
           ? 403
           : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof GuidedDeploymentDomainError) {
+    const status =
+      error.code === "PROJECT_NOT_FOUND" ||
+      error.code === "RELEASE_NOT_FOUND" ||
+      error.code === "DEPLOYMENT_NOT_FOUND" ||
+      error.code === "PLAN_NOT_FOUND"
+        ? 404
+        : error.code === "OWNER_REQUIRED" || error.code === "RUNNER_REQUIRED"
+          ? 403
+          : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof DeploymentOperationError) {
+    return reply.code(409).send(createError(error.code, error.message, correlationId));
   }
   if (error instanceof ScaffoldDomainError) {
     const status =
@@ -1481,6 +1521,15 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     ...(options.launchServiceStarter === undefined ? {} : { startService: options.launchServiceStarter }),
   });
   await launchMeasurementRunner.recover();
+  const deploymentDriver = options.deploymentDriver ?? createGithubActionsDeploymentDriver();
+  const deploymentRunner = createDeploymentRunner({
+    state: localState,
+    driver: deploymentDriver,
+    createCommandId: () => `deployment-command-${randomUUID()}`,
+    now,
+    logger: app.log,
+  });
+  await deploymentRunner.recover();
 
   const verificationPlatform = (): "darwin" | "linux" | "win32" => {
     const current = normalizePlatform();
@@ -1697,6 +1746,72 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         acceptancePackages,
       }),
     });
+  };
+  const readGuidedDeploymentSnapshot = (projectId: string) => {
+    const snapshot = localState.query({ type: "GET_PROJECT_GUIDED_DEPLOYMENT", projectId });
+    if (snapshot.type !== "PROJECT_GUIDED_DEPLOYMENT") {
+      throw new StateStoreError("PERSISTENCE_FAILURE", "Guided Deployment state is unavailable");
+    }
+    return guidedDeploymentProjectResponseSchema.parse({
+      schemaVersion: 1,
+      projectId: snapshot.project.id,
+      projectVersion: snapshot.project.version,
+      latestPlan: snapshot.latestPlan,
+      latestDeployment: snapshot.latestDeployment,
+      rollbackAvailability: "UNAVAILABLE",
+    });
+  };
+  const previewGuidedDeployment = async (projectId: string, releaseId: string) => {
+    const releaseSnapshot = await readLaunchReleaseSnapshot(projectId);
+    const release = releaseSnapshot.latestRelease;
+    if (release?.id !== releaseId) {
+      throw new GuidedDeploymentDomainError(
+        "RELEASE_NOT_FOUND",
+        "The requested Release is not the current Release for this Project",
+      );
+    }
+    const base = {
+      schemaVersion: 1 as const,
+      projectId,
+      projectVersion: releaseSnapshot.projectVersion,
+      releaseId: release.id,
+      releaseContentHash: release.contentHash,
+    };
+    if (releaseSnapshot.freshness?.status !== "CURRENT") {
+      return deploymentPreviewResponseSchema.parse({
+        ...base,
+        status: "BLOCKED",
+        code: "RELEASE_STALE",
+      });
+    }
+    if (release.gates.some(({ required, status }) => required && status !== "PASSED")) {
+      return deploymentPreviewResponseSchema.parse({
+        ...base,
+        status: "BLOCKED",
+        code: "RELEASE_GATES_BLOCKED",
+      });
+    }
+    if (release.environment.kind !== "PREVIEW") {
+      return deploymentPreviewResponseSchema.parse({
+        ...base,
+        status: "BLOCKED",
+        code: "ENVIRONMENT_UNSUPPORTED",
+      });
+    }
+    const projectResult = localState.query({ type: "GET_PROJECT", projectId });
+    const project = projectResult.type === "PROJECT" ? projectResult.project : null;
+    if (project === null) {
+      throw new GuidedDeploymentDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+    }
+    const preflight = await deploymentDriver.preflight({
+      repositoryPath: project.repositoryPath,
+      releaseTree: release.sourceTree,
+    });
+    return deploymentPreviewResponseSchema.parse(
+      preflight.type === "READY"
+        ? { ...base, status: "READY", target: preflight.target }
+        : { ...base, status: "BLOCKED", code: preflight.code },
+    );
   };
   const sessionForRequest = (request: FastifyRequest): Session | undefined => {
     const sessionToken = request.cookies[SESSION_COOKIE];
@@ -2956,6 +3071,141 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           byteSize: rendered.byteSize,
           markdown: rendered.markdown,
         });
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/projects/:projectId/guided-deployment", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        return readGuidedDeploymentSnapshot(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/projects/:projectId/guided-deployment/preview", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const query = deploymentPreviewQuerySchema.parse(request.query);
+        return await previewGuidedDeployment(params.projectId, query.releaseId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/guided-deployment/plans", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = adoptDeploymentPlanRequestSchema.parse(request.body);
+        const preview = await previewGuidedDeployment(params.projectId, body.releaseId);
+        if (preview.releaseContentHash !== body.expectedReleaseContentHash) {
+          throw new GuidedDeploymentDomainError(
+            "RELEASE_CONTENT_MISMATCH",
+            "The Release changed after the deployment preview was loaded",
+          );
+        }
+        if (preview.status === "BLOCKED") {
+          throw new DeploymentOperationError(
+            preview.code,
+            "The exact deployment target is not safe to approve in its current state",
+          );
+        }
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "ADOPT_DEPLOYMENT_PLAN",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            releaseId: body.releaseId,
+            expectedReleaseContentHash: body.expectedReleaseContentHash,
+            releaseFreshness: { status: "CURRENT", reasons: [] },
+            target: preview.target,
+          },
+        });
+        return readGuidedDeploymentSnapshot(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/deployments/:deploymentId/approve", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = deploymentParamsSchema.parse(request.params);
+        const body = approveDeploymentRequestSchema.parse(request.body);
+        const changed = localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "APPROVE_DEPLOYMENT",
+          payload: {
+            deploymentId: params.deploymentId,
+            expectedVersion: body.expectedVersion,
+            approvalDigest: body.approvalDigest,
+          },
+        });
+        if (changed.type !== "DEPLOYMENT_CHANGED") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "The Deployment Approval was not saved");
+        }
+        deploymentRunner.wake(params.deploymentId);
+        return readGuidedDeploymentSnapshot(changed.deployment.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/deployments/:deploymentId/start", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = deploymentParamsSchema.parse(request.params);
+        startDeploymentRequestSchema.parse(request.body);
+        const context = localState.query({
+          type: "GET_DEPLOYMENT_CONTEXT",
+          deploymentId: params.deploymentId,
+        });
+        if (context.type !== "DEPLOYMENT_CONTEXT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "Deployment context is unavailable");
+        }
+        deploymentRunner.wake(params.deploymentId);
+        return readGuidedDeploymentSnapshot(context.project.id);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/deployments/:deploymentId/observe", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = deploymentParamsSchema.parse(request.params);
+        const body = observeDeploymentRequestSchema.parse(request.body);
+        const context = localState.query({
+          type: "GET_DEPLOYMENT_CONTEXT",
+          deploymentId: params.deploymentId,
+        });
+        if (context.type !== "DEPLOYMENT_CONTEXT") {
+          throw new StateStoreError("PERSISTENCE_FAILURE", "Deployment context is unavailable");
+        }
+        await deploymentRunner.observe({
+          deploymentId: params.deploymentId,
+          commandId: body.commandId,
+          correlationId,
+        });
+        return readGuidedDeploymentSnapshot(context.project.id);
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }
@@ -4805,6 +5055,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           worker.whenIdle(),
           verificationRunner.whenIdle(),
           launchMeasurementRunner.whenIdle(),
+          deploymentRunner.whenIdle(),
         ]);
       },
       close: async () => {
@@ -4812,6 +5063,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         closing = true;
         try {
           // The live session must be asked to stop before the server starts closing connections.
+          await deploymentRunner.stop();
           await launchMeasurementRunner.stop();
           await verificationRunner.stop();
           await worker.stop();
@@ -4823,6 +5075,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       },
     };
   } catch (error: unknown) {
+    await deploymentRunner.stop().catch(() => undefined);
     await launchMeasurementRunner.stop().catch(() => undefined);
     await verificationRunner.stop().catch(() => undefined);
     await mcpGateway.shutdown().catch(() => undefined);

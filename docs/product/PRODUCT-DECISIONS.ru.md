@@ -858,6 +858,23 @@ Environment URL и имена variables являются декларацией:
 «production ready»; failed, missing и stale evidence остаются видимыми. L4 по-прежнему требует отдельного решения,
 двух owner confirmations и threat-model delta. Полный контракт — ADR-0028 и планы 112–113.
 
+### PD-030 — L4a разрешает только owner-approved dispatch существующего GitHub Actions workflow
+
+**Дата:** 2026-09-10. Разрешает первый Guided Deploy slice; не разрешает automatic deployment, произвольные
+команды, локальный SSH/VPS deploy, push/merge/tag, HOTFIX, rollback или L5 monitoring.
+
+Authenticated owner может принять immutable Deployment Plan для exact current L3 Release и затем одноразово
+подтвердить одну PREVIEW/STANDARD попытку. Единственный production preset v1 запускает только committed
+`.github/workflows/deploy-production.yml` на named branch, чей remote ref уже равен clean local `HEAD`. Loomrail
+вызывает локально авторизованный GitHub CLI без shell и inputs; deploy secrets остаются внутри GitHub Actions и не
+попадают в Loomrail.
+
+Домен владеет eligibility, approval digest, состояниями, idempotency, audit и recovery. Provider не получает deploy
+tool. GitHub-specific argv и output остаются в adapter. Dispatch считается идентифицированным только по одному
+строгому run URL exact repository. Потеря/неоднозначность результата и startup при `RUNNING` дают `UNKNOWN`; поиска
+latest run, автоматического retry/observe/probe/rollback нет. Production/HOTFIX/rollback остаются честно
+blocked/unavailable до следующих slices. Полный контракт — ADR-0029 и планы 114–115.
+
 ## 14. Отложенные решения
 
 Следующие решения намеренно принимаются отдельным spike/ADR после Phase 0, а не угадываются заранее:

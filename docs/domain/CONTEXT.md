@@ -141,6 +141,23 @@ effect.
 Exact npm tarball bytes одного versioned Loomrail build, ещё не равные published release или moving dist-tag.
 _Не означает_: проверенный registry package, owner data export, Git tag или разрешение publish.
 
+**Deployment Plan**:
+Immutable owner-adopted identity exact Release, Environment, repository, published branch/commit, fixed workflow и
+bounded preset revision для одной категории deploy.
+_Не означает_: Approval, provider tool, произвольный argv, Git push или факт выполненного deploy.
+
+**Deployment Approval**:
+Одноразовое HUMAN-подтверждение exact approval digest одного Deployment.
+_Не означает_: reusable consent, permission provider, automatic retry/rollback или подтверждение другого Release.
+
+**Deployment**:
+Durable одна внешняя попытка с состояниями `PENDING_APPROVAL | APPROVED | RUNNING | SUCCEEDED | FAILED | UNKNOWN`.
+_Не означает_: AgentRun, GitHub payload, workflow state Loomrail или обещание production readiness.
+
+**Unknown Deployment**:
+Попытка, для которой внешний side effect возможен, но exact outcome не доказан локально.
+_Не означает_: failure, разрешение выбрать latest run или повод автоматически повторить deploy.
+
 **Release Integrity Receipt**:
 Closed unsigned JSON, который связывает candidate name/version/source observation/toolchain с digest tarball и
 каждого allowlisted package file.

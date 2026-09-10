@@ -9,6 +9,8 @@ import {
   launchMeasurementProjectResponseSchema,
   launchEvidencePackageResponseSchema,
   launchReleaseProjectResponseSchema,
+  deploymentPreviewResponseSchema,
+  guidedDeploymentProjectResponseSchema,
   mcpProfileProposalSchema,
   mcpProfilesResponseSchema,
   projectsResponseSchema,
@@ -59,6 +61,9 @@ import {
   type LaunchEnvironmentConfiguration,
   type LaunchEvidencePackageResponse,
   type LaunchReleaseProjectResponse,
+  type Deployment,
+  type DeploymentPreviewResponse,
+  type GuidedDeploymentProjectResponse,
   type ProjectReadinessRun,
   type ProjectWorkspaceStrategySelection,
   type QADefect,
@@ -459,6 +464,77 @@ export const exportLaunchEvidencePackage = async (
   requestLocalApi(
     `/api/v1/launch-releases/${encodeURIComponent(releaseId)}/evidence-package`,
     launchEvidencePackageResponseSchema,
+  );
+
+export const getGuidedDeployment = async (projectId: string): Promise<GuidedDeploymentProjectResponse> =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/guided-deployment`,
+    guidedDeploymentProjectResponseSchema,
+  );
+
+export const previewGuidedDeployment = async (
+  projectId: string,
+  releaseId: string,
+): Promise<DeploymentPreviewResponse> =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/guided-deployment/preview?releaseId=${encodeURIComponent(releaseId)}`,
+    deploymentPreviewResponseSchema,
+  );
+
+export const adoptGuidedDeploymentPlan = async (input: {
+  preview: DeploymentPreviewResponse;
+}): Promise<GuidedDeploymentProjectResponse> =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(input.preview.projectId)}/guided-deployment/plans`,
+    guidedDeploymentProjectResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: input.preview.projectVersion,
+        releaseId: input.preview.releaseId,
+        expectedReleaseContentHash: input.preview.releaseContentHash,
+      }),
+    },
+  );
+
+export const approveGuidedDeployment = async (input: {
+  deployment: Deployment;
+}): Promise<GuidedDeploymentProjectResponse> =>
+  requestLocalApi(
+    `/api/v1/deployments/${encodeURIComponent(input.deployment.id)}/approve`,
+    guidedDeploymentProjectResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedVersion: input.deployment.version,
+        approvalDigest: input.deployment.approvalDigest,
+      }),
+    },
+  );
+
+export const startGuidedDeployment = async (
+  deployment: Deployment,
+): Promise<GuidedDeploymentProjectResponse> =>
+  requestLocalApi(
+    `/api/v1/deployments/${encodeURIComponent(deployment.id)}/start`,
+    guidedDeploymentProjectResponseSchema,
+    { method: "POST", body: JSON.stringify({ schemaVersion: 1 }) },
+  );
+
+export const observeGuidedDeployment = async (
+  deployment: Deployment,
+): Promise<GuidedDeploymentProjectResponse> =>
+  requestLocalApi(
+    `/api/v1/deployments/${encodeURIComponent(deployment.id)}/observe`,
+    guidedDeploymentProjectResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: 1, commandId: crypto.randomUUID() }),
+    },
   );
 
 export const retryVerificationPlanPublication = async (

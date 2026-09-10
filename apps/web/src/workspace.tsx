@@ -18,6 +18,8 @@ import type {
   LaunchEnvironmentConfiguration,
   LaunchEvidencePackageResponse,
   LaunchReleaseProjectResponse,
+  Deployment,
+  DeploymentPreviewResponse,
   ListedProject,
   McpProfileCandidate,
   McpProfileProposal,
@@ -120,6 +122,12 @@ import {
   setProjectWorkspaceStrategy,
   setWorkItemDependencies,
   adoptVerificationPlan,
+  adoptGuidedDeploymentPlan,
+  approveGuidedDeployment,
+  getGuidedDeployment,
+  observeGuidedDeployment,
+  previewGuidedDeployment,
+  startGuidedDeployment,
   revokeMcpProfile,
   updateWorkItem,
   waiveQADefect,
@@ -143,6 +151,10 @@ const projectVerificationPlanKey = (projectId: string) =>
 const projectLaunchMeasurementKey = (projectId: string) =>
   ["projects", projectId, "launch-measurement"] as const;
 const projectLaunchReleaseKey = (projectId: string) => ["projects", projectId, "launch-release"] as const;
+const projectGuidedDeploymentKey = (projectId: string) =>
+  ["projects", projectId, "guided-deployment"] as const;
+const projectGuidedDeploymentPreviewKey = (projectId: string, releaseId: string) =>
+  ["projects", projectId, "guided-deployment", "preview", releaseId] as const;
 const projectWorkItemsKey = (projectId: string) => ["projects", projectId, "work-items"] as const;
 const projectWorkItemDependenciesKey = (projectId: string) =>
   ["projects", projectId, "work-items", "dependencies"] as const;
@@ -906,6 +918,80 @@ export const useExportLaunchEvidencePackage = () =>
   useMutation<LaunchEvidencePackageResponse, Error, string>({
     mutationFn: (releaseId) => exportLaunchEvidencePackage(releaseId),
   });
+
+export const useGuidedDeployment = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: projectId ? projectGuidedDeploymentKey(projectId) : ["projects", "none", "guided-deployment"],
+    queryFn: () => {
+      if (!projectId) throw new Error("A project is required to load Guided Deployment");
+      return getGuidedDeployment(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+
+export const useGuidedDeploymentPreview = (projectId: string | undefined, releaseId: string | undefined) =>
+  useQuery({
+    queryKey:
+      projectId && releaseId
+        ? projectGuidedDeploymentPreviewKey(projectId, releaseId)
+        : ["projects", "none", "guided-deployment", "preview"],
+    queryFn: () => {
+      if (!projectId || !releaseId) throw new Error("A current Release is required for deployment preview");
+      return previewGuidedDeployment(projectId, releaseId);
+    },
+    enabled: projectId !== undefined && releaseId !== undefined,
+  });
+
+const invalidateGuidedDeployment = async (
+  queryClient: ReturnType<typeof useQueryClient>,
+  projectId: string,
+): Promise<void> => {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: projectGuidedDeploymentKey(projectId) }),
+    queryClient.invalidateQueries({ queryKey: projectLaunchReleaseKey(projectId) }),
+    queryClient.invalidateQueries({ queryKey: projectsKey }),
+  ]);
+};
+
+export const useAdoptGuidedDeploymentPlan = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (preview: DeploymentPreviewResponse) => adoptGuidedDeploymentPlan({ preview }),
+    onSuccess: async (snapshot) => {
+      await invalidateGuidedDeployment(queryClient, snapshot.projectId);
+    },
+  });
+};
+
+export const useApproveGuidedDeployment = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (deployment: Deployment) => approveGuidedDeployment({ deployment }),
+    onSuccess: async (snapshot) => {
+      await invalidateGuidedDeployment(queryClient, snapshot.projectId);
+    },
+  });
+};
+
+export const useStartGuidedDeployment = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (deployment: Deployment) => startGuidedDeployment(deployment),
+    onSuccess: async (snapshot) => {
+      await invalidateGuidedDeployment(queryClient, snapshot.projectId);
+    },
+  });
+};
+
+export const useObserveGuidedDeployment = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (deployment: Deployment) => observeGuidedDeployment(deployment),
+    onSuccess: async (snapshot) => {
+      await invalidateGuidedDeployment(queryClient, snapshot.projectId);
+    },
+  });
+};
 
 export const useProjectReadiness = (projectId: string | undefined) =>
   useQuery({

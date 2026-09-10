@@ -35,3 +35,5 @@ record.
 | [0025](0025-handoff-deadline-joins-the-session-task.md)              | Accepted              | Handoff joins session task before successor          |
 | [0026](0026-safe-verification-plan-context-projection.md)            | Accepted              | Safe immutable verification-plan context projection  |
 | [0027](0027-owner-approved-local-launch-measurements.md)             | Accepted              | Owner-approved local launch measurements             |
+| [0028](0028-domain-owned-release-evidence-snapshots.md)              | Accepted              | Immutable domain-owned Release evidence              |
+| [0029](0029-owner-approved-github-actions-deployment.md)             | Accepted              | Owner-approved exact GitHub Actions dispatch         |

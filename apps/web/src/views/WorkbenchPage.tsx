@@ -861,6 +861,26 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
             ? "success"
             : "warning",
       };
+    case "DEPLOYMENT_PLAN_ADOPTED":
+      return {
+        detail: t("event.deploymentPlanAdoptedDetail", {
+          branch: event.data.plan.target.branch,
+          commit: event.data.plan.target.commitSha.slice(0, 8),
+          repository: event.data.plan.target.repositorySlug,
+        }),
+        icon: "settings",
+        label: t("event.deploymentPlanAdopted"),
+        tone: "accent",
+      };
+    case "DEPLOYMENT_CHANGED":
+      return {
+        detail: t("event.deploymentChangedDetail", {
+          status: t(`settings.deploy.status.${event.data.deployment.status}`),
+        }),
+        icon: event.data.deployment.status === "SUCCEEDED" ? "check" : "warning",
+        label: t("event.deploymentChanged"),
+        tone: event.data.deployment.status === "SUCCEEDED" ? "success" : "warning",
+      };
     case "VERIFICATION_RUN_RESERVED":
       return {
         detail: t("event.verificationRunReservedDetail", {
