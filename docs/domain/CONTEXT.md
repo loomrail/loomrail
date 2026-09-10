@@ -271,6 +271,19 @@ _Не означает_: Git commit, push или самостоятельное 
 Versioned снимок одной проверки готовности Project, привязанный к наблюдаемому состоянию repository.
 _Не означает_: бессрочную гарантию безопасности или production readiness.
 
+**Launch Environment**:
+Versioned owner-declared `PREVIEW | PRODUCTION` target: HTTPS origin, health path, builtin preset revision и portable
+имена требуемых переменных без значений.
+_Не означает_: credential profile, network permission, существующий deploy или подтверждение запуска.
+
+**Release**:
+Неизменяемый Project snapshot точного Git tree, Environment revision и exact durable gate evidence.
+_Не означает_: build artifact, deploy attempt, mutable readiness status или approval.
+
+**Launch Evidence Package**:
+Bounded deterministic Markdown-представление одного immutable Release с gate counts, refs и limitations.
+_Не означает_: provider report, сырые логи, обещание безопасности или разрешение deploy.
+
 **Readiness Check**:
 Один пункт закрытого catalog с категорией, способом проверки, состоянием и evidence.
 _Не означает_: свободный совет provider или автоматически выполненную repository command.

@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { z } from "zod";
 
-import { loadMigrationSources } from "./migrations.js";
+import { loadMigrationSources, migrationChecksumMatches } from "./migrations.js";
 
 export type StateDatabaseInspectionStatus =
   | "MISSING"
@@ -102,7 +102,7 @@ export const inspectStateDatabase = async (
       applied.some((migration) => {
         const current = expectedByVersion.get(migration.version);
         if (current === undefined) return true;
-        return current.name !== migration.name || current.checksum !== migration.checksum;
+        return current.name !== migration.name || !migrationChecksumMatches(current, migration.checksum);
       })
     ) {
       return {

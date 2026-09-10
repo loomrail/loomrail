@@ -14,6 +14,10 @@ import type {
   LaunchMeasurementPlanConfiguration,
   LaunchMeasurementProjectResponse,
   LaunchMeasurementRun,
+  LaunchEnvironment,
+  LaunchEnvironmentConfiguration,
+  LaunchEvidencePackageResponse,
+  LaunchReleaseProjectResponse,
   ListedProject,
   McpProfileCandidate,
   McpProfileProposal,
@@ -102,7 +106,11 @@ import {
   startWorkItemVerificationRun,
   cancelLaunchMeasurement,
   cancelVerificationRun,
+  createLaunchRelease,
+  exportLaunchEvidencePackage,
+  getLaunchRelease,
   runProjectReadiness,
+  saveLaunchEnvironment,
   resolveAcceptance,
   resolveQACorrectionGate,
   resolveVerificationCorrectionGate,
@@ -134,6 +142,7 @@ const projectVerificationPlanKey = (projectId: string) =>
   ["projects", projectId, "verification-plan"] as const;
 const projectLaunchMeasurementKey = (projectId: string) =>
   ["projects", projectId, "launch-measurement"] as const;
+const projectLaunchReleaseKey = (projectId: string) => ["projects", projectId, "launch-release"] as const;
 const projectWorkItemsKey = (projectId: string) => ["projects", projectId, "work-items"] as const;
 const projectWorkItemDependenciesKey = (projectId: string) =>
   ["projects", projectId, "work-items", "dependencies"] as const;
@@ -848,6 +857,55 @@ export const useCancelLaunchMeasurement = () => {
     },
   });
 };
+
+export const useLaunchRelease = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: projectId ? projectLaunchReleaseKey(projectId) : ["projects", "none", "launch-release"],
+    queryFn: () => {
+      if (!projectId) throw new Error("A project is required to load its Launch Release");
+      return getLaunchRelease(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+
+export const useSaveLaunchEnvironment = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      configuration: LaunchEnvironmentConfiguration;
+      environment: LaunchEnvironment | null;
+      snapshot: LaunchReleaseProjectResponse;
+    }) => saveLaunchEnvironment(input),
+    onSuccess: async (snapshot) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectLaunchReleaseKey(snapshot.projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectsKey }),
+      ]);
+    },
+  });
+};
+
+export const useCreateLaunchRelease = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      environment: LaunchEnvironment;
+      snapshot: LaunchReleaseProjectResponse;
+      workItemIds: readonly string[];
+    }) => createLaunchRelease(input),
+    onSuccess: async (snapshot) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectLaunchReleaseKey(snapshot.projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectsKey }),
+      ]);
+    },
+  });
+};
+
+export const useExportLaunchEvidencePackage = () =>
+  useMutation<LaunchEvidencePackageResponse, Error, string>({
+    mutationFn: (releaseId) => exportLaunchEvidencePackage(releaseId),
+  });
 
 export const useProjectReadiness = (projectId: string | undefined) =>
   useQuery({

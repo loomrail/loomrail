@@ -7,6 +7,8 @@ import {
   humanRequestsResponseSchema,
   insightsResponseSchema,
   launchMeasurementProjectResponseSchema,
+  launchEvidencePackageResponseSchema,
+  launchReleaseProjectResponseSchema,
   mcpProfileProposalSchema,
   mcpProfilesResponseSchema,
   projectsResponseSchema,
@@ -53,6 +55,10 @@ import {
   type LaunchMeasurementPlanConfiguration,
   type LaunchMeasurementProjectResponse,
   type LaunchMeasurementRun,
+  type LaunchEnvironment,
+  type LaunchEnvironmentConfiguration,
+  type LaunchEvidencePackageResponse,
+  type LaunchReleaseProjectResponse,
   type ProjectReadinessRun,
   type ProjectWorkspaceStrategySelection,
   type QADefect,
@@ -396,6 +402,63 @@ export const cancelLaunchMeasurement = async (input: {
         expectedVersion: input.run.version,
       }),
     },
+  );
+
+export const getLaunchRelease = async (projectId: string): Promise<LaunchReleaseProjectResponse> =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/launch-release`,
+    launchReleaseProjectResponseSchema,
+  );
+
+export const saveLaunchEnvironment = async (input: {
+  configuration: LaunchEnvironmentConfiguration;
+  environment: LaunchEnvironment | null;
+  snapshot: LaunchReleaseProjectResponse;
+}): Promise<LaunchReleaseProjectResponse> =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(input.snapshot.projectId)}/launch-release/environments`,
+    launchReleaseProjectResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: input.snapshot.projectVersion,
+        environmentId: input.environment?.id ?? null,
+        expectedEnvironmentVersion: input.environment?.version ?? null,
+        configuration: input.configuration,
+      }),
+    },
+  );
+
+export const createLaunchRelease = async (input: {
+  environment: LaunchEnvironment;
+  snapshot: LaunchReleaseProjectResponse;
+  workItemIds: readonly string[];
+}): Promise<LaunchReleaseProjectResponse> =>
+  requestLocalApi(
+    `/api/v1/projects/${encodeURIComponent(input.snapshot.projectId)}/launch-release/releases`,
+    launchReleaseProjectResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        commandId: crypto.randomUUID(),
+        expectedProjectVersion: input.snapshot.projectVersion,
+        environmentId: input.environment.id,
+        expectedEnvironmentVersion: input.environment.version,
+        expectedEnvironmentContentHash: input.environment.contentHash,
+        workItemIds: input.workItemIds,
+      }),
+    },
+  );
+
+export const exportLaunchEvidencePackage = async (
+  releaseId: string,
+): Promise<LaunchEvidencePackageResponse> =>
+  requestLocalApi(
+    `/api/v1/launch-releases/${encodeURIComponent(releaseId)}/evidence-package`,
+    launchEvidencePackageResponseSchema,
   );
 
 export const retryVerificationPlanPublication = async (

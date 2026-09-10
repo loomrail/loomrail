@@ -86,6 +86,17 @@ describe("read-only state database inspection", () => {
     });
   });
 
+  it("reports the exact known pre-release migration 56 newline checksum as compatible", async () => {
+    await createCurrentDatabase();
+    const database = new DatabaseSync(databasePath);
+    database
+      .prepare("UPDATE schema_migrations SET checksum = ? WHERE version = 56")
+      .run("1806ec77c5bd58415f28c601a5537d5d88299515dfc7339b58c976b81aa2d559");
+    database.close();
+
+    await expect(inspectStateDatabase(databasePath)).resolves.toMatchObject({ status: "READY" });
+  });
+
   it("fails closed for corrupt and non-file paths", async () => {
     await writeFile(databasePath, "not a sqlite database", "utf8");
     await expect(inspectStateDatabase(databasePath)).resolves.toMatchObject({ status: "CORRUPT" });

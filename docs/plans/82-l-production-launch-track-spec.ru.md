@@ -2,10 +2,12 @@
 
 **Дата:** 2026-09-05
 
-**Статус:** L1 и L2 реализованы на macOS — детали в
+**Статус:** L1–L3 реализованы и production-shaped dogfooded на macOS — детали в
 [`83-l1-readiness-v2-implementation-plan.ru.md`](83-l1-readiness-v2-implementation-plan.ru.md) и
 [`111-l2-measured-launch-gates-implementation-plan.ru.md`](111-l2-measured-launch-gates-implementation-plan.ru.md);
-Windows lifecycle evidence для L2 и L3–L5 остаются pending, а L4 дополнительно требует отдельного PD (§12)
+[`112-l3-release-evidence-package-spec.ru.md`](112-l3-release-evidence-package-spec.ru.md) и
+[`113-l3-release-evidence-package-implementation-plan.ru.md`](113-l3-release-evidence-package-implementation-plan.ru.md);
+L4–L5 и Windows verification остаются pending, а L4 дополнительно требует отдельного PD (§12)
 
 **Основание:** PD-007 (вторая persona), WD-005, TD-001, HD-003, SD-001, SD-002, SD-003, QD-002, QD-003, PD-016;
 [B3+B2 project readiness](29-b3-b2-project-readiness-security-spec.ru.md),
@@ -34,7 +36,7 @@ Windows lifecycle evidence для L2 и L3–L5 остаются pending, а L4 
 | ------ | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | ----------------------------------- |
 | **L1** | Readiness v2: lockfile, разделение dev/prod окружения, решение по security headers, объявленный health-путь, аттестации бэкапа и плана отката | нет, только read-only наблюдения  | **Реализовано 2026-09-06**          |
 | **L2** | Измеряемые gates: локальный запуск по owner-approved recipe плюс браузерные измерения перфоманса и рантайм-безопасности                       | локальные сетевые пробы           | **Реализовано 2026-09-10 на macOS** |
-| **L3** | `Environment`, `Release`, обязательные gates и Launch Evidence Package без исполнения деплоя                                                  | новая миграция persistence        | не начата                           |
+| **L3** | `Environment`, `Release`, обязательные gates и Launch Evidence Package без исполнения деплоя                                                  | новая миграция persistence        | **Реализовано 2026-09-10 на macOS** |
 | **L4** | Guided Deploy v1: рецепт класса irreversible, один встроенный пресет, два подтверждения, проба, откат                                         | **PD-017, ROADMAP, THREAT-MODEL** | не начата                           |
 | **L5** | Жизнь после запуска: health check, протухание проверок, повторный прогон, порядок действий при падении                                        | периодические внешние пробы       | не начата                           |
 

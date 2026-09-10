@@ -40,6 +40,10 @@ import {
   cancelLaunchMeasurementRunRequestSchema,
   disableLaunchMeasurementPlanRequestSchema,
   launchMeasurementProjectResponseSchema,
+  createLaunchReleaseRequestSchema,
+  launchEvidencePackageResponseSchema,
+  launchReleaseProjectResponseSchema,
+  saveLaunchEnvironmentRequestSchema,
   mcpProfilesResponseSchema,
   mcpProfileProposalSchema,
   MAX_QA_RUN_HISTORY,
@@ -125,6 +129,7 @@ import {
   MAX_RELEASE_SUMMARY_AUDIT_EVENTS,
   ConstitutionDomainError,
   LaunchMeasurementDomainError,
+  LaunchReleaseDomainError,
   McpDomainError,
   ProviderSelectionDomainError,
   WorkspaceStrategyDomainError,
@@ -136,6 +141,8 @@ import {
   VerificationDomainError,
   projectVerificationRunFreshness,
   launchMeasurementFreshness,
+  launchReleaseFreshness,
+  renderLaunchEvidencePackage,
   renderReleaseSummary,
   ReviewFindingDispositionError,
   ScaffoldDomainError,
@@ -181,7 +188,9 @@ import {
   PathNotAFileError,
   PathOutsideWorktreeError,
   PathUnresolvableError,
+  inspectRepository,
   readFileDiff,
+  runGit,
   summariseChanges,
   treeOfWorktree,
 } from "@loomrail/workspace";
@@ -400,6 +409,7 @@ const mcpRevisionParamsSchema = z.object({ projectId: opaqueIdSchema, revisionId
 const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
 const verificationRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 const launchMeasurementRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
+const launchReleaseParamsSchema = z.object({ releaseId: opaqueIdSchema }).strict();
 const verificationCheckParamsSchema = z.object({ checkId: opaqueIdSchema }).strict();
 const qaAttachmentParamsSchema = z
   .object({ workItemId: opaqueIdSchema, attachmentId: opaqueIdSchema })
@@ -486,7 +496,8 @@ type WorkItemChangesErrorCode =
   | "WORKSPACE_WORKTREE_UNREADABLE"
   | "WORKSPACE_HAS_NO_BASELINE"
   | "GIT_UNAVAILABLE"
-  | "CHANGES_UNREADABLE";
+  | "CHANGES_UNREADABLE"
+  | "REPOSITORY_OPERATION_IN_PROGRESS";
 
 /**
  * A read of what a work item changed that could not be done at all.
@@ -627,6 +638,17 @@ const sendOperationError = (
       error.code === "PROJECT_NOT_FOUND" || error.code === "PLAN_NOT_FOUND" || error.code === "RUN_NOT_FOUND"
         ? 404
         : error.code === "OWNER_REQUIRED" || error.code === "SYSTEM_REQUIRED"
+          ? 403
+          : 409;
+    return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
+  }
+  if (error instanceof LaunchReleaseDomainError) {
+    const status =
+      error.code === "PROJECT_NOT_FOUND" ||
+      error.code === "ENVIRONMENT_NOT_FOUND" ||
+      error.code === "RELEASE_NOT_FOUND"
+        ? 404
+        : error.code === "OWNER_REQUIRED"
           ? 403
           : 409;
     return reply.code(status).send(createError(error.code, error.message, correlationId, error.details));
@@ -1534,6 +1556,41 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     }
   };
 
+  const readLaunchSource = async (
+    repositoryPath: string,
+  ): Promise<{ sourceTree: string; sourceHead: string | null; sourceHeadTree: string | null }> => {
+    const repository = await inspectRepository(repositoryPath);
+    if (repository === null) {
+      throw new WorkItemChangesError(
+        "CHANGES_UNREADABLE",
+        "The launch source could not be inspected as a stable Git repository",
+      );
+    }
+    if (repository.inProgress !== null) {
+      throw new WorkItemChangesError(
+        "REPOSITORY_OPERATION_IN_PROGRESS",
+        "A Release snapshot cannot be created while a Git operation is in progress",
+      );
+    }
+    const sourceTree = await readVerificationTree(repository.topLevel);
+    if (repository.headCommit === null) {
+      return { sourceTree, sourceHead: null, sourceHeadTree: null };
+    }
+    const headTree = await runGit(["rev-parse", `${repository.headCommit}^{tree}`], {
+      cwd: repository.topLevel,
+      maxStdoutBytes: 128,
+      maxStderrBytes: 1_024,
+    });
+    const sourceHeadTree = headTree.stdout.trim();
+    if (headTree.exitCode !== 0 || headTree.stdoutTruncated || !/^[0-9a-f]{40}$/u.test(sourceHeadTree)) {
+      throw new WorkItemChangesError(
+        "CHANGES_UNREADABLE",
+        "The committed launch source tree could not be read",
+      );
+    }
+    return { sourceTree, sourceHead: repository.headCommit, sourceHeadTree };
+  };
+
   const readVerificationRunSnapshot = async (
     runId: string,
     treeCache: Map<string, Promise<string>> = new Map(),
@@ -1590,6 +1647,55 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
               currentPlan: snapshot.plan ?? undefined,
               currentVerificationPlan: verification.plan ?? undefined,
             }),
+    });
+  };
+  const readLaunchReleaseSnapshot = async (projectId: string) => {
+    const snapshot = localState.query({ type: "GET_PROJECT_LAUNCH_RELEASE", projectId });
+    if (snapshot.type !== "PROJECT_LAUNCH_RELEASE") {
+      throw new StateStoreError("PERSISTENCE_FAILURE", "Launch Release state is unavailable");
+    }
+    const release = snapshot.latestRelease;
+    if (release === null) {
+      return launchReleaseProjectResponseSchema.parse({
+        schemaVersion: 1,
+        projectId: snapshot.project.id,
+        projectVersion: snapshot.project.version,
+        environments: snapshot.environments,
+        latestRelease: null,
+        freshness: null,
+      });
+    }
+    const readiness = localState.query({ type: "GET_PROJECT_READINESS_SNAPSHOT", projectId });
+    const verification = localState.query({ type: "GET_PROJECT_VERIFICATION_PLAN", projectId });
+    const measurement = localState.query({ type: "GET_PROJECT_LAUNCH_MEASUREMENT", projectId });
+    if (
+      readiness.type !== "PROJECT_READINESS_SNAPSHOT" ||
+      verification.type !== "PROJECT_VERIFICATION_PLAN" ||
+      measurement.type !== "PROJECT_LAUNCH_MEASUREMENT"
+    ) {
+      throw new StateStoreError("PERSISTENCE_FAILURE", "Launch Release evidence is unavailable");
+    }
+    const acceptancePackages = release.selectedWorkItems.flatMap(({ workItemId }) => {
+      const workflow = localState.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId });
+      return workflow.type === "WORKFLOW_SNAPSHOT" && workflow.snapshot.acceptancePackage !== null
+        ? [workflow.snapshot.acceptancePackage]
+        : [];
+    });
+    return launchReleaseProjectResponseSchema.parse({
+      schemaVersion: 1,
+      projectId: snapshot.project.id,
+      projectVersion: snapshot.project.version,
+      environments: snapshot.environments,
+      latestRelease: release,
+      freshness: launchReleaseFreshness(release, {
+        currentTree: await readVerificationTree(snapshot.project.repositoryPath),
+        environment: snapshot.environments.find(({ id }) => id === release.environment.id),
+        readiness: readiness.snapshot,
+        verificationPlan: verification.plan ?? undefined,
+        measurementPlan: measurement.plan ?? undefined,
+        measurementRun: measurement.latestRun ?? undefined,
+        acceptancePackages,
+      }),
     });
   };
   const sessionForRequest = (request: FastifyRequest): Session | undefined => {
@@ -2754,6 +2860,102 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           throw new StateStoreError("PERSISTENCE_FAILURE", "Launch measurement context is unavailable");
         }
         return await readLaunchMeasurementSnapshot(context.project.id);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/projects/:projectId/launch-release", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        return await readLaunchReleaseSnapshot(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/launch-release/environments", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = saveLaunchEnvironmentRequestSchema.parse(request.body);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "SAVE_LAUNCH_ENVIRONMENT",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            environmentId: body.environmentId,
+            expectedEnvironmentVersion: body.expectedEnvironmentVersion,
+            configuration: body.configuration,
+          },
+        });
+        return await readLaunchReleaseSnapshot(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.post("/api/v1/projects/:projectId/launch-release/releases", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!authorizeMutation(request, reply, correlationId)) return;
+      try {
+        const params = projectParamsSchema.parse(request.params);
+        const body = createLaunchReleaseRequestSchema.parse(request.body);
+        const projectResult = localState.query({ type: "GET_PROJECT", projectId: params.projectId });
+        const project = projectResult.type === "PROJECT" ? projectResult.project : null;
+        if (project === null) {
+          throw new LaunchReleaseDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+        }
+        const source = await readLaunchSource(project.repositoryPath);
+        localState.execute({
+          schemaVersion: 1,
+          commandId: body.commandId,
+          correlationId,
+          actor: { type: "HUMAN", id: "local-owner" },
+          type: "CREATE_LAUNCH_RELEASE",
+          payload: {
+            projectId: params.projectId,
+            expectedProjectVersion: body.expectedProjectVersion,
+            environmentId: body.environmentId,
+            expectedEnvironmentVersion: body.expectedEnvironmentVersion,
+            expectedEnvironmentContentHash: body.expectedEnvironmentContentHash,
+            ...source,
+            workItemIds: body.workItemIds,
+          },
+        });
+        return await readLaunchReleaseSnapshot(params.projectId);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    app.get("/api/v1/launch-releases/:releaseId/evidence-package", async (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = launchReleaseParamsSchema.parse(request.params);
+        const result = localState.query({ type: "GET_LAUNCH_RELEASE", releaseId: params.releaseId });
+        if (result.type !== "LAUNCH_RELEASE" || result.release === null) {
+          throw new LaunchReleaseDomainError("RELEASE_NOT_FOUND", "The Release does not exist");
+        }
+        const rendered = renderLaunchEvidencePackage(result.release);
+        if (rendered.type === "TOO_LARGE") {
+          throw new LaunchReleaseDomainError("EVIDENCE_PACKAGE_TOO_LARGE", rendered.reason);
+        }
+        return launchEvidencePackageResponseSchema.parse({
+          schemaVersion: 1,
+          releaseId: result.release.id,
+          contentType: "text/markdown; charset=utf-8",
+          byteSize: rendered.byteSize,
+          markdown: rendered.markdown,
+        });
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }

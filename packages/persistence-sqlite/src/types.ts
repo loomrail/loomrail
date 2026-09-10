@@ -13,8 +13,10 @@ import type {
   HumanRequest,
   HumanRequestStatus,
   LaunchDependencyAuditEvidence,
+  LaunchEnvironment,
   LaunchMeasurementPlan,
   LaunchMeasurementRun,
+  LaunchRelease,
   McpProfileView,
   McpSessionSnapshot,
   McpToolCallRecord,
@@ -148,6 +150,8 @@ export type StateQuery =
   | { type: "GET_PROJECT_CONSTITUTION_SNAPSHOT"; projectId: string }
   | { type: "GET_PROJECT_VERIFICATION_PLAN"; projectId: string }
   | { type: "GET_PROJECT_LAUNCH_MEASUREMENT"; projectId: string }
+  | { type: "GET_PROJECT_LAUNCH_RELEASE"; projectId: string }
+  | { type: "GET_LAUNCH_RELEASE"; releaseId: string }
   | { type: "GET_LAUNCH_MEASUREMENT_RUN_CONTEXT"; runId: string }
   | { type: "LIST_ACTIVE_LAUNCH_MEASUREMENT_RUNS" }
   | {
@@ -258,6 +262,13 @@ export type StateQueryResult =
       plan: LaunchMeasurementPlan | null;
       latestRun: LaunchMeasurementRun | null;
     }
+  | {
+      type: "PROJECT_LAUNCH_RELEASE";
+      project: Project;
+      environments: LaunchEnvironment[];
+      latestRelease: LaunchRelease | null;
+    }
+  | { type: "LAUNCH_RELEASE"; release: LaunchRelease | null }
   | {
       type: "LAUNCH_MEASUREMENT_RUN_CONTEXT";
       project: Project;
@@ -405,6 +416,8 @@ export type LocalStateIdKind =
   | "verificationCheck"
   | "launchMeasurementPlan"
   | "launchMeasurementRun"
+  | "launchEnvironment"
+  | "launchRelease"
   | "verificationFailure"
   | "verificationCorrectionRun"
   | "correctionBudgetEntry"

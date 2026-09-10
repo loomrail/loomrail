@@ -13,6 +13,15 @@ type Migration = {
   name: string;
   filename: string;
   /**
+   * Exact checksum pairs for a migration that was applied by an owner-approved dogfood build
+   * before its source entered shared history. Both sides are pinned so this cannot turn into a
+   * general "ignore drift" path: changing either the installed ledger or today's SQL still fails.
+   */
+  compatibleAppliedChecksums?: readonly {
+    appliedChecksum: string;
+    currentChecksum: string;
+  }[];
+  /**
    * This migration rebuilds a table other tables hold foreign keys into, so it runs with
    * `PRAGMA foreign_keys` off -- SQLite's own documented procedure for the change, and the only one
    * available to it.
@@ -281,6 +290,13 @@ const migrations: readonly Migration[] = [
     version: 56,
     name: "work_item_dependencies",
     filename: "0056_work_item_dependencies.sql",
+    compatibleAppliedChecksums: [
+      {
+        // The only byte difference is one additional trailing LF after the final statement.
+        appliedChecksum: "1806ec77c5bd58415f28c601a5537d5d88299515dfc7339b58c976b81aa2d559",
+        currentChecksum: "3b9ed8c5b9e0ac080f0709472628b6408cf43f64a04152d016f4c5103453f7e4",
+      },
+    ],
   },
   {
     version: 57,
@@ -291,6 +307,12 @@ const migrations: readonly Migration[] = [
     version: 58,
     name: "launch_measurements",
     filename: "0058_launch_measurements.sql",
+    rebuildsAReferencedTable: true,
+  },
+  {
+    version: 59,
+    name: "launch_releases",
+    filename: "0059_launch_releases.sql",
     rebuildsAReferencedTable: true,
   },
 ];
@@ -324,6 +346,14 @@ export const loadMigrationSources = async (
       return { ...migration, sql, checksum: checksum(sql) };
     }),
   );
+
+export const migrationChecksumMatches = (migration: MigrationSource, appliedChecksum: string): boolean =>
+  migration.checksum === appliedChecksum ||
+  (migration.compatibleAppliedChecksums?.some(
+    (compatible) =>
+      compatible.appliedChecksum === appliedChecksum && compatible.currentChecksum === migration.checksum,
+  ) ??
+    false);
 
 const databaseHasMigrationTable = (database: DatabaseSync): boolean =>
   database
@@ -406,7 +436,10 @@ export const applyMigrations = async (
 
   for (const migration of migrationSources) {
     const applied = appliedByVersion.get(migration.version);
-    if (applied && (applied.name !== migration.name || applied.checksum !== migration.checksum)) {
+    if (
+      applied &&
+      (applied.name !== migration.name || !migrationChecksumMatches(migration, applied.checksum))
+    ) {
       throw new StateStoreError(
         "MIGRATION_DRIFT",
         `Migration ${migration.version.toString()} no longer matches the applied checksum`,

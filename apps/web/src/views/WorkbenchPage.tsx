@@ -834,6 +834,33 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
               ? "accent"
               : "warning",
       };
+    case "LAUNCH_ENVIRONMENT_CHANGED":
+      return {
+        detail: t("event.launchEnvironmentChangedDetail", {
+          kind: event.data.environment.kind,
+          version: event.data.environment.version,
+        }),
+        icon: "settings",
+        label: t("event.launchEnvironmentChanged"),
+        tone: "accent",
+      };
+    case "LAUNCH_RELEASE_CREATED":
+      return {
+        detail: t("event.launchReleaseCreatedDetail", {
+          passed: event.data.release.passedRequiredGateCount,
+          required: event.data.release.requiredGateCount,
+          tree: event.data.release.sourceTree.slice(0, 8),
+        }),
+        icon:
+          event.data.release.passedRequiredGateCount === event.data.release.requiredGateCount
+            ? "check"
+            : "warning",
+        label: t("event.launchReleaseCreated"),
+        tone:
+          event.data.release.passedRequiredGateCount === event.data.release.requiredGateCount
+            ? "success"
+            : "warning",
+      };
     case "VERIFICATION_RUN_RESERVED":
       return {
         detail: t("event.verificationRunReservedDetail", {

@@ -2110,6 +2110,53 @@ symlink/traversal cwd; output/response/token-like canaries; service descendants;
 proof, durable blocked/missing-record recovery and no replay; current/stale/missing AUDIT reference; idempotency;
 macOS/Windows paths with spaces and Unicode; Event/API/UI/export/log leak scan.
 
+### Release evidence-snapshot delta (T77)
+
+**T77 — forged or cross-boundary evidence produces a misleading Release package. High.** A browser, provider or stale
+owner tab could name foreign WorkItems, old AcceptancePackages, a changed Environment or unrelated Project evidence;
+untrusted labels could inject Markdown/HTML or secret/path-like material into an export. A renderer over live queries
+could silently change historical bytes, while missing evidence could be described as success.
+
+Only an authenticated HUMAN mutation with exact Origin/CSRF may save an Environment or create a Release. Inputs are
+bounded IDs, expected versions and closed configuration; URLs must be credential-free HTTPS origins and environment
+variables are names only. Inside one transaction persistence reloads Project, Environment, latest readiness/current
+Plans and measurement plus every selected WorkItem's latest workflow, then rejects foreign, duplicate, changed or
+inconsistent Project/WorkItem/PipelineRun/tree lineage. The domain maps only closed typed records into exactly 24 gate
+snapshots. Missing evidence remains `ACTION_REQUIRED`; changed evidence becomes `STALE`; Release rows are immutable.
+Every readiness gate additionally compares the captured `repositoryHead` with the Release tree and retains that tree
+on its evidence reference, so a clean but older readiness run cannot become a current pass.
+Within a PipelineRun the selected AcceptancePackage is the artifact authority: only its exact `artifactIds` enter the
+Release. Superseded correction artifacts are ignored, while a named artifact that is missing or crosses the Project,
+WorkItem or PipelineRun boundary fails closed. Review/QA artifacts count only with their measured authority identity
+and tree, and all available Review/QA/Verification trees must agree even when Verification is absent; legacy prose
+cannot borrow another source's tree and become a passed gate.
+
+The daemon captures the Project's exact current Git tree before creation, refuses a repository during an unfinished
+merge/rebase/cherry-pick/bisect, and rechecks the tree after persistence, exposing a closed stale reason rather than
+rewriting the Release. The bounded renderer receives only the validated Release,
+escapes Markdown/HTML and redacts absolute macOS/Windows paths and credential-like URL forms. Repository paths,
+environment values, `.env` contents, raw provider/command payloads, response headers/bodies and tokens are absent from
+the Release schema. L3 performs no network or process operation and grants no deploy authority.
+
+Required verification: HUMAN-only mutation; HTTP session/Origin/CSRF; foreign/duplicate/stale IDs; expected-version
+and command replay/reuse; cross-Project/WorkItem/PipelineRun/tree mixing; missing/dirty/current evidence and
+in-progress Git refusal; immutable SQLite triggers and restart reads; Unicode/space labels; URL
+credentials/path/query/fragment; Markdown/HTML,
+macOS/Windows absolute path, `.env`, token and provider-payload canaries; 50-WorkItem/24-gate/512-KiB bounds.
+
+### Known pre-release migration compatibility delta (T78)
+
+**T78 — a broad checksum exception hides real migration drift. High.** Private Recurkit dogfood applied the exact
+pre-release bytes of migration 56 before that file entered shared history; the committed file differs only by one
+trailing LF. Treating every whitespace change as equivalent would also accept an altered migration and let a daemon
+write against an unproved schema. Refusing the one known digest, however, strands an otherwise valid owner database.
+
+The migration catalog therefore pins one cryptographic compatibility pair: exact historical ledger checksum and
+exact current source checksum. Both must match alongside version and name; the ledger is not rewritten, arbitrary
+normalization is not performed, and every other checksum still fails closed as `MIGRATION_DRIFT`. Read-only doctor
+inspection and the mutating open path use the same matcher. Tests prove the one known pair opens/reports ready and an
+unrelated checksum remains refused.
+
 ### Filesystem, shell and Git
 
 - canonical workspace allowlist;

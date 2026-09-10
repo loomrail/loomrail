@@ -13,6 +13,14 @@ import {
   launchMeasurementRunChangedResultSchema,
   startLaunchMeasurementRunCommandSchema,
 } from "./launch-measurement.js";
+import {
+  createLaunchReleaseCommandSchema,
+  launchEnvironmentChangedEventSchema,
+  launchEnvironmentChangedResultSchema,
+  launchReleaseCreatedEventSchema,
+  launchReleaseCreatedResultSchema,
+  saveLaunchEnvironmentCommandSchema,
+} from "./launch-release.js";
 import { providerModelMappingSchema } from "./provider-selection.js";
 import {
   setWorkItemDependenciesCommandSchema,
@@ -436,6 +444,8 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   projectWorkspaceStrategyChangedEventSchema,
   launchMeasurementPlanChangedEventSchema,
   launchMeasurementRunChangedEventSchema,
+  launchEnvironmentChangedEventSchema,
+  launchReleaseCreatedEventSchema,
   verificationPlanAdoptedEventSchema,
   verificationPlanDisabledEventSchema,
   verificationPlanPublicationAppliedEventSchema,
@@ -661,6 +671,8 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   cancelLaunchMeasurementRunCommandSchema,
   completeLaunchMeasurementRunCommandSchema,
   interruptLaunchMeasurementRunCommandSchema,
+  saveLaunchEnvironmentCommandSchema,
+  createLaunchReleaseCommandSchema,
   adoptVerificationPlanCommandSchema,
   disableVerificationPlanCommandSchema,
   completeVerificationPlanPublicationCommandSchema,
@@ -804,6 +816,8 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   projectWorkspaceStrategyChangedResultSchema,
   launchMeasurementPlanChangedResultSchema,
   launchMeasurementRunChangedResultSchema,
+  launchEnvironmentChangedResultSchema,
+  launchReleaseCreatedResultSchema,
   verificationPlanAdoptedResultSchema,
   verificationPlanDisabledResultSchema,
   verificationPlanPublicationAppliedResultSchema,

@@ -5,6 +5,7 @@ export * from "./constitution.js";
 export * from "./correction-budget.js";
 export * from "./dependency.js";
 export * from "./launch-measurement.js";
+export * from "./launch-release.js";
 export * from "./mcp.js";
 export * from "./readiness.js";
 export * from "./review.js";

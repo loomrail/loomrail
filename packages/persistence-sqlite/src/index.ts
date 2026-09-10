@@ -25,8 +25,10 @@ import {
   humanRequestSchema,
   humanRequestStatusSchema,
   launchDependencyAuditEvidenceSchema,
+  launchEnvironmentSchema,
   launchMeasurementPlanSchema,
   launchMeasurementRunSchema,
+  launchReleaseSchema,
   MAX_AUTOMATIC_CORRECTION_RUNS,
   MAX_TOTAL_CORRECTION_RUNS,
   MAX_DEPENDENCY_GRAPH_EDGES,
@@ -104,8 +106,10 @@ import {
   type EvidenceArtifact,
   type HumanRequest,
   type LaunchDependencyAuditEvidence,
+  type LaunchEnvironment,
   type LaunchMeasurementPlan,
   type LaunchMeasurementRun,
+  type LaunchRelease,
   type McpCapabilitySnapshot,
   type McpConsent,
   type McpGrant,
@@ -179,6 +183,8 @@ import {
   decideLaunchMeasurementRunCompletion,
   decideLaunchMeasurementRunInterruption,
   decideLaunchMeasurementRunReservation,
+  decideCreateLaunchRelease,
+  decideSaveLaunchEnvironment,
   decideVerificationPlanAdoption,
   decideVerificationPlanDisable,
   decideVerificationPlanPublicationCompleted,
@@ -250,6 +256,7 @@ import {
   ReadinessDomainError,
   McpDomainError,
   LaunchMeasurementDomainError,
+  LaunchReleaseDomainError,
   WorkspaceToolDomainError,
   ProviderSelectionDomainError,
   WorkspaceStrategyDomainError,
@@ -273,6 +280,8 @@ import {
   type ProjectReadinessAttestedIntent,
   type LaunchMeasurementPlanChangedIntent,
   type LaunchMeasurementRunChangedIntent,
+  type LaunchEnvironmentChangedIntent,
+  type LaunchReleaseCreatedIntent,
   type ProjectProviderPreferenceChangedIntent,
   type ProjectWorkspaceStrategyChangedIntent,
   type VerificationPlanAdoptedIntent,
@@ -1243,6 +1252,29 @@ const launchMeasurementRunRowSchema = z.object({
   version: z.number().int(),
 });
 
+const launchEnvironmentRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  kind: z.string(),
+  content_hash: z.string(),
+  environment_json: z.string(),
+  version: z.number().int(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+const launchReleaseRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int(),
+  project_id: z.string(),
+  environment_id: z.string(),
+  source_tree: z.string(),
+  content_hash: z.string(),
+  release_json: z.string(),
+  created_at: z.string(),
+});
+
 const launchDependencyAuditRowSchema = z.object({
   verification_run_id: z.string(),
   verification_check_id: z.string(),
@@ -1314,6 +1346,8 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("GET_PROJECT_CONSTITUTION_SNAPSHOT"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_VERIFICATION_PLAN"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_LAUNCH_MEASUREMENT"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_PROJECT_LAUNCH_RELEASE"), projectId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_LAUNCH_RELEASE"), releaseId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_LAUNCH_MEASUREMENT_RUN_CONTEXT"), runId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("LIST_ACTIVE_LAUNCH_MEASUREMENT_RUNS") }).strict(),
   z
@@ -1645,6 +1679,86 @@ const launchMeasurementRunFromRow = (value: unknown): LaunchMeasurementRun => {
     );
   }
   return run;
+};
+
+const launchEnvironmentContentHash = (
+  projectId: string,
+  configuration: Pick<
+    LaunchEnvironment,
+    | "kind"
+    | "name"
+    | "presetId"
+    | "presetRevision"
+    | "publicBaseUrl"
+    | "healthPath"
+    | "requiredEnvironmentVariables"
+  >,
+): string =>
+  createHash("sha256")
+    .update(
+      canonicalJson({
+        projectId,
+        configuration: {
+          kind: configuration.kind,
+          name: configuration.name,
+          presetId: configuration.presetId,
+          presetRevision: configuration.presetRevision,
+          publicBaseUrl: configuration.publicBaseUrl,
+          healthPath: configuration.healthPath,
+          requiredEnvironmentVariables: configuration.requiredEnvironmentVariables,
+        },
+      }),
+    )
+    .digest("hex");
+
+const launchReleaseContentHash = (release: LaunchRelease): string => {
+  const content: Partial<LaunchRelease> = { ...release };
+  delete content.contentHash;
+  return createHash("sha256").update(canonicalJson(content)).digest("hex");
+};
+
+const launchEnvironmentFromRow = (value: unknown): LaunchEnvironment => {
+  const row = launchEnvironmentRowSchema.parse(value);
+  const environment = launchEnvironmentSchema.parse(parseJson(row.environment_json));
+  const observedHash = launchEnvironmentContentHash(environment.projectId, environment);
+  if (
+    environment.id !== row.id ||
+    environment.schemaVersion !== row.schema_version ||
+    environment.projectId !== row.project_id ||
+    environment.kind !== row.kind ||
+    environment.contentHash !== row.content_hash ||
+    environment.contentHash !== observedHash ||
+    environment.version !== row.version ||
+    environment.createdAt !== row.created_at ||
+    environment.updatedAt !== row.updated_at
+  ) {
+    throw new StateStoreError(
+      "PERSISTENCE_FAILURE",
+      "The launch Environment row does not match its normalized content",
+    );
+  }
+  return environment;
+};
+
+const launchReleaseFromRow = (value: unknown): LaunchRelease => {
+  const row = launchReleaseRowSchema.parse(value);
+  const release = launchReleaseSchema.parse(parseJson(row.release_json));
+  if (
+    release.id !== row.id ||
+    release.schemaVersion !== row.schema_version ||
+    release.projectId !== row.project_id ||
+    release.environment.id !== row.environment_id ||
+    release.sourceTree !== row.source_tree ||
+    release.contentHash !== row.content_hash ||
+    release.contentHash !== launchReleaseContentHash(release) ||
+    release.createdAt !== row.created_at
+  ) {
+    throw new StateStoreError(
+      "PERSISTENCE_FAILURE",
+      "The launch Release row does not match its immutable normalized content",
+    );
+  }
+  return release;
 };
 
 const verificationPlanPublicationFromRow = (value: unknown): VerificationPlanPublication => {
@@ -3114,6 +3228,38 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         status = ?, run_json = ?, completed_at = ?, version = ?
        WHERE id = ? AND version = ?`,
     );
+    const selectLaunchEnvironmentById = database.prepare("SELECT * FROM launch_environments WHERE id = ?");
+    const selectLaunchEnvironmentByKind = database.prepare(
+      "SELECT * FROM launch_environments WHERE project_id = ? AND kind = ?",
+    );
+    const selectLaunchEnvironmentsForProject = database.prepare(
+      "SELECT * FROM launch_environments WHERE project_id = ? ORDER BY kind, id",
+    );
+    const countLaunchEnvironmentsForProject = database.prepare(
+      "SELECT COUNT(*) AS count FROM launch_environments WHERE project_id = ?",
+    );
+    const insertLaunchEnvironment = database.prepare(
+      `INSERT INTO launch_environments (
+        id, schema_version, project_id, kind, content_hash, environment_json,
+        version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateLaunchEnvironment = database.prepare(
+      `UPDATE launch_environments SET
+        content_hash = ?, environment_json = ?, version = ?, updated_at = ?
+       WHERE id = ? AND version = ?`,
+    );
+    const selectLaunchReleaseById = database.prepare("SELECT * FROM launch_releases WHERE id = ?");
+    const selectLatestLaunchRelease = database.prepare(
+      `SELECT * FROM launch_releases
+       WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+    );
+    const insertLaunchRelease = database.prepare(
+      `INSERT INTO launch_releases (
+        id, schema_version, project_id, environment_id, source_tree,
+        content_hash, release_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
     const selectLatestProjectAuditEvidence = database.prepare(
       `SELECT
          verification_runs.id AS verification_run_id,
@@ -4110,6 +4256,71 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       return row === undefined ? null : launchMeasurementRunFromRow(row);
     };
 
+    const readLaunchEnvironment = (id: string): LaunchEnvironment | null => {
+      const row = selectLaunchEnvironmentById.get(id);
+      return row === undefined ? null : launchEnvironmentFromRow(row);
+    };
+
+    const readLaunchEnvironments = (projectId: string): LaunchEnvironment[] =>
+      selectLaunchEnvironmentsForProject.all(projectId).map(launchEnvironmentFromRow);
+
+    const readLatestLaunchRelease = (projectId: string): LaunchRelease | null => {
+      const row = selectLatestLaunchRelease.get(projectId);
+      return row === undefined ? null : launchReleaseFromRow(row);
+    };
+
+    const readLaunchRelease = (id: string): LaunchRelease | null => {
+      const row = selectLaunchReleaseById.get(id);
+      return row === undefined ? null : launchReleaseFromRow(row);
+    };
+
+    const persistLaunchEnvironment = (
+      environment: LaunchEnvironment,
+      previous: LaunchEnvironment | null,
+    ): void => {
+      if (previous === null) {
+        insertLaunchEnvironment.run(
+          environment.id,
+          environment.schemaVersion,
+          environment.projectId,
+          environment.kind,
+          environment.contentHash,
+          JSON.stringify(environment),
+          environment.version,
+          environment.createdAt,
+          environment.updatedAt,
+        );
+        return;
+      }
+      const updated = updateLaunchEnvironment.run(
+        environment.contentHash,
+        JSON.stringify(environment),
+        environment.version,
+        environment.updatedAt,
+        environment.id,
+        previous.version,
+      );
+      if (updated.changes !== 1) {
+        throw new LaunchReleaseDomainError(
+          "ENVIRONMENT_VERSION_CONFLICT",
+          "The launch Environment changed while it was saved",
+        );
+      }
+    };
+
+    const persistLaunchRelease = (release: LaunchRelease): void => {
+      insertLaunchRelease.run(
+        release.id,
+        release.schemaVersion,
+        release.projectId,
+        release.environment.id,
+        release.sourceTree,
+        release.contentHash,
+        JSON.stringify(release),
+        release.createdAt,
+      );
+    };
+
     const persistLaunchMeasurementPlan = (plan: LaunchMeasurementPlan): void => {
       insertLaunchMeasurementPlan.run(
         plan.id,
@@ -4182,6 +4393,18 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
     const readReadinessChecks = (runId: string): ReadinessCheck[] =>
       selectReadinessChecksForRun.all(runId).map(readinessCheckFromRow);
+
+    const readProjectReadinessSnapshot = (projectId: string) => {
+      const run = readLatestProjectReadinessRun(projectId);
+      return projectReadinessSnapshotSchema.parse({
+        schemaVersion: 1,
+        run,
+        checks: run === null ? [] : readReadinessChecks(run.id),
+        findings: run === null ? [] : selectReadinessFindingsForRun.all(run.id).map(securityFindingFromRow),
+        attestations:
+          run === null ? [] : selectReadinessAttestationsForRun.all(run.id).map(readinessAttestationFromRow),
+      });
+    };
 
     const readMcpProfileRevision = (id: string): McpProfileRevision | null => {
       const row = selectMcpProfileRevisionById.get(id);
@@ -5878,6 +6101,44 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
     const appendLaunchMeasurementEvent = (
       intent: LaunchMeasurementPlanChangedIntent | LaunchMeasurementRunChangedIntent,
+      metadata: {
+        projectId: string;
+        actor: Actor;
+        occurredAt: string;
+        correlationId: string;
+      },
+    ): DomainEvent => {
+      const eventId = createId("event");
+      const result = insertEvent.run(
+        eventId,
+        1,
+        intent.type,
+        "PROJECT",
+        metadata.projectId,
+        metadata.projectId,
+        metadata.actor.type,
+        metadata.actor.id,
+        metadata.occurredAt,
+        metadata.correlationId,
+        JSON.stringify(intent.data),
+      );
+      return domainEventSchema.parse({
+        schemaVersion: 1,
+        sequence: lastInsertSequence(result.lastInsertRowid),
+        id: eventId,
+        type: intent.type,
+        aggregateType: "PROJECT",
+        aggregateId: metadata.projectId,
+        projectId: metadata.projectId,
+        actor: metadata.actor,
+        occurredAt: metadata.occurredAt,
+        correlationId: metadata.correlationId,
+        data: intent.data,
+      });
+    };
+
+    const appendLaunchReleaseEvent = (
+      intent: LaunchEnvironmentChangedIntent | LaunchReleaseCreatedIntent,
       metadata: {
         projectId: string;
         actor: Actor;
@@ -7837,6 +8098,134 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           type: "LAUNCH_MEASUREMENT_RUN_CHANGED",
           replayed: false,
           run: decision.run,
+          event,
+        });
+      }
+
+      if (command.type === "SAVE_LAUNCH_ENVIRONMENT") {
+        const project = readProject(command.payload.projectId);
+        const currentEnvironment =
+          command.payload.environmentId === null
+            ? null
+            : readLaunchEnvironment(command.payload.environmentId);
+        const sameKindRow = selectLaunchEnvironmentByKind.get(
+          command.payload.projectId,
+          command.payload.configuration.kind,
+        );
+        const sameKindEnvironment = sameKindRow === undefined ? null : launchEnvironmentFromRow(sameKindRow);
+        const count = countRowSchema.parse(
+          countLaunchEnvironmentsForProject.get(command.payload.projectId),
+        ).count;
+        const decision = decideSaveLaunchEnvironment(command, {
+          now: occurredAt,
+          newEnvironmentId: createId("launchEnvironment"),
+          contentHash: launchEnvironmentContentHash(command.payload.projectId, command.payload.configuration),
+          project: project ?? undefined,
+          currentEnvironment: currentEnvironment ?? undefined,
+          environmentCount: count,
+          sameKindEnvironment: sameKindEnvironment ?? undefined,
+        });
+        const updated = database
+          .prepare("UPDATE projects SET version = ?, updated_at = ? WHERE id = ? AND version = ?")
+          .run(
+            decision.project.version,
+            decision.project.updatedAt,
+            decision.project.id,
+            decision.project.version - 1,
+          );
+        if (updated.changes !== 1) {
+          throw new LaunchReleaseDomainError(
+            "PROJECT_VERSION_CONFLICT",
+            "The Project changed while the launch Environment was saved",
+          );
+        }
+        persistLaunchEnvironment(decision.environment, currentEnvironment);
+        const event = appendLaunchReleaseEvent(decision.event, {
+          projectId: decision.project.id,
+          actor: command.actor,
+          occurredAt,
+          correlationId: command.correlationId,
+        });
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "LAUNCH_ENVIRONMENT_CHANGED",
+          replayed: false,
+          environment: decision.environment,
+          projectVersion: decision.project.version,
+          event,
+        });
+      }
+
+      if (command.type === "CREATE_LAUNCH_RELEASE") {
+        const project = readProject(command.payload.projectId);
+        const environment = readLaunchEnvironment(command.payload.environmentId);
+        const readiness = readProjectReadinessSnapshot(command.payload.projectId);
+        const verificationPlan = readLatestVerificationPlan(command.payload.projectId);
+        const measurementPlan = readLatestLaunchMeasurementPlan(command.payload.projectId);
+        const measurementRunRow = selectLatestLaunchMeasurementRun.get(command.payload.projectId);
+        const measurementRun =
+          measurementRunRow === undefined ? null : launchMeasurementRunFromRow(measurementRunRow);
+        const workflowEvidence = command.payload.workItemIds.map((workItemId) => {
+          const workItem = readWorkItem(workItemId);
+          if (workItem?.projectId !== command.payload.projectId) {
+            throw new LaunchReleaseDomainError(
+              "EVIDENCE_BOUNDARY_INVALID",
+              "A selected WorkItem does not belong to the Release Project",
+            );
+          }
+          const snapshot = readWorkflowSnapshot(workItemId);
+          return {
+            workItemId,
+            acceptancePackage: snapshot.acceptancePackage,
+            availableArtifacts: snapshot.artifacts,
+          };
+        });
+        const draftDecision = decideCreateLaunchRelease(command, {
+          now: occurredAt,
+          newReleaseId: createId("launchRelease"),
+          contentHash: "0".repeat(64),
+          project: project ?? undefined,
+          environment: environment ?? undefined,
+          readiness,
+          verificationPlan: verificationPlan ?? undefined,
+          measurementPlan: measurementPlan ?? undefined,
+          measurementRun: measurementRun ?? undefined,
+          workflowEvidence,
+        });
+        const release: LaunchRelease = {
+          ...draftDecision.release,
+          contentHash: launchReleaseContentHash(draftDecision.release),
+        };
+        const updated = database
+          .prepare("UPDATE projects SET version = ?, updated_at = ? WHERE id = ? AND version = ?")
+          .run(
+            draftDecision.project.version,
+            draftDecision.project.updatedAt,
+            draftDecision.project.id,
+            draftDecision.project.version - 1,
+          );
+        if (updated.changes !== 1) {
+          throw new LaunchReleaseDomainError(
+            "PROJECT_VERSION_CONFLICT",
+            "The Project changed while the Release snapshot was created",
+          );
+        }
+        persistLaunchRelease(release);
+        const event = appendLaunchReleaseEvent(
+          { type: "LAUNCH_RELEASE_CREATED", data: { release } },
+          {
+            projectId: draftDecision.project.id,
+            actor: command.actor,
+            occurredAt,
+            correlationId: command.correlationId,
+          },
+        );
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "LAUNCH_RELEASE_CREATED",
+          replayed: false,
+          release,
+          projectVersion: draftDecision.project.version,
           event,
         });
       }
@@ -12832,6 +13221,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           error instanceof ProviderSelectionDomainError ||
           error instanceof WorkspaceStrategyDomainError ||
           error instanceof LaunchMeasurementDomainError ||
+          error instanceof LaunchReleaseDomainError ||
           error instanceof VerificationDomainError ||
           error instanceof VerificationCorrectionError ||
           error instanceof QACompletionError ||
@@ -12979,6 +13369,20 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             latestRun: latestRunRow === undefined ? null : launchMeasurementRunFromRow(latestRunRow),
           };
         }
+        case "GET_PROJECT_LAUNCH_RELEASE": {
+          const project = readProject(queryValue.projectId);
+          if (project === null) {
+            throw new LaunchReleaseDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
+          }
+          return {
+            type: "PROJECT_LAUNCH_RELEASE",
+            project,
+            environments: readLaunchEnvironments(project.id),
+            latestRelease: readLatestLaunchRelease(project.id),
+          };
+        }
+        case "GET_LAUNCH_RELEASE":
+          return { type: "LAUNCH_RELEASE", release: readLaunchRelease(queryValue.releaseId) };
         case "GET_LAUNCH_MEASUREMENT_RUN_CONTEXT": {
           const run = readLaunchMeasurementRun(queryValue.runId);
           const plan = run === null ? null : readLaunchMeasurementPlan(run.planId);
@@ -13112,20 +13516,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           if (!readProject(queryValue.projectId)) {
             throw new ReadinessDomainError("PROJECT_NOT_FOUND", "The Project does not exist");
           }
-          const run = readLatestProjectReadinessRun(queryValue.projectId);
           return {
             type: "PROJECT_READINESS_SNAPSHOT",
-            snapshot: projectReadinessSnapshotSchema.parse({
-              schemaVersion: 1,
-              run,
-              checks: run === null ? [] : readReadinessChecks(run.id),
-              findings:
-                run === null ? [] : selectReadinessFindingsForRun.all(run.id).map(securityFindingFromRow),
-              attestations:
-                run === null
-                  ? []
-                  : selectReadinessAttestationsForRun.all(run.id).map(readinessAttestationFromRow),
-            }),
+            snapshot: readProjectReadinessSnapshot(queryValue.projectId),
           };
         }
         case "GET_PROJECT_MCP_PROFILES": {

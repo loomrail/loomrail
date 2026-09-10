@@ -844,6 +844,20 @@ L2 не получает install, commit, push, merge, deploy, external URL, pro
 раздельно перед публикацией и ещё раз перед spawn; вложенный manifest не может неявно подменить executable.
 Полный контракт — ADR-0027 и планы 110–111.
 
+### PD-029 — L3 фиксирует evidence, но не даёт deploy authority
+
+**Дата:** 2026-09-10. Разрешает L3 из утверждённого L-track; не разрешает L4/L5.
+
+Authenticated owner может сохранить bounded `PREVIEW | PRODUCTION` Environment declaration и создать immutable
+Release snapshot на exact current Git tree. Release ссылается только на durable L1/L2/Q17/R1/Q1–Q3 evidence,
+сохраняет closed gate snapshots и экспортируется как bounded Launch Evidence Package. Provider не создаёт Environment
+или Release, не выбирает verdict и не получает их mutation tools.
+
+Environment URL и имена variables являются декларацией: L3 не делает network request, не читает variable values,
+не запускает hosting CLI/API и не хранит secrets. Создание Release не означает approval, deploy или утверждение
+«production ready»; failed, missing и stale evidence остаются видимыми. L4 по-прежнему требует отдельного решения,
+двух owner confirmations и threat-model delta. Полный контракт — ADR-0028 и планы 112–113.
+
 ## 14. Отложенные решения
 
 Следующие решения намеренно принимаются отдельным spike/ADR после Phase 0, а не угадываются заранее:

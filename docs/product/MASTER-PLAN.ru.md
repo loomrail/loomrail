@@ -2,12 +2,13 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-10 — L2 owner-approved local launch measurements and Recurkit dogfood
+**Последнее дополнение:** 2026-09-10 — L3 immutable Release evidence package and Recurkit dogfood
 
 **Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
 локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood,
-public fixture и private Recurkit Epic прошли до owner Acceptance; L2 local launch measurements реализованы и честно
-выявили target-level gaps Recurkit; Windows live-provider/lifecycle evidence и stable publish gates остаются pending
+public fixture и private Recurkit Epic прошли до owner Acceptance; L1–L3 launch evidence реализованы и честно
+выявили target-level gaps Recurkit; Guided Deploy/L5, Windows live-provider/lifecycle evidence и stable publish gates
+остаются pending
 
 **Продукт:** Loomrail
 
@@ -1733,8 +1734,21 @@ results и освобождает authority только после доказа
 `apps/<portable-name>/package.json`, closed `start | dev | preview` и общий cap 12. Production-shaped Recurkit run
 опубликовал 11 recipes, поднял dashboard, измерил current tree и остановил process tree; два gate прошли, один честно
 failed из-за отсутствующего `Permissions-Policy`, три потребовали явных входов/полных samples. Это подтверждает
-механизм, но не объявляет Recurkit production-ready. L3–L5 и Windows lifecycle evidence не начаты; sanitized result —
+механизм, но не объявляет Recurkit production-ready. L3 реализован следующим checkpoint; L4–L5 и Windows lifecycle
+evidence здесь не закрыты. Sanitized L2 result —
 в [`L2-LOCAL-LAUNCH-MEASUREMENT-EVIDENCE.md`](../evidence/phase-8/L2-LOCAL-LAUNCH-MEASUREMENT-EVIDENCE.md).
+
+**Implementation checkpoint 2026-09-10:** L3 реализован на macOS по PD-029, ADR-0028 и планам 112–113. Owner
+сохраняет bounded `PREVIEW | PRODUCTION` Environment declaration и создаёт immutable Release на exact current Git
+tree; домен один отображает durable L1/L2/Q17/R1/Q1–Q3 sources в закрытый каталог 24 gates и отдельно вычисляет
+freshness. Migration 0059 хранит Environment, Release, audit Event и command receipt транзакционно; Release защищён
+от update/delete. Authenticated API повторно проверяет tree, а UI показывает missing/failed/stale states и экспортирует
+bounded redacted Markdown без repository path, secret values и raw provider payloads. Первый реальный Recurkit create
+выявил superseded correction artifacts; регрессия закрепила выбор только exact `AcceptancePackage.artifactIds`.
+Итоговый Recurkit snapshot остался `CURRENT`, но прошёл 0/24 gates: 20 `ACTION_REQUIRED`, четыре `STALE`, поэтому
+никакого production-ready verdict нет. L3 не обращался к public origin и не исполнял deploy. Sanitized result — в
+[`L3-RELEASE-EVIDENCE-PACKAGE-RECURKIT.md`](../evidence/phase-8/L3-RELEASE-EVIDENCE-PACKAGE-RECURKIT.md). L4 требует
+отдельного PD и exact owner approval; L5 и Windows verification остаются pending.
 
 ## 22. Dogfood Alpha acceptance contract
 

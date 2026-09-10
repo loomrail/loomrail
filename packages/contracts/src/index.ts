@@ -9,6 +9,7 @@ export * from "./reporting.js";
 export * from "./scaffolding.js";
 export * from "./event-stream.js";
 export * from "./launch-measurement.js";
+export * from "./launch-release.js";
 export * from "./mcp.js";
 export * from "./provider-allowance.js";
 export * from "./provider-selection.js";

@@ -1441,7 +1441,7 @@ describe("SQLite local state", () => {
     expect(localState.startup.appliedMigrations).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
       29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54,
-      55, 56, 57, 58,
+      55, 56, 57, 58, 59,
     ]);
     expect(localState.startup.backupPath).toBeDefined();
     if (!localState.startup.backupPath) throw new Error("Expected a migration backup");
@@ -7380,6 +7380,20 @@ describe("SQLite local state", () => {
 
     await expect(open()).rejects.toBeInstanceOf(StateStoreError);
     state = undefined;
+  });
+
+  it("opens the exact known pre-release migration 56 newline checksum without weakening drift checks", async () => {
+    const localState = await open();
+    localState.close();
+    state = undefined;
+    const raw = new DatabaseSync(databasePath);
+    raw
+      .prepare("UPDATE schema_migrations SET checksum = ? WHERE version = 56")
+      .run("1806ec77c5bd58415f28c601a5537d5d88299515dfc7339b58c976b81aa2d559");
+    raw.close();
+
+    const reopened = await open();
+    expect(reopened.startup.appliedMigrations).toEqual([]);
   });
 
   it("enforces append-only Events at the database layer", async () => {
