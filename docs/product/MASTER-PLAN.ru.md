@@ -2,14 +2,14 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-11 — L4a cross-platform verification and L4b1 promotion boundary
+**Последнее дополнение:** 2026-09-11 — L4b1 environment-bound promotion cross-platform closure
 
 **Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
 локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood,
 public fixture и private Recurkit Epic прошли до owner Acceptance; L1–L3 launch evidence и L4a Guided Deploy
-реализованы, L4a source/browser/clean-install gates зелёные на macOS/Windows и честно выявили target-level gaps
-Recurkit; eligible live dispatch, L4b1 implementation, остальные L4b/L5, Windows live-provider evidence и stable
-publish gates остаются pending
+реализованы; L4b1 добавляет environment-bound Preview-before-Production, а source/browser/clean-install gates зелёные
+на macOS/Windows. Recurkit честно остаётся неeligible; eligible live dispatch, остальные L4b/L5, Windows
+live-provider evidence и stable publish gates остаются pending
 
 **Продукт:** Loomrail
 
@@ -1778,8 +1778,10 @@ authority. Migration 0061 сохраняет v1 JSON/Event history и индек
 adapter повторно валидирует environment-specific workflow непосредственно перед dispatch. Authenticated HTTP и UI
 показывают distinct Preview/Production approval/blocked states, а E2E доказывает Preview → restart → Production с
 двумя keyboard confirmations на каждой попытке. Локально прошли `pnpm verify`, 65 E2E, fault-injection и clean
-release install; exact-commit macOS/Windows CI ещё ожидается. Live dispatch не выполнялся. HOTFIX/waiver/rollback/
-probe и automatic deployment по-прежнему запрещены. Sanitized result — в
+release install. Exact commits `ef0a13a` и `82e5743` затем прошли Verify, Browser smoke и clean release install на
+macOS/Windows в [CI run 34601586505](https://github.com/loomrail/loomrail/actions/runs/34601586505); initial Windows
+test-harness timeout был исправлен без изменения production deadlines. Live dispatch не выполнялся. HOTFIX/waiver/
+rollback/probe и automatic deployment по-прежнему запрещены. Sanitized result — в
 [`L4B1-ENVIRONMENT-BOUND-PROMOTION-EVIDENCE.md`](../evidence/phase-8/L4B1-ENVIRONMENT-BOUND-PROMOTION-EVIDENCE.md).
 
 ## 22. Dogfood Alpha acceptance contract

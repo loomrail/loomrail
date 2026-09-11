@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-11  
 **Scope:** PD-031, ADR-0030, plans 116–117, threats T82–T83  
-**Status:** local verification green; exact-commit macOS/Windows CI pending
+**Status:** local and exact-commit macOS/Windows automation green; live dispatch not performed
 
 ## What was proved
 
@@ -31,11 +31,31 @@
   and zero reported vulnerabilities, then passed samples, setup, CLI diagnostics, receipt, installed-file and log
   lifecycle checks.
 
+## Cross-platform CI evidence
+
+[GitHub Actions run 34601586505](https://github.com/loomrail/loomrail/actions/runs/34601586505) exercised final
+implementation commits `ef0a13a` and `82e5743` on both release platforms:
+
+| Job                              | Result                                                          |
+| -------------------------------- | --------------------------------------------------------------- |
+| Verify (`macos-latest`)          | pass: policy gates, fault recovery and full repository verify   |
+| Verify (`windows-latest`)        | pass: Windows lifecycles, fault recovery and full source verify |
+| Browser smoke (`macos-latest`)   | pass: 65/65                                                     |
+| Browser smoke (`windows-latest`) | pass: 65/65                                                     |
+| Clean install (`macos-latest`)   | pass: receipt-checked release package                           |
+| Clean install (`windows-latest`) | pass: receipt-checked release package                           |
+
+The first exact implementation run, [34599046222](https://github.com/loomrail/loomrail/actions/runs/34599046222),
+passed five jobs but exposed a test-harness limit in Windows fault injection: three successful SQLite integration
+cases exceeded the package's 20-second test timeout under runner load, and timeout cleanup then reported an open
+database. There was no assertion failure; two cases completed in about 24.9 seconds. Commit `82e5743` changes only
+that package-level hang detector to 60 seconds. It does not increase any production, deployment, command, provider,
+output or token deadline. The repeated Windows fault gate and full source verify both passed.
+
 No live provider request or GitHub Actions deployment was sent. Recurkit was inspected read-only; its existing dirty,
 unpublished and 0/24 Release state was not changed or bypassed.
 
 ## Pending
 
-- exact pushed commit macOS/Windows Verify, Browser smoke and clean release-install jobs;
 - a separately approved eligible live Preview/Production dispatch;
 - HOTFIX, waiver, rollback, post-deploy probe, automatic polling/retry and L5 monitoring, all still unavailable.

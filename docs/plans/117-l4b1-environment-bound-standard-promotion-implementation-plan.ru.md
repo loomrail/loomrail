@@ -1,7 +1,7 @@
 # L4b1 — план реализации environment-bound STANDARD promotion
 
 **Дата:** 2026-09-11
-**Статус:** implementation complete; local verification green; macOS/Windows CI pending
+**Статус:** complete; local and macOS/Windows verification green; live dispatch not performed
 **Спека:** [`116-l4b1-environment-bound-standard-promotion-spec.ru.md`](116-l4b1-environment-bound-standard-promotion-spec.ru.md)
 
 1. Зафиксировать PD-031, ADR-0030, ubiquitous language, L-track/master-plan/roadmap и T82–T83 до расширения deploy
@@ -23,8 +23,10 @@
 - [x] legacy v1 history читается, но не повышает authority;
 - [x] два owner confirmations, one-shot/idempotency/restart/UNKNOWN сохранены;
 - [x] providers, HTTP и repository text не выбирают executable/path/input;
-- [ ] macOS/Windows automation green; live dispatch либо exact approved, либо честно blocked;
+- [x] macOS/Windows automation green; live dispatch либо exact approved, либо честно blocked;
 - [x] HOTFIX/waiver/rollback/probe остаются unavailable.
 
-Локальные `pnpm verify`, 65 E2E, fault-injection и release pack/install завершены успешно. Финальный пункт
-закрывается только после CI exact pushed commit; live GitHub Actions dispatch в этом срезе не выполнялся.
+Локальные `pnpm verify`, 65 E2E, fault-injection и release pack/install завершены успешно. Exact commits `ef0a13a`
+и `82e5743` прошли все шесть jobs в
+[CI run 34601586505](https://github.com/loomrail/loomrail/actions/runs/34601586505). Live GitHub Actions dispatch в
+этом срезе не выполнялся: Recurkit остаётся неeligible, а другой exact target владелец отдельно не подтверждал.
