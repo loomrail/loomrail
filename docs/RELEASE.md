@@ -1,6 +1,6 @@
 # Releasing the Loomrail launcher
 
-**Status:** `0.1.0` selected for macOS Apple Silicon Stable; `0.1.0-beta.1` remains published through npm `next`
+**Status:** `0.1.0` published for macOS Apple Silicon through npm `latest`; `0.1.0-beta.1` remains on `next`
 **Updated:** 2026-09-11
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
@@ -198,13 +198,14 @@ exact version and invocation contract inside the selected support target. Beta a
 committed macOS arm64 rows for Codex CLI and Claude Code CLI. There is no matching Windows live execution evidence,
 so Windows dispatch and a future Windows-inclusive support target remain blocked.
 
-### Public Beta channel
+### Published channels
 
-The registry serves `0.1.0-beta.1` through `next`; before Stable publication, `latest` remains on the historical
-`0.1.0-alpha.1`. The published
-Beta was built from exact source `a8073175cff13568f5be2eb018cb6b812c17bd5a`, passed the protected stage workflow and
-separate owner approval, and was then installed again from the public registry. The sanitized proof is recorded in
-the [Public Beta release evidence](evidence/phase-8/PUBLIC-BETA-RELEASE-EVIDENCE.md) and the
+The registry serves Stable `0.1.0` through `latest` and keeps `0.1.0-beta.1` through `next`. Stable was built from
+exact source `6388e26159eaa574186ce65795de992268bb4f4b`, passed the protected stage workflow and separate owner WebAuthn
+approval, and was then installed again from the public registry. Its sanitized proof is recorded in the
+[Stable release evidence](evidence/phase-8/STABLE-0.1.0-RELEASE-EVIDENCE.md) and
+[Stable release notes](releases/0.1.0.md). The historical Beta proof remains in the
+[Public Beta release evidence](evidence/phase-8/PUBLIC-BETA-RELEASE-EVIDENCE.md) and
 [Beta release notes](releases/0.1.0-beta.1.md).
 
 The manual workflow has only two fixed terminal operations after every gate and owner approval. Beta uses:

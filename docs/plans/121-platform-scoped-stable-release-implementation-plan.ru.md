@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-11
 
-**Статус:** active
+**Статус:** completed
 
 **Спека:** [`120-platform-scoped-stable-release-spec.ru.md`](120-platform-scoped-stable-release-spec.ru.md)
 
@@ -16,9 +16,9 @@
 
 ## Exit
 
-- [ ] `STABLE + MACOS_ARM64` gate passed 9/9; Windows rows честно `PENDING`;
-- [ ] `0.1.0` source/browser/package gates зелёные на macOS/Windows;
-- [ ] npm `latest` указывает на verified `0.1.0`, `next` сохраняет опубликованную Beta;
-- [ ] GitHub release и Pages опубликованы из exact source;
-- [ ] Windows/Linux limitation видна публично и runtime fail closed;
-- [ ] worktree чистый, `main == origin/main`, открытых PR нет.
+- [x] `STABLE + MACOS_ARM64` gate passed 9/9; Windows rows честно `PENDING`;
+- [x] `0.1.0` source/browser/package gates зелёные на macOS/Windows;
+- [x] npm `latest` указывает на verified `0.1.0`, `next` сохраняет опубликованную Beta;
+- [x] GitHub release и Pages опубликованы из exact source;
+- [x] Windows/Linux limitation видна публично и runtime fail closed;
+- [x] worktree чистый, `main == origin/main`, открытых PR нет.
