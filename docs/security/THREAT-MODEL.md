@@ -2200,6 +2200,31 @@ Required verification: canaries for `GH_TOKEN`, `GITHUB_TOKEN`, `.env`, bearer/t
 provider JSON and absolute macOS/Windows paths across driver result, SQLite/Event, HTTP response and operational log;
 ANSI/OSC/control characters; bounded stdout/stderr/JSON and fixed typed error summaries.
 
+### Environment-bound promotion delta (T82–T83)
+
+**T82 — environment/workflow confusion dispatches Production while the UI claims Preview. Critical.** A shared
+workflow filename, caller-provided path or unbound target kind can make an owner approve one Environment while the
+repository executes another. New authority uses only `GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2`; the adapter derives
+`.github/workflows/deploy-preview.yml` for `PREVIEW` and `.github/workflows/deploy-production.yml` for `PRODUCTION`.
+Environment kind is repeated and cross-checked in immutable Release, Plan, Deployment, target and approval digest.
+HTTP/provider input cannot name a workflow or input. Legacy v1 Plans remain historical and cannot be adopted again.
+
+Required verification: exact path for both kinds; swapped/missing/traversal/symlink workflow; forged target kind;
+stale Release/Environment/Plan; approval digest mutation; legacy read/observe without legacy re-adoption; proof that
+HTTP and provider contracts expose no executable workflow selector.
+
+**T83 — unrelated Preview evidence unlocks a Production deployment. Critical.** Matching only commit SHA, Release id
+or mutable Environment metadata could accept a Preview from another Project, a different gate snapshot, an
+unknown/failed run or a legacy record. Persistence computes a canonical Release Evidence Digest over Project,
+source tree, release-source identities, selected WorkItem evidence and every gate snapshot. The domain requires a
+same-Project v2 `SUCCEEDED` `PREVIEW` Deployment with exactly that digest, while independently rechecking current
+Production Release freshness and all required gates. The indexed query narrows candidates but cannot decide policy.
+
+Required verification: same evidence across two Environments succeeds; foreign Project, tree/source/WorkItem/gate
+mutation, failed/running/unknown status, Production predecessor and legacy v1 record all fail; command replay,
+expected-version conflict, transaction rollback and restart preserve the result; digest and records contain no
+Environment values, secrets, raw payloads or absolute paths.
+
 ### Filesystem, shell and Git
 
 - canonical workspace allowlist;

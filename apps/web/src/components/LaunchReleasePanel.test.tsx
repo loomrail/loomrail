@@ -100,12 +100,13 @@ const renderView = (snapshot: LaunchReleaseProjectResponse): string =>
   );
 
 const deploymentTarget: GithubActionsDeploymentTarget = {
-  presetId: "GITHUB_ACTIONS_WORKFLOW_V1",
-  presetRevision: 1,
+  presetId: "GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2",
+  presetRevision: 2,
+  environmentKind: "PREVIEW",
   repositorySlug: "recurkit/recurkit",
   branch: "main",
   commitSha: "d".repeat(40),
-  workflowPath: ".github/workflows/deploy-production.yml",
+  workflowPath: ".github/workflows/deploy-preview.yml",
   workflowContentHash: "e".repeat(64),
   argvDigest: "f".repeat(64),
   dispatchTimeoutSeconds: 30,
@@ -226,6 +227,7 @@ describe("LaunchReleaseView", () => {
       projectVersion: 5,
       releaseId: "release-web",
       releaseContentHash: "c".repeat(64),
+      releaseEvidenceDigest: "3".repeat(64),
       status: "BLOCKED",
       code: "RELEASE_GATES_BLOCKED",
     });
@@ -236,16 +238,35 @@ describe("LaunchReleaseView", () => {
     expect(html).not.toContain("Confirm exact plan");
   });
 
+  it("explains the Preview promotion gate before Production authority", () => {
+    const html = renderDeployment(emptyDeployment, {
+      schemaVersion: 1,
+      projectId: "project-web",
+      projectVersion: 5,
+      releaseId: "release-web",
+      releaseContentHash: "c".repeat(64),
+      releaseEvidenceDigest: "3".repeat(64),
+      status: "BLOCKED",
+      code: "PREVIEW_PROMOTION_REQUIRED",
+    });
+
+    expect(html).toContain("Production is blocked");
+    expect(html).toContain("Deploy and verify Preview first");
+    expect(html).not.toContain("Confirm exact plan");
+  });
+
   it("shows the exact target, distinct final approval and fail-closed unknown state", () => {
     const plan = {
       schemaVersion: 1 as const,
       id: "deployment-plan-web",
       projectId: "project-web",
-      revision: 1 as const,
+      revision: 2 as const,
       releaseId: "release-web",
       releaseContentHash: "c".repeat(64),
       environmentId: "environment-web",
       environmentContentHash: environment.contentHash,
+      environmentKind: "PREVIEW" as const,
+      releaseEvidenceDigest: "3".repeat(64),
       target: deploymentTarget,
       contentHash: "1".repeat(64),
       createdAt: now,
@@ -255,12 +276,14 @@ describe("LaunchReleaseView", () => {
       id: "deployment-web",
       projectId: "project-web",
       planId: plan.id,
-      planRevision: 1 as const,
+      planRevision: 2 as const,
       planContentHash: plan.contentHash,
       releaseId: "release-web",
       releaseContentHash: "c".repeat(64),
       environmentId: "environment-web",
       environmentContentHash: environment.contentHash,
+      environmentKind: "PREVIEW" as const,
+      releaseEvidenceDigest: "3".repeat(64),
       intent: "STANDARD" as const,
       approvalDigest: "2".repeat(64),
       status: "PENDING_APPROVAL" as const,
@@ -281,6 +304,7 @@ describe("LaunchReleaseView", () => {
       projectVersion: 5,
       releaseId: "release-web",
       releaseContentHash: "c".repeat(64),
+      releaseEvidenceDigest: "3".repeat(64),
       status: "READY",
       target: deploymentTarget,
     };
@@ -289,7 +313,8 @@ describe("LaunchReleaseView", () => {
       ready,
     );
     expect(pendingHtml).toContain("recurkit/recurkit");
-    expect(pendingHtml).toContain(".github/workflows/deploy-production.yml");
+    expect(pendingHtml).toContain(".github/workflows/deploy-preview.yml");
+    expect(pendingHtml).toContain("Preview");
     expect(pendingHtml).toContain("Second confirmation");
     expect(pendingHtml).toContain("Approve and deploy once");
     expect(pendingHtml).toContain("Rollback is unavailable");

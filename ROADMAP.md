@@ -23,8 +23,9 @@ implementation plans.
 
 ## Next — connect the proven loop to normal repository delivery
 
-- Prove one owner-approved, one-shot GitHub Actions Guided Deploy against an exact clean Release while keeping
-  deployment secrets and operational procedure inside the repository-owned workflow.
+- Prove one owner-approved, one-shot GitHub Actions Guided Deploy against an exact clean Release, then require an
+  environment-bound successful Preview before Production while keeping deployment secrets and operational procedure
+  inside repository-owned workflows.
 - Validate an optional, bounded Guided Launch service around repository readiness, verification setup, the first live
   route, and Acceptance Package review; keep the Apache-2.0 local workflow fully useful.
 - Prepare GitHub pull requests with linked issues and required checks while preserving explicit owner merge authority.

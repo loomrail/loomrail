@@ -67,6 +67,21 @@ export const createDeploymentRunner = (input: {
       payload: { deploymentId, expectedVersion: initial.deployment.version },
     });
     if (started.type !== "DEPLOYMENT_CHANGED" || started.deployment.status !== "RUNNING") return;
+    if (initial.plan.revision !== 2) {
+      input.state.execute({
+        schemaVersion: 1,
+        commandId: input.createCommandId(),
+        correlationId: correlationId(deploymentId),
+        actor: { type: "SYSTEM", id: "deployment-runner" },
+        type: "RECORD_DEPLOYMENT_DISPATCH",
+        payload: {
+          deploymentId,
+          expectedVersion: started.deployment.version,
+          outcome: { type: "REFUSED" },
+        },
+      });
+      return;
+    }
 
     try {
       const outcome = await input.driver.dispatch({

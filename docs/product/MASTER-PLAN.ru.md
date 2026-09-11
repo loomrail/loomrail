@@ -2,13 +2,14 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-11 — L4a macOS implementation and fail-closed Recurkit dogfood
+**Последнее дополнение:** 2026-09-11 — L4a cross-platform verification and L4b1 promotion boundary
 
 **Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
 локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood,
 public fixture и private Recurkit Epic прошли до owner Acceptance; L1–L3 launch evidence и L4a Guided Deploy
-реализованы на macOS и честно выявили target-level gaps Recurkit; eligible live dispatch, L4b/L5, Windows
-live-provider/lifecycle evidence и stable publish gates остаются pending
+реализованы, L4a source/browser/clean-install gates зелёные на macOS/Windows и честно выявили target-level gaps
+Recurkit; eligible live dispatch, L4b1 implementation, остальные L4b/L5, Windows live-provider evidence и stable
+publish gates остаются pending
 
 **Продукт:** Loomrail
 
@@ -1752,7 +1753,7 @@ bounded redacted Markdown без repository path, secret values и raw provider 
 разрешена PD-030/ADR-0029: только exact clean published commit, fixed repository-owned GitHub Actions workflow и
 одноразовый owner Approval. Recurkit deploy secrets остаются в GitHub; dirty/ahead-only source, production,
 HOTFIX, rollback и automatic retry остаются blocked.
-L4b/L5 и Windows verification остаются pending и требуют собственных exit gates.
+L4b/L5 и Windows live-provider verification остаются pending и требуют собственных exit gates.
 
 **Implementation checkpoint 2026-09-11:** L4a реализована на macOS по PD-030, ADR-0029 и планам 114–115.
 Provider-neutral `DeploymentDriver` имеет три операции: preflight, одноразовый dispatch и observation exact run;
@@ -1765,7 +1766,21 @@ approval, running, failure и unknown без raw GitHub/provider payloads. Insta
 честно заблокировал deploy на `0/24`; adapter отдельно отказал `SOURCE_DIRTY`. Ни одного GitHub Actions run не
 создано. Sanitized result — в
 [`L4-GUIDED-DEPLOY-RECURKIT.md`](../evidence/phase-8/L4-GUIDED-DEPLOY-RECURKIT.md). Eligible live Preview dispatch,
-L4b/L5 и Windows остаются pending.
+L4b/L5 и Windows live-provider evidence остаются pending. Exact commit `b9147b3` затем прошёл все шесть CI jobs:
+полный Verify, Browser smoke и clean release install на macOS/Windows.
+
+**Implementation checkpoint 2026-09-11:** Recurkit read-only workflow inspection доказал, что исторический L4a target
+`.github/workflows/deploy-production.yml` является настоящим production deploy, хотя L4a domain допускает только
+PREVIEW. PD-031/ADR-0030 исправляют эту semantic ambiguity для новых Plans: v2 target детерминированно выбирает
+`deploy-preview.yml` либо `deploy-production.yml`, а Production STANDARD требует успешный v2 Preview того же
+environment-independent Release Evidence Digest. Legacy records остаются читаемыми, но не выдают promotion
+authority. Migration 0061 сохраняет v1 JSON/Event history и индексирует только точную v2 promotion identity;
+adapter повторно валидирует environment-specific workflow непосредственно перед dispatch. Authenticated HTTP и UI
+показывают distinct Preview/Production approval/blocked states, а E2E доказывает Preview → restart → Production с
+двумя keyboard confirmations на каждой попытке. Локально прошли `pnpm verify`, 65 E2E, fault-injection и clean
+release install; exact-commit macOS/Windows CI ещё ожидается. Live dispatch не выполнялся. HOTFIX/waiver/rollback/
+probe и automatic deployment по-прежнему запрещены. Sanitized result — в
+[`L4B1-ENVIRONMENT-BOUND-PROMOTION-EVIDENCE.md`](../evidence/phase-8/L4B1-ENVIRONMENT-BOUND-PROMOTION-EVIDENCE.md).
 
 ## 22. Dogfood Alpha acceptance contract
 
@@ -1906,8 +1921,9 @@ human waiver с documented risk.
    read-only проверяет непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или
    auto-created environment не сможет stage-ить package. Staged artifact требует ещё одного owner 2FA approval.
    Только после этих gates принимать отдельное решение о stable release.
-6. Не начинать marketplace, team mode, Jira sync, desktop wrapper, billing или deploy automation до закрытия Dogfood
-   Alpha contract.
+6. Продолжать Guided Deploy только через отдельные PD/ADR/threat slices: L4b1 разрешает environment-bound STANDARD
+   promotion; HOTFIX/waiver/rollback/probe/monitoring остаются закрыты. Не начинать marketplace, team mode, Jira
+   sync, desktop wrapper или billing до stable decision.
 
 ## 27. Primary-source anchors
 

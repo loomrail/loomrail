@@ -1,4 +1,11 @@
-import type { Actor, LaunchEnvironment, LaunchRelease, Project } from "@loomrail/contracts";
+import type {
+  Actor,
+  Deployment,
+  GithubActionsDeploymentTargetV2,
+  LaunchEnvironment,
+  LaunchRelease,
+  Project,
+} from "@loomrail/contracts";
 import { launchReleaseGateKeySchema } from "@loomrail/contracts";
 import { expect, it } from "vitest";
 
@@ -80,13 +87,14 @@ const release: LaunchRelease = {
   contentHash: "c".repeat(64),
   createdAt: now,
 };
-const target = {
-  presetId: "GITHUB_ACTIONS_WORKFLOW_V1" as const,
-  presetRevision: 1 as const,
+const target: GithubActionsDeploymentTargetV2 = {
+  presetId: "GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2" as const,
+  presetRevision: 2 as const,
+  environmentKind: "PREVIEW" as const,
   repositorySlug: "recurkit/recurkit",
   branch: "main",
   commitSha: "d".repeat(40),
-  workflowPath: ".github/workflows/deploy-production.yml" as const,
+  workflowPath: ".github/workflows/deploy-preview.yml" as const,
   workflowContentHash: "e".repeat(64),
   argvDigest: "f".repeat(64),
   dispatchTimeoutSeconds: 30 as const,
@@ -94,9 +102,15 @@ const target = {
   outputLimitBytes: 32_768 as const,
   observeOutputLimitBytes: 65_536 as const,
 };
+const releaseEvidenceDigest = "3".repeat(64);
 const targetRunUrl = (): string => "https://github.com/recurkit/recurkit/actions/runs/12345";
 
-const adopt = (actor: Actor = owner, candidate: LaunchRelease = release) =>
+const adopt = (
+  actor: Actor = owner,
+  candidate: LaunchRelease = release,
+  candidateTarget: GithubActionsDeploymentTargetV2 = target,
+  previousPreviewDeployment?: Extract<Deployment, { planRevision: 2 }>,
+) =>
   decideAdoptDeploymentPlan(
     {
       schemaVersion: 1,
@@ -110,7 +124,8 @@ const adopt = (actor: Actor = owner, candidate: LaunchRelease = release) =>
         releaseId: candidate.id,
         expectedReleaseContentHash: candidate.contentHash,
         releaseFreshness: { status: "CURRENT", reasons: [] },
-        target,
+        releaseEvidenceDigest,
+        target: candidateTarget,
       },
     },
     {
@@ -119,6 +134,8 @@ const adopt = (actor: Actor = owner, candidate: LaunchRelease = release) =>
       newDeploymentId: "deployment-1",
       planContentHash: "1".repeat(64),
       approvalDigest: "2".repeat(64),
+      releaseEvidenceDigest,
+      ...(previousPreviewDeployment === undefined ? {} : { previousPreviewDeployment }),
       project,
       release: candidate,
       releaseFreshness: { status: "CURRENT", reasons: [] },
@@ -131,10 +148,14 @@ it("adopts one exact PREVIEW plan and creates a pending Deployment", () => {
   expect(decision.plan).toMatchObject({
     releaseId: release.id,
     environmentId: environment.id,
+    environmentKind: "PREVIEW",
+    releaseEvidenceDigest,
     target,
-    revision: 1,
+    revision: 2,
   });
   expect(decision.deployment).toMatchObject({
+    environmentKind: "PREVIEW",
+    releaseEvidenceDigest,
     status: "PENDING_APPROVAL",
     intent: "STANDARD",
     approvalDigest: "2".repeat(64),
@@ -142,7 +163,7 @@ it("adopts one exact PREVIEW plan and creates a pending Deployment", () => {
   });
 });
 
-it("refuses provider authority, stale evidence, failed gates and production in L4a", () => {
+it("refuses provider authority, stale evidence and failed gates", () => {
   expect(() => adopt({ type: "SYSTEM", id: "provider" })).toThrow(
     expect.objectContaining({ code: "OWNER_REQUIRED" }),
   );
@@ -160,6 +181,7 @@ it("refuses provider authority, stale evidence, failed gates and production in L
           releaseId: release.id,
           expectedReleaseContentHash: release.contentHash,
           releaseFreshness: { status: "STALE", reasons: ["TREE_CHANGED"] },
+          releaseEvidenceDigest,
           target,
         },
       },
@@ -169,6 +191,7 @@ it("refuses provider authority, stale evidence, failed gates and production in L
         newDeploymentId: "deployment-stale",
         planContentHash: "1".repeat(64),
         approvalDigest: "2".repeat(64),
+        releaseEvidenceDigest,
         project,
         release,
         releaseFreshness: { status: "STALE", reasons: ["TREE_CHANGED"] },
@@ -184,9 +207,63 @@ it("refuses provider authority, stale evidence, failed gates and production in L
   expect(() => adopt(owner, failedRelease)).toThrow(
     expect.objectContaining({ code: "RELEASE_GATES_BLOCKED" }),
   );
-  expect(() => adopt(owner, { ...release, environment: { ...environment, kind: "PRODUCTION" } })).toThrow(
-    expect.objectContaining({ code: "ENVIRONMENT_UNSUPPORTED" }),
+});
+
+it("requires the same successful v2 Preview evidence before Production STANDARD", () => {
+  const productionEnvironment: LaunchEnvironment = {
+    ...environment,
+    id: "environment-production",
+    kind: "PRODUCTION",
+    name: "Рекуркит Production",
+    publicBaseUrl: "https://example.test",
+    contentHash: "4".repeat(64),
+  };
+  const productionRelease: LaunchRelease = {
+    ...release,
+    id: "release-production",
+    environment: productionEnvironment,
+    contentHash: "5".repeat(64),
+  };
+  const productionTarget = {
+    ...target,
+    environmentKind: "PRODUCTION" as const,
+    workflowPath: ".github/workflows/deploy-production.yml" as const,
+  };
+
+  expect(() => adopt(owner, productionRelease, productionTarget)).toThrow(
+    expect.objectContaining({ code: "PREVIEW_PROMOTION_REQUIRED" }),
   );
+
+  const preview = adopt().deployment;
+  if (preview.planRevision !== 2) throw new Error("Expected a v2 Preview deployment");
+  const successfulPreview = {
+    ...preview,
+    status: "SUCCEEDED" as const,
+    approvalId: "approval-preview",
+    remoteRunId: 12345,
+    remoteRunUrl: targetRunUrl(),
+    approvedAt: now,
+    startedAt: now,
+    completedAt: now,
+    observedAt: now,
+  };
+  const decision = adopt(owner, productionRelease, productionTarget, successfulPreview);
+  expect(decision.deployment).toMatchObject({
+    environmentKind: "PRODUCTION",
+    releaseEvidenceDigest,
+    status: "PENDING_APPROVAL",
+  });
+
+  for (const invalidPreview of [
+    { ...successfulPreview, projectId: "other-project" },
+    { ...successfulPreview, releaseEvidenceDigest: "6".repeat(64) },
+    { ...successfulPreview, environmentKind: "PRODUCTION" as const },
+    { ...successfulPreview, status: "UNKNOWN" as const },
+  ]) {
+    expect(() => adopt(owner, productionRelease, productionTarget, invalidPreview)).toThrow(
+      expect.objectContaining({ code: "PREVIEW_PROMOTION_REQUIRED" }),
+    );
+  }
 });
 
 it("binds one owner Approval and allows the runner to start exactly once", () => {

@@ -37,3 +37,4 @@ record.
 | [0027](0027-owner-approved-local-launch-measurements.md)             | Accepted              | Owner-approved local launch measurements             |
 | [0028](0028-domain-owned-release-evidence-snapshots.md)              | Accepted              | Immutable domain-owned Release evidence              |
 | [0029](0029-owner-approved-github-actions-deployment.md)             | Accepted              | Owner-approved exact GitHub Actions dispatch         |
+| [0030](0030-environment-bound-standard-promotion.md)                 | Accepted              | Environment-bound Preview to Production promotion    |

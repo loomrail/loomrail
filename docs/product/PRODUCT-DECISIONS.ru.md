@@ -875,6 +875,26 @@ tool. GitHub-specific argv и output остаются в adapter. Dispatch сч�
 latest run, автоматического retry/observe/probe/rollback нет. Production/HOTFIX/rollback остаются честно
 blocked/unavailable до следующих slices. Полный контракт — ADR-0029 и планы 114–115.
 
+### PD-031 — L4b1 связывает STANDARD deploy с видом окружения и доказанным Preview
+
+**Дата:** 2026-09-11. Уточняет target-selection часть PD-030 и разрешает только environment-bound
+`PREVIEW | PRODUCTION` STANDARD promotion; не разрешает HOTFIX, waiver, rollback, post-deploy probe, monitoring или
+automatic retry.
+
+Новые Deployment Plans используют `GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2`: для `PREVIEW` daemon строит только
+`.github/workflows/deploy-preview.yml`, для `PRODUCTION` — только `.github/workflows/deploy-production.yml`. Вид
+окружения входит в immutable Plan, Deployment, target и approval digest; HTTP или provider не могут подать другой
+workflow path либо произвольный input. Старые L4a records остаются читаемыми и могут наблюдать уже сохранённый exact
+run, но не переиспользуются как новая authority и не доказывают Preview.
+
+Production STANDARD требует ранее завершённый `SUCCEEDED` Preview Deployment того же Project с тем же
+**Release Evidence Digest**. Этот digest детерминированно покрывает exact source tree, release-source identities,
+selected WorkItem evidence и все gate snapshots, но намеренно исключает Environment, Release id, timestamps и
+display metadata. Текущий Production Release всё равно обязан быть `CURRENT` и иметь все required gates `PASSED`;
+digest лишь доказывает равенство проверенного evidence между двумя immutable Releases, а не переносит freshness или
+approval. Legacy deployment без v2 digest никогда не удовлетворяет promotion gate. Полный контракт — ADR-0030 и
+планы 116–117.
+
 ## 14. Отложенные решения
 
 Следующие решения намеренно принимаются отдельным spike/ADR после Phase 0, а не угадываются заранее:

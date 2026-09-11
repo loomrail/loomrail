@@ -32,12 +32,17 @@ const processResult = (output: string, overrides: Partial<SupervisedProcessResul
   ...overrides,
 });
 
-const fixture = async (workflowAsSymlink = false) => {
+const fixture = async (workflowAsSymlink = false, environmentKind: "PREVIEW" | "PRODUCTION" = "PREVIEW") => {
   const root = await mkdtemp(join(tmpdir(), "loomrail deploy Репозиторий with spaces "));
   roots.push(root);
   const repositoryPath = join(root, "Recurkit проект");
   await mkdir(join(repositoryPath, ".github", "workflows"), { recursive: true });
-  const workflowPath = join(repositoryPath, ".github", "workflows", "deploy-production.yml");
+  const workflowPath = join(
+    repositoryPath,
+    ".github",
+    "workflows",
+    environmentKind === "PREVIEW" ? "deploy-preview.yml" : "deploy-production.yml",
+  );
   if (workflowAsSymlink) {
     const target = join(root, "outside-workflow.yml");
     await writeFile(target, "name: deploy\non: workflow_dispatch\n", "utf8");
@@ -88,6 +93,7 @@ describe("GitHub Actions deployment preflight", () => {
     const result = await driver.preflight({
       repositoryPath: repository.repositoryPath,
       releaseTree: repository.releaseTree,
+      environmentKind: "PREVIEW",
     });
     expect(result).toMatchObject({
       type: "READY",
@@ -95,7 +101,9 @@ describe("GitHub Actions deployment preflight", () => {
         repositorySlug: "recurkit/recurkit",
         branch: "main",
         commitSha: repository.commitSha,
-        workflowPath: ".github/workflows/deploy-production.yml",
+        presetId: "GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2",
+        environmentKind: "PREVIEW",
+        workflowPath: ".github/workflows/deploy-preview.yml",
       },
     });
     expect(invocations).toHaveLength(2);
@@ -111,6 +119,29 @@ describe("GitHub Actions deployment preflight", () => {
     }
   });
 
+  it("binds Production to the separate fixed production workflow", async () => {
+    const repository = await fixture(false, "PRODUCTION");
+    const runProcess = (options: SupervisedProcessOptions): Promise<SupervisedProcessResult> =>
+      Promise.resolve(
+        processResult(options.args[0] === "api" ? `${repository.commitSha}\n` : "authenticated\n"),
+      );
+    await expect(
+      createGithubActionsDeploymentDriver({ runProcess }).preflight({
+        repositoryPath: repository.repositoryPath,
+        releaseTree: repository.releaseTree,
+        environmentKind: "PRODUCTION",
+      }),
+    ).resolves.toMatchObject({
+      type: "READY",
+      target: {
+        presetId: "GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2",
+        presetRevision: 2,
+        environmentKind: "PRODUCTION",
+        workflowPath: ".github/workflows/deploy-production.yml",
+      },
+    });
+  });
+
   it("refuses dirty source and a committed symlink workflow", async () => {
     const dirty = await fixture();
     await writeFile(join(dirty.repositoryPath, "неотслеживаемый файл.txt"), "dirty", "utf8");
@@ -120,6 +151,7 @@ describe("GitHub Actions deployment preflight", () => {
       await createGithubActionsDeploymentDriver({ runProcess }).preflight({
         repositoryPath: dirty.repositoryPath,
         releaseTree: dirty.releaseTree,
+        environmentKind: "PREVIEW",
       }),
     ).toEqual({ type: "BLOCKED", code: "SOURCE_DIRTY" });
 
@@ -128,6 +160,7 @@ describe("GitHub Actions deployment preflight", () => {
       await createGithubActionsDeploymentDriver({ runProcess }).preflight({
         repositoryPath: linked.repositoryPath,
         releaseTree: linked.releaseTree,
+        environmentKind: "PREVIEW",
       }),
     ).toEqual({ type: "BLOCKED", code: "WORKFLOW_NOT_REGULAR" });
   });
@@ -145,6 +178,7 @@ describe("GitHub Actions deployment preflight", () => {
     const prepared = await driver.preflight({
       repositoryPath: repository.repositoryPath,
       releaseTree: repository.releaseTree,
+      environmentKind: "PREVIEW",
     });
     if (prepared.type !== "READY") throw new Error(`Unexpected preflight ${prepared.code}`);
     await expect(
@@ -205,6 +239,7 @@ describe("GitHub Actions deployment preflight", () => {
       const prepared = await driver.preflight({
         repositoryPath: repository.repositoryPath,
         releaseTree: repository.releaseTree,
+        environmentKind: "PREVIEW",
       });
       if (prepared.type !== "READY") throw new Error(`Unexpected preflight ${prepared.code}`);
       dispatching = true;

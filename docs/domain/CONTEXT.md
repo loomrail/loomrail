@@ -297,6 +297,12 @@ _Не означает_: credential profile, network permission, существ�
 Неизменяемый Project snapshot точного Git tree, Environment revision и exact durable gate evidence.
 _Не означает_: build artifact, deploy attempt, mutable readiness status или approval.
 
+**Release Evidence Digest**:
+Детерминированная identity Project, exact source tree и immutable source/WorkItem/gate evidence, намеренно не
+включающая Environment, Release id, timestamps или display metadata. Сравнивает Preview и Production Release только
+для STANDARD promotion.
+_Не означает_: общий Release content hash, перенос freshness/approval или право деплоя.
+
 **Launch Evidence Package**:
 Bounded deterministic Markdown-представление одного immutable Release с gate counts, refs и limitations.
 _Не означает_: provider report, сырые логи, обещание безопасности или разрешение deploy.

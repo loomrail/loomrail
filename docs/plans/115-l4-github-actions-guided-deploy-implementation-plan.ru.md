@@ -1,7 +1,7 @@
 # L4a — план реализации GitHub Actions Guided Deploy
 
 **Дата:** 2026-09-10
-**Статус:** Complete on macOS; eligible live dispatch and Windows verification pending
+**Статус:** Complete; macOS/Windows automated verification green; eligible live dispatch pending
 **Спека:** [`114-l4-github-actions-guided-deploy-spec.ru.md`](114-l4-github-actions-guided-deploy-spec.ru.md)
 
 ## Последовательность
@@ -29,7 +29,7 @@
 - [x] ambiguous outcome/restart дают `UNKNOWN` без повторного side effect;
 - [x] raw CLI/GitHub/provider data и secrets не сохраняются;
 - [x] production/hotfix/rollback не притворяются реализованными;
-- [x] macOS verification green; Windows остаётся blocking, пока нет live platform evidence.
+- [x] macOS/Windows source, browser and clean-install verification green on fixed commit `b9147b3`.
 
 ## Результат
 
@@ -45,4 +45,5 @@ migration 59→60 и существующие четыре полных owner-ac
 что нет eligible Preview Release и отдельного подтверждения его exact target.
 
 Sanitized evidence: [`L4-GUIDED-DEPLOY-RECURKIT.md`](../evidence/phase-8/L4-GUIDED-DEPLOY-RECURKIT.md).
-Windows остаётся blocking platform gate; Production, hotfix и rollback по-прежнему недоступны.
+Automated Windows gate закрыт CI run 34538581841. Windows live local-provider evidence остаётся отдельным stable
+gate; Production, hotfix и rollback в L4a по-прежнему недоступны.

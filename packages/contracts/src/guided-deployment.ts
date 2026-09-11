@@ -7,7 +7,7 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
-import { launchReleaseFreshnessSchema } from "./launch-release.js";
+import { launchEnvironmentKindSchema, launchReleaseFreshnessSchema } from "./launch-release.js";
 
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/u);
 const commitShaSchema = z.string().regex(/^[0-9a-f]{40}$/u);
@@ -45,22 +45,54 @@ export const deploymentBranchSchema = z
     "The deployment branch must be one portable Git ref name",
   );
 
-export const githubActionsDeploymentTargetSchema = z
+const githubActionsDeploymentTargetBaseShape = {
+  repositorySlug: githubRepositorySlugSchema,
+  branch: deploymentBranchSchema,
+  commitSha: commitShaSchema,
+  workflowContentHash: sha256Schema,
+  argvDigest: sha256Schema,
+  dispatchTimeoutSeconds: z.literal(30),
+  observeTimeoutSeconds: z.literal(15),
+  outputLimitBytes: z.literal(32_768),
+  observeOutputLimitBytes: z.literal(65_536),
+};
+
+export const githubActionsDeploymentTargetV1Schema = z
   .object({
     presetId: z.literal("GITHUB_ACTIONS_WORKFLOW_V1"),
     presetRevision: z.literal(1),
-    repositorySlug: githubRepositorySlugSchema,
-    branch: deploymentBranchSchema,
-    commitSha: commitShaSchema,
     workflowPath: z.literal(".github/workflows/deploy-production.yml"),
-    workflowContentHash: sha256Schema,
-    argvDigest: sha256Schema,
-    dispatchTimeoutSeconds: z.literal(30),
-    observeTimeoutSeconds: z.literal(15),
-    outputLimitBytes: z.literal(32_768),
-    observeOutputLimitBytes: z.literal(65_536),
+    ...githubActionsDeploymentTargetBaseShape,
   })
   .strict();
+
+export const githubActionsDeploymentTargetV2Schema = z
+  .object({
+    presetId: z.literal("GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2"),
+    presetRevision: z.literal(2),
+    environmentKind: launchEnvironmentKindSchema,
+    workflowPath: z.enum([".github/workflows/deploy-preview.yml", ".github/workflows/deploy-production.yml"]),
+    ...githubActionsDeploymentTargetBaseShape,
+  })
+  .strict()
+  .superRefine((target, context) => {
+    const expected =
+      target.environmentKind === "PREVIEW"
+        ? ".github/workflows/deploy-preview.yml"
+        : ".github/workflows/deploy-production.yml";
+    if (target.workflowPath !== expected) {
+      context.addIssue({
+        code: "custom",
+        path: ["workflowPath"],
+        message: "The workflow path must match the deployment Environment kind",
+      });
+    }
+  });
+
+export const githubActionsDeploymentTargetSchema = z.union([
+  githubActionsDeploymentTargetV1Schema,
+  githubActionsDeploymentTargetV2Schema,
+]);
 
 export const deploymentIntentSchema = z.literal("STANDARD");
 export const deploymentStatusSchema = z.enum([
@@ -99,23 +131,49 @@ export const deploymentPreflightFailureCodeSchema = z.enum([
   "AUTH_REQUIRED",
   "REMOTE_BRANCH_UNAVAILABLE",
   "REMOTE_COMMIT_MISMATCH",
+  "PREVIEW_PROMOTION_REQUIRED",
 ]);
 
-export const deploymentPlanSchema = z
+const deploymentPlanBaseShape = {
+  schemaVersion: schemaVersionSchema,
+  id: opaqueIdSchema,
+  projectId: opaqueIdSchema,
+  releaseId: opaqueIdSchema,
+  releaseContentHash: sha256Schema,
+  environmentId: opaqueIdSchema,
+  environmentContentHash: sha256Schema,
+  contentHash: sha256Schema,
+  createdAt: utcTimestampSchema,
+};
+
+const deploymentPlanV1Schema = z
   .object({
-    schemaVersion: schemaVersionSchema,
-    id: opaqueIdSchema,
-    projectId: opaqueIdSchema,
+    ...deploymentPlanBaseShape,
     revision: z.literal(1),
-    releaseId: opaqueIdSchema,
-    releaseContentHash: sha256Schema,
-    environmentId: opaqueIdSchema,
-    environmentContentHash: sha256Schema,
-    target: githubActionsDeploymentTargetSchema,
-    contentHash: sha256Schema,
-    createdAt: utcTimestampSchema,
+    target: githubActionsDeploymentTargetV1Schema,
   })
   .strict();
+
+const deploymentPlanV2Schema = z
+  .object({
+    ...deploymentPlanBaseShape,
+    revision: z.literal(2),
+    releaseEvidenceDigest: sha256Schema,
+    environmentKind: launchEnvironmentKindSchema,
+    target: githubActionsDeploymentTargetV2Schema,
+  })
+  .strict()
+  .superRefine((plan, context) => {
+    if (plan.environmentKind !== plan.target.environmentKind) {
+      context.addIssue({
+        code: "custom",
+        path: ["target", "environmentKind"],
+        message: "The Plan and target Environment kinds must match",
+      });
+    }
+  });
+
+export const deploymentPlanSchema = z.union([deploymentPlanV1Schema, deploymentPlanV2Schema]);
 
 const remoteRunIdentityShape = {
   remoteRunId: z.number().int().positive(),
@@ -125,33 +183,48 @@ const remoteRunIdentityShape = {
     .regex(/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/[1-9]\d*$/u),
 };
 
+const deploymentBaseShape = {
+  schemaVersion: schemaVersionSchema,
+  id: opaqueIdSchema,
+  projectId: opaqueIdSchema,
+  planId: opaqueIdSchema,
+  planContentHash: sha256Schema,
+  releaseId: opaqueIdSchema,
+  releaseContentHash: sha256Schema,
+  environmentId: opaqueIdSchema,
+  environmentContentHash: sha256Schema,
+  intent: deploymentIntentSchema,
+  approvalDigest: sha256Schema,
+  status: deploymentStatusSchema,
+  approvalId: opaqueIdSchema.nullable(),
+  remoteRunId: remoteRunIdentityShape.remoteRunId.nullable(),
+  remoteRunUrl: remoteRunIdentityShape.remoteRunUrl.nullable(),
+  failureCode: deploymentFailureCodeSchema.nullable(),
+  createdAt: utcTimestampSchema,
+  approvedAt: utcTimestampSchema.nullable(),
+  startedAt: utcTimestampSchema.nullable(),
+  completedAt: utcTimestampSchema.nullable(),
+  observedAt: utcTimestampSchema.nullable(),
+  version: z.number().int().positive(),
+};
+
 export const deploymentSchema = z
-  .object({
-    schemaVersion: schemaVersionSchema,
-    id: opaqueIdSchema,
-    projectId: opaqueIdSchema,
-    planId: opaqueIdSchema,
-    planRevision: z.literal(1),
-    planContentHash: sha256Schema,
-    releaseId: opaqueIdSchema,
-    releaseContentHash: sha256Schema,
-    environmentId: opaqueIdSchema,
-    environmentContentHash: sha256Schema,
-    intent: deploymentIntentSchema,
-    approvalDigest: sha256Schema,
-    status: deploymentStatusSchema,
-    approvalId: opaqueIdSchema.nullable(),
-    remoteRunId: remoteRunIdentityShape.remoteRunId.nullable(),
-    remoteRunUrl: remoteRunIdentityShape.remoteRunUrl.nullable(),
-    failureCode: deploymentFailureCodeSchema.nullable(),
-    createdAt: utcTimestampSchema,
-    approvedAt: utcTimestampSchema.nullable(),
-    startedAt: utcTimestampSchema.nullable(),
-    completedAt: utcTimestampSchema.nullable(),
-    observedAt: utcTimestampSchema.nullable(),
-    version: z.number().int().positive(),
-  })
-  .strict()
+  .union([
+    z
+      .object({
+        ...deploymentBaseShape,
+        planRevision: z.literal(1),
+      })
+      .strict(),
+    z
+      .object({
+        ...deploymentBaseShape,
+        planRevision: z.literal(2),
+        releaseEvidenceDigest: sha256Schema,
+        environmentKind: launchEnvironmentKindSchema,
+      })
+      .strict(),
+  ])
   .superRefine((deployment, context) => {
     if ((deployment.remoteRunId === null) !== (deployment.remoteRunUrl === null)) {
       context.addIssue({ code: "custom", message: "Remote run id and URL must be supplied together" });
@@ -252,7 +325,8 @@ export const adoptDeploymentPlanCommandSchema = commandBaseSchema.extend({
       releaseId: opaqueIdSchema,
       expectedReleaseContentHash: sha256Schema,
       releaseFreshness: launchReleaseFreshnessSchema,
-      target: githubActionsDeploymentTargetSchema,
+      releaseEvidenceDigest: sha256Schema,
+      target: githubActionsDeploymentTargetV2Schema,
     })
     .strict(),
 });
@@ -398,10 +472,11 @@ const deploymentPreviewBaseSchema = z.object({
   projectVersion: z.number().int().positive(),
   releaseId: opaqueIdSchema,
   releaseContentHash: sha256Schema,
+  releaseEvidenceDigest: sha256Schema,
 });
 export const deploymentPreviewResponseSchema = z.discriminatedUnion("status", [
   deploymentPreviewBaseSchema
-    .extend({ status: z.literal("READY"), target: githubActionsDeploymentTargetSchema })
+    .extend({ status: z.literal("READY"), target: githubActionsDeploymentTargetV2Schema })
     .strict(),
   deploymentPreviewBaseSchema
     .extend({ status: z.literal("BLOCKED"), code: deploymentPreflightFailureCodeSchema })
@@ -420,6 +495,7 @@ export const guidedDeploymentProjectResponseSchema = z
   .strict();
 
 export type GithubActionsDeploymentTarget = z.infer<typeof githubActionsDeploymentTargetSchema>;
+export type GithubActionsDeploymentTargetV2 = z.infer<typeof githubActionsDeploymentTargetV2Schema>;
 export type DeploymentIntent = z.infer<typeof deploymentIntentSchema>;
 export type DeploymentStatus = z.infer<typeof deploymentStatusSchema>;
 export type DeploymentFailureCode = z.infer<typeof deploymentFailureCodeSchema>;

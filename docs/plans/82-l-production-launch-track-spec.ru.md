@@ -2,13 +2,13 @@
 
 **Дата:** 2026-09-05
 
-**Статус:** L1–L4a реализованы и production-shaped dogfooded на macOS — детали в
+**Статус:** L1–L4a реализованы и production-shaped dogfooded; L4a automated verification зелёная на macOS/Windows — детали в
 [`83-l1-readiness-v2-implementation-plan.ru.md`](83-l1-readiness-v2-implementation-plan.ru.md) и
 [`111-l2-measured-launch-gates-implementation-plan.ru.md`](111-l2-measured-launch-gates-implementation-plan.ru.md);
 [`112-l3-release-evidence-package-spec.ru.md`](112-l3-release-evidence-package-spec.ru.md) и
 [`113-l3-release-evidence-package-implementation-plan.ru.md`](113-l3-release-evidence-package-implementation-plan.ru.md) и
 [`115-l4-github-actions-guided-deploy-implementation-plan.ru.md`](115-l4-github-actions-guided-deploy-implementation-plan.ru.md);
-eligible live L4a dispatch, L4b/L5 и Windows verification остаются pending
+eligible live dispatch, L4b1 implementation, остальные L4b/L5 и Windows live-provider evidence остаются pending
 
 **Основание:** PD-007 (вторая persona), WD-005, TD-001, HD-003, SD-001, SD-002, SD-003, QD-002, QD-003, PD-016;
 [B3+B2 project readiness](29-b3-b2-project-readiness-security-spec.ru.md),
@@ -33,13 +33,13 @@ eligible live L4a dispatch, L4b/L5 и Windows verification остаются pend
 
 ## 2. Декомпозиция
 
-| Веха   | Результат                                                                                                                                     | Новые границы                    | Статус                                  |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | --------------------------------------- |
-| **L1** | Readiness v2: lockfile, разделение dev/prod окружения, решение по security headers, объявленный health-путь, аттестации бэкапа и плана отката | нет, только read-only наблюдения | **Реализовано 2026-09-06**              |
-| **L2** | Измеряемые gates: локальный запуск по owner-approved recipe плюс браузерные измерения перфоманса и рантайм-безопасности                       | локальные сетевые пробы          | **Реализовано 2026-09-10 на macOS**     |
-| **L3** | `Environment`, `Release`, обязательные gates и Launch Evidence Package без исполнения деплоя                                                  | новая миграция persistence       | **Реализовано 2026-09-10 на macOS**     |
-| **L4** | Guided Deploy v1: irreversible attempt, два подтверждения; L4a — GitHub Actions, L4b — production/hotfix/probe/rollback                       | **PD-030, ADR-0029, T79–T81**    | **L4a реализована 2026-09-11 на macOS** |
-| **L5** | Жизнь после запуска: health check, протухание проверок, повторный прогон, порядок действий при падении                                        | периодические внешние пробы      | не начата                               |
+| Веха   | Результат                                                                                                                                     | Новые границы                    | Статус                              |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | ----------------------------------- |
+| **L1** | Readiness v2: lockfile, разделение dev/prod окружения, решение по security headers, объявленный health-путь, аттестации бэкапа и плана отката | нет, только read-only наблюдения | **Реализовано 2026-09-06**          |
+| **L2** | Измеряемые gates: локальный запуск по owner-approved recipe плюс браузерные измерения перфоманса и рантайм-безопасности                       | локальные сетевые пробы          | **Реализовано 2026-09-10 на macOS** |
+| **L3** | `Environment`, `Release`, обязательные gates и Launch Evidence Package без исполнения деплоя                                                  | новая миграция persistence       | **Реализовано 2026-09-10 на macOS** |
+| **L4** | Guided Deploy v1: irreversible attempt, два подтверждения; L4a — GitHub Actions, L4b — production/hotfix/probe/rollback                       | **PD-030/031, ADR-0029/0030**    | **L4a реализована; L4b1 начата**    |
+| **L5** | Жизнь после запуска: health check, протухание проверок, повторный прогон, порядок действий при падении                                        | периодические внешние пробы      | не начата                           |
 
 L1 и L2 приносят пользу самостоятельно и не зависят от решения по L4. L3 не требует deploy authority. PD-030
 разрешает только L4a: owner-approved dispatch существующего GitHub Actions workflow; остальные L4/L5 authority
@@ -305,8 +305,8 @@ L1–L3 не меняют утверждённых границ. До начал
 3. правка master plan §26.6, где сейчас записан запрет начинать deploy automation до закрытия Dogfood Alpha;
 4. обновление `docs/security/THREAT-MODEL.md` под продакшн-секреты, необратимую операцию и внешнюю пробу.
 
-PD-030, ADR-0029, ROADMAP и T79–T81 приняли эту дельту только для L4a. Production/HOTFIX/rollback/L5 не разрешены
-этим решением.
+PD-030, ADR-0029, ROADMAP и T79–T81 приняли первую дельту для L4a. PD-031/ADR-0030/T82–T83 отдельно разрешают
+environment-bound PREVIEW/PRODUCTION STANDARD promotion. HOTFIX/waiver/rollback/probe/L5 не разрешены.
 
 ## 13. Первичные источники
 

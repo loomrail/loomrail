@@ -350,6 +350,8 @@ const deploymentBlockKey = (code: DeploymentPreflightFailureCode): TranslationKe
       return "settings.deploy.block.REMOTE_BRANCH_UNAVAILABLE";
     case "REMOTE_COMMIT_MISMATCH":
       return "settings.deploy.block.REMOTE_COMMIT_MISMATCH";
+    case "PREVIEW_PROMOTION_REQUIRED":
+      return "settings.deploy.block.PREVIEW_PROMOTION_REQUIRED";
   }
 };
 
@@ -357,6 +359,14 @@ const DeploymentTarget = ({ target }: { target: GithubActionsDeploymentTarget })
   const { t } = useI18n();
   return (
     <dl className="deployment-target">
+      <div>
+        <dt>{t("settings.deploy.environment")}</dt>
+        <dd>
+          {target.presetId === "GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2"
+            ? t(`settings.deploy.environment.${target.environmentKind}`)
+            : t("settings.deploy.environment.LEGACY")}
+        </dd>
+      </div>
       <div>
         <dt>{t("settings.deploy.repository")}</dt>
         <dd>{target.repositorySlug}</dd>
@@ -410,6 +420,12 @@ export const GuidedDeploymentView = ({
   const deployment = snapshot.latestDeployment?.releaseId === releaseId ? snapshot.latestDeployment : null;
   const plan = deployment?.planId === snapshot.latestPlan?.id ? snapshot.latestPlan : null;
   const target = plan?.target ?? (preview?.status === "READY" ? preview.target : null);
+  const environmentKind =
+    plan?.revision === 2
+      ? plan.environmentKind
+      : preview?.status === "READY"
+        ? preview.target.environmentKind
+        : null;
   const canAdopt =
     preview?.status === "READY" &&
     (deployment === null || deployment.status === "FAILED") &&
@@ -450,7 +466,11 @@ export const GuidedDeploymentView = ({
 
       {deployment?.status === "PENDING_APPROVAL" ? (
         <div className="deployment-confirmation">
-          <p>{t("settings.deploy.approvalNotice")}</p>
+          <p>
+            {t("settings.deploy.approvalNotice", {
+              environment: t(`settings.deploy.environment.${environmentKind ?? "LEGACY"}`),
+            })}
+          </p>
           <Button
             loading={approving}
             onClick={() => {
@@ -466,7 +486,11 @@ export const GuidedDeploymentView = ({
 
       {deployment?.status === "APPROVED" ? (
         <div className="deployment-confirmation">
-          <p>{t("settings.deploy.approvedNotice")}</p>
+          <p>
+            {t("settings.deploy.approvedNotice", {
+              environment: t(`settings.deploy.environment.${environmentKind ?? "LEGACY"}`),
+            })}
+          </p>
           <Button
             loading={starting}
             onClick={() => {
@@ -519,7 +543,11 @@ export const GuidedDeploymentView = ({
 
       {canAdopt ? (
         <div className="deployment-confirmation">
-          <p>{t("settings.deploy.planNotice")}</p>
+          <p>
+            {t("settings.deploy.planNotice", {
+              environment: t(`settings.deploy.environment.${environmentKind ?? "LEGACY"}`),
+            })}
+          </p>
           <Button
             loading={adopting}
             onClick={() => {

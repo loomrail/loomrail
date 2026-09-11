@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import {
   launchReleaseGateKeySchema,
-  type GithubActionsDeploymentTarget,
+  type GithubActionsDeploymentTargetV2,
   type LaunchRelease,
 } from "../packages/contracts/dist/index.js";
 import { openLocalState } from "../packages/persistence-sqlite/dist/index.js";
@@ -174,20 +174,24 @@ test.describe("guided deployment", () => {
       );
     database.close();
 
-    const target: GithubActionsDeploymentTarget = {
-      presetId: "GITHUB_ACTIONS_WORKFLOW_V1",
-      presetRevision: 1,
+    const targetFor = (environmentKind: "PREVIEW" | "PRODUCTION"): GithubActionsDeploymentTargetV2 => ({
+      presetId: "GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2",
+      presetRevision: 2,
+      environmentKind,
       repositorySlug: "recurkit/recurkit",
       branch: "main",
       commitSha,
-      workflowPath: ".github/workflows/deploy-production.yml",
+      workflowPath:
+        environmentKind === "PREVIEW"
+          ? ".github/workflows/deploy-preview.yml"
+          : ".github/workflows/deploy-production.yml",
       workflowContentHash: "a".repeat(64),
       argvDigest: "b".repeat(64),
       dispatchTimeoutSeconds: 30,
       observeTimeoutSeconds: 15,
       outputLimitBytes: 32_768,
       observeOutputLimitBytes: 65_536,
-    };
+    });
     let dispatchCount = 0;
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
@@ -197,7 +201,8 @@ test.describe("guided deployment", () => {
       verificationArtifactsDirectory: join(directory, "verification-output"),
       now: () => new Date(timestamp),
       deploymentDriver: {
-        preflight: () => Promise.resolve({ type: "READY", target }),
+        preflight: ({ environmentKind }) =>
+          Promise.resolve({ type: "READY", target: targetFor(environmentKind) }),
         dispatch: () => {
           dispatchCount += 1;
           return Promise.resolve({
@@ -222,7 +227,8 @@ test.describe("guided deployment", () => {
     const deploy = page.getByRole("dialog", { name: "Settings" }).locator(".deployment-settings");
     await expect(deploy.getByRole("heading", { name: "Guided deploy" })).toBeVisible();
     await expect(deploy).toContainText("recurkit/recurkit");
-    await expect(deploy).toContainText(".github/workflows/deploy-production.yml");
+    await expect(deploy).toContainText(".github/workflows/deploy-preview.yml");
+    await expect(deploy).toContainText("Preview");
     await expect(deploy).toContainText(commitSha.slice(0, 12));
     await expect(deploy).toContainText("no hosting or SSH credentials");
 
@@ -244,6 +250,100 @@ test.describe("guided deployment", () => {
     await expect(deploy).toContainText("Deploy succeeded");
     expect(dispatchCount).toBe(1);
     await expect(deploy).toContainText("Rollback is unavailable");
+
+    await daemon.close();
+    daemon = undefined;
+    const promotionState = await openLocalState({ databasePath, now: () => new Date(timestamp) });
+    const productionEnvironment = promotionState.execute({
+      schemaVersion: 1,
+      commandId: "save-guided-deploy-e2e-production",
+      correlationId: "save-guided-deploy-e2e-production",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "SAVE_LAUNCH_ENVIRONMENT",
+      payload: {
+        projectId,
+        expectedProjectVersion: 3,
+        environmentId: null,
+        expectedEnvironmentVersion: null,
+        configuration: {
+          kind: "PRODUCTION",
+          name: "Recurkit Production",
+          presetId: "WEB_APP_V1",
+          presetRevision: 1,
+          publicBaseUrl: "https://example.test",
+          healthPath: "/api/health",
+          requiredEnvironmentVariables: [],
+        },
+      },
+    });
+    if (productionEnvironment.type !== "LAUNCH_ENVIRONMENT_CHANGED") {
+      throw new Error("Expected Production Environment");
+    }
+    const productionWithoutHash: Omit<LaunchRelease, "contentHash"> = {
+      ...releaseWithoutHash,
+      id: "guided-deploy-e2e-production-release",
+      environment: productionEnvironment.environment,
+      createdAt: "2026-09-11T00:00:01.000Z",
+    };
+    const productionRelease: LaunchRelease = {
+      ...productionWithoutHash,
+      contentHash: contentHash(productionWithoutHash),
+    };
+    promotionState.close();
+    const productionDatabase = new DatabaseSync(databasePath);
+    productionDatabase
+      .prepare(
+        `INSERT INTO launch_releases
+         (id, schema_version, project_id, environment_id, source_tree, content_hash, release_json, created_at)
+         VALUES (?, 1, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        productionRelease.id,
+        productionRelease.projectId,
+        productionRelease.environment.id,
+        productionRelease.sourceTree,
+        productionRelease.contentHash,
+        JSON.stringify(productionRelease),
+        productionRelease.createdAt,
+      );
+    productionDatabase.close();
+
+    daemon = await startDaemon({
+      bootstrapToken: randomBytes(32).toString("base64url"),
+      logger: false,
+      webRoot: resolve("apps/web/dist"),
+      stateDatabasePath: databasePath,
+      verificationArtifactsDirectory: join(directory, "verification-output"),
+      now: () => new Date(timestamp),
+      deploymentDriver: {
+        preflight: ({ environmentKind }) =>
+          Promise.resolve({ type: "READY", target: targetFor(environmentKind) }),
+        dispatch: () => {
+          dispatchCount += 1;
+          return Promise.resolve({
+            type: "DISPATCHED",
+            runId: 98765,
+            runUrl: "https://github.com/recurkit/recurkit/actions/runs/98765",
+          });
+        },
+        observe: ({ runId }) =>
+          Promise.resolve(runId === 98765 ? { type: "SUCCEEDED" } : { type: "UNKNOWN" }),
+      },
+    });
+    await page.goto(daemon.bootstrapUrl);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const productionDeploy = page.getByRole("dialog", { name: "Settings" }).locator(".deployment-settings");
+    await expect(productionDeploy).toContainText("Production");
+    await expect(productionDeploy).toContainText(".github/workflows/deploy-production.yml");
+    await productionDeploy.getByRole("button", { name: "Confirm exact plan" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(productionDeploy.getByRole("button", { name: "Approve and deploy once" })).toBeVisible();
+    await productionDeploy.getByRole("button", { name: "Approve and deploy once" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(productionDeploy).toContainText("GitHub run started");
+    expect(dispatchCount).toBe(2);
+    await productionDeploy.getByRole("button", { name: "Check exact run" }).click();
+    await expect(productionDeploy).toContainText("Deploy succeeded");
 
     await page
       .getByRole("group", { name: "Change color theme" })

@@ -1297,6 +1297,8 @@ const deploymentPlanRowSchema = z.object({
   release_id: z.string(),
   environment_id: z.string(),
   revision: z.number().int(),
+  release_evidence_digest: z.string().nullable(),
+  environment_kind: z.string().nullable(),
   content_hash: z.string(),
   plan_json: z.string(),
   created_at: z.string(),
@@ -1309,6 +1311,9 @@ const deploymentRowSchema = z.object({
   plan_id: z.string(),
   release_id: z.string(),
   environment_id: z.string(),
+  plan_revision: z.number().int(),
+  release_evidence_digest: z.string().nullable(),
+  environment_kind: z.string().nullable(),
   status: z.string(),
   approval_digest: z.string(),
   remote_run_id: z.number().int().nullable(),
@@ -1402,6 +1407,13 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("GET_PROJECT_LAUNCH_RELEASE"), projectId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_LAUNCH_RELEASE"), releaseId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_PROJECT_GUIDED_DEPLOYMENT"), projectId: opaqueIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal("GET_QUALIFYING_PREVIEW_DEPLOYMENT"),
+      projectId: opaqueIdSchema,
+      releaseEvidenceDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+    })
+    .strict(),
   z.object({ type: z.literal("GET_DEPLOYMENT_CONTEXT"), deploymentId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("LIST_ACTIVE_DEPLOYMENTS") }).strict(),
   z.object({ type: z.literal("GET_LAUNCH_MEASUREMENT_RUN_CONTEXT"), runId: opaqueIdSchema }).strict(),
@@ -1773,6 +1785,22 @@ const launchReleaseContentHash = (release: LaunchRelease): string => {
   return createHash("sha256").update(canonicalJson(content)).digest("hex");
 };
 
+export const launchReleaseEvidenceDigest = (release: LaunchRelease): string =>
+  createHash("sha256")
+    .update(
+      canonicalJson({
+        schemaVersion: release.schemaVersion,
+        projectId: release.projectId,
+        sourceTree: release.sourceTree,
+        source: release.source,
+        selectedWorkItems: release.selectedWorkItems,
+        gates: release.gates,
+        requiredGateCount: release.requiredGateCount,
+        passedRequiredGateCount: release.passedRequiredGateCount,
+      }),
+    )
+    .digest("hex");
+
 const launchEnvironmentFromRow = (value: unknown): LaunchEnvironment => {
   const row = launchEnvironmentRowSchema.parse(value);
   const environment = launchEnvironmentSchema.parse(parseJson(row.environment_json));
@@ -1853,6 +1881,8 @@ const deploymentPlanFromRow = (value: unknown): DeploymentPlan => {
     plan.releaseId !== row.release_id ||
     plan.environmentId !== row.environment_id ||
     plan.revision !== row.revision ||
+    (plan.revision === 2 ? plan.releaseEvidenceDigest : null) !== row.release_evidence_digest ||
+    (plan.revision === 2 ? plan.environmentKind : null) !== row.environment_kind ||
     plan.contentHash !== row.content_hash ||
     plan.contentHash !== deploymentPlanContentHash(plan) ||
     plan.createdAt !== row.created_at
@@ -1872,6 +1902,10 @@ const deploymentFromRow = (value: unknown): Deployment => {
     deployment.planId !== row.plan_id ||
     deployment.releaseId !== row.release_id ||
     deployment.environmentId !== row.environment_id ||
+    deployment.planRevision !== row.plan_revision ||
+    (deployment.planRevision === 2 ? deployment.releaseEvidenceDigest : null) !==
+      row.release_evidence_digest ||
+    (deployment.planRevision === 2 ? deployment.environmentKind : null) !== row.environment_kind ||
     deployment.status !== row.status ||
     deployment.approvalDigest !== row.approval_digest ||
     deployment.remoteRunId !== row.remote_run_id ||
@@ -3406,27 +3440,37 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectDeploymentPlanById = database.prepare("SELECT * FROM deployment_plans WHERE id = ?");
     const selectLatestDeploymentPlan = database.prepare(
       `SELECT * FROM deployment_plans
-       WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+       WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
     );
     const insertDeploymentPlan = database.prepare(
       `INSERT INTO deployment_plans (
         id, schema_version, project_id, release_id, environment_id, revision,
-        content_hash, plan_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        release_evidence_digest, environment_kind, content_hash, plan_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const selectDeploymentById = database.prepare("SELECT * FROM deployments WHERE id = ?");
     const selectLatestDeployment = database.prepare(
       `SELECT * FROM deployments
-       WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+       WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
     );
     const selectActiveDeployments = database.prepare(
       "SELECT * FROM deployments WHERE status IN ('APPROVED', 'RUNNING') ORDER BY id",
     );
+    const selectQualifyingPreviewDeployment = database.prepare(
+      `SELECT * FROM deployments
+       WHERE project_id = ?
+         AND release_evidence_digest = ?
+         AND plan_revision = 2
+         AND environment_kind = 'PREVIEW'
+         AND status = 'SUCCEEDED'
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+    );
     const insertDeployment = database.prepare(
       `INSERT INTO deployments (
-        id, schema_version, project_id, plan_id, release_id, environment_id, status,
-        approval_digest, remote_run_id, deployment_json, version, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, schema_version, project_id, plan_id, plan_revision, release_id, environment_id,
+        environment_kind, release_evidence_digest, status, approval_digest, remote_run_id,
+        deployment_json, version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const updateDeployment = database.prepare(
       `UPDATE deployments SET
@@ -4475,6 +4519,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       return row === undefined ? null : deploymentFromRow(row);
     };
 
+    const readQualifyingPreviewDeployment = (
+      projectId: string,
+      releaseEvidenceDigest: string,
+    ): Deployment | null => {
+      const row = selectQualifyingPreviewDeployment.get(projectId, releaseEvidenceDigest);
+      return row === undefined ? null : deploymentFromRow(row);
+    };
+
     const readDeploymentApproval = (deploymentId: string): DeploymentApproval | null => {
       const row = selectDeploymentApprovalByDeployment.get(deploymentId);
       return row === undefined ? null : deploymentApprovalFromRow(row);
@@ -4535,6 +4587,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         plan.releaseId,
         plan.environmentId,
         plan.revision,
+        plan.revision === 2 ? plan.releaseEvidenceDigest : null,
+        plan.revision === 2 ? plan.environmentKind : null,
         plan.contentHash,
         JSON.stringify(plan),
         plan.createdAt,
@@ -4547,8 +4601,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         deployment.schemaVersion,
         deployment.projectId,
         deployment.planId,
+        deployment.planRevision,
         deployment.releaseId,
         deployment.environmentId,
+        deployment.planRevision === 2 ? deployment.environmentKind : null,
+        deployment.planRevision === 2 ? deployment.releaseEvidenceDigest : null,
         deployment.status,
         deployment.approvalDigest,
         deployment.remoteRunId,
@@ -8541,15 +8598,23 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const release = readLaunchRelease(command.payload.releaseId);
         const newPlanId = createId("deploymentPlan");
         const newDeploymentId = createId("deployment");
+        const releaseEvidenceDigest =
+          release === null ? "0".repeat(64) : launchReleaseEvidenceDigest(release);
+        const previousPreviewDeployment =
+          release === null
+            ? null
+            : readQualifyingPreviewDeployment(command.payload.projectId, releaseEvidenceDigest);
         const draftPlan: DeploymentPlan = {
           schemaVersion: 1,
           id: newPlanId,
           projectId: command.payload.projectId,
-          revision: 1,
+          revision: 2,
           releaseId: command.payload.releaseId,
           releaseContentHash: command.payload.expectedReleaseContentHash,
           environmentId: release?.environment.id ?? "missing-environment",
           environmentContentHash: release?.environment.contentHash ?? "0".repeat(64),
+          environmentKind: release?.environment.kind ?? command.payload.target.environmentKind,
+          releaseEvidenceDigest,
           target: command.payload.target,
           contentHash: "0".repeat(64),
           createdAt: occurredAt,
@@ -8564,8 +8629,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           newDeploymentId,
           planContentHash: plan.contentHash,
           approvalDigest: release === null ? "0".repeat(64) : deploymentApprovalDigest({ plan, release }),
+          releaseEvidenceDigest,
           project: project ?? undefined,
           release: release ?? undefined,
+          ...(previousPreviewDeployment === null ? {} : { previousPreviewDeployment }),
         });
         const updated = database
           .prepare("UPDATE projects SET version = ?, updated_at = ? WHERE id = ? AND version = ?")
@@ -13838,6 +13905,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             latestDeployment: readLatestDeployment(project.id),
           };
         }
+        case "GET_QUALIFYING_PREVIEW_DEPLOYMENT":
+          return {
+            type: "QUALIFYING_PREVIEW_DEPLOYMENT",
+            deployment: readQualifyingPreviewDeployment(
+              queryValue.projectId,
+              queryValue.releaseEvidenceDigest,
+            ),
+          };
         case "GET_DEPLOYMENT_CONTEXT": {
           const deployment = readDeployment(queryValue.deploymentId);
           if (deployment === null) {

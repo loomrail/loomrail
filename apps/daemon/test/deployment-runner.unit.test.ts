@@ -16,12 +16,13 @@ import { silentLogger } from "./silent-logger.js";
 
 const now = "2026-09-10T15:00:00.000Z";
 const target = {
-  presetId: "GITHUB_ACTIONS_WORKFLOW_V1" as const,
-  presetRevision: 1 as const,
+  presetId: "GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2" as const,
+  presetRevision: 2 as const,
+  environmentKind: "PREVIEW" as const,
   repositorySlug: "recurkit/recurkit",
   branch: "main",
   commitSha: "a".repeat(40),
-  workflowPath: ".github/workflows/deploy-production.yml" as const,
+  workflowPath: ".github/workflows/deploy-preview.yml" as const,
   workflowContentHash: "b".repeat(64),
   argvDigest: "c".repeat(64),
   dispatchTimeoutSeconds: 30 as const,
@@ -33,11 +34,13 @@ const plan: DeploymentPlan = {
   schemaVersion: 1,
   id: "plan-1",
   projectId: "project-1",
-  revision: 1,
+  revision: 2,
   releaseId: "release-1",
   releaseContentHash: "d".repeat(64),
   environmentId: "environment-1",
   environmentContentHash: "e".repeat(64),
+  environmentKind: "PREVIEW",
+  releaseEvidenceDigest: "0".repeat(64),
   target,
   contentHash: "f".repeat(64),
   createdAt: now,
@@ -56,12 +59,14 @@ const deployment: Deployment = {
   id: "deployment-1",
   projectId: "project-1",
   planId: plan.id,
-  planRevision: 1,
+  planRevision: 2,
   planContentHash: plan.contentHash,
   releaseId: plan.releaseId,
   releaseContentHash: plan.releaseContentHash,
   environmentId: plan.environmentId,
   environmentContentHash: plan.environmentContentHash,
+  environmentKind: "PREVIEW",
+  releaseEvidenceDigest: "0".repeat(64),
   intent: "STANDARD",
   approvalDigest: approval.approvalDigest,
   status: "APPROVED",
@@ -106,7 +111,7 @@ const resultFor = (current: Deployment): StateCommandResult =>
     event: {},
   }) as StateCommandResult;
 
-const fakeState = (initial: Deployment) => {
+const fakeState = (initial: Deployment, currentPlan: DeploymentPlan = plan) => {
   let current = initial;
   const commands: StateCommand[] = [];
   const query = (input: StateQuery): StateQueryResult => {
@@ -117,7 +122,14 @@ const fakeState = (initial: Deployment) => {
       };
     }
     if (input.type !== "GET_DEPLOYMENT_CONTEXT") throw new Error(`Unexpected query ${input.type}`);
-    return { type: "DEPLOYMENT_CONTEXT", project, plan, deployment: current, approval, release };
+    return {
+      type: "DEPLOYMENT_CONTEXT",
+      project,
+      plan: currentPlan,
+      deployment: current,
+      approval,
+      release,
+    };
   };
   const execute = (command: StateCommand): StateCommandResult => {
     commands.push(command);
@@ -204,6 +216,82 @@ it("starts before dispatch and coalesces duplicate wake calls", async () => {
     "RECORD_DEPLOYMENT_DISPATCH",
   ]);
   expect(fixture.current()).toMatchObject({ status: "RUNNING", remoteRunId: 123, version: 4 });
+});
+
+it("fails a pending legacy v1 attempt closed without external dispatch", async () => {
+  const legacyTarget = {
+    presetId: "GITHUB_ACTIONS_WORKFLOW_V1" as const,
+    presetRevision: 1 as const,
+    repositorySlug: target.repositorySlug,
+    branch: target.branch,
+    commitSha: target.commitSha,
+    workflowPath: ".github/workflows/deploy-production.yml" as const,
+    workflowContentHash: target.workflowContentHash,
+    argvDigest: target.argvDigest,
+    dispatchTimeoutSeconds: target.dispatchTimeoutSeconds,
+    observeTimeoutSeconds: target.observeTimeoutSeconds,
+    outputLimitBytes: target.outputLimitBytes,
+    observeOutputLimitBytes: target.observeOutputLimitBytes,
+  };
+  const legacyPlan: DeploymentPlan = {
+    schemaVersion: 1,
+    id: plan.id,
+    projectId: plan.projectId,
+    revision: 1,
+    releaseId: plan.releaseId,
+    releaseContentHash: plan.releaseContentHash,
+    environmentId: plan.environmentId,
+    environmentContentHash: plan.environmentContentHash,
+    target: legacyTarget,
+    contentHash: plan.contentHash,
+    createdAt: now,
+  };
+  const legacyDeployment: Deployment = {
+    schemaVersion: 1,
+    id: deployment.id,
+    projectId: deployment.projectId,
+    planId: legacyPlan.id,
+    planRevision: 1,
+    planContentHash: legacyPlan.contentHash,
+    releaseId: legacyPlan.releaseId,
+    releaseContentHash: legacyPlan.releaseContentHash,
+    environmentId: legacyPlan.environmentId,
+    environmentContentHash: legacyPlan.environmentContentHash,
+    intent: "STANDARD",
+    approvalDigest: deployment.approvalDigest,
+    status: "APPROVED",
+    approvalId: approval.id,
+    remoteRunId: null,
+    remoteRunUrl: null,
+    failureCode: null,
+    createdAt: now,
+    approvedAt: now,
+    startedAt: null,
+    completedAt: null,
+    observedAt: null,
+    version: 2,
+  };
+  const fixture = fakeState(legacyDeployment, legacyPlan);
+  const dispatch = vi.fn<DeploymentDriver["dispatch"]>();
+  const runner = createDeploymentRunner({
+    state: fixture.state,
+    driver: { preflight: vi.fn(), dispatch, observe: vi.fn() },
+    now: () => new Date(now),
+    createCommandId: () => "legacy-command",
+    logger: silentLogger,
+  });
+  runner.wake(legacyDeployment.id);
+  await runner.whenIdle();
+
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(fixture.commands.map(({ type }) => type)).toEqual([
+    "START_DEPLOYMENT",
+    "RECORD_DEPLOYMENT_DISPATCH",
+  ]);
+  expect(fixture.current()).toMatchObject({
+    status: "FAILED",
+    failureCode: "PRECONDITION_CHANGED",
+  });
 });
 
 it("reconciles RUNNING to UNKNOWN at startup without dispatch", async () => {

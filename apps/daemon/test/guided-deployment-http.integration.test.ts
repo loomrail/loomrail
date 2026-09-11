@@ -11,10 +11,10 @@ import {
   deploymentPreviewResponseSchema,
   guidedDeploymentProjectResponseSchema,
   launchReleaseGateKeySchema,
-  type GithubActionsDeploymentTarget,
+  type GithubActionsDeploymentTargetV2,
   type LaunchRelease,
 } from "@loomrail/contracts";
-import { openLocalState } from "@loomrail/persistence-sqlite";
+import { launchReleaseEvidenceDigest, openLocalState } from "@loomrail/persistence-sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DeploymentDriver } from "../src/deployment-driver.js";
@@ -162,21 +162,28 @@ describe("guided deployment HTTP boundary", () => {
       );
     database.close();
 
-    const target: GithubActionsDeploymentTarget = {
-      presetId: "GITHUB_ACTIONS_WORKFLOW_V1",
-      presetRevision: 1,
+    const targetFor = (environmentKind: "PREVIEW" | "PRODUCTION"): GithubActionsDeploymentTargetV2 => ({
+      presetId: "GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2",
+      presetRevision: 2,
+      environmentKind,
       repositorySlug: "recurkit/recurkit",
       branch: "main",
       commitSha,
-      workflowPath: ".github/workflows/deploy-production.yml",
+      workflowPath:
+        environmentKind === "PREVIEW"
+          ? ".github/workflows/deploy-preview.yml"
+          : ".github/workflows/deploy-production.yml",
       workflowContentHash: "a".repeat(64),
       argvDigest: "b".repeat(64),
       dispatchTimeoutSeconds: 30,
       observeTimeoutSeconds: 15,
       outputLimitBytes: 32_768,
       observeOutputLimitBytes: 65_536,
-    };
-    const preflight = vi.fn<DeploymentDriver["preflight"]>(() => Promise.resolve({ type: "READY", target }));
+    });
+    const target = targetFor("PREVIEW");
+    const preflight = vi.fn<DeploymentDriver["preflight"]>((input) =>
+      Promise.resolve({ type: "READY", target: targetFor(input.environmentKind) }),
+    );
     const dispatch = vi.fn<DeploymentDriver["dispatch"]>(() =>
       Promise.resolve({
         type: "DISPATCHED",
@@ -213,6 +220,7 @@ describe("guided deployment HTTP boundary", () => {
       projectVersion: 2,
       releaseId: release.id,
       releaseContentHash: release.contentHash,
+      releaseEvidenceDigest: launchReleaseEvidenceDigest(release),
       status: "READY",
       target,
     });
@@ -313,5 +321,140 @@ describe("guided deployment HTTP boundary", () => {
     });
     expect(JSON.stringify(observed)).not.toContain(repositoryPath);
     expect(observe).toHaveBeenCalledTimes(1);
+
+    await daemon.close();
+    daemon = undefined;
+    const promotionState = await openLocalState({
+      databasePath,
+      now: () => new Date(timestamp),
+    });
+    const savedProduction = promotionState.execute({
+      schemaVersion: 1,
+      commandId: "save-production-environment",
+      correlationId: "save-production-environment",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "SAVE_LAUNCH_ENVIRONMENT",
+      payload: {
+        projectId,
+        expectedProjectVersion: 3,
+        environmentId: null,
+        expectedEnvironmentVersion: null,
+        configuration: {
+          kind: "PRODUCTION",
+          name: "Recurkit Production",
+          presetId: "WEB_APP_V1",
+          presetRevision: 1,
+          publicBaseUrl: "https://example.test",
+          healthPath: "/api/health",
+          requiredEnvironmentVariables: [],
+        },
+      },
+    });
+    if (savedProduction.type !== "LAUNCH_ENVIRONMENT_CHANGED") {
+      throw new Error("Expected Production Environment");
+    }
+    const productionWithoutHash: Omit<LaunchRelease, "contentHash"> = {
+      ...releaseWithoutHash,
+      id: "guided-deployment-production-release",
+      environment: savedProduction.environment,
+      createdAt: "2026-09-10T18:00:01.000Z",
+    };
+    const productionRelease: LaunchRelease = {
+      ...productionWithoutHash,
+      contentHash: contentHash(productionWithoutHash),
+    };
+    expect(launchReleaseEvidenceDigest(productionRelease)).toBe(launchReleaseEvidenceDigest(release));
+    promotionState.close();
+    const productionDatabase = new DatabaseSync(databasePath);
+    productionDatabase
+      .prepare(
+        `INSERT INTO launch_releases
+         (id, schema_version, project_id, environment_id, source_tree, content_hash, release_json, created_at)
+         VALUES (?, 1, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        productionRelease.id,
+        projectId,
+        productionRelease.environment.id,
+        productionRelease.sourceTree,
+        productionRelease.contentHash,
+        JSON.stringify(productionRelease),
+        productionRelease.createdAt,
+      );
+    productionDatabase.close();
+
+    const productionToken = bootstrapToken();
+    daemon = await startDaemon({
+      bootstrapToken: productionToken,
+      logger: false,
+      stateDatabasePath: databasePath,
+      verificationArtifactsDirectory: join(directory, "verification-output"),
+      now: () => new Date(timestamp),
+      deploymentDriver: { preflight, dispatch, observe },
+    });
+    const productionSession = await authenticate(daemon, productionToken);
+    const productionHeaders = mutationHeaders(daemon, productionSession);
+    const productionPreviewResponse = await fetch(
+      `${daemon.baseUrl}/api/v1/projects/${projectId}/guided-deployment/preview?releaseId=${productionRelease.id}`,
+      { headers: { cookie: productionSession.cookie } },
+    );
+    expect(productionPreviewResponse.status).toBe(200);
+    expect(deploymentPreviewResponseSchema.parse(await productionPreviewResponse.json())).toMatchObject({
+      status: "READY",
+      releaseEvidenceDigest: launchReleaseEvidenceDigest(productionRelease),
+      target: targetFor("PRODUCTION"),
+    });
+    expect(preflight).toHaveBeenLastCalledWith(expect.objectContaining({ environmentKind: "PRODUCTION" }));
+
+    const productionPlanResponse = await fetch(
+      `${daemon.baseUrl}/api/v1/projects/${projectId}/guided-deployment/plans`,
+      {
+        method: "POST",
+        headers: productionHeaders,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "adopt-production-deployment-plan",
+          expectedProjectVersion: 4,
+          releaseId: productionRelease.id,
+          expectedReleaseContentHash: productionRelease.contentHash,
+        }),
+      },
+    );
+    expect(productionPlanResponse.status).toBe(200);
+    const productionPlan = guidedDeploymentProjectResponseSchema.parse(await productionPlanResponse.json());
+    expect(productionPlan.latestPlan).toMatchObject({
+      revision: 2,
+      environmentKind: "PRODUCTION",
+      target: targetFor("PRODUCTION"),
+    });
+    if (productionPlan.latestDeployment === null) throw new Error("Expected Production Deployment");
+    const productionApproval = await fetch(
+      `${daemon.baseUrl}/api/v1/deployments/${productionPlan.latestDeployment.id}/approve`,
+      {
+        method: "POST",
+        headers: productionHeaders,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          commandId: "approve-production-deployment",
+          expectedVersion: productionPlan.latestDeployment.version,
+          approvalDigest: productionPlan.latestDeployment.approvalDigest,
+        }),
+      },
+    );
+    expect(productionApproval.status).toBe(200);
+    await daemon.whenIdle();
+    const productionObservation = await fetch(
+      `${daemon.baseUrl}/api/v1/deployments/${productionPlan.latestDeployment.id}/observe`,
+      {
+        method: "POST",
+        headers: productionHeaders,
+        body: JSON.stringify({ schemaVersion: 1, commandId: "observe-production-deployment" }),
+      },
+    );
+    expect(productionObservation.status).toBe(200);
+    expect(guidedDeploymentProjectResponseSchema.parse(await productionObservation.json())).toMatchObject({
+      latestDeployment: { status: "SUCCEEDED", environmentKind: "PRODUCTION" },
+    });
+    expect(dispatch).toHaveBeenCalledTimes(2);
   });
 });

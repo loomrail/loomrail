@@ -4,7 +4,7 @@ import { posix, resolve, win32 } from "node:path";
 
 import {
   deploymentBranchSchema,
-  githubActionsDeploymentTargetSchema,
+  githubActionsDeploymentTargetV2Schema,
   githubRepositorySlugSchema,
   type DeploymentDispatchOutcome,
   type DeploymentObservationOutcome,
@@ -20,7 +20,10 @@ import { z } from "zod";
 
 import type { DeploymentDriver, DeploymentPreflightResult } from "./deployment-driver.js";
 
-const WORKFLOW_PATH = ".github/workflows/deploy-production.yml" as const;
+const workflowPathFor = (environmentKind: "PREVIEW" | "PRODUCTION") =>
+  environmentKind === "PREVIEW"
+    ? (".github/workflows/deploy-preview.yml" as const)
+    : (".github/workflows/deploy-production.yml" as const);
 const MAX_WORKFLOW_BYTES = 256 * 1_024;
 const SMALL_OUTPUT_LIMIT = 4_096;
 
@@ -267,6 +270,7 @@ export const createGithubActionsDeploymentDriver = (
     });
 
   const preflight: DeploymentDriver["preflight"] = async (input): Promise<DeploymentPreflightResult> => {
+    const workflowPath = workflowPathFor(input.environmentKind);
     const repository = await inspectRepository(input.repositoryPath).catch(() => null);
     if (repository === null) {
       return { type: "BLOCKED", code: "REPOSITORY_UNAVAILABLE" };
@@ -304,7 +308,7 @@ export const createGithubActionsDeploymentDriver = (
         maxStdoutBytes: SMALL_OUTPUT_LIMIT,
         maxStderrBytes: SMALL_OUTPUT_LIMIT,
       }).catch(() => null),
-      runGit(["ls-tree", "-z", "HEAD", "--", WORKFLOW_PATH], {
+      runGit(["ls-tree", "-z", "HEAD", "--", workflowPath], {
         cwd: canonicalTopLevel,
         maxStdoutBytes: SMALL_OUTPUT_LIMIT,
         maxStderrBytes: SMALL_OUTPUT_LIMIT,
@@ -336,10 +340,10 @@ export const createGithubActionsDeploymentDriver = (
     const workflowRecord = workflowTreeResult.stdout.replace(/\0$/u, "");
     if (workflowRecord.length === 0) return { type: "BLOCKED", code: "WORKFLOW_MISSING" };
     const workflowMatch = /^(100644|100755) blob ([0-9a-f]{40})\t(.+)$/u.exec(workflowRecord);
-    if (workflowMatch?.[3] !== WORKFLOW_PATH) {
+    if (workflowMatch?.[3] !== workflowPath) {
       return { type: "BLOCKED", code: "WORKFLOW_NOT_REGULAR" };
     }
-    const workflowResult = await runGit(["show", `HEAD:${WORKFLOW_PATH}`], {
+    const workflowResult = await runGit(["show", `HEAD:${workflowPath}`], {
       cwd: canonicalTopLevel,
       maxStdoutBytes: MAX_WORKFLOW_BYTES + 1,
       maxStderrBytes: SMALL_OUTPUT_LIMIT,
@@ -382,15 +386,16 @@ export const createGithubActionsDeploymentDriver = (
       return { type: "BLOCKED", code: "REMOTE_COMMIT_MISMATCH" };
     }
 
-    const target = githubActionsDeploymentTargetSchema.parse({
-      presetId: "GITHUB_ACTIONS_WORKFLOW_V1",
-      presetRevision: 1,
+    const target = githubActionsDeploymentTargetV2Schema.parse({
+      presetId: "GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2",
+      presetRevision: 2,
+      environmentKind: input.environmentKind,
       repositorySlug,
       branch,
       commitSha: repository.headCommit,
-      workflowPath: WORKFLOW_PATH,
+      workflowPath,
       workflowContentHash: createHash("sha256").update(workflowResult.stdout, "utf8").digest("hex"),
-      argvDigest: argvDigest(dispatchArgs({ workflowPath: WORKFLOW_PATH, branch, repositorySlug })),
+      argvDigest: argvDigest(dispatchArgs({ workflowPath, branch, repositorySlug })),
       dispatchTimeoutSeconds: 30,
       observeTimeoutSeconds: 15,
       outputLimitBytes: 32_768,
@@ -402,9 +407,13 @@ export const createGithubActionsDeploymentDriver = (
   return {
     preflight,
     dispatch: async (input) => {
+      if (input.target.presetId !== "GITHUB_ACTIONS_ENVIRONMENT_WORKFLOW_V2") {
+        return { type: "REFUSED" };
+      }
       const current = await preflight({
         repositoryPath: input.repositoryPath,
         releaseTree: input.releaseTree,
+        environmentKind: input.target.environmentKind,
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
       if (current.type !== "READY" || !sameTarget(current.target, input.target)) {

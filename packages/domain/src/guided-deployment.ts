@@ -22,9 +22,11 @@ export type GuidedDeploymentDomainErrorCode =
   | "PROJECT_VERSION_CONFLICT"
   | "RELEASE_NOT_FOUND"
   | "RELEASE_CONTENT_MISMATCH"
+  | "RELEASE_EVIDENCE_MISMATCH"
   | "RELEASE_STALE"
   | "RELEASE_GATES_BLOCKED"
   | "ENVIRONMENT_UNSUPPORTED"
+  | "PREVIEW_PROMOTION_REQUIRED"
   | "DEPLOYMENT_NOT_FOUND"
   | "DEPLOYMENT_VERSION_CONFLICT"
   | "APPROVAL_DIGEST_MISMATCH"
@@ -112,9 +114,11 @@ export const decideAdoptDeploymentPlan = (
     newDeploymentId: string;
     planContentHash: string;
     approvalDigest: string;
+    releaseEvidenceDigest: string;
     project: Project | undefined;
     release: LaunchRelease | undefined;
     releaseFreshness?: LaunchReleaseFreshness;
+    previousPreviewDeployment?: Deployment;
   },
 ): {
   project: Project;
@@ -141,6 +145,12 @@ export const decideAdoptDeploymentPlan = (
       "The Release changed after the deployment preview was loaded",
     );
   }
+  if (command.payload.releaseEvidenceDigest !== context.releaseEvidenceDigest) {
+    throw new GuidedDeploymentDomainError(
+      "RELEASE_EVIDENCE_MISMATCH",
+      "The environment-independent Release evidence changed after the deployment preview was loaded",
+    );
+  }
   const releaseFreshness = context.releaseFreshness ?? command.payload.releaseFreshness;
   if (releaseFreshness.status !== "CURRENT") {
     throw new GuidedDeploymentDomainError("RELEASE_STALE", "The Release evidence is no longer current");
@@ -153,22 +163,39 @@ export const decideAdoptDeploymentPlan = (
       { blockedGateCount: blockedGates.length },
     );
   }
-  if (release.environment.kind !== "PREVIEW") {
+  if (command.payload.target.environmentKind !== release.environment.kind) {
     throw new GuidedDeploymentDomainError(
       "ENVIRONMENT_UNSUPPORTED",
-      "L4a supports PREVIEW deployment only; production remains blocked",
+      "The deployment target does not match the selected Environment",
     );
+  }
+  if (release.environment.kind === "PRODUCTION") {
+    const preview = context.previousPreviewDeployment;
+    if (
+      preview?.planRevision !== 2 ||
+      preview.projectId !== project.id ||
+      preview.environmentKind !== "PREVIEW" ||
+      preview.releaseEvidenceDigest !== context.releaseEvidenceDigest ||
+      preview.status !== "SUCCEEDED"
+    ) {
+      throw new GuidedDeploymentDomainError(
+        "PREVIEW_PROMOTION_REQUIRED",
+        "Production requires a successful Preview deployment of the exact same Release evidence",
+      );
+    }
   }
 
   const plan: DeploymentPlan = {
     schemaVersion: 1,
     id: context.newPlanId,
     projectId: project.id,
-    revision: 1,
+    revision: 2,
     releaseId: release.id,
     releaseContentHash: release.contentHash,
     environmentId: release.environment.id,
     environmentContentHash: release.environment.contentHash,
+    environmentKind: release.environment.kind,
+    releaseEvidenceDigest: context.releaseEvidenceDigest,
     target: { ...command.payload.target },
     contentHash: context.planContentHash,
     createdAt: context.now,
@@ -184,6 +211,8 @@ export const decideAdoptDeploymentPlan = (
     releaseContentHash: release.contentHash,
     environmentId: release.environment.id,
     environmentContentHash: release.environment.contentHash,
+    environmentKind: release.environment.kind,
+    releaseEvidenceDigest: context.releaseEvidenceDigest,
     intent: "STANDARD",
     approvalDigest: context.approvalDigest,
     status: "PENDING_APPROVAL",

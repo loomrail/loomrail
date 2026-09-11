@@ -162,6 +162,7 @@ import { canonicalMcpProfileSource } from "@loomrail/domain";
 import { createMcpGateway, McpGatewayError, type McpGateway } from "@loomrail/mcp-gateway";
 import {
   openLocalState,
+  launchReleaseEvidenceDigest,
   StateStoreError,
   type OrphanProcessEvent,
   type OrphanWorkspaceEvent,
@@ -1776,6 +1777,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       projectVersion: releaseSnapshot.projectVersion,
       releaseId: release.id,
       releaseContentHash: release.contentHash,
+      releaseEvidenceDigest: launchReleaseEvidenceDigest(release),
     };
     if (releaseSnapshot.freshness?.status !== "CURRENT") {
       return deploymentPreviewResponseSchema.parse({
@@ -1791,12 +1793,19 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         code: "RELEASE_GATES_BLOCKED",
       });
     }
-    if (release.environment.kind !== "PREVIEW") {
-      return deploymentPreviewResponseSchema.parse({
-        ...base,
-        status: "BLOCKED",
-        code: "ENVIRONMENT_UNSUPPORTED",
+    if (release.environment.kind === "PRODUCTION") {
+      const promotion = localState.query({
+        type: "GET_QUALIFYING_PREVIEW_DEPLOYMENT",
+        projectId,
+        releaseEvidenceDigest: base.releaseEvidenceDigest,
       });
+      if (promotion.type !== "QUALIFYING_PREVIEW_DEPLOYMENT" || promotion.deployment === null) {
+        return deploymentPreviewResponseSchema.parse({
+          ...base,
+          status: "BLOCKED",
+          code: "PREVIEW_PROMOTION_REQUIRED",
+        });
+      }
     }
     const projectResult = localState.query({ type: "GET_PROJECT", projectId });
     const project = projectResult.type === "PROJECT" ? projectResult.project : null;
@@ -1806,6 +1815,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     const preflight = await deploymentDriver.preflight({
       repositoryPath: project.repositoryPath,
       releaseTree: release.sourceTree,
+      environmentKind: release.environment.kind,
     });
     return deploymentPreviewResponseSchema.parse(
       preflight.type === "READY"
@@ -3130,6 +3140,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             releaseId: body.releaseId,
             expectedReleaseContentHash: body.expectedReleaseContentHash,
             releaseFreshness: { status: "CURRENT", reasons: [] },
+            releaseEvidenceDigest: preview.releaseEvidenceDigest,
             target: preview.target,
           },
         });

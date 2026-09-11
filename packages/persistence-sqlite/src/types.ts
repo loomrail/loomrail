@@ -156,6 +156,11 @@ export type StateQuery =
   | { type: "GET_PROJECT_LAUNCH_RELEASE"; projectId: string }
   | { type: "GET_LAUNCH_RELEASE"; releaseId: string }
   | { type: "GET_PROJECT_GUIDED_DEPLOYMENT"; projectId: string }
+  | {
+      type: "GET_QUALIFYING_PREVIEW_DEPLOYMENT";
+      projectId: string;
+      releaseEvidenceDigest: string;
+    }
   | { type: "GET_DEPLOYMENT_CONTEXT"; deploymentId: string }
   | { type: "LIST_ACTIVE_DEPLOYMENTS" }
   | { type: "GET_LAUNCH_MEASUREMENT_RUN_CONTEXT"; runId: string }
@@ -281,6 +286,7 @@ export type StateQueryResult =
       latestPlan: DeploymentPlan | null;
       latestDeployment: Deployment | null;
     }
+  | { type: "QUALIFYING_PREVIEW_DEPLOYMENT"; deployment: Deployment | null }
   | {
       type: "DEPLOYMENT_CONTEXT";
       project: Project;
