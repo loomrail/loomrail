@@ -77,13 +77,15 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod --audit-level high
 
+      # `pnpm verify` includes the real BrowserDriver suite. A trusted runner starts without
+      # browser binaries, so install Chromium before that suite rather than only before E2E.
+      - name: Install Chromium for release verification
+        run: pnpm exec playwright install chromium
+
       - name: Verify source
         run: pnpm verify
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-
-      - name: Install Chromium for release verification
-        run: pnpm exec playwright install chromium
 
       - name: Verify crash and fault recovery
         run: pnpm test:fault-injection

@@ -266,6 +266,15 @@ test("trusted stage workflow is manual, stage-only and OIDC-bound", async () => 
   assert.doesNotMatch(workflow, /NPM_TOKEN|NODE_AUTH_TOKEN|secrets\./);
   assert.doesNotMatch(workflow, /uses:\s+[^\s]+@(?![0-9a-f]{40}(?:\s|$))/);
 
+  const installChromiumIndex = workflow.indexOf("- name: Install Chromium for release verification");
+  const verifySourceIndex = workflow.indexOf("- name: Verify source");
+  assert.ok(installChromiumIndex >= 0, "trusted stage workflow must install Chromium");
+  assert.ok(verifySourceIndex >= 0, "trusted stage workflow must verify source");
+  assert.ok(
+    installChromiumIndex < verifySourceIndex,
+    "trusted stage workflow must install Chromium before pnpm verify runs BrowserDriver tests",
+  );
+
   const gate = await readFile(join(repositoryRoot, "scripts", "verify-release-stage.mjs"), "utf8");
   assert.match(gate, /await verifyBetaReleaseGates\(\{/);
   assert.match(gate, /await verifyStableReleaseGates\(\{/);
