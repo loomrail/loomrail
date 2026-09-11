@@ -1,12 +1,12 @@
 # Быстрый старт
 
-> Public Beta для macOS Apple Silicon · [English version](GETTING-STARTED.md)
+> Stable для macOS Apple Silicon · [English version](GETTING-STARTED.md)
 
 Этот маршрут подключает Loomrail к официальному Codex CLI или Claude Code CLI, уже установленному и
 авторизованному на вашей машине. Используется существующая подписочная сессия CLI; API-ключ Loomrail не нужен и не
 принимается. Для оценки начните в новом пустом каталоге.
 
-Public Beta поддерживает живое выполнение Codex/Claude на macOS Apple Silicon. Windows и Linux остаются
+Этот Stable-релиз поддерживает живое выполнение Codex/Claude на macOS Apple Silicon. Windows и Linux остаются
 непроверенными live-provider targets и fail closed; Mock и прямого API fallback нет.
 
 ## 1. Войдите в один локальный агент
@@ -29,7 +29,7 @@ claude auth login
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
-npm install --ignore-scripts loomrail@next
+npm install --ignore-scripts loomrail@latest
 npx playwright install chromium
 npx loomrail try
 ```

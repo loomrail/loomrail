@@ -2,15 +2,16 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-11 — macOS-first Public Beta release boundary
+**Последнее дополнение:** 2026-09-11 — platform-scoped macOS arm64 Stable boundary
 
 **Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
 локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood,
 public fixture и private Recurkit Epic прошли до owner Acceptance; L1–L3 launch evidence и L4a Guided Deploy
 реализованы; L4b1 добавляет environment-bound Preview-before-Production, а source/browser/clean-install gates зелёные
-на macOS/Windows. PD-032 разрешает отдельный Public Beta для доказанной `darwin/arm64` local-provider границы через
-trusted staged npm channel; Windows live-provider evidence и cross-platform Stable остаются pending. Recurkit честно
-остаётся неeligible; eligible live dispatch и остальные L4b/L5 также остаются pending
+на macOS/Windows. Public Beta `0.1.0-beta.1` опубликован из verified source через trusted staged npm channel. PD-033
+выбирает первый Stable как default release только для explicit `MACOS_ARM64` support target; Windows/Linux
+live-provider execution остаётся unsupported/pending и fail closed. Recurkit честно остаётся неeligible; eligible
+live dispatch и остальные L4b/L5 также остаются pending
 
 **Продукт:** Loomrail
 
@@ -22,7 +23,7 @@ trusted staged npm channel; Windows live-provider evidence и cross-platform Sta
 
 **Платформы первого Public Beta:** macOS arm64; Windows и Linux live-provider execution unsupported/pending
 
-**Платформы первого Stable:** macOS и Windows; Linux best effort
+**Release Support Target первого Stable:** macOS Apple Silicon (`darwin/arm64`); Windows и Linux unsupported/pending
 
 **Режим:** local-first, browser-first, single-owner first
 
@@ -1917,12 +1918,14 @@ human waiver с documented risk.
    provider, restart, Review, Project verification, Browser QA, export и owner Acceptance в пределах явно
    утверждённых бюджетов. Cancelled/returned runs не считаются live evidence; финальный clean Run имеет нулевой
    cross-session/cross-stage overlap.
-4. macOS local CLI compatibility rows и protected landing fixed-commit gate закрыты. PD-032 отделяет Public Beta от
-   Stable: Beta заявляет только exact `darwin/arm64` rows, а real Codex/Claude execution evidence на Windows остаётся
-   `PENDING` без Mock/API fallback и по-прежнему обязательно для Stable.
+4. macOS local CLI compatibility rows и protected landing fixed-commit gate закрыты. Public Beta `0.1.0-beta.1`
+   опубликован для exact `darwin/arm64` boundary. PD-033 разрешает первый Stable только для explicit
+   `MACOS_ARM64` Release Support Target; real Codex/Claude execution evidence на Windows остаётся `PENDING` без
+   Mock/API fallback и требуется только до отдельного будущего расширения support target.
 5. Repository-side stage-only workflow использует exact-intent, six-job CI и один strict evidence index. Public Beta
-   требует выбранную exact `0.1.0-beta.N` version и девять non-Windows gates, публикуется только в `next`; Stable
-   требует plain semver и все 11/11, публикуется только в `latest`. Оба канала используют protected main-only
+   требует выбранную exact `0.1.0-beta.N` version и девять macOS/product gates, публикуется только в `next`; первый
+   Stable требует plain semver, exact `MACOS_ARM64` target и те же девять gates, публикуется только в `latest`.
+   Missing/unknown target и попытка заявить Windows без 11/11 блокируются. Оба канала используют protected main-only
    `npm-release` environment и npm OIDC trust только для `npm stage publish`. Trusted job read-only проверяет
    непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или auto-created environment
    не сможет stage-ить package. Staged artifact требует отдельного owner 2FA approval.

@@ -1,13 +1,13 @@
 # Совместимость локальных провайдеров
 
-> Public Beta для macOS Apple Silicon · [English version](PROVIDER-COMPATIBILITY.md)
+> Stable для macOS Apple Silicon · [English version](PROVIDER-COMPATIBILITY.md)
 
 Loomrail запускает один из двух официальных локальных агентов: Codex CLI или Claude Code CLI. Выбираемого
 синтетического провайдера, прямого provider API, настройки API-ключа и успешного fallback нет.
 
 ## Текущая матрица
 
-Живое выполнение Public Beta проверено только на `darwin/arm64`: Codex CLI `0.153.4` и Claude Code CLI `2.1.260`.
+Живое выполнение Stable проверено только на `darwin/arm64`: Codex CLI `0.153.4` и Claude Code CLI `2.1.260`.
 Windows и Linux rows не проверены, поэтому provider dispatch на них fail closed.
 
 | Выбор в UI      | Внутренний ID | Чей login   | Обязательная безопасная поверхность              | Стадии    |
@@ -56,7 +56,7 @@ CLI-ход может превысить token estimate; UI говорит об 
 workspace-операции, idempotency, restart recovery, selection и persistence покрыты test-only CLI fixtures и
 локальными integration tests. Автоматические тесты не вызывают платный API. Для непроверенной комбинации
 OS/версии совместимость остаётся fail-closed. Windows source, browser и clean-install CI зелёный, но это не
-live-provider evidence и не расширяет Public Beta support claim.
+live-provider evidence и не расширяет Stable support target.
 
 Исторические API- и старые CLI-матрицы сохранены в датированных планах и evidence как audit record. Они не описывают
 активную runtime-границу.

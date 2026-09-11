@@ -9,7 +9,7 @@ const documentationPaths = [
   "docs/guides/GETTING-STARTED.md",
   "docs/guides/GETTING-STARTED.ru.md",
 ];
-const activeReleaseDocumentationPaths = ["docs/RELEASE.md", "docs/releases/0.1.0-beta.1.md"];
+const activeReleaseDocumentationPaths = ["docs/RELEASE.md", "docs/releases/0.1.0.md"];
 const legacyProviderCopy = [
   "setup --mode mock",
   "guided Mock",
@@ -22,11 +22,11 @@ const legacyProviderCopy = [
 const installCommands = [
   "mkdir loomrail-evaluation",
   "cd loomrail-evaluation",
-  "npm install --ignore-scripts loomrail@next",
+  "npm install --ignore-scripts loomrail@latest",
   "npx playwright install chromium",
   "npx loomrail try",
 ];
-const publicPrereleasePattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-[0-9A-Za-z.-]+$/;
+const publicStablePattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -129,8 +129,8 @@ export const validateLandingConsumer = ({
   assert(
     cliManifest.name === "@loomrail/cli" &&
       typeof cliManifest.version === "string" &&
-      publicPrereleasePattern.test(cliManifest.version),
-    "the landing version source must be the public CLI prerelease manifest",
+      publicStablePattern.test(cliManifest.version),
+    "the landing version source must be the public CLI Stable manifest",
   );
   assert(
     landingSource.includes(

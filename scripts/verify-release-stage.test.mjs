@@ -17,8 +17,9 @@ const sourceCommit = "0123456789abcdef0123456789abcdef01234567";
 const validIntent = {
   channel: "STABLE",
   version: "0.1.0",
+  supportTarget: "MACOS_ARM64",
   sourceCommit,
-  confirmation: `STAGE loomrail@0.1.0 AS STABLE FROM ${sourceCommit}`,
+  confirmation: `STAGE loomrail@0.1.0 AS STABLE FOR MACOS_ARM64 FROM ${sourceCommit}`,
   repository: "loomrail/loomrail",
   ref: "refs/heads/main",
   workflowCommit: sourceCommit,
@@ -31,6 +32,22 @@ test("accepts an exact stable release intent", () => {
     channel: "STABLE",
     distTag: "latest",
     version: "0.1.0",
+    supportTarget: "MACOS_ARM64",
+    sourceCommit,
+  });
+});
+
+test("binds Stable owner intent to the exact release support target", () => {
+  const intent = validateReleaseStageIntent({
+    ...validIntent,
+    supportTarget: "MACOS_ARM64",
+    confirmation: `STAGE loomrail@0.1.0 AS STABLE FOR MACOS_ARM64 FROM ${sourceCommit}`,
+  });
+  assert.deepEqual(intent, {
+    channel: "STABLE",
+    distTag: "latest",
+    version: "0.1.0",
+    supportTarget: "MACOS_ARM64",
     sourceCommit,
   });
 });
@@ -41,12 +58,13 @@ test("accepts an exact Beta intent and derives the fixed next tag", () => {
     channel: "BETA",
     version: "0.1.0-beta.1",
     packageVersion: "0.1.0-beta.1",
-    confirmation: `STAGE loomrail@0.1.0-beta.1 AS BETA FROM ${sourceCommit}`,
+    confirmation: `STAGE loomrail@0.1.0-beta.1 AS BETA FOR MACOS_ARM64 FROM ${sourceCommit}`,
   });
   assert.deepEqual(intent, {
     channel: "BETA",
     distTag: "next",
     version: "0.1.0-beta.1",
+    supportTarget: "MACOS_ARM64",
     sourceCommit,
   });
 });
@@ -56,6 +74,8 @@ test("rejects channel, version, branch, commit, package and confirmation drift",
     { channel: "beta" },
     { channel: "PREVIEW" },
     { version: "0.1.0-beta.1" },
+    { supportTarget: "WINDOWS_X64" },
+    { supportTarget: "" },
     { repository: "someone/fork" },
     { ref: "refs/heads/release" },
     { workflowCommit: "a".repeat(40) },
@@ -72,7 +92,7 @@ test("rejects channel, version, branch, commit, package and confirmation drift",
       channel: "BETA",
       version: "0.1.0-alpha.5",
       packageVersion: "0.1.0-alpha.5",
-      confirmation: `STAGE loomrail@0.1.0-alpha.5 AS BETA FROM ${sourceCommit}`,
+      confirmation: `STAGE loomrail@0.1.0-alpha.5 AS BETA FOR MACOS_ARM64 FROM ${sourceCommit}`,
     }),
   );
 });
@@ -238,6 +258,9 @@ test("trusted stage workflow is manual, stage-only and OIDC-bound", async () => 
   const workflow = await readFile(join(repositoryRoot, ".github", "workflows", "npm-stage.yml"), "utf8");
   for (const requiredText of [
     "workflow_dispatch:",
+    "support_target:",
+    "default: MACOS_ARM64",
+    "FOR <support_target> FROM <source_commit>",
     "environment: npm-release",
     "actions: read",
     "contents: read",
@@ -246,6 +269,7 @@ test("trusted stage workflow is manual, stage-only and OIDC-bound", async () => 
     "fetch-depth: 0",
     "node scripts/verify-release-stage.mjs",
     "LOOMRAIL_RELEASE_CHANNEL",
+    "LOOMRAIL_RELEASE_SUPPORT_TARGET",
     "pnpm test:fault-injection",
     "pnpm test:e2e",
     "pnpm pack:release",

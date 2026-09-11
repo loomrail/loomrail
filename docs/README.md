@@ -32,7 +32,8 @@ currently a runnable acceptance route.
 - [Localization contract](design/LOCALIZATION.md)
 - [Release procedure](RELEASE.md)
 - [Supply-chain policy](security/SUPPLY-CHAIN.md) · [Supply-chain policy (RU)](security/SUPPLY-CHAIN.ru.md)
-- [Current Public Beta notes](releases/0.1.0-beta.1.md)
+- [Current Stable notes](releases/0.1.0.md)
+- [Public Beta history](releases/0.1.0-beta.1.md)
 
 Files under [`plans/`](plans/) are versioned implementation records. They explain why a slice was built and how it
 was verified, but they are not an installation guide or public roadmap.

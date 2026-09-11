@@ -913,6 +913,27 @@ Stable остаётся отдельным `STABLE` Release Channel: обычн�
 включая обе Windows live-provider строки. Beta никогда не даёт waiver для Stable и не переводит pending row в
 passed. Полный контракт — ADR-0031 и планы 118–119.
 
+### PD-033 — первый Stable является platform-scoped для macOS arm64
+
+**Дата:** 2026-09-11. Заменяет только cross-platform Stable requirement из PD-032; Windows остаётся приоритетной
+будущей платформой по PD-003, но не входит в Release Support Target первого Stable.
+
+Stable означает default/recommended release для явно выбранного закрытого **Release Support Target**, а не обещание
+поддержки всех планируемых платформ. Первый Stable выбирает exact target `MACOS_ARM64`, обычный semver `0.1.0` и
+фиксированный npm dist-tag `latest`. Он требует те же девять доказанных product/security/private-dogfood/landing и
+macOS live-provider gates, а также полный source/browser/package CI на macOS и Windows. Две Windows live-provider
+строки остаются видимыми `PENDING`, не считаются passed и не входят в required set этого target.
+
+Публичные install, compatibility, landing и release surfaces обязаны одновременно называть `darwin/arm64` единственной
+поддержанной live-provider платформой. Windows/Linux dispatch продолжает fail closed без Mock, direct API или hidden
+fallback. Будущее расширение Stable target на Windows требует отдельного PD/ADR, обеих exact live-provider строк,
+новой версии и полного protected release flow; существующий `latest` не даёт такого права автоматически.
+
+Release manifest хранит exact Stable version и exact support target. Unknown/missing target, stable prerelease,
+pending gate внутри target, caller-supplied tag или попытка заявить Windows при 9/11 блокируются. Trusted workflow,
+exact main SHA, six-job CI, protected Environment, OIDC stage-only publish и отдельное 2FA approval не меняются.
+Полный контракт — ADR-0032 и планы 120–121.
+
 ## 14. Отложенные решения
 
 Следующие решения намеренно принимаются отдельным spike/ADR после Phase 0, а не угадываются заранее:

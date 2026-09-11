@@ -7,7 +7,7 @@ import { fixtureProjectIdSchema, prioritySchema, riskSchema, workItemTypeSchema 
 export const guidedActivationInstallCommands = [
   "mkdir loomrail-evaluation",
   "cd loomrail-evaluation",
-  "npm install --ignore-scripts loomrail@next",
+  "npm install --ignore-scripts loomrail@latest",
   "npx playwright install chromium",
   "npx loomrail try",
 ] as const;

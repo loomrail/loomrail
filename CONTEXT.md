@@ -20,7 +20,10 @@ not implementation structure.
 - **Public Beta** — an explicitly prerelease distribution target for the exact platforms with committed live-provider
   evidence. It may omit an unsupported platform only when that limitation remains visible in the release gate,
   compatibility guide and public install surface.
-- **Stable Release** — the default distribution target. It requires every blocking platform and provider compatibility
-  gate; Public Beta evidence never substitutes for a missing Stable Release gate.
+- **Stable Release** — the default distribution target for one explicit Release Support Target. It requires every
+  blocking gate inside that target; it makes no compatibility claim for platforms outside the target.
+- **Release Support Target** — the closed set of platforms and architectures whose live-provider compatibility a
+  release claims. The first Stable target is `MACOS_ARM64`; Windows and Linux remain outside it until separately
+  promoted by committed evidence.
 - **Release Channel** — the closed owner-selected publication class. Loomrail currently defines `BETA` and `STABLE`;
   each maps to one fixed npm dist-tag and one exact version shape.

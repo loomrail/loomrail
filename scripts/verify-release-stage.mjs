@@ -3,7 +3,11 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import { releaseVersion, repositoryRoot, toolCommand, toolSpawnOptions } from "./release-manifest.mjs";
-import { verifyBetaReleaseGates, verifyStableReleaseGates } from "./stable-release-gates.mjs";
+import {
+  releaseSupportTargets,
+  verifyBetaReleaseGates,
+  verifyStableReleaseGates,
+} from "./stable-release-gates.mjs";
 
 const expectedRepository = "loomrail/loomrail";
 const expectedRef = "refs/heads/main";
@@ -50,6 +54,7 @@ export const assertMinimumNpmVersion = (version) => {
 export const validateReleaseStageIntent = ({
   channel,
   version,
+  supportTarget,
   sourceCommit,
   confirmation,
   repository,
@@ -65,16 +70,26 @@ export const validateReleaseStageIntent = ({
     assert(stableVersionPattern.test(version), "Stable release version must be semver without a prerelease");
   }
   assert(commitPattern.test(sourceCommit), "source commit must be an exact lowercase SHA-1");
+  assert(
+    typeof supportTarget === "string" && releaseSupportTargets.includes(supportTarget),
+    "release support target is invalid",
+  );
   assert(repository === expectedRepository, "release staging is restricted to the canonical repository");
   assert(ref === expectedRef, "release staging is restricted to the main branch");
   assert(workflowCommit === sourceCommit, "source commit must match the workflow commit");
   assert(checkedOutCommit === sourceCommit, "checked-out commit must match the approved source commit");
   assert(packageVersion === version, "release package version must match the approved version");
   assert(
-    confirmation === `STAGE loomrail@${version} AS ${channel} FROM ${sourceCommit}`,
-    "release confirmation does not match the exact package and commit",
+    confirmation === `STAGE loomrail@${version} AS ${channel} FOR ${supportTarget} FROM ${sourceCommit}`,
+    "release confirmation does not match the exact package, target and commit",
   );
-  return { channel, distTag: channel === "BETA" ? "next" : "latest", version, sourceCommit };
+  return {
+    channel,
+    distTag: channel === "BETA" ? "next" : "latest",
+    version,
+    supportTarget,
+    sourceCommit,
+  };
 };
 
 export const selectSuccessfulCiRun = (payload, sourceCommit) => {
@@ -231,6 +246,7 @@ export const verifyReleaseStage = async (environment = process.env) => {
   const intent = validateReleaseStageIntent({
     channel: environment.LOOMRAIL_RELEASE_CHANNEL ?? "",
     version: environment.LOOMRAIL_RELEASE_VERSION ?? "",
+    supportTarget: environment.LOOMRAIL_RELEASE_SUPPORT_TARGET ?? "",
     sourceCommit: environment.LOOMRAIL_SOURCE_COMMIT ?? "",
     confirmation: environment.LOOMRAIL_RELEASE_CONFIRMATION ?? "",
     repository: environment.GITHUB_REPOSITORY ?? "",
@@ -242,11 +258,13 @@ export const verifyReleaseStage = async (environment = process.env) => {
   if (intent.channel === "BETA") {
     await verifyBetaReleaseGates({
       releaseVersion: intent.version,
+      supportTarget: intent.supportTarget,
       sourceCommit: intent.sourceCommit,
     });
   } else {
     await verifyStableReleaseGates({
       releaseVersion: intent.version,
+      supportTarget: intent.supportTarget,
       sourceCommit: intent.sourceCommit,
     });
   }
@@ -287,7 +305,7 @@ export const verifyReleaseStage = async (environment = process.env) => {
   await verifyRegistryVersionIsUnused(intent.version);
 
   process.stdout.write(
-    `Release stage gate passed for ${intent.channel} loomrail@${intent.version} with ${intent.distTag} from ${intent.sourceCommit}.\n`,
+    `Release stage gate passed for ${intent.channel} loomrail@${intent.version} for ${intent.supportTarget} with ${intent.distTag} from ${intent.sourceCommit}.\n`,
   );
 };
 

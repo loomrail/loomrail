@@ -15,12 +15,19 @@ on:
         description: Exact selected version already set in apps/cli/package.json
         required: true
         type: string
+      support_target:
+        description: Exact release support target already selected in the release evidence manifest
+        required: true
+        type: choice
+        default: MACOS_ARM64
+        options:
+          - MACOS_ARM64
       source_commit:
         description: Exact 40-character main commit with a successful CI run
         required: true
         type: string
       confirmation:
-        description: Type STAGE loomrail@<version> AS <channel> FROM <source_commit>
+        description: Type STAGE loomrail@<version> AS <channel> FOR <support_target> FROM <source_commit>
         required: true
         type: string
 
@@ -63,6 +70,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           LOOMRAIL_RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
           LOOMRAIL_RELEASE_CHANNEL: ${{ inputs.channel }}
+          LOOMRAIL_RELEASE_SUPPORT_TARGET: ${{ inputs.support_target }}
           LOOMRAIL_RELEASE_VERSION: ${{ inputs.version }}
           LOOMRAIL_SOURCE_COMMIT: ${{ inputs.source_commit }}
 

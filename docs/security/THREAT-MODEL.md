@@ -138,6 +138,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T74 | Handoff deadline detaches its losing session task and overlaps a successor          | Critical | named session promise; abort then join through MCP drain; no successor/session end before terminal calls; cancellation/restart proof                                                         | see handoff session-join delta below                                              |
 | T75 | Missing or over-broad Plan context makes provider invent or expose authority        | High     | transactional safe Plan projection; bounded metadata; no argv/cwd/script/path; provenance; explicit non-escalation rule                                                                      | see safe verification-plan context delta below                                    |
 | T84 | Ambiguous release channel publishes an unverified platform or moves the default tag | High     | closed Beta/Stable intent; exact version shapes; fixed tags; channel-specific immutable gates; protected OIDC stage + 2FA                                                                    | see Public Beta release-channel delta below                                       |
+| T85 | Platform-scoped Stable is mistaken for cross-platform compatibility                 | High     | exact closed support target; target-specific required gates; public platform disclosure; fail-closed provider admission                                                                      | see platform-scoped Stable delta below                                            |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -2229,19 +2230,41 @@ Environment values, secrets, raw payloads or absolute paths.
 ### Public Beta release-channel delta (T84)
 
 **T84 — ambiguous release channel publishes an unverified platform or moves the default tag. High.** A free-form
-channel/tag, prerelease accepted by the Stable path, or nine passed rows interpreted as 11/11 could publish unsupported
-Windows provider behavior or make it the default install. Release intent is a closed `BETA | STABLE` value. Beta
-accepts only `0.1.0-beta.N`, maps only to `next` and requires the exact nine non-Windows gates; Stable accepts only
-plain semver, maps only to `latest` and continues to require all eleven. The manifest stores separate selected
-versions and never promotes a pending Windows row. Both paths require exact main SHA/package/confirmation, the same
+channel/tag, prerelease accepted by the Stable path, or required gates selected without a support target could publish
+unsupported provider behavior or move the default install. Release intent is a closed `BETA | STABLE` value. Beta
+accepts only `0.1.0-beta.N` and maps only to `next`; Stable accepts only plain semver and maps only to `latest`.
+Schema v5 additionally binds both to the closed `MACOS_ARM64` support target and its exact nine required gates. The
+manifest stores separate selected versions/targets and never promotes a pending Windows row. Both paths require exact
+main SHA/package/target/confirmation, the same
 six successful macOS/Windows CI jobs, a reviewed main-only GitHub Environment, OIDC stage-only trusted publishing and
 separate interactive npm 2FA approval. Public compatibility text names only `darwin/arm64` live-provider support.
 
-Required verification: unknown/case-drift channel; Beta/Stable version crossover; exact confirmation/ref/SHA/package
-drift; pending allowed and required rows; fixed workflow `next | latest` branches; absence of raw `npm publish`, token
+Required verification: unknown/case-drift channel and target; Beta/Stable version crossover; exact confirmation/ref/
+SHA/package/target drift; pending allowed and required rows; fixed workflow `next | latest` branches; absence of raw `npm publish`, token
 secret and caller-supplied tag; registry version uniqueness; unchanged `latest`; provenance/signature/receipt and clean
 install/start after publication. Residual risk: a Beta user can manually force installation on an unverified platform,
 but provider admission still fails closed and the limitation remains visible before installation.
+
+### Platform-scoped Stable delta (T85)
+
+**T85 — platform-scoped Stable is mistaken for cross-platform compatibility. High.** Moving `latest` while two
+Windows live-provider rows remain pending could mislead users or let later code treat Stable status as authority for
+Windows/Linux dispatch. Release eligibility therefore includes an exact closed Release Support Target in addition to
+channel and version. The first Stable accepts only `MACOS_ARM64`, requires the exact nine product/security/dogfood/
+landing and macOS compatibility gates, and preserves both Windows rows as visible `PENDING`. Missing/unknown targets,
+target drift and any future target containing Windows without both exact live-provider rows fail closed. Six-job
+macOS/Windows CI remains mandatory but proves only source/package portability outside the live target.
+
+Public install, compatibility, landing and release text must name macOS Apple Silicon as the only supported
+live-provider target. Runtime admission continues to refuse unverified platform/version pairs and exposes no Mock,
+direct API or fallback route. A future Windows target requires a separate documented decision, evidence, version and
+protected release.
+
+Required verification: schema downgrade and omitted/unknown target; `STABLE + MACOS_ARM64` with nine passed and two
+pending Windows rows; pending required macOS/product gate; stable prerelease; channel/target/version drift; attempted
+Windows target without 11/11; fixed `latest`; exact-source CI; public limitation text; registry provenance/signatures
+and clean install/start. Residual risk: users can force-install the npm package on unsupported systems, but provider
+admission fails closed and the unsupported target receives no compatibility claim.
 
 ### Filesystem, shell and Git
 

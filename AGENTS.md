@@ -16,8 +16,13 @@ workflow state, gates, permissions, budgets and acceptance.
 
 ## Current scope
 
-Phase 0 is a mocked vertical slice. Do not add real Codex/Claude execution, shell/Git mutations, worktrees, product
-BrowserDriver, plugins, remote access, cloud sync or desktop packaging until their planned phase.
+The production runtime uses only locally installed, authenticated Codex CLI and Claude Code CLI adapters; Mock and
+direct provider API routes do not exist. All six stages run through domain-owned gates and bounded Loomrail workspace
+tools. The first Stable Release Support Target is macOS Apple Silicon. Windows and Linux live-provider dispatch remain
+unsupported and fail closed until a separate documented promotion; do not infer support from source/package CI.
+
+Do not add hidden fallbacks, provider API keys, automatic Git publication, remote access, cloud sync or desktop
+packaging outside an approved product decision, ADR, threat-model delta and implementation plan.
 
 ## Architecture rules
 

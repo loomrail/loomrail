@@ -1,6 +1,6 @@
 # Bundled samples and the shipped workflow
 
-> Public Beta for macOS Apple Silicon · [Русская версия](SAMPLES.ru.md) · [Quick start](GETTING-STARTED.md)
+> Stable for macOS Apple Silicon · [Русская версия](SAMPLES.ru.md) · [Quick start](GETTING-STARTED.md)
 
 Loomrail includes two small repository templates. Registering one copies reviewed regular files into the Loomrail
 data directory, initializes a separate local Git repository, and records that repository as a Project. Loomrail does
@@ -39,7 +39,7 @@ Every recipe uses the same domain-owned revision-4 workflow:
 Discovery → Plan → Implement → Review → QA → Acceptance
 ```
 
-Local Codex CLI and Claude Code CLI sessions feed the same deterministic state machine. The current Beta does not
+Local Codex CLI and Claude Code CLI sessions feed the same deterministic state machine. The current release does not
 offer workflow selection or custom templates.
 
 ## Built-in role catalog

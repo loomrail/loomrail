@@ -1,6 +1,6 @@
 # Supply-chain policy Loomrail
 
-> Public Beta для macOS Apple Silicon · [English](SUPPLY-CHAIN.md) · [Threat model](THREAT-MODEL.md)
+> Stable для macOS Apple Silicon · [English](SUPPLY-CHAIN.md) · [Threat model](THREAT-MODEL.md)
 
 Эта policy описывает repository dependencies, build inputs, integrity release candidate, publish authority и
 post-publication verification. Она не утверждает, что dependency, build или provenance statement безопасны сами по
@@ -70,8 +70,9 @@ Receipt не подписан. Он обнаруживает случайную 
 
 ## Publish authority и provenance
 
-Обычный CI имеет read-only repository permission и никогда не вызывает `npm publish`. Public Beta разрешён только
-через protected staged route ниже; Stable остаётся blocked до обеих Windows live-provider gates.
+Обычный CI имеет read-only repository permission и никогда не вызывает `npm publish`. Beta и Stable разрешены только
+через protected staged route ниже. Первый Stable ограничен доказанным macOS Apple Silicon support target; Windows/
+Linux live-provider execution остаётся unsupported и fail closed.
 
 До будущего public release maintainer настраивает npm trusted publishing для exact public repository и отдельного
 GitHub-hosted workflow `.github/workflows/npm-stage.yml`. npm relationship разрешает только staging, привязан к
@@ -85,13 +86,15 @@ GitHub environment `npm-release` и не разрешает прямой `npm pu
 более широкий policy response закрывает gate. Дополнительные более строгие protection rules разрешены. Проверка не
 создаёт и не изменяет environment.
 
-Repository gate требует closed `BETA | STABLE` channel, exact main SHA, совпадающее typed confirmation, свободную
+Repository gate требует closed `BETA | STABLE` channel, exact `MACOS_ARM64` support target, exact main SHA,
+совпадающее typed confirmation, свободную
 registry version, npm `11.15.0+` и успешный push-triggered CI для этого SHA со всеми шестью macOS/Windows Verify,
-Browser smoke и Clean install jobs. Schema-v4 evidence index выбирает Beta и Stable versions отдельно. Beta принимает
-только `0.1.0-beta.N`, использует только `next` и требует девять non-Windows gates; Stable принимает только plain
-semver, использует только `latest` и требует все одиннадцать gates. Каждая passed row связывает bounded non-symlink
+Browser smoke и Clean install jobs. Schema-v5 evidence index выбирает Beta/Stable versions и support targets отдельно.
+Beta принимает только `0.1.0-beta.N` и использует только `next`; Stable принимает только plain semver и использует
+только `latest`. Оба текущих пути `MACOS_ARM64` требуют девять macOS/product gates. Каждая passed row связывает bounded non-symlink
 evidence file, SHA-256 текущих и committed bytes и ancestor evidence commit. Текущее честное состояние — Beta 9/9 и
-Stable 9/11; обе Windows live-provider rows остаются pending. Index
+macOS Stable 9/9; обе Windows live-provider rows остаются pending и не объявляются passed. Они не входят в первый
+Stable support target. Missing/unknown target и будущий Windows target без exact evidence блокируются. Index
 предотвращает случайный пропуск, но остаётся repository-authored evidence, а не подписью или заменой owner review в
 protected environment. Обе source-CI платформы проверяют каждую текущую `PASSED` строку по полной Git history до
 длинной matrix. Staged package ещё не является публичной версией. Package owner отдельно проверяет его и подтверждает

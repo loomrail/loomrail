@@ -1,6 +1,6 @@
 # Loomrail user guide
 
-> Public Beta for macOS Apple Silicon · [Quick start](GETTING-STARTED.md) · [Русская версия](USER-GUIDE.ru.md)
+> Stable for macOS Apple Silicon · [Quick start](GETTING-STARTED.md) · [Русская версия](USER-GUIDE.ru.md)
 
 This guide takes you from a clean local launch to an accepted delivery, then explains how to run a real coding agent,
 inspect its work, recover after a restart, and preserve Loomrail's local state.
@@ -12,7 +12,7 @@ workflow state; it does not commit, push, or merge the agent's result.
 ## 1. Install and start Loomrail
 
 Use Node.js `>=24.19 <25` on macOS Apple Silicon. Windows and Linux live-provider execution is unsupported in this
-Beta and fails closed. For the first run, install the explicit Public Beta channel in a separate empty directory
+release and fails closed. For the first run, install the Stable channel in a separate empty directory
 rather than inside a repository you care about:
 
 Install the official Codex or Claude Code CLI and sign in with `codex login` or `claude auth login` first. If that
@@ -21,7 +21,7 @@ CLI already works locally, Loomrail needs no API key or additional provider cred
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
-npm install --ignore-scripts loomrail@next
+npm install --ignore-scripts loomrail@latest
 npx playwright install chromium
 npx loomrail setup --mode live
 npx loomrail start
@@ -29,11 +29,11 @@ npx loomrail start
 
 The explicit Chromium download is a one-time prerequisite for isolated Browser QA; Loomrail does not reuse a signed-in
 browser profile. Setup checks local CLI compatibility and login, verifies the route without changing state, and
-prints the exact owner actions that remain. The `next` tag keeps the Beta channel explicit. To put the launcher
+prints the exact owner actions that remain. The `latest` tag selects the macOS-scoped Stable release. To put the launcher
 on your `PATH` instead:
 
 ```bash
-npm install -g --ignore-scripts loomrail@next
+npm install -g --ignore-scripts loomrail@latest
 npx playwright install chromium
 loomrail setup
 loomrail start
@@ -361,9 +361,9 @@ unmeasured work is intact, and it will not create a replacement worktree for the
 succeeded. A missing Git executable, missing worktree, invalid baseline, or unreadable directory has its own error
 instead of masquerading as an empty list.
 
-## Current Public Beta limits
+## Current Stable limits
 
-- The npm package is Beta and there is no desktop installer.
+- The npm package is Stable for macOS Apple Silicon and there is no desktop installer.
 - The daemon is local-only; there is no remote or multi-user mode.
 - Provider preference is saved per Project; an optional process-wide environment override locks it until restart.
 - Live providers are verified only on macOS Apple Silicon; Windows and Linux dispatch fail closed. Browser QA is

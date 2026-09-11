@@ -11,7 +11,7 @@
   <p>
     <a href="https://github.com/loomrail/loomrail/actions/workflows/ci.yml"><img src="https://github.com/loomrail/loomrail/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-6173ff" alt="Apache 2.0 license" /></a>
-    <img src="https://img.shields.io/badge/status-public%20beta-4d63c7" alt="Public Beta status" />
+    <img src="https://img.shields.io/badge/status-stable-2f6b52" alt="Stable status" />
     <img src="https://img.shields.io/badge/Node.js-24.19-43853d" alt="Node.js 24.19" />
   </p>
 </div>
@@ -27,12 +27,12 @@ the source of truth.
 </picture>
 
 > [!IMPORTANT]
-> Loomrail is Public Beta software for macOS on Apple Silicon. New projects use **Auto**, which selects only a
+> Loomrail is Stable software for macOS on Apple Silicon. New projects use **Auto**, which selects only a
 > compatible, signed-in local
 > Codex CLI or Claude Code CLI. Loomrail does not ask for provider API keys or use separate API billing; a missing,
 > incompatible, or signed-out CLI blocks startup instead of falling back. Loomrail never creates provider credentials,
 > enables permission-bypass flags, commits, pushes, merges, or deploys for you. A task worktree is not an
-> operating-system sandbox. Windows and Linux live-provider execution is not supported by this Beta and fails closed;
+> operating-system sandbox. Windows and Linux live-provider execution is not supported by this release and fails closed;
 > Windows remains covered by source, browser and clean-install CI while its real local-CLI evidence is pending.
 
 ## Install and run safely
@@ -44,7 +44,7 @@ managed by the installed Playwright package, and at least one official local age
 - Claude Code: install the official CLI and run `claude auth login` once.
 
 That login remains owned by the provider CLI. Loomrail detects it read-only and never asks you to copy an API key.
-Windows and Linux are not supported live-provider targets in this Beta.
+Windows and Linux are not supported live-provider targets in this macOS-scoped Stable release.
 
 Start in a new empty directory, not inside a repository you care about:
 
@@ -53,7 +53,7 @@ Start in a new empty directory, not inside a repository you care about:
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
-npm install --ignore-scripts loomrail@next
+npm install --ignore-scripts loomrail@latest
 npx playwright install chromium
 npx loomrail try
 ```
@@ -77,9 +77,9 @@ npx loomrail try --no-open --port 4176
 
 Open the printed URL on the same machine within 60 seconds. `--no-open` does not enable remote access.
 
-For a global launcher, use `npm install -g --ignore-scripts loomrail@next`, run
+For a global launcher, use `npm install -g --ignore-scripts loomrail@latest`, run
 `npx playwright install chromium`, and then `loomrail try`.
-The project-local route above is recommended for evaluation because it keeps the selected Beta channel visible.
+The project-local route above is recommended because it keeps Loomrail and its browser runtime isolated.
 
 ## First run
 

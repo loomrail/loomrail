@@ -1,6 +1,6 @@
 # Loomrail supply-chain policy
 
-> Public Beta for macOS Apple Silicon · [Русская версия](SUPPLY-CHAIN.ru.md) · [Threat model](THREAT-MODEL.md)
+> Stable for macOS Apple Silicon · [Русская версия](SUPPLY-CHAIN.ru.md) · [Threat model](THREAT-MODEL.md)
 
 This policy covers repository dependencies, build inputs, release-candidate integrity, publishing authority, and
 post-publication verification. It does not claim that a dependency, build, or provenance statement is harmless.
@@ -69,8 +69,9 @@ it is not npm provenance and cannot identify its builder by itself.
 
 ## Publishing authority and provenance
 
-Ordinary CI has read-only repository permission and never runs `npm publish`. Public Beta publication is authorized
-only through the protected staged route below; Stable remains blocked until both Windows live-provider gates pass.
+Ordinary CI has read-only repository permission and never runs `npm publish`. Beta and Stable publication are
+authorized only through the protected staged route below. The first Stable is scoped to the proved macOS Apple
+Silicon support target; Windows/Linux live-provider execution remains unsupported and fail closed.
 
 Before a future public release, maintainers must configure npm trusted publishing for the exact public repository and
 the dedicated `.github/workflows/npm-stage.yml` GitHub-hosted workflow. The npm relationship is stage-only, binds the
@@ -84,14 +85,17 @@ non-empty required-reviewer rule and one custom branch policy named `main` are m
 incomplete or broader policy responses fail closed. Stronger additional protection rules are allowed. The check
 cannot create or mutate the environment.
 
-The repository gate requires a closed `BETA | STABLE` channel, an exact main SHA, matching typed confirmation, an
+The repository gate requires a closed `BETA | STABLE` channel, exact `MACOS_ARM64` support target, an exact main SHA,
+matching typed confirmation, an
 unused registry version, npm `11.15.0+`, and a successful push-triggered CI run for that SHA with all six
-macOS/Windows Verify, Browser smoke and Clean install jobs. The schema-v4 evidence index selects Beta and Stable
-versions separately. Beta accepts only `0.1.0-beta.N`, maps only to `next`, and requires the nine non-Windows gates;
-Stable accepts only plain semver, maps only to `latest`, and requires all eleven gates. Every passed row uses a bounded
+macOS/Windows Verify, Browser smoke and Clean install jobs. The schema-v5 evidence index selects Beta and Stable
+versions and support targets separately. Beta accepts only `0.1.0-beta.N` and maps only to `next`; Stable accepts only
+plain semver and maps only to `latest`. Both current `MACOS_ARM64` paths require the nine macOS/product gates. Every
+passed row uses a bounded
 non-symlink evidence file, matching SHA-256 for current and committed bytes, and an evidence commit that is an ancestor
-of the release source. The current honest state is Beta 9/9 and Stable 9/11, with both Windows live-provider rows still
-pending. This index prevents accidental omission; it is repository-authored evidence, not a signature
+of the release source. Both Windows live-provider rows remain pending and are not represented as passed; they are
+outside the first Stable support target. Missing/unknown targets and future Windows targets without exact evidence
+fail closed. This index prevents accidental omission; it is repository-authored evidence, not a signature
 or a substitute for protected-environment owner review. Both source-CI platforms verify every current `PASSED` row
 against full Git history before their long matrix. A staged package is still not public. A package owner must
 separately inspect it and approve it with interactive 2FA before npm makes the immutable name/version public.

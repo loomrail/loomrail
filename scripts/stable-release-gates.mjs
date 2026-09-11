@@ -16,7 +16,9 @@ const commitPattern = /^[0-9a-f]{40}$/;
 const digestPattern = /^[0-9a-f]{64}$/;
 const evidencePathPattern = /^docs\/evidence\/[A-Za-z0-9._/-]+\.md$/;
 
-export const requiredStableReleaseGates = Object.freeze([
+export const releaseSupportTargets = Object.freeze(["MACOS_ARM64"]);
+
+export const releaseEvidenceGates = Object.freeze([
   "q13FinalSecurityReliabilityReview",
   "q15CanonicalActivationNonLanding",
   "q17MeasuredProjectVerification",
@@ -30,7 +32,7 @@ export const requiredStableReleaseGates = Object.freeze([
   "claudeWindowsCompatibility",
 ]);
 
-export const requiredBetaReleaseGates = Object.freeze([
+export const requiredMacosArm64ReleaseGates = Object.freeze([
   "q13FinalSecurityReliabilityReview",
   "q15CanonicalActivationNonLanding",
   "q17MeasuredProjectVerification",
@@ -102,10 +104,17 @@ export const parseStableReleaseGateManifest = (text) => {
 
   assertExactKeys(
     manifest,
-    ["schemaVersion", "betaReleaseVersion", "stableReleaseVersion", "gates"],
+    [
+      "schemaVersion",
+      "betaReleaseVersion",
+      "betaReleaseTarget",
+      "stableReleaseVersion",
+      "stableReleaseTarget",
+      "gates",
+    ],
     "stable gate manifest",
   );
-  assert(manifest.schemaVersion === 4, "stable gate manifest schemaVersion must be 4");
+  assert(manifest.schemaVersion === 5, "stable gate manifest schemaVersion must be 5");
   assert(
     manifest.betaReleaseVersion === null ||
       (typeof manifest.betaReleaseVersion === "string" &&
@@ -118,9 +127,25 @@ export const parseStableReleaseGateManifest = (text) => {
         stableVersionPattern.test(manifest.stableReleaseVersion)),
     "stable gate manifest stableReleaseVersion must be null or stable semver",
   );
-  assertExactKeys(manifest.gates, requiredStableReleaseGates, "stable gate manifest gates");
+  assert(
+    manifest.betaReleaseTarget === null || releaseSupportTargets.includes(manifest.betaReleaseTarget),
+    "stable gate manifest betaReleaseTarget must be null or a supported target",
+  );
+  assert(
+    manifest.stableReleaseTarget === null || releaseSupportTargets.includes(manifest.stableReleaseTarget),
+    "stable gate manifest stableReleaseTarget must be null or a supported target",
+  );
+  assert(
+    (manifest.betaReleaseVersion === null) === (manifest.betaReleaseTarget === null),
+    "stable gate manifest Beta version and target must be selected together",
+  );
+  assert(
+    (manifest.stableReleaseVersion === null) === (manifest.stableReleaseTarget === null),
+    "stable gate manifest Stable version and target must be selected together",
+  );
+  assertExactKeys(manifest.gates, releaseEvidenceGates, "stable gate manifest gates");
 
-  for (const gateName of requiredStableReleaseGates) {
+  for (const gateName of releaseEvidenceGates) {
     const gate = manifest.gates[gateName];
     assert(isRecord(gate), `${gateName} gate must be an object`);
     if (gate.status === "PENDING") {
@@ -157,9 +182,11 @@ export const parseStableReleaseGateManifest = (text) => {
 
 export const summarizeStableReleaseGates = (manifest) => ({
   betaReleaseVersion: manifest.betaReleaseVersion,
+  betaReleaseTarget: manifest.betaReleaseTarget,
   stableReleaseVersion: manifest.stableReleaseVersion,
-  passed: requiredStableReleaseGates.filter((name) => manifest.gates[name].status === "PASSED"),
-  pending: requiredStableReleaseGates.filter((name) => manifest.gates[name].status === "PENDING"),
+  stableReleaseTarget: manifest.stableReleaseTarget,
+  passed: releaseEvidenceGates.filter((name) => manifest.gates[name].status === "PASSED"),
+  pending: releaseEvidenceGates.filter((name) => manifest.gates[name].status === "PENDING"),
 });
 
 const readBoundedRegularFile = async (root, relativePath, maximumBytes, label) => {
@@ -231,7 +258,7 @@ export const verifyRecordedStableReleaseEvidence = async ({
       return result.status === 0;
     });
 
-  for (const gateName of requiredStableReleaseGates) {
+  for (const gateName of releaseEvidenceGates) {
     const gate = parsedManifest.gates[gateName];
     if (gate.status === "PENDING") continue;
     assert(
@@ -260,6 +287,7 @@ export const verifyRecordedStableReleaseEvidence = async ({
 
 export const verifyStableReleaseGates = async ({
   releaseVersion,
+  supportTarget,
   sourceCommit,
   root = repositoryRoot,
   manifestOverride,
@@ -275,18 +303,23 @@ export const verifyStableReleaseGates = async ({
     typeof sourceCommit === "string" && commitPattern.test(sourceCommit),
     "stable release source commit is invalid",
   );
+  assert(
+    typeof supportTarget === "string" && releaseSupportTargets.includes(supportTarget),
+    "stable release support target is invalid",
+  );
 
   const manifest = await loadStableReleaseManifest(root, manifestOverride);
   assert(
     manifest.stableReleaseVersion === releaseVersion,
     "stable gate manifest does not approve this release version",
   );
-
-  const summary = summarizeStableReleaseGates(manifest);
   assert(
-    summary.pending.length === 0,
-    `stable release gates are still pending: ${summary.pending.join(", ")}`,
+    manifest.stableReleaseTarget === supportTarget,
+    "stable gate manifest does not approve this release support target",
   );
+
+  const pending = requiredMacosArm64ReleaseGates.filter((name) => manifest.gates[name].status === "PENDING");
+  assert(pending.length === 0, `stable release gates are still pending: ${pending.join(", ")}`);
   return verifyRecordedStableReleaseEvidence({
     manifest,
     sourceCommit,
@@ -299,6 +332,7 @@ export const verifyStableReleaseGates = async ({
 
 export const verifyBetaReleaseGates = async ({
   releaseVersion,
+  supportTarget,
   sourceCommit,
   root = repositoryRoot,
   manifestOverride,
@@ -314,14 +348,22 @@ export const verifyBetaReleaseGates = async ({
     typeof sourceCommit === "string" && commitPattern.test(sourceCommit),
     "Beta release source commit is invalid",
   );
+  assert(
+    typeof supportTarget === "string" && releaseSupportTargets.includes(supportTarget),
+    "Beta release support target is invalid",
+  );
 
   const manifest = await loadStableReleaseManifest(root, manifestOverride);
   assert(
     manifest.betaReleaseVersion === releaseVersion,
     "stable gate manifest does not approve this Beta release version",
   );
+  assert(
+    manifest.betaReleaseTarget === supportTarget,
+    "stable gate manifest does not approve this Beta release support target",
+  );
 
-  const pending = requiredBetaReleaseGates.filter((name) => manifest.gates[name].status === "PENDING");
+  const pending = requiredMacosArm64ReleaseGates.filter((name) => manifest.gates[name].status === "PENDING");
   assert(pending.length === 0, `Beta release gates are still pending: ${pending.join(", ")}`);
   return verifyRecordedStableReleaseEvidence({
     manifest,
@@ -343,14 +385,24 @@ const printStatus = async () => {
     manifest,
     sourceCommit,
   });
-  const betaPending = requiredBetaReleaseGates.filter((name) => manifest.gates[name].status === "PENDING");
+  const betaPending = requiredMacosArm64ReleaseGates.filter(
+    (name) => manifest.gates[name].status === "PENDING",
+  );
   process.stdout.write(`Beta release version: ${summary.betaReleaseVersion ?? "not selected"}\n`);
+  process.stdout.write(`Beta release target: ${summary.betaReleaseTarget ?? "not selected"}\n`);
   process.stdout.write(
-    `Beta passed gates: ${(requiredBetaReleaseGates.length - betaPending.length).toString()}/${requiredBetaReleaseGates.length.toString()}\n`,
+    `Beta passed gates: ${(requiredMacosArm64ReleaseGates.length - betaPending.length).toString()}/${requiredMacosArm64ReleaseGates.length.toString()}\n`,
   );
   process.stdout.write(`Stable release version: ${summary.stableReleaseVersion ?? "not selected"}\n`);
+  process.stdout.write(`Stable release target: ${summary.stableReleaseTarget ?? "not selected"}\n`);
   process.stdout.write(
-    `Passed gates: ${summary.passed.length.toString()}/${requiredStableReleaseGates.length.toString()}\n`,
+    `Compatibility evidence: ${summary.passed.length.toString()}/${releaseEvidenceGates.length.toString()}\n`,
+  );
+  const stablePending = requiredMacosArm64ReleaseGates.filter(
+    (name) => manifest.gates[name].status === "PENDING",
+  );
+  process.stdout.write(
+    `Stable required gates: ${(requiredMacosArm64ReleaseGates.length - stablePending.length).toString()}/${requiredMacosArm64ReleaseGates.length.toString()}\n`,
   );
   for (const name of summary.pending)
     process.stdout.write(`PENDING ${name}: ${manifest.gates[name].reason}\n`);
@@ -362,9 +414,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       cwd: repositoryRoot,
       encoding: "utf8",
     }).trim();
-    const summary = await verifyBetaReleaseGates({ releaseVersion: releaseVersion(), sourceCommit });
+    const summary = await verifyBetaReleaseGates({
+      releaseVersion: releaseVersion(),
+      supportTarget: "MACOS_ARM64",
+      sourceCommit,
+    });
     process.stdout.write(
-      `Beta release gate passed for loomrail@${summary.betaReleaseVersion}: ${requiredBetaReleaseGates.length.toString()}/${requiredBetaReleaseGates.length.toString()} required gates.\n`,
+      `Beta release gate passed for loomrail@${summary.betaReleaseVersion}: ${requiredMacosArm64ReleaseGates.length.toString()}/${requiredMacosArm64ReleaseGates.length.toString()} required gates.\n`,
     );
   } else {
     await printStatus();

@@ -100,5 +100,5 @@ Chromium имя `localhost` обязано разрешаться только �
 `STANDARD_30_DAYS` и удаляет screenshot/trace через 30 дней после последнего перехода работы в
 `DONE` или `CANCELLED`. Очистка идёт bounded batches при запуске daemon, записывает append-only результат и удаляет
 только точные пути из durable attachment refs. Она не делает recursive delete, не следует symlink, не трогает run с
-recovery marker и сохраняет неизвестные соседние файлы. Пользовательского экрана retention/cleanup в этой Beta
+recovery marker и сохраняет неизвестные соседние файлы. Пользовательского экрана retention/cleanup в этом релизе
 пока нет.

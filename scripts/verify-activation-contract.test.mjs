@@ -28,6 +28,16 @@ test("the repository consumes one canonical guided activation contract", async (
   await assert.doesNotReject(verifyActivationContract());
 });
 
+test("the canonical Stable activation follows the fixed latest channel", () => {
+  assert.deepEqual(source.install.commands, [
+    "mkdir loomrail-evaluation",
+    "cd loomrail-evaluation",
+    "npm install --ignore-scripts loomrail@latest",
+    "npx playwright install chromium",
+    "npx loomrail try",
+  ]);
+});
+
 test("the independent verifier rejects unknown fields", () => {
   assert.throws(() => validateActivationContract({ ...source, providerToken: "not-allowed" }), /unknown/);
 });
@@ -76,9 +86,9 @@ test("the independent verifier rejects landing version and Pages trigger drift",
     () =>
       validateLandingConsumer({
         ...validLandingConsumer,
-        cliManifest: { ...cliManifest, version: "0.0.0" },
+        cliManifest: { ...cliManifest, version: "0.1.0-beta.1" },
       }),
-    /public CLI prerelease manifest/,
+    /public CLI Stable manifest/,
   );
   assert.throws(
     () =>

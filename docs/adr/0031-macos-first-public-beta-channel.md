@@ -1,6 +1,6 @@
 # ADR-0031: Separate the macOS-first Public Beta channel from cross-platform Stable
 
-**Status:** Accepted
+**Status:** Accepted; Stable platform requirement superseded by ADR-0032
 
 **Date:** 2026-09-11
 
@@ -38,10 +38,11 @@ closed on every unverified platform/version and provides no Mock or API fallback
 ## Consequences
 
 - A public Beta can be distributed without misrepresenting Windows provider compatibility.
-- `latest` remains unchanged until the original cross-platform Stable gate reaches 11/11.
+- `latest` remained unchanged for the Beta publication. ADR-0032 now defines the separate platform-scoped Stable
+  promotion contract.
 - Green Windows CI proves package/code portability only; it is never interpreted as live-provider compatibility.
-- Promotion to Stable needs new Windows evidence and a separate version/owner confirmation; Beta publication cannot
-  waive or mutate those requirements.
+- Promotion to a Stable target still needs a separate version, support target and owner confirmation; Beta
+  publication cannot mutate evidence rows.
 - The existing trusted workflow remains the only publish entrypoint and gains a closed channel choice with fixed
   tags, keeping the npm trust relationship narrow.
 
@@ -49,5 +50,6 @@ closed on every unverified platform/version and provides no Mock or API fallback
 
 - **Mark the Windows rows passed from synthetic CI:** fabricates live-provider evidence.
 - **Publish the Beta as `latest`:** makes an unsupported-platform prerelease the default install.
-- **Delete Windows from the Stable gate:** silently changes the promised first stable platform set.
+- **Delete Windows from the Stable gate without an explicit support target:** silently changes the promised platform
+  set. ADR-0032 instead records a visible macOS-only target while preserving Windows rows as pending.
 - **Publish locally with a token:** bypasses protected review, OIDC provenance and stage-only approval.

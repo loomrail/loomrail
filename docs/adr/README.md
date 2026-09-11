@@ -39,3 +39,4 @@ record.
 | [0029](0029-owner-approved-github-actions-deployment.md)             | Accepted              | Owner-approved exact GitHub Actions dispatch         |
 | [0030](0030-environment-bound-standard-promotion.md)                 | Accepted              | Environment-bound Preview to Production promotion    |
 | [0031](0031-macos-first-public-beta-channel.md)                      | Accepted              | macOS-first Beta distinct from cross-platform Stable |
+| [0032](0032-platform-scoped-stable-release.md)                       | Accepted              | Stable eligibility includes an exact support target  |

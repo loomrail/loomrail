@@ -1,6 +1,6 @@
 # Руководство пользователя Loomrail
 
-> Public Beta для macOS Apple Silicon · [Быстрый старт](GETTING-STARTED.ru.md) · [English version](USER-GUIDE.md)
+> Stable для macOS Apple Silicon · [Быстрый старт](GETTING-STARTED.ru.md) · [English version](USER-GUIDE.md)
 
 Это руководство проводит от чистого локального запуска до принятой поставки, а затем объясняет, как запустить
 настоящего coding-агента, проверить его работу, восстановиться после рестарта и сохранить локальное состояние
@@ -12,8 +12,8 @@ Loomrail работает локально, но не является security 
 
 ## 1. Установка и запуск
 
-Используйте Node.js `>=24.19 <25` на macOS Apple Silicon. Live-provider execution на Windows и Linux в этой Beta не
-поддерживается и fail closed. Для первого запуска установите явный Public Beta канал в отдельный пустой каталог, а
+Используйте Node.js `>=24.19 <25` на macOS Apple Silicon. Live-provider execution на Windows и Linux в этом релизе не
+поддерживается и fail closed. Для первого запуска установите Stable channel в отдельный пустой каталог, а
 не внутрь важного репозитория:
 
 Сначала установите официальный Codex или Claude Code CLI и войдите через `codex login` или `claude auth login`.
@@ -22,7 +22,7 @@ Loomrail работает локально, но не является security 
 ```bash
 mkdir loomrail-evaluation
 cd loomrail-evaluation
-npm install --ignore-scripts loomrail@next
+npm install --ignore-scripts loomrail@latest
 npx playwright install chromium
 npx loomrail setup --mode live
 npx loomrail start
@@ -30,11 +30,11 @@ npx loomrail start
 
 Явная загрузка Chromium нужна один раз для изолированного Browser QA; Loomrail не использует авторизованный browser
 profile. Setup проверяет совместимость и login локального CLI, проверяет маршрут без изменения state и
-показывает точные оставшиеся действия владельца. Тег `next` оставляет Beta channel явным. Чтобы добавить launcher
+показывает точные оставшиеся действия владельца. Тег `latest` выбирает Stable для macOS. Чтобы добавить launcher
 в `PATH`:
 
 ```bash
-npm install -g --ignore-scripts loomrail@next
+npm install -g --ignore-scripts loomrail@latest
 npx playwright install chromium
 loomrail setup
 loomrail start
@@ -370,9 +370,9 @@ marker-bound каталог, пока осознанно не проверите
 измерение. Отсутствующий Git, потерянный worktree, неверный baseline и нечитаемый каталог показываются как отдельные
 ошибки, а не как пустой список.
 
-## Текущие ограничения Public Beta
+## Текущие ограничения Stable
 
-- Пакет в npm имеет статус Beta, desktop installer отсутствует.
+- Пакет в npm имеет статус Stable для macOS Apple Silicon, desktop installer отсутствует.
 - Daemon работает только локально; remote и multi-user режимов нет.
 - Provider preference сохраняется для каждого Project; необязательный process-wide override блокирует её до restart.
 - Live providers проверены только на macOS Apple Silicon; Windows и Linux dispatch fail closed. QA принадлежит

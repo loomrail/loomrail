@@ -143,8 +143,8 @@ const messages = {
     platformLabel: "Platforms",
     platformValue: "macOS Apple Silicon",
 
-    boundaryTitle: "What this Public Beta actually does",
-    boundaryIntro: `Loomrail ${productVersion} is a Public Beta for macOS on Apple Silicon. The second column is an honest list of what it does not do yet — not a roadmap.`,
+    boundaryTitle: "What this macOS Stable release actually does",
+    boundaryIntro: `Loomrail ${productVersion} is Stable for macOS on Apple Silicon. Windows and Linux remain outside this release support target and fail closed.`,
     todayTitle: "Available today",
     todayLocal: "Same-machine browser UI, loopback daemon, and local SQLite state.",
     todayProviders:
@@ -309,8 +309,8 @@ const messages = {
     platformLabel: "Платформы",
     platformValue: "macOS Apple Silicon",
 
-    boundaryTitle: "Что эта Public Beta действительно умеет",
-    boundaryIntro: `Loomrail ${productVersion} — Public Beta для macOS на Apple Silicon. Вторая колонка — честный список того, чего он пока не делает, а не дорожная карта.`,
+    boundaryTitle: "Что умеет Stable-релиз для macOS",
+    boundaryIntro: `Loomrail ${productVersion} — Stable для macOS на Apple Silicon. Windows и Linux не входят в support target этого релиза и продолжают fail closed.`,
     todayTitle: "Доступно сейчас",
     todayLocal: "Браузер на той же машине, loopback daemon и локальное состояние SQLite.",
     todayProviders:

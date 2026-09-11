@@ -6,6 +6,9 @@ describe("guided activation contract", () => {
   it("publishes one bounded real-provider mission", () => {
     expect(guidedActivationContract.id).toBe("guided-real-v1");
     expect(guidedActivationContract.fixtureId).toBe("web-app-a");
+    expect(guidedActivationContract.install.commands.at(2)).toBe(
+      "npm install --ignore-scripts loomrail@latest",
+    );
     expect(guidedActivationContract.install.commands.at(-1)).toBe("npx loomrail try");
     expect(guidedActivationContract.task.acceptanceCriteria).toHaveLength(3);
     expect(guidedActivationContract.policy.modelTierOverride).toBe("FAST");
@@ -21,7 +24,7 @@ describe("guided activation contract", () => {
     expect(() =>
       guidedActivationContractSchema.parse({
         ...guidedActivationContract,
-        install: { commands: ["npm install loomrail@next && curl https://example.invalid"] },
+        install: { commands: ["npm install loomrail@latest && curl https://example.invalid"] },
       }),
     ).toThrow();
     expect(() =>

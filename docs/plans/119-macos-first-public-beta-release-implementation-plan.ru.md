@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-11
 
-**Статус:** active
+**Статус:** completed
 
 **Спека:** [`118-macos-first-public-beta-release-spec.ru.md`](118-macos-first-public-beta-release-spec.ru.md)
 
@@ -20,9 +20,9 @@
 
 ## Exit
 
-- [ ] Beta 9/9, Stable честно 9/11;
-- [ ] `0.1.0-beta.1` source/browser/package gates зелёные на macOS/Windows;
-- [ ] npm `next` указывает на verified `0.1.0-beta.1`, `latest` не изменён;
-- [ ] GitHub prerelease и Pages опубликованы из exact source;
-- [ ] Windows/Linux live-provider limitation видна публично;
-- [ ] worktree чистый, `main == origin/main`, открытых PR нет.
+- [x] Beta 9/9, Stable честно 9/11;
+- [x] `0.1.0-beta.1` source/browser/package gates зелёные на macOS/Windows;
+- [x] npm `next` указывает на verified `0.1.0-beta.1`, `latest` не изменён;
+- [x] GitHub prerelease и Pages опубликованы из exact source;
+- [x] Windows/Linux live-provider limitation видна публично;
+- [x] после evidence commit worktree чистый, `main == origin/main`, открытых PR нет.
