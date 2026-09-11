@@ -1,6 +1,7 @@
 {
-  "schemaVersion": 3,
-  "releaseVersion": null,
+  "schemaVersion": 4,
+  "betaReleaseVersion": "0.1.0-beta.1",
+  "stableReleaseVersion": null,
   "gates": {
     "q13FinalSecurityReliabilityReview": {
       "status": "PASSED",

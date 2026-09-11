@@ -17,3 +17,10 @@ not implementation structure.
   `READY`: both facts must hold before a workflow can start.
 - **Blocked dependency** — an incoming dependency whose blocker is not `DONE`, including a blocker in `CANCELLED`.
   Cancellation does not silently satisfy or remove an approved dependency.
+- **Public Beta** — an explicitly prerelease distribution target for the exact platforms with committed live-provider
+  evidence. It may omit an unsupported platform only when that limitation remains visible in the release gate,
+  compatibility guide and public install surface.
+- **Stable Release** — the default distribution target. It requires every blocking platform and provider compatibility
+  gate; Public Beta evidence never substitutes for a missing Stable Release gate.
+- **Release Channel** — the closed owner-selected publication class. Loomrail currently defines `BETA` and `STABLE`;
+  each maps to one fixed npm dist-tag and one exact version shape.

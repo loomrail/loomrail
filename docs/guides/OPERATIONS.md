@@ -1,6 +1,6 @@
 # Loomrail operations guide
 
-> Public pre-alpha · [Русская версия](OPERATIONS.ru.md) · [Owner guide](USER-GUIDE.md)
+> Public Beta for macOS Apple Silicon · [Русская версия](OPERATIONS.ru.md) · [Owner guide](USER-GUIDE.md)
 
 This guide is the operational contract for the npm launcher: install checks, local diagnostics, data preservation,
 upgrade, rollback, and uninstall. Loomrail is local-first. These commands do not upload a support report or modify a
@@ -8,8 +8,10 @@ provider account.
 
 ## Supported installation
 
-The current package supports Node.js `>=24.19 <25` on macOS and Windows. Linux remains best effort. Git is required
-for repository and worktree operations; Browser QA separately needs the Chromium build installed by Playwright.
+The Public Beta supports Node.js `>=24.19 <25` and live providers on macOS Apple Silicon. Windows package/source CI is
+green, but real local-CLI execution remains unverified and fails closed; Linux is unsupported for this Beta. Git is
+required for repository and worktree operations; Browser QA separately needs the Chromium build installed by
+Playwright.
 
 For an isolated evaluation install:
 
@@ -22,7 +24,7 @@ npx loomrail setup --mode live
 npx loomrail start
 ```
 
-`next` is the explicit pre-alpha channel. A global installation uses
+`next` is the explicit Public Beta channel. A global installation uses
 `npm install -g --ignore-scripts loomrail@next`, followed by `npx playwright install chromium`, `loomrail setup`, and
 `loomrail start`. Pin an exact version instead of `next` when you need a reproducible installation. Loomrail does
 not require dependency lifecycle scripts; Chromium remains a separate, visible installation step.
@@ -42,8 +44,8 @@ available provenance attestations for the installed dependency graph. A release 
 must link to this public repository, the trusted publish workflow, and the reviewed source commit. Provenance does
 not prove that the code is safe; keep the exact version, release notes, and backup boundary visible.
 
-The current published pre-alpha may predate the trusted-publishing policy. A future stable release cannot pass its
-release gate without registry provenance. The JSON file produced beside a local candidate tarball is an unsigned
+Historical pre-alpha versions predate the trusted-publishing policy. Public Beta and future Stable releases cannot
+pass their release gates without registry provenance. The JSON file produced beside a local candidate tarball is an unsigned
 integrity receipt, not a registry attestation. See the [supply-chain policy](../security/SUPPLY-CHAIN.md).
 
 ## Guided setup
@@ -155,7 +157,7 @@ worktrees record metadata on both sides; moving only the Loomrail directory does
 
 ## Upgrade
 
-Pre-alpha schema changes are forward migrations. Before every upgrade:
+Beta schema changes are forward migrations. Before every upgrade:
 
 1. Note the exact installed Loomrail version.
 2. Stop Loomrail and preserve the whole data directory as above.

@@ -5,10 +5,12 @@ import test from "node:test";
 
 import { repositoryRoot } from "./release-manifest.mjs";
 import {
+  requiredBetaReleaseGates,
   parseStableReleaseGateManifest,
   requiredStableReleaseGates,
   stableReleaseEvidencePaths,
   summarizeStableReleaseGates,
+  verifyBetaReleaseGates,
   verifyStableReleaseGates,
 } from "./stable-release-gates.mjs";
 
@@ -24,31 +26,33 @@ const passedGate = (name) => ({
 });
 
 const completeManifest = () => ({
-  schemaVersion: 3,
-  releaseVersion: "0.1.0",
+  schemaVersion: 4,
+  betaReleaseVersion: "0.1.0-beta.1",
+  stableReleaseVersion: "0.1.0",
   gates: Object.fromEntries(requiredStableReleaseGates.map((name) => [name, passedGate(name)])),
 });
 
-test("records the current honest stable readiness with Windows gates pending", async () => {
+test("records an approved macOS-first Beta while keeping Windows Stable gates pending", async () => {
   const content = await readFile(`${repositoryRoot}/docs/evidence/phase-8/STABLE-RELEASE-GATES.json`, "utf8");
   const summary = summarizeStableReleaseGates(parseStableReleaseGateManifest(content));
-  assert.equal(summary.releaseVersion, null);
+  assert.equal(summary.betaReleaseVersion, "0.1.0-beta.1");
+  assert.equal(summary.stableReleaseVersion, null);
   assert.deepEqual(summary.pending, ["codexWindowsCompatibility", "claudeWindowsCompatibility"]);
   assert.equal(summary.passed.length, 9);
+  assert.deepEqual(requiredBetaReleaseGates, requiredStableReleaseGates.slice(0, 9));
 });
 
-test("rejects the superseded schema-v2 local API gate contract", () => {
+test("rejects the superseded schema-v3 single-version contract", () => {
   const manifest = completeManifest();
-  manifest.schemaVersion = 2;
-  delete manifest.gates.q20LocalSubscriptionWorkspaceExecution;
-  manifest.gates.liveProviderHardTokenBudgetEnforcement = passedGate(
-    "q20LocalSubscriptionWorkspaceExecution",
-  );
+  manifest.schemaVersion = 3;
+  manifest.releaseVersion = manifest.stableReleaseVersion;
+  delete manifest.betaReleaseVersion;
+  delete manifest.stableReleaseVersion;
 
-  assert.throws(() => parseStableReleaseGateManifest(JSON.stringify(manifest)), /schemaVersion must be 3/);
+  assert.throws(() => parseStableReleaseGateManifest(JSON.stringify(manifest)), /fields must be exactly/);
 });
 
-test("rejects a version-three manifest that omits the local CLI workspace-execution gate", () => {
+test("rejects a version-four manifest that omits the local CLI workspace-execution gate", () => {
   const manifest = completeManifest();
   delete manifest.gates.q20LocalSubscriptionWorkspaceExecution;
 
@@ -69,6 +73,53 @@ test("accepts a complete exact evidence manifest", async () => {
     manifestOverride: completeManifest(),
   });
   assert.deepEqual(summary.pending, []);
+});
+
+test("accepts Beta with the exact nine non-Windows gates and keeps Windows pending", async () => {
+  const manifest = completeManifest();
+  manifest.stableReleaseVersion = null;
+  manifest.gates.codexWindowsCompatibility = {
+    status: "PENDING",
+    reason: "No live Codex CLI evidence exists for Windows.",
+  };
+  manifest.gates.claudeWindowsCompatibility = {
+    status: "PENDING",
+    reason: "No live Claude Code CLI evidence exists for Windows.",
+  };
+
+  const summary = await verifyBetaReleaseGates({
+    releaseVersion: "0.1.0-beta.1",
+    sourceCommit,
+    root: repositoryRoot,
+    loadEvidence: async () => evidence,
+    loadCommittedEvidence: async () => evidence,
+    isAncestor: () => true,
+    manifestOverride: manifest,
+  });
+  assert.equal(summary.betaReleaseVersion, "0.1.0-beta.1");
+  assert.deepEqual(summary.pending, ["codexWindowsCompatibility", "claudeWindowsCompatibility"]);
+});
+
+test("Beta rejects a pending non-Windows gate and version drift", async () => {
+  const manifest = completeManifest();
+  manifest.gates.privateDogfood = { status: "PENDING", reason: "Dogfood is incomplete." };
+
+  await assert.rejects(
+    verifyBetaReleaseGates({
+      releaseVersion: "0.1.0-beta.1",
+      sourceCommit,
+      manifestOverride: manifest,
+    }),
+    /Beta release gates are still pending: privateDogfood/,
+  );
+  await assert.rejects(
+    verifyBetaReleaseGates({
+      releaseVersion: "0.1.0-beta.2",
+      sourceCommit,
+      manifestOverride: completeManifest(),
+    }),
+    /does not approve this Beta release version/,
+  );
 });
 
 test("rejects unknown fields, unsafe paths and malformed release identities", () => {
@@ -93,9 +144,13 @@ test("rejects unknown fields, unsafe paths and malformed release identities", ()
   terminalControl.gates.privateDogfood = { status: "PENDING", reason: "Waiting\u001b[2J" };
   assert.throws(() => parseStableReleaseGateManifest(JSON.stringify(terminalControl)), /pending reason/);
 
-  const prerelease = completeManifest();
-  prerelease.releaseVersion = "0.1.0-alpha.5";
-  assert.throws(() => parseStableReleaseGateManifest(JSON.stringify(prerelease)), /stable semver/);
+  const invalidBeta = completeManifest();
+  invalidBeta.betaReleaseVersion = "0.1.0-alpha.5";
+  assert.throws(() => parseStableReleaseGateManifest(JSON.stringify(invalidBeta)), /Beta semver/);
+
+  const prereleaseStable = completeManifest();
+  prereleaseStable.stableReleaseVersion = "0.1.0-beta.1";
+  assert.throws(() => parseStableReleaseGateManifest(JSON.stringify(prereleaseStable)), /stable semver/);
 });
 
 test("rejects every incomplete gate before reading evidence", async () => {

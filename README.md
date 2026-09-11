@@ -11,7 +11,7 @@
   <p>
     <a href="https://github.com/loomrail/loomrail/actions/workflows/ci.yml"><img src="https://github.com/loomrail/loomrail/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-6173ff" alt="Apache 2.0 license" /></a>
-    <img src="https://img.shields.io/badge/status-pre--alpha-c58b20" alt="Pre-alpha status" />
+    <img src="https://img.shields.io/badge/status-public%20beta-4d63c7" alt="Public Beta status" />
     <img src="https://img.shields.io/badge/Node.js-24.19-43853d" alt="Node.js 24.19" />
   </p>
 </div>
@@ -27,22 +27,24 @@ the source of truth.
 </picture>
 
 > [!IMPORTANT]
-> Loomrail is public pre-alpha software. New projects use **Auto**, which selects only a compatible, signed-in local
+> Loomrail is Public Beta software for macOS on Apple Silicon. New projects use **Auto**, which selects only a
+> compatible, signed-in local
 > Codex CLI or Claude Code CLI. Loomrail does not ask for provider API keys or use separate API billing; a missing,
 > incompatible, or signed-out CLI blocks startup instead of falling back. Loomrail never creates provider credentials,
 > enables permission-bypass flags, commits, pushes, merges, or deploys for you. A task worktree is not an
-> operating-system sandbox.
+> operating-system sandbox. Windows and Linux live-provider execution is not supported by this Beta and fails closed;
+> Windows remains covered by source, browser and clean-install CI while its real local-CLI evidence is pending.
 
 ## Install and run safely
 
-Requirements: Node.js `>=24.19 <25`, macOS or Windows, a browser on the same machine, the isolated Chromium build
+Requirements: Node.js `>=24.19 <25`, macOS on Apple Silicon, a browser on the same machine, the isolated Chromium build
 managed by the installed Playwright package, and at least one official local agent CLI already signed in:
 
 - Codex: install the official CLI and run `codex login` once; or
 - Claude Code: install the official CLI and run `claude auth login` once.
 
 That login remains owned by the provider CLI. Loomrail detects it read-only and never asks you to copy an API key.
-Linux is best effort.
+Windows and Linux are not supported live-provider targets in this Beta.
 
 Start in a new empty directory, not inside a repository you care about:
 
@@ -77,7 +79,7 @@ Open the printed URL on the same machine within 60 seconds. `--no-open` does not
 
 For a global launcher, use `npm install -g --ignore-scripts loomrail@next`, run
 `npx playwright install chromium`, and then `loomrail try`.
-The project-local route above is recommended for evaluation because it keeps the selected pre-alpha channel visible.
+The project-local route above is recommended for evaluation because it keeps the selected Beta channel visible.
 
 ## First run
 

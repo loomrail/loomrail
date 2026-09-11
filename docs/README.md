@@ -6,13 +6,13 @@ Use the shortest document that matches what you are trying to do.
 
 | Goal                                                     | English                                                    | Русский                                                          |
 | -------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------- |
-| Guided setup for a real API provider                     | [Quick start](guides/GETTING-STARTED.md)                   | [Быстрый старт](guides/GETTING-STARTED.ru.md)                    |
+| Guided setup for a local CLI provider                    | [Quick start](guides/GETTING-STARTED.md)                   | [Быстрый старт](guides/GETTING-STARTED.ru.md)                    |
 | Try bundled repositories, task recipes, and roles        | [Samples](guides/SAMPLES.md)                               | [Примеры](guides/SAMPLES.ru.md)                                  |
 | Repository, providers, recovery, backup, troubleshooting | [Owner guide](guides/USER-GUIDE.md)                        | [Руководство владельца](guides/USER-GUIDE.ru.md)                 |
 | Configure and inspect deterministic browser QA           | [Browser QA](guides/BROWSER-QA.md)                         | [QA в браузере](guides/BROWSER-QA.ru.md)                         |
 | Build a local read-only tool plugin                      | [Plugin SDK](guides/PLUGIN-SDK.md)                         | [Plugin SDK](guides/PLUGIN-SDK.ru.md)                            |
 | Diagnose, back up, restore, and manage local logs        | [Operations](guides/OPERATIONS.md)                         | [Эксплуатация](guides/OPERATIONS.ru.md)                          |
-| Configure supported provider APIs and models             | [Provider compatibility](guides/PROVIDER-COMPATIBILITY.md) | [Совместимость провайдеров](guides/PROVIDER-COMPATIBILITY.ru.md) |
+| Configure supported local CLIs and models                | [Provider compatibility](guides/PROVIDER-COMPATIBILITY.md) | [Совместимость провайдеров](guides/PROVIDER-COMPATIBILITY.ru.md) |
 | Verify dependencies, release integrity, and provenance   | [Supply chain](security/SUPPLY-CHAIN.md)                   | [Supply chain](security/SUPPLY-CHAIN.ru.md)                      |
 
 Before a credentialed run, read the [security and trust boundaries](security/THREAT-MODEL.md). The former
@@ -32,7 +32,7 @@ currently a runnable acceptance route.
 - [Localization contract](design/LOCALIZATION.md)
 - [Release procedure](RELEASE.md)
 - [Supply-chain policy](security/SUPPLY-CHAIN.md) · [Supply-chain policy (RU)](security/SUPPLY-CHAIN.ru.md)
-- [Current release candidate notes](releases/0.1.0-alpha.5.md)
+- [Current Public Beta notes](releases/0.1.0-beta.1.md)
 
 Files under [`plans/`](plans/) are versioned implementation records. They explain why a slice was built and how it
 was verified, but they are not an installation guide or public roadmap.

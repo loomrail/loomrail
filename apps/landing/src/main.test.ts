@@ -205,7 +205,7 @@ describe("landing public contract", () => {
     expect(html).toContain("data-locale-toggle");
   });
 
-  test("publishes the honest bilingual pre-alpha boundary without duplicating the activation contract", () => {
+  test("publishes the honest bilingual Public Beta boundary without duplicating the activation contract", () => {
     expect(html).toContain("The task outlives the chat.");
     expect(html).toContain("Apache-2.0");
     expect(html).not.toContain("· MIT ·");
@@ -213,6 +213,8 @@ describe("landing public contract", () => {
     expect(html).not.toContain("npm install loomrail@next");
     expect(html).toContain("data-install-commands");
     expect(html).toContain("data-product-version");
+    expect(html).toContain("macOS Apple Silicon");
+    expect(html).toContain("Windows/Linux live-provider support");
     expect(html).toContain("Try Loomrail without giving it a repository.");
     expect(html).toContain("Automatic commit, push, merge, deploy, or browser execution.");
     expect(html).toContain("A complete operating-system sandbox");

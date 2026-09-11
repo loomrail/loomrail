@@ -3,7 +3,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import { releaseVersion, repositoryRoot, toolCommand, toolSpawnOptions } from "./release-manifest.mjs";
-import { verifyStableReleaseGates } from "./stable-release-gates.mjs";
+import { verifyBetaReleaseGates, verifyStableReleaseGates } from "./stable-release-gates.mjs";
 
 const expectedRepository = "loomrail/loomrail";
 const expectedRef = "refs/heads/main";
@@ -11,6 +11,7 @@ const expectedReleaseEnvironment = "npm-release";
 const maximumResponseBytes = 2 * 1024 * 1024;
 const minimumNpmVersion = [11, 15, 0];
 const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const betaVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.(0|[1-9]\d*)$/;
 const commitPattern = /^[0-9a-f]{40}$/;
 
 export const requiredReleaseCiJobs = Object.freeze([
@@ -47,6 +48,7 @@ export const assertMinimumNpmVersion = (version) => {
 };
 
 export const validateReleaseStageIntent = ({
+  channel,
   version,
   sourceCommit,
   confirmation,
@@ -56,7 +58,12 @@ export const validateReleaseStageIntent = ({
   checkedOutCommit,
   packageVersion,
 }) => {
-  assert(stableVersionPattern.test(version), "release version must be stable semver without a prerelease");
+  assert(channel === "BETA" || channel === "STABLE", "release channel must be BETA or STABLE");
+  if (channel === "BETA") {
+    assert(betaVersionPattern.test(version), "Beta release version must be exact Beta semver");
+  } else {
+    assert(stableVersionPattern.test(version), "Stable release version must be semver without a prerelease");
+  }
   assert(commitPattern.test(sourceCommit), "source commit must be an exact lowercase SHA-1");
   assert(repository === expectedRepository, "release staging is restricted to the canonical repository");
   assert(ref === expectedRef, "release staging is restricted to the main branch");
@@ -64,10 +71,10 @@ export const validateReleaseStageIntent = ({
   assert(checkedOutCommit === sourceCommit, "checked-out commit must match the approved source commit");
   assert(packageVersion === version, "release package version must match the approved version");
   assert(
-    confirmation === `STAGE loomrail@${version} FROM ${sourceCommit}`,
+    confirmation === `STAGE loomrail@${version} AS ${channel} FROM ${sourceCommit}`,
     "release confirmation does not match the exact package and commit",
   );
-  return { version, sourceCommit };
+  return { channel, distTag: channel === "BETA" ? "next" : "latest", version, sourceCommit };
 };
 
 export const selectSuccessfulCiRun = (payload, sourceCommit) => {
@@ -222,6 +229,7 @@ export const verifyReleaseStage = async (environment = process.env) => {
   assertMinimumNpmVersion(npmVersion);
 
   const intent = validateReleaseStageIntent({
+    channel: environment.LOOMRAIL_RELEASE_CHANNEL ?? "",
     version: environment.LOOMRAIL_RELEASE_VERSION ?? "",
     sourceCommit: environment.LOOMRAIL_SOURCE_COMMIT ?? "",
     confirmation: environment.LOOMRAIL_RELEASE_CONFIRMATION ?? "",
@@ -231,10 +239,17 @@ export const verifyReleaseStage = async (environment = process.env) => {
     checkedOutCommit,
     packageVersion: releaseVersion(),
   });
-  await verifyStableReleaseGates({
-    releaseVersion: intent.version,
-    sourceCommit: intent.sourceCommit,
-  });
+  if (intent.channel === "BETA") {
+    await verifyBetaReleaseGates({
+      releaseVersion: intent.version,
+      sourceCommit: intent.sourceCommit,
+    });
+  } else {
+    await verifyStableReleaseGates({
+      releaseVersion: intent.version,
+      sourceCommit: intent.sourceCommit,
+    });
+  }
 
   const encodedEnvironment = encodeURIComponent(expectedReleaseEnvironment);
   const [releaseEnvironment, branchPolicies] = await Promise.all([
@@ -272,7 +287,7 @@ export const verifyReleaseStage = async (environment = process.env) => {
   await verifyRegistryVersionIsUnused(intent.version);
 
   process.stdout.write(
-    `Release stage gate passed for loomrail@${intent.version} from ${intent.sourceCommit}.\n`,
+    `Release stage gate passed for ${intent.channel} loomrail@${intent.version} with ${intent.distTag} from ${intent.sourceCommit}.\n`,
   );
 };
 

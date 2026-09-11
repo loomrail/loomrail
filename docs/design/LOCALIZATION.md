@@ -21,5 +21,5 @@ baseline rather than an optional follow-up.
 - Interpolated messages use named placeholders such as `{project}` and `{state}`.
 - Changes to either locale require type checking, unit tests, and a browser pass in both languages.
 
-The public README stays in English while Loomrail is pre-alpha. A separate Russian project guide can be added when the
+The public README stays in English while Loomrail is Public Beta. A separate Russian project guide can be added when the
 distribution and contributor workflow stabilize.

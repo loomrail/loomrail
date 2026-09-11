@@ -15,9 +15,10 @@ import {
 
 const sourceCommit = "0123456789abcdef0123456789abcdef01234567";
 const validIntent = {
+  channel: "STABLE",
   version: "0.1.0",
   sourceCommit,
-  confirmation: `STAGE loomrail@0.1.0 FROM ${sourceCommit}`,
+  confirmation: `STAGE loomrail@0.1.0 AS STABLE FROM ${sourceCommit}`,
   repository: "loomrail/loomrail",
   ref: "refs/heads/main",
   workflowCommit: sourceCommit,
@@ -27,14 +28,34 @@ const validIntent = {
 
 test("accepts an exact stable release intent", () => {
   assert.deepEqual(validateReleaseStageIntent(validIntent), {
+    channel: "STABLE",
+    distTag: "latest",
     version: "0.1.0",
     sourceCommit,
   });
 });
 
-test("rejects prerelease, branch, commit, package and confirmation drift", () => {
+test("accepts an exact Beta intent and derives the fixed next tag", () => {
+  const intent = validateReleaseStageIntent({
+    ...validIntent,
+    channel: "BETA",
+    version: "0.1.0-beta.1",
+    packageVersion: "0.1.0-beta.1",
+    confirmation: `STAGE loomrail@0.1.0-beta.1 AS BETA FROM ${sourceCommit}`,
+  });
+  assert.deepEqual(intent, {
+    channel: "BETA",
+    distTag: "next",
+    version: "0.1.0-beta.1",
+    sourceCommit,
+  });
+});
+
+test("rejects channel, version, branch, commit, package and confirmation drift", () => {
   for (const patch of [
-    { version: "0.1.0-alpha.5" },
+    { channel: "beta" },
+    { channel: "PREVIEW" },
+    { version: "0.1.0-beta.1" },
     { repository: "someone/fork" },
     { ref: "refs/heads/release" },
     { workflowCommit: "a".repeat(40) },
@@ -44,6 +65,16 @@ test("rejects prerelease, branch, commit, package and confirmation drift", () =>
   ]) {
     assert.throws(() => validateReleaseStageIntent({ ...validIntent, ...patch }));
   }
+
+  assert.throws(() =>
+    validateReleaseStageIntent({
+      ...validIntent,
+      channel: "BETA",
+      version: "0.1.0-alpha.5",
+      packageVersion: "0.1.0-alpha.5",
+      confirmation: `STAGE loomrail@0.1.0-alpha.5 AS BETA FROM ${sourceCommit}`,
+    }),
+  );
 });
 
 test("requires npm with staged publishing support", () => {
@@ -214,6 +245,7 @@ test("trusted stage workflow is manual, stage-only and OIDC-bound", async () => 
     "persist-credentials: false",
     "fetch-depth: 0",
     "node scripts/verify-release-stage.mjs",
+    "LOOMRAIL_RELEASE_CHANNEL",
     "pnpm test:fault-injection",
     "pnpm test:e2e",
     "pnpm pack:release",
@@ -221,6 +253,9 @@ test("trusted stage workflow is manual, stage-only and OIDC-bound", async () => 
     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     "retention-days: 7",
     "npm stage publish",
+    "if: inputs.channel == 'BETA'",
+    "if: inputs.channel == 'STABLE'",
+    "--tag next",
     "--tag latest",
     "--access public",
     "--provenance",
@@ -232,5 +267,6 @@ test("trusted stage workflow is manual, stage-only and OIDC-bound", async () => 
   assert.doesNotMatch(workflow, /uses:\s+[^\s]+@(?![0-9a-f]{40}(?:\s|$))/);
 
   const gate = await readFile(join(repositoryRoot, "scripts", "verify-release-stage.mjs"), "utf8");
+  assert.match(gate, /await verifyBetaReleaseGates\(\{/);
   assert.match(gate, /await verifyStableReleaseGates\(\{/);
 });

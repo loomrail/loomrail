@@ -137,6 +137,7 @@ data. A Git worktree is collision isolation, not a security sandbox.
 | T73 | Provider session expires before a bounded verification call can return              | High     | shared recipe ceiling; fixed control-plane reserve; one provider-core session policy; typed timeout; T72 drain; no replay or success                                                         | see local-provider deadline delta below                                           |
 | T74 | Handoff deadline detaches its losing session task and overlaps a successor          | Critical | named session promise; abort then join through MCP drain; no successor/session end before terminal calls; cancellation/restart proof                                                         | see handoff session-join delta below                                              |
 | T75 | Missing or over-broad Plan context makes provider invent or expose authority        | High     | transactional safe Plan projection; bounded metadata; no argv/cwd/script/path; provenance; explicit non-escalation rule                                                                      | see safe verification-plan context delta below                                    |
+| T84 | Ambiguous release channel publishes an unverified platform or moves the default tag | High     | closed Beta/Stable intent; exact version shapes; fixed tags; channel-specific immutable gates; protected OIDC stage + 2FA                                                                    | see Public Beta release-channel delta below                                       |
 
 `M7` entries identify future capabilities. The persisted M6 Workbench and owner acceptance gate are present; the
 event-delivery channel landed with A1.5 as SSE, not WebSocket (ADR-0003), and T03 is closed by the tests cited in
@@ -1439,7 +1440,7 @@ workflow could ship browser code, and an accidentally selected asset could publi
   databases and unsanitized screenshots before handoff and in normal verification;
 - Pages actions are pinned to full commit SHAs. The build job has `contents: read`; only the dependent deploy job gets
   `pages: write` and OIDC `id-token: write`, and no repository or deployment secret enters the build;
-- the landing shows the exact public pre-alpha version and explicit capability limits. It links to the normative guide
+- the landing shows the exact Public Beta version and explicit capability limits. It links to the normative guide
   and example rather than inventing executable setup instructions of its own.
 
 ### B5+B1 repository-onboarding and Constitution delta (T24)
@@ -2224,6 +2225,23 @@ Required verification: same evidence across two Environments succeeds; foreign P
 mutation, failed/running/unknown status, Production predecessor and legacy v1 record all fail; command replay,
 expected-version conflict, transaction rollback and restart preserve the result; digest and records contain no
 Environment values, secrets, raw payloads or absolute paths.
+
+### Public Beta release-channel delta (T84)
+
+**T84 — ambiguous release channel publishes an unverified platform or moves the default tag. High.** A free-form
+channel/tag, prerelease accepted by the Stable path, or nine passed rows interpreted as 11/11 could publish unsupported
+Windows provider behavior or make it the default install. Release intent is a closed `BETA | STABLE` value. Beta
+accepts only `0.1.0-beta.N`, maps only to `next` and requires the exact nine non-Windows gates; Stable accepts only
+plain semver, maps only to `latest` and continues to require all eleven. The manifest stores separate selected
+versions and never promotes a pending Windows row. Both paths require exact main SHA/package/confirmation, the same
+six successful macOS/Windows CI jobs, a reviewed main-only GitHub Environment, OIDC stage-only trusted publishing and
+separate interactive npm 2FA approval. Public compatibility text names only `darwin/arm64` live-provider support.
+
+Required verification: unknown/case-drift channel; Beta/Stable version crossover; exact confirmation/ref/SHA/package
+drift; pending allowed and required rows; fixed workflow `next | latest` branches; absence of raw `npm publish`, token
+secret and caller-supplied tag; registry version uniqueness; unchanged `latest`; provenance/signature/receipt and clean
+install/start after publication. Residual risk: a Beta user can manually force installation on an unverified platform,
+but provider admission still fails closed and the limitation remains visible before installation.
 
 ### Filesystem, shell and Git
 

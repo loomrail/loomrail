@@ -13,7 +13,7 @@ import {
 } from "./release-integrity.mjs";
 import { releaseDependencies } from "./release-manifest.mjs";
 
-const identity = { name: "loomrail", version: "0.1.0-alpha.5" };
+const identity = { name: "loomrail", version: "0.1.0-beta.1" };
 const source = {
   repository: "https://github.com/loomrail/loomrail",
   commit: "0123456789abcdef0123456789abcdef01234567",

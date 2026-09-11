@@ -1,6 +1,6 @@
 # Loomrail user guide
 
-> Early pre-alpha · [Quick start](GETTING-STARTED.md) · [Русская версия](USER-GUIDE.ru.md)
+> Public Beta for macOS Apple Silicon · [Quick start](GETTING-STARTED.md) · [Русская версия](USER-GUIDE.ru.md)
 
 This guide takes you from a clean local launch to an accepted delivery, then explains how to run a real coding agent,
 inspect its work, recover after a restart, and preserve Loomrail's local state.
@@ -11,8 +11,9 @@ workflow state; it does not commit, push, or merge the agent's result.
 
 ## 1. Install and start Loomrail
 
-Use Node.js `>=24.19 <25`. For the first run, install the explicit public pre-alpha channel in a separate empty
-directory rather than inside a repository you care about:
+Use Node.js `>=24.19 <25` on macOS Apple Silicon. Windows and Linux live-provider execution is unsupported in this
+Beta and fails closed. For the first run, install the explicit Public Beta channel in a separate empty directory
+rather than inside a repository you care about:
 
 Install the official Codex or Claude Code CLI and sign in with `codex login` or `claude auth login` first. If that
 CLI already works locally, Loomrail needs no API key or additional provider credential.
@@ -28,7 +29,7 @@ npx loomrail start
 
 The explicit Chromium download is a one-time prerequisite for isolated Browser QA; Loomrail does not reuse a signed-in
 browser profile. Setup checks local CLI compatibility and login, verifies the route without changing state, and
-prints the exact owner actions that remain. The `next` tag keeps the pre-alpha channel explicit. To put the launcher
+prints the exact owner actions that remain. The `next` tag keeps the Beta channel explicit. To put the launcher
 on your `PATH` instead:
 
 ```bash
@@ -360,12 +361,12 @@ unmeasured work is intact, and it will not create a replacement worktree for the
 succeeded. A missing Git executable, missing worktree, invalid baseline, or unreadable directory has its own error
 instead of masquerading as an empty list.
 
-## Current pre-alpha limits
+## Current Public Beta limits
 
-- The npm package is pre-alpha and there is no desktop installer.
+- The npm package is Beta and there is no desktop installer.
 - The daemon is local-only; there is no remote or multi-user mode.
 - Provider preference is saved per Project; an optional process-wide environment override locks it until restart.
-- No live provider version has a cross-platform verified matrix row in the current candidate; Browser QA is
+- Live providers are verified only on macOS Apple Silicon; Windows and Linux dispatch fail closed. Browser QA is
   daemon-owned.
 - Loomrail does not commit, squash, push, merge, or clean up the owner's result.
 - There is no supported online state export, retention UI, or portable workspace restore.

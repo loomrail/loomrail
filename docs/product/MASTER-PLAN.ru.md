@@ -2,14 +2,15 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-11 — L4b1 environment-bound promotion cross-platform closure
+**Последнее дополнение:** 2026-09-11 — macOS-first Public Beta release boundary
 
 **Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
 локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood,
 public fixture и private Recurkit Epic прошли до owner Acceptance; L1–L3 launch evidence и L4a Guided Deploy
 реализованы; L4b1 добавляет environment-bound Preview-before-Production, а source/browser/clean-install gates зелёные
-на macOS/Windows. Recurkit честно остаётся неeligible; eligible live dispatch, остальные L4b/L5, Windows
-live-provider evidence и stable publish gates остаются pending
+на macOS/Windows. PD-032 разрешает отдельный Public Beta для доказанной `darwin/arm64` local-provider границы через
+trusted staged npm channel; Windows live-provider evidence и cross-platform Stable остаются pending. Recurkit честно
+остаётся неeligible; eligible live dispatch и остальные L4b/L5 также остаются pending
 
 **Продукт:** Loomrail
 
@@ -19,7 +20,9 @@ live-provider evidence и stable publish gates остаются pending
 
 **Первый ICP:** solo developer и небольшая команда 1–10 человек
 
-**Платформы первого публичного релиза:** macOS и Windows; Linux best effort
+**Платформы первого Public Beta:** macOS arm64; Windows и Linux live-provider execution unsupported/pending
+
+**Платформы первого Stable:** macOS и Windows; Linux best effort
 
 **Режим:** local-first, browser-first, single-owner first
 
@@ -1914,15 +1917,15 @@ human waiver с documented risk.
    provider, restart, Review, Project verification, Browser QA, export и owner Acceptance в пределах явно
    утверждённых бюджетов. Cancelled/returned runs не считаются live evidence; финальный clean Run имеет нулевой
    cross-session/cross-stage overlap.
-4. macOS local CLI compatibility rows и protected landing fixed-commit gate закрыты. Получить real Codex/Claude
-   execution evidence на Windows; неизвестные результаты оставить `PENDING`, не возвращая Mock.
-5. Repository-side stage-only workflow уже подготовлен с exact-intent, six-job CI и strict eleven-gate evidence
-   index. Schema v3 сейчас честно показывает 9/11 и не содержит выбранной stable version; обе Windows local-CLI rows
-   машинно запрещают staging. После их закрытия владелец отдельно настраивает
-   protected main-only `npm-release` environment и npm OIDC trust только для `npm stage publish`. Trusted job
-   read-only проверяет непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или
-   auto-created environment не сможет stage-ить package. Staged artifact требует ещё одного owner 2FA approval.
-   Только после этих gates принимать отдельное решение о stable release.
+4. macOS local CLI compatibility rows и protected landing fixed-commit gate закрыты. PD-032 отделяет Public Beta от
+   Stable: Beta заявляет только exact `darwin/arm64` rows, а real Codex/Claude execution evidence на Windows остаётся
+   `PENDING` без Mock/API fallback и по-прежнему обязательно для Stable.
+5. Repository-side stage-only workflow использует exact-intent, six-job CI и один strict evidence index. Public Beta
+   требует выбранную exact `0.1.0-beta.N` version и девять non-Windows gates, публикуется только в `next`; Stable
+   требует plain semver и все 11/11, публикуется только в `latest`. Оба канала используют protected main-only
+   `npm-release` environment и npm OIDC trust только для `npm stage publish`. Trusted job read-only проверяет
+   непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или auto-created environment
+   не сможет stage-ить package. Staged artifact требует отдельного owner 2FA approval.
 6. Продолжать Guided Deploy только через отдельные PD/ADR/threat slices: L4b1 разрешает environment-bound STANDARD
    promotion; HOTFIX/waiver/rollback/probe/monitoring остаются закрыты. Не начинать marketplace, team mode, Jira
    sync, desktop wrapper или billing до stable decision.

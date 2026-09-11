@@ -25,7 +25,7 @@ const zeroFacts = {
 } as const;
 
 const runtime = {
-  productVersion: "0.1.0-alpha.5",
+  productVersion: "0.1.0-beta.1",
   operatingSystem: "MACOS",
   architecture: "ARM64",
   nodeMajor: 24,

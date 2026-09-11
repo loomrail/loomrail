@@ -1,6 +1,6 @@
 # Встроенные примеры и поставляемый workflow
 
-> Публичная pre-alpha · [English version](SAMPLES.md) · [Быстрый старт](GETTING-STARTED.ru.md)
+> Public Beta для macOS Apple Silicon · [English version](SAMPLES.md) · [Быстрый старт](GETTING-STARTED.ru.md)
 
 Loomrail включает два маленьких шаблона репозитория. При регистрации Loomrail копирует проверенные regular files в
 свой data directory, создаёт отдельный локальный Git repository и записывает его как Project. Loomrail не запускает
@@ -39,7 +39,7 @@ Web sample можно явно запустить командой `npm start` �
 Discovery → Plan → Implement → Review → QA → Acceptance
 ```
 
-Локальные сессии Codex CLI и Claude Code CLI передают результат в один deterministic state machine. Текущая pre-alpha не
+Локальные сессии Codex CLI и Claude Code CLI передают результат в один deterministic state machine. Текущая Beta не
 предлагает выбор workflow или custom templates.
 
 ## Каталог встроенных ролей

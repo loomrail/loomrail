@@ -1,7 +1,7 @@
 # Releasing the Loomrail launcher
 
-**Status:** alpha.4 published; alpha.5 candidate and the three-WorkItem private Recurkit Epic pass on macOS; Windows live-provider gates remain pending
-**Updated:** 2026-09-10
+**Status:** `0.1.0-beta.1` selected for macOS Apple Silicon Public Beta; trusted staging pending; Stable remains 9/11
+**Updated:** 2026-09-11
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
 the SQLite migrations and the bundled fixture projects. Consumers install one package and run one binary; they never
@@ -120,10 +120,10 @@ reviewed exception exists. The complete review and exception contract is the
 ## Publishing and provenance
 
 Publishing is a deliberate, human-authorized terminal action. Ordinary CI never runs `npm publish`, holds no npm
-write token, and has only `contents: read`. No Q6 change authorizes a tag, GitHub Release, dist-tag mutation, or npm
-publication.
+write token, and has only `contents: read`. Product implementation work never authorizes a tag, GitHub Release,
+dist-tag mutation, or npm publication by itself; each release still needs the exact release intent and approvals below.
 
-Before the first stable publication, configure npm trusted publishing for the exact public repository and the
+Before the first trusted publication, configure npm trusted publishing for the exact public repository and the
 dedicated `.github/workflows/npm-stage.yml` GitHub-hosted workflow. The trust relationship must allow only
 `npm stage publish`, bind the `npm-release` environment, and must not allow direct `npm publish`. Configure that
 environment with required owner review and a deployment-branch policy restricted to `main` before creating the npm
@@ -146,17 +146,19 @@ npm trust github loomrail --repository loomrail/loomrail --file npm-stage.yml --
 ```
 
 Do not run this command as an ordinary setup step. Creating the trust relationship is an owner-authorized external
-mutation and remains pending until the other stable gates are ready.
+mutation. It may be created for the selected Public Beta after the Beta gate reaches 9/9; it does not authorize a
+Stable release while the Stable gate remains below 11/11.
 
-The repository gate requires stable semver, an exact main SHA, matching typed confirmation, an unused registry
-version, npm `11.15.0+`, and a successful push-triggered CI run for that SHA with all six macOS/Windows Verify,
-Browser smoke and Clean install jobs. It also reads the versioned
-[`STABLE-RELEASE-GATES.json`](evidence/phase-8/STABLE-RELEASE-GATES.json) index and refuses staging unless all eleven
-required gates are `PASSED`, the selected stable version matches, every evidence file is a bounded regular file with
-the recorded SHA-256, and the identical bytes exist at a recorded ancestor commit. Run `pnpm release:status` to inspect
-the current index without changing external state. Schema v3 replaces the retired hard-token/API gate with
-`q20LocalSubscriptionWorkspaceExecution`. The index proves nine of eleven gates and deliberately keeps both Windows
-local-CLI rows `PENDING`; no stable version is selected. The accepted Recurkit Epic contains three durable child
+The repository gate requires a closed `BETA | STABLE` channel, an exact main SHA, matching typed confirmation, an
+unused registry version, npm `11.15.0+`, and a successful push-triggered CI run for that SHA with all six
+macOS/Windows Verify, Browser smoke and Clean install jobs. It also reads the versioned
+[`STABLE-RELEASE-GATES.json`](evidence/phase-8/STABLE-RELEASE-GATES.json) index. Schema v4 selects exact Beta and Stable
+versions separately. Beta accepts only `0.1.0-beta.N`, maps only to `next`, and requires the nine non-Windows gates;
+Stable accepts only plain semver, maps only to `latest`, and requires all eleven. Every passed evidence file must be a
+bounded regular file with the recorded SHA-256, with identical bytes at a recorded ancestor commit. Run
+`pnpm release:status` or `pnpm release:beta:status` without changing external state. The index proves Beta 9/9 and
+Stable 9/11 while deliberately keeping both Windows local-CLI rows `PENDING`; no Stable version is selected. The
+accepted Recurkit Epic contains three durable child
 WorkItems and a persisted `BLOCKS` edge. Earlier single-WorkItem evidence remains historical and does not substitute
 for the Epic. Both ordinary source-CI platforms run
 the same status check from full Git history, so a changed or unreachable recorded evidence object fails the candidate
@@ -173,53 +175,55 @@ approve it with interactive 2FA before npm makes the immutable name/version publ
 
 For every authorized candidate:
 
-1. Close every external stable gate, record sanitized evidence, run `pnpm release:status`, decide the version, and set
-   the same stable semver in `apps/cli/package.json` and `STABLE-RELEASE-GATES.json`.
+1. Close every gate required by the selected channel, record sanitized evidence, run `pnpm release:status`, decide the
+   version, and set the same exact version in `apps/cli/package.json` and `STABLE-RELEASE-GATES.json`.
 2. `pnpm test:fault-injection && pnpm verify && pnpm test:e2e` passes on macOS and Windows.
 3. `pnpm pack:release && pnpm test:release` passes on macOS and Windows with a clean receipt.
 4. Inspect the receipt and `dist-release/package/`; confirm exact source commit, expected files, no local paths, no
    state databases, and no logs.
-5. Human approval releases the manual stage-only workflow for that exact stable version and main commit. Its gate
+5. Human approval releases the manual stage-only workflow for that exact channel, version and main commit. Its gate
    independently requires a successful push-triggered CI run containing all six macOS/Windows jobs.
 6. Review the staged package and the workflow's seven-day candidate/receipt artifact, then use npm's separate
    interactive 2FA approval. Staging alone is not a release and must never be reported as one.
 7. Verify registry integrity, source commit/workflow provenance, signature audit, install, and startup before moving
    any default channel.
 
-Any release that claims a live provider version also requires one exact row in the
+Any Stable release that claims a live provider version requires one exact row in the
 [provider compatibility matrix](guides/PROVIDER-COMPATIBILITY.md). Add no semver range or `latest` promise: promotion
 must include sanitized real-CLI recordings, negative parser coverage and matching macOS/Windows evidence for that
-exact version and invocation contract. The repository has committed macOS arm64 execution evidence for Codex CLI and
-Claude Code CLI and both macOS rows are passed. There is no matching Windows live execution evidence, so
-cross-platform stable compatibility remains blocked.
+exact version and invocation contract. Public Beta claims only the committed macOS arm64 rows for Codex CLI and
+Claude Code CLI. There is no matching Windows live execution evidence, so Windows dispatch and cross-platform Stable
+compatibility remain blocked.
 
-### Pre-alpha channel
+### Public Beta channel
 
-The currently published pre-alpha version is `0.1.0-alpha.4`; the repository prepares `0.1.0-alpha.5`. Published
-pre-alpha releases use the explicit `next` dist-tag. The stable stage workflow rejects prerelease versions and must
-not be used to publish the prepared alpha.5 candidate. Check the registry before any future publication: a prepared
-repository version or local receipt is not evidence that the registry has advanced. Review the
-[release notes](releases/0.1.0-alpha.5.md) as historical candidate evidence, not as publish authority.
+The registry currently serves historical `0.1.0-alpha.4` through `next`; the repository selects
+`0.1.0-beta.1`. Public Beta uses the explicit `next` dist-tag and never moves `latest`. Check the registry before and
+after publication: a prepared repository version, local receipt or completed staging job is not evidence that npm has
+made the version public. Review the [Beta release notes](releases/0.1.0-beta.1.md) as candidate evidence, not publish
+authority.
 
-The manual stable workflow invokes only the following terminal operation after every gate and owner approval:
+The manual workflow has only two fixed terminal operations after every gate and owner approval. Beta uses:
 
 ```bash
-npm stage publish ./dist-release/loomrail-<stable-version>.tgz --tag latest --access public --provenance
+npm stage publish ./dist-release/loomrail-<beta-version>.tgz --tag next --access public --provenance
 ```
+
+Stable uses the separate fixed `--tag latest` branch only after 11/11.
 
 This creates a staged package, not a public version. Only a subsequent owner `npm stage approve <stage-id>` with 2FA
 can make those bytes public. Neither command belongs on a maintainer laptop as an ordinary build step.
 After publishing, verify the registry rather than the local tarball:
 
 ```bash
-npm view loomrail@0.1.0-alpha.5 name version dist.integrity --json
-npm install --ignore-scripts loomrail@0.1.0-alpha.5
+npm view loomrail@0.1.0-beta.1 name version dist.integrity --json
+npm install --ignore-scripts loomrail@0.1.0-beta.1
 npm audit signatures
 npx loomrail --no-open --port 4176
 ```
 
-Until a stable release exists, documentation and release checks use `loomrail@next` or an exact version so the
-intended pre-alpha channel stays explicit. Treat `npm view loomrail@next version` as the source of truth for what a
+Until a Stable release exists, documentation and release checks use `loomrail@next` or an exact version so the
+Public Beta channel stays explicit. Treat `npm view loomrail@next version` as the source of truth for what a
 new install will receive.
 
 The trusted-publishing and verification semantics follow the primary

@@ -1,10 +1,18 @@
-name: Stage stable npm release
+name: Stage npm release
 
 on:
   workflow_dispatch:
     inputs:
+      channel:
+        description: Closed release channel; BETA maps to next and STABLE maps to latest
+        required: true
+        type: choice
+        default: BETA
+        options:
+          - BETA
+          - STABLE
       version:
-        description: Stable semver already set in apps/cli/package.json (for example, 0.1.0)
+        description: Exact selected version already set in apps/cli/package.json
         required: true
         type: string
       source_commit:
@@ -12,7 +20,7 @@ on:
         required: true
         type: string
       confirmation:
-        description: Type STAGE loomrail@<version> FROM <source_commit>
+        description: Type STAGE loomrail@<version> AS <channel> FROM <source_commit>
         required: true
         type: string
 
@@ -20,12 +28,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: npm-stable-stage
+  group: npm-release-stage
   cancel-in-progress: false
 
 jobs:
   stage:
-    name: Stage loomrail@${{ inputs.version }}
+    name: Stage ${{ inputs.channel }} loomrail@${{ inputs.version }}
     if: github.repository == 'loomrail/loomrail' && github.ref == 'refs/heads/main'
     environment: npm-release
     runs-on: ubuntu-latest
@@ -54,6 +62,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           LOOMRAIL_RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+          LOOMRAIL_RELEASE_CHANNEL: ${{ inputs.channel }}
           LOOMRAIL_RELEASE_VERSION: ${{ inputs.version }}
           LOOMRAIL_SOURCE_COMMIT: ${{ inputs.source_commit }}
 
@@ -99,7 +108,19 @@ jobs:
           retention-days: 7
           compression-level: 0
 
-      - name: Stage the verified package for separate owner approval
+      - name: Stage the verified Beta package for separate owner approval
+        if: inputs.channel == 'BETA'
+        run: >-
+          npm stage publish
+          "./dist-release/loomrail-${LOOMRAIL_RELEASE_VERSION}.tgz"
+          --tag next
+          --access public
+          --provenance
+        env:
+          LOOMRAIL_RELEASE_VERSION: ${{ inputs.version }}
+
+      - name: Stage the verified Stable package for separate owner approval
+        if: inputs.channel == 'STABLE'
         run: >-
           npm stage publish
           "./dist-release/loomrail-${LOOMRAIL_RELEASE_VERSION}.tgz"

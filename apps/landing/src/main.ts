@@ -141,10 +141,10 @@ const messages = {
     firstRunLabel: "First run",
     firstRunValue: "Local CLI preflight",
     platformLabel: "Platforms",
-    platformValue: "macOS, Windows, Linux",
+    platformValue: "macOS Apple Silicon",
 
-    boundaryTitle: "What this pre-alpha actually does",
-    boundaryIntro: `Loomrail ${productVersion} is public pre-alpha. The second column is an honest list of what it does not do yet — not a roadmap.`,
+    boundaryTitle: "What this Public Beta actually does",
+    boundaryIntro: `Loomrail ${productVersion} is a Public Beta for macOS on Apple Silicon. The second column is an honest list of what it does not do yet — not a roadmap.`,
     todayTitle: "Available today",
     todayLocal: "Same-machine browser UI, loopback daemon, and local SQLite state.",
     todayProviders:
@@ -153,7 +153,7 @@ const messages = {
     todayRepo: "Repository registration, per-task worktrees, and change inspection.",
     notYetTitle: "Not claimed yet",
     notCloud: "Cloud sync, remote access, mobile control, or team accounts.",
-    notDesktop: "Desktop packaging, automatic updates, or a desktop installer.",
+    notDesktop: "Windows/Linux live-provider support, automatic updates, or a desktop installer.",
     notGit: "Automatic commit, push, merge, deploy, or browser execution.",
     notSandbox: "A complete operating-system sandbox for live providers.",
 
@@ -307,10 +307,10 @@ const messages = {
     firstRunLabel: "Первый запуск",
     firstRunValue: "Preflight локального CLI",
     platformLabel: "Платформы",
-    platformValue: "macOS, Windows, Linux",
+    platformValue: "macOS Apple Silicon",
 
-    boundaryTitle: "Что эта pre-alpha действительно умеет",
-    boundaryIntro: `Loomrail ${productVersion} — публичная pre-alpha. Вторая колонка — честный список того, чего он пока не делает, а не дорожная карта.`,
+    boundaryTitle: "Что эта Public Beta действительно умеет",
+    boundaryIntro: `Loomrail ${productVersion} — Public Beta для macOS на Apple Silicon. Вторая колонка — честный список того, чего он пока не делает, а не дорожная карта.`,
     todayTitle: "Доступно сейчас",
     todayLocal: "Браузер на той же машине, loopback daemon и локальное состояние SQLite.",
     todayProviders:
@@ -319,7 +319,7 @@ const messages = {
     todayRepo: "Регистрация репозитория, worktree на задачу и просмотр изменений.",
     notYetTitle: "Пока не обещаем",
     notCloud: "Cloud sync, удалённый доступ, mobile control или командные аккаунты.",
-    notDesktop: "Desktop packaging, автоматические обновления или desktop installer.",
+    notDesktop: "Live-provider support на Windows/Linux, автоматические обновления или desktop installer.",
     notGit: "Автоматические commit, push, merge, deploy или browser execution.",
     notSandbox: "Полный OS-level sandbox для живых providers.",
 

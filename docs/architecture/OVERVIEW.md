@@ -1,7 +1,7 @@
 # Loomrail architecture overview
 
-**Status:** public pre-alpha; local provider CLI executor slice in progress
-**Updated:** 2026-09-07
+**Status:** Public Beta candidate for macOS Apple Silicon; Windows/Linux live-provider execution pending
+**Updated:** 2026-09-11
 
 Loomrail separates deterministic product authority from non-deterministic agent work. The daemon owns state,
 permissions, budgets, transitions and recovery. Providers produce proposals, tool activity and artifacts; they do not

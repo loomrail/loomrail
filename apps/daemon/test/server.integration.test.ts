@@ -362,7 +362,7 @@ describe("local daemon session and state boundary", () => {
     daemon = await startDaemon({
       bootstrapToken: token,
       logger: false,
-      productVersion: "0.1.0-alpha.5",
+      productVersion: "0.1.0-beta.1",
     });
 
     const unauthenticated = await fetch(`${daemon.baseUrl}/api/v1/insights`);
@@ -374,7 +374,7 @@ describe("local daemon session and state boundary", () => {
     });
     expect(response.status).toBe(200);
     const insights = insightsResponseSchema.parse(await response.json());
-    expect(insights.aggregateReport.runtime.productVersion).toBe("0.1.0-alpha.5");
+    expect(insights.aggregateReport.runtime.productVersion).toBe("0.1.0-beta.1");
     expect(insights.localMetrics.workItems.total).toBe(0);
     expect(insights.localMetrics.rates.acceptedCompletionPercent).toBeNull();
     expect(insights.crashReport).toBeNull();
@@ -459,7 +459,7 @@ describe("local daemon session and state boundary", () => {
     daemon = await startDaemon({
       bootstrapToken: token,
       logger: false,
-      productVersion: "0.1.0-alpha.5",
+      productVersion: "0.1.0-beta.1",
       stateDatabasePath: databasePath,
     });
     const session = await authenticate(daemon, token);

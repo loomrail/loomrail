@@ -1,10 +1,13 @@
 # Getting started
 
-> Public pre-alpha · [Русская версия](GETTING-STARTED.ru.md)
+> Public Beta for macOS Apple Silicon · [Русская версия](GETTING-STARTED.ru.md)
 
 This route connects Loomrail to the official Codex or Claude Code CLI already installed and signed in on your
 machine. It uses that CLI's existing subscription session; Loomrail does not need or accept a provider API key.
 Use a fresh empty directory for the evaluation.
+
+The Public Beta supports live Codex/Claude execution on macOS Apple Silicon. Windows and Linux live-provider targets
+remain unverified and fail closed; no Mock or direct API fallback is used.
 
 ## 1. Sign in to one local agent
 

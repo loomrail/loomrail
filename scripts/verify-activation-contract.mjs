@@ -9,7 +9,7 @@ const documentationPaths = [
   "docs/guides/GETTING-STARTED.md",
   "docs/guides/GETTING-STARTED.ru.md",
 ];
-const activeReleaseDocumentationPaths = ["docs/RELEASE.md", "docs/releases/0.1.0-alpha.5.md"];
+const activeReleaseDocumentationPaths = ["docs/RELEASE.md", "docs/releases/0.1.0-beta.1.md"];
 const legacyProviderCopy = [
   "setup --mode mock",
   "guided Mock",

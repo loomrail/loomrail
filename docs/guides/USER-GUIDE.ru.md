@@ -1,6 +1,6 @@
 # Руководство пользователя Loomrail
 
-> Ранний pre-alpha · [Быстрый старт](GETTING-STARTED.ru.md) · [English version](USER-GUIDE.md)
+> Public Beta для macOS Apple Silicon · [Быстрый старт](GETTING-STARTED.ru.md) · [English version](USER-GUIDE.md)
 
 Это руководство проводит от чистого локального запуска до принятой поставки, а затем объясняет, как запустить
 настоящего coding-агента, проверить его работу, восстановиться после рестарта и сохранить локальное состояние
@@ -12,8 +12,9 @@ Loomrail работает локально, но не является security 
 
 ## 1. Установка и запуск
 
-Используйте Node.js `>=24.19 <25`. Для первого запуска установите явный публичный pre-alpha канал в отдельный пустой
-каталог, а не внутрь важного репозитория:
+Используйте Node.js `>=24.19 <25` на macOS Apple Silicon. Live-provider execution на Windows и Linux в этой Beta не
+поддерживается и fail closed. Для первого запуска установите явный Public Beta канал в отдельный пустой каталог, а
+не внутрь важного репозитория:
 
 Сначала установите официальный Codex или Claude Code CLI и войдите через `codex login` или `claude auth login`.
 Если CLI уже работает локально, Loomrail не нужен API-ключ или другой provider credential.
@@ -29,7 +30,7 @@ npx loomrail start
 
 Явная загрузка Chromium нужна один раз для изолированного Browser QA; Loomrail не использует авторизованный browser
 profile. Setup проверяет совместимость и login локального CLI, проверяет маршрут без изменения state и
-показывает точные оставшиеся действия владельца. Тег `next` оставляет pre-alpha канал явным. Чтобы добавить launcher
+показывает точные оставшиеся действия владельца. Тег `next` оставляет Beta channel явным. Чтобы добавить launcher
 в `PATH`:
 
 ```bash
@@ -369,12 +370,12 @@ marker-bound каталог, пока осознанно не проверите
 измерение. Отсутствующий Git, потерянный worktree, неверный baseline и нечитаемый каталог показываются как отдельные
 ошибки, а не как пустой список.
 
-## Текущие ограничения pre-alpha
+## Текущие ограничения Public Beta
 
-- Пакет в npm имеет статус pre-alpha, desktop installer отсутствует.
+- Пакет в npm имеет статус Beta, desktop installer отсутствует.
 - Daemon работает только локально; remote и multi-user режимов нет.
 - Provider preference сохраняется для каждого Project; необязательный process-wide override блокирует её до restart.
-- В текущем candidate ни одна live provider version не имеет cross-platform verified matrix row; QA принадлежит
+- Live providers проверены только на macOS Apple Silicon; Windows и Linux dispatch fail closed. QA принадлежит
   daemon.
 - Loomrail не commit-ит, не squash-ит, не push-ит, не merge-ит и не очищает результат владельца.
 - Нет поддержанного online state export, retention UI и переносимого restore workspace.

@@ -99,5 +99,5 @@ Evidence files live under Loomrail's data directory, outside the repository and 
 `STANDARD_30_DAYS` retention class and removes screenshot/trace files after 30 days from the latest
 transition that closed the work as `DONE` or `CANCELLED`. Cleanup runs in bounded batches at daemon startup, records
 an append-only outcome, and unlinks only exact durable attachment paths. It never recursively removes a directory,
-follows a symlink, touches a recovery-marker-bound run, or deletes an unknown neighboring file. This pre-alpha has no
+follows a symlink, touches a recovery-marker-bound run, or deletes an unknown neighboring file. This Beta has no
 end-user retention or cleanup screen yet.

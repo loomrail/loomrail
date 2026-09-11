@@ -895,6 +895,24 @@ digest лишь доказывает равенство проверенного
 approval. Legacy deployment без v2 digest никогда не удовлетворяет promotion gate. Полный контракт — ADR-0030 и
 планы 116–117.
 
+### PD-032 — Public Beta выпускается для доказанной macOS arm64 границы отдельно от Stable
+
+**Дата:** 2026-09-11. Уточняет PD-003 и release-часть PD-019; не отменяет Windows как обязательную платформу Stable.
+
+Первый публичный Beta-релиз разрешён только как exact prerelease `0.1.0-beta.N` для доказанной `darwin/arm64`
+границы. Он использует фиксированный npm dist-tag `next`, не двигает `latest` и не заявляет Windows/Linux live-provider
+совместимость. Windows Codex CLI и Claude Code CLI rows остаются видимыми `PENDING`; неизвестная platform/version
+по-прежнему блокирует provider dispatch без Mock, API или другого fallback.
+
+Beta требует те же девять уже доказанных product/security/dogfood/landing gates, полный source/browser/package CI на
+macOS и Windows, exact main SHA, protected `npm-release` Environment, OIDC trusted publisher, stage-only publication и
+отдельное интерактивное npm 2FA approval. Windows CI здесь доказывает переносимость кода и пакета, но не подменяет
+отсутствующее живое Windows provider evidence.
+
+Stable остаётся отдельным `STABLE` Release Channel: обычный semver, фиксированный `latest` и все одиннадцать gates,
+включая обе Windows live-provider строки. Beta никогда не даёт waiver для Stable и не переводит pending row в
+passed. Полный контракт — ADR-0031 и планы 118–119.
+
 ## 14. Отложенные решения
 
 Следующие решения намеренно принимаются отдельным spike/ADR после Phase 0, а не угадываются заранее:

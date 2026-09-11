@@ -1,6 +1,6 @@
 # Supply-chain policy Loomrail
 
-> Public pre-alpha · [English](SUPPLY-CHAIN.md) · [Threat model](THREAT-MODEL.md)
+> Public Beta для macOS Apple Silicon · [English](SUPPLY-CHAIN.md) · [Threat model](THREAT-MODEL.md)
 
 Эта policy описывает repository dependencies, build inputs, integrity release candidate, publish authority и
 post-publication verification. Она не утверждает, что dependency, build или provenance statement безопасны сами по
@@ -70,8 +70,8 @@ Receipt не подписан. Он обнаруживает случайную 
 
 ## Publish authority и provenance
 
-Обычный CI имеет read-only repository permission и никогда не вызывает `npm publish`. Пока stable-release,
-cross-platform и private-dogfood gates открыты, publish не разрешён.
+Обычный CI имеет read-only repository permission и никогда не вызывает `npm publish`. Public Beta разрешён только
+через protected staged route ниже; Stable остаётся blocked до обеих Windows live-provider gates.
 
 До будущего public release maintainer настраивает npm trusted publishing для exact public repository и отдельного
 GitHub-hosted workflow `.github/workflows/npm-stage.yml`. npm relationship разрешает только staging, привязан к
@@ -85,12 +85,13 @@ GitHub environment `npm-release` и не разрешает прямой `npm pu
 более широкий policy response закрывает gate. Дополнительные более строгие protection rules разрешены. Проверка не
 создаёт и не изменяет environment.
 
-Repository gate требует stable semver, exact main SHA, совпадающее typed confirmation, свободную registry version,
-npm `11.15.0+` и успешный push-triggered CI для этого SHA со всеми шестью macOS/Windows Verify, Browser smoke и Clean
-install jobs. Строгий versioned stable-gate index дополнительно требует все одиннадцать named gates, exact выбранную
-stable version, bounded non-symlink evidence files, совпадающий SHA-256 текущих и committed bytes и evidence commit,
-который является ancestor release source. Schema v3 заменяет отменённый hard-token/API gate на gate ограниченного
-workspace execution через local subscription CLI. Его текущее честное состояние — 2/11 без выбранной stable version. Index
+Repository gate требует closed `BETA | STABLE` channel, exact main SHA, совпадающее typed confirmation, свободную
+registry version, npm `11.15.0+` и успешный push-triggered CI для этого SHA со всеми шестью macOS/Windows Verify,
+Browser smoke и Clean install jobs. Schema-v4 evidence index выбирает Beta и Stable versions отдельно. Beta принимает
+только `0.1.0-beta.N`, использует только `next` и требует девять non-Windows gates; Stable принимает только plain
+semver, использует только `latest` и требует все одиннадцать gates. Каждая passed row связывает bounded non-symlink
+evidence file, SHA-256 текущих и committed bytes и ancestor evidence commit. Текущее честное состояние — Beta 9/9 и
+Stable 9/11; обе Windows live-provider rows остаются pending. Index
 предотвращает случайный пропуск, но остаётся repository-authored evidence, а не подписью или заменой owner review в
 protected environment. Обе source-CI платформы проверяют каждую текущую `PASSED` строку по полной Git history до
 длинной matrix. Staged package ещё не является публичной версией. Package owner отдельно проверяет его и подтверждает
@@ -113,7 +114,7 @@ pre-publication tarball registry attestation ещё не существует.
 
 ## Update, rollback и incident response
 
-Loomrail не обновляется сам. Владелец выбирает exact target или явно следует pre-alpha channel `next`, останавливает
+Loomrail не обновляется сам. Владелец выбирает exact target или явно следует Public Beta channel `next`, останавливает
 daemon, сохраняет whole data directory, устанавливает version, запускает `doctor` и local-CLI guided walkthrough. Database
 rollback основан на restore: нужно установить version, соответствующую pre-upgrade whole-directory backup. Контракта
 down-migration или silent dist-tag rollback нет.

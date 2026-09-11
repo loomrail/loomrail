@@ -32,6 +32,7 @@
     "bundle": "pnpm build && pnpm --filter @loomrail/cli bundle",
     "pack:release": "pnpm bundle && node scripts/pack-release.mjs",
     "test:release": "node scripts/verify-release.mjs",
+    "release:beta:status": "node scripts/stable-release-gates.mjs --beta",
     "release:status": "node scripts/stable-release-gates.mjs"
   },
   "devDependencies": {

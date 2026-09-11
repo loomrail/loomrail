@@ -5,12 +5,13 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-import { repositoryRoot } from "./release-manifest.mjs";
+import { releaseVersion, repositoryRoot } from "./release-manifest.mjs";
 
 const manifestRelativePath = "docs/evidence/phase-8/STABLE-RELEASE-GATES.json";
 const maximumManifestBytes = 64 * 1024;
 const maximumEvidenceBytes = 1024 * 1024;
 const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const betaVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.(0|[1-9]\d*)$/;
 const commitPattern = /^[0-9a-f]{40}$/;
 const digestPattern = /^[0-9a-f]{64}$/;
 const evidencePathPattern = /^docs\/evidence\/[A-Za-z0-9._/-]+\.md$/;
@@ -27,6 +28,18 @@ export const requiredStableReleaseGates = Object.freeze([
   "protectedLandingCanonicalActivation",
   "codexWindowsCompatibility",
   "claudeWindowsCompatibility",
+]);
+
+export const requiredBetaReleaseGates = Object.freeze([
+  "q13FinalSecurityReliabilityReview",
+  "q15CanonicalActivationNonLanding",
+  "q17MeasuredProjectVerification",
+  "q20LocalSubscriptionWorkspaceExecution",
+  "managedPublicDogfoodRehearsal",
+  "codexMacosCompatibility",
+  "claudeMacosCompatibility",
+  "privateDogfood",
+  "protectedLandingCanonicalActivation",
 ]);
 
 export const stableReleaseEvidencePaths = Object.freeze({
@@ -87,12 +100,23 @@ export const parseStableReleaseGateManifest = (text) => {
     throw new Error("stable gate manifest is not valid JSON");
   }
 
-  assertExactKeys(manifest, ["schemaVersion", "releaseVersion", "gates"], "stable gate manifest");
-  assert(manifest.schemaVersion === 3, "stable gate manifest schemaVersion must be 3");
+  assertExactKeys(
+    manifest,
+    ["schemaVersion", "betaReleaseVersion", "stableReleaseVersion", "gates"],
+    "stable gate manifest",
+  );
+  assert(manifest.schemaVersion === 4, "stable gate manifest schemaVersion must be 4");
   assert(
-    manifest.releaseVersion === null ||
-      (typeof manifest.releaseVersion === "string" && stableVersionPattern.test(manifest.releaseVersion)),
-    "stable gate manifest releaseVersion must be null or stable semver",
+    manifest.betaReleaseVersion === null ||
+      (typeof manifest.betaReleaseVersion === "string" &&
+        betaVersionPattern.test(manifest.betaReleaseVersion)),
+    "stable gate manifest betaReleaseVersion must be null or Beta semver",
+  );
+  assert(
+    manifest.stableReleaseVersion === null ||
+      (typeof manifest.stableReleaseVersion === "string" &&
+        stableVersionPattern.test(manifest.stableReleaseVersion)),
+    "stable gate manifest stableReleaseVersion must be null or stable semver",
   );
   assertExactKeys(manifest.gates, requiredStableReleaseGates, "stable gate manifest gates");
 
@@ -132,7 +156,8 @@ export const parseStableReleaseGateManifest = (text) => {
 };
 
 export const summarizeStableReleaseGates = (manifest) => ({
-  releaseVersion: manifest.releaseVersion,
+  betaReleaseVersion: manifest.betaReleaseVersion,
+  stableReleaseVersion: manifest.stableReleaseVersion,
   passed: requiredStableReleaseGates.filter((name) => manifest.gates[name].status === "PASSED"),
   pending: requiredStableReleaseGates.filter((name) => manifest.gates[name].status === "PENDING"),
 });
@@ -253,7 +278,7 @@ export const verifyStableReleaseGates = async ({
 
   const manifest = await loadStableReleaseManifest(root, manifestOverride);
   assert(
-    manifest.releaseVersion === releaseVersion,
+    manifest.stableReleaseVersion === releaseVersion,
     "stable gate manifest does not approve this release version",
   );
 
@@ -262,6 +287,42 @@ export const verifyStableReleaseGates = async ({
     summary.pending.length === 0,
     `stable release gates are still pending: ${summary.pending.join(", ")}`,
   );
+  return verifyRecordedStableReleaseEvidence({
+    manifest,
+    sourceCommit,
+    root,
+    loadEvidence,
+    loadCommittedEvidence,
+    isAncestor,
+  });
+};
+
+export const verifyBetaReleaseGates = async ({
+  releaseVersion,
+  sourceCommit,
+  root = repositoryRoot,
+  manifestOverride,
+  loadEvidence,
+  loadCommittedEvidence,
+  isAncestor,
+} = {}) => {
+  assert(
+    typeof releaseVersion === "string" && betaVersionPattern.test(releaseVersion),
+    "Beta release version is invalid",
+  );
+  assert(
+    typeof sourceCommit === "string" && commitPattern.test(sourceCommit),
+    "Beta release source commit is invalid",
+  );
+
+  const manifest = await loadStableReleaseManifest(root, manifestOverride);
+  assert(
+    manifest.betaReleaseVersion === releaseVersion,
+    "stable gate manifest does not approve this Beta release version",
+  );
+
+  const pending = requiredBetaReleaseGates.filter((name) => manifest.gates[name].status === "PENDING");
+  assert(pending.length === 0, `Beta release gates are still pending: ${pending.join(", ")}`);
   return verifyRecordedStableReleaseEvidence({
     manifest,
     sourceCommit,
@@ -282,7 +343,12 @@ const printStatus = async () => {
     manifest,
     sourceCommit,
   });
-  process.stdout.write(`Stable release version: ${summary.releaseVersion ?? "not selected"}\n`);
+  const betaPending = requiredBetaReleaseGates.filter((name) => manifest.gates[name].status === "PENDING");
+  process.stdout.write(`Beta release version: ${summary.betaReleaseVersion ?? "not selected"}\n`);
+  process.stdout.write(
+    `Beta passed gates: ${(requiredBetaReleaseGates.length - betaPending.length).toString()}/${requiredBetaReleaseGates.length.toString()}\n`,
+  );
+  process.stdout.write(`Stable release version: ${summary.stableReleaseVersion ?? "not selected"}\n`);
   process.stdout.write(
     `Passed gates: ${summary.passed.length.toString()}/${requiredStableReleaseGates.length.toString()}\n`,
   );
@@ -291,5 +357,16 @@ const printStatus = async () => {
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await printStatus();
+  if (process.argv[2] === "--beta") {
+    const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+    }).trim();
+    const summary = await verifyBetaReleaseGates({ releaseVersion: releaseVersion(), sourceCommit });
+    process.stdout.write(
+      `Beta release gate passed for loomrail@${summary.betaReleaseVersion}: ${requiredBetaReleaseGates.length.toString()}/${requiredBetaReleaseGates.length.toString()} required gates.\n`,
+    );
+  } else {
+    await printStatus();
+  }
 }

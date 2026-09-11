@@ -2,7 +2,7 @@ import { buildReportingSnapshot } from "@loomrail/domain";
 import { describe, expect, it } from "vitest";
 
 const runtime = {
-  productVersion: "0.1.0-alpha.5",
+  productVersion: "0.1.0-beta.1",
   operatingSystem: "WINDOWS",
   architecture: "X64",
   nodeMajor: 24,
