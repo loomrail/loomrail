@@ -2,14 +2,14 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-11 — macOS arm64 Stable 0.1.0 published
+**Последнее дополнение:** 2026-09-12 — macOS arm64 Stable 0.1.1 published and public dogfood accepted
 
 **Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
 локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood,
 public fixture и private Recurkit Epic прошли до owner Acceptance; L1–L3 launch evidence и L4a Guided Deploy
 реализованы; L4b1 добавляет environment-bound Preview-before-Production, а source/browser/clean-install gates зелёные
-на macOS/Windows. Stable `0.1.0` опубликован через npm `latest` из exact verified source и отдельно проверен чистой
-установкой из публичного registry; Public Beta `0.1.0-beta.1` сохранён в `next`. PD-033 выбирает первый Stable как
+на macOS/Windows. Stable `0.1.1` опубликован через npm `latest` из exact verified source, проверен clean lifecycle и
+полным Recurkit workflow из публичного registry; Public Beta `0.1.0-beta.1` сохранён в `next`. PD-033 выбирает Stable как
 default release только для explicit `MACOS_ARM64` support target; Windows/Linux
 live-provider execution остаётся unsupported/pending и fail closed. Recurkit честно остаётся неeligible; eligible
 live dispatch и остальные L4b/L5 также остаются pending
@@ -1930,19 +1930,21 @@ human waiver с documented risk.
    `npm-release` environment и npm OIDC trust только для `npm stage publish`. Trusted job read-only проверяет
    непустой required-reviewer gate и единственный custom branch pattern `main`; пустой или auto-created environment
    не сможет stage-ить package. Staged artifact требует отдельного owner 2FA approval.
-6. Stable `0.1.0` опубликован в npm `latest` и GitHub из exact source, а публичный registry smoke подтвердил подписи,
+6. Stable `0.1.1` опубликован в npm `latest` из exact source, а публичный registry smoke подтвердил подписи,
    attestations, guided setup, diagnostics и loopback startup на macOS arm64. Следующий release-support slice может
    добавлять Windows только после реального owner-approved Codex/Claude dogfood; до этого Windows/Linux остаются
    fail closed. Продолжать Guided Deploy только через отдельные PD/ADR/threat slices: L4b1 разрешает environment-bound STANDARD
    promotion; HOTFIX/waiver/rollback/probe/monitoring остаются закрыты. Не начинать marketplace, team mode, Jira
    sync, desktop wrapper или billing до stable decision.
-7. Post-Stable slice 122–123 проверил public-registry lifecycle `0.1.0-beta.1 -> 0.1.0`, backup/restore/uninstall,
+7. Post-Stable slice 122–123 проверил public-registry lifecycle `0.1.0-beta.1 -> 0.1.1`, backup/restore/uninstall,
    newcomer block/restart и production six-stage Codex workflow на изолированных macOS roots. Exact
    `0.154.0-alpha.6.2 / darwin / arm64` допущен только после real success/failure recordings и полного audited
    workflow до HUMAN Acceptance. Три Project одновременно остаются изолированы в UI и общей очереди; scheduler
    сохраняет global/project/provider limits и workspace writer lease. Найденный `SERVE`/finite-check mismatch закрыт
    доменным regression test. Windows/Linux и allowance row остаются отдельными непроверенными boundaries; следующий
-   patch проходит тот же Stable release gate без semver-наследования.
+   patch прошёл тот же Stable release gate без semver-наследования. Опубликованный `0.1.1` затем завершил полный
+   Recurkit workflow через `DONE / SUCCEEDED / ACCEPTED`; четыре required Project checks, шесть measured Browser QA
+   executions и controlled restart подтвердили terminal durability без replay.
 
 ## 27. Primary-source anchors
 

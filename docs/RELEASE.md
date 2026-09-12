@@ -1,6 +1,6 @@
 # Releasing the Loomrail launcher
 
-**Status:** `0.1.1` Stable candidate for macOS Apple Silicon; registry `latest` remains `0.1.0` until trusted publish
+**Status:** `0.1.1` Stable for macOS Apple Silicon; published through registry `latest`
 **Updated:** 2026-09-12
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
@@ -194,27 +194,29 @@ For every authorized candidate:
 Any release that claims a live provider version requires one exact row in the
 [provider compatibility matrix](guides/PROVIDER-COMPATIBILITY.md). Add no semver range or `latest` promise: promotion
 must include sanitized real-CLI recordings, negative parser coverage and matching macOS/Windows evidence for that
-exact version and invocation contract inside the selected support target. The current macOS Stable candidate claims
+exact version and invocation contract inside the selected support target. The current macOS Stable release claims
 only the committed macOS arm64 rows for Codex CLI and Claude Code CLI. There is no matching Windows live execution
 evidence, so Windows dispatch and a future Windows-inclusive support target remain blocked.
 
-### Current Stable candidate
+### Current Stable release
 
-`0.1.1` is the selected `MACOS_ARM64` patch candidate. It adds the exact Codex CLI
+`0.1.1` is the published `MACOS_ARM64` patch release. It adds the exact Codex CLI
 `0.154.0-alpha.6.2 / darwin / arm64` admission row after real success/failure recordings and a full production
 workflow, fixes finite Project verification Acceptance when a Plan also contains a supervised `SERVE` recipe, adds a
 repeatable public-registry lifecycle gate and extends the keyboard-first Attention E2E to three Projects. Local
 `pnpm verify`, 65 product E2E scenarios, 7 protected landing scenarios, fault injection, release-package verification
-and the public `0.1.0-beta.1 -> 0.1.0` lifecycle passed. This paragraph is candidate evidence only: `0.1.1` is not
-public until the protected stage and separate npm owner approval complete.
+and the public `0.1.0-beta.1 -> 0.1.1` lifecycle passed. The installed public package then completed a real Recurkit
+workflow through `DONE / SUCCEEDED / ACCEPTED` and preserved that terminal state across a controlled restart.
 
 ### Published channels
 
-The registry serves Stable `0.1.0` through `latest` and keeps `0.1.0-beta.1` through `next`. Stable was built from
-exact source `6388e26159eaa574186ce65795de992268bb4f4b`, passed the protected stage workflow and separate owner WebAuthn
-approval, and was then installed again from the public registry. Its sanitized proof is recorded in the
-[Stable release evidence](evidence/phase-8/STABLE-0.1.0-RELEASE-EVIDENCE.md) and
-[Stable release notes](releases/0.1.0.md). The historical Beta proof remains in the
+The registry serves Stable `0.1.1` through `latest` and keeps `0.1.0-beta.1` through `next`. Stable was built from
+exact source `7dcacc05509eb5fbbaa4114bed30da061a29910f`, passed the protected stage workflow and separate owner WebAuthn
+approval, and was then installed and exercised through a full accepted workflow from the public registry. Its
+sanitized proof is recorded in the
+[Stable release evidence](evidence/phase-8/STABLE-0.1.1-RELEASE-EVIDENCE.md) and
+[Stable release notes](releases/0.1.1.md). The historical `0.1.0` proof remains in
+[Stable 0.1.0 release evidence](evidence/phase-8/STABLE-0.1.0-RELEASE-EVIDENCE.md). The Beta proof remains in the
 [Public Beta release evidence](evidence/phase-8/PUBLIC-BETA-RELEASE-EVIDENCE.md) and
 [Beta release notes](releases/0.1.0-beta.1.md).
 
@@ -232,8 +234,8 @@ can make those bytes public. Neither command belongs on a maintainer laptop as a
 After publishing, verify the registry rather than the local tarball:
 
 ```bash
-npm view loomrail@0.1.0 name version dist.integrity --json
-npm install --ignore-scripts loomrail@0.1.0
+npm view loomrail@0.1.1 name version dist.integrity --json
+npm install --ignore-scripts loomrail@0.1.1
 npm audit signatures
 npx loomrail --no-open --port 4176
 ```

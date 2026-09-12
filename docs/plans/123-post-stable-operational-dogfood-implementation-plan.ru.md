@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-12
 
-**Статус:** implementation complete; patch publication pending
+**Статус:** complete; Stable `0.1.1` published and public-package dogfood accepted
 
 **Спека:** [`122-post-stable-operational-dogfood-spec.ru.md`](122-post-stable-operational-dogfood-spec.ru.md)
 
@@ -28,9 +28,10 @@
 
 - [x] Запустить exact `loomrail@latest` на чистых install/data roots и пройти canonical `/try` onboarding.
 - [x] Использовать только provider, который public Doctor классифицирует `VERIFIED + AUTHENTICATED`.
-- [ ] Пройти Discovery, Plan, bounded Implement, independent Review, Project verification, measured Browser QA и
-      owner Acceptance именно из опубликованного patch Stable. Public `0.1.0` честно остановился на исчерпанной
-      Claude allowance; production source candidate с новым exact Codex прошёл весь маршрут до `ACCEPTED`.
+- [x] Пройти Discovery, Plan, bounded Implement, independent Review, Project verification, measured Browser QA и
+      owner Acceptance именно из опубликованного patch Stable. Public `0.1.1` прошёл весь маршрут до
+      `DONE / SUCCEEDED / ACCEPTED`; исчерпанная Claude allowance осталась typed blocking event, а продолжение через
+      Codex потребовало явного выбора владельца и не было fallback.
 - [x] Выполнить controlled restart до terminal workflow state и проверить отсутствие replay/overlap.
 - [x] Проверить audit/evidence и отсутствие секретов/личных paths/raw provider payloads.
 
@@ -49,4 +50,5 @@
 - [x] Полный `pnpm verify`, product E2E, protected landing E2E, fault-injection, release package и
       public-registry lifecycle gate.
 - [x] Записать sanitized evidence и обновить master plan/compatibility/threat-model docs.
-- [ ] Любой patch release проводить только через existing Stable target/release gate и отдельный trusted publish.
+- [x] Провести patch release через existing Stable target/release gate, protected GitHub Environment, trusted npm
+      staging и отдельный owner WebAuthn approval.
