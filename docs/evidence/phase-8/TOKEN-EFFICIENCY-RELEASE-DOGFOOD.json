@@ -1,0 +1,247 @@
+{
+  "schemaVersion": 1,
+  "scenario": "Independent small local documentation fixture; not an identical Recurkit replay",
+  "provider": "CODEX",
+  "modelPolicy": "Built-in stage tiers",
+  "caps": {
+    "pipeline": 900000,
+    "agentRun": 300000,
+    "wallClockMinutes": 20
+  },
+  "workItemState": "BLOCKED",
+  "pipelineStatus": "WAITING_HUMAN",
+  "acceptanceStatus": "PENDING",
+  "rows": [
+    {
+      "stage": "DISCOVERY",
+      "stageStatus": "SUCCEEDED",
+      "measurementStatus": "REPORTED",
+      "sessions": 2,
+      "reports": 2,
+      "input": 153090,
+      "output": 1431,
+      "cachedInput": 118528,
+      "rawTotal": 154521,
+      "uncachedInputAndOutput": 35993,
+      "tools": [
+        {
+          "operation": "LIST_DIRECTORY",
+          "status": "FAILED",
+          "calls": 1,
+          "returnedBytes": null
+        },
+        {
+          "operation": "LIST_DIRECTORY",
+          "status": "SUCCEEDED",
+          "calls": 1,
+          "returnedBytes": 188
+        },
+        {
+          "operation": "READ_FILE",
+          "status": "SUCCEEDED",
+          "calls": 6,
+          "returnedBytes": 2636
+        }
+      ],
+      "models": ["gpt-5.6-terra"]
+    },
+    {
+      "stage": "PLAN",
+      "stageStatus": "SUCCEEDED",
+      "measurementStatus": "REPORTED",
+      "sessions": 1,
+      "reports": 1,
+      "input": 13268,
+      "output": 631,
+      "cachedInput": 0,
+      "rawTotal": 13899,
+      "uncachedInputAndOutput": 13899,
+      "tools": [],
+      "models": ["gpt-5.6-sol"]
+    },
+    {
+      "stage": "IMPLEMENT",
+      "stageStatus": "SUCCEEDED",
+      "measurementStatus": "REPORTED",
+      "sessions": 1,
+      "reports": 1,
+      "input": 181494,
+      "output": 1100,
+      "cachedInput": 165888,
+      "rawTotal": 182594,
+      "uncachedInputAndOutput": 16706,
+      "tools": [
+        {
+          "operation": "LIST_DIRECTORY",
+          "status": "FAILED",
+          "calls": 1,
+          "returnedBytes": null
+        },
+        {
+          "operation": "LIST_DIRECTORY",
+          "status": "SUCCEEDED",
+          "calls": 1,
+          "returnedBytes": 188
+        },
+        {
+          "operation": "READ_FILE",
+          "status": "SUCCEEDED",
+          "calls": 4,
+          "returnedBytes": 1899
+        },
+        {
+          "operation": "RUN_RECIPE",
+          "status": "SUCCEEDED",
+          "calls": 4,
+          "returnedBytes": 714
+        },
+        {
+          "operation": "WRITE_FILE",
+          "status": "SUCCEEDED",
+          "calls": 1,
+          "returnedBytes": 581
+        }
+      ],
+      "models": ["gpt-5.6-terra"]
+    },
+    {
+      "stage": "REVIEW",
+      "stageStatus": "SUCCEEDED",
+      "measurementStatus": "REPORTED",
+      "sessions": 1,
+      "reports": 1,
+      "input": 151282,
+      "output": 945,
+      "cachedInput": 140672,
+      "rawTotal": 152227,
+      "uncachedInputAndOutput": 11555,
+      "tools": [
+        {
+          "operation": "LIST_DIRECTORY",
+          "status": "SUCCEEDED",
+          "calls": 2,
+          "returnedBytes": 335
+        },
+        {
+          "operation": "READ_FILE",
+          "status": "SUCCEEDED",
+          "calls": 6,
+          "returnedBytes": 2834
+        }
+      ],
+      "models": ["gpt-5.6-sol"]
+    },
+    {
+      "stage": "QA",
+      "stageStatus": "SUCCEEDED",
+      "measurementStatus": "REPORTED",
+      "sessions": 1,
+      "reports": 1,
+      "input": 86696,
+      "output": 1057,
+      "cachedInput": 67328,
+      "rawTotal": 87753,
+      "uncachedInputAndOutput": 20425,
+      "tools": [
+        {
+          "operation": "LIST_DIRECTORY",
+          "status": "SUCCEEDED",
+          "calls": 1,
+          "returnedBytes": 223
+        },
+        {
+          "operation": "READ_FILE",
+          "status": "SUCCEEDED",
+          "calls": 3,
+          "returnedBytes": 1634
+        }
+      ],
+      "models": ["gpt-5.6-terra"]
+    },
+    {
+      "stage": "ACCEPTANCE",
+      "stageStatus": "WAITING_HUMAN",
+      "measurementStatus": "REPORTED",
+      "sessions": 1,
+      "reports": 1,
+      "input": 14062,
+      "output": 445,
+      "cachedInput": 0,
+      "rawTotal": 14507,
+      "uncachedInputAndOutput": 14507,
+      "tools": [],
+      "models": ["gpt-5.6-terra"]
+    }
+  ],
+  "verification": [
+    {
+      "status": "PASSED",
+      "freshness": "CURRENT",
+      "checks": [
+        {
+          "recipe": "package-lint",
+          "status": "PASSED",
+          "required": true
+        },
+        {
+          "recipe": "package-build",
+          "status": "PASSED",
+          "required": true
+        },
+        {
+          "recipe": "package-test",
+          "status": "PASSED",
+          "required": true
+        },
+        {
+          "recipe": "package-test-e2e",
+          "status": "PASSED",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "browserQA": [
+    {
+      "verdict": "PASSED",
+      "executions": 6,
+      "passedSteps": 8,
+      "passedAssertions": 14
+    }
+  ],
+  "review": [
+    {
+      "verdict": "PASSED",
+      "independent": true
+    }
+  ],
+  "quality": "ACTUAL",
+  "implementationSource": "e4812d63a7ca426fe241ac43ea8a1994b75cf5af",
+  "providerVersion": "0.154.0-alpha.6.2",
+  "pipelineCount": 1,
+  "budgetRevisionCount": 1,
+  "totals": {
+    "reports": 7,
+    "input": 599892,
+    "output": 5609,
+    "cachedInput": 492416,
+    "rawTotal": 605501,
+    "uncachedInputAndOutput": 113085
+  },
+  "ownerClarification": "Discovery asked how to describe a failed health request. A durable answer bounded the wording to failure to confirm GET /health and status ok, without inventing a root cause or application error contract. Both Discovery sessions remain included.",
+  "resultFiles": ["docs/local-health-check.md"],
+  "resultLines": 21,
+  "restart": {
+    "samePipelineStatus": true,
+    "sameAttempts": true,
+    "sameUsage": true,
+    "newProviderSessions": 0
+  },
+  "comparison": {
+    "sameScenarioAsPublicBaseline": false,
+    "controlledTokenSavings": null,
+    "rawTargetProven": false,
+    "uncachedTargetProven": false,
+    "note": "Complete measured provider workflow; final human Acceptance remains explicit. Different project/task/attempt counts prevent a causal percentage claim against Recurkit."
+  }
+}

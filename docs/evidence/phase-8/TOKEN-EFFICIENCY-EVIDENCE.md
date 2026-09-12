@@ -130,6 +130,38 @@ eliminate provider-owned instructions or accumulated input inside a CLI session.
 Local verification used macOS Apple Silicon. Windows/Linux live-provider promotion is outside this change. Test
 fixtures exercising provider-shaped responses remain test-only; they are not the production dogfood or its evidence.
 
+## Additional owner-authorized release dogfood
+
+After reviewing the first stopped run, the owner authorized one additional bounded dogfood and publication after
+successful checks. A new initial budget selected 900,000 pipeline tokens, 300,000 per AgentRun and a 20-minute
+harness deadline. The first run was neither erased nor resumed with a hidden override. The additional run used the
+same implementation source `e4812d63a7ca426fe241ac43ea8a1994b75cf5af`, the installed authenticated Codex CLI and built-in
+stage model tiers. Candidate `0.1.2` changes after that source are release metadata/documentation and E2E synchronization only.
+
+The [additional actual ledger](TOKEN-EFFICIENCY-RELEASE-DOGFOOD.json) retains all seven reports. Discovery raised a
+specific wording question about failed health requests. Its durable answer selected failure to confirm the actual
+endpoint, without inventing an application error contract or root cause; both Discovery sessions are counted.
+
+| Stage              |   Input | Output | Cached input |     Raw | Uncached input + output |
+| ------------------ | ------: | -----: | -----------: | ------: | ----------------------: |
+| Discovery          | 153,090 |  1,431 |      118,528 | 154,521 |                  35,993 |
+| Plan               |  13,268 |    631 |            0 |  13,899 |                  13,899 |
+| Implement          | 181,494 |  1,100 |      165,888 | 182,594 |                  16,706 |
+| Review             | 151,282 |    945 |      140,672 | 152,227 |                  11,555 |
+| QA                 |  86,696 |  1,057 |       67,328 |  87,753 |                  20,425 |
+| Acceptance Manager |  14,062 |    445 |            0 |  14,507 |                  14,507 |
+| Total              | 599,892 |  5,609 |      492,416 | 605,501 |                 113,085 |
+
+All six provider stages completed. Independent Review passed; the four required Project checks passed with CURRENT
+freshness; Browser QA passed all six executions, eight steps and fourteen assertions across both configured themes
+and viewports. The implementation result tree adds only the 21-line `docs/local-health-check.md`. A controlled
+restart preserved the pending owner Acceptance, all attempts and all usage without another provider session.
+Final human Acceptance is still a separate explicit action; this paragraph does not claim an accepted package.
+
+This closes the missing measured QA part of the first run, but it still is not a controlled old/new Recurkit replay.
+The actual >=50% uncached and >=40% raw efficiency targets remain unproven. The release notes therefore describe
+concrete context reductions and preserve that limitation instead of promising a causal token percentage.
+
 ## Forecast and residual limits
 
 Exact future input/output/cache usage cannot be predicted from the local CLI's terminal-only usage contract.

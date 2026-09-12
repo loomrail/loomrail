@@ -1,6 +1,6 @@
 # Releasing the Loomrail launcher
 
-**Status:** `0.1.1` Stable for macOS Apple Silicon; published through registry `latest`
+**Status:** `0.1.2` candidate for macOS Apple Silicon; public `latest` remains `0.1.1` until separate npm approval
 **Updated:** 2026-09-12
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
@@ -198,7 +198,19 @@ exact version and invocation contract inside the selected support target. The cu
 only the committed macOS arm64 rows for Codex CLI and Claude Code CLI. There is no matching Windows live execution
 evidence, so Windows dispatch and a future Windows-inclusive support target remain blocked.
 
-### Current Stable release
+### Current candidate
+
+`0.1.2` is the owner-authorized token-efficiency patch candidate for `MACOS_ARM64`. It preserves all six stages,
+independent Review, measured verification and Browser QA, final owner Acceptance, audit, permissions and recovery.
+The implementation reduces duplicate workspace result delivery and optional context, adds bounded stage context
+and structured upstream checkpoints, and shows cache attribution with honest unknowns. Modeled byte reductions
+are not provider-token savings claims. See the [candidate notes](releases/0.1.2.md) and
+[token-efficiency evidence](evidence/phase-8/TOKEN-EFFICIENCY-EVIDENCE.md).
+
+Publishing remains gated on the completed additional live dogfood, exact-source local/CI/package checks,
+protected-environment review and separate npm approval. The historical compatibility rows stay unchanged.
+
+### Current published Stable release
 
 `0.1.1` is the published `MACOS_ARM64` patch release. It adds the exact Codex CLI
 `0.154.0-alpha.6.2 / darwin / arm64` admission row after real success/failure recordings and a full production

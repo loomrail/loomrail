@@ -39,7 +39,7 @@ test("records the approved macOS release target while keeping Windows evidence p
   const summary = summarizeStableReleaseGates(parseStableReleaseGateManifest(content));
   assert.equal(summary.betaReleaseVersion, "0.1.0-beta.1");
   assert.equal(summary.betaReleaseTarget, "MACOS_ARM64");
-  assert.equal(summary.stableReleaseVersion, "0.1.1");
+  assert.equal(summary.stableReleaseVersion, "0.1.2");
   assert.equal(summary.stableReleaseTarget, "MACOS_ARM64");
   assert.deepEqual(summary.pending, ["codexWindowsCompatibility", "claudeWindowsCompatibility"]);
   assert.equal(summary.passed.length, 9);

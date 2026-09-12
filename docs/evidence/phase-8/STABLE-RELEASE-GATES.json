@@ -2,7 +2,7 @@
   "schemaVersion": 5,
   "betaReleaseVersion": "0.1.0-beta.1",
   "betaReleaseTarget": "MACOS_ARM64",
-  "stableReleaseVersion": "0.1.1",
+  "stableReleaseVersion": "0.1.2",
   "stableReleaseTarget": "MACOS_ARM64",
   "gates": {
     "q13FinalSecurityReliabilityReview": {

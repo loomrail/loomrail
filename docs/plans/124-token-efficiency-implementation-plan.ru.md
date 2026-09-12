@@ -49,3 +49,8 @@ CONTEXT_SOURCE_LIMIT_EXCEEDED и durable owner gate до provider dispatch.
 Цели actual uncached −50% / raw −40% **не доказаны**. Точные прогнозы неизвестного provider output/cache невозможны
 в текущем terminal-only CLI контракте; статистическая калибровка и контролируемое same-project сравнение остаются
 следующим шагом. Полные Review findings и measured evidence намеренно не заменены потерянными или недоказанными summary.
+
+Дополнительный разрешённый run и release проходят по [плану 125](125-token-efficiency-release-implementation-plan.ru.md).
+Он завершил все provider stages, independent Review, четыре Project checks и шесть Browser QA executions;
+финальное human Acceptance остаётся явным действием владельца. Actual comparative token targets не объявляются
+достигнутыми на основании другого проекта.
