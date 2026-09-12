@@ -2662,6 +2662,11 @@ test.describe("authenticated walking skeleton", () => {
     await expect(textField).toHaveCSS("height", "34px");
     await expect(projectTrigger).toHaveCSS("height", "34px");
     await expect(priorityTrigger).toHaveCSS("height", "34px");
+    // CSS height excludes the entrance transform, and separate geometry reads can cross animation frames.
+    // Wait for the actual animation lifecycle before checking the unchanged subpixel spacing contract.
+    await dialog.evaluate(async (element) => {
+      await Promise.all(element.getAnimations().map((animation) => animation.finished));
+    });
     const controlBoxes = await Promise.all([
       textField.boundingBox(),
       projectTrigger.boundingBox(),
