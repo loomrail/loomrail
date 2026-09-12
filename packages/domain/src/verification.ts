@@ -1162,11 +1162,16 @@ export const projectVerificationAcceptanceGate = (input: {
     return { status: "BLOCKED", evidence: null, blocker: `RUN_${run.status}` };
   }
 
+  // SERVE recipes describe a supervised launch process and are deliberately excluded when a
+  // finite verification Run is reserved. Acceptance must bind the same executable recipe set;
+  // comparing against the complete Plan would make every valid Run with a launch recipe
+  // permanently invalid after it had already passed.
+  const finiteRecipes = plan.recipes.filter((recipe) => recipe.kind !== "SERVE");
   const orderedChecks = [...input.checks].sort((left, right) => left.ordinal - right.ordinal);
   const exactChecks =
-    orderedChecks.length === plan.recipes.length &&
+    orderedChecks.length === finiteRecipes.length &&
     orderedChecks.every((check, index) => {
-      const recipe = plan.recipes[index];
+      const recipe = finiteRecipes[index];
       return (
         recipe !== undefined &&
         check.projectId === input.projectId &&

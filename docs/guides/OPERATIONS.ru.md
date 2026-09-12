@@ -164,7 +164,8 @@ migration, а не регулярный полный backup или portable work
 2. Остановите Loomrail и сохраните весь data directory.
 3. Проверьте release notes, exact registry integrity и заявленный provenance target version.
 4. Установите exact target version или осознанно обновите channel `next`.
-5. Выполните `loomrail doctor`. До первого запуска нового совместимого build ожидаем `STATE_UPGRADE_REQUIRED`.
+5. Выполните `loomrail doctor`. `STATE_UPGRADE_REQUIRED` ожидаем только если target содержит ещё не применённую
+   migration; schema-neutral upgrade честно остаётся `STATE_READY`.
 6. Запустите Loomrail нормально: только startup применяет migrations и recovery.
 7. Выполните `loomrail setup --mode live` и одну ограниченную provider stage до обычной работы.
 

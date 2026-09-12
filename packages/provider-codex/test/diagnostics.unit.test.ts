@@ -91,7 +91,7 @@ describe("Codex provider diagnostics", () => {
     });
   });
 
-  it.each(["0.153.0-alpha.5", "0.153.4"])(
+  it.each(["0.153.0-alpha.5", "0.153.4", "0.154.0-alpha.6.2"])(
     "verifies recorded version %s only on its exact macOS arm64 target",
     (version) => {
       expect(codexProviderDiagnostics.classifyVersion(`codex-cli ${version}\n`)).toEqual({

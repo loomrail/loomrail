@@ -112,6 +112,7 @@ export const probeCodexAuthenticationMode = (
 const verifiedTargets = [
   { version: "0.153.0-alpha.5", platform: "darwin", architecture: "arm64" },
   { version: "0.153.4", platform: "darwin", architecture: "arm64" },
+  { version: "0.154.0-alpha.6.2", platform: "darwin", architecture: "arm64" },
 ] as const;
 
 // Allowance compatibility is deliberately independent from execution compatibility. The App

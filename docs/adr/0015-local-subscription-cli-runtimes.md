@@ -88,6 +88,12 @@ whose path contained spaces and Unicode: IMPLEMENT performed an audited read and
 read-only inspection. No credential, account field or raw provider payload was retained. This proves the focused
 runtime slice on that host, not the complete private-project workflow or Windows compatibility.
 
+The post-Stable qualification on 2026-09-12 admitted the separate exact Codex CLI
+`0.154.0-alpha.6.2 / darwin / arm64` target after real read-only success and typed failure captures plus a complete
+production workflow. The full path included bounded workspace MCP calls, a measured required Project check, Browser
+QA, controlled restart and owner Acceptance. It did not infer compatibility for another version, allowance reader,
+OS or architecture, and it retained no raw product-session stream.
+
 ## Consequences
 
 - A user installs and signs in to the official CLI once; Loomrail discovers and reuses that login automatically.

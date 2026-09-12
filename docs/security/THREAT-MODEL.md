@@ -1,7 +1,7 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-09-07
+**Updated:** 2026-09-12
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
@@ -2265,6 +2265,28 @@ pending Windows rows; pending required macOS/product gate; stable prerelease; ch
 Windows target without 11/11; fixed `latest`; exact-source CI; public limitation text; registry provenance/signatures
 and clean install/start. Residual risk: users can force-install the npm package on unsupported systems, but provider
 admission fails closed and the unsupported target receives no compatibility claim.
+
+#### Post-Stable operational qualification (existing T09, T40–T43, T49, T61–T62, T84–T85)
+
+Публичный source/tarball gate не заменяет проверку registry package в жизненном цикле нового пользователя. После
+Stable отдельный operational dogfood использует только harness-owned install/data/workspace roots с пробелами и
+Unicode, exact public versions и выключенные lifecycle scripts. Он проверяет stopped whole-directory backup,
+schema-neutral или forward-only upgrade, restore matching pre-upgrade state и package uninstall отдельно от owner
+data. Старый binary никогда не открывает state, уже изменённый новым binary; recursive product cleanup отсутствует.
+
+Bootstrap/session values, absolute roots, provider transcripts и raw diagnostic output не входят в evidence. Full
+workflow считается успешным только по domain-owned durable lineage до HUMAN Acceptance. Current provider drift не
+наследует compatibility через semver: новая exact CLI version остаётся `UNVERIFIED` до bounded live
+read-only/workspace/MCP/failure и workflow evidence на том же platform/architecture. Gate не расширяет Stable target
+на Windows/Linux и не добавляет API, Mock, hidden fallback, login, provider update, Git publication или deploy.
+
+Qualification 2026-09-12 закрыла exact Codex `0.154.0-alpha.6.2 / darwin / arm64`: byte-exact success/failure
+recordings проходят текущий adapter, а production dogfood связал audited workspace MCP, required Project check,
+Browser QA, restart и HUMAN Acceptance на одном implementation tree. Dogfood также обнаружил fail-closed разрыв:
+finite verification Run корректно исключал `SERVE`, но Acceptance сравнивал его со всем Plan и навсегда возвращал
+`EVIDENCE_INVALID`. Общий доменный фильтр finite recipes и regression test теперь заставляют reservation и
+Acceptance связывать один и тот же набор; `SERVE` остаётся только supervised launch authority. Это доказательство не
+переносится на allowance reporting, Windows, Linux или соседнюю CLI version.
 
 ### Filesystem, shell and Git
 

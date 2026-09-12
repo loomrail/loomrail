@@ -801,8 +801,19 @@ const seedAttentionProjects = async (
 ): Promise<{
   first: { projectId: string; requestTitle: string; taskId: string; taskTitle: string };
   second: { projectId: string; requestTitle: string; taskId: string; taskTitle: string };
+  third: { projectId: string; requestTitle: string; taskId: string; taskTitle: string };
 }> => {
-  const fixtures = [await resolveBundledFixture("web-app-a"), await resolveBundledFixture("api-service-b")];
+  const webFixture = await resolveBundledFixture("web-app-a");
+  const fixtures = [
+    webFixture,
+    await resolveBundledFixture("api-service-b"),
+    {
+      projectId: "project-attention-analytics-c",
+      fixtureId: null,
+      name: "Analytics tools",
+      templatePath: join(dirname(webFixture.templatePath), "analytics tools Юникод"),
+    },
+  ];
   let nextId = 0;
   const localState = await openLocalState({
     databasePath,
@@ -833,8 +844,17 @@ const seedAttentionProjects = async (
           repositoryPath: fixture.templatePath,
         },
       });
-      const taskTitle = index === 0 ? "Choose web rollout" : "Choose API compatibility";
-      const requestTitle = index === 0 ? "Select the web rollout" : "Select the API compatibility mode";
+      const taskTitle = ["Choose web rollout", "Choose API compatibility", "Choose analytics retention"][
+        index
+      ];
+      const requestTitle = [
+        "Select the web rollout",
+        "Select the API compatibility mode",
+        "Select the analytics retention mode",
+      ][index];
+      if (taskTitle === undefined || requestTitle === undefined) {
+        throw new Error("Attention fixture metadata is incomplete");
+      }
       const created = localState.execute({
         schemaVersion: 1,
         commandId: `attention-create-${index.toString()}`,
@@ -923,8 +943,9 @@ const seedAttentionProjects = async (
     }
     const first = seeded[0];
     const second = seeded[1];
-    if (!first || !second) throw new Error("Both Attention projects must be seeded");
-    return { first, second };
+    const third = seeded[2];
+    if (!first || !second || !third) throw new Error("All three Attention projects must be seeded");
+    return { first, second, third };
   } finally {
     localState.close();
   }
@@ -1536,7 +1557,7 @@ test.describe("authenticated walking skeleton", () => {
     await expect(page.getByRole("button", { name: "Quick filter task" })).toBeVisible();
   });
 
-  test("keeps two projects in one keyboard-first Attention Inbox and opens the exact task", async ({
+  test("keeps three projects in one keyboard-first Attention Inbox and opens the exact task", async ({
     page,
   }) => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail attention e2e "));
@@ -1552,31 +1573,33 @@ test.describe("authenticated walking skeleton", () => {
       await page.goto(daemon.bootstrapUrl);
 
       const attentionLink = page.getByRole("link", { name: /Attention/ });
-      await expect(attentionLink.locator(".app-nav-link__count")).toHaveText("2");
+      await expect(attentionLink.locator(".app-nav-link__count")).toHaveText("3");
       await attentionLink.click();
-      await expect(page.locator(".attention-row")).toHaveCount(2);
+      await expect(page.locator(".attention-row")).toHaveCount(3);
       await expect(page.locator(".attention-inbox__heading h1")).toHaveText("Attention");
 
       const firstRow = page.locator(".attention-row").nth(0);
       const secondRow = page.locator(".attention-row").nth(1);
+      const thirdRow = page.locator(".attention-row").nth(2);
       await expect(firstRow).toContainText(seeded.first.requestTitle);
       await expect(secondRow).toContainText(seeded.second.requestTitle);
+      await expect(thirdRow).toContainText(seeded.third.requestTitle);
       await firstRow.focus();
       await firstRow.press("ArrowDown");
       await expect(secondRow).toHaveAttribute("aria-current", "true");
       await expect(page.locator(".attention-detail h2")).toHaveText(seeded.second.requestTitle);
 
       await page.reload();
-      await expect(page.locator(".attention-row")).toHaveCount(2);
+      await expect(page.locator(".attention-row")).toHaveCount(3);
       await page.locator(".attention-row").nth(0).focus();
       await page.locator(".attention-row").nth(0).press("End");
-      await expect(page.locator(".attention-detail h2")).toHaveText(seeded.second.requestTitle);
+      await expect(page.locator(".attention-detail h2")).toHaveText(seeded.third.requestTitle);
       await page.getByRole("button", { name: "Open task context" }).click();
       const taskUrl = new URL(page.url());
       expect(taskUrl.pathname).toBe("/");
-      expect(taskUrl.searchParams.get("project")).toBe(seeded.second.projectId);
-      expect(taskUrl.searchParams.get("task")).toBe(seeded.second.taskId);
-      await expect(page.getByRole("complementary", { name: seeded.second.taskTitle })).toBeVisible();
+      expect(taskUrl.searchParams.get("project")).toBe(seeded.third.projectId);
+      expect(taskUrl.searchParams.get("task")).toBe(seeded.third.taskId);
+      await expect(page.getByRole("complementary", { name: seeded.third.taskTitle })).toBeVisible();
 
       await page.getByRole("link", { name: /Attention/ }).click();
       await chooseInSettings(page, "Change color theme", "Light");

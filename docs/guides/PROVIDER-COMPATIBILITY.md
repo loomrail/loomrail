@@ -7,8 +7,9 @@ provider, direct provider API route, API-key configuration, or successful fallba
 
 ## Current matrix
 
-Stable live execution is verified only on `darwin/arm64`: Codex CLI `0.153.4` and Claude Code CLI `2.1.260`.
-Windows and Linux rows are unverified and provider dispatch fails closed on those targets.
+Stable live execution is verified only on `darwin/arm64`: Codex CLI `0.153.4` and `0.154.0-alpha.6.2`, and Claude
+Code CLI `2.1.260`. Each value is an exact admitted target, not a semver range. Windows and Linux rows are unverified
+and provider dispatch fails closed on those targets.
 
 | UI choice       | Internal ID   | Login owned by | Required safety surface                          | Stages         |
 | --------------- | ------------- | -------------- | ------------------------------------------------ | -------------- |
@@ -54,10 +55,12 @@ estimate; the UI states this instead of presenting a false hard token cap.
 ## Evidence status
 
 Adapter streams, safe arguments, environment filtering, aborts, schema validation, workspace allow/deny paths,
-idempotency, restart recovery, selection, and persistence are covered by test-only CLI fixtures and local integration
-tests. Test automation does not invoke a paid API. Compatibility remains fail-closed for an unverified OS/version
-target. Windows source, browser and clean-install CI is green, but it is not live-provider evidence and does not
-expand the Stable support target.
+idempotency, restart recovery, selection, and persistence are covered by real-CLI recordings, test-only CLI fixtures
+and local integration tests. Codex `0.154.0-alpha.6.2` additionally completed the production six-stage flow with an
+audited IMPLEMENT mutation, a passing required Project check, measured Browser QA, restart recovery and owner
+Acceptance on one tree. Test automation does not invoke a paid API. Compatibility remains fail-closed for an
+unverified OS/version target. Windows source, browser and clean-install CI is green, but it is not live-provider
+evidence and does not expand the Stable support target.
 
 Historical API and older CLI matrices remain in dated plans and evidence as an audit record. They do not describe the
 active runtime boundary.

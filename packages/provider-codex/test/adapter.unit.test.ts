@@ -12,7 +12,8 @@ import { createCodexProvider } from "../src/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = join(here, "fixtures", "fake-codex.mjs");
-const successRecording = join(here, "recordings", "codex-0.153.4-success-macos-arm64.jsonl");
+const successRecording = join(here, "recordings", "codex-0.154.0-alpha.6.2-success-macos-arm64.jsonl");
+const failureRecording = join(here, "recordings", "codex-0.154.0-alpha.6.2-failure-macos-arm64.jsonl");
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -97,18 +98,38 @@ describe("local Codex provider", () => {
     });
     await expect(provider.start(invocation(), sink)).resolves.toMatchObject({
       type: "COMPLETED",
-      summary: "Codex 0.153.4 read-only compatibility verified.",
+      summary: "Codex 0.154.0-alpha.6.2 read-only compatibility verified.",
     });
     expect(sink.checkpoints).toHaveLength(1);
     expect(sink.usage).toEqual([
       {
-        inputTokens: 14_252,
+        inputTokens: 10_529,
         cachedInputTokens: 0,
-        outputTokens: 71,
-        reasoningOutputTokens: 14,
+        outputTokens: 77,
+        reasoningOutputTokens: 15,
         quality: "ACTUAL",
       },
     ]);
+    expect(sink.pids).toHaveLength(1);
+  });
+
+  it("turns the exact current CLI failure stream into a typed owner gate", async () => {
+    const sink = listener();
+    const provider = createCodexProvider({
+      command: process.execPath,
+      commandArgsPrefix: [fixture, "--fixture-output", failureRecording, "--fixture-exit", "1"],
+    });
+
+    await expect(provider.start(invocation(), sink)).resolves.toMatchObject({
+      type: "NEEDS_HUMAN",
+      request: {
+        blocking: true,
+        kind: "FREE_TEXT",
+        title: "CODEX reported a failed turn",
+      },
+    });
+    expect(sink.checkpoints).toEqual([]);
+    expect(sink.usage).toEqual([]);
     expect(sink.pids).toHaveLength(1);
   });
 

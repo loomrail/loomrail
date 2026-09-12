@@ -163,7 +163,8 @@ Release schema changes are forward migrations. Before every upgrade:
 2. Stop Loomrail and preserve the whole data directory as above.
 3. Review the target's release notes, exact registry integrity, and advertised provenance.
 4. Install an explicit target version or intentionally update the `next` channel.
-5. Run `loomrail doctor`. `STATE_UPGRADE_REQUIRED` is expected before the first start with a newer compatible build.
+5. Run `loomrail doctor`. Expect `STATE_UPGRADE_REQUIRED` only when the target contains an unapplied migration; a
+   schema-neutral upgrade correctly remains `STATE_READY`.
 6. Start normally. Only startup applies migrations and performs recovery.
 7. Run `loomrail setup --mode live` and a bounded provider stage before trusting the upgraded provider path.
 

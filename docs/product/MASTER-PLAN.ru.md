@@ -1936,6 +1936,13 @@ human waiver с documented risk.
    fail closed. Продолжать Guided Deploy только через отдельные PD/ADR/threat slices: L4b1 разрешает environment-bound STANDARD
    promotion; HOTFIX/waiver/rollback/probe/monitoring остаются закрыты. Не начинать marketplace, team mode, Jira
    sync, desktop wrapper или billing до stable decision.
+7. Post-Stable slice 122–123 проверил public-registry lifecycle `0.1.0-beta.1 -> 0.1.0`, backup/restore/uninstall,
+   newcomer block/restart и production six-stage Codex workflow на изолированных macOS roots. Exact
+   `0.154.0-alpha.6.2 / darwin / arm64` допущен только после real success/failure recordings и полного audited
+   workflow до HUMAN Acceptance. Три Project одновременно остаются изолированы в UI и общей очереди; scheduler
+   сохраняет global/project/provider limits и workspace writer lease. Найденный `SERVE`/finite-check mismatch закрыт
+   доменным regression test. Windows/Linux и allowance row остаются отдельными непроверенными boundaries; следующий
+   patch проходит тот же Stable release gate без semver-наследования.
 
 ## 27. Primary-source anchors
 

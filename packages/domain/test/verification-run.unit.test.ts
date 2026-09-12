@@ -996,6 +996,56 @@ describe("verification Acceptance gate", () => {
     });
   });
 
+  it("ignores supervised SERVE recipes when binding finite verification evidence", () => {
+    const planWithServe: VerificationPlan = {
+      ...plan,
+      recipes: [
+        ...plan.recipes,
+        {
+          schemaVersion: 1,
+          id: "package-start",
+          kind: "SERVE",
+          label: "Start service",
+          required: false,
+          executable: "pnpm",
+          argv: ["run", "start"],
+          cwd: ".",
+          timeoutSeconds: 300,
+          outputLimitBytes: 65_536,
+          environmentProfile: "VERIFICATION_BASELINE",
+          networkPolicy: "INHERIT_HOST",
+          provenance: {
+            source: "PACKAGE_JSON_SCRIPT",
+            manifestPath: "package.json",
+            manifestContentHash: "f".repeat(64),
+            scriptName: "start",
+            scriptBodyPreview: "node server.mjs",
+          },
+        },
+      ],
+    };
+
+    expect(
+      projectVerificationAcceptanceGate({
+        projectId: run.projectId,
+        workItemId: run.workItemId,
+        pipelineRunId: run.pipelineRunId,
+        currentPlan: planWithServe,
+        publication,
+        latestRun: passedRun,
+        checks: [passedRequired, failedOptional],
+        currentTree: run.implementationTree,
+      }),
+    ).toMatchObject({
+      status: "READY",
+      blocker: null,
+      evidence: {
+        requiredCheckIds: [requiredCheck.id],
+        optionalFailedCheckIds: [optionalCheck.id],
+      },
+    });
+  });
+
   it.each([
     ["missing Run", undefined, [] as VerificationCheck[], "RUN_MISSING"],
     [
