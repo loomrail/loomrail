@@ -2,7 +2,7 @@
   "schemaVersion": 5,
   "betaReleaseVersion": "0.1.0-beta.1",
   "betaReleaseTarget": "MACOS_ARM64",
-  "stableReleaseVersion": "0.1.0",
+  "stableReleaseVersion": "0.1.1",
   "stableReleaseTarget": "MACOS_ARM64",
   "gates": {
     "q13FinalSecurityReliabilityReview": {
@@ -37,9 +37,9 @@
     },
     "codexMacosCompatibility": {
       "status": "PASSED",
-      "evidencePath": "docs/evidence/phase-8/Q20-LOCAL-SUBSCRIPTION-WORKSPACE-EXECUTION-EVIDENCE.md",
-      "evidenceSha256": "4de374ce948b903646df7479f100b50686e879c54be254311cbe040140e5dea9",
-      "evidenceCommit": "000997668cf5d2cee25678b9807d8e2796111bb8"
+      "evidencePath": "docs/evidence/phase-8/POST-STABLE-OPERATIONAL-DOGFOOD-2026-09-12.md",
+      "evidenceSha256": "6a913cacddc264a6d9bcb02b7bd4c6c535cb3a3e0027d1e56fe5a0f211e12750",
+      "evidenceCommit": "38e4e54c5c139613c8aa1a8c02e82a85c6378e0e"
     },
     "claudeMacosCompatibility": {
       "status": "PASSED",

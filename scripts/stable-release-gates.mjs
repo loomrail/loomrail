@@ -51,7 +51,7 @@ export const stableReleaseEvidencePaths = Object.freeze({
   q20LocalSubscriptionWorkspaceExecution:
     "docs/evidence/phase-8/Q20-LOCAL-SUBSCRIPTION-WORKSPACE-EXECUTION-EVIDENCE.md",
   managedPublicDogfoodRehearsal: "docs/evidence/phase-8/Q20-MANAGED-PUBLIC-DOGFOOD-EVIDENCE.md",
-  codexMacosCompatibility: "docs/evidence/phase-8/Q20-LOCAL-SUBSCRIPTION-WORKSPACE-EXECUTION-EVIDENCE.md",
+  codexMacosCompatibility: "docs/evidence/phase-8/POST-STABLE-OPERATIONAL-DOGFOOD-2026-09-12.md",
   claudeMacosCompatibility: "docs/evidence/phase-8/Q20-LOCAL-SUBSCRIPTION-WORKSPACE-EXECUTION-EVIDENCE.md",
   privateDogfood: "docs/evidence/phase-8/STABLE-PRIVATE-DOGFOOD-EVIDENCE.md",
   protectedLandingCanonicalActivation: "docs/evidence/phase-8/STABLE-PROTECTED-LANDING-EVIDENCE.md",

@@ -1,7 +1,7 @@
 # Releasing the Loomrail launcher
 
-**Status:** `0.1.0` published for macOS Apple Silicon through npm `latest`; `0.1.0-beta.1` remains on `next`
-**Updated:** 2026-09-11
+**Status:** `0.1.1` Stable candidate for macOS Apple Silicon; registry `latest` remains `0.1.0` until trusted publish
+**Updated:** 2026-09-12
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
 the SQLite migrations and the bundled fixture projects. Consumers install one package and run one binary; they never
@@ -159,7 +159,7 @@ plain semver and maps only to `latest`. Both current `MACOS_ARM64` paths require
 passed evidence file must be a
 bounded regular file with the recorded SHA-256, with identical bytes at a recorded ancestor commit. Run
 `pnpm release:status` or `pnpm release:beta:status` without changing external state. The index proves Beta 9/9 and
-macOS Stable 9/9 while deliberately keeping both Windows local-CLI rows `PENDING`; `0.1.0` selects only
+macOS Stable 9/9 while deliberately keeping both Windows local-CLI rows `PENDING`; `0.1.1` selects only
 `MACOS_ARM64`. The
 accepted Recurkit Epic contains three durable child
 WorkItems and a persisted `BLOCKS` edge. Earlier single-WorkItem evidence remains historical and does not substitute
@@ -194,9 +194,19 @@ For every authorized candidate:
 Any release that claims a live provider version requires one exact row in the
 [provider compatibility matrix](guides/PROVIDER-COMPATIBILITY.md). Add no semver range or `latest` promise: promotion
 must include sanitized real-CLI recordings, negative parser coverage and matching macOS/Windows evidence for that
-exact version and invocation contract inside the selected support target. Beta and the first Stable claim only the
-committed macOS arm64 rows for Codex CLI and Claude Code CLI. There is no matching Windows live execution evidence,
-so Windows dispatch and a future Windows-inclusive support target remain blocked.
+exact version and invocation contract inside the selected support target. The current macOS Stable candidate claims
+only the committed macOS arm64 rows for Codex CLI and Claude Code CLI. There is no matching Windows live execution
+evidence, so Windows dispatch and a future Windows-inclusive support target remain blocked.
+
+### Current Stable candidate
+
+`0.1.1` is the selected `MACOS_ARM64` patch candidate. It adds the exact Codex CLI
+`0.154.0-alpha.6.2 / darwin / arm64` admission row after real success/failure recordings and a full production
+workflow, fixes finite Project verification Acceptance when a Plan also contains a supervised `SERVE` recipe, adds a
+repeatable public-registry lifecycle gate and extends the keyboard-first Attention E2E to three Projects. Local
+`pnpm verify`, 65 product E2E scenarios, 7 protected landing scenarios, fault injection, release-package verification
+and the public `0.1.0-beta.1 -> 0.1.0` lifecycle passed. This paragraph is candidate evidence only: `0.1.1` is not
+public until the protected stage and separate npm owner approval complete.
 
 ### Published channels
 
