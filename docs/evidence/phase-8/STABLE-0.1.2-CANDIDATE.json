@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "https://github.com/loomrail/loomrail",
+    "commit": "d9d64563b142d17cb24927ac539d2053996342cb",
+    "tree": "CLEAN"
+  },
+  "artifact": {
+    "filename": "loomrail-0.1.2.tgz",
+    "size": 1757051,
+    "shasum": "e45ee10d39c37cbde93dcea1174c6af2a0c5c170",
+    "sha256": "5b197c8c0a60df61f4d395348963cbac33570101c2b8ed9684b4d904c0e42460",
+    "integrity": "sha512-FQnWgJsmtkAxMy1UnnJ+Ga+4C0MbRDIDEXEDJcmfXzzoQOL+DTPVBvI8nV1EnqmQ5MoKwMZDY0MwQcgJyv+CQw=="
+  },
+  "stageId": "139548b4-19a0-46e9-bd8c-cc26eca6aa54",
+  "stageRun": 34719201850,
+  "ciRun": 34717562403,
+  "entryCount": 104,
+  "localWorkflowAndStagedBytesIdentical": true,
+  "signatureLogIndex": 2811473549,
+  "status": "STAGED_AWAITING_NPM_WEBAUTHN"
+}

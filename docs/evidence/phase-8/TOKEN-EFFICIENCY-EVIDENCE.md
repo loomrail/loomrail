@@ -156,7 +156,8 @@ All six provider stages completed. Independent Review passed; the four required 
 freshness; Browser QA passed all six executions, eight steps and fourteen assertions across both configured themes
 and viewports. The implementation result tree adds only the 21-line `docs/local-health-check.md`. A controlled
 restart preserved the pending owner Acceptance, all attempts and all usage without another provider session.
-Final human Acceptance is still a separate explicit action; this paragraph does not claim an accepted package.
+The owner subsequently accepted the reviewed runbook explicitly. The production Acceptance command completed the
+workflow, and another restart preserved DONE / SUCCEEDED / ACCEPTED, all attempts and unchanged usage.
 
 This closes the missing measured QA part of the first run, but it still is not a controlled old/new Recurkit replay.
 The actual >=50% uncached and >=40% raw efficiency targets remain unproven. The release notes therefore describe
@@ -182,5 +183,6 @@ instruction/schema overhead and tool-history accumulation require separate attri
 bytes alone cannot guarantee an end-to-end token target.
 
 No new database migration is needed. New omission vocabulary is additive for this build; rollback uses a stopped
-backup, not a promise that older binaries can interpret newer context recipes. No npm version, GitHub Release,
-merge, provider install/update/login, direct provider API or separate API billing is part of this branch.
+backup, not a promise that older binaries can interpret newer context recipes. Subsequent owner-authorized merge
+and publication are tracked in [the 0.1.2 release evidence](STABLE-0.1.2-RELEASE-EVIDENCE.md). No provider
+install/update/login, direct provider API or separate API billing was used for this work.

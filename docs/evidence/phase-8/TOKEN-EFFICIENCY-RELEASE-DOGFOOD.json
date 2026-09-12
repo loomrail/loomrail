@@ -8,9 +8,9 @@
     "agentRun": 300000,
     "wallClockMinutes": 20
   },
-  "workItemState": "BLOCKED",
-  "pipelineStatus": "WAITING_HUMAN",
-  "acceptanceStatus": "PENDING",
+  "workItemState": "DONE",
+  "pipelineStatus": "SUCCEEDED",
+  "acceptanceStatus": "ACCEPTED",
   "rows": [
     {
       "stage": "DISCOVERY",
@@ -160,7 +160,7 @@
     },
     {
       "stage": "ACCEPTANCE",
-      "stageStatus": "WAITING_HUMAN",
+      "stageStatus": "SUCCEEDED",
       "measurementStatus": "REPORTED",
       "sessions": 1,
       "reports": 1,
@@ -242,6 +242,7 @@
     "controlledTokenSavings": null,
     "rawTargetProven": false,
     "uncachedTargetProven": false,
-    "note": "Complete measured provider workflow; final human Acceptance remains explicit. Different project/task/attempt counts prevent a causal percentage claim against Recurkit."
-  }
+    "note": "Complete measured and owner-accepted workflow. Different project/task/attempt counts prevent a causal percentage claim against Recurkit."
+  },
+  "ownerAcceptance": "Explicit owner acceptance recorded through the production Acceptance command; terminal state and unchanged usage verified after restart."
 }

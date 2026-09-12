@@ -1,6 +1,6 @@
 # Releasing the Loomrail launcher
 
-**Status:** `0.1.2` candidate for macOS Apple Silicon; public `latest` remains `0.1.1` until separate npm approval
+**Status:** `0.1.2` verified and staged for macOS Apple Silicon; public `latest` remains `0.1.1` until separate npm WebAuthn approval
 **Updated:** 2026-09-12
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
