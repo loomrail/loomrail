@@ -1,6 +1,7 @@
 # C1 MCP connections — implementation plan
 
 **Дата:** 2026-08-31
+**Статус:** complete and released through Stable `0.1.0`
 **Спецификация:** [`33-c1-mcp-connections-spec.ru.md`](33-c1-mcp-connections-spec.ru.md)
 
 ## 1. Contracts и domain

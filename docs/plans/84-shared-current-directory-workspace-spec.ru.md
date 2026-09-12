@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-06
 
-**Статус:** approved; required by Dogfood Alpha
+**Статус:** implemented and verified by accepted private Recurkit dogfood on macOS
 
 **Основание:** AD-007, AD-008, `MASTER-PLAN.ru.md` §11.2 и §22
 

@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implementation complete; release gate pending
+**Статус:** complete; release gate passed before Stable `0.1.0`
 **Спецификация:** [`45-r1-independent-review-loop-spec.ru.md`](45-r1-independent-review-loop-spec.ru.md)
 
 ## 1. Contracts and pure decisions

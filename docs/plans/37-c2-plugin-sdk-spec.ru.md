@@ -1,7 +1,7 @@
 # C2 — Plugin SDK v1
 
 **Дата:** 2026-08-31
-**Статус:** approved implementation boundary
+**Статус:** implemented and released through Stable `0.1.0`
 **Зависимости:** C1 MCP Connections, C3 release bundle, PD-012, ADR-0005, ADR-0006
 
 ## 1. Результат

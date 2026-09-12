@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** complete; named gate verified on macOS and Windows; repository verify blocked only by protected landing lint
+**Статус:** complete; named and repository gates passed before Stable `0.1.0`
 
 **Спецификация:**
 [55-q5-crash-and-fault-injection-gate-spec.ru.md](55-q5-crash-and-fault-injection-gate-spec.ru.md)

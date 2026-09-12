@@ -1,6 +1,6 @@
 # Q19 — Real-provider-only API execution: спецификация
 
-**Статус:** approved; core adapter slice implemented; workspace execution pending
+**Статус:** superseded by PD-019 / ADR-0015; direct provider APIs are not an active runtime route
 
 ## Цель
 

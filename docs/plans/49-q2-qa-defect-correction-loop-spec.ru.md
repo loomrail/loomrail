@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** approved implementation baseline
+**Статус:** implemented and released through Stable `0.1.0`
 
 **Предшественники:** R1, Q1
 

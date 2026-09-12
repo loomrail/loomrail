@@ -1,6 +1,6 @@
 # D3 / alpha.2 — implementation plan redesign и release
 
-**Статус:** в работе
+**Статус:** completed and published; superseded by the product-led Stable landing
 
 - [x] Перечитать product decisions, master plan, D3 plan и release guide.
 - [x] Проверить актуальные Linear, Cursor, Raycast, Resend, Conductor и Vibe Kanban.

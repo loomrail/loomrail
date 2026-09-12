@@ -1,6 +1,6 @@
 # Q13 — Final security and reliability review implementation plan
 
-**Статус:** implementation и Q13 macOS/Windows gates complete; external stable gates pending
+**Статус:** complete; external Stable gates passed for `MACOS_ARM64`
 
 **Спецификация:** [71-q13-final-security-reliability-review-spec.ru.md](71-q13-final-security-reliability-review-spec.ru.md)
 

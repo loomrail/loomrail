@@ -1,7 +1,7 @@
 # A1.5 — Фоновое исполнение и канал событий
 
 **Дата:** 2026-08-26
-**Статус:** design approved владельцем; секции 6, 7 и 9 добавлены этим документом и требуют его прочтения
+**Статус:** implemented and released; historical design remains normative for its scope
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — AD-002 (закрытие вкладки не останавливает очередь),

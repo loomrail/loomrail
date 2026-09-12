@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implementation complete; release gate pending on parallel landing lint
+**Статус:** complete; shared landing/release gates passed before Stable `0.1.0`
 
 **Спецификация:** [47-q1-deterministic-browser-qa-spec.ru.md](47-q1-deterministic-browser-qa-spec.ru.md)
 

@@ -1,6 +1,6 @@
 # Q18 — Enforceable provider token budgets
 
-**Статус:** implementation complete; live-provider capability unavailable; stable gate blocked
+**Статус:** superseded by PD-019 / ADR-0015 `POST_SESSION` local-CLI accounting boundary
 
 **Дата:** 2026-09-06
 

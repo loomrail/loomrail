@@ -1,7 +1,7 @@
 # B4 — Scaffolding нового Project
 
 **Дата:** 2026-09-01
-**Статус:** approved implementation boundary
+**Статус:** implemented and released through Stable `0.1.0`
 **Зависимости:** E1, B5+B1, B3+B2, PD-007, PD-013, T34
 
 ## 1. Результат

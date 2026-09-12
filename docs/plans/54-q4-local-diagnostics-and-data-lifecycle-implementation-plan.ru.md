@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implementation complete; shared release gate pending
+**Статус:** complete; shared release gate passed before Stable `0.1.0`
 
 **Спецификация:**
 [53-q4-local-diagnostics-and-data-lifecycle-spec.ru.md](53-q4-local-diagnostics-and-data-lifecycle-spec.ru.md)

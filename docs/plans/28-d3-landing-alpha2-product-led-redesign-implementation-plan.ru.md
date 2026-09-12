@@ -1,6 +1,6 @@
 # D3 / alpha.2 — implementation plan product-led redesign
 
-**Статус:** проверено, ждёт визуального одобрения и публикации
+**Статус:** completed, owner-approved and published through Stable `0.1.0`
 
 - [x] Перечитать product authority и предыдущий D3 scope.
 - [x] Изучить официальный 21st.dev и дополнительные developer-tool референсы.

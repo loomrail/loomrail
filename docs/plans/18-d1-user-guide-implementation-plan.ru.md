@@ -2,7 +2,7 @@
 
 **Спецификация:** [`17-d1-user-guide-spec.ru.md`](17-d1-user-guide-spec.ru.md)
 
-**Статус:** complete, изменения не закоммичены
+**Статус:** complete and released through Stable `0.1.0`
 
 **Объём:** документация и точечное исправление устаревшей UI-копии; новых runtime-возможностей нет.
 

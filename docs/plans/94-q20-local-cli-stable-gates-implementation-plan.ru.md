@@ -1,6 +1,6 @@
 # Q20.2 — Stable gates для local subscription CLI: implementation plan
 
-**Статус:** complete; current stable index is 9/11
+**Статус:** complete for `MACOS_ARM64` Stable; full compatibility index remains 9/11 by design
 
 1. Зафиксировать schema-v3 seam и retired hard-token meaning в ADR-0016/PD-019/Threat Model. **Done.**
 2. Заменить exact gate key/path в глубоком release-gate module без изменения остальных десяти gates. **Done.**

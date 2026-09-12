@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** approved implementation baseline
+**Статус:** implemented and released through Stable `0.1.0`
 
 **Предшественники:** E1, E1.5, A2, A3
 **Нормативные решения:** TD-002, TD-003, AD-006, AD-007, WD-006, BD-003

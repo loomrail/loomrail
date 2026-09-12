@@ -1,6 +1,6 @@
 # Q19 — Real-provider-only API execution: implementation plan
 
-**Статус:** in progress
+**Статус:** superseded by PD-019 / ADR-0015 and plans 89–98; incomplete API-route items are intentionally cancelled
 
 1. Ввести общий bounded JSON transport и strict provider protocol errors. **Done.**
 2. Реализовать OpenAI Responses и Anthropic Messages adapters с native output cap, usage validation, abort и strict

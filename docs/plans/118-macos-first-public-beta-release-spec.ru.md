@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-11
 
-**Статус:** approved
+**Статус:** implemented; Public Beta published as `0.1.0-beta.1`
 
 **Решение:** PD-032 / ADR-0031
 

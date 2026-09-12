@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-11
 
-**Статус:** approved
+**Статус:** implemented; Stable `0.1.0` published for `MACOS_ARM64`
 
 **Решение:** PD-033 / ADR-0032
 

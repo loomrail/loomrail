@@ -1,7 +1,7 @@
 # L4a — owner-approved GitHub Actions Guided Deploy
 
 **Дата:** 2026-09-10
-**Статус:** утверждено к реализации
+**Статус:** implemented; Preview semantics refined by L4b1
 **Основание:** PD-030, ADR-0029, L-track D3/D4/D7/D9/D10, L3 Release evidence
 
 ## 1. Outcome

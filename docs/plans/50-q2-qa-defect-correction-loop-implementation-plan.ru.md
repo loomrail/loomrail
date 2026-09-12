@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implementation complete; release gate pending on parallel landing lint and cross-platform CI
+**Статус:** complete; shared landing/cross-platform gates passed before Stable `0.1.0`
 
 **Спецификация:** [49-q2-qa-defect-correction-loop-spec.ru.md](49-q2-qa-defect-correction-loop-spec.ru.md)
 

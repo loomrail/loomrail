@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-05
 
-**Статус:** complete; automated macOS/Windows fixed-commit CI green; external stable gates pending
+**Статус:** complete; fixed-commit and Stable `MACOS_ARM64` gates passed
 
 **Спецификация:**
 [79-q17-project-verification-gate-spec.ru.md](79-q17-project-verification-gate-spec.ru.md)

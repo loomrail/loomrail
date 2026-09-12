@@ -1,6 +1,6 @@
 # Provider Selection: AUTO и выбор провайдера в Project Settings
 
-**Статус:** утверждено владельцем 31 августа 2026
+**Статус:** implemented and released through Stable `0.1.0`
 
 ## 1. Проблема
 

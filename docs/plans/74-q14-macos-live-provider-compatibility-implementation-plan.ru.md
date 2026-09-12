@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-04
 
-**Статус:** complete on macOS; external stable gates pending
+**Статус:** complete; recorded macOS rows shipped in Stable `0.1.0`
 
 **Спецификация:**
 [73-q14-macos-live-provider-compatibility-spec.ru.md](73-q14-macos-live-provider-compatibility-spec.ru.md)

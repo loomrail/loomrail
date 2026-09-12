@@ -1,7 +1,7 @@
 # A2 — Живые адаптеры Codex и Claude Code
 
 **Дата:** 2026-08-26
-**Статус:** design; требует ревью владельца
+**Статус:** historical implementation baseline; active local-runtime boundary is Q20.1 / ADR-0015
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — AD-004 (CLI-first), AD-005 (capabilities,

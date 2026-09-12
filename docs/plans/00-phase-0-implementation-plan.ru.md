@@ -1,7 +1,7 @@
 # Loomrail Phase 0 — implementation plan
 
 **Дата:** 2026-08-22
-**Статус:** approved; M3 locally complete, Windows CI evidence pending
+**Статус:** historical plan complete; released through Stable `0.1.0`
 **Phase outcome:** безопасный mocked vertical slice локальной control plane
 **Нормативные входы:**
 

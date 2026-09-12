@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-04
 
-**Статус:** implemented on macOS; external stable gates pending
+**Статус:** implemented; recorded macOS rows shipped in Stable `0.1.0`
 
 **Предшественники:** Q9, Q13
 

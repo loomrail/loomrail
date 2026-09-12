@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** approved for implementation
+**Статус:** implemented and released through Stable `0.1.0`
 
 **Предшественники:** D1, A2, Q3
 

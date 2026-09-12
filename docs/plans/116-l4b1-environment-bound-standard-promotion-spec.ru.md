@@ -1,7 +1,7 @@
 # L4b1 — environment-bound STANDARD promotion
 
 **Дата:** 2026-09-11
-**Статус:** утверждено к реализации
+**Статус:** implemented and cross-platform verified; live dispatch not performed
 **Основание:** PD-031, ADR-0030, L-track D4/D5/D7/D9, T82–T83
 
 ## 1. Outcome

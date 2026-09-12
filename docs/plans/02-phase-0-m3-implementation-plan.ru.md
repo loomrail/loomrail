@@ -1,7 +1,7 @@
 # Loomrail Phase 0 / M3 — real task cockpit
 
 **Дата:** 2026-08-24
-**Статус:** locally complete; Windows CI evidence pending
+**Статус:** historical milestone complete; later macOS/Windows source gates passed
 **Outcome:** browser Workbench управляет настоящими Project/WorkItem из локального SQLite через authenticated daemon,
 а не отображает отдельный UI mock
 

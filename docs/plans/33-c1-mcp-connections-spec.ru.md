@@ -1,7 +1,7 @@
 # C1 — MCP-подключения для provider sessions
 
 **Дата:** 2026-08-31
-**Статус:** active specification
+**Статус:** implemented and released through Stable `0.1.0`
 **Предыдущий checkpoint:** B3+B2 и Project provider selection реализованы
 **Следующий checkpoint:** C3, встроенный профиль Context7
 

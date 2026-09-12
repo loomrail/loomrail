@@ -2,7 +2,7 @@
 
 **Спецификация:** [`19-d2-full-route-example-spec.ru.md`](19-d2-full-route-example-spec.ru.md)
 
-**Статус:** завершено; настоящий Codex route достиг pending owner Acceptance; изменения не закоммичены
+**Статус:** historical route complete; later public/private dogfood closed owner Acceptance
 
 ## Ограничения
 

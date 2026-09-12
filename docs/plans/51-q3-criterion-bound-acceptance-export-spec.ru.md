@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-02
 
-**Статус:** implemented; shared release gate pending
+**Статус:** implemented and released through Stable `0.1.0`
 
 **Предшественники:** M6, R1, Q1, Q2
 

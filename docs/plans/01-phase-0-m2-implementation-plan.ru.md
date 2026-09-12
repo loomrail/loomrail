@@ -1,7 +1,7 @@
 # Loomrail Phase 0 / M2 — contracts, domain and persistence
 
 **Дата:** 2026-08-22
-**Статус:** locally complete; Windows CI evidence pending
+**Статус:** historical milestone complete; later macOS/Windows source gates passed
 **Outcome:** локальное состояние Project и WorkItem переживает restart, каждая принятая mutation атомарно оставляет
 versioned Event, а повтор command не дублирует результат
 

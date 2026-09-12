@@ -1,6 +1,6 @@
 # Q13 — Final security and reliability review
 
-**Статус:** implementation and Q13 verification complete; external stable gates pending
+**Статус:** implementation complete; external Stable gates passed for `MACOS_ARM64`
 
 **Дата:** 2026-09-03
 

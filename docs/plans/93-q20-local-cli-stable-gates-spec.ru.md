@@ -1,6 +1,6 @@
 # Q20.2 — Stable gates для local subscription CLI: спецификация
 
-**Статус:** approved
+**Статус:** implemented; `MACOS_ARM64` Stable gate completed, Windows live rows remain separate
 
 **Основание:** PD-019, ADR-0015, ADR-0016, Threat Model T35
 

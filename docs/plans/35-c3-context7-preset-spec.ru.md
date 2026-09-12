@@ -1,7 +1,7 @@
 # C3 — встроенный Context7 preset
 
 **Дата:** 2026-08-31
-**Статус:** approved implementation boundary
+**Статус:** implemented and released through Stable `0.1.0`
 **Зависимость:** C1 MCP Connections, PD-010, ADR-0005
 
 ## 1. Результат

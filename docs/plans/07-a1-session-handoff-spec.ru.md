@@ -1,7 +1,7 @@
 # A1 — Session handoff и непрерывность работы агента
 
 **Дата:** 2026-08-25
-**Статус:** design approved владельцем; implementation plan ещё не написан
+**Статус:** implemented and released; active recovery boundary evolved through Q20.11–Q20.13
 **Нормативные входы:**
 
 - [Product decisions](../product/PRODUCT-DECISIONS.ru.md) — PD-008 (handoff проектируется до живых провайдеров)

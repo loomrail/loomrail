@@ -2,7 +2,7 @@
 
 **Дата:** 2026-09-05
 
-**Статус:** implemented; final review and fresh fixed-commit CI pending
+**Статус:** implemented, fixed-commit verified and released through Stable `0.1.0`
 
 **Основание:** QD-002, QD-003, T48 и Phase 8 Q17 в
 [MASTER-PLAN.ru.md](../product/MASTER-PLAN.ru.md)

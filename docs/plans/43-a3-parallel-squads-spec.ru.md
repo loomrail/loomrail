@@ -1,7 +1,7 @@
 # A3 — Parallel agents and dynamic squads
 
 **Дата:** 2026-09-01
-**Статус:** implemented locally; release verification in progress
+**Статус:** implemented, cross-platform verified and released through Stable `0.1.0`
 **Основание:** AD-006–AD-008, WD-004, WD-006, TD-001–TD-003, BD-001, MASTER-PLAN §5.1–5.2, §7, §11–12
 
 ## 1. Проблема

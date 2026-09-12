@@ -1,6 +1,6 @@
 # B3 + B2 — план реализации Project Readiness
 
-**Статус:** implementation complete; repo-wide gate awaits landing fix
+**Статус:** implementation complete; shared gate passed before Stable `0.1.0`
 
 **Дата:** 2026-08-30
 
