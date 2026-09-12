@@ -294,11 +294,13 @@ describe("session worker", () => {
       specSource: "ROLE_PLAYBOOK",
       roleProfile: { id: "builtin.product-analyst", revision: 1 },
     });
-    expect(sessionState.recipes[0]?.sections.map(({ id }) => id).slice(0, 3)).toEqual([
+    expect(sessionState.recipes[0]?.sections.map(({ id }) => id)).toEqual([
       "WORK_ITEM_BRIEF",
       "DECISIONS",
-      "ACTIVITY",
+      "WORKFLOW_POSITION",
+      "LATEST_CHECKPOINT",
     ]);
+    expect(sessionState.recipes[0]?.omitted).toEqual([{ id: "ACTIVITY", reason: "STAGE_PROJECTION" }]);
 
     adapter.release();
     await awaitIdle(worker);
@@ -532,7 +534,10 @@ describe("session worker", () => {
             },
           };
         }
+        if (stage === "PLAN")
+          expect(invocation.contextPack.text).toContain("DISCOVERY durable handoff canary");
         if (stage === "IMPLEMENT") {
+          expect(invocation.contextPack.text).toContain("PLAN durable handoff canary");
           if (!invocation.workspace) throw new Error("IMPLEMENT must receive its worktree");
           recordImplementationEffectInState(localState, invocation);
           await writeFile(
@@ -542,6 +547,7 @@ describe("session worker", () => {
           );
         }
         if (stage === "REVIEW") {
+          expect(invocation.contextPack.text).not.toContain("durable handoff canary");
           return {
             type: "COMPLETED",
             summary: "The independent review passed.",
@@ -614,6 +620,15 @@ describe("session worker", () => {
               knownRisk: null,
             })),
           };
+        }
+        if (stage === "DISCOVERY" || stage === "PLAN") {
+          listener.onCheckpoint({
+            summary: `${stage} durable handoff canary`,
+            completed: ["Read relevant files"],
+            remaining: ["Next stage"],
+            deadEnds: [],
+            openQuestions: [],
+          });
         }
         return {
           type: "COMPLETED",

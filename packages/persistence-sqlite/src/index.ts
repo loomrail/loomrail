@@ -4407,11 +4407,17 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectDecisionsForWorkItem = database.prepare(
       "SELECT * FROM decisions WHERE work_item_id = ? ORDER BY created_at, id",
     );
-    // The context-pack variant of the read above. Newest-first with a LIMIT, then reversed by the
-    // caller, exactly as ACTIVITY is read: the cap has to bind on the end that would be dropped, and
-    // the most recent decisions are the ones the next session needs. See MAX_CONTEXT_SOURCE_RECORDS.
-    const selectRecentDecisionsForWorkItem = database.prepare(
-      "SELECT * FROM decisions WHERE work_item_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+    // Read one beyond the provenance ceiling so assembly refuses rather than silently losing decisions.
+    const selectContextDecisions = database.prepare(
+      "SELECT * FROM decisions WHERE work_item_id = ? ORDER BY created_at, id LIMIT ?",
+    );
+    const selectUpstreamCheckpoint = database.prepare(
+      `SELECT c.* FROM checkpoints c
+       JOIN stage_attempts a ON a.id = c.stage_attempt_id
+       JOIN provider_sessions p ON p.id = c.provider_session_id
+       WHERE a.pipeline_run_id = ? AND a.stage = ? AND a.status = 'SUCCEEDED'
+         AND a.correction_run_id IS NULL AND a.verification_correction_run_id IS NULL
+       ORDER BY a.attempt DESC, p.ordinal DESC, c.ordinal DESC LIMIT 1`,
     );
     const selectRecentEventsForAggregate = database.prepare(
       "SELECT * FROM events WHERE aggregate_id = ? ORDER BY sequence DESC LIMIT ?",
@@ -5233,8 +5239,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
 
         const decisions = decisionRowSchema
           .array()
-          .parse(selectRecentDecisionsForWorkItem.all(workItem.id, MAX_CONTEXT_SOURCE_RECORDS))
-          .reverse()
+          .parse(selectContextDecisions.all(workItem.id, maxContextPackRecipeSources + 1))
           .map(decisionFromRow)
           .map((decision) => {
             const request = readHumanRequest(decision.humanRequestId);
@@ -5260,6 +5265,27 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 remaining: latestCheckpointEntity.remaining,
                 deadEnds: latestCheckpointEntity.deadEnds,
                 openQuestions: latestCheckpointEntity.openQuestions,
+              };
+
+        const upstreamStage =
+          stageAttempt.stage === "PLAN" ? "DISCOVERY" : stageAttempt.stage === "IMPLEMENT" ? "PLAN" : null;
+        const upstreamRow =
+          upstreamStage === null ? undefined : selectUpstreamCheckpoint.get(run.id, upstreamStage);
+        const upstreamCheckpoint = upstreamRow === undefined ? null : checkpointFromRow(upstreamRow);
+        const stageHandoff: ContextSources["stageHandoff"] =
+          upstreamStage === null || upstreamCheckpoint === null
+            ? null
+            : {
+                stage: upstreamStage,
+                checkpoint: {
+                  id: upstreamCheckpoint.id,
+                  version: 1,
+                  summary: upstreamCheckpoint.summary,
+                  completed: upstreamCheckpoint.completed,
+                  remaining: upstreamCheckpoint.remaining,
+                  deadEnds: upstreamCheckpoint.deadEnds,
+                  openQuestions: upstreamCheckpoint.openQuestions,
+                },
               };
 
         const reviewInput =
@@ -5571,6 +5597,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           qaCorrection,
           decisions,
           latestCheckpoint,
+          stageHandoff,
           reviewInput,
           qaMeasurement,
           projectVerification,

@@ -602,6 +602,11 @@ Mapping tier -> конкретная model хранится в provider config. 
 - actual и estimated usage визуально различаются;
 - эффективность multi-agent workflow сравнивается с single-agent baseline в eval suite.
 
+Token-efficiency slice 124 / ADR-0033 сохраняет все шесть production стадий. Context packs имеют отдельные
+stage ceilings; optional audit activity не входит в prompt. Structured Discovery/Plan checkpoints передаются
+следующему потребителю без author transcript в Review. Workspace MCP result передаётся одной полной копией.
+Byte estimates и детерминированный benchmark не считаются actual/cached/uncached provider usage.
+
 ### 12.4. Provider allowance
 
 Provider allowance и Loomrail budget показаны рядом, но никогда не объединяются в одну шкалу:

@@ -1,0 +1,169 @@
+{
+  "schemaVersion": 1,
+  "source": "Public Recurkit dogfood through loomrail@0.1.1; read-only aggregate verification of the original durable ledger",
+  "baselineCommit": "12bb55548c9fb550cdf0db1bbf7b177abd1822be",
+  "quality": "ACTUAL",
+  "rows": [
+    {
+      "stage": "DISCOVERY",
+      "reports": 1,
+      "input": 412005,
+      "output": 2205,
+      "cachedInput": 348160,
+      "rawTotal": 414210,
+      "uncachedInputAndOutput": 66050,
+      "packEstimatedTokens": 1093,
+      "maxPackEstimatedTokens": 1093,
+      "tools": [
+        {
+          "operation": "LIST_DIRECTORY",
+          "calls": 7,
+          "returnedBytes": 3575
+        },
+        {
+          "operation": "READ_FILE",
+          "calls": 13,
+          "returnedBytes": 62602
+        }
+      ]
+    },
+    {
+      "stage": "PLAN",
+      "reports": 1,
+      "input": 356769,
+      "output": 2417,
+      "cachedInput": 318720,
+      "rawTotal": 359186,
+      "uncachedInputAndOutput": 40466,
+      "packEstimatedTokens": 1423,
+      "maxPackEstimatedTokens": 1423,
+      "tools": [
+        {
+          "operation": "LIST_DIRECTORY",
+          "calls": 8,
+          "returnedBytes": 3995
+        },
+        {
+          "operation": "READ_FILE",
+          "calls": 10,
+          "returnedBytes": 27011
+        }
+      ]
+    },
+    {
+      "stage": "IMPLEMENT",
+      "reports": 4,
+      "input": 1631854,
+      "output": 10618,
+      "cachedInput": 1339904,
+      "rawTotal": 1642472,
+      "uncachedInputAndOutput": 302568,
+      "packEstimatedTokens": 7415,
+      "maxPackEstimatedTokens": 2119,
+      "tools": [
+        {
+          "operation": "EDIT_FILE",
+          "calls": 3,
+          "returnedBytes": 7344
+        },
+        {
+          "operation": "LIST_DIRECTORY",
+          "calls": 23,
+          "returnedBytes": 14889
+        },
+        {
+          "operation": "READ_FILE",
+          "calls": 28,
+          "returnedBytes": 93521
+        },
+        {
+          "operation": "RUN_RECIPE",
+          "calls": 16,
+          "returnedBytes": 223944
+        },
+        {
+          "operation": "WRITE_FILE",
+          "calls": 1,
+          "returnedBytes": 2234
+        }
+      ]
+    },
+    {
+      "stage": "REVIEW",
+      "reports": 4,
+      "input": 982481,
+      "output": 5955,
+      "cachedInput": 854272,
+      "rawTotal": 988436,
+      "uncachedInputAndOutput": 134164,
+      "packEstimatedTokens": 10616,
+      "maxPackEstimatedTokens": 2876,
+      "tools": [
+        {
+          "operation": "LIST_DIRECTORY",
+          "calls": 14,
+          "returnedBytes": 9848
+        },
+        {
+          "operation": "READ_FILE",
+          "calls": 23,
+          "returnedBytes": 69742
+        },
+        {
+          "operation": "RUN_RECIPE",
+          "calls": 9,
+          "returnedBytes": null
+        }
+      ]
+    },
+    {
+      "stage": "QA",
+      "reports": 1,
+      "input": 318136,
+      "output": 1892,
+      "cachedInput": 266240,
+      "rawTotal": 320028,
+      "uncachedInputAndOutput": 53788,
+      "packEstimatedTokens": 2896,
+      "maxPackEstimatedTokens": 2896,
+      "tools": [
+        {
+          "operation": "LIST_DIRECTORY",
+          "calls": 5,
+          "returnedBytes": 2986
+        },
+        {
+          "operation": "READ_FILE",
+          "calls": 7,
+          "returnedBytes": 22706
+        },
+        {
+          "operation": "RUN_RECIPE",
+          "calls": 4,
+          "returnedBytes": null
+        }
+      ]
+    },
+    {
+      "stage": "ACCEPTANCE",
+      "reports": 1,
+      "input": 13965,
+      "output": 448,
+      "cachedInput": 0,
+      "rawTotal": 14413,
+      "uncachedInputAndOutput": 14413,
+      "packEstimatedTokens": 3155,
+      "maxPackEstimatedTokens": 3155,
+      "tools": []
+    }
+  ],
+  "totals": {
+    "reports": 12,
+    "input": 3715210,
+    "output": 23535,
+    "cachedInput": 3127296,
+    "rawTotal": 3738745,
+    "uncachedInputAndOutput": 611449,
+    "packEstimatedTokens": 26598
+  }
+}

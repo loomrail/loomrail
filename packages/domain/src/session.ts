@@ -192,10 +192,10 @@ const pauseWording = (reason: StageAttemptPauseReason): PauseWording => {
       };
     case "CONTEXT_FLOOR_EXCEEDED":
       return {
-        title: "The required context does not fit the provider's window",
-        context: `The sections this stage marks required need ${reason.requiredBytes.toString()} bytes, and the pack budget for this provider is ${reason.budgetBytes.toString()}. Trimming a required section would hand the agent an input Loomrail knows is incomplete.`,
+        title: "The required context does not fit this stage's context budget",
+        context: `The sections this stage marks required need ${reason.requiredBytes.toString()} bytes, and the effective stage/provider pack budget is ${reason.budgetBytes.toString()}. Trimming a required section would hand the agent an input Loomrail knows is incomplete.`,
         recommendation:
-          "Split this WorkItem into smaller ones, or run this stage on a provider with a larger context window.",
+          "Split this WorkItem into smaller ones while preserving owner decisions. A larger provider window helps only when it, rather than the per-stage ceiling, is the limiting bound.",
         pauseReason: "The required context sections do not fit the pack budget.",
       };
     case "PROVIDER_START_FAILED":

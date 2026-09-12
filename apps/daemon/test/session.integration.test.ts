@@ -964,6 +964,41 @@ describe("stage attempt session loop", () => {
     expect(snapshot.humanRequests[0]?.blocking).toBe(true);
   });
 
+  it("durably refuses source overflow before dispatch and retains the owner gate after restart", async () => {
+    const localState = await open();
+    const seeded = seedRunningAttempt(localState);
+    const adapter = recording(finishingAdapter());
+    const overflowState: LocalState = {
+      ...localState,
+      query: (query) => {
+        const result = localState.query(query);
+        if (result.type !== "CONTEXT_SOURCES") return result;
+        return {
+          ...result,
+          sources: {
+            ...result.sources,
+            decisions: Array.from({ length: 201 }, (_, index) => ({
+              id: `decision-${index.toString()}`,
+              version: 1,
+              question: "Scope",
+              answer: "Preserve all gates",
+            })),
+          },
+        };
+      },
+    };
+    await runStageAttempt(depsFor(localState, seeded, adapter, { state: overflowState }));
+    expect(adapter.startedSessionIds).toEqual([]);
+    const before = snapshotOf(localState, seeded.workItemId);
+    expect(before.humanRequests.at(-1)?.title).toBe("The required context source limit was exceeded");
+    localState.close();
+    const reopened = await open();
+    const after = snapshotOf(reopened, seeded.workItemId);
+    expect(after.humanRequests).toEqual(before.humanRequests);
+    expect(after.run?.status).toBe("WAITING_HUMAN");
+    expect(sessionRows(reopened, seeded.stageAttemptId).sessions).toHaveLength(0);
+  });
+
   it("stops without starting a session when one is already running on the attempt", async () => {
     // Nothing serialises the daemon's drain and the dispatch stays PENDING for the attempt's whole
     // life, so two callers can enter this loop for the same dispatch. The second one used to reach
@@ -1108,39 +1143,42 @@ describe("stage attempt session loop", () => {
     expect(snapshotOf(restarted, seeded.workItemId).stageAttempts.at(0)?.status).toBe("INTERRUPTED");
   });
 
-  it("retries once with a smaller pack share when the provider rejects the pack, then asks the owner", () => {
-    // Spec §7's mis-estimated-pack branch, and the only coverage of PACK_SHARE_BACKOFF.
-    return (async () => {
-      const localState = await open();
-      const seeded = seedRunningAttempt(localState);
-      // Rejects every pack it is handed, so both the retry and the give-up after it are reached.
-      const fussy = createProviderTestDouble({ contextWindowTokens: 4_000, rejectPacksLongerThan: 10 });
+  it.each([4_000, 128_000])(
+    "retries with a smaller pack for a %i token window, then asks the owner",
+    (contextWindowTokens) => {
+      // Spec §7's mis-estimated-pack branch, and the only coverage of PACK_SHARE_BACKOFF.
+      return (async () => {
+        const localState = await open();
+        const seeded = seedRunningAttempt(localState);
+        // Rejects every pack it is handed, so both the retry and the give-up after it are reached.
+        const fussy = createProviderTestDouble({ contextWindowTokens, rejectPacksLongerThan: 10 });
 
-      await runStageAttempt(depsFor(localState, seeded, fussy));
+        await runStageAttempt(depsFor(localState, seeded, fussy));
 
-      const { sessions, recipes } = sessionRows(localState, seeded.stageAttemptId);
-      expect(sessions).toHaveLength(2);
-      expect(sessions.map(({ endReason }) => endReason)).toEqual(["INTERRUPTED", "INTERRUPTED"]);
-      // The reduction is visible where §7 asks for it to be recorded: the second session's recipe
-      // was assembled against a strictly smaller budget than the first.
-      const firstBudget = recipes[0]?.budgetTokens ?? 0;
-      const secondBudget = recipes[1]?.budgetTokens ?? 0;
-      expect(secondBudget).toBeLessThan(firstBudget);
+        const { sessions, recipes } = sessionRows(localState, seeded.stageAttemptId);
+        expect(sessions).toHaveLength(2);
+        expect(sessions.map(({ endReason }) => endReason)).toEqual(["INTERRUPTED", "INTERRUPTED"]);
+        // The reduction is visible where §7 asks for it to be recorded: the second session's recipe
+        // was assembled against a strictly smaller budget than the first.
+        const firstBudget = recipes[0]?.budgetTokens ?? 0;
+        const secondBudget = recipes[1]?.budgetTokens ?? 0;
+        expect(secondBudget).toBeLessThan(firstBudget);
 
-      const attempt = snapshotOf(localState, seeded.workItemId).stageAttempts.at(0);
-      // One automatic retry, not an unbounded search.
-      expect(attempt?.packShareBackoffs).toBe(1);
-      // A session the provider refused to start never had the chance to publish anything, so
-      // §6.5's guard -- which is about an agent that ran and stayed silent -- must not claim it,
-      // and the owner must be asked one question about this failure rather than two.
-      expect(attempt?.unproductiveSessions).toBe(0);
-      expect(attempt?.status).toBe("HARD_PAUSED");
-      expect(attempt?.failureCode).toBe("PROVIDER_REJECTED_PACK");
-      const requests = snapshotOf(localState, seeded.workItemId).humanRequests;
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.title).toMatch(/context pack/);
-    })();
-  });
+        const attempt = snapshotOf(localState, seeded.workItemId).stageAttempts.at(0);
+        // One automatic retry, not an unbounded search.
+        expect(attempt?.packShareBackoffs).toBe(1);
+        // A session the provider refused to start never had the chance to publish anything, so
+        // §6.5's guard -- which is about an agent that ran and stayed silent -- must not claim it,
+        // and the owner must be asked one question about this failure rather than two.
+        expect(attempt?.unproductiveSessions).toBe(0);
+        expect(attempt?.status).toBe("HARD_PAUSED");
+        expect(attempt?.failureCode).toBe("PROVIDER_REJECTED_PACK");
+        const requests = snapshotOf(localState, seeded.workItemId).humanRequests;
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.title).toMatch(/context pack/);
+      })();
+    },
+  );
 
   it("keeps a reduced pack share across a restart instead of starting over at the full share", async () => {
     // §6.5 argues the unproductive counter cannot live in daemon memory because §6.4 makes a

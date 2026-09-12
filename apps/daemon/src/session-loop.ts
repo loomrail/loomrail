@@ -1,7 +1,7 @@
 import { access, constants, mkdir, realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { assembleContextPack } from "@loomrail/context-assembly";
+import { assembleContextPack, stageContextTokenCaps } from "@loomrail/context-assembly";
 import {
   checkpointDraftSchema,
   contextPackRecipeInputSchema,
@@ -1010,6 +1010,10 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     // variants of `DispatchStageDecision` because their fixes differ, and the log line names which
     // one happened.
     type PreSessionRefusal =
+      | {
+          type: "CONTEXT_SOURCE_LIMIT_EXCEEDED";
+          request: Extract<ProviderOutcome, { type: "NEEDS_HUMAN" }>["request"];
+        }
       | Exclude<DispatchStageDecision, { type: "DISPATCH" }>
       | ({ type: "REVIEW_CONTEXT_UNAVAILABLE" } & Omit<
           Extract<ReviewContextPreparation, { type: "REFUSED" }>,
@@ -1262,13 +1266,39 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     // §6.4 makes a daemon restart an ordinary end of a session, and a share held in memory would be
     // silently restored to full by the very event §7's "one automatic retry" has to survive.
     const packShare = MAX_PACK_SHARE - attempt.packShareBackoffs * PACK_SHARE_BACKOFF;
-    const budgetTokens = Math.max(1, Math.floor(capabilities.contextWindowTokens * packShare));
+    const budgetTokens = Math.max(
+      1,
+      Math.floor(
+        Math.min(
+          stageContextTokenCaps[attempt.stage] * (packShare / MAX_PACK_SHARE),
+          capabilities.contextWindowTokens * packShare,
+        ),
+      ),
+    );
     const assembled = assembleContextPack({
       sources: reviewContext.sources,
       spec: contextSpec,
       budgetTokens,
       bytesPerToken: BYTES_PER_TOKEN,
+      projection: "STAGE_V1",
     });
+
+    if (assembled.type === "SOURCE_LIMIT_EXCEEDED") {
+      refuseDispatch({
+        type: "CONTEXT_SOURCE_LIMIT_EXCEEDED",
+        request: {
+          kind: "FREE_TEXT",
+          blocking: true,
+          title: "The required context source limit was exceeded",
+          allowOther: true,
+          context: `Section ${assembled.section} exceeds ${assembled.limit.toString()} durable sources. No provider session started and no decisions were dropped.`,
+          options: [],
+          recommendation:
+            "Split this WorkItem into smaller work with explicitly carried owner decisions; then cancel this run or resume after resolving the source limit.",
+        },
+      });
+      return;
+    }
 
     if (assembled.type === "FLOOR_EXCEEDED") {
       // Spec §D8: the required sections do not fit, so the session does not start at all. Trimming

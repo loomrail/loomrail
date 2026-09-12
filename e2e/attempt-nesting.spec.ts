@@ -248,7 +248,7 @@ const seedMeasuredAndHandedOffSessions = async (databasePath: string, title: str
           },
         });
       }
-      if (ordinal === 1) {
+      if (ordinal <= 2) {
         localState.execute({
           schemaVersion: 1,
           commandId: `provider-usage-${session.session.id}`,
@@ -259,6 +259,7 @@ const seedMeasuredAndHandedOffSessions = async (databasePath: string, title: str
             providerSessionId: session.session.id,
             usage: {
               inputTokens: 7,
+              ...(ordinal === 1 ? { cachedInputTokens: 4 } : {}),
               outputTokens: 3,
               costUsd: 0.0012,
               quality: "ACTUAL",
@@ -515,9 +516,18 @@ test.describe("attempt nesting", () => {
 
       // Both figures are measured rather than estimated, and the cockpit still says which.
       await expect(session1.getByText("(measured)", { exact: true })).toHaveCount(2);
-      await expect(session1.getByText("10 tokens used (7 in · 3 out)", { exact: true })).toBeVisible();
+      await expect(
+        session1.getByText("10 tokens used (7 in · 3 out · 4 cached in · 6 uncached in + out)", {
+          exact: true,
+        }),
+      ).toBeVisible();
       await expect(session1.getByText("· $0.0012", { exact: true })).toBeVisible();
-      await expect(session2.getByText("(measured)", { exact: true })).toBeVisible();
+      await expect(session2.getByText("(measured)", { exact: true })).toHaveCount(2);
+      await expect(
+        session2.getByText("10 tokens used (7 in · 3 out · Unknown cached in · Unknown uncached in + out)", {
+          exact: true,
+        }),
+      ).toBeVisible();
 
       // Never measured at all, which is not the same as measured at zero: no occupancy line.
       await expect(session3).toBeVisible();

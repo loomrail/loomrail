@@ -3,3 +3,5 @@ export { renderSection } from "./render.js";
 export type { ReviewChangedFile, ReviewDiffContent } from "@loomrail/contracts";
 export type { AssembleInput, AssembleResult, ContextPackRecipeDraft } from "./assemble.js";
 export { assembleContextPack } from "./assemble.js";
+
+export { stageContextTokenCaps } from "./policy.js";

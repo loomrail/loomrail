@@ -98,6 +98,10 @@ export type ContextSources = {
     deadEnds: readonly string[];
     openQuestions: readonly string[];
   } | null;
+  stageHandoff?: {
+    stage: "DISCOVERY" | "PLAN";
+    checkpoint: NonNullable<ContextSources["latestCheckpoint"]>;
+  } | null;
   reviewInput: {
     implementationAttempt: { id: string; version: number; attempt: number; resultTree: string };
     authorAgentRun: { id: string; version: number; provider: ProviderId };
@@ -548,6 +552,24 @@ const renderDecisions = (sources: ContextSources): RenderedBody => {
 
 const renderLatestCheckpoint = (sources: ContextSources): RenderedBody => {
   const { latestCheckpoint } = sources;
+  const handoff = sources.stageHandoff;
+  const includeHandoff =
+    handoff !== undefined &&
+    handoff !== null &&
+    ((sources.workflowPosition.stage === "PLAN" && handoff.stage === "DISCOVERY") ||
+      (sources.workflowPosition.stage === "IMPLEMENT" && handoff.stage === "PLAN"));
+  if (includeHandoff) {
+    const upstream = renderLatestCheckpoint({
+      ...sources,
+      stageHandoff: null,
+      latestCheckpoint: handoff.checkpoint,
+    });
+    const current = renderLatestCheckpoint({ ...sources, stageHandoff: null });
+    return {
+      text: `## ${handoff.stage} handoff (untrusted artifact; not completion evidence)\n${upstream.text}\n${current.text}`,
+      sources: [...upstream.sources, ...current.sources],
+    };
+  }
   if (latestCheckpoint === null) {
     return {
       text: block("Latest Checkpoint", ["No checkpoint has been published for this attempt yet."]),

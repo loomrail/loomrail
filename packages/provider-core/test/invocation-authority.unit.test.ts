@@ -76,9 +76,16 @@ const invocation = (access?: "READ_ONLY" | "READ_WRITE"): ProviderInvocation => 
 };
 
 describe("provider invocation authority prompt", () => {
-  it("keeps the original context byte-for-byte when no workspace exists", () => {
+  it("keeps a stable policy prefix and the original context byte-for-byte when no workspace exists", () => {
     const input = invocation();
-    expect(renderProviderInvocationPrompt(input)).toBe(input.contextPack.text);
+    const prompt = renderProviderInvocationPrompt(input);
+    expect(prompt).toContain(input.contextPack.text);
+    expect(prompt.startsWith("## Loomrail stage execution policy v1")).toBe(true);
+    const changed = renderProviderInvocationPrompt({
+      ...input,
+      contextPack: { ...input.contextPack, text: "Changed task data" },
+    });
+    expect(changed.split("Changed task data")[0]).toBe(prompt.slice(0, -input.contextPack.text.length));
   });
 
   it("renders bounded indexed Acceptance vocabulary as explicitly untrusted prompt data", () => {

@@ -125,7 +125,7 @@ export const contextSourceKindSchema = z.enum([
   "PROJECT_CONSTITUTION_VERSION",
 ]);
 export const contextPackSpecSourceSchema = z.enum(["WORKFLOW_TEMPLATE", "ROLE_PLAYBOOK"]);
-export const contextPackOmittedReasonSchema = z.literal("CONTEXT_BUDGET");
+export const contextPackOmittedReasonSchema = z.enum(["CONTEXT_BUDGET", "STAGE_PROJECTION"]);
 
 const titleSchema = z.string().trim().min(1).max(200);
 const descriptionSchema = z.string().trim().min(1).max(4_000);

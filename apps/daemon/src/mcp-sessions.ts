@@ -46,7 +46,8 @@ const workspaceTools = (policy: WorkspaceToolPolicyDescription) =>
     },
     {
       name: "loomrail_read_file",
-      description: "Read a bounded UTF-8 range from one relative Loomrail workspace file.",
+      description:
+        "Read a bounded UTF-8 range from one relative Loomrail workspace file. Start with at most 4096 bytes; request further ranges only when relevant. The digest covers the whole file; truncated means more bytes exist.",
       inputSchema: {
         type: "object",
         properties: {
@@ -173,7 +174,7 @@ const workspaceDirectBinding = (input: {
       : failedToolResult(operation);
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
-      structuredContent: { result },
+      // One complete result: duplicating it in structuredContent amplifies every later tool turn.
       isError: result.status !== "SUCCEEDED",
     };
   },

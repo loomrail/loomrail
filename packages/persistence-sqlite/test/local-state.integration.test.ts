@@ -1,3 +1,4 @@
+import { assembleContextPack } from "@loomrail/context-assembly";
 import { execFileSync, spawn } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,11 +27,7 @@ import type {
   UpdateWorkItemCommand,
   VerificationPlanProposal,
 } from "@loomrail/contracts";
-import {
-  contextPackRecipeSectionSchema,
-  maxAttentionItems,
-  maxContextPackRecipeSources,
-} from "@loomrail/contracts";
+import { maxAttentionItems, maxContextPackRecipeSources } from "@loomrail/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 import { verificationPlanProposalHash } from "@loomrail/project-readiness";
@@ -9842,12 +9839,66 @@ describe("SQLite local state", () => {
       ]);
     });
 
-    // The recipe assembled from these sources is parsed with contextPackRecipeSectionSchema, whose
-    // `sources` array is capped. An uncapped read made that cap a failure mode rather than a bound:
-    // a work item with more decisions than the cap threw out of `runStageAttempt`, and out of
-    // `startDaemon` when the boot drain was the caller. The boundary is asserted with the exported
-    // constant, so raising one number cannot leave the other behind.
-    it("caps the decisions a context pack cites at the recipe's own source limit", async () => {
+    it("reconstructs only successful upstream handoffs after restart and isolates independent Review", async () => {
+      const localState = await open();
+      const { stageAttemptId } = startWorkflow(localState, "handoff-route", "handoff-item");
+      const started = localState.execute(startProviderSessionCommand("handoff-session", stageAttemptId));
+      if (started.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected session");
+      localState.execute(
+        publishCheckpointCommand("handoff-checkpoint", started.session.id, {
+          summary: "Discovery found docs/путь с пробелом.md",
+          completed: ["Found the existing route"],
+          remaining: ["Plan the bounded documentation change"],
+          deadEnds: [],
+          openQuestions: [],
+        }),
+      );
+      localState.execute(endProviderSessionCommand("handoff-end", started.session.id, "COMPLETED"));
+      localState.close();
+      state = undefined;
+      const raw = new DatabaseSync(databasePath);
+      raw.prepare("UPDATE stage_attempts SET status = 'SUCCEEDED' WHERE id = ?").run(stageAttemptId);
+      for (const stage of ["PLAN", "IMPLEMENT", "REVIEW"] as const) {
+        raw
+          .prepare(
+            `INSERT INTO stage_attempts (id, pipeline_run_id, project_id, work_item_id, stage, attempt, status, version)
+          SELECT ?, pipeline_run_id, project_id, work_item_id, ?, 1, 'RUNNING', 1 FROM stage_attempts WHERE id = ?`,
+          )
+          .run(`handoff-${stage}`, stage, stageAttemptId);
+      }
+      raw.close();
+      const reopened = await open();
+      const read = (id: string) => {
+        const result = reopened.query({
+          type: "READ_CONTEXT_SOURCES",
+          stageAttemptId: id,
+          sessionOrdinal: 1,
+        });
+        if (result.type !== "CONTEXT_SOURCES") throw new Error("Expected sources");
+        return result.sources;
+      };
+      const plan = read("handoff-PLAN");
+      expect(plan.latestCheckpoint).toBeNull();
+      expect(plan.stageHandoff).toMatchObject({
+        stage: "DISCOVERY",
+        checkpoint: { summary: "Discovery found docs/путь с пробелом.md" },
+      });
+      expect(read("handoff-IMPLEMENT").stageHandoff).toBeNull();
+      expect(read("handoff-REVIEW").stageHandoff).toBeNull();
+      const packed = assembleContextPack({
+        sources: plan,
+        spec: { schemaVersion: 1, sections: [{ id: "LATEST_CHECKPOINT", ordinal: 0, required: true }] },
+        budgetTokens: 12000,
+        bytesPerToken: 4,
+      });
+      expect(packed.type).toBe("ASSEMBLED");
+      const changed = new DatabaseSync(databasePath);
+      changed.prepare("UPDATE stage_attempts SET status = 'FAILED' WHERE id = ?").run(stageAttemptId);
+      changed.close();
+      expect(read("handoff-PLAN").stageHandoff).toBeNull();
+    });
+
+    it("returns an overflow sentinel decision instead of silently dropping owner authority", async () => {
       const localState = await open();
       const { workItemId, stageAttemptId, projectId } = startWorkflow(
         localState,
@@ -9875,24 +9926,19 @@ describe("SQLite local state", () => {
       const sources = reopened.query({ type: "READ_CONTEXT_SOURCES", stageAttemptId, sessionOrdinal: 1 });
       if (sources.type !== "CONTEXT_SOURCES") throw new Error("Expected the context sources");
       const cited = sources.sources.decisions;
-      expect(cited).toHaveLength(maxContextPackRecipeSources);
-      // The oldest decision is the one dropped, and the order the pack renders stays chronological.
-      expect(cited.at(0)?.id).toBe(idOf(1));
+      expect(cited).toHaveLength(total);
+      // Keep the oldest decision and one overflow record; assembly must refuse before dispatch.
+      expect(cited.at(0)?.id).toBe(idOf(0));
       expect(cited.at(-1)?.id).toBe(idOf(total - 1));
 
-      // What the read returns is exactly what the recipe contract accepts -- the property the cap
-      // exists for, asserted against the schema itself rather than against a copy of its number.
-      expect(() =>
-        contextPackRecipeSectionSchema.parse({
-          id: "DECISIONS",
-          sources: cited.map((decision) => ({
-            kind: "DECISION",
-            id: decision.id,
-            version: decision.version,
-          })),
-          bytes: 0,
+      expect(
+        assembleContextPack({
+          sources: sources.sources,
+          spec: { schemaVersion: 1, sections: [{ id: "DECISIONS", ordinal: 0, required: true }] },
+          budgetTokens: 100_000,
+          bytesPerToken: 4,
         }),
-      ).not.toThrow();
+      ).toEqual({ type: "SOURCE_LIMIT_EXCEEDED", section: "DECISIONS", limit: maxContextPackRecipeSources });
     });
 
     it("reads context sources even when a recent Event's type is not modeled by domainEventSchema", async () => {

@@ -912,7 +912,7 @@ const en = {
   "workflow.budget.kind": "Hard budget",
   "workflow.budget.input": "Hard token budget",
   "workflow.budget.description":
-    "Maximum estimated tokens for the whole run. The suggested value covers the built-in stage envelopes; unused budget is not spent.",
+    "All six stages run, including independent Review, Project verification, Browser QA and owner Acceptance. Tool turns and retries can make even a small task expensive. This is a ceiling, not a forecast: input, output and cache hits are unknown before execution. Local CLI usage is reported after a session; that session can exceed the ceiling, which blocks subsequent work.",
   "workflow.budget.invalid": "Enter a positive whole number.",
   "workflow.budget.overrideDescription":
     "Keep at least the current {current}; the limit must stay above recorded usage {used}.",
@@ -965,7 +965,9 @@ const en = {
   "workflow.sessions.usageQuality.ACTUAL": "(measured)",
   "workflow.sessions.usageQuality.PROVIDER_ESTIMATE": "(provider estimate)",
   "workflow.sessions.usageQuality.LOOMRAIL_ESTIMATE": "(Loomrail estimate)",
-  "workflow.sessions.tokenUsage": "{total} tokens used ({input} in · {output} out)",
+  "workflow.sessions.cacheUnknown": "Unknown",
+  "workflow.sessions.tokenUsage":
+    "{total} tokens used ({input} in · {output} out · {cached} cached in · {uncached} uncached in + out)",
   "workflow.sessions.tokenCost": "· {cost}",
   "workflow.sessions.noCheckpointOnRequest":
     "This provider cannot wind down on request — losing recent work when a session is cut is expected for it.",
@@ -2286,7 +2288,7 @@ const ru = {
   "workflow.budget.kind": "Жёсткий бюджет",
   "workflow.budget.input": "Жёсткий лимит токенов",
   "workflow.budget.description":
-    "Максимум оценочных токенов на весь запуск. Предложенное значение покрывает встроенные лимиты стадий; неиспользованный бюджет не расходуется.",
+    "Запускаются все шесть стадий, включая независимый Review, Project verification, Browser QA и Acceptance владельца. Чтения файлов и повторные попытки могут сделать даже небольшую задачу дорогой. Лимит — не прогноз: input, output и cache hits заранее неизвестны. Локальный CLI сообщает расход после сессии; она может превысить лимит, который остановит следующую работу.",
   "workflow.budget.invalid": "Введите положительное целое число.",
   "workflow.budget.overrideDescription":
     "Оставьте не меньше текущего {current}; лимит должен быть выше записанного расхода {used}.",
@@ -2339,7 +2341,9 @@ const ru = {
   "workflow.sessions.usageQuality.ACTUAL": "(измерено)",
   "workflow.sessions.usageQuality.PROVIDER_ESTIMATE": "(оценка провайдера)",
   "workflow.sessions.usageQuality.LOOMRAIL_ESTIMATE": "(оценка Loomrail)",
-  "workflow.sessions.tokenUsage": "Использовано токенов: {total} (вход: {input} · выход: {output})",
+  "workflow.sessions.cacheUnknown": "Неизвестно",
+  "workflow.sessions.tokenUsage":
+    "Использовано токенов: {total} (вход: {input} · выход: {output} · cached input: {cached} · uncached input + output: {uncached})",
   "workflow.sessions.tokenCost": "· {cost}",
   "workflow.sessions.noCheckpointOnRequest":
     "Этот провайдер не умеет сворачиваться по запросу — для него штатно терять недавнюю работу при обрыве сессии.",

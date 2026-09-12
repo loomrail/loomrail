@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "baseline": "12bb55548c9fb550cdf0db1bbf7b177abd1822be",
+  "sourceHashes": {
+    "render": "8a4a25f9a07b49baa4347a7ff7aa1983e6b9cf064cd43fb9b7802d90ac007d1d",
+    "assemble": "77dd1c2dc571bae670955f9aa86a4f1c233d995d2ed88c82f89241a88fc8fb42",
+    "packages/provider-core/src/allowance.ts": "5a3368213409e67b06f901d70c2a3f1b1e91e2e9956d3090beeeb065b14faa47",
+    "packages/provider-core/src/diagnostics.ts": "21fdd07987bbf4b8c3388beea79489d279ffbf040a4acbce0fc20b99619ed244",
+    "packages/provider-core/src/index.ts": "4f90c67778abca38666b35c6644f4d4185676990ea429ceedc0de21624804f2a",
+    "packages/provider-core/src/local-runtime.ts": "da528c42e71d6baed9458ab7ace96b009e774a3d7c5ac379e546e75ffbe033b4",
+    "packages/provider-core/src/process-runner.ts": "f812ad6a08a8352a48301cb48fbbf78ec66b4d0d92d075c8b11167ddcd586dfc",
+    "packages/provider-core/src/session-diagnosis.ts": "6b370dacd128a2def9941171dfa5260ab1d3c1dd5754a55bf1a625f696b5a5e4",
+    "packages/provider-core/src/stage-result.ts": "c05f51d8c19bd1334e00c244eba1c22d600e89ba5b591fb6acb8cb0721cef10b",
+    "packages/provider-core/src/workspace-tools.ts": "f58a92ba7217ff0d04afc3c1415fa58f7d9d8c3444e97bfc8dc98d92302a2231"
+  },
+  "metric": "UTF8_BYTES_NOT_PROVIDER_TOKENS",
+  "assumptions": "Identical stage fixtures and six tool results for each workspace-enabled stage; no tool results for Acceptance. Cumulative full-history replay. Includes the full Loomrail invocation prompt, including newly added guidance. Excludes provider-owned prefixes, tool definitions and call arguments, output, cache and actual tool scheduling. Fixture reports are test data, not production success evidence.",
+  "actualProviderTokens": null,
+  "cachedTokens": null,
+  "uncachedTokens": null,
+  "rows": [
+    {
+      "stage": "DISCOVERY",
+      "toolResultCount": 6,
+      "beforePackBytes": 5100,
+      "afterPackBytes": 2523,
+      "beforePromptBytes": 5529,
+      "afterPromptBytes": 3863,
+      "beforeReplayBytes": 209202,
+      "afterReplayBytes": 114107,
+      "beforeHash": "sha256:86874e4a9bde6f5d751e11103c802128fa7a5adb1202694121319accb8fc766e",
+      "afterHash": "sha256:a4e2b3dc3e1a4b65e4247ea3643ca4b32e76e3ddc6a49f704a0b0559e33b949e"
+    },
+    {
+      "stage": "PLAN",
+      "toolResultCount": 6,
+      "beforePackBytes": 5095,
+      "afterPackBytes": 3104,
+      "beforePromptBytes": 5524,
+      "afterPromptBytes": 4475,
+      "beforeReplayBytes": 209167,
+      "afterReplayBytes": 118391,
+      "beforeHash": "sha256:cbb4063d6521773c6e4f7b8c403cd417e541710d74117a8e128ff1632e426592",
+      "afterHash": "sha256:ce739d5230e419b118ba6eb33794adf06b7a719f3cc22a1a49d3c7a064d9f0f1"
+    },
+    {
+      "stage": "IMPLEMENT",
+      "toolResultCount": 6,
+      "beforePackBytes": 5139,
+      "afterPackBytes": 3143,
+      "beforePromptBytes": 6105,
+      "afterPromptBytes": 5093,
+      "beforeReplayBytes": 213234,
+      "afterReplayBytes": 122717,
+      "beforeHash": "sha256:67c3e179eb598ddee10290b1d45abaaa4f302a628811d6501767c91712a5120e",
+      "afterHash": "sha256:d8fa7ac3e7552f83d724629240f6af17c1c185da76cad3a339cf1ba1ae67cd33"
+    },
+    {
+      "stage": "REVIEW",
+      "toolResultCount": 6,
+      "beforePackBytes": 6396,
+      "afterPackBytes": 3819,
+      "beforePromptBytes": 6825,
+      "afterPromptBytes": 5245,
+      "beforeReplayBytes": 218274,
+      "afterReplayBytes": 123781,
+      "beforeHash": "sha256:a92eaa30a81b0a823a122032e371704a43616ebf800307a5f1d0c4ed0ce9e18c",
+      "afterHash": "sha256:90b317d1307e2f1d076f19b519be239350afc4df40516700f05410728d07a6e1"
+    },
+    {
+      "stage": "QA",
+      "toolResultCount": 6,
+      "beforePackBytes": 5447,
+      "afterPackBytes": 2870,
+      "beforePromptBytes": 5876,
+      "afterPromptBytes": 4303,
+      "beforeReplayBytes": 211631,
+      "afterReplayBytes": 117187,
+      "beforeHash": "sha256:6a9c856e79dc8010b01fd1e8653c2a0b641c67efc2616cf6582f90a8715deb73",
+      "afterHash": "sha256:7f3f20ddadec057360a04fb15f73a86d18b8100f5c8b03ac6ae34c99c7c7a344"
+    },
+    {
+      "stage": "ACCEPTANCE",
+      "toolResultCount": 0,
+      "beforePackBytes": 5455,
+      "afterPackBytes": 2878,
+      "beforePromptBytes": 5455,
+      "afterPromptBytes": 3809,
+      "beforeReplayBytes": 5455,
+      "afterReplayBytes": 3809,
+      "beforeHash": "sha256:3e8c74ebbc8fe6c02d692f3ad5d54ecbaec14331b1f46771c7874f043785cbd7",
+      "afterHash": "sha256:de95bbe94fec676cb5cf68c60fd0fa1118e4fcbd2f602cb35437ce2a855baa10"
+    }
+  ],
+  "totals": {
+    "beforePackBytes": 32632,
+    "afterPackBytes": 18337,
+    "beforePromptBytes": 35314,
+    "afterPromptBytes": 26788,
+    "beforeReplayBytes": 1066963,
+    "afterReplayBytes": 599992,
+    "replayReductionPercent": 43.766372404666335
+  }
+}

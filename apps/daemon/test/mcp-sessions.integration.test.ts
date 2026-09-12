@@ -342,9 +342,19 @@ describe("daemon MCP session orchestration", () => {
         },
       });
       expect(JSON.stringify(recipeTool)).not.toContain("Run the project test suite");
-      await expect(
-        client.callTool({ name: "loomrail_run_recipe", arguments: { recipeId: "npm-test" } }),
-      ).resolves.toMatchObject({ structuredContent: { result: { status: "SUCCEEDED" } } });
+      const response = await client.callTool({
+        name: "loomrail_run_recipe",
+        arguments: { recipeId: "npm-test" },
+      });
+      expect(response.structuredContent).toBeUndefined();
+      expect(response.isError).toBe(false);
+      const content = response.content;
+      expect(content).toHaveLength(1);
+      if (!Array.isArray(content)) throw new Error("Expected content array");
+      const text = content[0] as { type: string; text: string };
+      expect(text.type).toBe("text");
+      const result: unknown = JSON.parse(text.text);
+      expect(result).toMatchObject({ status: "SUCCEEDED" });
       expect(requests).toMatchObject([{ operation: "RUN_RECIPE", recipeId: "npm-test" }]);
     } finally {
       await client.close().catch(() => undefined);

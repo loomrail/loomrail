@@ -2444,3 +2444,14 @@ At every Phase:
 - review dependency and release provenance;
 - inspect export/retention/deletion behavior;
 - document residual risk and any human waiver.
+
+### Token-efficiency context delta (T86)
+
+**T86 — context compression drops authority or promotes stale/untrusted summaries. High.** ADR-0033 keeps all
+required sections and owner Decisions; optional audit activity can be omitted with recorded provenance. Per-stage
+context overflow uses the durable CONTEXT_FLOOR_EXCEEDED path before dispatch. Discovery/Plan handoff is selected
+only from a successful upstream stage in the same pipeline and framed as untrusted data. Review receives no author
+checkpoint. New sessions remain self-contained and do not assume a provider cache hit or hidden conversation state.
+Workspace results retain their complete typed result exactly once; audit/CAS/range/truncation/errors are unchanged.
+No repeated operation is turned into synthetic success. Tests cover hostile framing, mandatory floor, omission
+provenance, lineage/restart, unknown cache accounting, MCP delivery and measured six-stage workflow.

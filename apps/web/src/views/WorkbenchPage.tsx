@@ -2523,6 +2523,16 @@ const AttemptSessionsPanel = ({ attempt }: { attempt: StageAttempt }): React.JSX
                 total: spend.totalTokens.toLocaleString(locale),
                 input: spend.inputTokens.toLocaleString(locale),
                 output: spend.outputTokens.toLocaleString(locale),
+                cached:
+                  spend.cachedInputTokens === null
+                    ? t("workflow.sessions.cacheUnknown")
+                    : spend.cachedInputTokens.toLocaleString(locale),
+                uncached:
+                  spend.cachedInputTokens === null || spend.cachedInputTokens > spend.inputTokens
+                    ? t("workflow.sessions.cacheUnknown")
+                    : (spend.inputTokens - spend.cachedInputTokens + spend.outputTokens).toLocaleString(
+                        locale,
+                      ),
               }),
               usageQualityLabel: t(usageQualityLabelKeys[spend.quality]),
               ...(spend.costUsd === null

@@ -1772,6 +1772,20 @@ test.describe("authenticated walking skeleton", () => {
         .locator(".workflow-policy-form")
         .evaluate((form) => window.getComputedStyle(form).alignItems),
     ).toBe("start");
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate((value) => {
+        document.documentElement.dataset["theme"] = value;
+      }, theme);
+      await expect(
+        inspector.getByText(/Tool turns and retries can make even a small task expensive/),
+      ).toBeVisible();
+      await expect(inspector.getByText(/that session can exceed the ceiling/)).toBeVisible();
+      const budgetInput = inspector.getByLabel("Hard token budget");
+      await budgetInput.focus();
+      await expect(budgetInput).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(inspector.getByLabel("Per-agent run ceiling")).toBeFocused();
+    }
     await inspector.getByLabel("Hard token budget").fill("100");
     await inspector.getByLabel("Per-agent run ceiling").fill("100");
     await inspector.getByRole("button", { name: "Start workflow" }).click();

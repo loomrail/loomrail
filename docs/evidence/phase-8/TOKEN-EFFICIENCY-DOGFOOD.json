@@ -1,0 +1,182 @@
+{
+  "schemaVersion": 1,
+  "scenario": "Independent small local documentation fixture; not an identical Recurkit replay",
+  "provider": "CODEX",
+  "modelPolicy": "Built-in stage tiers",
+  "caps": {
+    "pipeline": 600000,
+    "agentRun": 150000,
+    "wallClockMinutes": 20
+  },
+  "workItemState": "BLOCKED",
+  "pipelineStatus": "HARD_PAUSED",
+  "acceptanceStatus": null,
+  "rows": [
+    {
+      "stage": "DISCOVERY",
+      "sessions": 2,
+      "reports": 2,
+      "input": 138275,
+      "output": 1218,
+      "cachedInput": 104448,
+      "rawTotal": 139493,
+      "uncachedInputAndOutput": 35045,
+      "stageStatus": "SUCCEEDED",
+      "measurementStatus": "REPORTED",
+      "tools": [
+        {
+          "operation": "LIST_DIRECTORY",
+          "status": "SUCCEEDED",
+          "calls": 2,
+          "returnedBytes": 376
+        },
+        {
+          "operation": "READ_FILE",
+          "status": "SUCCEEDED",
+          "calls": 6,
+          "returnedBytes": 2636
+        }
+      ],
+      "packEstimatedTokens": 1796
+    },
+    {
+      "stage": "PLAN",
+      "sessions": 1,
+      "reports": 1,
+      "input": 13349,
+      "output": 398,
+      "cachedInput": 0,
+      "rawTotal": 13747,
+      "uncachedInputAndOutput": 13747,
+      "stageStatus": "SUCCEEDED",
+      "measurementStatus": "REPORTED",
+      "tools": [],
+      "packEstimatedTokens": 1339
+    },
+    {
+      "stage": "IMPLEMENT",
+      "sessions": 1,
+      "reports": 1,
+      "input": 116965,
+      "output": 959,
+      "cachedInput": 83456,
+      "rawTotal": 117924,
+      "uncachedInputAndOutput": 34468,
+      "stageStatus": "SUCCEEDED",
+      "measurementStatus": "REPORTED",
+      "tools": [
+        {
+          "operation": "LIST_DIRECTORY",
+          "status": "FAILED",
+          "calls": 1,
+          "returnedBytes": null
+        },
+        {
+          "operation": "READ_FILE",
+          "status": "SUCCEEDED",
+          "calls": 4,
+          "returnedBytes": 1774
+        },
+        {
+          "operation": "WRITE_FILE",
+          "status": "SUCCEEDED",
+          "calls": 1,
+          "returnedBytes": 456
+        }
+      ],
+      "packEstimatedTokens": 1427
+    },
+    {
+      "stage": "REVIEW",
+      "sessions": 1,
+      "reports": 1,
+      "input": 150912,
+      "output": 979,
+      "cachedInput": 117632,
+      "rawTotal": 151891,
+      "uncachedInputAndOutput": 34259,
+      "stageStatus": "SUCCEEDED",
+      "measurementStatus": "REPORTED",
+      "tools": [
+        {
+          "operation": "LIST_DIRECTORY",
+          "status": "SUCCEEDED",
+          "calls": 2,
+          "returnedBytes": 335
+        },
+        {
+          "operation": "READ_FILE",
+          "status": "SUCCEEDED",
+          "calls": 6,
+          "returnedBytes": 2709
+        }
+      ],
+      "packEstimatedTokens": 1480
+    },
+    {
+      "stage": "QA",
+      "sessions": 0,
+      "reports": 0,
+      "input": null,
+      "output": null,
+      "cachedInput": null,
+      "rawTotal": null,
+      "uncachedInputAndOutput": null,
+      "stageStatus": "HARD_PAUSED",
+      "measurementStatus": "NOT_RUN",
+      "tools": [],
+      "packEstimatedTokens": null
+    },
+    {
+      "stage": "ACCEPTANCE",
+      "sessions": 0,
+      "reports": 0,
+      "input": null,
+      "output": null,
+      "cachedInput": null,
+      "rawTotal": null,
+      "uncachedInputAndOutput": null,
+      "stageStatus": "NOT_CREATED",
+      "measurementStatus": "NOT_RUN",
+      "tools": [],
+      "packEstimatedTokens": null
+    }
+  ],
+  "verification": [],
+  "browserQA": [],
+  "review": [
+    {
+      "verdict": "PASSED",
+      "independent": true
+    }
+  ],
+  "quality": "ACTUAL_INCOMPLETE_WORKFLOW",
+  "providerVersion": "0.154.0-alpha.6.2",
+  "transport": "Installed authenticated local Codex CLI; POST_SESSION usage; no direct provider API",
+  "pipelineCount": 1,
+  "budgetRevisionCount": 1,
+  "stopReason": "Review terminal usage 151891 exceeded the unchanged 150000 AgentRun ceiling. The next stage was hard-paused before Project verification or Browser QA dispatch.",
+  "ownerGateContinuation": "Discovery first returned a placeholder NEEDS_HUMAN request. The same pipeline received one durable answer restating already-authorized requirements; both Discovery usage reports remain included.",
+  "totalsObservedOnly": {
+    "reports": 5,
+    "input": 419501,
+    "output": 3554,
+    "cachedInput": 305536,
+    "rawTotal": 423055,
+    "uncachedInputAndOutput": 117519
+  },
+  "restart": {
+    "samePipelineStatus": true,
+    "sameAttemptCount": true,
+    "sameUsageReportsAndAmounts": true,
+    "newProviderSessions": 0
+  },
+  "comparison": {
+    "sameScenarioAsPublicBaseline": false,
+    "fullWorkflowCompleted": false,
+    "rawTokenReductionTargetDemonstrated": false,
+    "uncachedTokenReductionTargetDemonstrated": false,
+    "controlledSavings": null,
+    "note": "Not-run stages are unknown, not zero-cost successes. Aggregate difference from Recurkit is not an efficiency measurement."
+  }
+}
