@@ -10,12 +10,16 @@ const recording = (name: string): readonly string[] =>
     .split("\n")
     .filter(Boolean);
 
-// None of the captured recordings contain an assistant `text` block (see
-// `test/recordings/README.md` -- those runs only exercised tool calls), which is exactly why the
-// `text-${index}` collision this file regression-tests survived review undetected. These lines are
-// hand-built, not captured: they mimic the real stream-json shape (`type`, top-level `uuid`,
-// `message.id`, `message.content`) closely enough to exercise the parser honestly, without
-// pretending to be a real CLI run. Do not add these to `test/recordings/`.
+// `test/recordings/not-logged-in.jsonl` line 8 is the one real captured assistant line with a
+// `text` block -- see the "drops every system event" test below, which asserts against it directly.
+// Every other captured run only exercised tool calls (see `test/recordings/README.md`). One line
+// can never collide with itself, so no captured *pair* of lines exists to exercise a cross-line
+// key collision -- which is exactly why the `text-${index}` collision this file regression-tests
+// survived review: checking a text block against the recordings shows it parsing correctly, because
+// the recordings never put two text blocks in a position to need distinct keys. These lines are
+// hand-built, not captured, to fill that specific gap: they mimic the real stream-json shape
+// (`type`, top-level `uuid`, `message.id`, `message.content`) closely enough to exercise the parser
+// honestly, without pretending to be a real CLI run. Do not add these to `test/recordings/`.
 const syntheticLine = (fields: Record<string, unknown>): string => JSON.stringify(fields);
 
 const assistantTextLine = (
@@ -59,9 +63,18 @@ describe("parseClaudeActivity", () => {
     expect(entries.every((entry) => entry.kind !== "PROVIDER_ERROR" || entry.label !== null)).toBe(true);
     const systemLines = recording("not-logged-in.jsonl").filter((line) => line.includes('"type":"system"'));
     expect(systemLines.flatMap(parseClaudeActivity)).toEqual([]);
+
+    // This recording's line 8 is the package's one real captured assistant `text` block. Abbreviated
+    // (the real line carries more fields): `{"type":"assistant","uuid":"f661d271-1348-4317-8a1c-
+    // dddac5f9a602","message":{"id":"a7e54b9b-3a3b-4d40-ad44-dd9422d8a6cb","content":[{"type":"text",
+    // "text":"Not logged in..."}]}}`. Its own `uuid` outranks `message.id` in the fallback chain, so
+    // the derived key is built from the uuid.
+    const textEntries = entries.filter((entry) => entry.kind === "AGENT_TEXT");
+    expect(textEntries).toHaveLength(1);
+    expect(textEntries[0]?.actionKey).toBe("f661d271-1348-4317-8a1c-dddac5f9a602-text-0");
   });
 
-  describe("AGENT_TEXT action keys (synthetic: no recording carries a text block)", () => {
+  describe("AGENT_TEXT action keys (synthetic: the one real text block can't exercise a collision)", () => {
     it("keys two different assistant lines' text blocks differently", () => {
       // Regression test for the defect this task fixes: a positional `text-${index}` key resets to
       // 0 on every line, so two different lines' first text block used to collide and the second

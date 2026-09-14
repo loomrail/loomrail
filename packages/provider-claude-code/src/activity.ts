@@ -1,4 +1,4 @@
-import type { ProviderActivityEntry } from "@loomrail/contracts";
+import { MAX_ACTION_KEY_LENGTH, type ProviderActivityEntry } from "@loomrail/contracts";
 import { boundActivityText } from "@loomrail/provider-core";
 import { z } from "zod";
 
@@ -63,8 +63,6 @@ const targetOf = (name: string, input: Record<string, unknown> | undefined): str
 // than let it flow into a key.
 const nonEmpty = (value: string | undefined): string | undefined =>
   value !== undefined && value.length > 0 ? value : undefined;
-
-const MAX_ACTION_KEY_LENGTH = 200;
 
 /**
  * Builds diagnostic activity entries from one line of the `claude` CLI's stream-json output.

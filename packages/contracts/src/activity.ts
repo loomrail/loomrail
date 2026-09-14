@@ -17,11 +17,16 @@ export const providerActivityKindSchema = z.enum([
   "PROVIDER_ERROR",
 ]);
 
+// Exported so a parser building an actionKey from provider-controlled input (e.g. a Claude Code
+// text block keyed off the line's own uuid/message.id) can check its own bound before handing the
+// entry to this schema, instead of duplicating the literal and risking the two drifting apart.
+export const MAX_ACTION_KEY_LENGTH = 200;
+
 export const providerActivityEntrySchema = z
   .object({
     // The provider's own identifier for the action, so a terminal report updates the record the
     // starting one created instead of appending a second row for the same action.
-    actionKey: z.string().trim().min(1).max(200),
+    actionKey: z.string().trim().min(1).max(MAX_ACTION_KEY_LENGTH),
     kind: providerActivityKindSchema,
     label: z.string().trim().min(1).max(500).nullable(),
     detail: z.string().trim().min(1).max(2_000).nullable(),
