@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { liveProviderIdSchema } from "./provider-selection.js";
 import { actorSchema, correlationIdSchema, opaqueIdSchema, schemaVersionSchema } from "./shared.js";
+import { workspaceToolFailureCodeSchema } from "./workspace-tool.js";
 
 /**
  * What a provider adapter reports about one action it took.
@@ -52,9 +53,15 @@ export const activityOriginSchema = z.enum(["DAEMON_AUDITED", "PROVIDER_REPORTED
 
 export const agentRunActivityEntrySchema = z
   .object({
+    // The only identity that holds across the merged feed. `seq` below does not: it is monotonic
+    // per *origin*, not across the page, so two entries from different sources legitimately share a
+    // `seq` value. The cursor is `(at, origin, id)` for the same reason -- never `seq` alone.
     id: z.string().min(1),
-    // Monotonic within a run but NOT dense: eviction leaves gaps, and a reader that treats a
-    // missing number as a defect would report every long run as broken.
+    // Monotonic within a run's own source but NOT dense: eviction leaves gaps on the reported side,
+    // and a reader that treats a missing number as a defect would report every long run as broken.
+    // Not unique across a merged page -- an audited entry and a reported entry can both be `seq: 1`,
+    // one counting its own source's rows, the other counting the other source's. Use `id` for
+    // identity and `(at, origin, id)` for ordering; never key UI rows on `seq` alone.
     seq: z.number().int().positive(),
     at: z.iso.datetime(),
     origin: activityOriginSchema,
@@ -63,6 +70,11 @@ export const agentRunActivityEntrySchema = z
     label: z.string().max(500).nullable(),
     detail: z.string().max(2_000).nullable(),
     status: z.string().max(120).nullable(),
+    // Bare, matching `status` and `label` above -- both already read as opaque i18n lookup keys
+    // (`workspaceTool.status.*`), never parsed for embedded structure. `null` for a
+    // PROVIDER_REPORTED entry (the table this reads from has no such column) and for a
+    // DAEMON_AUDITED entry that did not fail.
+    failureCode: workspaceToolFailureCodeSchema.nullable(),
     truncated: z.boolean(),
   })
   .strict();

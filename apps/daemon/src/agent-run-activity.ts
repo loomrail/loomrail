@@ -28,6 +28,14 @@ const ORIGIN_ORDER: Readonly<Record<ActivityOrigin, number>> = {
   PROVIDER_REPORTED: 1,
 };
 
+// Code-unit comparison, not `localeCompare`: the SQL that establishes the audited side's own
+// ordering (`ORDER BY started_at, id`) sorts under SQLite's BINARY collation, which is a byte
+// comparison, not a locale-aware one. `localeCompare`'s result depends on the host's ICU/locale
+// data and can disagree with BINARY on mixed-case ids -- exactly the disagreement "deterministic
+// ordering" (this task's whole point) cannot afford. This matches BINARY for the ASCII opaque ids
+// and ISO timestamps every caller here actually produces.
+const compareStrings = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
+
 /**
  * Orders the two sources into one feed.
  *
@@ -48,9 +56,9 @@ export const mergeRunActivity = <
 ): readonly (Audited | Reported)[] =>
   [...audited, ...reported].sort(
     (left, right) =>
-      left.at.localeCompare(right.at) ||
+      compareStrings(left.at, right.at) ||
       ORIGIN_ORDER[left.origin] - ORIGIN_ORDER[right.origin] ||
-      left.id.localeCompare(right.id),
+      compareStrings(left.id, right.id),
   );
 
 // What a cursor carries: the sort key of the last entry a page ended on. `.strict()` on purpose --
@@ -95,14 +103,16 @@ export const REPORTED_ENTRIES_FETCH_LIMIT = 2_000;
  * One workspace tool call, read as a Run Activity entry.
  *
  * `kind` is always `TOOL_CALL`: a daemon-gated workspace operation is definitionally a tool call, no
- * provider guess involved. `label`/`detail` mirror the table's own `operation`/`target` columns
- * exactly -- both are already bounded and redaction-safe at write time (ADR-0014), so nothing here
- * truncates or rewrites them. `status` folds in `failureCode` when the call failed, because a bare
- * "FAILED" tells the owner less than the audited system already knows.
+ * provider guess involved. `label`/`detail`/`status` mirror the table's own
+ * `operation`/`target`/`status` columns exactly, bare -- all three are read as i18n lookup keys
+ * (`workspaceTool.status.*` and friends), never parsed for embedded structure, so folding
+ * `failureCode` into `status` (`"FAILED:PATH_FORBIDDEN"`) would break that lookup. `failureCode`
+ * travels in its own field instead.
  *
  * `seq` has no column to read on this table (unlike the reported side's own `agent_run_activity.seq`
  * counter): assigned here as the entry's 1-based rank in `startedAt` order, which the caller supplies
- * pre-sorted so this stays a pure per-entry mapping.
+ * pre-sorted so this stays a pure per-entry mapping. It is a per-source counter, not a cross-source
+ * one -- see the field's own comment in the contract.
  */
 const activityEntryFromWorkspaceToolCall = (
   call: WorkspaceToolCallRecord,
@@ -118,12 +128,14 @@ const activityEntryFromWorkspaceToolCall = (
     kind: "TOOL_CALL",
     label: call.operation,
     detail: call.target,
-    status: call.failureCode === null ? call.status : `${call.status}:${call.failureCode}`,
+    status: call.status,
+    failureCode: call.failureCode,
     truncated: false,
   } satisfies AgentRunActivityEntry);
 
 // The reported side's raw row already carries everything an entry needs (Task 6/7); this only adds
-// the `origin` its source table implies.
+// the `origin` its source table implies. `failureCode` is always `null` here -- `agent_run_activity`
+// has no such column, since it is the provider's own unverified account, not an audited outcome.
 const activityEntryFromReportedRow = (row: AgentRunActivityRow): AgentRunActivityEntry =>
   agentRunActivityEntrySchema.parse({
     id: row.id,
@@ -135,6 +147,7 @@ const activityEntryFromReportedRow = (row: AgentRunActivityRow): AgentRunActivit
     label: row.label,
     detail: row.detail,
     status: row.status,
+    failureCode: null,
     truncated: row.truncated,
   } satisfies AgentRunActivityEntry);
 
@@ -196,6 +209,10 @@ const mapAuditedEntries = (
  * Pure and side-effect-free on purpose: every read this needs (the AgentRun's provider, both
  * sources' rows) is the caller's job, so this function -- the one with the pagination and gap logic
  * that most needs direct tests -- never has to touch SQLite to be tested.
+ *
+ * A merged page can legitimately repeat `seq` values across origins (an audited entry and a reported
+ * entry can both be `seq: 1`): it is a per-source counter, not a cross-source one. `id` is the only
+ * identity a reader -- or a UI keying rows -- can rely on here.
  */
 export const buildAgentRunActivityPage = (input: BuildActivityPageInput): AgentRunActivityPage => {
   const pageSize = input.pageSize ?? MAX_ACTIVITY_PAGE_SIZE;

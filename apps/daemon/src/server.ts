@@ -213,6 +213,7 @@ import {
   buildAgentRunActivityPage,
   decodeCursor,
   REPORTED_ENTRIES_FETCH_LIMIT,
+  type ActivityCursor,
 } from "./agent-run-activity.js";
 import { broadcastingState } from "./broadcasting-state.js";
 import { resolveProjectBrowserQAConfig, type BrowserQAConfigResolver } from "./browser-qa-config.js";
@@ -442,7 +443,7 @@ const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
 const agentRunActivityParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 // Opaque per Task 8's contract: this daemon never inspects `after` beyond handing it to
 // `decodeCursor`, so the only runtime shape worth asserting here is "a non-empty string, if present".
-const agentRunActivityQuerySchema = z.object({ after: z.string().min(1).optional() }).strict();
+const agentRunActivityQuerySchema = z.object({ after: z.string().min(1).max(1_000).optional() }).strict();
 const verificationRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 const launchMeasurementRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 const launchReleaseParamsSchema = z.object({ releaseId: opaqueIdSchema }).strict();
@@ -3421,7 +3422,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         // page, but a present-and-unparseable one is refused outright rather than silently treated
         // as "no cursor" -- that would let a corrupted or forged value quietly restart the feed
         // instead of telling the caller their own cursor was rejected.
-        let cursor = null;
+        let cursor: ActivityCursor | null = null;
         if (query.after !== undefined) {
           cursor = decodeCursor(query.after);
           if (cursor === null) {

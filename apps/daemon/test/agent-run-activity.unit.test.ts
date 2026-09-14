@@ -153,15 +153,30 @@ describe("buildAgentRunActivityPage", () => {
       cursor: null,
     });
     const [entry] = page.entries;
+    // Bare, not folded: `status` and `failureCode` are separate fields because the UI reads both as
+    // opaque i18n lookup keys (`workspaceTool.status.*`) and never parses one apart from the other.
     expect(entry).toMatchObject({
       origin: "DAEMON_AUDITED",
       provider: "CLAUDE_CODE",
       kind: "TOOL_CALL",
       label: "WRITE_FILE",
       detail: "src/config.ts",
-      status: "FAILED:PATH_FORBIDDEN",
+      status: "FAILED",
+      failureCode: "PATH_FORBIDDEN",
       truncated: false,
     });
+  });
+
+  it("carries a null failureCode for a reported entry, which has no such column to read", () => {
+    const page = buildAgentRunActivityPage({
+      auditedCalls: [],
+      provider: "CODEX",
+      reportedRows: [reportedRow({ id: "a1" })],
+      omittedCount: 0,
+      degraded: false,
+      cursor: null,
+    });
+    expect(page.entries[0]).toMatchObject({ origin: "PROVIDER_REPORTED", failureCode: null });
   });
 
   it("passes omittedCount and degraded through from the reported source untouched", () => {
@@ -235,8 +250,31 @@ describe("buildAgentRunActivityPage", () => {
     expect(seen).toEqual(["w1", "w2", "w3", "w4", "w5"]);
   });
 
-  it("caps a page at the schema's own bound", () => {
-    expect(MAX_ACTIVITY_PAGE_SIZE).toBeLessThanOrEqual(200);
+  it("caps a page at MAX_ACTIVITY_PAGE_SIZE even when far more entries are available", () => {
+    // A fact about the constant (`MAX_ACTIVITY_PAGE_SIZE <= 200`) would pass against a builder that
+    // ignored the cap entirely -- this instead builds past it and checks the slice and the
+    // nextCursor-on-a-full-page branch actually fire.
+    const totalCalls = MAX_ACTIVITY_PAGE_SIZE + 50;
+    const calls = Array.from({ length: totalCalls }, (_, index) =>
+      workspaceToolCall({
+        id: `w${index.toString().padStart(4, "0")}`,
+        startedAt: new Date(Date.UTC(2026, 8, 14, 10, 0, 0) + index).toISOString(),
+      }),
+    );
+    const page = buildAgentRunActivityPage({
+      auditedCalls: calls,
+      provider: "CODEX",
+      reportedRows: [],
+      omittedCount: 0,
+      degraded: false,
+      cursor: null,
+    });
+    expect(page.entries).toHaveLength(MAX_ACTIVITY_PAGE_SIZE);
+    expect(page.entries[0]?.id).toBe("w0000");
+    expect(page.entries[page.entries.length - 1]?.id).toBe(
+      `w${(MAX_ACTIVITY_PAGE_SIZE - 1).toString().padStart(4, "0")}`,
+    );
+    expect(page.nextCursor).not.toBeNull();
   });
 
   it("serves a MOCK AgentRun's reported-only feed instead of failing on its non-live provider", () => {
