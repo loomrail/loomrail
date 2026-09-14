@@ -15,7 +15,7 @@ export type BoundedActivityText = {
 export const boundActivityText = (value: string, maxChars: number): BoundedActivityText => {
   const trimmed = value.trim();
   if (trimmed.length === 0) return { text: null, truncated: false };
-  const points = [...trimmed];
+  const points = Array.from(trimmed);
   if (points.length <= maxChars) return { text: trimmed, truncated: false };
   return { text: points.slice(0, maxChars).join(""), truncated: true };
 };

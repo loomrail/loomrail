@@ -19,6 +19,6 @@ describe("boundActivityText", () => {
 
   it("does not split a surrogate pair", () => {
     const result = boundActivityText("😀".repeat(400), 500);
-    expect(result.text === null || [...result.text].every((ch) => ch.codePointAt(0) !== 0xfffd)).toBe(true);
+    expect(result.text === null || Array.from(result.text).every((ch) => ch.codePointAt(0) !== 0xfffd)).toBe(true);
   });
 });

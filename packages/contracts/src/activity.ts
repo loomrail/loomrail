@@ -48,7 +48,7 @@ export const agentRunActivityEntrySchema = z
     // Monotonic within a run but NOT dense: eviction leaves gaps, and a reader that treats a
     // missing number as a defect would report every long run as broken.
     seq: z.number().int().positive(),
-    at: z.string().datetime(),
+    at: z.iso.datetime(),
     origin: activityOriginSchema,
     provider: z.enum(["CODEX", "CLAUDE_CODE"]),
     kind: providerActivityKindSchema,
