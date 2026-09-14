@@ -1639,10 +1639,19 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         } catch (error: unknown) {
           // A throw from a timer callback is an uncaught exception and would take the daemon down
           // over a diagnostic. A frame nobody received costs the owner a manual refresh.
-          deps.logger.warn(
-            { providerSessionId: providerSession.id, error: errorName(error) },
-            "The activity signal could not be published; the feed updates on the next read",
-          );
+          //
+          // The logger is inside its own guard for exactly the same reason the publish is: an
+          // injected logger is as capable of throwing as the publisher, and this is still a timer
+          // callback. Same shape as `writeActivityDegraded` and the drain.
+          try {
+            deps.logger.warn(
+              { providerSessionId: providerSession.id, error: errorName(error) },
+              "The activity signal could not be published; the feed updates on the next read",
+            );
+          } catch {
+            // A recorder that cannot even log has nothing further to report, and still no licence
+            // to take the daemon down over it.
+          }
         }
       }, ACTIVITY_SIGNAL_DEBOUNCE_MS);
       // Never keeps the daemon alive: a pending signal about a finished session is not a reason to
@@ -2005,11 +2014,23 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           );
           scheduleActivityDrain();
         } catch (error: unknown) {
-          deps.logger.warn(
-            { providerSessionId: providerSession.id, error: errorName(error) },
-            "An action could not be queued; the activity feed for this run is degraded",
-          );
-          degradeActivityFeed();
+          // This catch is the last thing standing between a broken recorder and `guarded`, so its
+          // own body must be incapable of throwing. The flag is set by bare assignment first --
+          // `degradeActivityFeed` would do the same thing but also schedules, and scheduling is not
+          // the part that must survive. Everything that CAN throw goes in the guard below, the
+          // logger included, for the same reason it is guarded in the drain and in the signal
+          // timer: here a throwing logger does not merely lose a line, it kills the run.
+          activityFeed.degraded = true;
+          try {
+            scheduleActivityDrain();
+            deps.logger.warn(
+              { providerSessionId: providerSession.id, error: errorName(error) },
+              "An action could not be queued; the activity feed for this run is degraded",
+            );
+          } catch {
+            // Nothing left to do, and nothing here worth failing a provider session over: the
+            // session's forced final drain still writes the mark this flag now carries.
+          }
         }
       },
     };
